@@ -32,6 +32,8 @@ Framework 0.30.1은 Java·Kotlin binding 1.19.1과 Core 1.19.0을 사용합니�
 - Target이 commit 직후 종료해 authority가 `Missing`이면 source가 재조회를 반복하고 host close가 멈추던 결함을 수정했습니다. Preserve를 시도하지 않고 expired-owner terminal로 종료합니다. (#1847)
 - Route 교체 중 cross-node Join과 relocation frame 유실로 대기하던 결함을 수정하여, 다른 선택 route를 관찰하면 ready 상태에서 durable request와 batch·cutover를 다시 제출합니다. 선택 route의 handshake만 수락하고 ADMIT까지 같은 HELLO snapshot을 재전송한 뒤 변경은 UPDATE로 게시하며, 기존 route·manual intent가 있는 상대에게 자동 중복 연결을 만들지 않습니다. (#1852, #1874)
 - RID로 수동 연결한 Ready peer의 lifecycle generation을 0으로 보고해 Spot placement와 Kotlin TicTacToe 요청이 시간 초과되던 결함을 수정했습니다. Peer의 generation·revision·channel 수는 admitted topology descriptor에서 조회합니다. (#1874)
+- 진행 중인 deferred Join의 admission을 진행 상태와 무관한 1초 timer가 지워 target이 `target rejected canonical relocation: 17`·`35`(`DataLost`)로 거절하던 결함을 수정했습니다. PREPARE를 수락한 target attempt가 준비 자원의 수명을 인수해 그 attempt의 종료 경로에서만 정리하며, 준비만 된 항목은 등록 기본 timeout 뒤 만료됩니다. Admission이 사라진 recovery는 `Unavailable`로 보고합니다. (#1729)
+- Instance Spot Close가 queue로 넘어가는 중인 수신 frame을 먼저 해제해, 같은 메시지를 새 incarnation이 처리할 때 `HANDLER_MISSING for packet ''`로 실패하던 결함을 수정했습니다. 대기 중인 frame은 execution queue가 소유합니다. Channel 생성 전에 기동이 실패하면 rollback이 원래 예외에 NullPointerException을 덧붙이던 결함도 수정했습니다. (#1745)
 
 ## 설치
 

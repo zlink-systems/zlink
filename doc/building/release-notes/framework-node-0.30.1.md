@@ -22,6 +22,7 @@ Framework 0.30.1 uses Node.js binding 1.19.0 and Core 1.19.0.
 - Fixed missing relocation-source `safeToShutdown` observations and failures in host shutdown with Actor members or maintenance Entry restoration: queries and observations share one status, shutdown retires local Actors, and maintenance restores them into the target startup Entry. `findSpot` returns the current Spot generation, and Session route finalization is sent to the actual Session owner. (#1831)
 - Fixed unfinished Promises accumulating on each STREAM receive-wait cycle, increasing memory use and potentially causing `Map maximum size exceeded`. One cancellable poller wait now handles both wake and shutdown. (#1839)
 - Fixed cross-node Join and relocation stalling during route replacement by resubmitting durable requests and batches or cutover on a different observed route once ready. The same HELLO snapshot is reused for retransmission and replies until ADMIT, later changes use UPDATE, automatic discovery avoids duplicate connections to peers with an existing route or manual intent, and physical disconnection preserves manual intents. (#1850, #1864)
+- Fixed a deferred Join whose admission could be removed by the 30-second retention timer while its restore was in progress. The target attempt that accepts PREPARE now owns the admission and prewarm and releases them only on its terminal path. (#1729)
 - Fixed duplicate Spot packet and subscription registrations being accepted or ignored. Activation now rejects them as `InvalidOperation`. (#1715)
 
 ## Install

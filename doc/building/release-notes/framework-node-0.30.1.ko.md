@@ -22,6 +22,7 @@ Framework 0.30.1은 Node.js binding 1.19.0과 Core 1.19.0을 사용합니다.
 - Relocation source의 `safeToShutdown` 관찰 누락과 Actor member가 있는 host 종료·maintenance Entry 복원 실패를 수정하여, 조회·관찰은 같은 status를 사용하고 종료는 local Actor를 정리하며 maintenance는 target startup Entry에 복원합니다. `findSpot`은 현재 Spot generation을 반환하고 Session route 확정은 실제 Session owner로 보냅니다. (#1831)
 - STREAM receive 대기에서 미완료 Promise가 회전마다 쌓여 메모리가 증가하고 `Map maximum size exceeded`까지 발생하던 결함을 수정했습니다. Poller의 취소 가능한 대기 하나가 wake와 shutdown을 함께 처리합니다. (#1839)
 - Route 교체 중 cross-node Join과 relocation이 멈추던 결함을 수정하여, 다른 선택 route를 관찰하면 ready 상태에서 durable request와 batch·cutover를 다시 제출합니다. ADMIT까지 같은 HELLO snapshot을 재전송·응답에 사용하고 이후 변경은 UPDATE로 보내며, 같은 상대의 기존 route·manual intent가 있으면 자동 중복 연결을 만들지 않고 물리 연결이 끊겨도 manual intent를 유지합니다. (#1850, #1864)
+- 진행 중인 deferred Join의 admission을 30초 retention timer가 지울 수 있던 결함을 수정했습니다. PREPARE를 수락한 target attempt가 admission과 prewarm의 수명을 인수해 그 attempt의 종료 경로에서만 정리합니다. (#1729)
 - 중복 Spot packet·subscription 등록을 허용하거나 무시하던 결함을 수정했습니다. Activation이 `InvalidOperation`으로 거부합니다. (#1715)
 
 ## 설치
