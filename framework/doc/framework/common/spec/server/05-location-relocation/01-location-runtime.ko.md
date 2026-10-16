@@ -638,7 +638,7 @@ lease read에서 얻은 만료 시각이 지난 descriptor는 새 target 선택�
 select-one의 후보 갱신도 여기에 포함한다.
 
 Object Server descriptor에는 `Server` role, node-wide placement weight, node별 Actor·Spot
-count와 limit, 지원하는 Spot stable type과 Entry Spot ID가 있다.
+count와 limit, 지원하는 Spot stable type, Entry Spot ID와 application Entry Spot 등록 여부가 있다.
 
 여러 target 후보에 새 object를 배정할 상대 비중을
 [weight](../00-foundation/02-glossary.ko.md#weight)라고 한다. 값이 클수록 다른 조건이 같은 후보보다 자주
@@ -873,7 +873,7 @@ sequenceDiagram
 ```
 
 Target은 `Serving` 상태이고 요청한 stable type을 등록했으며 owner lease와 남은 수용 공간이
-유효해야 한다. Framework는 weight가 0보다 큰 후보 중 하나를 고른다.
+유효해야 한다. 새 Actor 생성의 Entry Spot 조건은 [Actor model §6.3](../03-spot-actor/04-actor-model.ko.md#63-mesh와-placement-target-선택)이 정한다. Framework는 weight가 0보다 큰 후보 중 하나를 고른다.
 
 Location Store의 `Reserve`는 record가 없을 때만 `Creating` record와 사용할 수용 공간을 함께
 기록한다. 이때 `ObjectGeneration`과 `AuthorityOwnerGeneration`도 발급한다. Target 상태나

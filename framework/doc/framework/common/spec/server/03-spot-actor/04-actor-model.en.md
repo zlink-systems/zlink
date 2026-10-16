@@ -461,11 +461,18 @@ decide the Mesh.
 The framework checks target candidates in the following order.
 
 1. Checks object role.
-2. Checks whether the requested stable type is registered.
+2. Checks whether the requested stable type is registered. A Create or GetOrCreate that makes a
+   new Actor keeps only the Object Servers among them that registered an application Entry Spot.
 3. Checks whether active/pending capacity remains.
 4. Applies node-wide placement weight to the remaining candidates.
 
 The caller doesn't select the target node or endpoint.
+
+The application Entry Spot of the node that creates a new Actor handles that Actor's first message and
+`OnCreateActor`, so a node that registered an Actor factory but no application Entry Spot doesn't create
+new Actors. Such a node can still be the join or relocation target of an existing Actor. If the selected
+target hasn't registered an application Entry Spot, it refuses without starting the factory, and the
+Framework excludes that target and picks another candidate up to the deadline.
 
 ### 6.4 Creation Request and Factory Execution
 

@@ -410,11 +410,17 @@ ZLinkActorCreateResult result = await actorManager
 Framework는 다음 순서로 target 후보를 검사한다.
 
 1. Object role을 확인한다.
-2. 요청한 stable type이 등록되어 있는지 확인한다.
+2. 요청한 stable type이 등록되어 있는지 확인한다. 새 Actor를 만드는 Create·GetOrCreate는 이 가운데
+   application Entry Spot을 등록한 Object Server만 남긴다.
 3. Active·pending capacity가 남아 있는지 확인한다.
 4. 남은 후보에 node-wide placement weight를 적용한다.
 
 Caller는 target node나 endpoint를 선택하지 않는다.
+
+새 Actor의 첫 message와 `OnCreateActor`는 생성된 node의 application Entry Spot이 처리하므로, Actor factory만
+등록하고 application Entry Spot이 없는 node는 새 Actor를 만들지 않는다. 그런 node도 이미 있는 Actor의 join·relocation
+target은 될 수 있다. 선택한 target이 application Entry Spot을 등록하지 않았으면 target은 factory를 시작하지 않고
+거절하며, Framework는 그 target을 제외하고 deadline까지 다른 후보를 고른다.
 
 ### 6.4 Creation request와 factory 실행
 
