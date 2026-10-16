@@ -200,6 +200,226 @@ public sealed class BoundSessionReplacementLifecycleTests
         Assert.Equal(1, fixture.Socket.DisconnectCount);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Rebind_On_Same_Runtime_Still_Closes_The_Retired_Transport(bool rebind)
+    {
+        await using var retired = await ReplacementFixture.CreateAsync(
+            ReplacementCallbackBehavior.Success
+        );
+        retired.BindRetiredSessionActor("actor-a");
+        Assert.True(retired.NotifyReplacement("actor-a"));
+        await retired.Time.TimerScheduled.Task;
+
+        await using var replacement = await ReplacementFixture.CreateAsync(
+            ReplacementCallbackBehavior.Success,
+            sharedRuntime: retired.Runtime,
+            sessionRid: RoutingId.From("replacement-session")
+        );
+        if (rebind)
+            replacement.BindRetiredSessionActor("actor-a", "replacement-binding");
+
+        retired.Time.Advance(TimeSpan.FromMilliseconds(99));
+        Assert.Equal(0, retired.Socket.DisconnectCount);
+        retired.Time.Advance(TimeSpan.FromMilliseconds(1));
+        Assert.Equal(1, retired.Socket.DisconnectCount);
+        Assert.Equal(0, replacement.Socket.DisconnectCount);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Same_Node_Rebind_Closes_Only_The_Retired_Session(bool notificationFirst)
+    {
+        var nodeRid = RoutingId.From($"replacement-owner-{Guid.NewGuid():N}");
+        await using var retired = await HostedReplacementFixture.CreateAsync(
+            nodeRid,
+            "tcp://127.0.0.1:0",
+            ReplacementCallbackBehavior.Success
+        );
+        retired.BindRetiredSessionActor("actor-a");
+        Assert.True(
+            retired.Runtime.TryGetSessionActorBinding(
+                "actor-a",
+                "binding-actor-a",
+                out var oldEntry
+            )
+        );
+        await using var replacement = await ReplacementFixture.CreateAsync(
+            ReplacementCallbackBehavior.Success,
+            sharedRuntime: retired.Runtime,
+            sessionRid: RoutingId.From("new-session")
+        );
+        var record = new ZLinkServiceWireCodec.BoundSessionReplacedRecord(
+            new ZLinkServiceWireCodec.BoundSessionReplacedActorAuthority(
+                "actor-a",
+                1,
+                nodeRid,
+                retired.SessionOwnerNodeGeneration,
+                3,
+                5
+            ),
+            new ZLinkServiceWireCodec.BoundSessionReplacedRetiredSession(
+                retired.SessionOwnerNodeRid,
+                retired.SessionOwnerNodeGeneration,
+                retired.SessionOwnerId,
+                retired.SessionOwnerLeaseGeneration,
+                retired.SessionRid,
+                retired.BindingGeneration
+            )
+        );
+        if (notificationFirst)
+        {
+            Assert.True(
+                retired.Runtime.TryHandleBoundSessionReplacedNotification(nodeRid, nodeRid, record)
+            );
+            await retired.Time.TimerScheduled.Task;
+        }
+
+        const string newToken = "replacement-binding";
+        var newActor = new ZLinkSessionActor(
+            replacement.Lifetime.Context,
+            "actor-a",
+            replacement.SessionRid,
+            newToken
+        );
+        retired.Runtime.BindSessionActor(
+            "actor-a",
+            replacement.Lifetime.Context,
+            newToken,
+            newActor,
+            oldEntry.BindingGeneration + 1,
+            oldEntry.Route,
+            oldEntry.SessionOwnerNodeGeneration,
+            oldEntry.SessionOwnerNodeRid,
+            oldEntry.SessionOwnerId,
+            oldEntry.SessionOwnerLeaseGeneration
+        );
+        if (!notificationFirst)
+        {
+            Assert.True(
+                retired.Runtime.TryHandleBoundSessionReplacedNotification(nodeRid, nodeRid, record)
+            );
+            await retired.Time.TimerScheduled.Task;
+        }
+
+        ZLinkSessionBindingEntry? ExactRetiredBinding() =>
+            retired.Runtime.GetExactRetiredSessionBinding(
+                ZLinkActorId.FromBoundary("actor-a", "actorId"),
+                retired.SessionOwnerNodeRid,
+                retired.SessionRid,
+                retired.SessionOwnerNodeGeneration,
+                retired.SessionOwnerId,
+                retired.SessionOwnerLeaseGeneration,
+                retired.BindingGeneration
+            );
+        Assert.NotNull(ExactRetiredBinding());
+
+        retired.Time.Advance(TimeSpan.FromMilliseconds(99));
+        Assert.Equal(0, retired.Socket.DisconnectCount);
+        retired.Time.Advance(TimeSpan.FromMilliseconds(1));
+        Assert.Equal(1, retired.Socket.DisconnectCount);
+        Assert.Equal(0, replacement.Socket.DisconnectCount);
+        await retired.Session.DisposeAsync();
+        Assert.Equal(1, retired.Lifetime.CallbackCount);
+        Assert.Equal(1, retired.Lifetime.DisconnectedCount);
+        Assert.Null(ExactRetiredBinding());
+        Assert.False(
+            retired.Runtime.TryGetSessionActorBinding("actor-a", "binding-actor-a", out _)
+        );
+        Assert.True(
+            retired.Runtime.TryGetSessionActorBinding("actor-a", newToken, out var surviving)
+        );
+        Assert.Same(replacement.Lifetime.Context, surviving.Context);
+    }
+
+    [Fact]
+    public async Task Rebind_Preserves_The_Exact_Retired_Notification_Target()
+    {
+        await using var retired = await ReplacementFixture.CreateAsync(
+            ReplacementCallbackBehavior.Success
+        );
+        var oldToken = retired.BindRetiredSessionActor("actor-a");
+        var oldEntry = Assert.IsType<ZLinkSessionBindingEntry>(
+            retired.Runtime.TryGetSessionActorBinding("actor-a", oldToken, out var entry)
+                ? entry
+                : null
+        );
+        await using var replacement = await ReplacementFixture.CreateAsync(
+            ReplacementCallbackBehavior.Success,
+            sharedRuntime: retired.Runtime,
+            sessionRid: RoutingId.From("replacement-session")
+        );
+        var table = new ZLinkSessionActorBindingTable(
+            TimeSpan.FromSeconds(30),
+            new ZLinkLocationOptions().SessionRelocationSealTimeout
+        );
+        var actorId = ZLinkActorId.FromBoundary("actor-a", "actorId");
+        await table.BindAsync(
+            actorId,
+            oldEntry.Context,
+            oldEntry.BindingToken,
+            oldEntry.ActorRef,
+            oldEntry.BindingGeneration,
+            oldEntry.Route,
+            oldEntry.SessionOwnerNodeGeneration,
+            oldEntry.SessionOwnerNodeRid,
+            oldEntry.SessionOwnerId,
+            oldEntry.SessionOwnerLeaseGeneration
+        );
+        var newActor = new ZLinkSessionActor(
+            replacement.Lifetime.Context,
+            "actor-a",
+            replacement.SessionRid,
+            "replacement-binding"
+        );
+        await table.BindAsync(
+            actorId,
+            replacement.Lifetime.Context,
+            newActor.BindingToken,
+            newActor,
+            oldEntry.BindingGeneration + 1,
+            oldEntry.Route,
+            oldEntry.SessionOwnerNodeGeneration,
+            oldEntry.SessionOwnerNodeRid,
+            oldEntry.SessionOwnerId,
+            oldEntry.SessionOwnerLeaseGeneration
+        );
+
+        Assert.NotNull(
+            await table.GetExactRetiredBindingAsync(
+                "actor-a",
+                oldEntry.SessionOwnerNodeRid,
+                retired.SessionRid,
+                oldEntry.SessionOwnerNodeGeneration,
+                oldEntry.SessionOwnerId,
+                oldEntry.SessionOwnerLeaseGeneration,
+                oldEntry.BindingGeneration
+            )
+        );
+        await table.TombstoneAsync(
+            "actor-a",
+            retired.SessionRid,
+            oldToken,
+            oldEntry.BindingGeneration,
+            oldEntry.SessionOwnerNodeGeneration,
+            oldEntry.Route
+        );
+        Assert.Null(
+            await table.GetExactRetiredBindingAsync(
+                "actor-a",
+                oldEntry.SessionOwnerNodeRid,
+                retired.SessionRid,
+                oldEntry.SessionOwnerNodeGeneration,
+                oldEntry.SessionOwnerId,
+                oldEntry.SessionOwnerLeaseGeneration,
+                oldEntry.BindingGeneration
+            )
+        );
+        Assert.NotNull(await table.GetBindingAsync("actor-a", newActor.BindingToken));
+    }
+
     [Fact]
     public async Task Callback_OperationCanceledException_Is_A_Failure_With_The_Fixed_Grace_Window()
     {
@@ -301,8 +521,12 @@ public sealed class BoundSessionReplacementLifecycleTests
         Assert.Equal(newSessionRid, replacement.SessionRid);
         Assert.Equal(replacementToken, replacement.BindingToken);
         Assert.False(fixture.Runtime.TryGetActorBoundSession("actor-b", out _));
-        Assert.False(fixture.Runtime.TryGetSessionActorBinding("actor-a", out _));
-        Assert.False(fixture.Runtime.TryGetSessionActorBinding("actor-b", out _));
+        Assert.False(
+            fixture.Runtime.TryGetSessionActorBinding("actor-a", fixture.Lifetime.Context, out _)
+        );
+        Assert.False(
+            fixture.Runtime.TryGetSessionActorBinding("actor-b", fixture.Lifetime.Context, out _)
+        );
     }
 
     [Fact]
@@ -801,7 +1025,9 @@ public sealed class BoundSessionReplacementLifecycleTests
 
         internal static async Task<ReplacementFixture> CreateAsync(
             ReplacementCallbackBehavior behavior,
-            TimeSpan? sessionReplacementCallbackTimeout = null
+            TimeSpan? sessionReplacementCallbackTimeout = null,
+            ZLinkFrameworkRuntime? sharedRuntime = null,
+            RoutingId? sessionRid = null
         )
         {
             var registration = new ZLinkFrameworkRegistration
@@ -818,23 +1044,25 @@ public sealed class BoundSessionReplacementLifecycleTests
                 .AddSingleton(lifetime)
                 .AddSingleton(_ => runtime);
             var provider = services.BuildServiceProvider();
-            runtime = new ZLinkFrameworkRuntime(
-                provider,
-                null!,
-                registration,
-                new ZLinkHandlerRegistry([]),
-                new ZLinkHandlerDispatcher(
-                    provider.GetRequiredService<IServiceScopeFactory>(),
-                    registration
-                )
-            );
+            runtime =
+                sharedRuntime
+                ?? new ZLinkFrameworkRuntime(
+                    provider,
+                    null!,
+                    registration,
+                    new ZLinkHandlerRegistry([]),
+                    new ZLinkHandlerDispatcher(
+                        provider.GetRequiredService<IServiceScopeFactory>(),
+                        registration
+                    )
+                );
             var time = new ReplacementTimeProvider();
             var socket = new ReplacementStreamSocket();
-            var sessionRid = RoutingId.From("retired-session");
+            sessionRid ??= RoutingId.From("retired-session");
             var session = await ZLinkStreamSessionRuntime.CreateAsync(
                 provider,
                 socket,
-                sessionRid,
+                sessionRid.Value,
                 typeof(ReplacementSession),
                 static _ => { },
                 "test",
@@ -847,13 +1075,13 @@ public sealed class BoundSessionReplacementLifecycleTests
                 socket,
                 session,
                 lifetime,
-                sessionRid
+                sessionRid.Value
             );
         }
 
-        internal string BindRetiredSessionActor(string actorId)
+        internal string BindRetiredSessionActor(string actorId, string? bindingToken = null)
         {
-            var bindingToken = $"binding-{actorId}";
+            bindingToken ??= $"binding-{actorId}";
             var actor = new ActorRef(actorId, 1, "actors", RoutingId.From("actor-owner"));
             var bound = new ZLinkSessionActor(Lifetime.Context, actorId, SessionRid, bindingToken);
             _ = Runtime.BindSessionActor(
@@ -885,8 +1113,7 @@ public sealed class BoundSessionReplacementLifecycleTests
                 SessionOwnerId,
                 SessionOwnerLeaseGeneration,
                 SessionRid,
-                BindingGeneration,
-                $"binding-{actorId}"
+                BindingGeneration
             );
 
         public async ValueTask DisposeAsync()

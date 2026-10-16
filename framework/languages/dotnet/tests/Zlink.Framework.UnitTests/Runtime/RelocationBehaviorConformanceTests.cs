@@ -1418,11 +1418,13 @@ public sealed partial class RelocationBehaviorConformanceTests
             Assert.Equal(1, stream.WriteCount);
             await WaitUntilAsync(
                 () =>
-                    source.Runtime.TryGetSessionActorBinding(actorId, out var binding)
+                    source.Runtime.TryGetSessionActorBinding(actorId, session, out var binding)
                     && binding.AppliedCanonicalRelocationRoute is not null,
                 TimeSpan.FromSeconds(2)
             );
-            Assert.True(source.Runtime.TryGetSessionActorBinding(actorId, out var routedBinding));
+            Assert.True(
+                source.Runtime.TryGetSessionActorBinding(actorId, session, out var routedBinding)
+            );
             Assert.NotNull(routedBinding.AppliedCanonicalRelocationRoute);
             Assert.Equal(targetProtocolErrorsBeforeJoin, targetMonitor.Status().ProtocolErrors);
         }
