@@ -134,13 +134,20 @@ test('node runtime and coverage gates isolate native test handles and concurrent
 
 test('node test gate lock rejects a live owner and releases after owner exit', async () => {
   const lockRoot = path.join(workspaceRoot, `.lock-contract-${process.pid}-${Date.now()}`);
-  const holder = childProcess.spawn(process.execPath, [
-    '-e',
-    lockScript('holder', "process.stdout.write('ready\\n'); setInterval(() => {}, 1000);")
-  ], {
-    cwd: workspaceRoot,
-    stdio: ['ignore', 'pipe', 'pipe']
-  });
+  const holder = childProcess.spawn(
+    process.execPath,
+    [
+      '-e',
+      lockScript(
+        'holder',
+        "process.once('message', () => process.disconnect()); process.stdout.write('ready\\n');"
+      )
+    ],
+    {
+      cwd: workspaceRoot,
+      stdio: ['ignore', 'pipe', 'pipe', 'ipc']
+    }
+  );
 
   try {
     await once(holder.stdout, 'data');
@@ -148,8 +155,11 @@ test('node test gate lock rejects a live owner and releases after owner exit', a
     assert.notEqual(blocked.status, 0);
     assert.match(blocked.stderr, /already running/);
   } finally {
-    holder.kill('SIGTERM');
-    await once(holder, 'exit');
+    const exited = once(holder, 'exit');
+    holder.send({ type: 'release' });
+    const [code, signal] = await exited;
+    assert.equal(code, 0);
+    assert.equal(signal, null);
   }
 
   const reacquired = runLockProcess(lockRoot, 'successor');
@@ -165,16 +175,20 @@ test('node test gate lock rejects a live owner and releases after owner exit', a
   }
 
   function runLockProcess(root, gateName) {
-    return childProcess.spawnSync(process.execPath, [
-      '-e',
+    return childProcess.spawnSync(
+      process.execPath,
       [
-        `const { acquireNodeTestGateLock } = require(${JSON.stringify(lockModule)});`,
-        `const release = acquireNodeTestGateLock(${JSON.stringify(root)}, ${JSON.stringify(gateName)});`,
-        'release();'
-      ].join('\n')
-    ], {
-      cwd: workspaceRoot,
-      encoding: 'utf8'
-    });
+        '-e',
+        [
+          `const { acquireNodeTestGateLock } = require(${JSON.stringify(lockModule)});`,
+          `const release = acquireNodeTestGateLock(${JSON.stringify(root)}, ${JSON.stringify(gateName)});`,
+          'release();'
+        ].join('\n')
+      ],
+      {
+        cwd: workspaceRoot,
+        encoding: 'utf8'
+      }
+    );
   }
 });
