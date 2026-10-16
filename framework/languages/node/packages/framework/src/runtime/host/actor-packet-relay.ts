@@ -12,6 +12,7 @@ import type {
 } from '../../contracts';
 import { ZLinkFrameworkException, ZLinkSpotKind } from '../../contracts';
 import { ZLinkConfigurationException } from '../../contracts/Configuration/ConfigurationException';
+import { throwIfAborted } from '../abort';
 import type { Message } from '../../contracts/Common/Message';
 import {
   ZLINK_REMOTE_ACTOR_PACKET_RELAY_PACKET,
@@ -38,6 +39,7 @@ import {
 } from '../actors/actor-message-follow-context';
 import { streamMetadataMap } from '../actors/bound-session-wire';
 import { decodeRoutingId, normalizeRoutingId, routingIdsEqual } from '../routing-id';
+import { encodeSessionDisconnected } from '../actors/session-disconnected-wire';
 import { ZLinkSubmitStatus } from '../messaging/submission-result';
 import type { DefaultZLinkSpotManager, ZLinkSpotNodeRuntimeManager } from '../spots';
 import type { ZLinkDetachedTaskRunner } from '../spots/spot-actor-join-dispatch';
@@ -109,7 +111,8 @@ export class ZLinkActorPacketRelay {
 
   async notifyBoundActorDisconnected(
     actor: ZLinkSessionActor,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    binding?: ServiceStreamSessionBinding
   ): Promise<void> {
     const state = this.options.actorManager()?.getState(actor.actorId);
     const currentRemoteBoundSessionTarget =
@@ -121,25 +124,27 @@ export class ZLinkActorPacketRelay {
       currentRemoteActorPacketTarget ??
       (state?.spotId === undefined ? undefined : this.targets.cachedTargetForActor(actor));
     if (remoteTarget !== undefined) {
-      await this.notifyRemoteActorDisconnected(actor.actorId, remoteTarget, signal, actor.ref);
+      await this.notifyRemoteActorDisconnected(
+        actor.actorId,
+        remoteTarget,
+        signal,
+        actor.ref,
+        binding
+      );
       return;
     }
     const actorRefTarget = this.targets.targetForActorRef(actor.ref);
     if (actorRefTarget !== undefined) {
-      await this.notifyRemoteActorDisconnected(actor.actorId, actorRefTarget, signal, actor.ref);
+      await this.notifyRemoteActorDisconnected(
+        actor.actorId,
+        actorRefTarget,
+        signal,
+        actor.ref,
+        binding
+      );
       return;
     }
-    if (state?.spotId !== undefined && state.actor !== undefined) {
-      const handled = await this.requireSpotManager().notifyJoinedSpotActorDisconnected(
-        state.spotId,
-        state.actor,
-        signal
-      );
-      if (handled) {
-        return;
-      }
-    }
-    await this.notifyActorDisconnectedById(actor.actorId, signal);
+    await this.notifyLocalActorDisconnectedById(actor.actorId, signal, binding, actor.ref);
   }
 
   clearRemoteActorPacketTarget(actorId: string): void {
@@ -154,44 +159,41 @@ export class ZLinkActorPacketRelay {
     return this.targets.targetForState(actorId);
   }
 
-  async notifyActorDisconnectedById(actorId: string, signal?: AbortSignal): Promise<void> {
+  async notifyLocalActorDisconnectedById(
+    actorId: string,
+    signal?: AbortSignal,
+    binding?: ServiceStreamSessionBinding,
+    bindingActorRef?: ActorRef
+  ): Promise<void> {
+    throwIfAborted(signal);
     const state = this.options.actorManager()?.getState(actorId);
-    const remoteTarget =
-      state === undefined
-        ? undefined
-        : (state.remoteBoundSessionTarget ?? state.remoteActorPacketTarget);
-    if (remoteTarget !== undefined) {
-      await this.notifyRemoteActorDisconnected(actorId, remoteTarget, signal);
-      return;
+    const frame = this.disconnectedFrame(actorId, binding);
+    const header = RuntimeMessage.fromOwned(Buffer.from(frame.header));
+    const body = RuntimeMessage.fromOwned(frame.payload);
+    try {
+      if (state?.spotId === undefined)
+        await this.requireSpotNodeRuntime().dispatchEntryActorPacket(
+          'local',
+          actorId,
+          [header, body],
+          false,
+          undefined,
+          bindingActorRef
+        );
+      else
+        await this.requireSpotManager().dispatchRoutedActorPacket(
+          'local',
+          state.spotId,
+          actorId,
+          [header, body],
+          false,
+          undefined,
+          bindingActorRef
+        );
+    } finally {
+      header.close();
+      body.close();
     }
-    await this.notifyLocalActorDisconnectedById(actorId, signal);
-  }
-
-  async notifyLocalActorDisconnectedById(actorId: string, signal?: AbortSignal): Promise<void> {
-    const state = this.options.actorManager()?.getState(actorId);
-    if (state?.spotId !== undefined && state.actor !== undefined) {
-      const handled = await this.requireSpotManager().notifyJoinedSpotActorDisconnected(
-        state.spotId,
-        state.actor,
-        signal
-      );
-      if (handled) {
-        return;
-      }
-    }
-    const localActor = state?.actor;
-    if (localActor === undefined) {
-      throw new Error(`Actor '${actorId}' does not have a local actor instance.`);
-    }
-    const meshName = state?.meshName;
-    if (meshName === undefined) {
-      throw new Error(`Actor '${actorId}' does not have a RouteMesh identity.`);
-    }
-    await this.requireSpotNodeRuntime().notifyEntrySpotActorDisconnected(
-      meshName,
-      localActor,
-      signal
-    );
   }
 
   async receiveRemoteActorPacketRelay(
@@ -285,28 +287,17 @@ export class ZLinkActorPacketRelay {
         }
         return { ok: true, response: { acknowledged: true } };
       }
-      if (frameHeader.name === ZLINK_REMOTE_ACTOR_SESSION_DISCONNECTED_PACKET) {
-        // Session–Actor binding §8.3: disconnect can arrive after its binding
-        // has been removed. A successor binding suppresses it; no current binding
-        // still permits the already accepted notification to reach the Actor.
-        if (
-          this.options.actorManager()?.getState(relay.actorId)?.boundSession !== undefined &&
-          !this.matchesCurrentRemoteBinding(relay, _routeContext)
-        )
-          return { ok: true };
-        await this.notifyLocalActorDisconnectedById(relay.actorId);
-        return {
-          ok: true,
-          actorPacketTarget: encodeRemoteActorPacketTarget(
-            this.actorPacketTargetForState(relay.actorId)
-          )
-        };
-      }
-      if (remoteBoundSessionTarget !== undefined) {
+      if (
+        remoteBoundSessionTarget !== undefined &&
+        frameHeader.name !== ZLINK_REMOTE_ACTOR_SESSION_DISCONNECTED_PACKET
+      ) {
         this.requireCurrentRemoteBinding(relay, _routeContext);
       }
       const state = this.options.actorManager()?.getState(relay.actorId);
-      if (frameHeader.kind === ZLinkStreamMessageKind.Send) {
+      if (
+        frameHeader.kind === ZLinkStreamMessageKind.Send ||
+        frameHeader.name === ZLINK_REMOTE_ACTOR_SESSION_DISCONNECTED_PACKET
+      ) {
         const dispatch =
           state?.spotId === undefined
             ? this.requireSpotNodeRuntime().dispatchEntryActorPacket(
@@ -326,6 +317,15 @@ export class ZLinkActorPacketRelay {
                 remoteBoundSessionTarget,
                 fallbackActorRef
               );
+        if (frameHeader.name === ZLINK_REMOTE_ACTOR_SESSION_DISCONNECTED_PACKET) {
+          await dispatch;
+          return {
+            ok: true,
+            actorPacketTarget: encodeRemoteActorPacketTarget(
+              this.actorPacketTargetForState(relay.actorId)
+            )
+          };
+        }
         // Spec 05 §1.3: a one-way Session Actor relay completes at relay
         // queue admission, not after the remote application turn. In
         // particular, a handler may register a deferred Join whose relocation
@@ -768,23 +768,21 @@ export class ZLinkActorPacketRelay {
     actorId: string,
     remoteTarget: ZLinkRemoteBoundSessionTarget | ZLinkRemoteActorPacketTarget,
     signal?: AbortSignal,
-    bindingActorRef?: ActorRef
+    bindingActorRef?: ActorRef,
+    binding?: ServiceStreamSessionBinding
   ): Promise<void> {
     const spotKind: ZLinkSpotKind | undefined =
       'spotKind' in remoteTarget ? (remoteTarget.spotKind as ZLinkSpotKind | undefined) : undefined;
-    const header: ZLinkStreamFrameHeader = {
-      kind: ZLinkStreamMessageKind.Send,
-      codec: ZLinkStreamCodec.Raw,
-      flags: ZLinkStreamHeaderFlags.None,
-      name: ZLINK_REMOTE_ACTOR_SESSION_DISCONNECTED_PACKET,
-      metadata: new Map()
-    };
+    const frame = this.disconnectedFrame(
+      actorId,
+      binding,
+      'sessionNodeRid' in remoteTarget ? remoteTarget : undefined
+    );
     const payload = encodeRemoteActorPacketRelayPayload({
       actorId,
       routerChannelId: remoteTarget.routerChannelId,
       bindingActorRef,
-      header: encodeStreamHeader(header),
-      payload: Buffer.alloc(0)
+      ...frame
     });
     if ((spotKind ?? ZLinkSpotKind.Entry) === ZLinkSpotKind.Entry) {
       await this.options.routeTransport.request(
@@ -811,6 +809,32 @@ export class ZLinkActorPacketRelay {
         signal
       }
     );
+  }
+
+  private disconnectedFrame(
+    actorId: string,
+    binding?: ServiceStreamSessionBinding,
+    target?: ZLinkRemoteBoundSessionTarget
+  ) {
+    const current =
+      binding === undefined
+        ? (this.options.actorManager()?.getState(actorId)?.boundSession ?? target)
+        : undefined;
+    const header: ZLinkStreamFrameHeader = {
+      kind: ZLinkStreamMessageKind.Send,
+      codec: ZLinkStreamCodec.Raw,
+      flags: ZLinkStreamHeaderFlags.None,
+      name: ZLINK_REMOTE_ACTOR_SESSION_DISCONNECTED_PACKET,
+      metadata: new Map()
+    };
+    return {
+      header: encodeStreamHeader(header),
+      payload: encodeSessionDisconnected(
+        binding?.sessionOwnerNodeRid ?? current?.sessionNodeRid,
+        binding?.sessionOwnerNodeGeneration ?? current?.sessionOwnerNodeGeneration,
+        binding?.bindingGeneration ?? current?.bindingGeneration
+      )
+    };
   }
 
   private requireCurrentRemoteBinding(

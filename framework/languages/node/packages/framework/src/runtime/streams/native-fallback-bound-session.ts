@@ -35,6 +35,7 @@ import type { ZLinkNativeFallbackBoundSessionPort } from './stream-binding-runti
 import type { ZLinkBackendActorSessionNode } from '../backend';
 import { resolveFrameworkPacketName } from '../messaging/packet-name';
 import { currentOrCreateFlow, runWithOutboundFlow } from '../diagnostics/flow-context';
+import { encodeSessionDisconnected } from '../actors/session-disconnected-wire';
 
 export interface ZLinkNativeFallbackBoundSessionOptions {
   readonly runtime: ZLinkNativeFallbackBoundSessionPort;
@@ -69,7 +70,11 @@ export class ZLinkNativeFallbackBoundSession implements ZLinkBoundSession {
         actorId: this.options.actorId,
         routerChannelId: remoteTarget.routerChannelId,
         header: encodeStreamHeader(disconnectedFrameHeader()),
-        payload: Buffer.alloc(0)
+        payload: encodeSessionDisconnected(
+          remoteTarget.sessionNodeRid,
+          remoteTarget.sessionOwnerNodeGeneration,
+          remoteTarget.bindingGeneration
+        )
       });
       const target = {
         routerChannelId: remoteTarget.routerChannelId,

@@ -1,4 +1,7 @@
 import { actorMessageFollowContext } from '../actors/actor-message-follow-context';
+import { DefaultZLinkActorContext } from '../actors/actor-context';
+import { decodeSessionDisconnected } from '../actors/session-disconnected-wire';
+import { routingIdsEqual } from '../routing-id';
 import type { ApplicationJobOrigin } from '../application-jobs/contracts';
 import {
   ZLinkFrameworkInternalErrorKind,
@@ -13,7 +16,11 @@ import type {
   ZLinkSpot
 } from '../../contracts';
 import type { Message } from '../../contracts/Common/Message';
-import { ZLinkFrameworkException, zlinkMessageMetadata } from '../../contracts';
+import {
+  ZLinkFrameworkException,
+  ZLinkFrameworkErrorKind,
+  zlinkMessageMetadata
+} from '../../contracts';
 import {
   ZLinkRuntimeMessageFlowOutcome as ZLinkMessageFlowOutcome,
   ZLinkRuntimeDispatchErrorAction as ZLinkDispatchErrorAction,
@@ -231,6 +238,31 @@ export class ZLinkSpotActorPacketDispatch {
           );
         }
         if (header.name === ZLINK_REMOTE_ACTOR_SESSION_DISCONNECTED_PACKET) {
+          const identity = decodeSessionDisconnected(messageToBytes(parts[1]));
+          if (identity === undefined) {
+            if (this.options.dispatchErrors?.captureEnabled() === true)
+              this.reportInvalidFrame(
+                actorId,
+                messageKind,
+                new ZLinkFrameworkException(
+                  ZLinkFrameworkErrorKind.ProtocolError,
+                  'ProtocolError: malformed Session disconnect identity.'
+                ),
+                'warning'
+              );
+            return undefined;
+          }
+          const current =
+            actor.context instanceof DefaultZLinkActorContext
+              ? actor.context.currentSessionBinding
+              : undefined;
+          if (
+            current !== undefined &&
+            (!routingIdsEqual(current.sessionNodeRid, identity.sessionOwnerNodeRid) ||
+              current.sessionOwnerNodeGeneration !== identity.sessionOwnerNodeGeneration ||
+              current.bindingGeneration !== identity.bindingGeneration)
+          )
+            return undefined;
           await this.options.onDisconnectActor(actor);
           return undefined;
         }
@@ -606,7 +638,8 @@ export class ZLinkSpotActorPacketDispatch {
   private reportInvalidFrame(
     actorId: string,
     messageKind: ZLinkDispatchMessageKind,
-    error?: unknown
+    error?: unknown,
+    severity?: 'warning'
   ): void {
     this.options.dispatchErrors?.report({
       surface: ZLinkDispatchErrorSurface.SpotActor,
@@ -615,7 +648,8 @@ export class ZLinkSpotActorPacketDispatch {
       action: ZLinkDispatchErrorAction.Drop,
       spotId: this.options.spotId(),
       actorId,
-      error
+      error,
+      severity
     });
   }
 

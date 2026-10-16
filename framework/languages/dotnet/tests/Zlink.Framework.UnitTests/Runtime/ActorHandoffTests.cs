@@ -1339,7 +1339,7 @@ public sealed class ActorHandoffTests
 
         using var disconnect = Message.From(
             ZLinkActorBoundSessionRelay.EncodeSessionDisconnected(
-                "binding-1",
+                sessionNode,
                 bindingGeneration: 4,
                 sessionOwnerNodeGeneration: 3
             )
@@ -1348,10 +1348,9 @@ public sealed class ActorHandoffTests
         Assert.True(
             ZLinkActorBoundSessionRelay.TryValidateDisconnectedBinding(
                 state,
-                sessionNode,
-                sessionRid,
                 disconnect,
-                out var bindingToken
+                out var bindingToken,
+                out _
             )
         );
         Assert.Equal("binding-1", bindingToken);

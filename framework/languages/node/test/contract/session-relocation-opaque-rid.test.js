@@ -906,9 +906,22 @@ for (const binding of ['absent', 'same', 'successor']) {
     } = require('../../packages/framework/dist/runtime/host/actor-packet-relay');
     const packets = require('../../packages/framework/dist/runtime/actors/actor-packet-relay-wire');
     const protocol = require('../../packages/framework/dist/runtime/streams/protocol');
+    const {
+      encodeSessionDisconnected
+    } = require('../../packages/framework/dist/runtime/actors/session-disconnected-wire');
+    const {
+      DefaultZLinkActorContext
+    } = require('../../packages/framework/dist/runtime/actors/actor-context');
+    const {
+      ZLinkSpotActorPacketDispatch
+    } = require('../../packages/framework/dist/runtime/spots/spot-actor-packet-dispatch');
     const entered = barrier();
     const allowNotification = barrier();
-    let currentBinding = { sessionNodeRid: 'session-owner', bindingGeneration: 6n };
+    let currentBinding = {
+      sessionNodeRid: 'session-owner',
+      sessionOwnerNodeGeneration: 4n,
+      bindingGeneration: 6n
+    };
     let callbacks = 0;
     let submissions = 0;
     const actorRelay = new ZLinkActorPacketRelay({
@@ -918,9 +931,27 @@ for (const binding of ['absent', 'same', 'successor']) {
         getState: () => ({ boundSession: currentBinding, spotId: 'spot', actor: {} })
       }),
       spotManager: () => ({
-        async notifyJoinedSpotActorDisconnected() {
-          callbacks++;
-          return true;
+        async dispatchRoutedActorPacket(origin, _spotId, actorId, parts) {
+          const state = new framework.ZLinkActorRuntimeState(actorId);
+          if (currentBinding !== undefined)
+            state.installBoundSessionBinding({
+              routerChannelId: 'route',
+              targetNodeRid: 'session-owner',
+              spotId: 'entry',
+              sessionRid: 'session',
+              sessionOwnerId: 'session-owner-id',
+              sessionOwnerLeaseGeneration: 8n,
+              ...currentBinding
+            });
+          return new ZLinkSpotActorPacketDispatch({
+            spot: {},
+            spotId: () => 'spot',
+            registry: {},
+            resolveActor: () => ({ context: new DefaultZLinkActorContext(state) }),
+            onDisconnectActor: async () => {
+              callbacks++;
+            }
+          }).dispatch(origin, actorId, parts);
         }
       })
     });
@@ -940,7 +971,7 @@ for (const binding of ['absent', 'same', 'successor']) {
               name: packets.ZLINK_REMOTE_ACTOR_SESSION_DISCONNECTED_PACKET,
               metadata: new Map()
             }),
-            payload: Buffer.alloc(0)
+            payload: encodeSessionDisconnected('session-owner', 4n, 6n)
           });
           entered.release();
           await allowNotification.joined;
@@ -970,7 +1001,11 @@ for (const binding of ['absent', 'same', 'successor']) {
           ? undefined
           : binding === 'same'
             ? currentBinding
-            : { sessionNodeRid: 'session-owner', bindingGeneration: 7n };
+            : {
+                sessionNodeRid: 'session-owner',
+                sessionOwnerNodeGeneration: 4n,
+                bindingGeneration: 7n
+              };
       const absent =
         await h.host.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationSeal(
           h.sent[0]
