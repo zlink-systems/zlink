@@ -87,10 +87,9 @@ export function spotNodeAutoConnectCapability(
       (channel) => channel.server === true
     )
   };
-  const manualConnections = hasManualRouterConnections(spotNode);
   return {
     local,
-    executor: new ZLinkSpotNodeAutoConnectExecutor(node, manualConnections)
+    executor: new ZLinkSpotNodeAutoConnectExecutor(node)
   };
 }
 
@@ -138,13 +137,6 @@ function meshDescriptorPeerResolver(runtime: ZLinkLocationRuntime): ZLinkPeerLoc
   };
 }
 
-function hasManualRouterConnections(spotNode: ZLinkSpotNodeOptions): boolean {
-  return (
-    (spotNode.router?.manualConnections?.length ?? 0) > 0 ||
-    (spotNode.router?.manualPeerConnections?.length ?? 0) > 0
-  );
-}
-
 const detachedSpotNodeAutoConnectResource = new AsyncResource('zlink:spot-node-autoconnect');
 
 interface ZLinkSpotNodeConnectionIntent {
@@ -155,10 +147,7 @@ class ZLinkSpotNodeAutoConnectExecutor implements IZLinkAutoConnectExecutor {
   private readonly lane = new ZLinkStateLane();
   private readonly connectionIntents = new Map<string, ZLinkSpotNodeConnectionIntent>();
 
-  constructor(
-    private readonly node: ZLinkBackendMeshNode,
-    private readonly manualConnections: boolean
-  ) {}
+  constructor(private readonly node: ZLinkBackendMeshNode) {}
 
   onDisconnected(handler: (endpoint: string) => void): void {
     this.node.onPeerDisconnected?.(handler);
@@ -179,24 +168,6 @@ class ZLinkSpotNodeAutoConnectExecutor implements IZLinkAutoConnectExecutor {
   disconnect(target: ZLinkAutoConnectTarget): void {
     if (!this.connectionIntents.has(connectionKey(target))) return;
     this.disconnectPeer(target);
-  }
-
-  disconnectStalePeers(targets: readonly ZLinkAutoConnectTarget[]): void {
-    if (this.manualConnections) return;
-    const current = new Map(
-      targets
-        .filter((target) => target.nodeRid !== undefined)
-        .map((target) => [String(target.nodeRid), target])
-    );
-    const peers = this.node.peers();
-    for (const peer of peers) {
-      if (peer.routingId === null) continue;
-      const target = current.get(String(peer.routingId));
-      if (target !== undefined && peer.endpoint === target.endpoint) {
-        continue;
-      }
-      this.node.disconnectPeer(peer.routingId, peer.lifecycleGeneration);
-    }
   }
 
   isDisconnected(target: ZLinkAutoConnectTarget): boolean {
