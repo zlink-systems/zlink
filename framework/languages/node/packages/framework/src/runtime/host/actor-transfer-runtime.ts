@@ -956,7 +956,7 @@ export class ZLinkActorTransferRuntime {
     state: ZLinkActorRuntimeState,
     signal?: AbortSignal,
     relocation?: ServiceWireOperationId
-  ): Promise<ZLinkRemoteBoundSessionTarget> {
+  ): Promise<ZLinkRemoteBoundSessionTarget | undefined> {
     const target = state.boundSession;
     const actorRef = state.nativeActorRef;
     if (
@@ -1041,12 +1041,13 @@ export class ZLinkActorTransferRuntime {
       },
       session
     };
-    await serviceWire.requestSessionRelocationSeal(
+    const response = await serviceWire.requestSessionRelocationSeal(
       target.routerChannelId,
       target.targetNodeRid,
       request,
       signal
     );
+    if (response.sealResult === 'bindingAbsent') return undefined;
     return {
       ...target,
       previousAuthorityOwnerGeneration: authority.authorityOwnerGeneration,
