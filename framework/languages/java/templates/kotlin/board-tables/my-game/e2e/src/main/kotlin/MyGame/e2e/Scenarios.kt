@@ -33,7 +33,7 @@ private suspend fun view(client: Client): TableView {
     return client.next<TableView>()
 }
 
-suspend fun scenario(id: String, nodes: Nodes) {
+suspend fun scenario(id: String, nodes: Nodes, expectedNode: String? = null) {
     val suffix = UUID.randomUUID().toString()
     val tableId = "table-$suffix"
     val p1 = Client(nodes.endpoint, "p1-$suffix", tableId)
@@ -42,6 +42,10 @@ suspend fun scenario(id: String, nodes: Nodes) {
     try {
         val first = p1.connect()
         val second = p2.connect()
+        if (expectedNode != null)
+            check(first.nodeId == expectedNode && second.nodeId == expectedNode) {
+                "Replacement node did not host new work"
+            }
         check(first.yourSeat == 0 && first.seats.single().chips == Rules.INITIAL_CHIPS)
         check(
             second.yourSeat == 1 &&
@@ -114,7 +118,7 @@ suspend fun scenario(id: String, nodes: Nodes) {
         check(result1.handNumber == start1.handNumber)
         if (id == "update") {
             nodes.replace(before1.nodeId)
-            scenario("table", nodes)
+            scenario("table", nodes, before1.nodeId)
         }
     } catch (failure: Exception) {
         primaryFailure = failure

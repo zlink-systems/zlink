@@ -85,7 +85,7 @@ private class Node(val id: String, module: String, config: Path, root: Path, log
 
 fun isWindows() = System.getProperty("os.name").startsWith("Windows")
 
-class Nodes(private val root: Path) : AutoCloseable {
+class Nodes(private val root: Path, private val tableCapacity: Int) : AutoCloseable {
     private val runId = UUID.randomUUID().toString()
     val logs: Path = root.resolve(".logs/run-$runId").also { Files.createDirectories(it) }
     private val project = "my-game-$runId"
@@ -133,6 +133,7 @@ class Nodes(private val root: Path) : AutoCloseable {
                     "my-game:$runId:",
                     "tcp://127.0.0.1:0",
                     if (id == "session") "tcp://127.0.0.1:0" else null,
+                    tableCapacity,
                 )
             val path = logs.resolve("$id.json")
             Json.mapper.writeValue(path.toFile(), config)

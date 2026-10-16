@@ -23,7 +23,12 @@ data class NodeConfig(
     val keyPrefix: String = "",
     val meshEndpoint: String = "tcp://127.0.0.1:0",
     val streamEndpoint: String? = null,
-)
+    val tableCapacity: Int = 0,
+) {
+    init {
+        require(tableCapacity >= 0) { "Table capacity must be nonnegative" }
+    }
+}
 
 object Json {
     val mapper = jacksonObjectMapper().findAndRegisterModules()

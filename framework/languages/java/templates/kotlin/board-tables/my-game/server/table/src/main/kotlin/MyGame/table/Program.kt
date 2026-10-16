@@ -25,7 +25,10 @@ class Program {
             .objects()
             .server()
             .addEntrySpot<Entry>()
-            .addSpotFactory<Table>(Names.TABLE) { preserveStateWith<Table, TableTransfer>() }
+            .addSpotFactory<Table>(Names.TABLE) {
+                if (config.tableCapacity > 0) stableTypeLimit(config.tableCapacity)
+                preserveStateWith<Table, TableTransfer>()
+            }
             .addActorFactory<Player, PlayerFactory>(Names.PLAYER) {
                 preserveStateWith<Player, PlayerTransfer>()
             }

@@ -96,7 +96,9 @@ fun checkStructure(root: Path) {
     unique(logicalIds)
     check(spots.any { it["kind"].asText() == "user" && it["dynamic"]?.asBoolean() == true })
     for (node in nodes.filter { roles[it["id"].asText()] == "table" }) check(
-        spots.any { it["owner"].asText() == node["id"].asText() && it["kind"].asText() == "entry" }
+        spots.count {
+            it["owner"].asText() == node["id"].asText() && it["kind"].asText() == "entry"
+        } == 1
     )
     for (edge in array("edges")) {
         check(text(edge, "from") in ids && text(edge, "to") in ids)

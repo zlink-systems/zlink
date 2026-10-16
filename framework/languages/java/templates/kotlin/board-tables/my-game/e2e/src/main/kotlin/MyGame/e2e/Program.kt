@@ -10,15 +10,16 @@ fun main(args: Array<String>) = runBlocking {
     checkStructure(root)
     if (args.contentEquals(arrayOf("--check-structure"))) return@runBlocking
     require(args.isEmpty() || (args.size == 2 && args[0] == "--scenario"))
-    val selected = if (args.isEmpty()) Names.SCENARIOS else args[1].split(',')
+    val requested = if (args.isEmpty()) Names.SCENARIOS else args[1].split(',')
     require(
-        selected.isNotEmpty() &&
-            selected.distinct() == selected &&
-            selected.all { it in Names.SCENARIOS }
+        requested.isNotEmpty() &&
+            requested.distinct() == requested &&
+            requested.all { it in Names.SCENARIOS }
     )
+    val selected = Names.SCENARIOS.filter { it in requested }
     var passed = 0
     var cleanupFailure: Exception? = null
-    val nodes = Nodes(root)
+    val nodes = Nodes(root, selected.size)
     try {
         println("Logs: ${nodes.logs}")
         nodes.start()
