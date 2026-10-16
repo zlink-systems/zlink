@@ -128,9 +128,10 @@ function validateFrameworkJsonV1Value(
       if (typeof value !== 'string' || !BASE64_PATTERN.test(value)) {
         schemaFailure(path, 'padded RFC 4648 base64');
       }
-      const bytes = decodeBase64(value as string);
-      if (encodeBase64(bytes) !== value) schemaFailure(path, 'canonical padded RFC 4648 base64');
-      return decode ? Uint8Array.from(bytes) : value;
+      if (!hasCanonicalBase64Padding(value as string))
+        schemaFailure(path, 'canonical padded RFC 4648 base64');
+      // decodeBase64 returns fresh storage owned by this value.
+      return decode ? decodeBase64(value as string) : value;
     }
     case 'enum':
       if (typeof value !== 'string' || !schema.names.includes(value)) {
@@ -341,6 +342,21 @@ class JsonPropertyScanner {
 }
 
 const BASE64_STRING_CHUNK_BYTES = 8192;
+const BASE64_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+
+/**
+ * Padded RFC 4648 text that matches BASE64_PATTERN is canonical exactly when
+ * the bits after the last encoded byte are zero: the low four bits of the
+ * symbol before `==`, or the low two bits of the symbol before `=`. Checking
+ * those bits replaces re-encoding the decoded bytes for comparison.
+ */
+function hasCanonicalBase64Padding(value: string): boolean {
+  if (value.endsWith('=='))
+    return (BASE64_ALPHABET.indexOf(value.charAt(value.length - 3)) & 0x0f) === 0;
+  if (value.endsWith('='))
+    return (BASE64_ALPHABET.indexOf(value.charAt(value.length - 2)) & 0x03) === 0;
+  return true;
+}
 
 function encodeBase64(bytes: Uint8Array): string {
   let binary = '';
