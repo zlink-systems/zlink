@@ -85,6 +85,8 @@ fun checkStructure(root: Path) {
     unique(spots.map { text(it, "id") })
     val logicalIds = mutableListOf<String>()
     val dynamic = mutableSetOf<String>()
+    // These roles explicitly register the shared Entry and first-admission handlers.
+    val applicationEntryRoles = setOf(NodeRole.LOBBY, NodeRole.INSTANCE)
     val entryOwners = mutableSetOf<String>()
     for (spot in spots) {
         if (spot["kind"].asText() == "entry")
@@ -93,7 +95,7 @@ fun checkStructure(root: Path) {
         when (text(spot, "kind")) {
             "entry" ->
                 check(
-                    (role == NodeRole.LOBBY || role == NodeRole.INSTANCE) &&
+                    (role in applicationEntryRoles) &&
                         spot["type"]?.isNull == true &&
                         !spot.has("logicalId") &&
                         !spot.has("dynamic")
@@ -115,10 +117,8 @@ fun checkStructure(root: Path) {
     }
     unique(logicalIds)
     check(dynamic == setOf(Names.PARTY, Names.DUNGEON)) { "Missing dynamic Spot family" }
-    for (node in
-        nodes.filter { roles[it["id"].asText()] in setOf(NodeRole.LOBBY, NodeRole.INSTANCE) }) {
-        val id = text(node, "id")
-        check(spots.any { it["owner"].asText() == id && it["kind"].asText() == "entry" })
+    check(entryOwners == roles.filterValues { it in applicationEntryRoles }.keys) {
+        "Entry owners differ from application Entry registrations"
     }
     for (edge in array("edges")) {
         check(text(edge, "from") in ids && text(edge, "to") in ids)

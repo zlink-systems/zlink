@@ -106,6 +106,8 @@ inline void check_structure (const std::filesystem::path &root)
         require (roles.contains (node.at ("id")) && node.at ("role") == roles.at (node.at ("id")),
                  "Node role mismatch");
     require (j.at ("channels").empty (), "This structure has no channels");
+    // These roles explicitly register the shared Entry and first-admission handlers.
+    const std::set<std::string> application_entry_roles{"lobby", "instance"};
     std::set<std::string> entry_owners, dynamic_types;
     for (const auto &spot : j.at ("spots")) {
         const auto id = nonempty (spot, "id"), owner = nonempty (spot, "owner"),
@@ -114,7 +116,7 @@ inline void check_structure (const std::filesystem::path &root)
                  "Invalid Spot owner or duplicate ID");
         if (kind == "entry") {
             require (entry_owners.insert (owner).second, "Duplicate Entry owner");
-            require ((roles.at (owner) == "lobby" || roles.at (owner) == "instance")
+            require (application_entry_roles.contains (roles.at (owner))
                        && spot.at ("type").is_null () && !spot.contains ("logicalId")
                        && !spot.contains ("dynamic"),
                      "Invalid Entry Spot");
@@ -130,8 +132,9 @@ inline void check_structure (const std::filesystem::path &root)
     require (dynamic_types == std::set<std::string>{Names::party, Names::dungeon},
              "Missing dynamic Spot family");
     for (const auto &[id, role] : roles)
-        if (role == "lobby" || role == "instance")
-            require (entry_owners.contains (id), "Object Server lacks Entry Spot");
+        if (application_entry_roles.contains (role))
+            require (entry_owners.contains (id),
+                     "Application Entry registration lacks Entry declaration");
     for (const auto &[id, config] : configurations) {
         require ((id == "session") == config.contains ("StreamEndpoint"),
                  "Session endpoint ownership mismatch");

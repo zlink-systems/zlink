@@ -60,7 +60,7 @@ export async function runHost(
   builder.addLocationStore(location);
   builder.addRelocationStore(relocation);
   builder.configureDispatch().messageFlow('normal');
-  builder.setMessageFollowDuration(Limits.messageFollowMs);
+  builder.configureLocations().messageFollowDurationMs(Limits.messageFollowMs);
   const mesh = builder
     .addRouteMesh(Names.mesh)
     .setRoutingIdPrefix(config.id)

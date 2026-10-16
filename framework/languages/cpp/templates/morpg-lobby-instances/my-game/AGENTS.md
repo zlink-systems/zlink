@@ -17,7 +17,7 @@ Use typed messages and the default JSON serializer. Replies to handler requests 
 
 Do not add internal APIs, reflection, raw frame parsing, manual codecs, transport policy, retries, fixed sleeps or relaxed assertions. A public package defect must remain a documented blocker. Framework owns execution gates, routing, membership, binding and relocation.
 
-Register the shared stateless Entry and its shared admission handlers on every Object Server that registers Player. Keep party state in the Party User Spot. Structure checks must reject missing Entry owners and missing dynamic Party or Dungeon types. Keep the one-Dungeon instance capacity that makes replacement admission deterministic.
+Lobby and Instance register the shared application Entry and first-admission handlers. Declare exactly one Entry for each node with either role; omit Framework infrastructure Entry instances on other roles. Keep party state in the Party User Spot. Structure checks must reject missing Entry owners and missing dynamic Party or Dungeon types. Keep the one-Dungeon instance capacity that makes replacement admission deterministic.
 
 ## Changes and verification
 

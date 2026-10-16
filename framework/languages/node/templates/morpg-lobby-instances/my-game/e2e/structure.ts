@@ -76,6 +76,8 @@ export function checkStructure(path = 'zlink.structure.json'): void {
     spots.map((n) => text(n.id)),
     'Spot ID'
   );
+  // These roles explicitly register the shared Entry and first-admission handlers.
+  const applicationEntryRoles = new Set(['lobby', 'instance']);
   const entryOwners = new Set<string>();
   for (const spot of spots) {
     const host = owner(spot.owner);
@@ -95,10 +97,8 @@ export function checkStructure(path = 'zlink.structure.json'): void {
   }
   assert.deepEqual(
     entryOwners,
-    new Set(
-      nodes.filter((n) => n.role === 'lobby' || n.role === 'instance').map((n) => text(n.id))
-    ),
-    'Entry owners differ from Object Server registrations'
+    new Set(nodes.filter((n) => applicationEntryRoles.has(text(n.role))).map((n) => text(n.id))),
+    'Entry owners differ from application Entry registrations'
   );
   for (const type of [Names.party, Names.dungeon])
     assert(

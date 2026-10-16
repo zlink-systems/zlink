@@ -18,7 +18,7 @@ Use public APIs and the default typed JSON serializer. Reply inside a request ha
 
 Party owns party membership and readiness. Dungeon owns its admitted party and stage. Relocation adapters capture application state only. Framework owns routes, leases, membership, queues, execution gates, and relocation. Do not compensate for Framework errors through internal APIs, reflection, raw frames, manual codecs, sleeps, retries, larger deadlines, or weaker assertions. Delivery handlers restore declared DTO classes using their packet table until #1731 is fixed.
 
-Register the shared stateless Entry and its shared admission handlers on every Object Server that registers Player. Keep party state in the Party User Spot. Structure checks must reject missing Entry owners and missing dynamic Party or Dungeon types. Keep the one-Dungeon instance capacity that makes replacement admission deterministic.
+Lobby and Instance register the shared application Entry and first-admission handlers. Declare exactly one Entry for each node with either role; omit Framework infrastructure Entry instances on other roles. Keep party state in the Party User Spot. Structure checks must reject missing Entry owners and missing dynamic Party or Dungeon types. Keep the one-Dungeon instance capacity that makes replacement admission deterministic.
 
 ## Changes and verification
 

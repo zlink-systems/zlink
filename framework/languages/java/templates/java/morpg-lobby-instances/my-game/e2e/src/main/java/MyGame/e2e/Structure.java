@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 
 import java.nio.file.*;
 import java.util.*;
+import java.util.stream.Collectors;
 
 public final class Structure {
     private Structure() {}
@@ -112,6 +113,8 @@ public final class Structure {
         unique(spots.stream().map(p -> text(p, "id")).toList());
         var logical = new ArrayList<String>();
         var dynamic = new HashSet<String>();
+        // These roles explicitly register the shared Entry and first-admission handlers.
+        var applicationEntryRoles = Set.of(NodeRole.LOBBY, NodeRole.INSTANCE);
         var entryOwners = new HashSet<String>();
         for (var spot : spots) {
             if (spot.path("kind").asText().equals("entry"))
@@ -120,7 +123,7 @@ public final class Structure {
             switch (text(spot, "kind")) {
                 case "entry" ->
                         require(
-                                (role == NodeRole.LOBBY || role == NodeRole.INSTANCE)
+                                applicationEntryRoles.contains(role)
                                         && spot.has("type")
                                         && spot.path("type").isNull()
                                         && !spot.has("logicalId")
@@ -144,16 +147,13 @@ public final class Structure {
         }
         unique(logical);
         require(dynamic.equals(Set.of(Names.PARTY, Names.DUNGEON)), "Missing dynamic Spot family");
-        for (var node : nodes)
-            if (roles.get(text(node, "id")) == NodeRole.LOBBY
-                    || roles.get(text(node, "id")) == NodeRole.INSTANCE)
-                require(
-                        spots.stream()
-                                .anyMatch(
-                                        p ->
-                                                p.path("owner").asText().equals(text(node, "id"))
-                                                        && p.path("kind").asText().equals("entry")),
-                        "Object Server lacks Entry Spot");
+        require(
+                entryOwners.equals(
+                        roles.entrySet().stream()
+                                .filter(pair -> applicationEntryRoles.contains(pair.getValue()))
+                                .map(Map.Entry::getKey)
+                                .collect(Collectors.toSet())),
+                "Entry owners differ from application Entry registrations");
         for (var edge : array(s, "edges")) {
             require(
                     ids.contains(text(edge, "from")) && ids.contains(text(edge, "to")),

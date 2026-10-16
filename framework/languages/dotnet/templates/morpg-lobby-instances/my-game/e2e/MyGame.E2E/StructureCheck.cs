@@ -140,6 +140,12 @@ internal static class StructureCheck
         );
         var spotIds = new HashSet<string>(StringComparer.Ordinal);
         var logicalIds = new HashSet<string>(StringComparer.Ordinal);
+        // These roles explicitly register the shared Entry and first-admission handlers.
+        var applicationEntryRoles = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "lobby",
+            "instance",
+        };
         var entryOwners = new HashSet<string>(StringComparer.Ordinal);
         var dynamicTypes = new HashSet<string>(StringComparer.Ordinal);
         foreach (var spot in Array(document, "spots"))
@@ -151,8 +157,8 @@ internal static class StructureCheck
             if (kind == "entry")
             {
                 Require(
-                    roles[owner] is "lobby" or "instance",
-                    "Entry owner must be an Object Server."
+                    applicationEntryRoles.Contains(roles[owner]),
+                    "Entry owner has no application Entry registration."
                 );
                 Require(entryOwners.Add(owner), "Duplicate Entry owner.");
                 Require(
@@ -187,9 +193,11 @@ internal static class StructureCheck
         }
         Require(
             entryOwners.SetEquals(
-                roles.Where(pair => pair.Value is "lobby" or "instance").Select(pair => pair.Key)
+                roles
+                    .Where(pair => applicationEntryRoles.Contains(pair.Value))
+                    .Select(pair => pair.Key)
             ),
-            "Entry owners differ from Object Server registrations."
+            "Entry owners differ from application Entry registrations."
         );
         Require(
             dynamicTypes.SetEquals(new[] { GameNames.PartyType, GameNames.DungeonType }),
