@@ -63,6 +63,38 @@ bool pending_actor_admission_t::matches_prepare (const actor_ref_t &actor,
            && completion_operation_id_low == operation_low;
 }
 
+task_t<void> actor_transfer_coordinator_t::wait_for_source_completion (std::string actor_key)
+{
+    const auto completion = co_await _lane.run_task ([this, &actor_key] {
+        const auto found = _moves.find (actor_key);
+        if (found == _moves.end ()
+            || (found->second.phase != actor_move_phase_t::source_reserved
+                && found->second.phase != actor_move_phase_t::source_remote
+                && (found->second.phase != actor_move_phase_t::reconcile
+                    || !found->second.reconcile_context)))
+            return std::shared_ptr<task_completion_source_t<void>>{};
+        if (!found->second.source_completion)
+            found->second.source_completion = std::make_shared<task_completion_source_t<void>> ();
+        return found->second.source_completion;
+    });
+    if (completion)
+        co_await completion->task ();
+}
+
+void actor_transfer_coordinator_t::erase_move_on_lane (const std::string &actor_key)
+{
+    auto move = _moves.extract (actor_key);
+    if (!move || !move.mapped ().source_completion)
+        return;
+    const auto completion = std::move (move.mapped ().source_completion);
+    // Continuations may enter the node lane or query this coordinator.
+    // Deliver outside the state lane using its existing executor.
+    if (!_lane_executor.try_submit_internal (
+          [completion] { completion->complete (result_t<void>::success ()); }))
+        completion->complete (result_t<void>::failure (framework_error_kind_t::shutting_down,
+                                                       "Actor transfer executor is stopping"));
+}
+
 bool actor_transfer_coordinator_t::try_reserve_source (const std::string &actor_key,
                                                        std::string transfer_id)
 {
@@ -121,7 +153,7 @@ actor_transfer_coordinator_t::cancel_move (const std::string &actor_key)
       .run ([&, this] {
           if (_activity_handler)
               _activity_handler ();
-          _moves.erase (actor_key);
+          erase_move_on_lane (actor_key);
           auto discarded = _backlogs.extract (actor_key);
           return discarded ? std::move (discarded.mapped ()) : std::vector<handoff_packet_t>{};
       })
@@ -187,7 +219,7 @@ actor_transfer_coordinator_t::complete_move (const std::string &actor_key)
           if (found->second.transfer_started_at) {
               elapsed = std::chrono::steady_clock::now () - *found->second.transfer_started_at;
           }
-          _moves.erase (found);
+          erase_move_on_lane (found->first);
           return elapsed;
       })
       .get ();
@@ -212,7 +244,7 @@ actor_transfer_coordinator_t::complete_move_and_take_backlog (const std::string 
               backlog = std::move (queued->second);
               _backlogs.erase (queued);
           }
-          _moves.erase (found);
+          erase_move_on_lane (found->first);
           return actor_move_completion_t{std::move (elapsed), std::move (backlog), true};
       })
       .get ();
@@ -239,7 +271,7 @@ actor_transfer_coordinator_t::finish_move_replay (const std::string &actor_key)
           if (found->second.transfer_started_at) {
               elapsed = std::chrono::steady_clock::now () - *found->second.transfer_started_at;
           }
-          _moves.erase (found);
+          erase_move_on_lane (found->first);
           return actor_move_completion_t{std::move (elapsed), {}, true};
       })
       .get ();
@@ -842,7 +874,7 @@ bool actor_transfer_coordinator_t::admit_attempt (const std::string &actor_key,
                 displaced = std::move (node.mapped ());
             if (auto queued = _backlogs.extract (actor_key))
                 discarded_backlog = std::move (queued.mapped ());
-            _moves.erase (moving);
+            erase_move_on_lane (moving->first);
             return true;
         })
         .get ();
@@ -905,7 +937,7 @@ actor_transfer_coordinator_t::begin_commit (const std::string &transfer_id,
               return std::nullopt;
           }
           if (found->second.deadline <= std::chrono::steady_clock::now ()) {
-              _moves.erase (found->second.actor_key);
+              erase_move_on_lane (found->second.actor_key);
               if (auto queued = _backlogs.extract (found->second.actor_key))
                   discarded_backlog = std::move (queued.mapped ());
               _admissions.erase (found);
@@ -1014,7 +1046,7 @@ actor_transfer_coordinator_t::complete_commit_and_take_backlog (const std::strin
               backlog = std::move (queued->second);
               _backlogs.erase (queued);
           }
-          _moves.erase (moving);
+          erase_move_on_lane (moving->first);
           _completed_admissions.insert_or_assign (transfer_id, found->second);
           _admissions.erase (found);
           return backlog;
@@ -1129,7 +1161,7 @@ actor_transfer_coordinator_t::fail_commit (const std::string &transfer_id, bool 
               //  parked since Accepted must not be left stranded under a dead
               //  actor_key for a later admission to inherit (spec 15 §4.2 cleanup
               //  "exactly once").
-              _moves.erase (actor_key);
+              erase_move_on_lane (actor_key);
               auto discarded = _backlogs.extract (actor_key);
               return discarded ? std::move (discarded.mapped ()) : std::vector<handoff_packet_t>{};
           }
@@ -1148,7 +1180,7 @@ void actor_transfer_coordinator_t::complete_commit (const std::string &transfer_
           if (found == _admissions.end ()) {
               return;
           }
-          _moves.erase (found->second.actor_key);
+          erase_move_on_lane (found->second.actor_key);
           _completed_admissions.insert_or_assign (transfer_id, found->second);
           _admissions.erase (found);
       })
@@ -1173,7 +1205,7 @@ actor_transfer_cleanup_snapshot_t actor_transfer_coordinator_t::cleanup_expired_
         const bool can_expire =
           moving != _moves.end () && moving->second.phase == actor_move_phase_t::target_pending;
         if (can_expire && found->second.deadline <= now) {
-            _moves.erase (moving);
+            erase_move_on_lane (moving->first);
             auto queued = _backlogs.extract (found->second.actor_key);
             snapshot.expired_admissions.push_back (expired_actor_admission_t{
               found->first, found->second,

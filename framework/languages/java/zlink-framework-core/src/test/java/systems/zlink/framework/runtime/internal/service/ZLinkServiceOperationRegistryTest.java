@@ -34,6 +34,101 @@ import java.util.concurrent.atomic.AtomicReference;
 
 final class ZLinkServiceOperationRegistryTest {
     @Test
+    void wheelHandlesMixedDeadlinesAndIdentities() {
+        AtomicLong clock = new AtomicLong();
+        try (var scheduler = new CountingScheduler();
+                var registry =
+                        new ZLinkServiceOperationRegistry(
+                                scheduler, new IllegalStateException("closed"), clock::get)) {
+            scheduler.shutdownNow();
+            List<ZLinkServiceOperationRegistry.Operation<Object>> operations = new ArrayList<>();
+            for (int index = 0; index < 100; index++) {
+                int timeout = (index * 37 % 100) + 1;
+                operations.add(
+                        registry.register(
+                                new UUID(index % 2, index + 1), Duration.ofMillis(timeout)));
+            }
+            assertEquals(50, registry.expire(TimeUnit.MILLISECONDS.toNanos(50)));
+            for (int index = 0; index < operations.size(); index++) {
+                int timeout = (index * 37 % 100) + 1;
+                if (timeout <= 50)
+                    assertThrows(
+                            CompletionException.class, operations.get(index).completion()::join);
+                else assertFalse(operations.get(index).completion().isDone());
+            }
+            assertEquals(50, registry.expire(TimeUnit.MILLISECONDS.toNanos(100)));
+            assertEquals(0, registry.pendingCount());
+        }
+    }
+
+    @Test
+    void expirationYieldsAtTheManagementBudgetAndResumesAfterTerminalRemoval() {
+        AtomicLong clock = new AtomicLong();
+        try (var scheduler = new CountingScheduler();
+                var registry =
+                        new ZLinkServiceOperationRegistry(
+                                scheduler,
+                                new IllegalStateException("closed"),
+                                () -> {
+                                    clock.addAndGet(
+                                            systems.zlink.framework.runtime.internal.dispatch
+                                                    .ZLinkReceiveBatchBudget
+                                                    .DEFAULT_MAX_ELAPSED_NANOS);
+                                    return new TimeoutException("expired");
+                                },
+                                clock::get)) {
+            scheduler.shutdownNow();
+            var first = registry.register(Duration.ofMillis(1));
+            var removed = registry.register(Duration.ofMillis(1));
+            var last = registry.register(Duration.ofMillis(1));
+
+            assertEquals(1, registry.expire(TimeUnit.MILLISECONDS.toNanos(1)));
+            assertTrue(registry.discard(removed.id()));
+            assertEquals(1, registry.expire(clock.get()));
+            assertEquals(0, registry.pendingCount());
+            assertThrows(CompletionException.class, first.completion()::join);
+            assertThrows(CompletionException.class, last.completion()::join);
+        }
+    }
+
+    @Test
+    void roundsOnlyVisitsYieldAtTheManagementBudgetAndResumeFromTheCursor() {
+        long budget =
+                systems.zlink.framework.runtime.internal.dispatch.ZLinkReceiveBatchBudget
+                        .DEFAULT_MAX_ELAPSED_NANOS;
+        AtomicLong clock = new AtomicLong();
+        AtomicLong step = new AtomicLong();
+        try (var scheduler = new CountingScheduler();
+                var registry =
+                        new ZLinkServiceOperationRegistry(
+                                scheduler,
+                                new IllegalStateException("closed"),
+                                () -> clock.getAndAdd(step.get()))) {
+            scheduler.shutdownNow();
+            List<ZLinkServiceOperationRegistry.Operation<Object>> later = new ArrayList<>();
+            for (int index = 0; index < 8; index++)
+                later.add(registry.register(Duration.ofMillis(257)));
+            var due = registry.register(Duration.ofMillis(1));
+            // §4.2: every slot visit, a rounds-only one included, reads the management budget
+            // counted from entry; four reads exhaust it.
+            step.set(budget / 4);
+            long tick = TimeUnit.MILLISECONDS.toNanos(1);
+
+            assertEquals(0, registry.expire(tick));
+            assertFalse(due.completion().isDone());
+            int turns = 1;
+            while (registry.expire(tick) == 0) assertTrue(++turns < 9);
+            assertThrows(CompletionException.class, due.completion()::join);
+            assertEquals(8, registry.pendingCount());
+            for (var operation : later) assertFalse(operation.completion().isDone());
+
+            step.set(0);
+            assertEquals(8, registry.expire(TimeUnit.MILLISECONDS.toNanos(257)));
+            assertEquals(0, registry.pendingCount());
+        }
+    }
+
+    @Test
     void oneMaintenanceTaskServesEveryPendingDeadlineAndExpiresAtTheBoundary() {
         AtomicLong clock = new AtomicLong(100);
         try (var scheduler = new CountingScheduler();
@@ -45,8 +140,13 @@ final class ZLinkServiceOperationRegistryTest {
 
             assertEquals(1, scheduler.fixedRateSchedules.get());
             assertEquals(0, scheduler.otherSchedules.get());
+            // The scheduled maintenance would race the explicit expiries below and take
+            // entries from a slot already under the cursor; the test drives every turn.
+            scheduler.shutdownNow();
+            // Hot-path E3: timer-wheel deadlines expire at the next 1ms tick, never early.
             assertEquals(0, registry.expire(109));
-            assertEquals(2, registry.expire(110));
+            assertEquals(0, registry.expire(110));
+            assertEquals(2, registry.expire(100 + TimeUnit.MILLISECONDS.toNanos(1)));
             assertEquals(0, registry.pendingCount());
             assertTrue(
                     assertThrows(CompletionException.class, first.completion()::join).getCause()
@@ -59,18 +159,47 @@ final class ZLinkServiceOperationRegistryTest {
 
     @Test
     void deadlineComparisonSurvivesNanoTimeWraparound() {
-        AtomicLong clock = new AtomicLong(Long.MAX_VALUE - 2);
+        long tickNanos = TimeUnit.MILLISECONDS.toNanos(1);
+        long origin = Long.MAX_VALUE - tickNanos;
+        Duration timeout = Duration.ofMillis(2);
+        AtomicLong clock = new AtomicLong(origin);
         try (var scheduler = new CountingScheduler();
                 var registry =
                         new ZLinkServiceOperationRegistry(
                                 scheduler, new IllegalStateException("closed"), clock::get)) {
-            var operation = registry.register(Duration.ofNanos(5));
+            scheduler.shutdownNow();
+            var operation = registry.register(timeout);
+            long deadline = origin + timeout.toNanos();
 
+            assertTrue(deadline < 0);
             assertEquals(0, registry.expire(Long.MAX_VALUE));
-            assertEquals(1, registry.expire(Long.MIN_VALUE + 2));
+            assertFalse(operation.completion().isDone());
+            assertEquals(0, registry.expire(deadline - 1));
+            assertFalse(operation.completion().isDone());
+            clock.set(deadline + 1);
+            assertEquals(1, registry.expire(clock.get()));
             assertTrue(
                     assertThrows(CompletionException.class, operation.completion()::join).getCause()
                             instanceof TimeoutException);
+            assertEquals(0, registry.pendingCount());
+        }
+    }
+
+    @Test
+    void wheelRoundsDoNotExpireInEarlierRevolutions() {
+        AtomicLong clock = new AtomicLong();
+        try (var scheduler = new CountingScheduler();
+                var registry =
+                        new ZLinkServiceOperationRegistry(
+                                scheduler, new IllegalStateException("closed"), clock::get)) {
+            scheduler.shutdownNow();
+            var operation = registry.register(Duration.ofMillis(513));
+            // Hot-path E3: occupied-slot visits preserve the remaining wheel rounds.
+            assertEquals(0, registry.expire(TimeUnit.MILLISECONDS.toNanos(1)));
+            assertEquals(0, registry.expire(TimeUnit.MILLISECONDS.toNanos(257)));
+            assertEquals(0, registry.expire(TimeUnit.MILLISECONDS.toNanos(512)));
+            assertEquals(1, registry.expire(TimeUnit.MILLISECONDS.toNanos(513)));
+            assertThrows(CompletionException.class, operation.completion()::join);
         }
     }
 
@@ -207,7 +336,9 @@ final class ZLinkServiceOperationRegistryTest {
                                             ignored -> {}));
             try {
                 assertTrue(entered.await(1, TimeUnit.SECONDS));
-                var expiry = workers.submit(() -> registry.expire(1L));
+                // Hot-path E3: expiry runs at the first 1ms timer-wheel tick after the deadline.
+                var expiry =
+                        workers.submit(() -> registry.expire(TimeUnit.MILLISECONDS.toNanos(1)));
                 assertEquals(1, expiry.get(1, TimeUnit.SECONDS));
                 assertEquals(0, registry.pendingCount());
             } finally {

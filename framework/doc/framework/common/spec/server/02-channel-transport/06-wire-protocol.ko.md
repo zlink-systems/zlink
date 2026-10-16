@@ -571,7 +571,7 @@ seal/route-update leg만 추가하므로, 수신자는 canonical `actorJoin`(28)
 ### Session seal과 source relay
 
 - Relocation coordinator는 source application dispatch를 멈추기 전에 command 42로 bound Session
-  binding을 seal한다. Command 43은 seal 설치 결과를 알린다.
+  binding을 seal한다. Command 43은 seal 설치 결과(`sealResult`: `sealed` 또는 `bindingAbsent`)를 알린다.
 - Session owner는 current Session identity, binding generation, ActorId·ObjectGeneration과
   relocation identity만 확인한다. Numeric high-water를 만들거나 Actor authority를 다시 조회하지
   않는다.
@@ -707,6 +707,9 @@ Session seal을 복원한다. 그 뒤 submit 결과만으로 source를 복원하
 - Session route는 Session owner의 current Session과 binding에서만 검증한다.
 - Command 42는 current binding을 seal하고 command 43은 seal 설치 결과만 반환한다.
   Command 43은 Session message sequence나 high-water를 전달하지 않는다.
+- Command 43의 마지막 body field `sealResult`(u8)는 `sealed`(1) 또는 `bindingAbsent`(2)다. Exact binding이
+  이미 정리됐으면 Session owner는 seal 없이 `bindingAbsent`를 반환하고, coordinator는 그 Session을 envelope와
+  command 44에서 뺀다([Session·Actor binding §8.3](../04-session/02-session-actor-binding.ko.md#83-이미-정리된-binding에-대한-seal)).
 - Command 44는 session-route update이면 target runtime이, relay-ready reply가 accepted 상태가 되기 전 abort이면 source coordinator가 `[send]`로
   전달한다. Route update는 relocation identity, current binding generation,
   ActorId·ObjectGeneration과 target route를 포함한다. Session owner는 Location Store나 Actor

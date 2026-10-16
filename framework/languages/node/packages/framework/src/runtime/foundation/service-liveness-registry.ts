@@ -54,9 +54,19 @@ export class ServiceLivenessConnection {
 }
 
 /** Uses monotonic milliseconds and never treats application traffic as a probe ACK. */
+const NO_LIVENESS_WORK: ServiceLivenessTick = Object.freeze({
+  probes: Object.freeze([]) as readonly ServiceProbe[],
+  timedOutNodes: Object.freeze([]) as readonly string[]
+});
+
 export class ServiceLivenessRegistry {
   private readonly peers = new Map<string, ServiceLivenessConnection>();
   private nextProbeId = 1n;
+  /**
+   * The earliest probe or timeout among admitted peers. Received traffic only
+   * extends a peer's deadline, so this stays a lower bound between ticks.
+   */
+  private nextDueMs = Number.POSITIVE_INFINITY;
 
   constructor(
     private readonly probeIntervalMs = DEFAULT_SERVICE_PROBE_INTERVAL_MS,
@@ -89,7 +99,13 @@ export class ServiceLivenessRegistry {
       this.peerTimeoutMs
     );
     this.peers.set(nodeRoutingId, admitted);
+    this.nextDueMs = Math.min(this.nextDueMs, admitted.nextProbeMs, admitted.deadlineMs);
     return admitted;
+  }
+
+  /** When the next tick has probe or timeout work (spec 08 §4.2 management deadline). */
+  nextDeadlineMs(): number {
+    return this.nextDueMs;
   }
 
   recordReceived(connection: ServiceLivenessConnection, nowMs: number): void {
@@ -127,8 +143,10 @@ export class ServiceLivenessRegistry {
   }
 
   tick(nowMs: number): ServiceLivenessTick {
+    if (nowMs < this.nextDueMs) return NO_LIVENESS_WORK;
     const probes: ServiceProbe[] = [];
     const timedOutNodes: string[] = [];
+    let nextDueMs = Number.POSITIVE_INFINITY;
     for (const [nodeRoutingId, peer] of this.peers) {
       if (peer.isExpired(nowMs)) {
         timedOutNodes.push(nodeRoutingId);
@@ -138,7 +156,9 @@ export class ServiceLivenessRegistry {
       const probeId = peer.tryGetProbe(nowMs, this.allocateProbeId);
       if (probeId !== undefined)
         probes.push({ nodeRoutingId, connectionId: peer.connectionId, probeId });
+      nextDueMs = Math.min(nextDueMs, peer.nextProbeMs, peer.deadlineMs);
     }
+    this.nextDueMs = nextDueMs;
     timedOutNodes.sort();
     return { probes, timedOutNodes };
   }
