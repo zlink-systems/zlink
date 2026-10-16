@@ -37,7 +37,12 @@ internal static class Scenarios
     private static void SameState(RoomView before, RoomView after) =>
         Require(Equal(before with { NodeId = after.NodeId }, after), "Room state changed.");
 
-    public static async Task RunAsync(string root, string[] selected, CancellationToken ct)
+    public static async Task RunAsync(
+        string root,
+        string[] selected,
+        List<MatchRun> runs,
+        CancellationToken ct
+    )
     {
         var passed = 0;
         try
@@ -48,6 +53,7 @@ internal static class Scenarios
                 {
                     await using (var run = new MatchRun(root))
                     {
+                        runs.Add(run);
                         await run.StartAsync(ct);
                         await PlayAsync(run.Endpoint, scenario, run, ct);
                     }
@@ -75,8 +81,18 @@ internal static class Scenarios
     )
     {
         var suffix = Guid.NewGuid().ToString("N");
-        await using var p1 = await GameClient.ConnectAsync(endpoint, "p1-" + suffix, ct);
-        await using var p2 = await GameClient.ConnectAsync(endpoint, "p2-" + suffix, ct);
+        await using var p1 = await GameClient.ConnectAsync(
+            run.Outcome,
+            endpoint,
+            "p1-" + suffix,
+            ct
+        );
+        await using var p2 = await GameClient.ConnectAsync(
+            run.Outcome,
+            endpoint,
+            "p2-" + suffix,
+            ct
+        );
         await p1.QueueAsync(ct);
         await p2.QueueAsync(ct);
         var found1 = await p1.WaitAsync<MatchFound>(_ => true, ct);
@@ -124,7 +140,12 @@ internal static class Scenarios
         else if (scenario == "reconnect")
         {
             await p2.DisposeAsync();
-            await using var again = await GameClient.ConnectAsync(endpoint, p2.PlayerId, ct);
+            await using var again = await GameClient.ConnectAsync(
+                run.Outcome,
+                endpoint,
+                p2.PlayerId,
+                ct
+            );
             await again.QueueAsync(ct);
             var restored = await again.WaitAsync<RoomView>(_ => true, ct);
             var identity = await again.SessionAsync(ct);
@@ -150,7 +171,7 @@ internal static class Scenarios
             SameState(before, after2);
             await run.ReplaceAsync(before.NodeId, ct);
             // New actors exercise the replacement process's entry and admission responsibilities.
-            await NewMatchAsync(endpoint, before.NodeId, ct);
+            await NewMatchAsync(endpoint, run, before.NodeId, ct);
             await HitAsync(p1, p2, 3, GameNames.InitialHp - GameNames.ShotDamage * 2, ct);
             Require(
                 await p1.SessionAsync(ct) == session1 && await p2.SessionAsync(ct) == session2,
@@ -164,13 +185,24 @@ internal static class Scenarios
 
     private static async Task NewMatchAsync(
         string endpoint,
+        MatchRun run,
         string replacementId,
         CancellationToken ct
     )
     {
         var suffix = Guid.NewGuid().ToString("N");
-        await using var a = await GameClient.ConnectAsync(endpoint, "new-a-" + suffix, ct);
-        await using var b = await GameClient.ConnectAsync(endpoint, "new-b-" + suffix, ct);
+        await using var a = await GameClient.ConnectAsync(
+            run.Outcome,
+            endpoint,
+            "new-a-" + suffix,
+            ct
+        );
+        await using var b = await GameClient.ConnectAsync(
+            run.Outcome,
+            endpoint,
+            "new-b-" + suffix,
+            ct
+        );
         await a.QueueAsync(ct);
         await b.QueueAsync(ct);
         var first = await a.WaitAsync<MatchFound>(_ => true, ct);

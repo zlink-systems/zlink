@@ -5,6 +5,18 @@ namespace MyGame.E2E;
 
 internal static class StructureCheck
 {
+    private static readonly (
+        string From,
+        string To,
+        string Label,
+        string? Semantic
+    )[] RequiredEdges =
+    [
+        ("players", "session", "STREAM", null),
+        ("session", "matchA", "relay", null),
+        ("matchA", "location", "Location / lease", "location-authority"),
+    ];
+
     private static readonly string[] CommandShells = ["sh", "powershell"];
 
     private static void Require(bool condition, string message)
@@ -210,7 +222,18 @@ internal static class StructureCheck
                 ),
             "Bootstrap differs from fixed Matchmaking owner."
         );
-        foreach (var edge in Array(document, "edges"))
+        var edges = Array(document, "edges");
+        foreach (var required in RequiredEdges)
+            Require(
+                edges.Any(edge =>
+                    Text(edge, "from") == required.From
+                    && Text(edge, "to") == required.To
+                    && Text(edge, "label") == required.Label
+                    && edge?["semantic"]?.GetValue<string>() == required.Semantic
+                ),
+                $"Missing required edge: {required.From} -> {required.To} ({required.Label})."
+            );
+        foreach (var edge in edges)
         {
             Require(
                 roles.ContainsKey(Text(edge, "from")) && roles.ContainsKey(Text(edge, "to")),

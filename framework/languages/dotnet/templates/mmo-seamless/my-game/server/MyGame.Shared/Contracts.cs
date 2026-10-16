@@ -69,13 +69,34 @@ public sealed record NodeReady(string Id, string MeshEndpoint, string? StreamEnd
 
 public static class NodeProtocol
 {
+    // Marker declarations register themselves; commands remain compile-time constants.
+    private static readonly List<(string Text, bool Prefix)> Markers = [];
+
+    private static string Marker(string text, bool prefix = false)
+    {
+        Markers.Add((text, prefix));
+        return text;
+    }
+
+    public static bool IsMarker(string line)
+    {
+        foreach (var marker in Markers)
+            if (
+                marker.Prefix
+                    ? line.StartsWith(marker.Text, StringComparison.Ordinal)
+                    : line == marker.Text
+            )
+                return true;
+        return false;
+    }
+
     public const int ReplacementX = 0;
     public const string VacateZone = "vacate-zone";
-    public const string ZoneVacated = "ZONE_VACATED";
-    public const string ReadyPrefix = "READY ";
+    public static readonly string ZoneVacated = Marker("ZONE_VACATED");
+    public static readonly string ReadyPrefix = Marker("READY ", prefix: true);
     public const string Drain = "drain";
     public const string Shutdown = "shutdown";
-    public const string RelocationRequested = "RELOCATION_REQUESTED";
-    public const string Relocated = "RELOCATED";
-    public const string SafeToShutdown = "SAFE_TO_SHUTDOWN";
+    public static readonly string RelocationRequested = Marker("RELOCATION_REQUESTED");
+    public static readonly string Relocated = Marker("RELOCATED");
+    public static readonly string SafeToShutdown = Marker("SAFE_TO_SHUTDOWN");
 }

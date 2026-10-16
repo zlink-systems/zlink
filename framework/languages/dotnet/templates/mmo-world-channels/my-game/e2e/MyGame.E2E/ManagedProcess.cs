@@ -7,6 +7,7 @@ namespace MyGame.E2E;
 internal sealed class ManagedProcess : IAsyncDisposable
 {
     private static readonly TimeSpan ShutdownTimeout = TimeSpan.FromSeconds(20);
+    private readonly RunOutcome outcome;
     private readonly Process process;
     private readonly Task stdout;
     private readonly Task stderr;
@@ -15,12 +16,14 @@ internal sealed class ManagedProcess : IAsyncDisposable
     private bool stopped;
 
     public ManagedProcess(
+        RunOutcome outcome,
         string file,
         IEnumerable<string> arguments,
         string logDirectory,
         string name
     )
     {
+        this.outcome = outcome;
         var start = new ProcessStartInfo(file)
         {
             UseShellExecute = false,
@@ -49,10 +52,13 @@ internal sealed class ManagedProcess : IAsyncDisposable
         }
         catch
         {
-            if (!process.HasExited)
-                process.Kill(entireProcessTree: true);
-            process.WaitForExit();
-            process.Dispose();
+            outcome.Cleanup(() =>
+            {
+                if (!process.HasExited)
+                    process.Kill(entireProcessTree: true);
+            });
+            outcome.Cleanup(process.WaitForExit);
+            outcome.Cleanup(process.Dispose);
             throw;
         }
     }
@@ -66,16 +72,7 @@ internal sealed class ManagedProcess : IAsyncDisposable
             {
                 await log.WriteLineAsync(line);
                 await log.FlushAsync();
-                if (
-                    publish
-                    && (
-                        line.StartsWith(NodeProtocol.ReadyPrefix, StringComparison.Ordinal)
-                        || line == NodeProtocol.RelocationRequested
-                        || line == NodeProtocol.Relocated
-                        || line == NodeProtocol.SafeToShutdown
-                        || line == NodeProtocol.Stopped
-                    )
-                )
+                if (publish && NodeProtocol.IsMarker(line))
                     await lines.Writer.WriteAsync(line);
             }
         }
@@ -102,11 +99,12 @@ internal sealed class ManagedProcess : IAsyncDisposable
 
     public Task CommandAsync(string command) => process.StandardInput.WriteLineAsync(command);
 
-    public async Task StopAsync()
+    public ValueTask StopAsync() => outcome.CleanupAsync(StopCoreAsync);
+
+    private async ValueTask StopCoreAsync()
     {
         if (stopped)
             return;
-        List<Exception> failures = [];
         if (!process.HasExited)
         {
             using var deadline = new CancellationTokenSource(ShutdownTimeout);
@@ -118,7 +116,7 @@ internal sealed class ManagedProcess : IAsyncDisposable
             }
             catch (Exception error)
             {
-                failures.Add(error);
+                outcome.Record(error);
             }
             finally
             {
@@ -126,7 +124,7 @@ internal sealed class ManagedProcess : IAsyncDisposable
                 {
                     process.Kill(entireProcessTree: true);
                     await process.WaitForExitAsync();
-                    failures.Add(
+                    outcome.Record(
                         new InvalidOperationException(
                             $"Node PID {process.Id} required forced termination."
                         )
@@ -134,33 +132,19 @@ internal sealed class ManagedProcess : IAsyncDisposable
                 }
             }
         }
-        try
-        {
-            await Task.WhenAll(stdout, stderr);
-        }
-        catch (Exception error)
-        {
-            failures.Add(error);
-        }
+        await outcome.CleanupAsync(async () => await stdout);
+        await outcome.CleanupAsync(async () => await stderr);
         stopped = true;
         if (process.ExitCode != 0)
-            failures.Add(
+            outcome.Record(
                 new InvalidOperationException($"Node PID {process.Id} exited {process.ExitCode}.")
             );
-        if (failures.Count > 0)
-            throw new AggregateException($"Node PID {process.Id} cleanup failed.", failures);
     }
 
     public async ValueTask DisposeAsync()
     {
-        try
-        {
-            await StopAsync();
-        }
-        finally
-        {
-            process.Dispose();
-        }
+        await StopAsync();
+        outcome.Cleanup(process.Dispose);
     }
 }
 

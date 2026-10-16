@@ -102,7 +102,12 @@ internal static class Scenarios
             if (selected.Contains("channel"))
             {
                 current = "channel";
-                await using var player = await GameClient.ConnectAsync(endpoint, "p1", ct);
+                await using var player = await GameClient.ConnectAsync(
+                    run.Outcome,
+                    endpoint,
+                    "p1",
+                    ct
+                );
                 var town = await player.JoinAsync(1, ct);
                 Require(town.NodeId == "townA", "Initial town was not hosted on townA.");
                 var before = await player.SessionAsync(ct);
@@ -125,9 +130,9 @@ internal static class Scenarios
             if (selected.Any(id => id != "channel"))
             {
                 current = selected.First(id => id != "channel");
-                await using var p1 = await GameClient.ConnectAsync(endpoint, "p1", ct);
+                await using var p1 = await GameClient.ConnectAsync(run.Outcome, endpoint, "p1", ct);
                 await p1.JoinAsync(2, ct);
-                var p2 = await GameClient.ConnectAsync(endpoint, "p2", ct);
+                var p2 = await GameClient.ConnectAsync(run.Outcome, endpoint, "p2", ct);
                 try
                 {
                     await p2.JoinAsync(2, ct);
@@ -156,7 +161,7 @@ internal static class Scenarios
                     {
                         current = "reconnect";
                         await p2.DisposeAsync();
-                        p2 = await GameClient.ConnectAsync(endpoint, "p2", ct);
+                        p2 = await GameClient.ConnectAsync(run.Outcome, endpoint, "p2", ct);
                         var restored = await p2.SendAsync<DungeonView, JoinTownRequest>(
                             new("p2", 2),
                             _ => true,
@@ -199,9 +204,19 @@ internal static class Scenarios
                             "Session continuity failed during host relocation."
                         );
                         await run.ReplaceInstanceAsync(advanced.NodeId, ct);
-                        await using var p3 = await GameClient.ConnectAsync(endpoint, "p3", ct);
+                        await using var p3 = await GameClient.ConnectAsync(
+                            run.Outcome,
+                            endpoint,
+                            "p3",
+                            ct
+                        );
                         await p3.JoinAsync(2, ct);
-                        await using var p4 = await GameClient.ConnectAsync(endpoint, "p4", ct);
+                        await using var p4 = await GameClient.ConnectAsync(
+                            run.Outcome,
+                            endpoint,
+                            "p4",
+                            ct
+                        );
                         await p4.JoinAsync(2, ct);
                         var fresh = await EnterAsync(p3, p4, "party-2", ct);
                         Require(

@@ -39,8 +39,9 @@ public static class GameNames
 
 public static class GameTiming
 {
-    public static readonly TimeSpan MessageFollow = TimeSpan.FromSeconds(20);
-    public static readonly TimeSpan SafeShutdown = MessageFollow + TimeSpan.FromSeconds(10);
+    public static readonly TimeSpan MessageFollow = TimeSpan.FromSeconds(30);
+    public static readonly TimeSpan Relocation = TimeSpan.FromSeconds(30);
+    public static readonly TimeSpan SafeShutdown = MessageFollow + Relocation;
 }
 
 public static class Rejection
@@ -110,11 +111,32 @@ public sealed record NodeReady(string Id, string MeshEndpoint, string? StreamEnd
 
 public static class NodeProtocol
 {
-    public const string ReadyPrefix = "READY ";
+    // Marker declarations register themselves; commands remain compile-time constants.
+    private static readonly List<(string Text, bool Prefix)> Markers = [];
+
+    private static string Marker(string text, bool prefix = false)
+    {
+        Markers.Add((text, prefix));
+        return text;
+    }
+
+    public static bool IsMarker(string line)
+    {
+        foreach (var marker in Markers)
+            if (
+                marker.Prefix
+                    ? line.StartsWith(marker.Text, StringComparison.Ordinal)
+                    : line == marker.Text
+            )
+                return true;
+        return false;
+    }
+
+    public static readonly string ReadyPrefix = Marker("READY ", prefix: true);
     public const string Drain = "drain";
     public const string Shutdown = "shutdown";
-    public const string Stopped = "STOPPED";
-    public const string RelocationRequested = "RELOCATION_REQUESTED";
-    public const string Relocated = "RELOCATED";
-    public const string SafeToShutdown = "SAFE_TO_SHUTDOWN";
+    public static readonly string Stopped = Marker("STOPPED");
+    public static readonly string RelocationRequested = Marker("RELOCATION_REQUESTED");
+    public static readonly string Relocated = Marker("RELOCATED");
+    public static readonly string SafeToShutdown = Marker("SAFE_TO_SHUTDOWN");
 }

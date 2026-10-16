@@ -28,7 +28,30 @@ string? Option(string name)
     return args[index + 1];
 }
 
+WorldRun? run = null;
+Exception? scenarioFailure = null;
+var result = 0;
 try
+{
+    result = await RunAsync();
+}
+catch (Exception error)
+{
+    scenarioFailure = error;
+}
+var failures = run?.Outcome.Failures ?? [];
+if (scenarioFailure is not null)
+    failures.Insert(0, scenarioFailure);
+if (failures.Count > 0)
+{
+    Console.Error.WriteLine(
+        new AggregateException("Run failed (scenario first, then cleanup).", failures)
+    );
+    return 1;
+}
+return result;
+
+async Task<int> RunAsync()
 {
     var root = Path.GetFullPath(Option("--root") ?? Directory.GetCurrentDirectory());
     if (args.Contains("--check-structure"))
@@ -37,25 +60,13 @@ try
         return 0;
     }
     var selected = Scenarios.Select(Option("--scenario"));
-    await using var run = new WorldRun(root);
+    run = new WorldRun(root);
+    await using var ownedRun = run;
     using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellation.Token);
     deadline.CancelAfter(TimeSpan.FromMinutes(3));
-    try
-    {
-        StructureCheck.Run(root, null);
-        await run.StartAsync(deadline.Token);
-        await Scenarios.RunAsync(run.Endpoint, run, selected, deadline.Token);
-    }
-    catch (Exception failure)
-    {
-        Console.Error.WriteLine("Startup or scenario failure: " + failure);
-        throw;
-    }
+    StructureCheck.Run(root, null);
+    await run.StartAsync(deadline.Token);
+    await Scenarios.RunAsync(run.Endpoint, run, selected, deadline.Token);
     Console.WriteLine("morpg-lobby-instances=completed");
     return 0;
-}
-catch (Exception error)
-{
-    Console.Error.WriteLine(error);
-    return 1;
 }

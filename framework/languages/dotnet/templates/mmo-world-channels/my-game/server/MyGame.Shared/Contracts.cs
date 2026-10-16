@@ -48,16 +48,37 @@ public sealed record NodeReady(
 
 public static class NodeProtocol
 {
+    // Marker declarations register themselves; commands remain compile-time constants.
+    private static readonly List<(string Text, bool Prefix)> Markers = [];
+
+    private static string Marker(string text, bool prefix = false)
+    {
+        Markers.Add((text, prefix));
+        return text;
+    }
+
+    public static bool IsMarker(string line)
+    {
+        foreach (var marker in Markers)
+            if (
+                marker.Prefix
+                    ? line.StartsWith(marker.Text, StringComparison.Ordinal)
+                    : line == marker.Text
+            )
+                return true;
+        return false;
+    }
+
     public static readonly TimeSpan MessageFollow = TimeSpan.FromSeconds(30);
     public static readonly TimeSpan StartupDeadline = TimeSpan.FromSeconds(30);
     public static readonly TimeSpan SafeDeadline = MessageFollow + StartupDeadline;
-    public const string ReadyPrefix = "READY ";
+    public static readonly string ReadyPrefix = Marker("READY ", prefix: true);
     public const string Drain = "drain";
     public const string CreateUpdateZone = "create-update-zone";
-    public const string UpdateZoneCreated = "UPDATE_ZONE_CREATED";
+    public static readonly string UpdateZoneCreated = Marker("UPDATE_ZONE_CREATED");
     public const string Shutdown = "shutdown";
-    public const string Stopped = "STOPPED";
-    public const string RelocationRequested = "RELOCATION_REQUESTED";
-    public const string Relocated = "RELOCATED";
-    public const string SafeToShutdown = "SAFE_TO_SHUTDOWN";
+    public static readonly string Stopped = Marker("STOPPED");
+    public static readonly string RelocationRequested = Marker("RELOCATION_REQUESTED");
+    public static readonly string Relocated = Marker("RELOCATED");
+    public static readonly string SafeToShutdown = Marker("SAFE_TO_SHUTDOWN");
 }

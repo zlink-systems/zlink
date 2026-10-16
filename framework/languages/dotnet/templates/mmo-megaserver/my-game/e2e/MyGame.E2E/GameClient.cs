@@ -4,8 +4,11 @@ using Systems.Zlink.Stream.Connector.Contracts;
 
 namespace MyGame.E2E;
 
-internal sealed class GameClient(IZlinkStreamConnector connector, string playerId)
-    : IAsyncDisposable
+internal sealed class GameClient(
+    RunOutcome outcome,
+    IZlinkStreamConnector connector,
+    string playerId
+) : IAsyncDisposable
 {
     private static readonly TimeSpan MessageTimeout = TimeSpan.FromSeconds(10);
     public IZlinkStreamConnector Connector { get; } = connector;
@@ -13,6 +16,7 @@ internal sealed class GameClient(IZlinkStreamConnector connector, string playerI
     public bool Disconnected { get; private set; }
 
     public static async Task<GameClient> ConnectAsync(
+        RunOutcome outcome,
         string endpoint,
         string playerId,
         CancellationToken ct
@@ -27,7 +31,7 @@ internal sealed class GameClient(IZlinkStreamConnector connector, string playerI
                 DispatchMode = ZlinkStreamDispatchMode.Immediate,
             }
         );
-        var client = new GameClient(connector, playerId);
+        var client = new GameClient(outcome, connector, playerId);
         connector.OnDisconnected(
             (_, _) =>
             {
@@ -49,7 +53,7 @@ internal sealed class GameClient(IZlinkStreamConnector connector, string playerI
         }
         catch
         {
-            await connector.DisposeAsync();
+            await client.DisposeAsync();
             throw;
         }
     }
@@ -90,5 +94,5 @@ internal sealed class GameClient(IZlinkStreamConnector connector, string playerI
         Func<RegionView, bool>? predicate = null
     ) => SendAsync<RegionView, ViewRequest>(new(), predicate ?? (_ => true), ct);
 
-    public ValueTask DisposeAsync() => Connector.DisposeAsync();
+    public ValueTask DisposeAsync() => outcome.CleanupAsync(Connector.DisposeAsync);
 }

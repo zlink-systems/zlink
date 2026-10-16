@@ -49,10 +49,15 @@ internal static class Scenarios
         var current = selected[0];
         try
         {
-            await using var initialP1 = await GameClient.ConnectAsync(endpoint, "p1", ct);
+            await using var initialP1 = await GameClient.ConnectAsync(
+                run.Outcome,
+                endpoint,
+                "p1",
+                ct
+            );
             var p1 = initialP1;
             var initial = await p1.JoinAsync(Forest, ct);
-            var p2 = await GameClient.ConnectAsync(endpoint, "p2", ct);
+            var p2 = await GameClient.ConnectAsync(run.Outcome, endpoint, "p2", ct);
             try
             {
                 var together = p1.ReceiveAsync<RegionView>(view => view.Players.Length == 2, ct);
@@ -66,7 +71,7 @@ internal static class Scenarios
                             .SequenceEqual(new[] { "p1", "p2" }),
                     "First region membership mismatch."
                 );
-                await using var p3 = await GameClient.ConnectAsync(endpoint, "p3", ct);
+                await using var p3 = await GameClient.ConnectAsync(run.Outcome, endpoint, "p3", ct);
                 var separate = await p3.JoinAsync(Forest, ct);
                 Require(
                     separate.RegionId == GameNames.RegionId(Forest, 2)
@@ -128,7 +133,7 @@ internal static class Scenarios
                 {
                     current = "reconnect";
                     await p1.DisposeAsync();
-                    p1 = await GameClient.ConnectAsync(endpoint, "p1", ct);
+                    p1 = await GameClient.ConnectAsync(run.Outcome, endpoint, "p1", ct);
                     var restored = await p1.JoinAsync(Forest, ct);
                     SameState(moved, restored);
                     Require(restored.NodeId == moved.NodeId, "Reconnect changed the region host.");
@@ -168,7 +173,12 @@ internal static class Scenarios
                         "Host relocation changed the Sessions."
                     );
                     await run.ReplaceRegionAsync(moved.NodeId, ct);
-                    await using var fresh = await GameClient.ConnectAsync(endpoint, "p4", ct);
+                    await using var fresh = await GameClient.ConnectAsync(
+                        run.Outcome,
+                        endpoint,
+                        "p4",
+                        ct
+                    );
                     var created = await fresh.JoinAsync("desert", ct);
                     Require(
                         created.NodeId == moved.NodeId
