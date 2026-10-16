@@ -1537,16 +1537,19 @@ reread authority satisfies all three conditions:
 - `AuthorityOwnerGeneration` is greater than the value when the source started the relocation.
 - The owner is not the source.
 
-The basis is §6's CAS kinds. Only `NewOwner` keeps `ObjectGeneration` and raises
-`AuthorityOwnerGeneration`; re-creation after owner lease expiry and `Reincarnate` create a new
-`ObjectGeneration`. While the source is owner, the only `NewOwner` that moves ownership away from it is
-this relocation's target CAS: the source runs one relocation per object at a time, and source `Preserve`
-excludes an earlier relocation's late CAS. So when the three conditions hold, this relocation's target CAS
+The basis is §6.1's owner-change kinds. Only `NewOwner` and the `SpotWide` whole-unit batch (§8.1)
+keep `ObjectGeneration` and raise `AuthorityOwnerGeneration`; re-creation after owner lease expiry and
+`Reincarnate` create a new `ObjectGeneration`. While the source is owner, the only such change that moves
+ownership away from it is this relocation's target CAS: the source runs one relocation per object at a
+time, including the aggregate relocation the object belongs to, and source `Preserve` excludes an earlier
+relocation's late CAS. So when the three conditions hold, this relocation's target CAS
 committed first, and later owner changes are moves continued from that target. This decision adds no
 separate commit record.
 
-In that case the source doesn't insist on the first target route; it uses the reread authority's current
-owner as the later Message Follow destination, releases the retained copy, and runs source cleanup once.
+In that case the source installs §7.3's Message Follow route to the committed first target, releases the
+retained copy, and runs source cleanup once. The expiry still counts from this relocation's commit. Moves
+after the first target are forwarded hop by hop by the first target's own Message Follow route (within
+§7.3's hop limit). The source does not create a route straight to the reread current owner.
 If `ObjectGeneration` differs, or `AuthorityOwnerGeneration` did not increase and the owner is neither the
 source nor the first target, the source still fails with `DataLost`. An indeterminate `Preserve` result repeats under this section's Store-failure policy without a new timer while the source lease is valid. Source lease expiry, or an authority that the source rereads as absent (`Missing`), ends source work under the expired-owner terminal in [common relocation §4.4](04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover). On `Missing` the source fence no longer holds, so the source does not attempt `Preserve`. The source may resume dispatch only
 while its owner lease remains valid under §5.
