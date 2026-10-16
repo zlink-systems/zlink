@@ -204,7 +204,8 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                         cancellationToken
                     )
                     .ConfigureAwait(false);
-                route = ToRemoteRoute(sealedSession.Value);
+                if (sealedSession is { } sealedBinding)
+                    route = ToRemoteRoute(sealedBinding);
             }
 
             _ = await actorState.BeginHandoffCaptureAsync(cancellationToken).ConfigureAwait(false);
@@ -1102,7 +1103,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
         );
     }
 
-    private async ValueTask<ZLinkActorBoundSession> SealSessionRouteAsync(
+    private async ValueTask<ZLinkActorBoundSession?> SealSessionRouteAsync(
         ZLinkActorRuntimeState actorState,
         ZLinkActorBoundSession session,
         ZLinkSessionRelocationContext wireContext,
@@ -1129,7 +1130,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                     )
                     : session.AuthorityOwnerGeneration,
         };
-        _ = await runtime
+        var response = await runtime
             .SealSessionRelocationAsync(
                 normalized.MeshName.Value,
                 sessionNode,
@@ -1142,6 +1143,8 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                 cancellationToken
             )
             .ConfigureAwait(false);
+        if (response.SealResult == ServiceWirePilotCodec.SessionSealResult.BindingAbsent)
+            return null;
         actorState.BindSession(
             normalized.SessionNodeRid,
             normalized.SessionRid,

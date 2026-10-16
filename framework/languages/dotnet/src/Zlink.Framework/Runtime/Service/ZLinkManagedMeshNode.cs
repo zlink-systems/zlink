@@ -132,8 +132,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         PendingSessionRelocationKey,
         ZLinkServiceWireCodec.SessionRelocationSealedRecord
     > _sessionRelocationSealReplyTerminals = new();
-    private readonly ConcurrentQueue<PendingSessionRelocationKey> _sessionRelocationSealReplyTerminalOrder =
-        new();
     private readonly ConcurrentDictionary<
         ObservedSpotAuthorityKey,
         ObservedAuthority
@@ -1474,9 +1472,11 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         CancellationToken cancellationToken
     )
     {
+        var key = PendingSessionRelocationKey.Create(sessionOwnerNodeRid, seal);
+        if (_sessionRelocationSealReplyTerminals.TryGetValue(key, out var terminal))
+            return terminal;
         Peer peer = RequireSessionRelocationPeer(sessionOwnerNodeRid);
         var encoded = ZLinkServiceWireCodec.EncodeSessionRelocationSeal(seal);
-        var key = PendingSessionRelocationKey.Create(sessionOwnerNodeRid, seal);
         var fingerprint = SHA256.HashData(encoded);
         var pending = new PendingSessionRelocationSeal(fingerprint, seal);
         if (!_pendingSessionRelocationSeals.TryAdd(key, pending))
@@ -7368,9 +7368,11 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 var response = await target
                     .SealAsync(seal, sourceNodeRid, _stop?.Token ?? CancellationToken.None)
                     .ConfigureAwait(false);
+                if (response is null)
+                    return;
                 await SendCanonicalRelocationRecordAsync(
                         peer,
-                        ZLinkServiceWireCodec.EncodeSessionRelocationSealed(response),
+                        ZLinkServiceWireCodec.EncodeSessionRelocationSealed(response.Value),
                         _stop?.Token ?? CancellationToken.None
                     )
                     .ConfigureAwait(false);
@@ -7394,10 +7396,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             && pending.TryComplete(sealedRecord)
         )
             return;
-        if (
-            _sessionRelocationSealReplyTerminals.TryGetValue(key, out var terminal)
-            && terminal == sealedRecord
-        )
+        if (_sessionRelocationSealReplyTerminals.ContainsKey(key))
             return;
         Publish(MeshMonitorEventKind.ProtocolError, peerRid: sourceNodeRid);
     }
@@ -13077,73 +13076,26 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     private void RememberSessionRelocationSealReply(
         PendingSessionRelocationKey key,
         ZLinkServiceWireCodec.SessionRelocationSealedRecord response
-    ) =>
-        RememberSessionRelocationReply(
-            _sessionRelocationSealReplyTerminals,
-            _sessionRelocationSealReplyTerminalOrder,
-            key,
-            response
-        );
-
-    private static void RememberSessionRelocationReply<T>(
-        ConcurrentDictionary<PendingSessionRelocationKey, T> terminals,
-        ConcurrentQueue<PendingSessionRelocationKey> order,
-        PendingSessionRelocationKey key,
-        T response
-    )
-        where T : struct, IEquatable<T>
-    {
-        if (!terminals.TryAdd(key, response))
-        {
-            if (!terminals.TryGetValue(key, out var existing) || !existing.Equals(response))
-                throw new InvalidDataException(
-                    "A session relocation reply changed after completion."
-                );
-            return;
-        }
-        order.Enqueue(key);
-    }
+    ) => _sessionRelocationSealReplyTerminals.TryAdd(key, response);
 
     private readonly record struct PendingSessionRelocationKey(
         RoutingId SessionOwnerNodeRid,
         ZLinkServiceWireCodec.RelocationWireId RelocationId,
-        ZLinkServiceWireCodec.RelocationCoordinatorFence Coordinator,
-        string ActorId,
-        RoutingId SessionRid,
-        ulong BindingGeneration,
-        byte Action
+        string ActorId
     )
     {
         internal static PendingSessionRelocationKey Create(
             RoutingId owner,
             ZLinkServiceWireCodec.SessionRelocationSealRecord record
-        ) =>
-            new(
-                owner,
-                record.RelocationId,
-                record.Coordinator,
-                record.Actor.Actor.ActorId,
-                record.Session.SessionRid,
-                record.Session.BindingGeneration,
-                0
-            );
+        ) => new(owner, record.RelocationId, record.Actor.Actor.ActorId);
 
         internal static PendingSessionRelocationKey Create(
             RoutingId owner,
             ZLinkServiceWireCodec.SessionRelocationSealedRecord record
-        ) =>
-            new(
-                owner,
-                record.RelocationId,
-                record.Coordinator,
-                record.Actor.Actor.ActorId,
-                record.Session.SessionRid,
-                record.Session.BindingGeneration,
-                0
-            );
+        ) => new(owner, record.RelocationId, record.Actor.Actor.ActorId);
     }
 
-    private sealed class PendingSessionRelocationSeal(
+    internal sealed class PendingSessionRelocationSeal(
         byte[] fingerprint,
         ZLinkServiceWireCodec.SessionRelocationSealRecord request
     )
@@ -13154,6 +13106,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
 
         internal bool TryComplete(ZLinkServiceWireCodec.SessionRelocationSealedRecord response)
         {
+            if (Completion.Task.IsCompletedSuccessfully)
+                return true;
             if (
                 response.RelocationId != request.RelocationId
                 || response.Coordinator != request.Coordinator
@@ -13161,8 +13115,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 || response.Session != request.Session
             )
                 return false;
-            return Completion.TrySetResult(response)
-                || Completion.Task.IsCompletedSuccessfully && Completion.Task.Result == response;
+            Completion.TrySetResult(response);
+            return true;
         }
     }
 
