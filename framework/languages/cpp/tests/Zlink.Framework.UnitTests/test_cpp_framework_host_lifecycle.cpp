@@ -1406,9 +1406,27 @@ bool verify_degraded_host_blocks_and_resumes_relocation ()
       && blocked.reason == zlink::framework::relocation_reason_t::store_unavailable;
 
     location_store->recover ();
+    // An empty host ends Relocated/None without a target search (spec 05 §5.1),
+    // so the recovered host owns one User Spot to reach the target search again.
+    auto services = app.advanced ().services ().build_provider ();
+    bool unit_created = false;
     bool relocation_resumed = false;
     const auto recovery_deadline = std::chrono::steady_clock::now () + std::chrono::seconds (1);
     do {
+        if (!unit_created) {
+            unit_created = static_cast<bool> (
+              services.get_required<zlink::framework::spot_manager_t> ()
+                .get_or_create (zlink::framework::spot_id_t ("degraded-relocation-unit"),
+                                "degraded-object")
+                .in_mesh ("degraded-relocation-host")
+                .timeout (std::chrono::milliseconds (100))
+                .async ()
+                .result ());
+            if (!unit_created) {
+                std::this_thread::sleep_for (std::chrono::milliseconds (5));
+                continue;
+            }
+        }
         const auto resumed =
           app
             .relocate ({.mode = zlink::framework::relocation_mode_t::planned_maintenance,
@@ -1421,6 +1439,7 @@ bool verify_degraded_host_blocks_and_resumes_relocation ()
         if (!relocation_resumed)
             std::this_thread::sleep_for (std::chrono::milliseconds (5));
     } while (!relocation_resumed && std::chrono::steady_clock::now () < recovery_deadline);
+    services.close ();
 
     auto shutdown = app.shutdown (std::chrono::seconds (1));
     service_view->wait_stop_entered ();
@@ -1434,7 +1453,8 @@ bool verify_degraded_host_blocks_and_resumes_relocation ()
         std::cerr << "degraded host relocation admission did not close and resume"
                   << " startup=" << startup_completed
                   << " blocked-reason=" << static_cast<int> (blocked.reason)
-                  << " blocked=" << relocation_blocked << " resumed=" << relocation_resumed << '\n';
+                  << " blocked=" << relocation_blocked << " unit=" << unit_created
+                  << " resumed=" << relocation_resumed << '\n';
     }
     return passed;
 }
@@ -1457,6 +1477,159 @@ void configure_empty_relocation_app (
             .listen ("tcp://127.0.0.1:0")
             .set_routing_id (zlink::routing_id_t::from (routing_id));
       });
+}
+
+class relocation_unit_spot_t final : public zlink::framework::spot_t<zlink::framework::actor_t>
+{
+  public:
+    explicit relocation_unit_spot_t (zlink::framework::spot_context_t context) :
+        _context (std::move (context))
+    {
+    }
+
+    zlink::framework::spot_context_t &context () noexcept override { return _context; }
+
+    const zlink::framework::spot_context_t &context () const noexcept override { return _context; }
+
+    void configure () override {}
+
+    zlink::framework::task_t<zlink::framework::spot_create_response_t>
+    on_create (const zlink::framework::message_t &) override
+    {
+        co_return zlink::framework::spot_create_response_t::accept ();
+    }
+
+    zlink::framework::task_t<void> on_initialize () override { co_return; }
+
+    zlink::framework::task_t<zlink::framework::spot_actor_join_result_t>
+    on_actor_join (std::string_view, const zlink::framework::message_t &) override
+    {
+        co_return zlink::framework::spot_actor_join_result_t::reject ();
+    }
+
+    zlink::framework::task_t<void> on_actor_joined (zlink::framework::actor_t &) override
+    {
+        co_return;
+    }
+
+    zlink::framework::task_t<void> on_leave_actor (zlink::framework::actor_t &) override
+    {
+        co_return;
+    }
+
+  private:
+    zlink::framework::spot_context_t _context;
+};
+
+struct lone_host_relocation_t
+{
+    bool ready = false;
+    bool unit_created = false;
+    zlink::framework::relocation_result_t result;
+    zlink::framework::framework_runtime_state_t state_after =
+      zlink::framework::framework_runtime_state_t::preparing;
+    bool stopped = false;
+};
+
+/* A host alone in its Mesh relocates with no other node to target. With
+ * owns_unit it first creates one User Spot. */
+lone_host_relocation_t
+relocate_lone_host (std::string routing_id, bool owns_unit, std::chrono::milliseconds deadline)
+{
+    const std::string mesh_name = "lone-host-relocation-mesh";
+    auto app = zlink::framework::app_t::create ();
+    app.add_zlink_framework ([owns_unit, mesh_name, routing_id = std::move (routing_id)] (
+                               zlink::framework::zlink_framework_options_t &options) {
+        options.add_location_store (
+          std::make_shared<zlink::framework::runtime::in_memory_location_store_t> ());
+        options.add_relocation_store (
+          std::make_shared<zlink::framework::runtime::in_memory_relocation_store_t> ());
+        options.configure_locations ().polling_interval = std::chrono::milliseconds (10);
+        auto mesh = options.add_route_mesh (mesh_name);
+        mesh.channel_name ("lone-host-relocation-channel").server ();
+        mesh.set_object_role (zlink::framework::object_role_t::server)
+          .listen ("tcp://127.0.0.1:0")
+          .set_routing_id (zlink::routing_id_t::from (routing_id));
+        if (owns_unit) {
+            mesh.add_spot_factory<relocation_unit_spot_t> (
+              "relocation-unit",
+              [] (zlink::framework::spot_context_t context) {
+                  return std::make_shared<relocation_unit_spot_t> (std::move (context));
+              },
+              [] (auto &factory) { factory.recreate_on_relocation (); });
+        }
+    });
+
+    char program[] = "lone-host-relocation";
+    char *arguments[] = {program, nullptr};
+    int exit_code = -1;
+    std::thread run_thread ([&] { exit_code = app.run (1, arguments); });
+
+    lone_host_relocation_t observed;
+    observed.ready = wait_until ([&] { return app.is_ready (); }, std::chrono::seconds (2));
+    if (observed.ready && owns_unit) {
+        auto services = app.advanced ().services ().build_provider ();
+        observed.unit_created = static_cast<bool> (
+          services.get_required<zlink::framework::spot_manager_t> ()
+            .get_or_create (zlink::framework::spot_id_t ("relocation-unit"), "relocation-unit")
+            .in_mesh (mesh_name)
+            .timeout (std::chrono::seconds (1))
+            .async ()
+            .result ());
+        services.close ();
+    }
+    if (observed.ready && (!owns_unit || observed.unit_created)) {
+        observed.result =
+          app
+            .relocate ({.mode = zlink::framework::relocation_mode_t::planned_maintenance,
+                        .deadline = deadline})
+            .result ()
+            .value ();
+        observed.state_after = app.runtime_state ();
+    }
+    const auto stopped = app.shutdown (std::chrono::seconds (2)).result ().value ();
+    run_thread.join ();
+    observed.stopped =
+      stopped.outcome == zlink::framework::termination_outcome_t::stopped && exit_code == 0;
+    return observed;
+}
+
+/* Spec 05-host-relocation-flow §5.1 (#1947): a host with no Actor, User Spot or
+ * Instance Spot needs no target and ends Relocated/None; a host that owns a
+ * unit still needs a target and stays Serving when none exists. */
+bool verify_host_relocation_needs_target_only_for_units ()
+{
+    // A workload-free host completes without waiting for a target.
+    const auto empty =
+      relocate_lone_host ("lone-empty-host", false, std::chrono::milliseconds (500));
+    const bool empty_relocated =
+      empty.ready && empty.result.outcome == zlink::framework::relocation_outcome_t::relocated
+      && empty.result.reason == zlink::framework::relocation_reason_t::none
+      && empty.state_after == zlink::framework::framework_runtime_state_t::relocated
+      && empty.stopped;
+    if (!empty_relocated) {
+        std::cerr << "host with only mesh listeners must relocate without a target: ready="
+                  << empty.ready << " outcome=" << static_cast<int> (empty.result.outcome)
+                  << " reason=" << static_cast<int> (empty.result.reason)
+                  << " state=" << static_cast<int> (empty.state_after)
+                  << " stopped=" << empty.stopped << '\n';
+    }
+
+    const auto owner = relocate_lone_host ("lone-unit-host", true, std::chrono::milliseconds (1));
+    const bool owner_blocked =
+      owner.ready && owner.unit_created
+      && owner.result.outcome == zlink::framework::relocation_outcome_t::blocked
+      && owner.result.reason == zlink::framework::relocation_reason_t::target_unavailable
+      && owner.state_after == zlink::framework::framework_runtime_state_t::serving && owner.stopped;
+    if (!owner_blocked) {
+        std::cerr << "host with a User Spot and no target must stay Blocked: ready=" << owner.ready
+                  << " unit=" << owner.unit_created
+                  << " outcome=" << static_cast<int> (owner.result.outcome)
+                  << " reason=" << static_cast<int> (owner.result.reason)
+                  << " state=" << static_cast<int> (owner.state_after)
+                  << " stopped=" << owner.stopped << '\n';
+    }
+    return empty_relocated && owner_blocked;
 }
 
 bool verify_relocation_retry_after_target_unavailable ()
@@ -2092,8 +2265,11 @@ bool verify_relocation_target_eligibility_applies_full_narrowing ()
 
 } // namespace
 
-int main ()
+int main (int argc, char **argv)
 {
+    if (argc == 2 && std::string_view (argv[1]) == "empty-host-relocation")
+        return verify_host_relocation_needs_target_only_for_units () ? EXIT_SUCCESS : EXIT_FAILURE;
+
     if (const char *iterations = std::getenv ("ZLINK_CPP_FIRST_ACTOR_REQUEST_ITERATIONS")) {
         return verify_first_request_after_remote_actor_create (std::atoi (iterations))
                  ? EXIT_SUCCESS
@@ -2119,6 +2295,9 @@ int main ()
         return EXIT_FAILURE;
 
     if (!verify_first_request_after_remote_actor_create (5))
+        return EXIT_FAILURE;
+
+    if (!verify_host_relocation_needs_target_only_for_units ())
         return EXIT_FAILURE;
 
     if (!verify_relocation_retry_after_target_unavailable ())
@@ -2160,24 +2339,6 @@ int main ()
           zlink::framework::relocation_reason_t::manual_topology_unsupported)) {
         return EXIT_FAILURE;
     }
-    if (!verify_relocation_blocker (
-          "automatic RouteMesh without a replacement",
-          [] (zlink::framework::zlink_framework_options_t &options) {
-              options.add_location_store (
-                std::make_shared<zlink::framework::runtime::in_memory_location_store_t> ());
-              options.add_relocation_store (
-                std::make_shared<zlink::framework::runtime::in_memory_relocation_store_t> ());
-              auto node = options.add_route_mesh ("retire-single-mesh");
-              node.set_object_role (zlink::framework::object_role_t::server);
-              node.channel_name ("retire-single-channel").client ();
-              node.set_routing_id (zlink::routing_id_t::from ("retire-single-node"))
-                .listen ("inproc://cpp-retire-single-node");
-          },
-          zlink::framework::relocation_reason_t::target_unavailable, std::chrono::milliseconds (75),
-          std::chrono::milliseconds (50))) {
-        return EXIT_FAILURE;
-    }
-
     auto app = zlink::framework::app_t::create ();
     if (app.runtime_state () != zlink::framework::framework_runtime_state_t::preparing) {
         std::cerr << "new app must begin in Preparing\n";
@@ -2254,9 +2415,10 @@ int main ()
                     .deadline = std::chrono::seconds (2)})
         .result ()
         .value ();
+    // No unit needs a target (spec 05 §5.1), but this host has no Location
+    // Store to read its own descriptor from.
     if (unavailable_relocation.outcome != zlink::framework::relocation_outcome_t::blocked
-        || unavailable_relocation.reason
-             != zlink::framework::relocation_reason_t::target_unavailable
+        || unavailable_relocation.reason != zlink::framework::relocation_reason_t::store_unavailable
         || !running.is_ready ()) {
         std::cerr << "Relocation preflight blocker must preserve Serving\n";
         running.stop ();

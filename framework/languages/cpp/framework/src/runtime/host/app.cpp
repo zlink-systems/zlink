@@ -3139,13 +3139,24 @@ struct relocation_preflight_t
     std::int64_t source_application_version = 0;
 };
 
+/* Spec 05-host-relocation-flow §5.1: the unit inventory decides whether host
+ * relocation needs a target. A MeshNode with no Actor, User Spot or Instance
+ * Spot has nothing to move, so no target is searched for it. */
+bool has_relocation_units (const detail::mesh_node_runtime_t &node)
+{
+    return node.active_spot_count () != 0 || node.active_actor_count () != 0;
+}
+
 task_t<relocation_preflight_t>
 relocation_topology_preflight_once (detail::app_state_t &state, const relocation_options_t &options)
 {
     if (state.has_manual_service_topology && state.has_manual_service_topology ())
         co_return relocation_preflight_t{relocation_reason_t::manual_topology_unsupported, 0};
-    if (state.route_mesh_nodes.empty ())
-        co_return relocation_preflight_t{relocation_reason_t::target_unavailable, 0};
+    // A process with several Meshes must find a target on every Mesh once it
+    // owns a unit anywhere (§5.1), so the inventory is read for the whole host.
+    const bool requires_target =
+      std::any_of (state.route_mesh_nodes.begin (), state.route_mesh_nodes.end (),
+                   [] (const auto &node) { return node && has_relocation_units (*node); });
 
     try {
         auto provider = state.services.build_provider ();
@@ -3206,6 +3217,8 @@ relocation_topology_preflight_once (detail::app_state_t &state, const relocation
               options.mode == relocation_mode_t::planned_maintenance
                 ? source->application_version
                 : *options.target_application_version;
+            if (!requires_target)
+                continue;
 
             bool replacement = false;
             for (const auto &candidate : descriptors) {
@@ -3226,10 +3239,14 @@ relocation_topology_preflight_once (detail::app_state_t &state, const relocation
                                                  target_application_version};
             }
         }
+        // A host without a RouteMesh publishes no descriptor and keeps the
+        // descriptor's default application version.
+        const auto source_version =
+          source_application_version.value_or (mesh_node_descriptor_t{}.application_version);
         const auto effective = options.mode == relocation_mode_t::planned_maintenance
-                                 ? *source_application_version
+                                 ? source_version
                                  : *options.target_application_version;
-        co_return relocation_preflight_t{std::nullopt, effective, *source_application_version};
+        co_return relocation_preflight_t{std::nullopt, effective, source_version};
     }
     catch (const std::invalid_argument &) {
         throw;
@@ -3634,6 +3651,9 @@ task_t<void> app_t::run_shared_relocation (detail::app_state_t &state)
                 zlink::framework::runtime::wait_poll_interval (std::chrono::milliseconds (1));
                 application_units = spot_runtime->application_relocation_units ();
             }
+            // §5.1: with no unit on this Mesh there is no target to narrow.
+            if (!has_relocation_units (*node))
+                continue;
 
             // Source's own descriptor supplies the maintenance wave and the
             // declared relocation policy per capability for the candidate
