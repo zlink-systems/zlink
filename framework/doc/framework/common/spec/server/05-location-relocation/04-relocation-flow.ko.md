@@ -571,7 +571,8 @@ reply route를 유지한다. Store를 다시 읽거나 application handler를 so
 
 - **Session 연결과 중계가 이 전달 경로에 의존한다.** 이 경로가 없으면 이동한 Actor에 연결된
   session은 이동 자체가 성공해도 조용히 끊긴다. 따라서 Message Follow는 선택적인 성능
-  최적화가 아니다.
+  최적화가 아니다. 유일한 예외는 [Location runtime §10](01-location-runtime.ko.md#10-store-응답을-받지-못했을-때)의
+  연속 이동 예외이며, 그때는 다음 target들이 이미 Session route를 옮겼다.
 - Message Follow의 전달량에는 이 handoff가 별도로 두는 상한이 없다 — Location runtime이 정한
   hop 수와 기간 제한 외에 relocation 전용 record 수·byte 상한을 추가하지 않는다.
 

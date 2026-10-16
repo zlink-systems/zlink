@@ -629,7 +629,9 @@ redefine those values and only adds the following two.
 
 - **Session connection and relay depend on this forwarding path.** Without it, a
   session connected to a moved Actor silently disconnects even if the move itself
-  succeeds. So Message Follow isn't an optional performance optimization.
+  succeeds. So Message Follow isn't an optional performance optimization. The only exception is
+  [Location runtime §10](01-location-runtime.en.md#10-when-a-store-response-isnt-received)'s
+  chained-move exception, where later targets have already moved the Session routes.
 - Message Follow's forwarding volume has no separate cap set by this handoff — beyond
   the hop count and duration limit Location Runtime sets, no relocation-specific record
   count or byte cap is added.
