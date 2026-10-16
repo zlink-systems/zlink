@@ -185,6 +185,78 @@ final class ZLinkRelocationObservationPublicTest {
         }
     }
 
+    @Test
+    void vacatingIdleSpotBeforeRelocationKeepsTheRemainingWorkloadRelocatable() throws Exception {
+        joined = new CompletableFuture<>();
+        var locations = new ZLinkInMemoryLocationStore();
+        var relocations = new InMemoryRelocationStore();
+        var sourceOptions = options("vacate-source", locations, relocations, null);
+        sourceOptions.registration().meshNodes().getFirst().setSpotCapacity(3);
+        try (var source = ZLinkFrameworkRuntimeTestAccess.start(sourceOptions)) {
+            for (String room : java.util.List.of("room-1", "room-2", "room-3")) {
+                source.spotManager()
+                        .getOrCreate(room, "room")
+                        .submit()
+                        .toCompletableFuture()
+                        .get(WAIT.toSeconds(), TimeUnit.SECONDS);
+            }
+            var actor =
+                    assertInstanceOf(
+                                    ZLinkActorCreateResult.Created.class,
+                                    source.actorManager()
+                                            .create("vacate-player", "player")
+                                            .submit()
+                                            .toCompletableFuture()
+                                            .get(WAIT.toSeconds(), TimeUnit.SECONDS))
+                            .actor();
+            source.actorClient()
+                    .requestToActor(actor.actorId(), new Join("room-3"))
+                    .timeout(WAIT)
+                    .submit(String.class)
+                    .toCompletableFuture()
+                    .get(WAIT.toSeconds(), TimeUnit.SECONDS);
+            assertInstanceOf(
+                    ZLinkActorJoinCompletion.Accepted.class,
+                    joined.get(WAIT.toSeconds(), TimeUnit.SECONDS));
+            var endpoint = source.listenerStatus(ZLinkListenerKind.ROUTE_MESH, MESH).endpoint();
+            var targetOptions = options("vacate-target", locations, relocations, endpoint);
+            targetOptions.registration().meshNodes().getFirst().setSpotCapacity(5);
+            try (var target = ZLinkFrameworkRuntimeTestAccess.start(targetOptions);
+                    var ready =
+                            observe(
+                                    target.routeMeshRuntime().observe(MESH, 8),
+                                    status -> status.isReady() && status.readyPeerCount() > 0)) {
+                ready.result.get(WAIT.toSeconds(), TimeUnit.SECONDS);
+                for (String room : java.util.List.of("room-4", "room-5", "room-6")) {
+                    target.spotManager()
+                            .getOrCreate(room, "room")
+                            .submit()
+                            .toCompletableFuture()
+                            .get(WAIT.toSeconds(), TimeUnit.SECONDS);
+                }
+                var idle =
+                        source.spotManager()
+                                .find("room-1")
+                                .toCompletableFuture()
+                                .join()
+                                .orElseThrow();
+                assertTrue(source.spotManager().close(idle).toCompletableFuture().join());
+                var result =
+                        source.relocate(
+                                        new ZLinkFrameworkRelocationOptions(
+                                                ZLinkFrameworkRelocationMode.PLANNED_MAINTENANCE,
+                                                null,
+                                                WAIT))
+                                .toCompletableFuture()
+                                .get(WAIT.toSeconds(), TimeUnit.SECONDS);
+                assertEquals(
+                        ZLinkFrameworkRelocationOutcome.RELOCATED,
+                        result.outcome(),
+                        result.toString());
+            }
+        }
+    }
+
     public record Probe(String value) {}
 
     public record BoundSession(ZLinkSessionContext context) implements ZLinkSession {
