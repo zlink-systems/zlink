@@ -16,7 +16,7 @@ Default builds and e2e run nodes and the client in Docker without a host SDK. Ru
 pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
 pwsh -NoProfile -File ./run-e2e.ps1
 pwsh -NoProfile -File ./run-e2e.ps1 -Scenario region,dungeon,reconnect,update
-pwsh -NoProfile -File ./run-e2e.ps1 --check-structure
+pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
 ```
 
 Bash provides the same workflow:

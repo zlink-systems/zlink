@@ -72,7 +72,7 @@ PowerShell:
 ```powershell
 pwsh -NoProfile -File ./run-e2e.ps1
 pwsh -NoProfile -File ./run-e2e.ps1 -Scenario field,dungeon,reconnect,update
-pwsh -NoProfile -File ./run-e2e.ps1 --check-structure
+pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
 ```
 
 `field` crosses from field-2 on fieldA to field-3 on fieldB and checks a nearby observer's `BorderVisible` event and unchanged `SessionInfo`. `dungeon` checks a two-player party's shared dungeon and stage broadcast. `reconnect` checks the same Actor, dungeon and stage after reconnect. `update` drains the active instance, checks game state and Session continuity, waits for stopped shutdown, and verifies its replacement accepts a new dungeon. Selecting reconnect or update includes party setup.

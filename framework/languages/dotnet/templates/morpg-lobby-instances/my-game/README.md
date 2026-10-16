@@ -73,7 +73,7 @@ PowerShell 7:
 ```powershell
 pwsh -NoProfile -File ./run-e2e.ps1
 pwsh -NoProfile -File ./run-e2e.ps1 -Scenario party,reconnect,update
-pwsh -NoProfile -File ./run-e2e.ps1 --check-structure
+pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
 ```
 
 The runner checks `zlink.structure.json`, starts Redis with a unique Compose project and key prefix, starts Lobby, instanceA, instanceB and Session, and cleans up its own processes and containers. Listeners bind port zero; clients use the endpoints published by Framework. Each run keeps configurations, stdout and stderr in `.logs/run-<id>/`. Node stderr includes message-flow diagnostics at Normal level.

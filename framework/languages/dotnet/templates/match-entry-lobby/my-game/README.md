@@ -67,7 +67,7 @@ pwsh -NoProfile -File ./run-e2e.ps1 -Local -NoBuild
 ```powershell
 pwsh -NoProfile -File ./run-e2e.ps1
 pwsh -NoProfile -File ./run-e2e.ps1 -Scenario hit,reconnect,update
-pwsh -NoProfile -File ./run-e2e.ps1 --check-structure
+pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
 ```
 
 The runner checks the structure, starts its own Redis Compose project and node processes, and records stdout, stderr and message-flow diagnostics in `.logs/run-<id>/`. Redis and node listeners use OS-assigned ports; Redis keys use a unique run prefix. Cleanup failures return exit code 1. Each scenario uses fresh node containers and an independent Redis key prefix; the invocation shares one Redis service. The fixture sets RoomCapacity to one, so after migration fills the surviving process, the replacement is the eligible provider for a new Room. Production defaults to unrestricted Room capacity.

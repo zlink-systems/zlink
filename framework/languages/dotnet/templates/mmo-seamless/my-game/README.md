@@ -68,7 +68,7 @@ The default runs all four scenarios. To select scenarios, use:
 
 ```powershell
 pwsh -NoProfile -File ./run-e2e.ps1 -Scenario cross,border,reconnect
-pwsh -NoProfile -File ./run-e2e.ps1 --check-structure
+pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
 ```
 
 Selection retains the canonical scenario order. Unknown or duplicate names fail before node startup. Exit status includes cleanup failures even when all selected scenarios pass.
@@ -94,7 +94,7 @@ pwsh -NoProfile -File ./run-e2e.ps1 -Local -NoBuild
 
 The client also requests a Dungeon User Spot from the Instance node through `GetOrCreate`. Scenario results use `✓`/`✗` with a total and a nonzero exit code on failure. A failed run retains diagnostics; inspect that run before repeating it.
 
-Pass `--check-structure` to either default script to check composition without starting nodes. After a local build, structure validation can also run without Docker:
+Pass `--check-structure` to `run-e2e.sh` or `-CheckStructure` to `run-e2e.ps1` to check composition without starting nodes. After a local build, structure validation can also run without Docker:
 
 ```sh
 dotnet e2e/MyGame.E2E/bin/Debug/net8.0/MyGame.E2E.dll --root . --check-structure

@@ -19,7 +19,7 @@ services:
     profiles: [docker]
     image: ${COMPOSE_PROJECT_NAME}-node
     build:
-      context: .
+      context: ${MY_GAME_BUILD_CONTEXT:-.}
       target: node
   runner:
     profiles: [docker]
@@ -28,7 +28,7 @@ services:
     group_add:
       - "${MY_GAME_DOCKER_GID:-0}"
     build:
-      context: .
+      context: ${MY_GAME_BUILD_CONTEXT:-.}
       target: runner
     environment:
       DOCKER_CONFIG: /template/.logs/docker-config

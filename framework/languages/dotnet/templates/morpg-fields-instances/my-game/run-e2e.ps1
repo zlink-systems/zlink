@@ -2,6 +2,7 @@ param(
     [switch]$Local,
     [switch]$NoBuild,
     [switch]$BuildOnly,
+    [switch]$CheckStructure,
     [string]$Scenario,
     [Parameter(ValueFromRemainingArguments = $true)][string[]]$RunnerArguments = @()
 )
@@ -10,7 +11,8 @@ Set-StrictMode -Version Latest
 if ($PSVersionTable.PSVersion.Major -lt 7) { throw 'PowerShell 7 or later is required.' }
 $root = $PSScriptRoot
 New-Item -ItemType Directory -Force (Join-Path $root '.logs') | Out-Null
-if ($Scenario) { $RunnerArguments = @('--scenario', $Scenario) + $RunnerArguments }
+if ($CheckStructure) { $RunnerArguments = @('--check-structure') + $RunnerArguments }
+elseif ($Scenario) { $RunnerArguments = @('--scenario', $Scenario) + $RunnerArguments }
 if ($Local) {
     if (-not $NoBuild) {
         & dotnet build (Join-Path $root 'server/MyGame.sln') --nologo --verbosity minimal *> (Join-Path $root '.logs/build.log')
@@ -27,6 +29,12 @@ if ($NoBuild) { throw '-NoBuild requires -Local; Docker builds reuse the layer c
 $project = 'my-game-e2e-' + [guid]::NewGuid().ToString('N')
 $logs = Join-Path $root ".logs/docker-$project"
 New-Item -ItemType Directory $logs | Out-Null
+# BuildKit reuses the previous transfer of a build context with the same directory name and
+# compares only file size and modification time, so two projects named my-game with equal
+# timestamps would build each other's files. A link with a per-run name gives every build its own
+# transfer.
+$env:MY_GAME_BUILD_CONTEXT = Join-Path $logs $project
+New-Item -ItemType ($IsWindows ? 'Junction' : 'SymbolicLink') -Path $env:MY_GAME_BUILD_CONTEXT -Target $root | Out-Null
 $compose = @('compose', '-f', (Join-Path $root 'docker-compose.yml'), '-p', $project, '--profile', 'docker')
 $result = 1
 Write-Host "Docker logs: $logs"
@@ -38,9 +46,10 @@ try {
     }
     if ($BuildOnly) { $result = 0 }
     else {
-        & docker @compose run --rm --no-deps -T --name "$project-check" runner @RunnerArguments --check-structure
+        $checkArguments = @(if ($CheckStructure) { $RunnerArguments } else { '--check-structure' })
+        & docker @compose run --rm --no-deps -T --name "$project-check" runner @checkArguments
         if ($LASTEXITCODE -ne 0) { throw 'Structure check failed.' }
-        if ($RunnerArguments -contains '--check-structure') { $result = 0 }
+        if ($CheckStructure) { $result = 0 }
         else {
             & docker @compose up -d --wait --wait-timeout 30 location *> (Join-Path $logs 'redis-start.log')
             if ($LASTEXITCODE -ne 0) { throw 'Redis startup failed.' }
@@ -68,5 +77,6 @@ finally {
             if ($LASTEXITCODE -ne 0) { $result = 1 }
         }
     }
+    [IO.Directory]::Delete($env:MY_GAME_BUILD_CONTEXT)
 }
 exit $result
