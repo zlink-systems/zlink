@@ -164,7 +164,7 @@ maps to one contract test.
   rejects or whose `OnInitializeAsync` fails, the registered timers never run a callback.
 - A context `Close` requested by an Instance Spot cold activation's `OnInitializeAsync` starts only after the first
   business message handler completes and the replay-cursor update and recovery-pointer release finish
-  ([Spot address messaging §7](06-spot-address-messaging.en.md#7-close-and-generation-boundary)).
+  ([Spot address messaging §7](06-spot-address-messaging.en.md#7-close-and-the-generation-boundary)).
 - After cancel is called, a tick from that generation onward doesn't start its callback, but a callback
   already running at the moment of cancel runs to completion.
 - When `cancel` is called concurrently more than once for the same generation, every result
