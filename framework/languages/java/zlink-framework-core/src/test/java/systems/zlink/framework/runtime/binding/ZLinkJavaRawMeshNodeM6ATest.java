@@ -1134,8 +1134,13 @@ final class ZLinkJavaRawMeshNodeM6ATest {
                         return CompletableFuture.completedFuture(
                                 codec.encodeSessionRelocationSealed(
                                         new ZLinkServiceM6BWireCodec.SessionRelocationSealed(
-                                                seal.relocation(), seal.coordinator(),
-                                                seal.actor(), seal.session())));
+                                                seal.relocation(),
+                                                seal.coordinator(),
+                                                seal.actor(),
+                                                seal.session(),
+                                                systems.zlink.framework.runtime.protocol
+                                                        .ServiceWirePilotCodec.SessionSealResult
+                                                        .SEALED)));
                     });
             source.start();
             sessionOwner.start();
