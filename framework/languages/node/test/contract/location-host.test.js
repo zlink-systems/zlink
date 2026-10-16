@@ -29,7 +29,7 @@ for (const emptyFirstPage of [true, false]) {
       meshName: 'play', rid: 'node-a', lifecycleGeneration: 1n,
       state: framework.ZLinkFrameworkRuntimeState.Serving, objectRole: 'server',
       placementWeight: 100, entrySpotId: 'entry', ownerId: 'owner', leaseGeneration: 1n,
-      objectCapabilities: [{ objectKind: 'actor', stableType: 'SessionActor' }],
+      objectCapabilities: [{ objectKind: 'actor', stableType: 'SessionActor', entryAccepted: true }],
       populationCapacity: { actors: { active: 0, reserved: 0, limit: 1000 } }
     };
     const calls = [];

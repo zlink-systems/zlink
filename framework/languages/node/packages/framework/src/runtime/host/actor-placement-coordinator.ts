@@ -2,6 +2,7 @@ import { encodeRoutingIdStorageHex, routingIdsEqual } from '../routing-id';
 import {
   ZLinkFrameworkInternalErrorKind,
   createInternalFrameworkException,
+  internalFrameworkErrorKindFromWireReply,
   wireReplyFailureException
 } from '../framework-errors-internal';
 import { createHash } from 'node:crypto';
@@ -204,6 +205,15 @@ export class ZLinkActorPlacementCoordinator {
           }
         }
         if (remote === undefined) throw transportFailure;
+        if (
+          internalFrameworkErrorKindFromWireReply(remote.terminalResult, remote.failureCode) ===
+          ZLinkFrameworkInternalErrorKind.RouteNotConnected
+        ) {
+          //  The target refused before the callback and cancelled its reservation
+          //  (Actor model §6.3); exclude this host run like a Reserve failure.
+          excluded.add(encodeRoutingIdStorageHex(target.nodeRid));
+          continue;
+        }
         if (remote.terminalResult !== RequestResult.Ok || remote.failureCode !== 0) {
           //  Classify the (terminal, fine failure code) pair via the shared
           //  ownership-aware translator instead of collapsing every non-OK

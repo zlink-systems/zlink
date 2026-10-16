@@ -182,6 +182,7 @@ import {
   ZLinkPublicSpotManager,
   ZLinkRuntimeSpotPublisherTransport,
   ZLinkSpotNodeRuntimeManager,
+  registrationAcceptsNewActor,
   type ZLinkDetachedTaskRunner,
   type ZLinkSpotManagerOptions
 } from '../spots';
@@ -2248,7 +2249,7 @@ export class ZLinkFrameworkRuntimeHost
               descriptor.placementWeight > 0 &&
               descriptor.entrySpotId !== undefined &&
               excludedNodeRids?.has(encodeRoutingIdStorageHex(descriptor.rid)) !== true &&
-              capability !== undefined
+              capability?.entryAccepted === true
             );
           }
         );
@@ -2490,6 +2491,18 @@ export class ZLinkFrameworkRuntimeHost
             return await actorPlacement.handleRemoteCreate(
               record,
               async (requestPayload, authority, createSignal) => {
+                const registration = this.options.registration.spotNodes.get(meshName);
+                if (
+                  registration === undefined ||
+                  !registrationAcceptsNewActor(registration, record.stableType)
+                ) {
+                  // Framework failure before the callback (Actor model §6.3): the reservation is
+                  // cancelled and the requester excludes this host run.
+                  throw createInternalFrameworkException(
+                    ZLinkFrameworkInternalErrorKind.RouteNotConnected,
+                    `RouteMesh '${meshName}' registers no Entry Spot type that accepts Actor type '${record.stableType}'.`
+                  );
+                }
                 const request = decodeFrameworkCreationPayload(
                   requestPayload,
                   this.options.registration.messageSerializers

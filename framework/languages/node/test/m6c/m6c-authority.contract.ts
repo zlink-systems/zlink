@@ -115,6 +115,7 @@ for (const backend of ['provider', 'memory'] as const) {
                       ? 'recreate'
                       : 'disabled',
                   hasSnapshotAdapter: false,
+                  entryAccepted: false,
                   limit: 0
                 }
               ],
@@ -505,6 +506,7 @@ for (const backend of ['provider', 'memory'] as const) {
               stableType: 'player',
               policy: 'disabled',
               hasSnapshotAdapter: false,
+              entryAccepted: false,
               limit: 0
             }
           ]
@@ -573,6 +575,7 @@ for (const backend of ['provider', 'memory'] as const) {
               stableType: 'player',
               policy: 'disabled',
               hasSnapshotAdapter: false,
+              entryAccepted: false,
               limit: 0
             }
           ]
@@ -3089,6 +3092,7 @@ async function writeTargetDescriptor(
         stableType: 'room',
         policy: 'disabled' as const,
         hasSnapshotAdapter: false,
+        entryAccepted: false,
         limit: 0
       }
     ],
