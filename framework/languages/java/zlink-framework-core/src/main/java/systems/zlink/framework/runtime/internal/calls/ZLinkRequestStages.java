@@ -3,6 +3,7 @@ package systems.zlink.framework.runtime.internal.calls;
 import systems.zlink.framework.channels.ZLinkRequestStage;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.runtime.internal.ZLinkCompletionBridge;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceCompletionDispatcher;
 
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
@@ -40,7 +41,7 @@ public final class ZLinkRequestStages {
                     else admission.completeExceptionally(unwrap(failure));
                 });
         ZLinkCompletionBridge.forwardCancellation(admission, reply);
-        CompletionStage<Void> managed = ZLinkSerialExecutionQueue.manageCurrent(admission);
+        CompletionStage<Void> managed = ZLinkSerialExecutionQueue.manageCurrentInTurn(admission);
         return new RequestStage<>(reply, admission, managed == admission ? null : managed);
     }
 
@@ -59,7 +60,7 @@ public final class ZLinkRequestStages {
         private final CompletionStage<T> reply;
         private final CompletableFuture<Void> admission;
 
-        /** The handler-turn stage, or the caller view created on the first observation. */
+        /** The handler-turn stage, or the caller delivery created on the first observation. */
         private volatile CompletionStage<Void> admitted;
 
         private RequestStage(
@@ -75,8 +76,11 @@ public final class ZLinkRequestStages {
         public CompletionStage<Void> admitted() {
             CompletionStage<Void> current = admitted;
             if (current != null) return current;
-            CompletionStage<Void> view = ZLinkCompletionBridge.applicationView(admission);
-            return ADMITTED.compareAndSet(this, null, view) ? view : admitted;
+            CompletableFuture<Void> view =
+                    admission.isDone() ? admission : new CompletableFuture<>();
+            if (!ADMITTED.compareAndSet(this, null, view)) return admitted;
+            if (view != admission) ZLinkServiceCompletionDispatcher.deliver(admission, view);
+            return view;
         }
 
         @Override
