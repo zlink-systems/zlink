@@ -387,6 +387,23 @@ stateful_error_t stateful_object_runtime_t::commit_create (std::uint64_t attempt
       .get ();
 }
 
+bool stateful_object_runtime_t::finalized_relocation_source (object_kind_t kind,
+                                                             const std::string &key,
+                                                             std::uint64_t object_generation) const
+{
+    return _lane
+      .run ([&] {
+          const auto object = _objects.find (object_key_t{kind, key});
+          if (object == _objects.end () || object->second.state != object_state_t::moving
+              || object->second.reference.object_generation != object_generation)
+              return false;
+          const auto seal = _relocation_seals.find (object->second.barrier_generation);
+          return seal != _relocation_seals.end ()
+                 && seal->second.ingress_phase == relocation_ingress_phase_t::follow_only;
+      })
+      .get ();
+}
+
 stateful_error_t stateful_object_runtime_t::abort_create (std::uint64_t attempt)
 {
     return _lane
@@ -1418,7 +1435,9 @@ stateful_error_t stateful_object_runtime_t::abort_relocation_before_cutover (std
       .get ();
 }
 
-stateful_error_t stateful_object_runtime_t::finalize_relocation_cutover (std::uint64_t token)
+stateful_error_t stateful_object_runtime_t::finalize_relocation_cutover (
+  std::uint64_t token,
+  std::optional<std::function<void (const object_ref_t &, const turn_record_t &)>> deliver)
 {
     return _lane
       .run ([&, this] () -> stateful_error_t {
@@ -1435,6 +1454,8 @@ stateful_error_t stateful_object_runtime_t::finalize_relocation_cutover (std::ui
                   return stateful_error_t::conflict;
               }
           }
+          if (deliver)
+              seal->second.deliver = std::move (*deliver);
           seal->second.ingress_phase = relocation_ingress_phase_t::follow_only;
           seal->second.frozen.clear ();
           seal->second.boundary_application.clear ();
