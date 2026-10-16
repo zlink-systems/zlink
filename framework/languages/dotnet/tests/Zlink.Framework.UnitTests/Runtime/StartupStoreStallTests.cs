@@ -41,6 +41,10 @@ public sealed class StartupStoreStallTests
             Assert.True(store.IsHolding);
             Assert.True(store.HeldCalls > 0);
             Assert.False(locations.IsOwnerAdmissionOpen);
+            // §5: no new application work, so the host stays Preparing.
+            var host = provider.GetRequiredService<IZLinkFrameworkRuntime>();
+            Assert.Equal(ZLinkFrameworkRuntimeState.Preparing, host.Status.State);
+            Assert.False(host.Status.IsReady);
             var repository = new ZLinkProviderLocationRepository(store.Inner);
             Assert.Empty((await repository.ListMeshNodesAsync(MeshName, default)).Items);
 
@@ -64,6 +68,10 @@ public sealed class StartupStoreStallTests
             Assert.Equal(locations.OwnerId, descriptor.OwnerId);
             Assert.False(string.IsNullOrEmpty(descriptor.Endpoint));
             Assert.True(locations.IsOwnerAdmissionOpen);
+            await foreach (var observed in host.ObserveAsync(hang.Token))
+                if (observed.Status.State == ZLinkFrameworkRuntimeState.Serving)
+                    break;
+            Assert.True(host.Status.IsReady);
             Assert.IsType<ZLinkOwnerLeaseReadResult.Found>(
                 await repository.ReadOwnerLeaseAsync(locations.OwnerId)
             );
@@ -90,6 +98,10 @@ public sealed class StartupStoreStallTests
         // still completes, and a host that never claimed stops cleanly.
         await hosted.StartAsync(CancellationToken.None).WaitAsync(Hang);
         Assert.False(locations.IsOwnerAdmissionOpen);
+        Assert.Equal(
+            ZLinkFrameworkRuntimeState.Preparing,
+            provider.GetRequiredService<IZLinkFrameworkRuntime>().Status.State
+        );
         await hosted.StopAsync(CancellationToken.None).WaitAsync(Hang);
 
         store.Unavailable = false;
