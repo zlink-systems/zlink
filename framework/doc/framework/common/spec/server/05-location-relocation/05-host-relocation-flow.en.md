@@ -849,7 +849,8 @@ twice isn't a valid bounded teardown.
 `Shutdown` in `Relocated` only cleans up accepted work and infrastructure. Calling it
 directly from `Serving` doesn't move objects.
 
-While `Relocated`, the source retains Message Follow routes and the descriptors, peer
+While `Relocated`, the source retains Message Follow routes (except units with no route under
+[Location runtime §10](01-location-runtime.en.md#10-when-a-store-response-isnt-received)'s chained-move exception) and the descriptors, peer
 connections, and listeners required to forward sends and requests that still arrive at
 the old address, and also keeps each unit's cutover retransmission copy until its
 authority settlement and retransmission-copy cleanup end (common relocation §4.4). A deployment that needs the full configured

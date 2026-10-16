@@ -813,7 +813,7 @@ admission deadline 때문에 message, timer, phase update와 cleanup을 수행�
 ## 9. Message Follow
 
 Commit 뒤 source는 `MessageFollowDuration` 안에서 이전 주소로 도착한 message를 committed
-target으로 relay한다. Relay는 Store를 읽거나 application handler를 실행하지 않으며 original
+target으로 relay한다([Location runtime §10](../05-location-relocation/01-location-runtime.ko.md#10-store-응답을-받지-못했을-때)의 연속 이동 예외 제외). Relay는 Store를 읽거나 application handler를 실행하지 않으며 original
 operation identity, generation, payload와 reply route를 유지한다. Route duration이 끝난 뒤 이전
 주소로 도착한 request는 `Unavailable`로 끝난다.
 

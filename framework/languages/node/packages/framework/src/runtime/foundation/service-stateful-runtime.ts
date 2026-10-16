@@ -2015,6 +2015,11 @@ export class ServiceStatefulRuntime {
     return this.operations.size;
   }
 
+  /** The next stateful request expiry, as a lower bound. */
+  nextMaintenanceDeadlineMs(): number {
+    return this.operations.nextDeadlineMs();
+  }
+
   close(): void {
     if (this.closed) return;
     this.closed = true;

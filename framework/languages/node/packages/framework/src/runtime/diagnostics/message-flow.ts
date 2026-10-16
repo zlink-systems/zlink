@@ -86,6 +86,15 @@ export function effectiveMessageFlow(ctx: ZLinkDiagnosticsContext): ZLinkMessage
   return ctx.liveMode.mode;
 }
 
+/**
+ * Message-flow tracing is on at Normal and Detailed only (04-flow-correlation
+ * §4). Below it no flow ID is created, validated, captured or propagated. This
+ * is the one decision every flow processing point reads.
+ */
+export function messageFlowTracingEnabled(mode: ZLinkMessageFlowLogMode): boolean {
+  return MESSAGE_FLOW_MODE_RANK[mode] >= MESSAGE_FLOW_MODE_RANK.normal;
+}
+
 export function createMessageFlowModeCell(
   dispatch: { diagnostics?: ZLinkDiagnosticsOptions } | undefined
 ): ZLinkMessageFlowModeCell {
@@ -201,7 +210,7 @@ export class ZLinkMessageFlowTracer {
   }
 
   flowCreationEnabled(): boolean {
-    return effectiveMessageFlow(this.ctx) !== 'off';
+    return messageFlowTracingEnabled(effectiveMessageFlow(this.ctx));
   }
 
   trace(flowInput: MessageFlowInput): void {
