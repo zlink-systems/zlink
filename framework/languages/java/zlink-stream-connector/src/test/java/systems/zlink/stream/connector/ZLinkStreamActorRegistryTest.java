@@ -193,8 +193,12 @@ final class ZLinkStreamActorRegistryTest {
             server.sendAsync(actorPacketHeader(7, "Ping"), new byte[] {1}).join();
             server.sendAsync(controlHeader(ZLinkStreamActorRegistry.UNBOUND), unboundControl(7))
                     .join();
-            TcpStreamConnectorTestServer.awaitCondition(() -> connector.actors().isEmpty());
+            // Spec 32 §5.6 removes the Actor before queueing its lifecycle callback.
+            // Both callbacks must be queued before this manual dispatch can observe their order.
+            TcpStreamConnectorTestServer.awaitCondition(
+                    () -> connector.pendingDispatchCount() == 2);
 
+            assertTrue(connector.actors().isEmpty());
             assertFalse(actor.isBound());
             ConnectorTestAwait.await(connector.dispatch());
             assertEquals("player-a", received.join());

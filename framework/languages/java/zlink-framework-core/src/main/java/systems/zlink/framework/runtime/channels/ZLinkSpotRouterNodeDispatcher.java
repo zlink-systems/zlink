@@ -162,19 +162,14 @@ final class ZLinkSpotRouterNodeDispatcher {
                 return;
             }
             List<Message> replyParts = ZLinkChannelRuntime.copyMessages(reply.parts());
-            if (ZLinkChannelRuntime.isFrameworkErrorReply(replyParts)) {
-                //  Preserve the public kind the framework-error reply carries
-                //  rather than collapsing every error reply to InternalFailure,
-                //  and keep the reply metadata (framework-origin marker).
-                ZLinkFrameworkErrorKind errorKind =
-                        ZLinkChannelRuntime.frameworkErrorReplyKind(reply.parts());
+            //  Preserve the public kind the framework-error reply carries
+            //  rather than collapsing every error reply to InternalFailure,
+            //  and keep the reply metadata (framework-origin marker).
+            ZLinkFrameworkException errorReply =
+                    ZLinkChannelRuntime.frameworkErrorReplyFailure(replyParts);
+            if (errorReply != null) {
                 replyParts.forEach(Message::close);
-                result.completeExceptionally(
-                        new ZLinkFrameworkException(
-                                errorKind,
-                                ZLinkChannelRuntime.frameworkErrorReplyMessage(reply.parts()),
-                                null,
-                                ZLinkChannelRuntime.frameworkErrorReplyMetadata(reply.parts())));
+                result.completeExceptionally(errorReply);
                 return;
             }
             if (!result.complete(replyParts)) {

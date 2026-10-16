@@ -217,7 +217,8 @@ and keeps taking PRs; a release is verified and tagged on a release branch cut f
   main into the release branch — it would bring in changes meant for the next version. Do not make
   fixes that exist only on the release branch.
 - **Work on the release branch.** The gate and partial re-verification, the version bump
-  (`sync-version.py --write`), release notes, `release-check.sh` and the tag. The tag goes on a
+  (`sync-version.py --write`), release notes, the Framework C++ recipes
+  (`release-check.sh --write framework cpp`), `release-check.sh` and the tag. The tag goes on a
   release-branch commit as in `CONTRIBUTING.md` §8 and `doc/building/release-pipeline.md`. To confirm
   inclusion, run `git cherry -v release/framework-<version> origin/main` and check that no milestone
   PR change is missing.

@@ -41,6 +41,8 @@
         <Compile Include="Runtime/MeshLivenessPhysicalCloseTests.cs"/>
         <Compile Include="Runtime/RequestAdmissionStageTests.cs"/>
         <Compile Include="Runtime/HostRelocationSealStageTests.cs"/>
+        <Compile Include="Runtime/StartupStoreStallTests.cs"/>
+        <Compile Include="Runtime/SpotWideMemberSealCaptureTests.cs"/>
         <Compile Include="TestCompletionPollerDriver.cs"/>
         <Compile Include="../../cross-language/Zlink.Framework.TestHost/TestHostMessageFlowListener.cs" Link="Support/TestHostMessageFlowListener.cs"/>
         <Compile Include="Configuration/Registration/Channels.cs"/>

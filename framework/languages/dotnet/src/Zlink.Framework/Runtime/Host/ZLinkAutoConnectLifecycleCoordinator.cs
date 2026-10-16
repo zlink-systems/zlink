@@ -9,7 +9,12 @@ namespace Zlink.Framework.Runtime.Host;
 internal sealed class ZLinkAutoConnectLifecycleCoordinator
 {
     private readonly ZLinkStateLane _lane = new();
-    private readonly Func<ZLinkFrameworkComponentState, CancellationToken, ValueTask>? _start;
+    private readonly Func<
+        ZLinkFrameworkComponentState,
+        CancellationToken,
+        Action,
+        ValueTask
+    >? _start;
     private readonly Func<CancellationToken, ValueTask>? _stop;
     private ZLinkFrameworkComponentState? _state;
     private Task? _startTask;
@@ -22,7 +27,7 @@ internal sealed class ZLinkAutoConnectLifecycleCoordinator
         ) { }
 
     internal ZLinkAutoConnectLifecycleCoordinator(
-        Func<ZLinkFrameworkComponentState, CancellationToken, ValueTask>? start,
+        Func<ZLinkFrameworkComponentState, CancellationToken, Action, ValueTask>? start,
         Func<CancellationToken, ValueTask>? stop
     )
     {
@@ -30,11 +35,22 @@ internal sealed class ZLinkAutoConnectLifecycleCoordinator
         _stop = stop;
     }
 
+    /// <summary>
+    /// Starts the auto-connect generation. <paramref name="published"/> runs
+    /// when the host's descriptors are published, which may be after this
+    /// task completes (location runtime §5); without auto-connect it runs now.
+    /// </summary>
     internal Task FrameworkReadyAsync(
         ZLinkFrameworkComponentState state,
+        Action published,
         CancellationToken cancellationToken
     )
     {
+        if (_start is null)
+        {
+            published();
+            return Task.CompletedTask;
+        }
         var start = AwaitStateLane(
             _lane.RunAsync(() =>
             {
@@ -47,7 +63,10 @@ internal sealed class ZLinkAutoConnectLifecycleCoordinator
 
         try
         {
-            CompleteTask(start.Completion, _start!(start.State, cancellationToken).AsTask());
+            CompleteTask(
+                start.Completion,
+                _start!(start.State, cancellationToken, published).AsTask()
+            );
         }
         catch (Exception exception)
         {

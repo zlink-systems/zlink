@@ -2683,13 +2683,27 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         currentRow.kind === 'found'
           ? { kind: 'version', key: rowKey, expected: currentRow.value.version }
           : { kind: 'missing', key: rowKey };
-      const result = await this.provider.write(
-        {
-          conditions: [leaseValueCondition(leaseKey, { ownerId, leaseGeneration }), rowCondition],
-          mutations: [{ kind: 'put', key: rowKey, bytes: encodedDescriptor }]
-        },
-        signal
-      );
+      let result: Awaited<ReturnType<ZLinkLocationStore['write']>>;
+      try {
+        result = await this.provider.write(
+          {
+            conditions: [leaseValueCondition(leaseKey, { ownerId, leaseGeneration }), rowCondition],
+            mutations: [{ kind: 'put', key: rowKey, bytes: encodedDescriptor }]
+          },
+          signal
+        );
+      } catch (failure) {
+        // Location runtime §10: the Store may have applied a write whose result
+        // was lost. Re-read the same key; the same bytes confirm the write.
+        const confirmed = await this.provider.read(rowKey, signal).catch(() => undefined);
+        if (
+          confirmed?.kind === 'found' &&
+          Buffer.from(confirmed.value.bytes).equals(Buffer.from(encodedDescriptor))
+        ) {
+          return { status: WriteStatus.Stored, generation, updatedAt: confirmed.value.storeNow };
+        }
+        throw failure;
+      }
       if (result.kind === 'applied') {
         return { status: WriteStatus.Stored, generation, updatedAt: result.storeNow };
       }
@@ -4416,10 +4430,6 @@ function canTakeOverStoredLocation(
   );
 }
 
-function persistMeshDescriptor(descriptor: ZLinkMeshNodeDescriptor): ZLinkMeshNodeDescriptor {
-  return descriptor;
-}
-
 function reviveMeshDescriptor(descriptor: ZLinkMeshNodeDescriptor): ZLinkMeshNodeDescriptor {
   const value = descriptor as unknown as Record<string, unknown>;
   if ('routingIdHex' in value) {
@@ -4590,13 +4600,14 @@ function descriptorOwnerLeaseGeneration(value: OwnedStoreRecord): bigint | undef
   return undefined;
 }
 
+// Location runtime §10: a write whose result was lost is confirmed by reading
+// the same key. The stored row already is this write when it differs only in
+// the time the Store stamped, as for every other descriptor kind.
 function sameMeshDescriptor(
   left: ZLinkMeshNodeDescriptor,
   right: ZLinkMeshNodeDescriptor
 ): boolean {
-  return Buffer.from(encodeJson(persistMeshDescriptor(left))).equals(
-    Buffer.from(encodeJson(persistMeshDescriptor(right)))
-  );
+  return descriptorFingerprint(left, ['updatedAt']) === descriptorFingerprint(right, ['updatedAt']);
 }
 
 function sameClientServerDescriptor(

@@ -121,8 +121,7 @@ final class ZLinkSpotHandlerInvoker {
                 value ->
                         Optional.of(
                                 ZLinkMessagePayloads.message(
-                                        ZLinkCodecRegistration.serializeForDeclaredType(
-                                                serializer, value, registration.replyType()))));
+                                        serializer, value, registration.replyType())));
     }
 
     CompletionStage<Optional<Message>> invokeActorRequest(
@@ -224,8 +223,7 @@ final class ZLinkSpotHandlerInvoker {
             return stage.thenApply(
                     reply ->
                             ZLinkMessagePayloads.message(
-                                    ZLinkCodecRegistration.serializeForDeclaredType(
-                                            serializer, reply, registration.replyType())));
+                                    serializer, reply, registration.replyType()));
         } catch (RuntimeException ex) {
             return failed(
                     "failed to invoke SPOT request handler: "

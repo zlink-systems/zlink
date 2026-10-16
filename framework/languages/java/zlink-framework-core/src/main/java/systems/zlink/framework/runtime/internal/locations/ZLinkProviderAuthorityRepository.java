@@ -281,52 +281,47 @@ final class ZLinkProviderAuthorityRepository {
                                         new CapacityPlan(
                                                 CapacityAdmission.UNAVAILABLE, null, null));
                             }
-                            ZLinkStoreKey key = capacityKey(request.targetDescriptor());
-                            return provider.read(key, cancellation)
-                                    .thenApply(
-                                            read -> {
-                                                CapacityRecord current;
-                                                if (read instanceof ZLinkStoreReadFound found) {
-                                                    current = decodeCapacity(found.value().bytes());
-                                                    if (!capacityFits(
-                                                            current,
-                                                            descriptor.orElseThrow(),
-                                                            request.capacityBundle())) {
-                                                        return new CapacityPlan(
-                                                                CapacityAdmission.EXHAUSTED,
-                                                                null,
-                                                                null);
-                                                    }
-                                                    conditions.add(
-                                                            new ZLinkStoreVersionCondition(
-                                                                    key, found.value().version()));
-                                                } else {
-                                                    current = CapacityRecord.empty();
-                                                    if (!capacityFits(
-                                                            current,
-                                                            descriptor.orElseThrow(),
-                                                            request.capacityBundle())) {
-                                                        return new CapacityPlan(
-                                                                CapacityAdmission.EXHAUSTED,
-                                                                null,
-                                                                null);
-                                                    }
-                                                    conditions.add(
-                                                            new ZLinkStoreMissingCondition(key));
-                                                }
-                                                CapacityRecord next =
-                                                        current.adjustPending(
-                                                                request.capacityBundle(), 1);
-                                                return next == null
-                                                        ? new CapacityPlan(
-                                                                CapacityAdmission.EXHAUSTED,
-                                                                null,
-                                                                null)
-                                                        : new CapacityPlan(
-                                                                CapacityAdmission.ACCEPTED,
-                                                                key,
-                                                                next);
-                                            });
+                            return reservePendingCapacity(
+                                    descriptor.orElseThrow(),
+                                    request.targetDescriptor(),
+                                    request.capacityBundle(),
+                                    conditions,
+                                    cancellation);
+                        });
+    }
+
+    /**
+     * Location runtime §6.1: the single rule that admits a capacity bundle on a target node and
+     * holds it as pending usage. Object {@code Reserve} and the relocation aggregate prepare (the
+     * capacity a later {@code NewOwner} consumes) both reserve through here.
+     */
+    private CompletionStage<CapacityPlan> reservePendingCapacity(
+            ZLinkMeshNodeDescriptor descriptor,
+            ZLinkMeshNodeDescriptorKey target,
+            ZLinkPlacementCapacityBundle bundle,
+            List<ZLinkStoreCondition> conditions,
+            systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
+        ZLinkStoreKey key = capacityKey(target);
+        return provider.read(key, cancellation)
+                .thenApply(
+                        read -> {
+                            CapacityRecord current =
+                                    read instanceof ZLinkStoreReadFound found
+                                            ? decodeCapacity(found.value().bytes())
+                                            : CapacityRecord.empty();
+                            CapacityRecord next =
+                                    capacityFits(current, descriptor, bundle)
+                                            ? current.adjustPending(bundle, 1)
+                                            : null;
+                            if (next == null) {
+                                return new CapacityPlan(CapacityAdmission.EXHAUSTED, null, null);
+                            }
+                            conditions.add(
+                                    read instanceof ZLinkStoreReadFound found
+                                            ? new ZLinkStoreVersionCondition(
+                                                    key, found.value().version())
+                                            : new ZLinkStoreMissingCondition(key));
+                            return new CapacityPlan(CapacityAdmission.ACCEPTED, key, next);
                         });
     }
 
@@ -1565,92 +1560,232 @@ final class ZLinkProviderAuthorityRepository {
             boolean ownsStaging,
             int counterRetry,
             Instant retryDeadline) {
-        return aggregateInventory
-                .store(request, cancellation)
+        // Decide target admission before any participant marker is written, so a refused
+        // relocation leaves every participant authority untouched.
+        return reserveAggregateCapacity(request, cancellation)
                 .thenCompose(
-                        ignored ->
-                                installAggregateMarkers(
-                                        request, fence, cancellation, counterRetry, retryDeadline))
+                        reservation ->
+                                reservation.isEmpty()
+                                        ? refuseAggregatePrepare(
+                                                fence, staging, cancellation, ownsStaging)
+                                        : aggregateInventory
+                                                .store(request, cancellation)
+                                                .thenCompose(
+                                                        ignored ->
+                                                                installAggregateMarkers(
+                                                                        request,
+                                                                        fence,
+                                                                        cancellation,
+                                                                        counterRetry,
+                                                                        retryDeadline))
+                                                .thenCompose(
+                                                        markers ->
+                                                                finishAggregatePrepare(
+                                                                        request,
+                                                                        fence,
+                                                                        key,
+                                                                        staging,
+                                                                        cancellation,
+                                                                        ownsStaging,
+                                                                        retryDeadline,
+                                                                        reservation.orElseThrow(),
+                                                                        markers)));
+    }
+
+    private CompletionStage<ZLinkAggregatePrepareResult> finishAggregatePrepare(
+            ZLinkAggregatePrepareRequest request,
+            ZLinkAggregateFence fence,
+            ZLinkStoreKey key,
+            ZLinkStoreReadFound staging,
+            systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation,
+            boolean ownsStaging,
+            Instant retryDeadline,
+            AggregateCapacityReservation reservation,
+            AggregateMarkerInstallation markers) {
+        if (markers.reenteredResult() != null) {
+            ZLinkAggregatePrepareResult reentered = markers.reenteredResult();
+            boolean needsCleanup =
+                    reentered instanceof ZLinkAggregateConflict
+                            || reentered instanceof ZLinkAggregateGenerationExhausted;
+            CompletionStage<Boolean> cleanup =
+                    ownsStaging && needsCleanup
+                            ? abortOwnedAggregateStaging(
+                                    fence, staging.value().version().value(), cancellation)
+                            : completed(false);
+            return cleanup.thenApply(ignored -> reentered);
+        }
+        if (!markers.installed()) {
+            CompletionStage<Boolean> cleanup =
+                    ownsStaging
+                            ? abortOwnedAggregateStaging(
+                                    fence, staging.value().version().value(), cancellation)
+                            : completed(false);
+            return cleanup.thenApply(
+                    ignored ->
+                            markers.exhausted()
+                                    ? new ZLinkAggregateGenerationExhausted()
+                                    : new ZLinkAggregateConflict());
+        }
+        return publishAggregatePrepared(
+                request,
+                fence,
+                key,
+                staging,
+                cancellation,
+                ownsStaging,
+                retryDeadline,
+                reservation);
+    }
+
+    /**
+     * Location runtime §6.1 {@code NewOwner}: the STAGING to PREPARED write is the one place that
+     * reserves the relocation's target capacity. The same conditional write holds {@code
+     * request.capacityBundle()} as pending usage on the target, so new placements see it from
+     * prepare on; commit turns exactly that reservation into active usage and abort returns it. A
+     * write that raced another change to the target descriptor or capacity record re-reads them and
+     * decides again.
+     */
+    private CompletionStage<ZLinkAggregatePrepareResult> publishAggregatePrepared(
+            ZLinkAggregatePrepareRequest request,
+            ZLinkAggregateFence fence,
+            ZLinkStoreKey key,
+            ZLinkStoreReadFound staging,
+            systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation,
+            boolean ownsStaging,
+            Instant retryDeadline,
+            AggregateCapacityReservation reservation) {
+        List<ZLinkStoreCondition> conditions = new ArrayList<>();
+        conditions.add(new ZLinkStoreVersionCondition(key, staging.value().version()));
+        conditions.addAll(reservation.conditions());
+        List<ZLinkStoreMutation> mutations = new ArrayList<>();
+        mutations.add(new ZLinkStorePut(key, encodeAggregate(AGGREGATE_PREPARED, request), null));
+        mutations.addAll(reservation.mutations());
+        return provider.write(new ZLinkStoreWriteRequest(conditions, mutations), cancellation)
                 .thenCompose(
-                        markers -> {
-                            if (markers.reenteredResult() != null) {
-                                ZLinkAggregatePrepareResult reentered = markers.reenteredResult();
-                                boolean needsCleanup =
-                                        reentered instanceof ZLinkAggregateConflict
-                                                || reentered
-                                                        instanceof
-                                                        ZLinkAggregateGenerationExhausted;
-                                CompletionStage<Boolean> cleanup =
-                                        ownsStaging && needsCleanup
-                                                ? abortOwnedAggregateStaging(
-                                                        fence,
-                                                        staging.value().version().value(),
-                                                        cancellation)
-                                                : completed(false);
-                                return cleanup.thenApply(ignored -> reentered);
+                        result -> {
+                            if (result instanceof ZLinkStoreWriteApplied) {
+                                return completed(new ZLinkAggregatePrepared(fence));
                             }
-                            if (!markers.installed()) {
-                                CompletionStage<Boolean> cleanup =
-                                        ownsStaging
-                                                ? abortOwnedAggregateStaging(
-                                                        fence,
-                                                        staging.value().version().value(),
-                                                        cancellation)
-                                                : completed(false);
-                                return cleanup.thenApply(
-                                        ignored ->
-                                                markers.exhausted()
-                                                        ? new ZLinkAggregateGenerationExhausted()
-                                                        : new ZLinkAggregateConflict());
-                            }
-                            return provider.write(
-                                            new ZLinkStoreWriteRequest(
-                                                    List.of(
-                                                            new ZLinkStoreVersionCondition(
-                                                                    key,
-                                                                    staging.value().version())),
-                                                    List.of(
-                                                            new ZLinkStorePut(
-                                                                    key,
-                                                                    encodeAggregate(
-                                                                            AGGREGATE_PREPARED,
-                                                                            request),
-                                                                    null))),
-                                            cancellation)
+                            return provider.read(key, cancellation)
                                     .thenCompose(
-                                            result -> {
-                                                if (result instanceof ZLinkStoreWriteApplied) {
-                                                    return completed(
-                                                            new ZLinkAggregatePrepared(fence));
-                                                }
-                                                return provider.read(key, cancellation)
-                                                        .thenApply(
-                                                                raced -> {
-                                                                    if (!(raced
-                                                                            instanceof
-                                                                            ZLinkStoreReadFound
-                                                                                    found)) {
-                                                                        return new ZLinkAggregateConflict();
-                                                                    }
-                                                                    PreparedAggregate current =
-                                                                            decodeAggregate(
-                                                                                    found.value()
-                                                                                            .bytes());
-                                                                    if (!sameAggregateRequest(
-                                                                            current, request)) {
-                                                                        return new ZLinkAggregateConflict();
-                                                                    }
-                                                                    return current.state()
-                                                                                    == AGGREGATE_PREPARED
-                                                                            ? new ZLinkAggregateAlreadyPrepared(
-                                                                                    fence)
-                                                                            : current.state()
-                                                                                            == AGGREGATE_COMMITTED
-                                                                                    ? new ZLinkAggregateStale()
-                                                                                    : new ZLinkAggregateConflict();
-                                                                });
-                                            });
+                                            raced ->
+                                                    afterAggregatePrepareRace(
+                                                            request,
+                                                            fence,
+                                                            key,
+                                                            staging,
+                                                            cancellation,
+                                                            ownsStaging,
+                                                            retryDeadline,
+                                                            raced));
                         });
+    }
+
+    private CompletionStage<ZLinkAggregatePrepareResult> afterAggregatePrepareRace(
+            ZLinkAggregatePrepareRequest request,
+            ZLinkAggregateFence fence,
+            ZLinkStoreKey key,
+            ZLinkStoreReadFound staging,
+            systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation,
+            boolean ownsStaging,
+            Instant retryDeadline,
+            ZLinkStoreReadResult raced) {
+        if (!(raced instanceof ZLinkStoreReadFound found)) {
+            return completed(new ZLinkAggregateConflict());
+        }
+        PreparedAggregate current = decodeAggregate(found.value().bytes());
+        if (!sameAggregateRequest(current, request)) {
+            return completed(new ZLinkAggregateConflict());
+        }
+        if (current.state() == AGGREGATE_PREPARED) {
+            return completed(new ZLinkAggregateAlreadyPrepared(fence));
+        }
+        if (current.state() == AGGREGATE_COMMITTED) {
+            return completed(new ZLinkAggregateStale());
+        }
+        if (!found.value().version().equals(staging.value().version())
+                || cancellation.isCancellationRequested()
+                || !Instant.now().isBefore(retryDeadline)) {
+            return refuseAggregatePrepare(fence, staging, cancellation, ownsStaging);
+        }
+        // The staging marker is still this attempt's: another write changed the target
+        // descriptor or capacity record. Decide admission again from the current values.
+        return reserveAggregateCapacity(request, cancellation)
+                .thenCompose(
+                        reservation ->
+                                reservation.isEmpty()
+                                        ? refuseAggregatePrepare(
+                                                fence, staging, cancellation, ownsStaging)
+                                        : publishAggregatePrepared(
+                                                request,
+                                                fence,
+                                                key,
+                                                staging,
+                                                cancellation,
+                                                ownsStaging,
+                                                retryDeadline,
+                                                reservation.orElseThrow()));
+    }
+
+    private CompletionStage<Optional<AggregateCapacityReservation>> reserveAggregateCapacity(
+            ZLinkAggregatePrepareRequest request,
+            systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
+        ZLinkPlacementCapacityBundle bundle = request.capacityBundle();
+        if (isEmptyBundle(bundle)) {
+            return completed(Optional.of(new AggregateCapacityReservation(List.of(), List.of())));
+        }
+        List<ZLinkStoreCondition> conditions = new ArrayList<>();
+        return descriptors
+                .readMeshNode(request.targetDescriptor(), conditions, cancellation)
+                .thenCompose(
+                        descriptor -> {
+                            if (descriptor.isEmpty()
+                                    || !descriptorMatchesTarget(
+                                            descriptor.orElseThrow(),
+                                            request.targetDescriptor(),
+                                            request.targetDescriptorLifecycleGeneration(),
+                                            request.targetOwner())) {
+                                return completed(Optional.empty());
+                            }
+                            return reservePendingCapacity(
+                                            descriptor.orElseThrow(),
+                                            request.targetDescriptor(),
+                                            bundle,
+                                            conditions,
+                                            cancellation)
+                                    .thenApply(
+                                            plan ->
+                                                    plan.admission() != CapacityAdmission.ACCEPTED
+                                                            ? Optional.empty()
+                                                            : Optional.of(
+                                                                    new AggregateCapacityReservation(
+                                                                            conditions,
+                                                                            List.of(
+                                                                                    new ZLinkStorePut(
+                                                                                            plan
+                                                                                                    .key(),
+                                                                                            encodeCapacity(
+                                                                                                    plan
+                                                                                                            .next()),
+                                                                                            null)))));
+                        });
+    }
+
+    private CompletionStage<ZLinkAggregatePrepareResult> refuseAggregatePrepare(
+            ZLinkAggregateFence fence,
+            ZLinkStoreReadFound staging,
+            systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation,
+            boolean ownsStaging) {
+        CompletionStage<Boolean> cleanup =
+                ownsStaging
+                        ? abortOwnedAggregateStaging(
+                                fence, staging.value().version().value(), cancellation)
+                        : completed(false);
+        return cleanup.thenApply(ignored -> new ZLinkAggregateConflict());
+    }
+
+    private static boolean isEmptyBundle(ZLinkPlacementCapacityBundle bundle) {
+        return bundle.actorSlots() == 0 && bundle.spotSlots() == 0;
     }
 
     private CompletionStage<Boolean> abortOwnedAggregateStaging(
@@ -1887,6 +2022,10 @@ final class ZLinkProviderAuthorityRepository {
         Map<ZLinkStoreKey, CapacityRecord> capacities = new HashMap<>();
         List<ZLinkPlacementAllocation> allocations = new ArrayList<>();
         ZLinkStoreKey target = capacityKey(request.targetDescriptor());
+        ZLinkPlacementCapacityBundle reserved = request.capacityBundle();
+        if (!isEmptyBundle(reserved)) {
+            capacities.put(target, CapacityRecord.empty());
+        }
         for (int index = 0; index < rows.size(); index++) {
             if (request.participants().get(index).ownerTransition()
                     != ZLinkAuthorityGenerationTransition.NEW_OWNER) continue;
@@ -1924,6 +2063,15 @@ final class ZLinkProviderAuthorityRepository {
         }
         return loaded.thenApply(
                 ignored -> {
+                    // NewOwner consumes the target capacity that prepare reserved.
+                    if (!isEmptyBundle(reserved)) {
+                        CapacityRecord consumed =
+                                capacities.get(target).adjustPending(reserved, -1);
+                        if (consumed == null)
+                            throw new IllegalStateException(
+                                    "Location Store capacity record is inconsistent");
+                        capacities.put(target, consumed);
+                    }
                     for (var allocation : allocations) {
                         ZLinkStoreKey source = capacityKey(allocation.descriptor());
                         var bundle = allocation.capacityBundle();
@@ -2131,18 +2279,29 @@ final class ZLinkProviderAuthorityRepository {
                             if (aggregate.state() == AGGREGATE_COMMITTED) {
                                 return completed(ZLinkAggregateAbortResult.STALE);
                             }
-                            return provider.write(
-                                            new ZLinkStoreWriteRequest(
-                                                    List.of(
-                                                            new ZLinkStoreVersionCondition(
-                                                                    key, found.value().version())),
-                                                    List.of(new ZLinkStoreDelete(key))),
-                                            opaqueCancellation)
+                            List<ZLinkStoreCondition> conditions = new ArrayList<>();
+                            conditions.add(
+                                    new ZLinkStoreVersionCondition(key, found.value().version()));
+                            List<ZLinkStoreMutation> mutations = new ArrayList<>();
+                            mutations.add(new ZLinkStoreDelete(key));
+                            return releaseAggregateCapacity(
+                                            aggregate, conditions, mutations, opaqueCancellation)
+                                    .thenCompose(
+                                            ignored ->
+                                                    provider.write(
+                                                            new ZLinkStoreWriteRequest(
+                                                                    conditions, mutations),
+                                                            opaqueCancellation))
                                     .thenCompose(
                                             result -> {
                                                 if (!(result instanceof ZLinkStoreWriteApplied)) {
-                                                    return completed(
-                                                            ZLinkAggregateAbortResult.STALE);
+                                                    // The marker or the target capacity record
+                                                    // changed after the read; decide again from
+                                                    // the current marker.
+                                                    return cancellation.isCancellationRequested()
+                                                            ? completed(
+                                                                    ZLinkAggregateAbortResult.STALE)
+                                                            : abortAggregate(fence, cancellation);
                                                 }
                                                 return clearAggregateMarkersByScan(
                                                                 fence, opaqueCancellation)
@@ -2161,6 +2320,40 @@ final class ZLinkProviderAuthorityRepository {
                                                                                         ZLinkAggregateAbortResult
                                                                                                 .STALE));
                                             });
+                        });
+    }
+
+    /**
+     * Abort of a PREPARED aggregate returns the target capacity that prepare reserved, in the same
+     * conditional write that deletes the aggregate marker. The marker exists in PREPARED state only
+     * while that reservation is held, so the release happens exactly once.
+     */
+    private CompletionStage<Void> releaseAggregateCapacity(
+            PreparedAggregate aggregate,
+            List<ZLinkStoreCondition> conditions,
+            List<ZLinkStoreMutation> mutations,
+            systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
+        ZLinkPlacementCapacityBundle reserved = aggregate.capacityBundle();
+        if (aggregate.state() != AGGREGATE_PREPARED || isEmptyBundle(reserved)) {
+            return completed(null);
+        }
+        ZLinkStoreKey key = capacityKey(aggregate.targetDescriptor());
+        return provider.read(key, cancellation)
+                .thenAccept(
+                        read -> {
+                            CapacityRecord released =
+                                    read instanceof ZLinkStoreReadFound found
+                                            ? decodeCapacity(found.value().bytes())
+                                                    .adjustPending(reserved, -1)
+                                            : null;
+                            if (released == null) {
+                                throw new IllegalStateException(
+                                        "Location Store capacity record is inconsistent");
+                            }
+                            conditions.add(
+                                    new ZLinkStoreVersionCondition(
+                                            key, ((ZLinkStoreReadFound) read).value().version()));
+                            mutations.add(new ZLinkStorePut(key, encodeCapacity(released), null));
                         });
     }
 
@@ -4264,6 +4457,14 @@ final class ZLinkProviderAuthorityRepository {
 
     private record CapacityPlan(
             CapacityAdmission admission, ZLinkStoreKey key, CapacityRecord next) {}
+
+    private record AggregateCapacityReservation(
+            List<ZLinkStoreCondition> conditions, List<ZLinkStoreMutation> mutations) {
+        AggregateCapacityReservation {
+            conditions = List.copyOf(conditions);
+            mutations = List.copyOf(mutations);
+        }
+    }
 
     private record CapacitySnapshot(
             ZLinkStoreKey key, ZLinkStoreValue value, CapacityRecord record) {}

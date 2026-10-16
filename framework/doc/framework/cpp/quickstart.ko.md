@@ -36,8 +36,8 @@ recipe를 함께 담고 있으므로 설치 경로는 셋이다. **끝까지 검
 | 경로 | 지금 상태 |
 |---|---|
 | GitHub Release | 이 플랫폼의 framework prebuilt 하나를 받아 푼다. Core·C++ binding·framework library·`nlohmann_json`이 한 prefix에 들어 있다 |
-| vcpkg overlay port | 릴리스마다 `sync-recipes`가 갱신한다. 이 문서의 검증 범위 밖이다 |
-| Conan recipe | 릴리스마다 `sync-recipes`가 갱신한다. 이 문서의 검증 범위 밖이다 |
+| vcpkg overlay port | 릴리스 브랜치에서 태그 전에 `release-check.sh --write framework cpp`가 갱신한다. 이 문서의 검증 범위 밖이다 |
+| Conan recipe | 릴리스 브랜치에서 태그 전에 `release-check.sh --write framework cpp`가 갱신한다. 이 문서의 검증 범위 밖이다 |
 
 아카이브 경로의 명령은 프로젝트의
 [`README.md`](../../../languages/cpp/quickstart/README.md)에 있다.

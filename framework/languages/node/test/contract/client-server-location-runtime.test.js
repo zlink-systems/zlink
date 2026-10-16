@@ -1373,7 +1373,7 @@ test('ClientServer reserved hello is consumed before application dispatch and re
     normalizedEffectiveMaxMessageBytes: 1024
   }));
   let reply;
-  let pushed;
+  const pushedFrames = [];
   let received = {
     parts: [hello],
     replyToken: {},
@@ -1391,7 +1391,7 @@ test('ClientServer reserved hello is consumed before application dispatch and re
       reply = Buffer.from(message.data());
     },
     async send(_routingId, message) {
-      pushed = Buffer.from(message.data());
+      pushedFrames.push(Buffer.from(message.data()));
     },
     async dispose() {}
   };
@@ -1426,8 +1426,12 @@ test('ClientServer reserved hello is consumed before application dispatch and re
     descriptorRevision: 2n
   }, 'orders');
   await new Promise(( resolve ) => setImmediate(resolve));
-  const update = clientServerWire.decodeClientServerControl(pushed);
-  assert.equal(update.kind, 'update');
+  //  The real-time liveness timer may push a probe before or after the update; select the update by kind.
+  const updates = pushedFrames
+    .map(( frame ) => clientServerWire.decodeClientServerControl(frame))
+    .filter(( control ) => control.kind === 'update');
+  assert.equal(updates.length, 1);
+  const update = updates[0];
   assert.equal(update.admission.normalizedEffectiveMaxMessageBytes, 1024);
   await sockets.dispose();
 });
