@@ -71,6 +71,40 @@ final class ZLinkCanonicalRelocationStateMachineTest {
     private static final ZLinkStoreCancellation OPEN = () -> false;
 
     @Test
+    void targetDrainWaitsForAdmissionResourceCleanup() throws Exception {
+        var cleanupEntered = new CompletableFuture<Void>();
+        var cleanup = new CompletableFuture<Void>();
+        CountingEndpoint endpoint =
+                new CountingEndpoint() {
+                    @Override
+                    public CompletionStage<Void> endPrepare(UUID relocationId) {
+                        cleanupEntered.complete(null);
+                        return cleanup;
+                    }
+                };
+        Fixture fixture = fixture(null, endpoint);
+        var request = fixture.request(new byte[] {1});
+        fixture.source
+                .stage(fixture.targetRid, request, Duration.ofSeconds(2))
+                .toCompletableFuture()
+                .join();
+        var publishing =
+                fixture.source.publish(fixture.targetRid, request.fence(), Duration.ofSeconds(2));
+        cleanupEntered.get(2, java.util.concurrent.TimeUnit.SECONDS);
+        var drain = fixture.target.awaitAcceptedTargetRelocations().toCompletableFuture();
+        try {
+            assertThrows(
+                    java.util.concurrent.TimeoutException.class,
+                    () -> drain.get(100, java.util.concurrent.TimeUnit.MILLISECONDS),
+                    "the target owns its resources until terminal cleanup finishes");
+        } finally {
+            cleanup.complete(null);
+        }
+        drain.get(2, java.util.concurrent.TimeUnit.SECONDS);
+        publishing.toCompletableFuture().get(2, java.util.concurrent.TimeUnit.SECONDS);
+    }
+
+    @Test
     void targetDrainWaitsForAcceptedPublication() {
         CompletableFuture<Void> publication = new CompletableFuture<>();
         CountingEndpoint endpoint =
