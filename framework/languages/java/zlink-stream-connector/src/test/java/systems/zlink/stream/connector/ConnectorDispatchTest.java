@@ -277,22 +277,21 @@ final class ConnectorDispatchTest {
     }
 
     @Test
-    void cancelledQueuedWaiterClosesTheMessageItCannotReceive() {
+    void cancelledWaiterLeavesTheLaterMessageForAnotherWait() {
         ZLinkStreamDispatchQueue queue = new ZLinkStreamDispatchQueue();
-        ZLinkStreamMessage<ZLinkStreamEncodedPayload> queued = message("queued");
-        queue.addMessage(
-                queued, () -> () -> CompletableFuture.completedFuture(null), () -> 1, false);
-
-        CompletableFuture<ZLinkStreamMessage<ZLinkStreamEncodedPayload>> cancelled =
-                new CompletableFuture<>();
+        var cancelled = queue.awaitMessage("Push", ignored -> true);
         assertTrue(cancelled.cancel(false));
-
-        queue.awaitMessage("Push", ignored -> true, cancelled);
-
-        assertEquals(0, queued.payload().payload().size());
-        //  The message did arrive, so spec 32 10 keeps it counted even
-        //  though the cancelled waiter could not take it.
-        assertEquals(1, queue.receivedCount("Push"));
+        ZLinkStreamMessage<ZLinkStreamEncodedPayload> queued = message("queued");
+        try {
+            queue.addMessage(
+                    queued, () -> () -> CompletableFuture.completedFuture(null), () -> 1, false);
+            var next = queue.awaitMessage("Push", ignored -> true);
+            assertTrue(next.isDone());
+            assertTrue(next.join() == queued);
+            assertEquals(1, queue.receivedCount("Push"));
+        } finally {
+            queued.payload().payload().close();
+        }
     }
 
     /**
@@ -376,10 +375,7 @@ final class ConnectorDispatchTest {
     @Test
     void connectionEndCompletesWaitersWithoutReentrantModification() {
         ZLinkStreamDispatchQueue queue = new ZLinkStreamDispatchQueue();
-        CompletableFuture<ZLinkStreamMessage<ZLinkStreamEncodedPayload>> waiter =
-                new CompletableFuture<>();
-
-        queue.awaitMessage("Push", ignored -> true, waiter);
+        var waiter = queue.awaitMessage("Push", ignored -> true);
 
         queue.connectionEnded();
 
@@ -407,8 +403,7 @@ final class ConnectorDispatchTest {
                                     + " queued="
                                     + queue.pendingCallbacks());
                     return false;
-                },
-                new CompletableFuture<>());
+                });
 
         queue.addMessage(
                 message("body"),
@@ -426,9 +421,7 @@ final class ConnectorDispatchTest {
         ZLinkStreamDispatchQueue queue = new ZLinkStreamDispatchQueue();
         queue.addMessage(message("kept"), () -> null, () -> 1, false);
         queue.drainAsync().toCompletableFuture().get(1, TimeUnit.SECONDS);
-        CompletableFuture<ZLinkStreamMessage<ZLinkStreamEncodedPayload>> received =
-                new CompletableFuture<>();
-        queue.awaitMessage("Push", ignored -> true, received);
+        var received = queue.awaitMessage("Push", ignored -> true);
         assertEquals("Push", received.get(1, TimeUnit.SECONDS).packetName());
     }
 
