@@ -105,6 +105,11 @@ Gate를 얻어 handler를 실행하고 그 권한을 반납하기까지의 실�
 call별 제공 범위는 [§16](#yield-call-eligibility)이 소유한다. Create·get-or-create는
 terminator naming 범위를 넓히지 않는 object execution 특례다.
 
+**한 turn에서 `Yield`를 쓰는 call은 하나다.** 같은 turn에서 두 번째 call의 `Yield`를 호출하면, 첫 `Yield`가
+gate를 이미 반납했는지와 관계없이 submission·queue 변경 전에 `InvalidOperation`으로 끝난다. Gate를 반납하는 시점은
+언어마다 다를 수 있지만(호출할 때 또는 기다리기 시작할 때), 재개 record는 turn 하나에 하나여야 continuation이
+어느 turn에서 재개하는지 정해지기 때문이다.
+
 **`SpotWide` member Actor가 `Yield`하면 shared Spot gate만 반납하고 Actor queue claim은
 유지한다.**
 
@@ -545,6 +550,9 @@ callback, handler 실행 순서를 관찰할 수 있는 side effect, application
   terminal만 제공한다.
 - Actor join, send, publish, timer 등록, close와 destroy는 `Yield`를 제공하지 않는다.
 - Owner turn 밖의 `Yield` 호출은 submission·queue 변경 전에 `InvalidOperation`으로 끝난다.
+- 같은 turn에서 두 번째 call의 `Yield`를 호출하면(예: 두 `Yield` 결과를 함께 기다림) 첫 `Yield`의 gate 반납
+  여부와 관계없이 submission·queue 변경 전에 `InvalidOperation`으로 끝나고, 첫 `Yield`는 그대로 재개한다
+  ([§3](#yield-gate-and-claim)).
 - `SpotWide` member Actor가 `Yield`한 뒤에도 같은 Actor의 다음 record는 먼저 실행되지
   않고, 다른 Actor·Spot handler·timer는 실행된다.
 - 같은 실행 권한 안에서 자기 자신을 기다리는 호출(자기 Actor에 request를 보내고 대기,

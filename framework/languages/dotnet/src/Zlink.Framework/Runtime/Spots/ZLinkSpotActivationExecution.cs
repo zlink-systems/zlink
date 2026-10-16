@@ -373,7 +373,18 @@ internal abstract partial class ZLinkSpotActivation
         // external ingress.
         return _serial.ExecuteSealedRelocationAsync(
             admissionSeal.QueueSeal,
-            static (activation, ct) => activation.UserSpot.OnInitializeAsync(ct),
+            static async (activation, ct) =>
+            {
+                activation._timers.BeginRelocatedInitialization();
+                try
+                {
+                    await activation.UserSpot.OnInitializeAsync(ct).ConfigureAwait(false);
+                }
+                finally
+                {
+                    activation._timers.EndRelocatedInitialization();
+                }
+            },
             cancellationToken
         );
     }
@@ -585,7 +596,18 @@ internal abstract partial class ZLinkSpotActivation
     protected ValueTask InitializeInstanceCoreAsync(CancellationToken cancellationToken)
     {
         return ExecuteSerializedAsync(
-            static (activation, state, ct) => state.OnInitializeAsync(ct),
+            static async (activation, state, ct) =>
+            {
+                activation._timers.BeginRelocatedInitialization();
+                try
+                {
+                    await state.OnInitializeAsync(ct).ConfigureAwait(false);
+                }
+                finally
+                {
+                    activation._timers.EndRelocatedInitialization();
+                }
+            },
             InstanceSpot,
             cancellationToken
         );

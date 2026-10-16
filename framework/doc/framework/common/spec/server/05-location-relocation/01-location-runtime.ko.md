@@ -771,17 +771,27 @@ message다. 이 operation이 steady `Ready` record를 읽었고, 그 record의 o
 정책이 `Disabled`이면 Location repository가 그 record를 해제한다. `Closing`이나 미완료 최초 activation은
 allocation이 `Active`라는 이유로 이 대상이 되지 않으며 각자의 lifecycle·recovery 절차를 따른다. `Reserve`하는 node는 Actor와 User Spot에서는 생성을 요청한
 node이고, Instance Spot에서는 activation envelope를 받은 target이다. 그 node에 type이 등록되어 있지
-않으면 `Disabled`로 보지 않는다. User Spot은 그 SpotId와 `ObjectGeneration`의 Actor membership이
-Location Store에 하나도 없을 때만 해제한다. Repository는 old Spot authority에 기록된 owner lease가
-무효임을 exact read로 확인한 뒤 새 snapshot을 시작해 membership을 끝까지 읽는다. Membership을 추가하는
+않으면 `Disabled`로 보지 않는다. User Spot은 그 SpotId와 `ObjectGeneration`에 남은 Actor membership이
+모두 **owner가 끝난 member**일 때만 해제한다. Membership이 없으면 이 조건을 만족한다. Owner가 끝난
+member는 membership이 가리키는 Actor authority가 같은 SpotId·`ObjectGeneration`을 가리키는 steady
+`Ready`이고, 그 authority에 기록된 owner lease가 없거나 다른 `LeaseGeneration`이거나 만료된 Actor다.
+Owner lease가 유효한 member, relocation 진행 정보나 aggregate에 속한 member, 최초 activation을 끝내지
+않은 member가 하나라도 있으면 아무것도 바꾸지 않는다. 살아 있는 owner의 Actor가 없는 Spot을 가리키게
+되거나 진행 중인 이동을 끊지 않기 위해서다. Repository는 old Spot authority에 기록된 owner lease가
+무효임을 exact read로 확인한 뒤 새 snapshot을 시작해 membership을 끝까지 읽고, 각 member의 Actor
+authority를 같은 snapshot에서 읽는다. Membership을 추가하는
 transaction의 commit 조건은 [Spot·Actor membership §1](../03-spot-actor/05-spot-actor-membership.ko.md#1-identity와-authority)을 따르므로, lease가 무효인
 뒤에는 그 incarnation에 membership이 새로 commit되지 않는다. Snapshot이 만료되면 앞 page의 결과를 버리고
 다시 읽으며, Store failure나 끝까지 읽지 못한 scan을 빈 membership으로 보지 않는다. process 안의 목록으로도
-판정하지 않는다. Member가 남아 있으면 아무것도 바꾸지 않는다. Relocation 진행 정보나
+판정하지 않는다. Relocation 진행 정보나
 aggregate에 속한 record, activation recovery pointer가 남은 Instance Spot은 이 해제 대상이 아니며 각자의
 복구 절차를 따른다. 해제는 위 reservation 해제와 같은 조건(authority `StoreVersion`, owner lease 상태,
 descriptor 상태, 수용 공간 record)을 한 batch로 검사하고, authority와 그 incarnation의 membership을
-함께 지우며 active 수용 공간을 반납한다. 해제가 commit된 뒤에만 `Missing`에서 새 incarnation을
+함께 지우며 active 수용 공간을 반납한다. Owner가 끝난 member가 있으면 같은 batch에서 각 member Actor
+authority의 `StoreVersion`과 owner lease 무효를 함께 조건으로 걸고, 그 Actor authority와 수용 공간도
+같은 방식으로 해제한다. 해제된 member Actor는 `Missing`이 되며, 이후 같은 ActorId의 생성은 새
+incarnation으로 시작한다. 이 batch가 provider의 한 batch 상한을 넘으면 일부만 지우지 않고 아무것도
+바꾸지 않은 채 `Unavailable`을 반환한다. 해제가 commit된 뒤에만 `Missing`에서 새 incarnation을
 만든다 — 이전 incarnation의 상태, 수락된 operation과 recovery 정보는 이어받지 않는다. 해제 판정 전에
 kind와 stable type이 같은지 확인한다(다르면 기존 `TypeMismatch`). Owner lease가 유효하면 type과
 operation에 따른 기존 결과를 반환한다. Owner lease가 무효이고 해제 조건을 만족하지 않으면
@@ -1515,12 +1525,13 @@ provider conformance test가 store record golden fixture로 관찰하는 key·va
 
 - 동시에 같은 ID를 요청해도 `Creating`이 하나만 생기고 하나의 target만 factory를 실행한다.
 - [§6.1](#61-read와-cas)의 owner가 끝난 record 해제는 provider와 in-memory repository, 네 구현에 같은 입력을
-  적용한다. 해제되는 입력(Disabled Actor, member가 없는 User Spot, steady `Ready` Instance Spot의 새 Instance
+  적용한다. 해제되는 입력(Disabled Actor, member가 없거나 owner가 끝난 member만 남은 User Spot, steady `Ready` Instance Spot의 새 Instance
   intent)은 새 `ObjectGeneration`, 이전 allocation의 공간 반환과 factory 실행 한 번을 확인한다. 해제 조건을
-  하나씩 어긴 입력(유효한 lease, `Disabled`가 아니거나 등록되지 않은 type, member가 남은 User Spot, recovery
+  하나씩 어긴 입력(유효한 lease, `Disabled`가 아니거나 등록되지 않은 type, owner lease가 유효하거나 이동 중인 member가 남은 User Spot, provider 한 batch 상한을 넘는 member, recovery
   pointer, `Closing`, aggregate·relocation 진행, 일반 message·`Find`)은 authority·membership·수용 공간과
   factory 실행 수가 바뀌지 않음을 확인한다. 생성을 요청한 node와 factory target(Instance는 source와 수신
-  target)의 등록 정책이 다른 입력으로 정책의 출처를 확인한다.
+  target)의 등록 정책이 다른 입력으로 정책의 출처를 확인한다. Owner가 끝난 member가 남은 User Spot의 해제는 그 member
+  Actor authority와 수용 공간도 같은 batch에서 해제되고, 이후 같은 ActorId 생성이 새 incarnation으로 시작함을 확인한다.
 - 첫 page 뒤에 member가 있는 scan, snapshot 만료, Store failure를 빈 membership으로 처리하지 않는다. Old
   Spot의 lease 무효화와 늦은 Join commit을 경합시키고, 두 재생성 요청을 경합시켜 old version으로 새
   authority를 지우거나 수용 공간을 두 번 반환하지 않음을 확인한다.

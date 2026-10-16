@@ -305,7 +305,7 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
                                std::string_view error) noexcept
     {
         try {
-            const auto *trace = std::getenv ("ZLINK_CPP_HOST_STOP_TRACE");
+            const auto *trace = std::getenv ("ZLINK_CPP_AUTO_CONNECT_TRACE");
             if (trace == nullptr || std::string_view (trace) == "0"
                 || std::string_view (trace).empty ())
                 return;
