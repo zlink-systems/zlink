@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+set -euo pipefail
+umask 077
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+local_mode=false
+no_build=false
+build_only=false
+arguments=()
+for argument in "$@"; do
+  case "$argument" in
+    --local) local_mode=true ;;
+    --no-build) no_build=true ;;
+    --build-only) build_only=true ;;
+    *) arguments+=("$argument") ;;
+  esac
+done
+cd "$ROOT"
+mkdir -p "$ROOT/.logs"
+if $local_mode; then
+  if ! $no_build; then
+    if ! ./gradlew --no-daemon installDist :e2e:javaHome >"$ROOT/.logs/build.log" 2>&1; then
+      tail -n 35 "$ROOT/.logs/build.log" >&2
+      exit 1
+    fi
+  fi
+  $build_only && exit 0
+  java_home_path=$(cat .logs/java-home.txt)
+  exec "$java_home_path/bin/java" --enable-native-access=ALL-UNNAMED -Dstdout.encoding=UTF-8 -Dstderr.encoding=UTF-8 -cp 'e2e/build/install/e2e/lib/*' MyGame.e2e.ProgramKt "${arguments[@]}"
+fi
+if $no_build; then
+  echo '--no-build requires --local; Docker builds reuse the layer cache automatically.' >&2
+  exit 1
+fi
+if [[ -S /var/run/docker.sock ]]; then
+  export MY_GAME_RUNNER_USER="$(id -u):$(id -g)"
+  export MY_GAME_DOCKER_GID="$(stat -c '%g' /var/run/docker.sock 2>/dev/null || stat -f '%g' /var/run/docker.sock)"
+fi
+project="my-game-e2e-$(date +%s)-$$-$RANDOM"
+logs="$ROOT/.logs/docker-$project"
+mkdir -p "$logs"
+compose=(docker compose -f "$ROOT/docker-compose.yml" -p "$project" --profile docker)
+cleanup() {
+  local result=$?
+  trap - EXIT
+  local containers
+  containers=$(docker ps -aq --filter "label=my-game.e2e=$project") || result=1
+  if [[ -n "$containers" ]]; then
+    # IDs are Docker-generated hexadecimal tokens, one per line.
+    docker rm -f $containers >>"$logs/cleanup.log" 2>&1 || result=1
+  fi
+  "${compose[@]}" logs --no-color redis >"$logs/redis.log" 2>&1 || result=1
+  "${compose[@]}" down --volumes >>"$logs/cleanup.log" 2>&1 || result=1
+  for image in "$project-node" "$project-runner"; do
+    if docker image inspect "$image" >/dev/null 2>&1; then
+      docker image rm "$image" >>"$logs/cleanup.log" 2>&1 || result=1
+    fi
+  done
+  exit "$result"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+echo "Docker logs: $logs"
+if ! "${compose[@]}" build >"$logs/build.log" 2>&1; then
+  tail -n 30 "$logs/build.log" >&2
+  exit 1
+fi
+$build_only && exit 0
+"${compose[@]}" run --rm --no-deps -T --name "$project-check" runner --check-structure
+for argument in "${arguments[@]}"; do
+  [[ "$argument" == "--check-structure" ]] && exit 0
+done
+"${compose[@]}" up -d --wait --wait-timeout 30 redis >"$logs/redis-start.log" 2>&1
+"${compose[@]}" run --rm --no-deps -T --name "$project-control" runner "${arguments[@]}"
