@@ -23,6 +23,43 @@ public sealed partial class EntrySpotActorDispatchTests
     private const string AcceptedSendRequestPacket = "accepted-send-request";
     private const string AcceptedRelayNodeId = "accepted-relay-node";
 
+    [Fact]
+    public async Task Actor_request_after_shutdown_seal_decodes_as_shutting_down()
+    {
+        var (runtime, actorRef) = await CreateStartedRuntimeAsync(new CapturingSpotNode());
+        try
+        {
+            runtime.SealApplicationAdmissionsForDrain(CancellationToken.None);
+            var refusal = await Record.ExceptionAsync(async () =>
+                await new ZLinkActorClient(runtime)
+                    .RequestToActor(actorRef.ActorId, new ProbeRouteMessage("late-request"))
+                    .Async<ProbeReply>()
+            );
+            Assert.NotNull(refusal);
+            var reply = ZLinkActorReply.FromError(refusal);
+            using var frame = Message.From(
+                reply.EncodeFrame(
+                    new ZlinkStreamHeader(
+                        ZlinkStreamMessageKind.Error,
+                        ZlinkStreamCodec.Json,
+                        ZlinkStreamHeaderFlags.HasRequestSeq,
+                        new ZlinkStreamRequestSeq(1),
+                        string.Empty,
+                        ZlinkStreamMetadata.Empty
+                    )
+                )
+            );
+            var received = Assert.Throws<ZLinkFrameworkException>(() =>
+                ZLinkActorReplyDecoder.Decode<ProbeReply>([frame])
+            );
+            Assert.Equal(ZLinkFrameworkErrorKind.ShuttingDown, received.Kind);
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
     public enum AcceptedSendPath
     {
         NativeActorFrames,
@@ -205,16 +242,18 @@ public sealed partial class EntrySpotActorDispatchTests
                 probe.Started.Task.IsCompletedSuccessfully,
                 System.Text.Json.JsonSerializer.Serialize(flow.Events)
             );
-            var rejected = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            var rejected = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
                 await actor.Context.BoundSession.Send(new ProbeRouteMessage("new-send")).Async()
             );
             Assert.Contains("application admission is sealed", rejected.Message);
-            var requestRejected = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            Assert.Equal(ZLinkFrameworkErrorKind.ShuttingDown, rejected.Kind);
+            var requestRejected = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
                 await new ZLinkActorClient(runtime)
                     .RequestToActor(actorRef.ActorId, new ProbeRouteMessage("new-request"))
                     .Async<ProbeReply>()
             );
             Assert.Contains("application admission is sealed", requestRejected.Message);
+            Assert.Equal(ZLinkFrameworkErrorKind.ShuttingDown, requestRejected.Kind);
             probe.Release.TrySetResult();
             probe.WarmRelease.TrySetResult();
             probe.SubmissionRelease.TrySetResult();
@@ -249,7 +288,11 @@ public sealed partial class EntrySpotActorDispatchTests
     )
     {
         using var operation = (await runtime.AdmitOperationAsync()).Enter();
-        var seal = await activation.SealRelocationAsync(CancellationToken.None);
+        // A canonical replay runs under the target admission seal
+        // (StageInboundSpotAggregateAsync), not under a source unit seal.
+        var seal =
+            await activation.TrySealRelocationAsync()
+            ?? throw new InvalidOperationException("The target admission seal was refused.");
         const string handoffId = "accepted-replay";
         var state = probe.ActorState;
         var actorRef = state.NativeActorRef!.Value;
@@ -797,7 +840,11 @@ public sealed partial class EntrySpotActorDispatchTests
         try
         {
             using var operation = (await runtime.AdmitOperationAsync()).Enter();
-            var seal = await activation.SealRelocationAsync(CancellationToken.None);
+            // A canonical replay runs under the target admission seal
+            // (StageInboundSpotAggregateAsync), not under a source unit seal.
+            var seal =
+                await activation.TrySealRelocationAsync()
+                ?? throw new InvalidOperationException("The target admission seal was refused.");
             state.Handoff.BeginCanonicalMaintenanceImport(handoffId, []);
             state.Handoff.MarkAuthorityCommitted(
                 handoffId,

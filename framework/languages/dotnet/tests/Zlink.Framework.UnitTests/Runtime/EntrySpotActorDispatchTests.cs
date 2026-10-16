@@ -358,7 +358,8 @@ public sealed partial class EntrySpotActorDispatchTests
                 runtime.EnsureKnownRouteMeshPeer(
                     "entry",
                     RoutingId.From("remote-node"),
-                    "SPOT 'remote'"
+                    "SPOT",
+                    "remote"
                 )
             );
 
@@ -389,7 +390,8 @@ public sealed partial class EntrySpotActorDispatchTests
                 runtime.EnsureKnownRouteMeshPeer(
                     "entry",
                     RoutingId.From("remote-node"),
-                    "SPOT 'remote'"
+                    "SPOT",
+                    "remote"
                 )
             );
 
@@ -431,7 +433,7 @@ public sealed partial class EntrySpotActorDispatchTests
         );
         try
         {
-            runtime.EnsureKnownRouteMeshPeer("entry", targetRid, "packet 'GetNodeStatus'");
+            runtime.EnsureKnownRouteMeshPeer("entry", targetRid, "packet", "GetNodeStatus");
             Assert.Equal(0, node.MeshPeerSnapshotReads);
         }
         finally
@@ -2672,6 +2674,82 @@ public sealed partial class EntrySpotActorDispatchTests
         }
     }
 
+    [Theory]
+    [InlineData(40ul, 51ul, (byte)1)]
+    [InlineData(41ul, 50ul, (byte)1)]
+    [InlineData(41ul, 51ul, (byte)0)]
+    [InlineData(41ul, 51ul, (byte)9)]
+    public async Task RemoteActorFrameReceiver_RejectsInvalidOrdinaryDirectRelayFence(
+        ulong authorityGeneration,
+        ulong ownerLeaseGeneration,
+        byte hopCount
+    )
+    {
+        var node = new CapturingSpotNode();
+        var (runtime, actorRef) = await CreateStartedRuntimeAsync(node);
+        try
+        {
+            RegisterProbeActor(runtime, actorRef);
+            var relayNode = RoutingId.From("relay-source-node");
+            node.AdmittedMeshPeers.Add(
+                new MeshNodePeer(
+                    1,
+                    MeshPeerSource.Discovery,
+                    MeshPeerState.Admitted,
+                    relayNode,
+                    61,
+                    1,
+                    "inproc://relay-source-node",
+                    1,
+                    0,
+                    1
+                )
+            );
+            node.SetLocalActorAuthorityFence(actorRef, 41, 51);
+            var source = new ZLinkServiceWireCodec.RequestSourceFence(
+                "caller-owner",
+                71,
+                RoutingId.From("caller-node"),
+                72
+            );
+            var failure = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
+                runtime
+                    .DispatchRemoteActorFrameAsync(
+                        actorRef.ActorId,
+                        actorRef.Generation,
+                        actorRef.NodeRid,
+                        1,
+                        authorityGeneration,
+                        ownerLeaseGeneration,
+                        relayNode,
+                        relayNode,
+                        61,
+                        source.NodeRid,
+                        source.NodeGeneration,
+                        default,
+                        source,
+                        Array.Empty<byte>(),
+                        new MeshOperationId(81, 82),
+                        hopCount,
+                        83,
+                        1,
+                        "reply-capability",
+                        0,
+                        ZLinkStreamProtocolDefaults.EncodeHeader(CreateHeader("request")).ToArray(),
+                        Encoding.UTF8.GetBytes("payload"),
+                        CancellationToken.None
+                    )
+                    .AsTask()
+            );
+            Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, failure.Kind);
+            Assert.Contains("direct relay", failure.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
     [Fact]
     public async Task RemoteActorFrameReceiver_RejectsAuthenticatedPeerAndOriginalSourceMismatch()
     {
@@ -4547,7 +4625,10 @@ public sealed partial class EntrySpotActorDispatchTests
         await disposeStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.False(runtime.IsStarted);
         Assert.Null(runtime.Context);
-        Assert.Throws<InvalidOperationException>(() => runtime.GetSpotMonitoringSnapshot("entry"));
+        var refusal = Assert.Throws<ZLinkFrameworkException>(() =>
+            runtime.GetSpotMonitoringSnapshot("entry")
+        );
+        Assert.Equal(ZLinkFrameworkErrorKind.ShuttingDown, refusal.Kind);
         var restart = runtime.StartAsync(CancellationToken.None).AsTask();
         await Task.Delay(25);
         Assert.False(restart.IsCompleted);
@@ -4683,7 +4764,8 @@ public sealed partial class EntrySpotActorDispatchTests
             );
 
             Assert.NotNull(fence);
-            Assert.Throws<InvalidOperationException>(() => runtime.EnterOperation());
+            var refusal = Assert.Throws<ZLinkFrameworkException>(() => runtime.EnterOperation());
+            Assert.Equal(ZLinkFrameworkErrorKind.ShuttingDown, refusal.Kind);
             var firstFence = fence.Value;
             Assert.True(runtime.TryReopenRetireAdmissionsAfterRollback(firstFence));
 
@@ -7907,7 +7989,12 @@ public sealed partial class EntrySpotActorDispatchTests
     public async Task Retained_BoundSession_Preserves_The_Ambient_Lifecycle_Flow()
     {
         var node = new CapturingSpotNode();
-        var (runtime, actor) = await CreateStartedRuntimeAsync(node);
+        // Flow-correlation §4: flow IDs are carried only while message-flow
+        // tracing is on, at Normal or Detailed.
+        var (runtime, actor) = await CreateStartedRuntimeAsync(
+            node,
+            messageFlowMode: ZLinkDiagnosticsLevel.Normal
+        );
         try
         {
             runtime.GetOrCreateActorState(actor.ActorId).BindNativeActorRef(actor);
@@ -8296,7 +8383,7 @@ public sealed partial class EntrySpotActorDispatchTests
             var reply = Assert.Single(node.NoBindReplies);
             var decoded = DecodeReplyFrame<ZLinkStreamWireError>(Assert.Single(reply.Parts));
             Assert.Equal(ZlinkStreamMessageKind.Error, decoded.Header.Kind);
-            Assert.Equal(nameof(InvalidOperationException), decoded.Payload.Code);
+            Assert.Equal("internal_failure", decoded.Payload.Code);
             Assert.Contains("boom", decoded.Payload.Message, StringComparison.Ordinal);
             Assert.Empty(node.BoundSessionReplies);
             Assert.False(runtime.TryGetActorBoundSession(actorRef.ActorId, out _));
@@ -8342,7 +8429,7 @@ public sealed partial class EntrySpotActorDispatchTests
             var reply = Assert.Single(node.NoBindReplies);
             var decoded = DecodeReplyFrame<ZLinkStreamWireError>(Assert.Single(reply.Parts));
             Assert.Equal(ZlinkStreamMessageKind.Error, decoded.Header.Kind);
-            Assert.Equal(nameof(JsonException), decoded.Payload.Code);
+            Assert.Equal("internal_failure", decoded.Payload.Code);
             Assert.Empty(node.BoundSessionReplies);
 
             var observed = await observer.WaitAsync("failed", TimeSpan.FromSeconds(2));
@@ -9645,7 +9732,12 @@ public sealed partial class EntrySpotActorDispatchTests
     {
         const string flowId = "0196f7c2-4cb4-7cc8-89d4-2d6aee6fca2d";
         var node = new CapturingSpotNode();
-        var (runtime, actorRef) = await CreateStartedRuntimeAsync(node);
+        // Flow-correlation §4: flow IDs are carried only while message-flow
+        // tracing is on, at Normal or Detailed.
+        var (runtime, actorRef) = await CreateStartedRuntimeAsync(
+            node,
+            messageFlowMode: ZLinkDiagnosticsLevel.Normal
+        );
         try
         {
             var actor = RegisterProbeActor(runtime, actorRef);
@@ -13455,6 +13547,10 @@ public sealed partial class EntrySpotActorDispatchTests
             IZLinkBackendLocalActorAuthorityReader
     {
         private readonly CapturingSpot _entrySpot = new();
+        private readonly ConcurrentDictionary<
+            (RoutingId, ulong),
+            ZLinkServiceWireCodec.RequestSourceFence
+        > _requestSources = new();
         private long _nextOperationId;
 
         private static readonly Task NoRouteChange = new TaskCompletionSource().Task;
@@ -13574,7 +13670,15 @@ public sealed partial class EntrySpotActorDispatchTests
 
         public void SetLocalRequestSourceFence(ZLinkServiceWireCodec.RequestSourceFence source) { }
 
-        public void ObserveRequestSourceFence(ZLinkServiceWireCodec.RequestSourceFence source) { }
+        public void ObserveRequestSourceFence(ZLinkServiceWireCodec.RequestSourceFence source) =>
+            _requestSources[(source.NodeRid, source.NodeGeneration)] = source;
+
+        public ZLinkServiceWireCodec.RequestSourceFence? ResolveRequestSourceFence(
+            RoutingId sourceNodeRid,
+            ulong sourceNodeGeneration
+        ) => _requestSources.TryGetValue((sourceNodeRid, sourceNodeGeneration), out var source)
+            ? source
+            : null;
 
         public void ObserveActorAuthority(
             ZLinkBackendActorRef actor,

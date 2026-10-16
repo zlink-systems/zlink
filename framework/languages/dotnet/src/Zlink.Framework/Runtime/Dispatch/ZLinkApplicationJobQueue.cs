@@ -450,7 +450,10 @@ internal sealed class ZLinkApplicationJobQueue : IDisposable
     // later acquisition and status turn observes it, and the lease state CAS
     // decides between a mark and a release of the same lease.
     internal void MarkQueued(ZLinkApplicationJobQueueLease lease) =>
-        _lane.TryPost(() => MarkQueuedOnLane(lease));
+        _lane.TryPost(
+            static state => state.Queue.MarkQueuedOnLane(state.Lease),
+            (Queue: this, Lease: lease)
+        );
 
     internal void MarkQueuedBatch(IReadOnlyList<ZLinkApplicationJobQueueLease?> leases, int count)
     {
@@ -485,7 +488,12 @@ internal sealed class ZLinkApplicationJobQueue : IDisposable
     // outside it (spec 06 §5).
     private async Task ReleaseAsync(ZLinkApplicationJobQueueLease lease)
     {
-        var released = await _lane.RunAsync(() => ReleaseOnLane(lease)).ConfigureAwait(false);
+        var released = await _lane
+            .RunAsync(
+                static state => state.Queue.ReleaseOnLane(state.Lease),
+                (Queue: this, Lease: lease)
+            )
+            .ConfigureAwait(false);
         CompleteRelease(released);
     }
 

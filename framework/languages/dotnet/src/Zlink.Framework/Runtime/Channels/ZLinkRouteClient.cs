@@ -186,8 +186,9 @@ internal sealed class ZLinkChannelRequestCall<TRequest>(
 
     public ZLinkRequest<TReply> Async<TReply>(CancellationToken cancellationToken = default)
     {
-        return ZLinkRequestAdmission.Run<TReply>(admission =>
-            ExecuteAsync<TReply>(cancellationToken, admission)
+        return ZLinkRequestAdmission.Run(
+            (Call: this, Token: cancellationToken),
+            static (state, admission) => state.Call.ExecuteAsync<TReply>(state.Token, admission)
         );
     }
 
@@ -300,7 +301,13 @@ internal sealed class ZLinkRouteSendCall<TMessage>(
         var handedOff = false;
         try
         {
-            runtime.EnsureKnownRouteMeshPeer(meshName, targetNodeRid, $"packet '{_messageName}'");
+            runtime.EnsureKnownRouteMeshPeer(
+                nodeRuntime,
+                meshName,
+                targetNodeRid,
+                ZLinkFrameworkRuntime.PacketRouteTarget,
+                _messageName
+            );
             handedOff = true;
             var result = await nodeRuntime
                 .SendToNodeAsync(
@@ -382,8 +389,9 @@ internal sealed class ZLinkRouteRequestCall<TRequest>(
 
     public ZLinkRequest<TReply> Async<TReply>(CancellationToken cancellationToken = default)
     {
-        return ZLinkRequestAdmission.Run<TReply>(admission =>
-            ExecuteAsync<TReply>(cancellationToken, admission)
+        return ZLinkRequestAdmission.Run(
+            (Call: this, Token: cancellationToken),
+            static (state, admission) => state.Call.ExecuteAsync<TReply>(state.Token, admission)
         );
     }
 
@@ -418,7 +426,13 @@ internal sealed class ZLinkRouteRequestCall<TRequest>(
         try
         {
             if (!durable)
-                runtime.EnsureKnownRouteMeshPeer(meshName, targetNodeRid, $"packet '{packetName}'");
+                runtime.EnsureKnownRouteMeshPeer(
+                    nodeRuntime,
+                    meshName,
+                    targetNodeRid,
+                    ZLinkFrameworkRuntime.PacketRouteTarget,
+                    packetName
+                );
             var header = ZLinkClientCallCodec.CreateEnvelope(
                 ZLinkMessageKind.Request,
                 meshName,
@@ -580,12 +594,14 @@ internal sealed class ZLinkRouteSpotRequestCall<TRequest>(
 
     public ZLinkRequest<TReply> Async<TReply>(CancellationToken cancellationToken = default)
     {
-        return ZLinkRequestAdmission.Run<TReply>(admission =>
-            ExecuteAfterTerminatorAsync<TReply>(
-                ZLinkNestedRequestTerminator.Async,
-                cancellationToken,
-                admission
-            )
+        return ZLinkRequestAdmission.Run(
+            (Call: this, Token: cancellationToken),
+            static (state, admission) =>
+                state.Call.ExecuteAfterTerminatorAsync<TReply>(
+                    ZLinkNestedRequestTerminator.Async,
+                    state.Token,
+                    admission
+                )
         );
     }
 

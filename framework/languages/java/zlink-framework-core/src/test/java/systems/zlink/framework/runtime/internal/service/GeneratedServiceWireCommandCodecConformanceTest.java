@@ -90,13 +90,7 @@ final class GeneratedServiceWireCommandCodecConformanceTest {
             assertArrayEquals(bytes, generatedCommandRoundTrip(bytes));
         }
         for (byte[] bytes : canonicalArray("session-relocation-barrier-v1.json")) {
-            if (bytes[3] == 43
-                    && ServiceWirePilotCodec.decodeSessionRelocationSealed43(bytes).sealResult()
-                            == ServiceWirePilotCodec.SessionSealResult.BINDING_ABSENT) {
-                assertThrows(Exception.class, () -> runtimeCommandRoundTrip(bytes));
-            } else {
-                assertArrayEquals(bytes, runtimeCommandRoundTrip(bytes));
-            }
+            assertArrayEquals(bytes, runtimeCommandRoundTrip(bytes));
             assertArrayEquals(bytes, generatedCommandRoundTrip(bytes));
         }
     }

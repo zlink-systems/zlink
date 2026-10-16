@@ -1,128 +1,85 @@
 package systems.zlink.framework.runtime.internal.service;
 
-import systems.zlink.framework.runtime.internal.calls.ZLinkBlockingCalls;
+import systems.zlink.framework.runtime.internal.ZLinkCompletionBridge;
 
-import java.util.concurrent.locks.LockSupport;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ForkJoinPool;
+import java.util.function.BiConsumer;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
-/**
- * Owns the process-wide execution lane for service operation terminals. A registered work item is
- * also its intrusive queue node, so a terminal winner never needs a second queue allocation.
- */
-final class ZLinkServiceCompletionDispatcher {
+/** Owns independent process-pool turns for Framework completion delivery. */
+public final class ZLinkServiceCompletionDispatcher {
     private static final Logger LOGGER =
             Logger.getLogger(ZLinkServiceCompletionDispatcher.class.getName());
     static final ZLinkServiceCompletionDispatcher INSTANCE = new ZLinkServiceCompletionDispatcher();
+    private static final ThreadLocal<Boolean> CURRENT_COMPLETION = new ThreadLocal<>();
 
-    private final Object gate = new Object();
-    private final Thread worker;
-    private WorkItem head;
-    private WorkItem tail;
+    private ZLinkServiceCompletionDispatcher() {}
 
-    private ZLinkServiceCompletionDispatcher() {
-        worker =
-                Thread.ofPlatform()
-                        .daemon(true)
-                        .name("zlink-jvm-service-completion")
-                        .unstarted(this::run);
-        worker.start();
+    public static boolean isCurrentCompletion() {
+        return Boolean.TRUE.equals(CURRENT_COMPLETION.get());
+    }
+
+    /** Reuses an existing completion turn; other sources start an independent pool turn. */
+    public static <T> CompletionStage<T> deliver(CompletionStage<T> source) {
+        if (source.toCompletableFuture().isDone()) return source;
+        var caller = new CompletableFuture<T>();
+        deliver(source, caller);
+        return caller;
+    }
+
+    /** Connects a caller view only after its owner has published that shared view. */
+    public static <T> void deliver(CompletionStage<T> source, CompletableFuture<T> caller) {
+        Delivery<T> delivery = new Delivery<>(source, caller);
+        INSTANCE.register(delivery);
+        source.whenComplete(delivery);
     }
 
     void register(WorkItem item) {
-        synchronized (gate) {
-            if (item.registered) {
-                throw new IllegalStateException("completion work item is already registered");
-            }
-            item.registered = true;
+        if (item.registered) {
+            throw new IllegalStateException("completion work item is already registered");
         }
+        item.registered = true;
     }
 
     void releaseWithoutDispatch(WorkItem item) {
-        synchronized (gate) {
-            releaseRegistration(item);
-        }
+        releaseRegistration(item);
     }
 
     void post(WorkItem item) {
-        item.dispatchNext = null;
-        synchronized (gate) {
-            requireRegistered(item);
-            if (tail == null) {
-                head = item;
-            } else {
-                tail.dispatchNext = item;
-            }
-            tail = item;
-        }
-        LockSupport.unpark(worker);
+        requireRegistered(item);
+        ForkJoinPool.commonPool().execute(item);
     }
 
     void postChain(WorkItem first, WorkItem last) {
-        if (first == null) {
-            return;
-        }
-        synchronized (gate) {
-            WorkItem current = first;
-            while (true) {
-                requireRegistered(current);
-                if (current == last) {
-                    break;
-                }
-                current = current.dispatchNext;
-                if (current == null) {
-                    throw new IllegalStateException(
-                            "completion work chain does not reach its tail");
-                }
-            }
-            if (tail == null) {
-                head = first;
-            } else {
-                tail.dispatchNext = first;
-            }
-            tail = last;
-        }
-        LockSupport.unpark(worker);
-    }
-
-    private void run() {
-        ZLinkBlockingCalls.markInfrastructureThread();
+        if (first == null) return;
+        WorkItem current = first;
         while (true) {
-            WorkItem item = take();
-            if (item == null) {
-                LockSupport.park(this);
-                continue;
+            requireRegistered(current);
+            if (current == last) break;
+            current = current.dispatchNext;
+            if (current == null) {
+                throw new IllegalStateException("completion work chain does not reach its tail");
             }
-            try {
-                item.dispatch();
-            } catch (Throwable failure) {
-                LOGGER.log(Level.SEVERE, "service completion dispatch failed", failure);
-            } finally {
-                synchronized (gate) {
-                    releaseRegistration(item);
-                }
-            }
+        }
+        current = first;
+        while (true) {
+            // Posting can run, release and reuse this entry before post returns.
+            WorkItem next = current.dispatchNext;
+            current.dispatchNext = null;
+            boolean end = current == last;
+            post(current);
+            if (end) break;
+            current = next;
         }
     }
 
-    private WorkItem take() {
-        synchronized (gate) {
-            WorkItem item = head;
-            if (item == null) {
-                return null;
-            }
-            head = item.dispatchNext;
-            item.dispatchNext = null;
-            if (head == null) {
-                tail = null;
-            }
-            return item;
-        }
-    }
-
-    private void releaseRegistration(WorkItem item) {
+    private static void releaseRegistration(WorkItem item) {
         requireRegistered(item);
         item.registered = false;
+        item.released();
     }
 
     private static void requireRegistered(WorkItem item) {
@@ -131,18 +88,59 @@ final class ZLinkServiceCompletionDispatcher {
         }
     }
 
-    abstract static class WorkItem {
+    abstract static class WorkItem implements Runnable {
         private WorkItem dispatchNext;
-        private boolean registered;
+        private volatile boolean registered;
 
         final void setDispatchNext(WorkItem value) {
             dispatchNext = value;
         }
 
-        final WorkItem getDispatchNext() {
-            return dispatchNext;
+        @Override
+        public final void run() {
+            Boolean previous = CURRENT_COMPLETION.get();
+            CURRENT_COMPLETION.set(true);
+            try {
+                try {
+                    dispatch();
+                } catch (RuntimeException | Error failure) {
+                    LOGGER.log(Level.SEVERE, "service completion dispatch failed", failure);
+                } finally {
+                    releaseRegistration(this);
+                }
+            } finally {
+                if (previous == null) CURRENT_COMPLETION.remove();
+                else CURRENT_COMPLETION.set(previous);
+            }
         }
 
         abstract void dispatch();
+
+        void released() {}
+    }
+
+    private static final class Delivery<T> extends WorkItem implements BiConsumer<T, Throwable> {
+        private final CompletableFuture<T> caller;
+        private T value;
+        private Throwable failure;
+
+        private Delivery(CompletionStage<T> source, CompletableFuture<T> caller) {
+            this.caller = caller;
+            ZLinkCompletionBridge.forwardCancellation(caller, source);
+        }
+
+        @Override
+        public void accept(T value, Throwable failure) {
+            this.value = value;
+            this.failure = failure;
+            if (isCurrentCompletion()) run();
+            else INSTANCE.post(this);
+        }
+
+        @Override
+        void dispatch() {
+            if (failure == null) caller.complete(value);
+            else caller.completeExceptionally(failure);
+        }
     }
 }

@@ -720,6 +720,11 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
                 .AddRequestHandler<FlowEchoHandler, FlowEchoRequest, EchoReply>();
         });
         await using var server = services.BuildServiceProvider();
+        // Flow-correlation §4: flow IDs are carried only while message-flow
+        // tracing is on, at Normal or Detailed.
+        server
+            .GetRequiredService<ZLinkFrameworkRegistration>()
+            .DispatchOptions.Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
         var serverRuntime = server.GetRequiredService<ZLinkFrameworkRuntime>();
 
         await serverRuntime.StartAsync(CancellationToken.None);
@@ -728,6 +733,9 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
             await GetServerBundle(serverState, "work").ClientServerServer!.ReadAsync()
         ).AdvertisedEndpoint;
         await using var client = CreateClient(endpoint);
+        client
+            .GetRequiredService<ZLinkFrameworkRegistration>()
+            .DispatchOptions.Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
         var clientRuntime = client.GetRequiredService<ZLinkFrameworkRuntime>();
         await clientRuntime.StartAsync(CancellationToken.None);
         try

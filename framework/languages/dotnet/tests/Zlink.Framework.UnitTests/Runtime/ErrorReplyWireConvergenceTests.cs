@@ -401,6 +401,47 @@ public sealed class ErrorReplyWireConvergenceTests
     }
 
     [Fact]
+    public void Stream_wire_error_maps_non_framework_exceptions_to_internal_failure()
+    {
+        var wire = ZLinkStreamWireError.FromException(new InvalidOperationException("failed"));
+        Assert.Equal("internal_failure", wire.Code);
+        var parts = ActorErrorReplyParts(
+            JsonSerializer.Serialize(wire, ZLinkJsonSerializerOptions.Default)
+        );
+        try
+        {
+            var error = Assert.Throws<ZLinkFrameworkException>(() =>
+                ZLinkActorReplyDecoder.Decode<object>(parts)
+            );
+            Assert.Equal(ZLinkFrameworkErrorKind.InternalFailure, error.Kind);
+            Assert.Equal("failed", error.Message);
+        }
+        finally
+        {
+            ZLinkMessageParts.DisposeAll(parts);
+        }
+    }
+
+    [Fact]
+    public void Actor_reply_decoder_rejects_clr_exception_names()
+    {
+        var parts = ActorErrorReplyParts(
+            "{\"code\":\"InvalidOperationException\",\"message\":\"failed\"}"
+        );
+        try
+        {
+            var error = Assert.Throws<ZLinkFrameworkException>(() =>
+                ZLinkActorReplyDecoder.Decode<object>(parts)
+            );
+            Assert.Equal(ZLinkFrameworkErrorKind.ProtocolError, error.Kind);
+        }
+        finally
+        {
+            ZLinkMessageParts.DisposeAll(parts);
+        }
+    }
+
+    [Fact]
     public void Actor_reply_decoder_maps_snake_case_stream_wire_codes()
     {
         foreach (var (kind, name) in WireNameTable)

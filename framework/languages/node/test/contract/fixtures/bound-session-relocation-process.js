@@ -155,7 +155,6 @@ async function startTarget() {
       takeRelocationRelay() { return []; },
       complete() {}
     },
-    actorTransferRegistry: {},
     actorManager: () => ({ getState: () => transferState }),
     spotManager: () => undefined,
     locationLifecycle: () => undefined,
@@ -166,7 +165,6 @@ async function startTarget() {
       status: () => ({ routingId: 'source', lifecycleGeneration: 2n })
     }),
     notifyEntrySpotActorLeft: async () => {},
-    restoreEntrySpotActorJoined: async () => {},
     clearRemoteActorPacketTarget() {}
   });
   const session = new ZLinkNativeFallbackBoundSession({

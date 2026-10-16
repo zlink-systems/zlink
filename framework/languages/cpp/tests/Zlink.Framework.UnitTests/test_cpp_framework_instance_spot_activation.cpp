@@ -32,6 +32,8 @@
 #include <map>
 #include <mutex>
 #include <thread>
+#include <type_traits>
+#include <typeinfo>
 #include <vector>
 
 namespace
@@ -820,18 +822,36 @@ TEST (ZLinkFrameworkInstanceSpotActivation, RepositoryPreservesExcludedProviderF
         std::exception_ptr failure;
     } store;
     fw::runtime::provider_location_repository_t repository (store);
-    for (const auto &failure :
-         {std::make_exception_ptr (fw::framework_exception_t (
-            fw::framework_error_kind_t::protocol_error, "typed failure")),
-          std::make_exception_ptr (std::invalid_argument ("caller validation")),
-          std::make_exception_ptr (std::out_of_range ("caller range")),
-          std::make_exception_ptr (
-            std::system_error (std::make_error_code (std::errc::operation_canceled)))}) {
-        store.failure = failure;
+    const auto verify = [&] (const auto &failure) {
+        using exception_t = std::decay_t<decltype (failure)>;
+        store.failure = std::make_exception_ptr (failure);
         const auto result = repository.read_owner_lease ("owner").result ();
         EXPECT_FALSE (result.has_value ());
-        EXPECT_EQ (failure, result.exception ());
-    }
+        ASSERT_NE (nullptr, result.exception ());
+        // MSVC can copy exceptions during rethrow; preserve their type and contents.
+        try {
+            result.value ();
+            FAIL () << "provider failure was lost";
+        }
+        catch (const exception_t &error) {
+            EXPECT_EQ (typeid (failure), typeid (error));
+            EXPECT_STREQ (failure.what (), error.what ());
+            if constexpr (std::is_same_v<exception_t, fw::framework_exception_t>) {
+                EXPECT_EQ (failure.kind (), error.kind ());
+                EXPECT_EQ (failure.code (), error.code ());
+            } else if constexpr (std::is_same_v<exception_t, std::system_error>) {
+                EXPECT_EQ (failure.code (), error.code ());
+            }
+        }
+        catch (...) {
+            FAIL () << "provider failure type changed";
+        }
+    };
+    verify (
+      fw::framework_exception_t (fw::framework_error_kind_t::protocol_error, "typed failure"));
+    verify (std::invalid_argument ("caller validation"));
+    verify (std::out_of_range ("caller range"));
+    verify (std::system_error (std::make_error_code (std::errc::operation_canceled)));
 }
 
 TEST (ZLinkFrameworkInstanceSpotActivation, MissingWithoutIntentDoesNotActivate)

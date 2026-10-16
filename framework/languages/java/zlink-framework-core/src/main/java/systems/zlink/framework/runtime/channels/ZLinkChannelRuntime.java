@@ -1524,6 +1524,11 @@ public final class ZLinkChannelRuntime
     private void closeCore(Instant deadline)
             throws InterruptedException, TimeoutException, ExecutionException {
         beginClose();
+        // Location stop removes native connections, so settle their liveness callers first.
+        timeoutExecutor.shutdownNow();
+        infrastructureExecutor.shutdown();
+        boolean terminatedWithinDeadline = awaitTerminated(timeoutExecutor, deadline);
+        terminatedWithinDeadline &= awaitTerminated(infrastructureExecutor, deadline);
         try {
             CompletionStage<Void> clientServerStop = CompletableFuture.completedFuture(null);
             if (clientServerLocationRuntime != null) {
@@ -1542,14 +1547,14 @@ public final class ZLinkChannelRuntime
         } finally {
             receiveLoops.close();
             receiveLoops.awaitTermination();
-            timeoutExecutor.shutdownNow();
-            infrastructureExecutor.shutdown();
-            awaitTerminated(timeoutExecutor);
-            awaitTerminated(infrastructureExecutor);
             closeSpotRouteBridges();
             sockets.closeAll();
             if (ownsContext) {
                 context.close();
+            }
+            if (!terminatedWithinDeadline) {
+                throw new TimeoutException(
+                        "host shutdown deadline expired stopping Channel infrastructure");
             }
         }
     }
@@ -1621,12 +1626,19 @@ public final class ZLinkChannelRuntime
         }
     }
 
-    static void awaitTerminated(ExecutorService executor) {
-        try {
-            executor.awaitTermination(1, TimeUnit.SECONDS);
-        } catch (InterruptedException ex) {
-            Thread.currentThread().interrupt();
+    private static boolean awaitTerminated(ExecutorService executor, Instant deadline)
+            throws InterruptedException {
+        boolean withinDeadline = deadline == null || executor.isTerminated();
+        if (!withinDeadline) {
+            long remaining = Math.max(0L, Duration.between(Instant.now(), deadline).toNanos());
+            withinDeadline = executor.awaitTermination(remaining, TimeUnit.NANOSECONDS);
         }
+        // Expiry determines the host result, but cannot let a later teardown stage destroy
+        // the shared context while a binding call is still running (shutdown spec §14).
+        while (!executor.isTerminated()) {
+            executor.awaitTermination(Long.MAX_VALUE, TimeUnit.NANOSECONDS);
+        }
+        return withinDeadline;
     }
 
     private ZLinkBackendSpotRouteBridge requireSpotRouteBridge(String channelName) {
@@ -1729,20 +1741,9 @@ public final class ZLinkChannelRuntime
         return Arrays.equals(expected.get(0), actual.get(0).toByteArray());
     }
 
-    static boolean isFrameworkErrorReply(List<Message> parts) {
-        return ZLinkFrameworkErrorReply.isReply(parts);
-    }
-
-    static String frameworkErrorReplyMessage(List<Message> parts) {
-        return ZLinkFrameworkErrorReply.message(parts);
-    }
-
-    static ZLinkFrameworkErrorKind frameworkErrorReplyKind(List<Message> parts) {
-        return ZLinkFrameworkErrorReply.kind(parts);
-    }
-
-    static java.util.Map<String, String> frameworkErrorReplyMetadata(List<Message> parts) {
-        return ZLinkFrameworkErrorReply.metadata(parts);
+    /** The failure a framework error reply carries, or {@code null} for any other reply. */
+    static ZLinkFrameworkException frameworkErrorReplyFailure(List<Message> parts) {
+        return ZLinkFrameworkErrorReply.failure(parts);
     }
 
     private void startRouteLoop(String channelName, ZLinkBackendRouterSocket router) {

@@ -19,6 +19,7 @@ import java.util.Map;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -27,6 +28,103 @@ import java.util.concurrent.atomic.AtomicInteger;
 final class ZLinkStateLaneTest {
     private static final int POOL_OCCUPATION_TIMEOUT_SECONDS = 5;
     private static final int COMPLETION_TIMEOUT_SECONDS = 1;
+
+    @Test
+    void idleSynchronousTurnsAllocateNoPrivateCompletion() {
+        var lane = new ZLinkStateLane(Runnable::run);
+        java.util.function.Supplier<Object> work = () -> null;
+        var allocations =
+                (com.sun.management.ThreadMXBean)
+                        java.lang.management.ManagementFactory.getThreadMXBean();
+        long thread = Thread.currentThread().threadId();
+        for (int index = 0; index < 50_000; index++) lane.awaitTurn(work);
+        long before = allocations.getThreadAllocatedBytes(thread);
+        for (int index = 0; index < 20_000; index++) lane.awaitTurn(work);
+        long bytes = allocations.getThreadAllocatedBytes(thread) - before;
+        assertTrue(bytes < 20_000, "idle turn allocated " + bytes + " bytes");
+        assertTrue(lane.closeAsync().toCompletableFuture().isDone());
+    }
+
+    @Test
+    void concurrentFirstSubmissionsKeepOneTurnOwnerAndCloseDrainsEveryTurn() throws Exception {
+        var lane = new ZLinkStateLane();
+        int producers = 16;
+        var start = new java.util.concurrent.CyclicBarrier(producers);
+        var active = new AtomicInteger();
+        var completed = new AtomicInteger();
+        var submitted = new ArrayList<java.util.concurrent.Future<CompletionStage<Void>>>();
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            for (int index = 0; index < producers; index++) {
+                submitted.add(
+                        executor.submit(
+                                () -> {
+                                    start.await(5, TimeUnit.SECONDS);
+                                    return lane.runAsync(
+                                            () -> {
+                                                assertEquals(1, active.incrementAndGet());
+                                                completed.incrementAndGet();
+                                                assertEquals(0, active.decrementAndGet());
+                                            });
+                                }));
+            }
+            var turns = new ArrayList<CompletionStage<Void>>();
+            for (var submission : submitted) turns.add(submission.get(5, TimeUnit.SECONDS));
+            lane.closeAsync().toCompletableFuture().get(5, TimeUnit.SECONDS);
+            for (var turn : turns) turn.toCompletableFuture().get(5, TimeUnit.SECONDS);
+            assertEquals(producers, completed.get());
+            assertThrows(IllegalStateException.class, () -> lane.runAsync(() -> {}));
+        }
+    }
+
+    @Test
+    void completedTurnsDrainOnOneExecutorInvocation() {
+        var scheduled = new java.util.ArrayDeque<Runnable>();
+        var lane = new ZLinkStateLane(scheduled::addLast);
+        var turns = new ArrayList<Integer>();
+        var results = new ArrayList<CompletableFuture<Integer>>();
+        for (int index = 0; index < 64; index++) {
+            int value = index;
+            results.add(
+                    lane.runAsync(
+                                    () -> {
+                                        assertSame(lane, ZLinkStateLane.current());
+                                        turns.add(value);
+                                        return value;
+                                    })
+                            .toCompletableFuture());
+        }
+        assertEquals(1, scheduled.size());
+        scheduled.removeFirst().run();
+        assertEquals(64, turns.size());
+        assertTrue(scheduled.isEmpty());
+        for (int index = 0; index < results.size(); index++) {
+            assertEquals(index, results.get(index).join());
+            assertEquals(index, turns.get(index));
+        }
+        assertTrue(lane.closeAsync().toCompletableFuture().isDone());
+    }
+
+    @Test
+    void pendingTurnKeepsTheLaneUntilItsCompletion() {
+        var scheduled = new java.util.ArrayDeque<Runnable>();
+        var lane = new ZLinkStateLane(scheduled::addLast);
+        var pending = new CompletableFuture<Void>();
+        assertTrue(lane.tryPost(() -> pending));
+        var ran = new AtomicBoolean();
+        var following = lane.runAsync(() -> ran.set(true));
+        var closed = lane.closeAsync().toCompletableFuture();
+        scheduled.removeFirst().run();
+        assertFalse(ran.get());
+        assertFalse(closed.isDone());
+        assertTrue(scheduled.isEmpty());
+        pending.complete(null);
+        assertEquals(1, scheduled.size());
+        scheduled.removeFirst().run();
+        following.toCompletableFuture().join();
+        assertTrue(ran.get());
+        assertTrue(closed.isDone());
+        assertTrue(scheduled.isEmpty());
+    }
 
     @Test
     void pendingCompletionProgressesWhileObservationPoolIsBlocked() throws Exception {

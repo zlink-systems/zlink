@@ -25,6 +25,32 @@ final class ZLinkServiceM6AWireCodecTest {
     private final ZLinkServiceM6AWireCodec codec = new ZLinkServiceM6AWireCodec();
 
     @Test
+    void textDecodeAcceptsCanonicalUnicodeAndRejectsMalformedUtf8() {
+        for (String name : List.of("event", "한글", "\uD83D\uDE00", "\uFFFD")) {
+            var payload =
+                    new ZLinkServiceM6AWireCodec.ApplicationPayload(
+                            name, "application/json", new byte[0]);
+            assertEquals(
+                    name,
+                    codec.decodeApplicationPayload(codec.encodeApplicationPayload(payload))
+                            .packetName());
+        }
+        for (String hex : List.of("00", "80", "c080", "eda080", "f4908080", "e282")) {
+            byte[] malformed = HexFormat.of().parseHex(hex);
+            byte[] frame =
+                    codec.encodeApplicationPayload(
+                            new ZLinkServiceM6AWireCodec.ApplicationPayload(
+                                    "x".repeat(malformed.length), "application/json", new byte[0]));
+            int packetOffset = Byte.BYTES + Integer.BYTES + Byte.BYTES;
+            System.arraycopy(malformed, 0, frame, packetOffset, malformed.length);
+            assertThrows(
+                    ZLinkServiceWireException.class,
+                    () -> codec.decodeApplicationPayload(frame),
+                    hex);
+        }
+    }
+
+    @Test
     void admissionRoundTripsAllM6ACommandsAndDescriptorFields() {
         var source = RoutingId.from("node-a");
         var descriptor = descriptor(source);

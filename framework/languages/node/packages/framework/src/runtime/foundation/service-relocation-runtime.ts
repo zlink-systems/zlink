@@ -796,12 +796,16 @@ export function decodeServiceRelocationEnvelope(
     });
   }
   for (const timer of generated.timerRegistrations) {
+    const dueAtUnixMs = unixMilliseconds(timer.nextScheduledAtUnixMilliseconds);
+    const intervalMs = unixMilliseconds(timer.periodMilliseconds);
     byId.get(timer.participantId)!.timers.push({
       timerId: timer.name,
       handlerType: timer.handlerType,
-      startedAtUnixMs: 0,
-      dueAtUnixMs: unixMilliseconds(timer.nextScheduledAtUnixMilliseconds),
-      intervalMs: unixMilliseconds(timer.periodMilliseconds),
+      // The wire anchors the nominal schedule by its next due time: the next
+      // nominal tick after the completed ScheduledIndex (Spot timer §1).
+      startedAtUnixMs: dueAtUnixMs - Number(timer.lastCompletedScheduledIndex + 1n) * intervalMs,
+      dueAtUnixMs,
+      intervalMs,
       overrunPolicy: timerPolicyName(timer.overrunPolicy),
       maxCatchUpTicks: unixMilliseconds(timer.maxCatchUpTicks),
       stopOnUnhandledException: timer.stopOnUnhandledException,
