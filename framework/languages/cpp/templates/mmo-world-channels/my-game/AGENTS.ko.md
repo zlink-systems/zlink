@@ -85,9 +85,9 @@ Actor가 소속 Spot을 바꾸는 동작은 membership 변경이다. 대상 Spot
 예시 게임의 요청은 다음 경로로 처리된다. 기능을 더하거나 옮기기 전에 이 경로를 따라 코드를 읽으면 바꿀 위치를 빠르게 찾을 수 있다.
 
 1. client가 Accounts process의 `GET /worlds`를 읽어 월드를 고르고, 그 월드의 Session endpoint에 STREAM으로 연결해 첫 패킷 `EnterWorldRequest`를 보낸다. `Session::on_packet`은 첫 패킷 이름을 확인하고 월드의 mesh에서 `playerId`로 Player Actor를 `get_or_create`한 뒤 `bind_or_get`으로 binding하고 원래 패킷을 relay한다.
-2. 새 Actor는 Entry Spot `WorldEntry`에서 시작한다. `PlayerFactory::create`가 `PlayerData`로 월드 데이터베이스에서 플레이어의 gold를 읽고, `WorldEntry::enter`가 identity를 확인하고 첫 channel(`Names::first_channel`)에 `join_spot(...).defer()`를 요청한다.
+2. 새 Actor는 Entry Spot `WorldEntry`에서 시작한다. `PlayerFactory::create`가 `PlayerData`로 월드 데이터베이스에서 플레이어의 gold를 읽을 때까지 `co_await`하고, `WorldEntry::enter`가 identity를 확인하고 첫 channel(`Names::first_channel`)에 `join_spot(...).defer()`를 요청한다.
 3. `Zone::on_actor_join`이 플레이어를 수락하고 `Zone::on_actor_joined`가 Actor client로 Actor에게 `PlayerView`(월드, channel, node, gold)를 보내며 `Zone::deliver`가 이를 binding된 Session으로 전달한다. `Zone::enter`는 재접속 때 다시 보낸 첫 패킷에 답하고 `Zone::read`는 `ViewRequest`에 답한다.
-4. `EarnRequest`는 `Zone::earn`이 처리한다. `Player::earn`을 호출하고 새 gold를 `PlayerData`로 저장한 뒤 현재 `PlayerView`로 답한다.
+4. `EarnRequest`는 `Zone::earn`이 처리하며 `Player::earn`을 `co_await`한다. `Player::earn`은 Zone의 I/O worker(`run_io_worker(...).async()`)에서 새 gold를 `PlayerData`로 저장하고, 저장이 끝날 때까지 turn을 유지한 뒤 gold를 갱신한다. 그다음 `Zone::earn`이 현재 `PlayerView`로 답한다.
 5. `ChangeChannelRequest`는 `Zone::change`가 처리하며 새 channel의 Zone에 `join_spot(...).defer()`를 요청한다. 그 Zone이 다른 channel node에 있어도 client 연결과 Actor는 바뀌지 않는다.
 6. node를 교체할 때 `NodeControl`의 `drain`이 relocation을 요청한다. Framework는 `PlayerRelocation`의 `capture`로 gold를 받아 같은 월드의 다른 node에서 `restore`한다. `ZoneRelocation`은 상태를 옮기지 않는다.
 
@@ -140,7 +140,7 @@ channel·world 같은 역할 이름을 이 샘플과 다르게 정하려면 타�
 
 ### 비동기 실행과 lifecycle
 
-handler는 `task_t` coroutine으로 작성하고 공개 비동기 호출은 템플릿처럼 `co_await`한다. `.result()` 같은 blocking 대기는 [Host execution model](https://docs.zlink.systems/ko/cpp/guide/server/43-execution-model/)이 테스트와 client에만 허용한다. handler에서 대기나 동기 I/O로 실행을 중단하지 않는다. `NodeControl`은 자신의 stdin thread에서만 `await_host`로 대기한다. `server/channel/data.hpp`의 `PlayerData`는 Actor turn 안에서 blocking socket 호출을 하는 샘플 수준 코드이므로, 의존하기 전에 non-blocking store client로 바꾸거나 작업을 handler 밖으로 옮긴다. SpotWide 실행 모드가 같은 상태의 실행을 하나의 gate로 제한하므로 별도 lock이나 queue로 같은 상태를 다시 보호하지 않는다. await 중에도 turn을 유지할 수 있으므로 같은 Spot에 대한 request처럼 그 turn이 끝나야 실행되는 작업을 기다리지 않으며, 긴 작업은 handler 밖에서 처리한다. 실행 경계는 [Execution model](https://docs.zlink.systems/ko/cpp/guide/server/32-execution-model/)이 설명한다.
+handler는 `task_t` coroutine으로 작성하고 공개 비동기 호출은 템플릿처럼 `co_await`한다. `.result()` 같은 blocking 대기는 [Host execution model](https://docs.zlink.systems/ko/cpp/guide/server/43-execution-model/)이 테스트와 client에만 허용한다. handler에서 대기나 동기 I/O로 실행을 중단하지 않는다. `NodeControl`은 자신의 stdin thread에서만 `await_host`로 대기한다. `server/channel/data.hpp`의 `PlayerData`는 Redis 명령마다 자신의 I/O thread에서 실행하고 Framework task를 반환한다. Spot handler 안에서는 `Player::earn`처럼 Spot의 I/O worker(`run_io_worker(...).async()`)로 기다리며, 이 worker가 handler를 그 turn 안에서 재개한다. worker 종료 방식은 [Timers and workers 가이드](https://docs.zlink.systems/ko/cpp/guide/server/36-timer-worker/)가 설명한다. SpotWide 실행 모드가 같은 상태의 실행을 하나의 gate로 제한하므로 별도 lock이나 queue로 같은 상태를 다시 보호하지 않는다. await 중에도 turn을 유지할 수 있으므로 같은 Spot에 대한 request처럼 그 turn이 끝나야 실행되는 작업을 기다리지 않으며, 긴 작업은 handler 밖에서 처리한다. 실행 경계는 [Execution model](https://docs.zlink.systems/ko/cpp/guide/server/32-execution-model/)이 설명한다.
 
 타입 등록과 객체별 callback은 각각 정해진 lifecycle 단계에 둔다. factory와 Entry Spot은 node의 `main.cpp`에서 등록하고, handler는 `configure()`에서 등록하고, 참가 수락과 membership 판정은 `on_actor_join`, `on_actor_joined`, `on_leave_actor`, `on_disconnect_actor`에서 처리한다. membership 변경은 `join_spot(...).defer()`와 공개 완료 callback `on_join_completed`를 사용하고 host 종료는 relocation과 runtime 관찰로 확인하여 요청 수락을 완료로 오인하지 않는다. 생성과 초기화의 차이는 [Activation and lifetime](https://docs.zlink.systems/ko/cpp/guide/server/34-activation-lifetime/)이 설명한다.
 

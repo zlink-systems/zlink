@@ -98,7 +98,7 @@ Use `--no-build` or `-NoBuild` with local mode to reuse a debugger build. Scenar
 3. Start sessionA and sessionB. Populate accounts' `Worlds` list with their published STREAM endpoints and start accounts. Clients select a world through `GET /worlds` and send `EnterWorldRequest` first.
 4. Send `drain` on channelA1's standard input. Wait for `RELOCATION_REQUESTED`, `RELOCATED`, and `SAFE_TO_SHUTDOWN`. Send `shutdown`, wait for `STOPPED` and exit zero, then start its replacement with the same configuration. The logical Zone remains on its relocation target; a new Zone on the replacement accepts Player work.
 
-Player gold persistence currently follows the public Bingo sample's synchronous Boost.Asio Redis boundary. It uses one short connection per load/save and runs no background application queue. Production storage can replace `server/channel/data.hpp` without changing Actor, Session, or relocation contracts.
+Player gold persistence uses an asynchronous Boost.Asio Redis client in `server/channel/data.hpp` with one short connection per load/save. Commands run on that client's own I/O thread and return Framework tasks; `Zone::earn` awaits the save through the Spot's I/O worker, so no handler thread waits on a socket. Production storage can replace `server/channel/data.hpp` without changing Actor, Session, or relocation contracts.
 
 ChannelA1 has a one-Zone capacity and starts before channelA2, whose capacity is two.
 This places each fixed Zone on its declared initial owner and leaves room for drain.
