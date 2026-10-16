@@ -2279,10 +2279,12 @@ internal sealed class RelocationBehaviorHost : IAsyncDisposable
         bool relocateSpots = false,
         Task? autoConnectGate = null,
         (RoutingId Rid, string Endpoint)? manualPeer = null,
-        string? advertiseHost = null
+        string? advertiseHost = null,
+        Action<IServiceCollection>? configureServices = null
     )
     {
         var services = new ServiceCollection();
+        configureServices?.Invoke(services);
         if (canonicalTransportProbe is not null)
             services.AddSingleton<IZLinkBackendAdapterFactory>(
                 new ProbedBackendAdapterFactory(

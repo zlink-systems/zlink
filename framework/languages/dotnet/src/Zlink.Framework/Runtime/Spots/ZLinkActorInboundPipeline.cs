@@ -499,11 +499,13 @@ internal sealed class ZLinkActorInboundPipeline(
             throw;
         }
         catch (ZLinkFrameworkException exception)
-            when (allowCapture
-                && exception.Kind == ZLinkFrameworkErrorKind.NotFound
-                && state.Handoff.BlocksLocalDispatch
-            )
+            when (allowCapture && IsUnitSealRefusal(exception, state))
         {
+            // The frame passed the arrival capture check before its unit
+            // sealed, then its turn was refused by the Actor handoff
+            // (NotFound) or by the sealed Spot (Rejected). Both are the same
+            // unit seal: hold the frame for the handoff when capture accepts
+            // it, otherwise end it at the moving boundary.
             ZLinkActorHandoffCaptureResult retryCapture;
             try
             {
@@ -523,20 +525,6 @@ internal sealed class ZLinkActorInboundPipeline(
             // A bound-session frame cannot be made durable because it has no
             // owner lease fence. Requests receive an observable retry terminal;
             // one-way sends have no reply contract and stop at this boundary.
-            await CompleteMovingBoundaryAsync(frame, acknowledgeHandledFrame, cancellationToken)
-                .ConfigureAwait(false);
-        }
-        catch (ZLinkFrameworkException exception)
-            when (allowCapture
-                && exception.Kind == ZLinkFrameworkErrorKind.Rejected
-                && IsRelocationAdmissionRejection(state)
-            )
-        {
-            // The frame won the inbound handoff race, but its actor turn
-            // reached the Spot admission barrier after relocation sealed the
-            // application queue. It still owns a reply route; letting this
-            // rejection escape would leave the session's accepted frame
-            // pending until timeout and block the route seal.
             await CompleteMovingBoundaryAsync(frame, acknowledgeHandledFrame, cancellationToken)
                 .ConfigureAwait(false);
         }
@@ -631,8 +619,17 @@ internal sealed class ZLinkActorInboundPipeline(
             frame.DirectReply
         );
 
-    private static bool IsRelocationAdmissionRejection(ZLinkActorRuntimeState state) =>
-        state.Handoff.BlocksLocalDispatch || state.LiveActivation?.HasRelocationBarrier == true;
+    private static bool IsUnitSealRefusal(
+        ZLinkFrameworkException exception,
+        ZLinkActorRuntimeState state
+    ) =>
+        exception.Kind switch
+        {
+            ZLinkFrameworkErrorKind.NotFound => state.Handoff.BlocksLocalDispatch,
+            ZLinkFrameworkErrorKind.Rejected => state.Handoff.BlocksLocalDispatch
+                || state.LiveActivation?.HasRelocationBarrier == true,
+            _ => false,
+        };
 
     private async ValueTask<bool> RouteAwayFromCurrentActorAsync(
         ZLinkActorRuntimeState state,

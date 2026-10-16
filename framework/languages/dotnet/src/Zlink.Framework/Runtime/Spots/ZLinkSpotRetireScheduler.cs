@@ -384,7 +384,11 @@ internal sealed class ZLinkSpotRetireScheduler(
         var sessionRelocationContext = default(ZLinkSessionRelocationContext);
         try
         {
-            var sealedActorIds = activation.SnapshotActorIds();
+            // The seal read the membership once and captured exactly those
+            // members; it must be the inventory fixed at relocation_begin.
+            var sealedActorIds = admittedSeal
+                .CapturedMembers.Select(static state => state.ActorId)
+                .Order(StringComparer.Ordinal);
             if (!perActorShell && !sealedActorIds.SequenceEqual(actorIds, StringComparer.Ordinal))
                 throw new InvalidOperationException(
                     $"SPOT '{activation.SpotId}' participant inventory changed before the relocation seal."
@@ -403,6 +407,8 @@ internal sealed class ZLinkSpotRetireScheduler(
                 inventory.SourceNodeLifecycleGeneration,
                 coordinatorAuthority.StoreVersion
             );
+            // The seal started every member's handoff capture
+            // (ZLinkSpotActivation.SealRelocationAsync).
             var sourceActorStates = actorIds.Select(runtime.GetOrCreateActorState).ToArray();
             foreach (var actorState in sourceActorStates)
             {
@@ -414,29 +420,6 @@ internal sealed class ZLinkSpotRetireScheduler(
                     );
                 var actorKey = ZLinkActorId.FromBoundary(actorState.ActorId, nameof(actorState));
                 actorCaptures.Add(actorKey, new SourceActorCapture(actorState, sourceActor));
-            }
-            for (
-                var first = 0;
-                first < sourceActorStates.Length;
-                first += MaxConcurrentParticipantIo
-            )
-            {
-                var count = Math.Min(MaxConcurrentParticipantIo, sourceActorStates.Length - first);
-                await Task.WhenAll(
-                        sourceActorStates
-                            .Skip(first)
-                            .Take(count)
-                            .Select(async state =>
-                            {
-                                _ = await state
-                                    .BeginHandoffCaptureAsync(cancellationToken)
-                                    .ConfigureAwait(false);
-                                actorCaptures[
-                                    ZLinkActorId.FromBoundary(state.ActorId, nameof(state))
-                                ].CaptureStarted = true;
-                            })
-                    )
-                    .ConfigureAwait(false);
             }
             var sealedRoutes = new ZLinkRemoteActorBoundSessionRoute[actorIds.Count];
             for (var first = 0; first < actorIds.Count; first += MaxConcurrentParticipantIo)
@@ -1062,18 +1045,14 @@ internal sealed class ZLinkSpotRetireScheduler(
         async ValueTask RestoreSourceActorsAsync()
         {
             foreach (
-                var capture in actorCaptures.Values.OrderBy(
-                    static capture => capture.State.ActorId,
+                var state in admittedSeal.CapturedMembers.OrderBy(
+                    static state => state.ActorId,
                     StringComparer.Ordinal
                 )
             )
-            {
-                if (!capture.CaptureStarted)
-                    continue;
                 await runtime
-                    .RestoreStandaloneActorRelocationSourceAsync(capture.State)
+                    .RestoreStandaloneActorRelocationSourceAsync(state)
                     .ConfigureAwait(false);
-            }
         }
 
         async ValueTask DiscardStagingAsync()
@@ -1478,7 +1457,6 @@ internal sealed class ZLinkSpotRetireScheduler(
     {
         internal ZLinkActorRuntimeState State { get; } = state;
         internal ZLinkBackendActorRef SourceActor { get; } = sourceActor;
-        internal bool CaptureStarted { get; set; }
         internal ZLinkActorHandoffCommitBoundary CommitBoundary { get; set; }
     }
 }

@@ -249,7 +249,11 @@ public sealed partial class EntrySpotActorDispatchTests
     )
     {
         using var operation = (await runtime.AdmitOperationAsync()).Enter();
-        var seal = await activation.SealRelocationAsync(CancellationToken.None);
+        // A canonical replay runs under the target admission seal
+        // (StageInboundSpotAggregateAsync), not under a source unit seal.
+        var seal =
+            await activation.TrySealRelocationAsync()
+            ?? throw new InvalidOperationException("The target admission seal was refused.");
         const string handoffId = "accepted-replay";
         var state = probe.ActorState;
         var actorRef = state.NativeActorRef!.Value;
