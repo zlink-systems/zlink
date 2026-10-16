@@ -3747,6 +3747,89 @@ public sealed partial class StatefulServiceRuntimeTests
         Assert.Equal(reservation, operationTarget.LastOperation.Reservation);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Unadmitted_records_are_silently_discarded_before_validation(
+        bool infrastructure
+    )
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = NewNode(context, "unadmitted-record-node");
+        await using var peer = context.CreateRouterSocket();
+        using var completions = new TestCompletionPollerDriver(peer);
+        await using var monitor = node.OpenMonitor();
+        var suffix = Guid.NewGuid().ToString("N");
+        var nodeEndpoint = $"inproc://unadmitted-node-{suffix}";
+        var peerEndpoint = $"inproc://unadmitted-peer-{suffix}";
+        var peerRid = RoutingId.From($"unadmitted-peer-{suffix}");
+        peer.SetRoutingId(peerRid);
+        peer.Bind(peerEndpoint);
+        node.SetBind(nodeEndpoint);
+        node.ConnectPeer(peerEndpoint, peerRid);
+        node.Start();
+        using (var hello = await ReceiveRouterEnvelopeAsync(peer)) { }
+
+        var unadmittedRecord = infrastructure
+            ? ZLinkServiceWireCodec.EncodeRouteAdmission(
+                ServiceWireConstants.Command.Update,
+                "mesh",
+                peerEndpoint,
+                lifecycleGeneration: 1,
+                descriptorRevision: 1,
+                new Dictionary<string, uint>(StringComparer.Ordinal),
+                objectRole: (byte)ZLinkMeshNodeObjectRole.Server
+            )
+            : new byte[]
+            {
+                ServiceWireConstants.Magic0,
+                ServiceWireConstants.Magic1,
+                ServiceWireConstants.WireMajor,
+                (byte)ServiceWireConstants.Command.SpotSend,
+                0,
+            };
+        using var record = Message.From(unadmittedRecord);
+        await peer.Send(node.RoutingId).Message(record).Async(CancellationToken.None).Admitted;
+
+        // Admission is an ordered barrier after the unadmitted record. The
+        // application header above is deliberately incomplete: admission must
+        // fence it before application validation can report a protocol error.
+        using var admit = Message.From(
+            ZLinkServiceWireCodec.EncodeRouteAdmission(
+                ServiceWireConstants.Command.Admit,
+                "mesh",
+                peerEndpoint,
+                lifecycleGeneration: 1,
+                descriptorRevision: 1,
+                new Dictionary<string, uint>(StringComparer.Ordinal),
+                objectRole: (byte)ZLinkMeshNodeObjectRole.Server
+            )
+        );
+        await peer.Send(node.RoutingId).Message(admit).Async(CancellationToken.None).Admitted;
+        await WaitUntilAsync(() => node.Status().AdmittedPeerCount == 1);
+        Assert.Equal(0UL, monitor.Status().ProtocolErrors);
+        Assert.Equal(0UL, node.Status().PendingApplicationMessages);
+
+        using var invalidAdmittedRecord = Message.From(
+            infrastructure
+                ? ZLinkServiceWireCodec.EncodeRouteAdmission(
+                    ServiceWireConstants.Command.Update,
+                    "mesh",
+                    peerEndpoint,
+                    lifecycleGeneration: 2,
+                    descriptorRevision: 1,
+                    new Dictionary<string, uint>(StringComparer.Ordinal),
+                    objectRole: (byte)ZLinkMeshNodeObjectRole.Server
+                )
+                : unadmittedRecord
+        );
+        await peer.Send(node.RoutingId)
+            .Message(invalidAdmittedRecord)
+            .Async(CancellationToken.None)
+            .Admitted;
+        await WaitUntilAsync(() => monitor.Status().ProtocolErrors != 0);
+    }
+
     [Fact]
     public async Task RawReplyCannotCompleteNativeInfrastructureRequests()
     {

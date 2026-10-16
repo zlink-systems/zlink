@@ -276,6 +276,27 @@ final class ZLinkSameTargetActivationTest {
         assertSame(first.toCompletableFuture().join().spot(), joined.join().spot());
     }
 
+    @Test
+    void readyJoinPublishesRegistryReadinessBeforeItsCallerCanClose() {
+        var scheduled = new ConcurrentLinkedDeque<Runnable>();
+        var registry =
+                new ZLinkJavaInstanceSpotRegistry(
+                        new ZLinkStateLane(Runnable::run), scheduled::add);
+        registry.register("room", (id, generation) -> backendSpot(generation));
+        var first = registry.activate("spot", "room", 1).toCompletableFuture();
+        Runnable next;
+        while ((next = scheduled.poll()) != null) next.run();
+        assertTrue(first.isDone());
+
+        var closed =
+                registry.activate("spot", "room", 1)
+                        .thenApply(activation -> registry.close("spot", 1))
+                        .toCompletableFuture();
+        while ((next = scheduled.poll()) != null) next.run();
+        assertTrue(closed.join(), "successful Ready join left the registry pending");
+        registry.closeAll();
+    }
+
     private static ZLinkBackendSpot backendSpot(long generation) {
         return (ZLinkBackendSpot)
                 Proxy.newProxyInstance(

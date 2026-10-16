@@ -3953,7 +3953,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 sessionOwnerNodeGeneration: 19
             );
 
-            Assert.True(runtime.TryGetSessionActorBinding(actor.ActorId, out var binding));
+            Assert.True(runtime.TryGetSessionActorBinding(actor.ActorId, context, out var binding));
             await runtime.NotifyActorDisconnectedAsync(binding, CancellationToken.None);
 
             var relay = ZLinkFrameworkJsonPayloadCodec.Deserialize<ZLinkRemoteActorFrameRelay>(
@@ -13141,6 +13141,12 @@ public sealed partial class EntrySpotActorDispatchTests
     {
         private readonly CapturingSpot _entrySpot = new();
         private long _nextOperationId;
+
+        private static readonly Task NoRouteChange = new TaskCompletionSource().Task;
+        private const ulong StableRouteGeneration = 1;
+
+        public ZLinkPeerRouteObservation ObservePeerRoute(RoutingId target) =>
+            new(StableRouteGeneration, StableRouteGeneration, NoRouteChange);
 
         public CapturingSpotNode()
         {

@@ -288,6 +288,7 @@ export class ZLinkLocalNativeActorJoin {
     completionOperationId: ZLinkActorJoinOperationId | undefined,
     entrySpot: boolean
   ): Promise<ZLinkActorJoinRuntimeResult<Message>> {
+    const deadlineAtMs = timeoutMs === undefined ? undefined : performance.now() + timeoutMs;
     const actorType = state.actorType;
     if (actorType === undefined) {
       throw createInternalFrameworkException(
@@ -434,6 +435,7 @@ export class ZLinkLocalNativeActorJoin {
         target,
         relocationId,
         completionOperationId,
+        deadlineAtMs,
         ...(control.canonicalHandoffId === undefined || canonicalAdmission === undefined
           ? {}
           : {

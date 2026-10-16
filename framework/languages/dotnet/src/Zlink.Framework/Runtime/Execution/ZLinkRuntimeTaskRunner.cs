@@ -102,22 +102,41 @@ internal sealed class ZLinkRuntimeTaskRunner
 
     public bool TryRunDetached(string name, Func<CancellationToken, ValueTask> callback)
     {
-        return TryStart(name, callback, TaskCreationOptions.None, out _);
+        return TryStart(name, callback, out _);
     }
 
     public Task Run(string name, Func<CancellationToken, ValueTask> callback)
     {
-        return TryStart(name, callback, TaskCreationOptions.None, out var task)
-            ? task
-            : Task.CompletedTask;
+        return TryStart(name, callback, out var task) ? task : Task.CompletedTask;
     }
 
-    public Task RunLongRunning(string name, Func<CancellationToken, ValueTask> callback)
+    /// <summary>
+    /// Runs a loop that blocks in a native poll or wait. The loop is synchronous and owns one
+    /// dedicated thread until it returns, so a blocked loop never holds a ThreadPool worker.
+    /// </summary>
+    public Task RunLongRunning(string name, Action<CancellationToken> loop)
     {
-        return TryStart(name, callback, TaskCreationOptions.LongRunning, out var task)
-            ? task
-            : Task.CompletedTask;
+        return TryRunLongRunning(name, loop, out var task) ? task : Task.CompletedTask;
     }
+
+    public bool TryRunLongRunning(string name, Action<CancellationToken> loop, out Task task)
+    {
+        ArgumentNullException.ThrowIfNull(loop);
+        return TryStart(name, loop, out task);
+    }
+
+    /// <summary>
+    /// Starts <paramref name="loop"/> on a thread of its own. Every blocking native loop of the
+    /// framework starts here; none runs on a ThreadPool worker.
+    /// </summary>
+    internal static Task StartDedicatedThread(Action<object?> loop, object? state) =>
+        Task.Factory.StartNew(
+            loop,
+            state,
+            CancellationToken.None,
+            TaskCreationOptions.DenyChildAttach | TaskCreationOptions.LongRunning,
+            TaskScheduler.Default
+        );
 
     public async ValueTask StopAsync()
     {
@@ -129,17 +148,14 @@ internal sealed class ZLinkRuntimeTaskRunner
         await _supervisor.StopRunnerAsync(this, _ownsSupervisor).ConfigureAwait(false);
     }
 
-    private bool TryStart(
-        string name,
-        Func<CancellationToken, ValueTask> callback,
-        TaskCreationOptions creationOptions,
-        out Task task
-    )
+    // The work is either an asynchronous callback, which runs on the ThreadPool, or a
+    // synchronous blocking loop, which runs on a dedicated thread.
+    private bool TryStart(string name, Delegate work, out Task task)
     {
         var completion = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
-        var state = new TaskState(this, name, callback, _errorSink, _shutdownToken, completion);
+        var state = new TaskState(this, name, work, _errorSink, _shutdownToken, completion);
         var startedTask = completion.Task;
         var acceptsRunnerExecution =
             AmbientExecution.Value is { IsActive: true } lease
@@ -166,17 +182,8 @@ internal sealed class ZLinkRuntimeTaskRunner
         // Scheduling happens after supervisor admission, outside its state lane.
         // The callback carries its own completion directly; no outer Task<Task>,
         // Unwrap task or completion-registration task is needed.
-        if (creationOptions == TaskCreationOptions.LongRunning)
-            _ = Task.Factory.StartNew(
-                static value =>
-                {
-                    _ = RunDetachedCoreAsync((TaskState)value!);
-                },
-                state,
-                CancellationToken.None,
-                TaskCreationOptions.DenyChildAttach | TaskCreationOptions.LongRunning,
-                TaskScheduler.Default
-            );
+        if (work is Action<CancellationToken>)
+            _ = StartDedicatedThread(static value => RunLoopCore((TaskState)value!), state);
         else
             ThreadPool.QueueUserWorkItem(
                 static value =>
@@ -201,27 +208,58 @@ internal sealed class ZLinkRuntimeTaskRunner
         AmbientExecution.Value = lease;
         try
         {
-            await state.Callback(state.ShutdownToken).ConfigureAwait(false);
+            await ((Func<CancellationToken, ValueTask>)state.Work)(state.ShutdownToken)
+                .ConfigureAwait(false);
         }
-        catch (OperationCanceledException) when (state.ShutdownToken.IsCancellationRequested) { }
-        catch (Exception ex)
+        catch (Exception exception)
         {
-            try
-            {
-                state.ErrorSink.ReportRuntimeTaskException(state.Name, ex);
-            }
-            catch (Exception reportingFailure)
-            {
-                state.Runner.ReportErrorSinkFailure(state.Name, reportingFailure);
-            }
+            Report(state, exception);
         }
         finally
         {
-            lease.Deactivate();
-            AmbientExecution.Value = previous;
-            state.Completion.TrySetResult();
-            state.Runner.RemoveCompletedTask(state.Completion.Task);
+            Complete(state, lease, previous);
         }
+    }
+
+    private static void RunLoopCore(TaskState state)
+    {
+        var previous = AmbientExecution.Value;
+        var lease = new ExecutionLease(state.Runner.ExecutionOwner, state.Runner);
+        AmbientExecution.Value = lease;
+        try
+        {
+            ((Action<CancellationToken>)state.Work)(state.ShutdownToken);
+        }
+        catch (Exception exception)
+        {
+            Report(state, exception);
+        }
+        finally
+        {
+            Complete(state, lease, previous);
+        }
+    }
+
+    private static void Report(TaskState state, Exception exception)
+    {
+        if (exception is OperationCanceledException && state.ShutdownToken.IsCancellationRequested)
+            return;
+        try
+        {
+            state.ErrorSink.ReportRuntimeTaskException(state.Name, exception);
+        }
+        catch (Exception reportingFailure)
+        {
+            state.Runner.ReportErrorSinkFailure(state.Name, reportingFailure);
+        }
+    }
+
+    private static void Complete(TaskState state, ExecutionLease lease, ExecutionLease? previous)
+    {
+        lease.Deactivate();
+        AmbientExecution.Value = previous;
+        state.Completion.TrySetResult();
+        state.Runner.RemoveCompletedTask(state.Completion.Task);
     }
 
     public void ReportErrorSinkFailure(string name, Exception exception)
@@ -234,7 +272,7 @@ internal sealed class ZLinkRuntimeTaskRunner
     private sealed record TaskState(
         ZLinkRuntimeTaskRunner Runner,
         string Name,
-        Func<CancellationToken, ValueTask> Callback,
+        Delegate Work,
         IZLinkRuntimeFailureReporter ErrorSink,
         CancellationToken ShutdownToken,
         TaskCompletionSource Completion

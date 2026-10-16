@@ -29,6 +29,11 @@
 #include <utility>
 #include <vector>
 
+namespace zlink::framework::detail
+{
+class delay_owner_t;
+}
+
 namespace zlink::framework::runtime::stateful
 {
 
@@ -333,22 +338,14 @@ struct eligible_relocation_unit_t
                                     const relocation_ingress_batch_t &)>
           send_relocation_data;
         std::function<void (const object_ref_t &, const turn_record_t &)> send_application;
-        enum class cutover_enqueue_t
-        {
-            not_enqueued,
-            enqueued,
-            uncertain
-        };
-        std::function<task_t<cutover_enqueue_t> (const protocol::relocation_cutover_t &)>
-          send_cutover;
+        std::function<task_t<bool> (const protocol::relocation_cutover_t &)> send_cutover;
         /* The unit Restore absolute deadline, owned by the source: from it the
          * source settles authority with its Preserve fence (01 §10). */
         std::chrono::steady_clock::time_point restore_deadline{};
         /* The existing host lifecycle ends source settlement after shutdown. */
         std::function<bool ()> source_stopped;
-        /* Whether the ordered connection to the target is currently up; a
-         * reconnect after a break resends the batch and cutover (28 §4.4). */
-        std::function<bool ()> target_connected;
+        // Core selected generation and admission readiness, observed by MeshNode.
+        std::function<std::pair<std::uint64_t, bool> ()> target_route;
         // This is valid only after an exact target failure and before a
         // Cutover enqueue.  It fences source admission restoration.
         std::function<bool ()> abort_target_before_cutover;
@@ -530,6 +527,7 @@ class maintenance_runtime_t
       std::uint64_t advertised_receive_chunk_limit_bytes = 0);
 
     void attach_relocation_wire (raw_relocation_replay_coordinator_t &wire) noexcept;
+    void bind_delay_owner (detail::delay_owner_t &owner) noexcept { _delay_owner = &owner; }
     /* Expired-owner terminal (28 §4.4): replies Unavailable once to each
      * pending request of the object and drops its accepted records. */
     void attach_unavailable_terminal (std::function<void (const object_ref_t &)> terminal) noexcept;
@@ -658,6 +656,7 @@ class maintenance_runtime_t
     std::shared_ptr<relocation_store_port_t> _relocations;
     relocation_limits_t _limits;
     observer_t _observer;
+    detail::delay_owner_t *_delay_owner = nullptr;
     mutable std::mutex _gate_mutex;
     relocation_gate_snapshot_t _gate;
     raw_relocation_replay_coordinator_t *_relocation_wire = nullptr;

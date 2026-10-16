@@ -98,9 +98,9 @@ export interface ZLinkBackendMeshNode {
       'kind'
     >
   ): Promise<boolean>;
-  shutdown(timeoutMs: number): RequestResult;
+  shutdown(timeoutMs: number): Promise<RequestResult>;
   publishDraining?(): Promise<void>;
-  close(): void;
+  close(): Promise<void>;
   addChannelName(name: string): void;
   setChannelWeight(name: string, weight: number): Promise<void>;
   setPlacementWeight(weight: number): Promise<void>;
@@ -185,6 +185,10 @@ export interface ZLinkBackendMeshNode {
     readonly lifecycleGeneration: bigint;
   }): void;
   isObjectClientNodeDirectTarget?(targetRid: unknown): boolean;
+  observePeerRoute?(
+    targetRid: unknown
+  ): import('../../foundation/durable-service-request').PeerRouteObservation;
+  hasPeerRouteOrConnectionIntent?(targetRid: unknown, endpoint: string): boolean;
   isPeerRouteReady?(targetRid: unknown, lifecycleGeneration?: bigint): boolean;
   sendToNode(
     targetRid: unknown,
@@ -211,7 +215,11 @@ export interface ZLinkBackendMeshNode {
   requestInfrastructureControlFrames?(
     targetRid: unknown,
     frames: readonly Uint8Array[],
-    options?: { readonly timeoutMs?: number }
+    options?: {
+      readonly timeoutMs?: number;
+      readonly signal?: AbortSignal;
+      readonly onSubmitted?: (signal: AbortSignal) => Promise<void>;
+    }
   ): Promise<readonly Uint8Array[]>;
   requestToNode(
     targetRid: unknown,

@@ -76,8 +76,8 @@ async function main() {
   } finally {
     subscriber.close();
     publisher.close();
-    node.shutdown(1000);
-    node.close();
+    await node.shutdown(1000);
+    await node.close();
     await context.dispose();
   }
 }

@@ -66,6 +66,8 @@ function pair() {
             ? { descriptor: { lifecycleGeneration: nodes.get(peer).generation } }
             : undefined
       },
+      observePeerRoute: () => ({ generation: 1n, ready: true }),
+      observePeerRouteChanged: () => () => {},
       observePeerConnectionIntentRemoved(callback) {
         disconnect.add(callback);
         return () => disconnect.delete(callback);

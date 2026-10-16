@@ -1,3 +1,4 @@
+import { requestDurableService } from '../../foundation/durable-service-request';
 import {
   decodeStreamWireFrame,
   decodeStreamWireHeader,
@@ -184,12 +185,12 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   private stateful?: ServiceStatefulRuntime;
   private readyHandler?: (domains: number) => number;
   private maintenanceTimer?: NodeJS.Timeout;
-  private pumping = false;
+  private pumpTask?: Promise<void>;
   private readable = 0;
   private readonly onReadable = (receiveReady: boolean, routeReady: boolean): void => {
     if (receiveReady) this.readable |= 1;
     if (routeReady) this.readable |= 2;
-    if (!this.closed && !this.pumping) void this.pump();
+    this.pump();
   };
   private readonly onMaintenance = (): void => {
     this.maintenanceTimer = undefined;
@@ -202,7 +203,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     );
     this.stateful?.expireOperations(nowMs, turnDeadlineMs);
     this.scheduleMaintenance();
-    void this.pump();
+    this.pump();
   };
   private readonly onPendingOperationsChanged = (): void => this.scheduleMaintenance();
   private nextPeerIntent = 1n;
@@ -417,15 +418,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
           }
         }
       },
-      onPeerDisconnected: (nodeRoutingId, endpoint) => {
-        for (const [intentId, peer] of this.peerIntents) {
-          if (
-            peer.endpoint === endpoint &&
-            (peer.nodeRoutingId === undefined || peer.nodeRoutingId === nodeRoutingId)
-          ) {
-            this.peerIntents.delete(intentId);
-          }
-        }
+      onPeerDisconnected: (_nodeRoutingId, endpoint) => {
         for (const handler of this.peerDisconnectedHandlers) handler(endpoint);
       }
     });
@@ -447,7 +440,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     try {
       runtime.setReadableHandler(this.onReadable);
     } catch (error) {
-      this.close();
+      void this.close().catch((failure) => runtime.reportInfrastructureFailure(failure));
       throw error;
     }
     this.scheduleMaintenance();
@@ -471,8 +464,8 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     return await this.requireStateful().sendMessageFollowNotification(targetNodeRid, record);
   }
 
-  shutdown(_timeoutMs: number): RequestResultValue {
-    this.close();
+  async shutdown(_timeoutMs: number): Promise<RequestResultValue> {
+    await this.close();
     return RequestResult.Ok;
   }
 
@@ -481,15 +474,15 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     await this.requireRuntime().updateLocalDescriptor({ state: 'draining' });
   }
 
-  close(): void {
-    if (this.closed) return;
+  async close(): Promise<void> {
+    this.closed = true;
     if (this.maintenanceTimer !== undefined) clearTimeout(this.maintenanceTimer);
     this.maintenanceTimer = undefined;
+    if (this.pumpTask !== undefined) await this.pumpTask;
     this.stateful?.close();
     this.stateful = undefined;
     this.runtime?.close();
     this.runtime = undefined;
-    this.closed = true;
   }
 
   addChannelName(name: string): void {
@@ -636,6 +629,23 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     return this.requireRuntime().isObjectClientNodeDirectTarget(String(targetRid));
   }
 
+  observePeerRoute(targetRid: unknown) {
+    return this.requireRuntime().observePeerRoute(String(targetRid));
+  }
+
+  hasPeerRouteOrConnectionIntent(targetRid: unknown, endpoint: string): boolean {
+    const rid = String(targetRid);
+    if (this.requireRuntime().hasSelectedPeerRoute(rid)) return true;
+    for (const intent of this.peerIntents.values()) {
+      if (
+        intent.nodeRoutingId === rid ||
+        (intent.nodeRoutingId === undefined && intent.endpoint === endpoint)
+      )
+        return true;
+    }
+    return false;
+  }
+
   isPeerRouteReady(targetRid: unknown, lifecycleGeneration?: bigint): boolean {
     return this.requireRuntime().isPeerRouteReady(String(targetRid), lifecycleGeneration);
   }
@@ -680,12 +690,20 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   async requestInfrastructureControlFrames(
     targetRid: unknown,
     frames: readonly Uint8Array[],
-    options?: { readonly timeoutMs?: number }
+    options?: {
+      readonly timeoutMs?: number;
+      readonly signal?: AbortSignal;
+      readonly onSubmitted?: (signal: AbortSignal) => Promise<void>;
+    }
   ): Promise<readonly Uint8Array[]> {
-    return await this.requireRuntime().requestService(
+    return requestDurableService(
+      this.requireRuntime(),
       String(targetRid),
-      frames.map((frame) => Buffer.from(frame)),
-      options?.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
+      frames,
+      performance.now() + (options?.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS),
+      'relocation control',
+      options?.signal,
+      options?.onSubmitted
     );
   }
 
@@ -1558,29 +1576,30 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     }
   }
 
-  private async pump(): Promise<void> {
-    if (this.isClosed() || this.pumping) return;
-    this.pumping = true;
-    try {
-      do {
-        const ready = this.readable;
-        this.readable = 0;
-        const more = await this.requireRuntime().pumpBatch((ready & 1) !== 0, (ready & 2) !== 0);
-        if (more) {
-          // Yield only after actual progress, retaining readiness across the
-          // existing batch limits until receive reports no data.
-          this.readable |= 1;
-          await yieldToIO();
-        }
-      } while (!this.closed && this.readable !== 0);
-    } finally {
-      this.pumping = false;
-      this.scheduleMaintenance();
-    }
-  }
-
-  private isClosed(): boolean {
-    return this.closed;
+  private pump(): void {
+    if (this.closed || this.pumpTask !== undefined) return;
+    const runtime = this.requireRuntime();
+    // Install the owned task before running callbacks that can signal readiness again.
+    this.pumpTask = Promise.resolve().then(async () => {
+      try {
+        do {
+          const ready = this.readable;
+          this.readable = 0;
+          const more = await runtime.pumpBatch((ready & 1) !== 0, (ready & 2) !== 0);
+          if (more) {
+            // Yield only after actual progress, retaining readiness across the
+            // existing batch limits until receive reports no data.
+            this.readable |= 1;
+            await yieldToIO();
+          }
+        } while (!this.closed && this.readable !== 0);
+      } catch (error) {
+        runtime.reportInfrastructureFailure(error);
+      } finally {
+        this.pumpTask = undefined;
+        this.scheduleMaintenance();
+      }
+    });
   }
 
   private notifyReady(): void {

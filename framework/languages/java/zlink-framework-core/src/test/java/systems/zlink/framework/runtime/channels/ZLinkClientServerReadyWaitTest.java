@@ -252,6 +252,7 @@ final class ZLinkClientServerReadyWaitTest {
                             .toCompletableFuture();
             assertTrue(pending.cancel(false));
             fixture.admit();
+            assertTrue(fixture.businessSendStarted.await(1, TimeUnit.SECONDS));
             assertEquals(1, fixture.businessSends.get());
         }
     }
@@ -409,6 +410,7 @@ final class ZLinkClientServerReadyWaitTest {
         private final AtomicInteger disconnects = new AtomicInteger();
         private final AtomicInteger businessRequests = new AtomicInteger();
         private final AtomicInteger businessSends = new AtomicInteger();
+        private final CountDownLatch businessSendStarted = new CountDownLatch(1);
         private CompletableFuture<Void> sendAdmission = CompletableFuture.completedFuture(null);
         private final CountDownLatch businessRequestStarted = new CountDownLatch(1);
         private final AtomicReference<Duration> requestTimeout = new AtomicReference<>();
@@ -464,6 +466,7 @@ final class ZLinkClientServerReadyWaitTest {
                                                 case "equals" -> proxy == args[0];
                                                 case "send" -> {
                                                     businessSends.incrementAndGet();
+                                                    businessSendStarted.countDown();
                                                     yield sendAdmission;
                                                 }
                                                 case "close" -> {

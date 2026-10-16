@@ -9,7 +9,8 @@ const {
   SmoothWeightedSelection
 } = require('../../packages/framework/dist/runtime/foundation/service-weighted-selection');
 const {
-  SERVICE_WIRE_REQUIRED_CAPABILITY
+  SERVICE_WIRE_REQUIRED_CAPABILITY,
+  ServiceWireCommand
 } = require('../../packages/framework/dist/runtime/foundation/service-wire-constants.generated');
 
 function serviceNode(nodeRoutingId, weight) {
@@ -75,7 +76,7 @@ test('object placement uses current descriptor capacity and keeps selection unch
   assert.equal(topology.selectObjectPlacementWithStatus('T', () => false).status, 'unavailable');
   assert.equal(topology.selectObjectPlacement('T').nodeRoutingId, 'a');
   assert.equal(
-    topology.admit(objectNode('a', 5, { descriptorRevision: 2n, activeCapacityUsed: 10 }), 'a'),
+    topology.admit(objectNode('a', 5, { descriptorRevision: 2n, activeCapacityUsed: 10 }), 'a', undefined, undefined, ServiceWireCommand.update),
     'admitted'
   );
   assert.equal(topology.selectObjectPlacement('T').nodeRoutingId, 'b');
@@ -121,7 +122,7 @@ test('weighted selection keeps its cumulative state across descriptor updates', 
         descriptorRevision: 2n,
         activeCapacityUsed: 1
       },
-      'connection-a'
+      'connection-a', undefined, undefined, ServiceWireCommand.update
     ),
     'admitted'
   );

@@ -615,9 +615,8 @@ public sealed class StandaloneActorRelocationPrecommitTests
         var inner = new ZLinkInMemoryLocationStore();
         var store = new LostStoredResponseAuthorityStore(inner);
         var source = await PrepareCapturedSourceAsync(inner);
-        //  Relocation flow §4.4: a failed boundary submission and Store
-        //  failures are not answers; the source keeps the attempt, submits the
-        //  whole batch again, and settles with Preserve at the Restore deadline.
+        // Relocation flow §4.4: a new selected route requires the whole batch
+        // again even when submission on the previous route succeeded.
         store.FailNextReads(3);
         var submissions = 0;
         var settlement = await ZLinkStandaloneActorRelocationRuntime.SettleSourceAsync(
@@ -630,9 +629,19 @@ public sealed class StandaloneActorRelocationPrecommitTests
             source.Prepare.TargetAttemptGeneration,
             Stopwatch.GetElapsedTime(0) + TimeSpan.FromMilliseconds(200),
             static () => true,
-            _ => ValueTask.FromResult(++submissions > 1),
+            _ =>
+            {
+                submissions++;
+                return ValueTask.CompletedTask;
+            },
             TimeSpan.FromMilliseconds(5),
-            CancellationToken.None
+            CancellationToken.None,
+            () =>
+                new ZLinkPeerRouteObservation(
+                    submissions == 0 ? 1UL : 2UL,
+                    submissions == 0 ? 1UL : 2UL,
+                    NoRouteChange
+                )
         );
 
         Assert.Equal(ZLinkSourceSettlement.SourcePreserved, settlement.Outcome);
@@ -661,6 +670,77 @@ public sealed class StandaloneActorRelocationPrecommitTests
     }
 
     [Fact]
+    public async Task Source_settlement_does_not_resubmit_without_a_route_change()
+    {
+        var store = new ZLinkInMemoryLocationStore();
+        var source = await PrepareCapturedSourceAsync(store);
+        var submissions = 0;
+        var settlement = await ZLinkStandaloneActorRelocationRuntime.SettleSourceAsync(
+            store,
+            source.Key,
+            source.Steady,
+            new ZLinkRelocationStored(string.Empty, 0, default, default),
+            source.RelocationId,
+            source.Target,
+            source.Prepare.TargetAttemptGeneration,
+            Stopwatch.GetElapsedTime(0) + TimeSpan.FromMilliseconds(200),
+            static () => true,
+            _ =>
+            {
+                submissions++;
+                return ValueTask.CompletedTask;
+            },
+            TimeSpan.FromMilliseconds(5),
+            CancellationToken.None,
+            ReadyRoute
+        );
+        Assert.Equal(ZLinkSourceSettlement.SourcePreserved, settlement.Outcome);
+        Assert.Equal(1, submissions);
+    }
+
+    [Fact]
+    public async Task Target_commit_then_authority_removal_ends_source_without_preserve()
+    {
+        var inner = new ZLinkInMemoryLocationStore();
+        var source = await PrepareCapturedSourceAsync(inner);
+        var committed = await new ZLinkStandaloneActorRelocationPrecommitCoordinator(
+            inner
+        ).CommitTargetAsync(
+            source.Captured,
+            source.Envelope,
+            source.Prepare,
+            source.TargetAuthority,
+            CancellationToken.None
+        );
+        Assert.IsType<ZLinkAuthorityCompareExchangeResult.Deleted>(
+            await inner.CompareExchangeAuthorityAsync(
+                source.Key,
+                committed.StoreVersion,
+                new ZLinkAuthorityMutation.Delete()
+            )
+        );
+        var store = new LostStoredResponseAuthorityStore(inner);
+        var settlement = await ZLinkStandaloneActorRelocationRuntime.SettleSourceAsync(
+            store,
+            source.Key,
+            source.Steady,
+            new ZLinkRelocationStored(string.Empty, 0, default, default),
+            source.RelocationId,
+            source.Target,
+            source.Prepare.TargetAttemptGeneration,
+            Stopwatch.GetElapsedTime(0) + TimeSpan.FromSeconds(30),
+            static () => true,
+            static _ => throw new InvalidOperationException("Missing must not resubmit."),
+            TimeSpan.FromMilliseconds(5),
+            CancellationToken.None,
+            ReadyRoute
+        );
+        Assert.Equal(ZLinkSourceSettlement.SourceLeaseExpired, settlement.Outcome);
+        Assert.Equal(0, store.CompareExchangeCount);
+        Assert.Equal(1, store.ReadCount);
+    }
+
+    [Fact]
     public async Task Source_settlement_ends_on_source_lease_expiry_without_a_preserve_write()
     {
         var inner = new ZLinkInMemoryLocationStore();
@@ -677,9 +757,10 @@ public sealed class StandaloneActorRelocationPrecommitTests
             source.Prepare.TargetAttemptGeneration,
             Stopwatch.GetElapsedTime(0),
             static () => false,
-            static _ => ValueTask.FromResult(true),
+            static _ => ValueTask.CompletedTask,
             TimeSpan.FromMilliseconds(5),
-            CancellationToken.None
+            CancellationToken.None,
+            ReadyRoute
         );
 
         Assert.Equal(ZLinkSourceSettlement.SourceLeaseExpired, settlement.Outcome);
@@ -721,9 +802,10 @@ public sealed class StandaloneActorRelocationPrecommitTests
             source.Prepare.TargetAttemptGeneration,
             Stopwatch.GetElapsedTime(0),
             static () => true,
-            static _ => ValueTask.FromResult(true),
+            static _ => ValueTask.CompletedTask,
             TimeSpan.FromMilliseconds(5),
-            CancellationToken.None
+            CancellationToken.None,
+            ReadyRoute
         );
 
         Assert.Equal(ZLinkSourceSettlement.TargetCommitted, settlement.Outcome);
@@ -754,9 +836,10 @@ public sealed class StandaloneActorRelocationPrecommitTests
                 source.Prepare.TargetAttemptGeneration,
                 Stopwatch.GetElapsedTime(0),
                 static () => true,
-                static _ => ValueTask.FromResult(true),
+                static _ => ValueTask.CompletedTask,
                 TimeSpan.Zero,
-                CancellationToken.None
+                CancellationToken.None,
+                ReadyRoute
             )
         );
         Assert.Same(validation, observed);
@@ -1356,4 +1439,8 @@ public sealed class StandaloneActorRelocationPrecommitTests
             CancellationToken cancellationToken = default
         ) => inner.ScanAsync(request, cancellationToken);
     }
+
+    private static ZLinkPeerRouteObservation ReadyRoute() => new(1, 1, NoRouteChange);
+
+    private static readonly Task NoRouteChange = new TaskCompletionSource().Task;
 }

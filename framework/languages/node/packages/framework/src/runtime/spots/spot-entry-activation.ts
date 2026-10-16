@@ -50,7 +50,7 @@ import {
   DefaultZLinkSpotHandlerRegistry
 } from './spot-handler-registry';
 import { DefaultZLinkSpotOutbound, type ZLinkSpotRoutedTransport } from './spot-outbound';
-import { createProviderInstance } from './spot-provider';
+import { createFreshProviderInstance } from './spot-provider';
 import { ZLinkSpotSerialTurnExecutor } from './spot-serial-turn-executor';
 import { ZLinkSpotSerialExecutor } from './spot-serial-executor';
 import { invokeSpotClosing } from './spot-closing';
@@ -269,7 +269,7 @@ export class ZLinkEntrySpotActivation {
   }
 
   async create(): Promise<void> {
-    const entrySpot = await createProviderInstance(
+    const entrySpot = await createFreshProviderInstance(
       this.options.entrySpotType,
       this.options.providerResolver,
       this.context
@@ -332,7 +332,10 @@ export class ZLinkEntrySpotActivation {
     await cleanup(() => this.timers.dispose());
     await cleanup(() => this.spotSerialExecutor.close());
     await cleanup(() => disposeLifecycleHandlers(this.entrySpot, this.options.detachedTaskRunner));
-    await cleanup(() => this.options.nativeSpot.dispose());
+    await cleanup(async () => {
+      await this.options.entryActorRuntime?.releaseMembers?.(this.options.spotNodeName);
+      await this.options.nativeSpot.dispose();
+    });
     if (this.initialized) {
       this.lifecycleMetrics.closed('entry');
     }

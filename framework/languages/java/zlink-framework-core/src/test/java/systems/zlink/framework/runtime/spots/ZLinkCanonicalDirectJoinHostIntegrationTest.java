@@ -439,8 +439,11 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
 
             ZLinkActor sourceActor = sourceActors.localActor(ACTOR_ID).orElseThrow();
             ZLinkBackendActorRef sourceRef = sourceActors.currentRef(sourceActor);
-            sourceActors.bindNativeSession(
-                    sourceActor, inertSpotNode(), sourceRef, SOURCE_RID, SESSION_RID, 7, 0);
+            sourceActors
+                    .bindNativeSession(
+                            sourceActor, inertSpotNode(), sourceRef, SOURCE_RID, SESSION_RID, 7)
+                    .toCompletableFuture()
+                    .join();
 
             CompletableFuture<Void> activeTurn = new CompletableFuture<>();
             ZLinkSerialExecutionQueue sourceQueue =
@@ -1283,6 +1286,14 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                             new Class<?>[] {ZLinkInternalMeshNode.class},
                             (proxy, method, arguments) ->
                                     switch (method.getName()) {
+                                        case "observePeerRoute" ->
+                                                new ZLinkInternalMeshNode.PeerRouteObservation(
+                                                        1, true);
+                                        case "targetLifecycleEnded" -> false;
+                                        case "onStateChanged" -> {
+                                            ((Runnable) arguments[0]).run();
+                                            yield (AutoCloseable) () -> {};
+                                        }
                                         case "status" -> status;
                                         case "setActorLeftHandler" -> {
                                             if (sourceSide) {
@@ -1509,20 +1520,21 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
         }
 
         @Override
-        public void prepareBoundSession(
+        public CompletionStage<Void> prepareBoundSession(
                 Object actor,
                 ZLinkStandaloneActorRelocationStagingOwner.Request request,
                 ZLinkServiceM6BWireCodec.ActorRouteFence actorRoute,
                 ZLinkServiceM6BWireCodec.SessionOwnerFence session) {
             var prepared = (ZLinkActorRuntime.PreparedTransferredActor) actor;
-            actorRuntime.bindNativeSession(
-                    prepared.actor(),
-                    pushSpotNode(),
-                    actorRoute.actor(),
-                    session.nodeRid(),
-                    session.sessionRid(),
-                    session.bindingGeneration(),
-                    0);
+            return actorRuntime
+                    .bindNativeSession(
+                            prepared.actor(),
+                            pushSpotNode(),
+                            actorRoute.actor(),
+                            session.nodeRid(),
+                            session.sessionRid(),
+                            session.bindingGeneration())
+                    .thenApply(ignored -> null);
         }
 
         @Override

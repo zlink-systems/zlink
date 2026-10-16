@@ -708,7 +708,7 @@ Operation이 deadline까지 완료 조건을 만족하지 못한 결과를
 | Framework가 relay-ready reply acceptance 전에 deadline 때문에 callback을 취소하거나 작업이 deadline을 넘는다. | `Blocked/DeadlineExceeded` |
 | Target이 relay-ready reply 전에 Restore를 명시적으로 거부해 source queue를 복원할 수 있다. | 아직 cutover를 시도하지 않은 source workload를 복원하고 `Blocked/RelocationFailed` |
 | Relay-ready 뒤 Restore deadline에 target commit이 확정되지 않는다. | Source가 [Location runtime §6.1·§10](01-location-runtime.ko.md#61-read와-cas)의 `Preserve` fence로 authority를 확정한다. 모든 unit의 source fence가 이기면 `Serving`과 `Blocked/RelocationFailed`, 모든 unit의 target commit이 확인되면 `Relocated/None`, 양쪽에 commit된 unit이 있으면 `Error`와 `Blocked/RelocationFailed`다. Fence 결과가 불확정이면 source lease가 유효한 동안 기존 Store 실패 정책에 따라 보관과 판정을 계속한다. |
-| Source owner lease가 `Preserve` 성공 전에 만료된다. | [공통 relocation §4.4](04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)의 expired-owner terminal로 해당 unit을 실패 처리하고 host는 `Error`, 결과는 `Blocked/RelocationFailed`(원인: source owner lease 만료)로 끝낸다. Target staging은 [Location runtime §10](01-location-runtime.ko.md#10-store-응답을-받지-못했을-때)을 따른다. |
+| [Location runtime §10](01-location-runtime.ko.md#10-store-응답을-받지-못했을-때)이 source 작업을 expired-owner terminal로 끝낸다(source owner lease 만료 또는 authority `Missing`). | [공통 relocation §4.4](04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)의 expired-owner terminal로 해당 unit을 실패 처리하고 host는 `Error`, 결과는 `Blocked/RelocationFailed`로 끝낸다. 원인은 §10이 확정한 조건이다. Target staging은 [Location runtime §10](01-location-runtime.ko.md#10-store-응답을-받지-못했을-때)을 따른다. |
 
 Relay-ready 전 명시적 실패 또는 그 뒤 source `Preserve` fence 성공은 해당 unit의 source
 authority와 queue를 재개한다. Target commit이 확인된 unit은 source로 돌아오지 않는다.

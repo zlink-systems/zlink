@@ -29,7 +29,9 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
     private Task? _disposeTask;
     private Task? _receiveLoop;
     private Task? _livenessLoop;
-    private Task? _monitorLoop;
+
+    // The monitor loop closes the monitor when it returns.
+    private readonly ZLinkReceiveSocketOwner _monitorOwner;
     private IZLinkBackendSocketPoller? _receivePoller;
 
     public ZLinkStreamNodeRuntime(
@@ -51,6 +53,7 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
         NodeName = nodeName;
         Socket = socket;
         Monitor = monitor;
+        _monitorOwner = new ZLinkReceiveSocketOwner(CloseMonitorAsync);
         BoundEndpoint = boundEndpoint;
         AdvertisedEndpoint = advertisedEndpoint;
         _taskRunner = taskRunner;
@@ -147,20 +150,7 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
         await CaptureAsync(() => DisposeSessionsAsync(sessions, deadline)).ConfigureAwait(false);
         await CaptureAsync(_sessionIngress.DisposeAsync).ConfigureAwait(false);
         await CaptureAsync(_controlIngress.DisposeAsync).ConfigureAwait(false);
-        if (Monitor is { } monitor)
-            await CaptureAsync(monitor.DisposeAsync).ConfigureAwait(false);
-
-        if (_monitorLoop is not null)
-            try
-            {
-                await _monitorLoop;
-            }
-            catch (OperationCanceledException) { }
-            catch (ObjectDisposedException) { }
-            catch (Exception exception)
-            {
-                failures.Add(exception);
-            }
+        await CaptureAsync(_monitorOwner.CloseAsync).ConfigureAwait(false);
 
         if (_livenessLoop is not null)
             try
@@ -270,30 +260,26 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
         _receivePoller ??= Socket.CreateReceivePoller();
         _receiveLoop = _taskRunner.RunLongRunning(
             $"stream-recv:{NodeName}",
-            runtimeToken =>
-            {
-                RunReceiveLoopUntilStopped(runtimeToken);
-                return ValueTask.CompletedTask;
-            }
+            RunReceiveLoopUntilStopped
         );
-        _monitorLoop = _taskRunner.RunLongRunning(
-            $"stream-monitor:{NodeName}",
-            runtimeToken => new ValueTask(RunMonitorLoopUntilStoppedAsync(runtimeToken))
-        );
+        _monitorOwner.Start(_taskRunner, $"stream-monitor:{NodeName}", RunMonitorLoopUntilStopped);
         _livenessLoop = _taskRunner.Run(
             $"stream-liveness:{NodeName}",
             runtimeToken => new ValueTask(RunLivenessLoopUntilStoppedAsync(runtimeToken))
         );
     }
 
-    private async Task RunMonitorLoopUntilStoppedAsync(CancellationToken runtimeToken)
+    private void RunMonitorLoopUntilStopped(CancellationToken runtimeToken)
     {
         using var stop = CancellationTokenSource.CreateLinkedTokenSource(
             _stopSource.Token,
             runtimeToken
         );
-        await RunMonitorLoopAsync(stop.Token).ConfigureAwait(false);
+        RunMonitorLoop(stop.Token);
     }
+
+    private ValueTask CloseMonitorAsync() =>
+        Monitor is { } monitor ? monitor.DisposeAsync() : ValueTask.CompletedTask;
 
     private async Task RunLivenessLoopUntilStoppedAsync(CancellationToken runtimeToken)
     {
@@ -782,21 +768,17 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
     private sealed class ZLinkStreamPeerAdmissionException(string message)
         : InvalidOperationException(message);
 
-    private async Task RunMonitorLoopAsync(CancellationToken cancellationToken)
+    private void RunMonitorLoop(CancellationToken cancellationToken)
     {
-        var backoff = new ZLinkPollingBackoff();
+        var monitor = Monitor!;
         while (!cancellationToken.IsCancellationRequested)
         {
             try
             {
-                if (!Monitor!.TryRecv(out var monitorEvent))
-                {
-                    await backoff.NoDataAsync(cancellationToken).ConfigureAwait(false);
+                if (!monitor.Wait(ReceivePollInterval))
                     continue;
-                }
-
-                backoff.Reset();
-                await OnMonitorEventAsync(monitorEvent).ConfigureAwait(false);
+                while (monitor.TryRecv(out var monitorEvent))
+                    OnMonitorEventAsync(monitorEvent).GetAwaiter().GetResult();
             }
             catch (Exception) when (cancellationToken.IsCancellationRequested)
             {
@@ -807,15 +789,13 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
                 return;
             }
             catch (ZlinkRecvException ex)
-                when (cancellationToken.IsCancellationRequested
-                    || ex.Result
+                when (ex.Result
                         is ZlinkRecvException.ErrorCode.InternalError
                             or ZlinkRecvException.ErrorCode.InvalidHandle
                 )
             {
                 return;
             }
-            await Task.Yield();
         }
     }
 

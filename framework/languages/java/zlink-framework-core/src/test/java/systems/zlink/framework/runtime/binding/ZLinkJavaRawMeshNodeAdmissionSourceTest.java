@@ -9,6 +9,7 @@ import systems.zlink.contracts.core.Zlink;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceNodeDescriptor;
+import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 
 import java.time.Duration;
 import java.util.concurrent.*;
@@ -21,6 +22,10 @@ final class ZLinkJavaRawMeshNodeAdmissionSourceTest {
                 var source = new ZLinkJavaRawMeshNode(context, "mesh")) {
             start(source, "rejected-observer");
             var peerRid = RoutingId.from("rejected-peer");
+            // The direct admission fixture represents a record on the selected route.
+            var routesField = ZLinkJavaRawMeshNode.class.getDeclaredField("selectedRoutes");
+            routesField.setAccessible(true);
+            routesField.set(source, java.util.Map.of(peerRid, 0L));
             var descriptorField = ZLinkJavaRawMeshNode.class.getDeclaredField("localDescriptor");
             descriptorField.setAccessible(true);
             var local = (ZLinkServiceNodeDescriptor) descriptorField.get(source);
@@ -70,8 +75,7 @@ final class ZLinkJavaRawMeshNodeAdmissionSourceTest {
                                                 else rejected.complete(null);
                                             })) {
                 initial.get(1, TimeUnit.SECONDS);
-                int hello =
-                        systems.zlink.framework.runtime.protocol.ServiceWireConstants.COMMAND_HELLO;
+                int hello = ServiceWireConstants.COMMAND_HELLO;
                 var wire =
                         new systems.zlink.framework.runtime.internal.service
                                 .ZLinkServiceM6AWireCodec();

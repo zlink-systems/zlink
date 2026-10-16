@@ -25,6 +25,7 @@
 #include <zlink/framework/contracts/locations/options.hpp>
 
 #include "runtime/actors/actor_ref_access.hpp"
+#include "runtime/locations/actor_authority_payload.hpp"
 #include <zlink/framework/contracts/locations/stores.hpp>
 
 #include <chrono>
@@ -54,6 +55,7 @@ class raw_relocation_replay_coordinator_t;
 
 namespace zlink::framework::detail
 {
+class delay_owner_t;
 class spot_node_runtime_t;
 }
 
@@ -596,11 +598,13 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     }
 
     bool capture_flow () const { return !_flow_capture || _flow_capture (); }
+    void set_delay_owner (detail::delay_owner_t &owner) noexcept { _delay_owner = &owner; }
 
     bool connect_peer (const std::string &endpoint,
                        std::optional<zlink::routing_id_t> expected = std::nullopt,
                        std::uint64_t expected_lifecycle_generation = 0,
-                       std::string security_identity = "default");
+                       std::string security_identity = "default",
+                       bool automatic = false);
     void expect_peer (const std::string &endpoint,
                       const zlink::routing_id_t &expected,
                       std::uint64_t expected_lifecycle_generation,
@@ -667,15 +671,15 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
      * that Actor on this node is refused by the leftover. */
     using actor_join_recovery_rollback_t =
       std::function<void (const std::string &, const stateful::object_ref_t &)>;
-    using actor_join_authority_spot_resolver_t =
-      std::function<std::optional<std::tuple<std::string, std::string, std::uint64_t>> (
+    using actor_relocation_authority_resolver_t =
+      std::function<std::optional<runtime::actor_authority_payload_t> (
         const stateful::object_ref_t &)>;
     using actor_join_committed_authority_adopter_t =
       std::function<bool (const stateful::object_ref_t &, std::uint64_t, std::uint64_t)>;
     void
     configure_actor_join_relocation (actor_join_relocation_prepare_validator_t prepare_validator,
                                      actor_join_recovery_consumer_t recovery_consumer,
-                                     actor_join_authority_spot_resolver_t authority_spot_resolver,
+                                     actor_relocation_authority_resolver_t authority_spot_resolver,
                                      actor_join_recovery_rollback_t recovery_rollback,
                                      actor_join_committed_authority_adopter_t authority_adopter);
     void configure_instance_spot_operations (
@@ -841,6 +845,8 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     std::optional<stateful::object_ref_t> resolve_spot (const std::string &spot_id) const;
 
   private:
+    std::optional<stateful::object_ref_t> resolve_actor (std::string_view actor_id) const;
+
     struct instance_activation_ready_t
     {
         authority_snapshot_t snapshot;
@@ -902,7 +908,7 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     bool complete_local_actor_join (pending_operation_t operation,
                                     std::string actor_type,
                                     stateful::membership_token_t membership,
-                                    actor_join_result_t result,
+                                    const actor_join_operation_result_t &result,
                                     const std::vector<zlink::message_t> &parts);
     zlink::submit_result_t enqueue_local_actor_message (
       const actor_ref_t &target,
@@ -940,6 +946,7 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
 
     host_options_t _options;
     std::function<bool ()> _flow_capture;
+    detail::delay_owner_t *_delay_owner = nullptr;
     std::string _entry_spot_id;
     std::shared_ptr<mesh::raw_mesh_node_owner_t> _transport;
     std::unique_ptr<stateful::raw_relocation_replay_coordinator_t> _relocation_wire;
@@ -957,7 +964,7 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     actor_join_relocation_prepare_validator_t _actor_join_relocation_prepare_validator;
     actor_join_recovery_consumer_t _actor_join_recovery_consumer;
     actor_join_recovery_rollback_t _actor_join_recovery_rollback;
-    actor_join_authority_spot_resolver_t _actor_join_authority_spot_resolver;
+    actor_relocation_authority_resolver_t _actor_relocation_authority_resolver;
     actor_join_committed_authority_adopter_t _actor_join_committed_authority_adopter;
     std::shared_ptr<const instance_spot_activation_materializer_t> _instance_spot_materializer;
     std::map<std::string, std::shared_ptr<instance_activation_operation_t>>
@@ -1192,7 +1199,7 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
 zlink::submit_result_t reply (const reply_token_t &token,
                               const std::vector<zlink::message_t> &parts);
 bool actor_join_reply (const reply_token_t &token,
-                       actor_join_result_t result,
+                       result_t<actor_join_result_t> result,
                        const std::vector<zlink::message_t> &parts);
 
 using mesh_node_t = public_host_runtime_t;
