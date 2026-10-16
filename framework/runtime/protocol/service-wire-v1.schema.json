@@ -854,18 +854,19 @@
       "routeControl": "one-way-no-response-command-45-reserved-never-sent-or-accepted",
       "sealTimeout": "3000ms-then-close-physical-session-and-clean-binding-held-messages-and-seal",
       "abort": "before-cutover-durable-abort-and-source-queue-restore-before-matching-sessionRelocationRoute-abort-one-way-only-for-sealed-participants",
-      "duplicate": "same-relocation-identity-returns-recorded-sealResult-within-result-lifetime-coordinator-uses-first-result-only",
+      "duplicate": "same-relocation-and-actor-returns-recorded-sealResult-closed-seal-record-ignored-with-warning-coordinator-uses-first-result-only",
       "sessionOwnerRestart": "stale-node-generation-protocol-error-no-route-switch",
       "sealResultType": "session-seal-result",
       "sealDecisionOwner": "session-actor-binding-section-8.3-session-owner-only",
       "bindingAbsent": "terminal-without-binding-seal-held-messages-or-seal-timeout-excluded-from-sessionBindings-and-command-44",
       "resultRecord": {
-        "identity": "relocation-identity",
+        "identity": "relocation-identity-and-actor-id",
         "lookup": "recorded-result-before-current-binding-reassessment",
-        "sealedLifetime": "existing-seal-lifetime-command-44-abort-seal-timeout-or-physical-session-end",
+        "sealedLifetime": "open-until-command-44-abort-or-seal-timeout-then-closed-record-kept-per-binding-until-next-seal-or-binding-removal",
         "bindingAbsentLifetime": "SessionRelocationSealTimeout-from-decision",
-        "afterExpiry": "reassess-current-binding-under-session-actor-binding-section-8.3",
-        "duplicateFence": "original-request-fields-must-match-else-protocol-error"
+        "afterExpiry": "bindingAbsent-only-reassess-current-binding-cannot-match-old-binding-generation",
+        "duplicateFence": "original-request-fields-must-match-else-protocol-error",
+        "staleFence": "expectedOwnerLeaseGeneration-below-current-binding-route-owner-lease-generation-is-mismatch"
       },
       "lateBindingAbsentRoute": "warning-late_session_route_update-ignore-without-changing-new-binding-or-another-relocation-seal"
     },
@@ -8385,7 +8386,7 @@
         "phases": [
           "preparing"
         ],
-        "duplicate": "same-relocation-identity-returns-recorded-sealResult-within-result-lifetime-coordinator-uses-first-result-only",
+        "duplicate": "same-relocation-and-actor-returns-recorded-sealResult-closed-seal-record-ignored-with-warning-coordinator-uses-first-result-only",
         "reorder": "first-result-for-matching-sessionRelocationSeal-is-terminal-ignore-later-results",
         "loss": "duplicate-sessionRelocationSeal-replays-recorded-result-within-result-lifetime"
       },

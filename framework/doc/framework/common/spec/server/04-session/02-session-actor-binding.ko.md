@@ -561,15 +561,18 @@ Store CAS가 결정했으므로 Session owner가 Store나 Actor authority mirror
 있다. Session owner는 command 42를 아래 순서로 한 번 판정한다. 판정은 §8.1의 Session owner 한
 곳에서만 하며, 조회 범위는 그 Session owner가 소유한 모든 Session이다.
 
-1. **같은 relocation identity의 결과 기록**이 있으면 그 결과를 그대로 반환한다. Current binding을
-   다시 판정하지 않는다.
+1. **같은 relocation identity와 같은 `ActorId`의 결과 기록**이 있으면 아래 결과 기록 규칙으로
+   처리한다. Current binding을 다시 판정하지 않는다. 같은 relocation의 다른 Actor participant는 각자의
+   기록을 가진다.
 2. Session owner 안에서 command 42의 `ActorId`에 대한 **current binding을 찾는다.** SessionRid나
    binding generation으로 먼저 좁히지 않는다.
    - Current binding이 없으면 **exact binding 부재**다.
    - Current binding이 있고 Session identity·SessionRid, binding generation,
      `ObjectGeneration`이 command 42와 모두 같으면 **seal 설치**다. 그 binding에 다른 relocation
      identity의 seal이 이미 있으면 불일치다.
-   - Current binding이 있으나 위 값 중 하나라도 다르면 **불일치**다.
+   - Current binding이 있으나 위 값 중 하나라도 다르면 **불일치**다. Command 42의
+     `expectedOwnerLeaseGeneration`이 current binding route에 보관한 `OwnerLeaseGeneration`(§8.2)보다
+     작으면 이미 끝난 relocation의 요청이므로 역시 불일치다.
 
 | 판정 | Session owner 처리 |
 |---|---|
@@ -580,12 +583,23 @@ Store CAS가 결정했으므로 Session owner가 Store나 Actor authority mirror
 `bindingAbsent`는 seal을 설치했다는 뜻이 아니라 seal할 current binding이 없다는 뜻이다. 이 결과는
 Session binding과 seal에 관한 결과만 나타내며, disconnect callback의 진행 상태를 알려 주지 않는다.
 
-**결과 기록과 수명.** Session owner는 `sealed`와 `bindingAbsent` 결과를 relocation identity별로
-기록한다. 이 기록은 binding이나 seal이 아니며 1단계 조회에만 쓴다. `sealed` 기록은 기존 seal의
-수명(command 44 적용, abort, seal timeout, physical Session 종료)을 따른다. `bindingAbsent` 기록은
-판정 시점부터 `SessionRelocationSealTimeout` 동안 유지한다. 기록이 사라진 뒤 같은 command 42가
-도착하면 2단계부터 다시 판정하며, 그 결과는 그 시점의 current binding만 나타낸다. 별도 message ACK
-journal이나 두 번째 binding registry를 두지 않는다.
+**결과 기록과 수명.** Session owner는 relocation identity와 `ActorId`를 키로 결과를 기록한다. 이 기록은
+binding이나 seal이 아니며 1단계 조회에만 쓴다. 같은 키의 command 42는 원 요청의 모든 field가 같아야
+하며, 다르면 protocol error로 거부한다.
+
+- `sealed` 기록은 seal이 열려 있는 동안 같은 command 42에 `sealed`를 다시 반환한다. Seal이 command 44
+  적용, abort 또는 seal timeout으로 끝나면 기록은 **닫힌 기록**이 되어 그 binding에 남는다. 한 binding은
+  마지막 닫힌 기록 하나만 보관하며, 다음 seal이 설치되거나 binding이 제거되면 함께 지운다. 닫힌 기록과
+  같은 command 42는 reply 없이 `late_session_relocation_seal` Warning만 남기고 무시한다. 이미 끝난
+  relocation의 seal을 다시 설치하지 않는다.
+- `bindingAbsent` 기록은 판정 시점부터 `SessionRelocationSealTimeout` 동안 유지한다. 기록이 사라진 뒤
+  같은 command 42가 도착하면 2단계부터 다시 판정한다. 그 사이 생긴 binding은 더 큰 binding
+  generation을 가지므로 command 42와 일치하지 않고, 재판정 결과는 부재 또는 불일치만 될 수 있다. Seal은
+  설치되지 않는다.
+- Binding이 제거되면 그 binding의 닫힌 기록도 사라진다. 그 뒤 같은 command 42는 부재로 판정된다. 이는
+  그 시점의 사실과 같다.
+
+별도 message ACK journal이나 두 번째 binding registry를 두지 않는다.
 
 **Coordinator 처리.** Relocation coordinator는 participant마다 처음 받은 command 43만 사용하고, 같은
 relocation identity의 이후 command 43은 무시한다. `bindingAbsent`를 받은 participant는 bind되지 않은

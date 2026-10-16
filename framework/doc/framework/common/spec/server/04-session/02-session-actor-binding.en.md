@@ -687,15 +687,18 @@ notification or a logical notification. The Session owner decides command 42 onc
 order below. Only the Session owner of §8.1 decides, and the lookup scope is every Session
 that Session owner owns.
 
-1. If a **result record for the same relocation identity** exists, return that result as is.
-   The current binding is not decided again.
+1. If a **result record for the same relocation identity and the same `ActorId`** exists, handle it
+   under the result-record rules below. The current binding is not decided again. Other Actor
+   participants of the same relocation each have their own record.
 2. Within the Session owner, **look up the current binding for command 42's `ActorId`.** Do not
    narrow first by SessionRid or binding generation.
    - If there is no current binding, it is **exact binding absent**.
    - If a current binding exists and its Session identity/SessionRid, binding generation, and
      `ObjectGeneration` all equal command 42's, it is **seal installed**. If that binding already
      holds a seal of a different relocation identity, it is a mismatch.
-   - If a current binding exists but any of those values differs, it is a **mismatch**.
+   - If a current binding exists but any of those values differs, it is a **mismatch**. If command
+     42's `expectedOwnerLeaseGeneration` is lower than the `OwnerLeaseGeneration` kept in the current
+     binding route (§8.2), the request belongs to a finished relocation and is also a mismatch.
 
 | Decision | Session owner handling |
 |---|---|
@@ -707,13 +710,24 @@ that Session owner owns.
 seal. The result describes only the Session binding and seal, and says nothing about the
 progress of a disconnect callback.
 
-**Result record and lifetime.** The Session owner records `sealed` and `bindingAbsent` results
-per relocation identity. The record is neither a binding nor a seal and is used only for step 1.
-A `sealed` record follows the existing seal lifetime (command 44 applied, abort, seal timeout,
-physical Session close). A `bindingAbsent` record is kept for `SessionRelocationSealTimeout`
-from the decision. When the same command 42 arrives after the record is gone, the decision
-starts again from step 2, and its result describes only the current binding at that point. No
-separate message ACK journal or second binding registry is kept.
+**Result record and lifetime.** The Session owner records results keyed by relocation identity and
+`ActorId`. The record is neither a binding nor a seal and is used only for step 1. A command 42 with the
+same key must match every field of the original request; otherwise it is rejected as a protocol error.
+
+- While the seal is open, a `sealed` record returns `sealed` again for the same command 42. When the
+  seal ends by command 44, abort, or seal timeout, the record becomes a **closed record** and stays on
+  that binding. A binding keeps only its last closed record, removed when the next seal is installed or
+  the binding is removed. A command 42 matching a closed record is ignored with only a
+  `late_session_relocation_seal` Warning and no reply. The seal of a finished relocation is never
+  installed again.
+- A `bindingAbsent` record is kept for `SessionRelocationSealTimeout` from the decision. When the same
+  command 42 arrives after the record is gone, the decision starts again from step 2. A binding created
+  in between has a larger binding generation and doesn't match command 42, so the new decision can only
+  be absent or mismatch. No seal is installed.
+- When a binding is removed, its closed record goes with it. A later identical command 42 is decided as
+  absent, which matches the facts at that point.
+
+No separate message ACK journal or second binding registry is kept.
 
 **Coordinator handling.** The relocation coordinator uses only the first command 43 it receives
 for each participant and ignores later command 43s of the same relocation identity. A
