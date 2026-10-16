@@ -127,7 +127,9 @@ export function decodeDynamicValue(bytes: Buffer): unknown {
         arrayValue.push(decodeDynamicValue(readBytesPayload(field)));
         break;
       case DynamicValueField.Bytes:
-        bytesValue = Buffer.from(readBytesPayload(field));
+        // Copy into an unpooled ArrayBuffer: a pooled Buffer may share the
+        // encoded payload's backing store, which decoded values must not expose.
+        bytesValue = copyToOwnedBuffer(readBytesPayload(field));
         break;
       default:
         break;
@@ -293,4 +295,10 @@ function readVarint(
     if ((byte & 0x80) === 0) return { value, offset };
     shift += 7n;
   }
+}
+
+function copyToOwnedBuffer(source: Uint8Array): Buffer<ArrayBuffer> {
+  const owned = new ArrayBuffer(source.byteLength);
+  new Uint8Array(owned).set(source);
+  return Buffer.from(owned);
 }
