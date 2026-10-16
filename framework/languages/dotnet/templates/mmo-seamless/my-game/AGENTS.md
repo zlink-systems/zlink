@@ -10,37 +10,25 @@ The project layout and feature procedure below describe where to add gameplay. T
 
 ## Development commands
 
-### Windows PowerShell 7
-
-Run these commands from this directory after installing the prerequisites in the README. The solution includes every server role and the e2e client, so build it before invoking the compiled client directly.
+Default builds and e2e run nodes and the client in Docker without a host SDK. Run these commands from this directory.
 
 ```powershell
-dotnet build server/MyGame.sln
-# Run all scenarios, including a build.
+pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
 pwsh -NoProfile -File ./run-e2e.ps1
-# Select scenarios in canonical order.
 pwsh -NoProfile -File ./run-e2e.ps1 -Scenario cross,border,reconnect
-# Reuse the existing build.
-pwsh -NoProfile -File ./run-e2e.ps1 -NoBuild
-# Check structure without Docker or server startup.
-dotnet e2e/MyGame.E2E/bin/Debug/net8.0/MyGame.E2E.dll --root . --check-structure
+pwsh -NoProfile -File ./run-e2e.ps1 --check-structure
 ```
 
-`-NoBuild` uses the existing build, while `--check-structure` validates composition without starting Docker or servers. After changes, run the structure check and affected scenarios, and compare failures with [Known issues](README.md#known-issues--알려진-문제).
-
-### Linux and WSL Bash
-
-Bash uses the same solution and e2e client. When combining build reuse with scenario selection, put `--no-build` first because the runner checks its first argument to decide whether to build.
+Bash provides the same workflow:
 
 ```bash
-dotnet build server/MyGame.sln
+./run-e2e.sh --build-only
 ./run-e2e.sh
 ./run-e2e.sh --scenario cross,border,reconnect
-./run-e2e.sh --no-build
-dotnet e2e/MyGame.E2E/bin/Debug/net8.0/MyGame.E2E.dll --root . --check-structure
+./run-e2e.sh --check-structure
 ```
 
-The default scenario order is `cross,border,reconnect,update`; keep the lists in `e2e/MyGame.E2E/Scenarios.cs` and the descriptor consistent. [Local e2e](README.md#local-e2e) explains runner startup and cleanup.
+For host process debugging, install the .NET 8 SDK and add `--local` or `-Local`. Add `--no-build` or `-NoBuild` only with an existing local Debug build. Keep canonical scenario order and assertions; compare first failures with Known issues in the README.
 
 ## Project layout and extension points
 
@@ -210,7 +198,7 @@ Investigate Framework failures using actual replies, events, and lifecycle resul
 
 Preserve the first failing run and read its logs before deciding whether to run it again. An intermittent failure is an observed defect; a subsequent pass does not invalidate it. `.logs/run-<id>/` contains effective settings written by `WorldRun.cs` at node startup and logs for each node.
 
-Settings files are `zone-a.json`, `zone-b.json`, `instance.json`, and `session.json`; a replaced A uses the prefix `zone-a-replacement`. `ManagedProcess.cs` records diagnostic stderr in `<node>.err.log` and readiness/control stdout in `<node>.out.log`. Redis logs are `redis-start.log`, `redis-port.log`, `redis.log`, and `redis-stop.log`; shell runner build output is in `.logs/build.log`.
+Settings files are `zone-a.json`, `zone-b.json`, `instance.json`, and `session.json`; a replaced A uses the prefix `zone-a-replacement`. `ManagedProcess.cs` records diagnostic stderr in `<node>.err.log` and readiness/control stdout in `<node>.out.log`. Redis logs are `redis-start.log`, `redis-port.log`, `redis.log`, and `redis-stop.log`; local build output is in `.logs/build.log`. Docker build, Redis, and outer cleanup logs are in `.logs/docker-<project>/`.
 
 ### Diagnostic levels
 
@@ -232,7 +220,7 @@ Read the failure fields and preceding stage together without filtering categorie
 
 ### Supplementary tracing and cleanup
 
-Set supplementary Spot discovery tracing in the parent environment before starting nodes. In PowerShell, use this environment variable.
+In local process mode, set supplementary Spot discovery tracing in the parent environment before starting nodes. Docker nodes do not inherit host environment variables. In PowerShell, use this environment variable.
 
 ```powershell
 $env:ZLINK_DEBUG_FRAMEWORK_SPOT_DISCOVERY = "1"

@@ -16,10 +16,10 @@ The initial `zlink.structure.json` uses the landing page's `mmo-seamless` compos
 
 ## Prerequisites
 
-- .NET SDK 8.0 or later with the .NET and ASP.NET Core 8 runtimes.
 - Docker Engine with Docker Compose v2, reachable from the current shell.
+- Docker Desktop must use Linux containers; default execution needs no host .NET SDK.
 - Bash for Linux, WSL, or macOS; PowerShell 7 for Windows.
-- A platform supported by the published native `Zlink` package. The local verification targets Windows x64 and WSL Linux x64; macOS execution also requires native assets for the target architecture.
+- Linux native assets supported by the published `Zlink` package. Local process debugging additionally requires the .NET 8 SDK and ASP.NET Core 8 runtime.
 
 Packages come from public NuGet only. `Directory.Packages.props` pins the Framework package family to `0.30.0`. This project has no dependency on a ZLink source checkout or local package feed.
 
@@ -28,17 +28,18 @@ Packages come from public NuGet only. `Directory.Packages.props` pins the Framew
 Run commands from this project root:
 
 ```sh
-dotnet build server/MyGame.sln
+./run-e2e.sh --build-only
 ```
 
-On Windows, set `DOTNET_SYSTEM_NET_DISABLEIPV6=1` in the current PowerShell session before building:
+PowerShell builds the same Dockerfile targets:
 
 ```powershell
-$env:DOTNET_SYSTEM_NET_DISABLEIPV6 = "1"
-dotnet build server/MyGame.sln
+pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
 ```
 
-The solution includes all server roles and the C# e2e client. It can also be opened directly in Visual Studio or Rider.
+`Dockerfile` owns fixed `SDK_IMAGE`, `RUNTIME_IMAGE`, and `DOCKER_CLI_IMAGE` defaults. Replace the appropriate base ARG when adopting a ZLink base image. Session, Zone, and Instance share the node image because their runtime dependencies match; each retains its own executable entry point. The ASP.NET Core runtime supplies shared hosting dependencies. The runner target adds Docker CLI and structure inputs without including the SDK.
+
+Scripts remove unique image tags after each invocation. Docker retains build layers for subsequent runs.
 
 ## Local e2e
 
@@ -50,9 +51,13 @@ The solution includes all server roles and the C# e2e client. It can also be ope
 pwsh -NoProfile -File ./run-e2e.ps1
 ```
 
-Both scripts build the solution and call the same C# orchestrator. It checks the structure, starts a uniquely named Compose project with an ephemeral Redis port, starts four server processes, waits for their explicit readiness responses, executes the scenarios, and cleans up its processes and container. Node endpoints and configuration overrides are generated per run under `.logs/`. Docker does not expose Redis beyond loopback.
+Both scripts build images and call the same C# orchestrator inside a runner container. A unique Compose project/network contains Redis and the runner. The runner checks structure before starting nodes. Nodes share its network namespace, preserving loopback listeners and OS-assigned ports without host port mappings. Redis publishes an ephemeral loopback port for local debugging.
+
+The runner creates each node with interactive stdin, copies its configuration with `docker cp`, and attaches through `docker start -a -i`. `ManagedProcess` retains readiness, drain, shutdown, and replacement controls. Only the runner mounts the Docker socket; use a trusted local daemon. Scripts remove their labeled containers, Compose project, and image tags. Cleanup failure returns exit code 1.
 
 Node stderr logs (`<node>.err.log`) include Framework message flow records because dispatch diagnostics use `Normal`. Inspect these logs from the first failing run.
+
+On Unix sockets, Bash runs the runner with the caller's UID/GID and the socket's group so retained logs remain writable by the caller. Windows uses Docker Desktop's filesystem mapping. Build, Redis, and outer cleanup logs are in `.logs/docker-<project>/`; node settings and control logs are in `.logs/run-<id>/`.
 
 The default runs all four scenarios. To select scenarios, use:
 
@@ -66,14 +71,16 @@ pwsh -NoProfile -File ./run-e2e.ps1 -Scenario cross,border,reconnect
 
 Selection retains the canonical scenario order. Unknown or duplicate names fail before node startup. Exit status includes cleanup failures even when all selected scenarios pass.
 
-After building, `--no-build` skips compilation on Bash; `-NoBuild` does the same on PowerShell:
+For host process debugging, install the .NET 8 SDK and add `--local` or `-Local`. Redis remains in Docker. After a local build, `--no-build` or `-NoBuild` skips compilation:
 
 ```sh
-./run-e2e.sh --no-build
+./run-e2e.sh --local
+./run-e2e.sh --local --no-build
 ```
 
 ```powershell
-pwsh -NoProfile -File ./run-e2e.ps1 -NoBuild
+pwsh -NoProfile -File ./run-e2e.ps1 -Local
+pwsh -NoProfile -File ./run-e2e.ps1 -Local -NoBuild
 ```
 
 | Scenario | Observable behavior |
@@ -85,7 +92,7 @@ pwsh -NoProfile -File ./run-e2e.ps1 -NoBuild
 
 The client also requests a Dungeon User Spot from the Instance node through `GetOrCreate`. Scenario results use `✓`/`✗` with a total and a nonzero exit code on failure. A failed run retains diagnostics; inspect that run before repeating it.
 
-Structure validation can run without Docker:
+Pass `--check-structure` to either default script to check composition without starting nodes. After a local build, structure validation can also run without Docker:
 
 ```sh
 dotnet e2e/MyGame.E2E/bin/Debug/net8.0/MyGame.E2E.dll --root . --check-structure
@@ -95,22 +102,20 @@ Message Follow is explicitly configured to 30 seconds in shared hosting. The wai
 
 Every e2e run validates the composition before starting nodes. `--check-structure` checks the supplied files without starting servers. Verify missing Entry and User Spot declarations with temporary input copies during development. The checker does not require the initial preset's node counts, deployment IDs or edge indices.
 
-## Known issues / 알려진 문제
+## Known issues
 
 The pinned public Framework `0.30.0` has the following defects. The template preserves the assertions and reports failures; it does not compensate with retries or delays. Fixes for #1690 and #1691 are scheduled for `0.30.1`.
 
-- Zone startup is blocked: startup validation calls `ZoneSpot.Configure()` with an empty `Context.SpotId`. The public Spot contract requires an instance identity, which this application uses to select adjacent-zone subscription topics. This fails with `ArgumentOutOfRangeException` through `ZLinkSpotStartupValidator.ValidateAsync` before scenarios run. No fixed topic is registered to compensate; the Framework must provide the contracted Context.
+- [#1697](https://github.com/zlink-systems/zlink/issues/1697): Zone startup is blocked because startup validation calls `ZoneSpot.Configure()` with an empty `Context.SpotId`. The public Spot contract requires an instance identity, which this application uses to select adjacent-zone subscription topics. This fails with `ArgumentOutOfRangeException` through `ZLinkSpotStartupValidator.ValidateAsync` before scenarios run. No fixed topic is registered to compensate; the Framework must provide the contracted Context.
 
 - [#1690](https://github.com/zlink-systems/zlink/issues/1690): Session node `ShutdownAsync` with a bound connection can return `TeardownFailed` with native errno 110. Cleanup errors remain in the result and process logs, even if selected scenarios passed.
 - [#1691](https://github.com/zlink-systems/zlink/issues/1691): After relocation admission seal, an already accepted handler's `BoundSession.Send` can fail with `application admission is sealed`. Once startup is available, the default `update` scenario also requires this fix; passing cross, border, and reconnect does not establish update continuity.
-
-공개 Framework `0.30.0`의 시작 검사가 빈 `SpotId`로 `Configure()`를 호출하여 Zone 기동이 실패한다. 고정 topic으로 보상하지 않으며, Framework의 Context 계약 수정이 필요하다. `update`의 코드와 기대값은 유지하며 기본 실행에서도 제외하지 않는다. 기동 결함과 #1690·#1691을 수정한 package에서 전체 시나리오를 다시 검증해야 한다.
 
 ## Deployment sequence
 
 The JSON files in `server/config/` are examples. Set a reachable Redis endpoint and a shared, isolated key prefix for each game environment. Set routable mesh endpoints and the public Session STREAM endpoint. Configure authentication before exposing this minimal example to players.
 
-1. Start Redis. For local manual deployment, use `docker compose -p my-game-local up -d --wait` and obtain its chosen host port with `docker compose -p my-game-local port location 6379`.
+1. Start Redis. For local manual deployment, use `docker compose -p my-game-local up -d --wait location` and obtain its chosen host port with `docker compose -p my-game-local port location 6379`.
 2. Start Zone A using `server/config/zone-a.json`. Wait for its `READY` response after Zones 1–3 are created.
 3. Start Zone B using `server/config/zone-b.json`. Wait for Zones 4–6. A's capacity is three; B's capacity is six so it can receive A's Zones during drain.
 4. Start the Instance and Session processes using their configurations. Each process accepts `--config <path>`.
@@ -132,6 +137,6 @@ Fixed Zones are bootstrapped serially: Zone A fills its three-Spot capacity befo
 
 ## 한국어 실행 안내
 
-이 프로젝트는 Session, Zone A·B, Instance node와 Redis를 실행한다. `run-e2e.sh`와 `run-e2e.ps1`은 같은 C# 실행기를 사용하며, cross·border·reconnect·update의 실제 동작을 확인한 뒤 자신이 만든 process와 container를 정리한다. 로그는 `.logs/`에 남는다.
+Docker와 Compose v2를 설치한 뒤 Bash에서 `./run-e2e.sh`, PowerShell 7에서 `pwsh -NoProfile -File ./run-e2e.ps1`을 실행한다. 기본 실행은 빌드부터 node와 e2e client 실행까지 컨테이너에서 처리하므로 호스트 .NET SDK가 필요 없다. 로그는 `.logs/`에 남으며 자신이 만든 컨테이너·network·이미지 태그를 자동으로 제거한다.
 
-Zone A가 Zone 1–3을 만든 뒤 Zone B를 기동한다. A의 용량은 3이며 B의 용량은 6이다. Update 때 A의 workload를 B로 옮기고, 종료 가능한 상태를 확인한 뒤 A를 교체한다. 새 A의 `Bootstrap`은 `false`이며 기존 Zone은 B에 유지된다. 게임 로직을 추가할 위치와 공개 API 사용 규칙은 `AGENTS.md`를 따른다.
+로컬 디버깅은 .NET 8 SDK를 설치한 뒤 `--local` 또는 `-Local`로 실행한다. 공개 0.30.0에서는 #1697로 Zone이 READY 이전에 실패한다. 시나리오의 기대값을 유지하고 최초 실패 로그와 종료 코드를 보존한다. 게임 확장 위치와 공개 API 규칙은 `AGENTS.md`를 따른다.

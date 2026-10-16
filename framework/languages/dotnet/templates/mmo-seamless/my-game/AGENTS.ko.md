@@ -10,37 +10,25 @@
 
 ## 개발 명령
 
-### Windows PowerShell 7
-
-README의 사전 요구 사항을 설치한 상태에서 이 디렉터리를 기준으로 실행한다. solution에는 server 역할별 프로젝트와 e2e client가 포함되므로, 컴파일된 client를 직접 실행하기 전에 빌드한다.
+기본 실행은 Docker에서 node와 client를 모두 실행하므로 호스트 SDK가 필요 없다. 이 디렉터리에서 다음 명령을 실행한다.
 
 ```powershell
-dotnet build server/MyGame.sln
-# Run all scenarios, including a build.
+pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
 pwsh -NoProfile -File ./run-e2e.ps1
-# Select scenarios in canonical order.
 pwsh -NoProfile -File ./run-e2e.ps1 -Scenario cross,border,reconnect
-# Reuse the existing build.
-pwsh -NoProfile -File ./run-e2e.ps1 -NoBuild
-# Check structure without Docker or server startup.
-dotnet e2e/MyGame.E2E/bin/Debug/net8.0/MyGame.E2E.dll --root . --check-structure
+pwsh -NoProfile -File ./run-e2e.ps1 --check-structure
 ```
 
-`-NoBuild`는 기존 빌드를 사용하고, `--check-structure`는 Docker와 server를 시작하지 않고 구성을 검사한다. 변경 뒤에는 구조 검사와 영향을 받는 scenario를 실행하며, 실패는 [Known issues](README.md#known-issues--알려진-문제)와 대조한다.
-
-### Linux·WSL Bash
-
-Bash에서도 같은 solution과 e2e client를 사용한다. 빌드 생략과 scenario 선택을 함께 지정할 때는 runner가 첫 인자에서 빌드 생략을 확인하므로 `--no-build`를 먼저 둔다.
+Bash도 같은 절차를 실행한다.
 
 ```bash
-dotnet build server/MyGame.sln
+./run-e2e.sh --build-only
 ./run-e2e.sh
 ./run-e2e.sh --scenario cross,border,reconnect
-./run-e2e.sh --no-build
-dotnet e2e/MyGame.E2E/bin/Debug/net8.0/MyGame.E2E.dll --root . --check-structure
+./run-e2e.sh --check-structure
 ```
 
-기본 scenario 순서는 `cross,border,reconnect,update`이며 `e2e/MyGame.E2E/Scenarios.cs`와 descriptor의 목록을 함께 유지한다. runner의 기동·정리 동작은 [Local e2e](README.md#local-e2e)가 설명한다.
+로컬 process 디버깅은 .NET 8 SDK를 설치한 뒤 `--local` 또는 `-Local`로 실행한다. 로컬 Debug 빌드가 있으면 `--no-build` 또는 `-NoBuild`를 추가한다. 시나리오 순서와 assertion은 유지하며 최초 실패를 README의 Known issues와 대조한다.
 
 ## 프로젝트 구성과 확장 위치
 
@@ -232,7 +220,7 @@ options.ConfigureDispatch().Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
 
 ### 보조 trace와 정리
 
-Spot discovery의 추가 trace는 node를 시작하기 전 부모 환경에서 설정한다. PowerShell에서는 다음 환경 변수를 사용한다.
+로컬 process 모드의 Spot discovery 추가 trace는 node를 시작하기 전 부모 환경에서 설정한다. 기본 Docker node는 호스트 환경 변수를 상속하지 않는다. PowerShell에서는 다음 환경 변수를 사용한다.
 
 ```powershell
 $env:ZLINK_DEBUG_FRAMEWORK_SPOT_DISCOVERY = "1"
