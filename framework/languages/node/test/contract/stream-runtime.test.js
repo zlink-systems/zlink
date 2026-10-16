@@ -2977,6 +2977,7 @@ test('command 42 seal is exact and idempotent while command 43 echoes its immuta
   const retry = await host.boundSessionRelay.boundSessions
     .receiveServiceWireSessionRelocationSeal(seal);
   assert.deepEqual(first, {
+    sealResult: 'sealed',
     relocation: seal.relocation,
     coordinator: seal.coordinator,
     actor: seal.actor,
@@ -3072,6 +3073,7 @@ test('M1 actorJoin command 42 waits for every pre-seal accepted Actor frame to f
 
   const sealed = await sealing;
   assert.deepEqual(sealed, {
+    sealResult: 'sealed',
     relocation: serviceSessionRelocationSeal(actor.actorId).relocation,
     coordinator: serviceSessionRelocationSeal(actor.actorId).coordinator,
     actor: serviceSessionRelocationSeal(actor.actorId).actor,
@@ -4422,7 +4424,7 @@ test('source and target command 36 push reach the client before command 44', asy
     actorNodeGeneration: 4n,
     sealId: 'off-wire-owner-advance-seal'
   };
-  await aggregate.owner.sealRelocation(seal, {
+  await aggregate.sealRelocation(seal, {
     objectGeneration: 5n,
     authorityOwnerGeneration: 11n,
     bindingGeneration: 1n,
@@ -5190,7 +5192,7 @@ test('command 42 exact fences reject stale bindings and command 44 exact retry i
       ...seal,
       actor: {
         ...seal.actor,
-        actor: { ...seal.actor.actor, nodeRid: 'stale-source' }
+        ownerLeaseGeneration: 19n
       }
     },
     {
@@ -8735,11 +8737,13 @@ async function testActorRouteAggregate(
   });
 
   const owner = {
-    sealRelocation: (...args) => registry.sealRelocation(...args),
+    prepareSessionRelocationSeal: (...args) => registry.prepareSessionRelocationSeal(...args),
+    clearSessionRelocationResults: () => registry.clearSessionRelocationResults(),
+    acceptSessionRelocationRoute: (value) => registry.acceptSessionRelocationRoute(value),
     relocationSnapshot: (actorId, sealId) => registry.relocationSnapshot(actorId, sealId),
     applyRelocation: (...args) => registry.applyRelocation(...args),
     observeRelocationTerminal: (...args) => registry.observeRelocationTerminal(...args),
-    clearRelocation: (actorId, error) => registry.clearRelocation(actorId, error),
+    clearRelocation: (...args) => registry.clearRelocation(...args),
     async committedRoute(actorId) {
       const route = await registry.route(actorId);
       return route === undefined
@@ -8759,6 +8763,7 @@ async function testActorRouteAggregate(
     },
     owner,
     port,
+    sealRelocation: (...args) => registry.sealRelocation(...args),
     async publish(actorRef, releaseSeal) {
       const previous = await registry.route(actorRef.actorId);
       assert.ok(previous);

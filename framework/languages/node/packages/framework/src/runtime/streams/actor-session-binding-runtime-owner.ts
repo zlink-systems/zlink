@@ -1,19 +1,23 @@
 import type { RoutingId } from '../../contracts';
+import type {
+  ServiceSessionRelocationSeal,
+  ServiceSessionRelocationRoute
+} from '../foundation/service-stateful-wire-codec';
 import type { ActorRef } from '../../contracts';
 import type {
   ZLinkActorSessionAuthorityFence,
-  ZLinkActorSessionRelocationClaim,
   ZLinkActorSessionRelocationSnapshot,
-  ZLinkActorSessionRouteFence
+  ZLinkPreparedSessionRelocationSeal
 } from './actor-session-binding-registry';
 
 export interface ZLinkActorSessionBindingRuntimeOwner {
-  actorSlot(actorId: string, sessionRid: RoutingId): Promise<number | undefined>;
-  sealRelocation(
-    claim: ZLinkActorSessionRelocationClaim,
-    expected: ZLinkActorSessionRouteFence,
+  prepareSessionRelocationSeal(
+    value: ServiceSessionRelocationSeal,
     signal?: AbortSignal
-  ): Promise<void>;
+  ): Promise<ZLinkPreparedSessionRelocationSeal | undefined>;
+  acceptSessionRelocationRoute(value: ServiceSessionRelocationRoute): Promise<boolean>;
+  clearSessionRelocationResults(): Promise<void>;
+  actorSlot(actorId: string, sessionRid: RoutingId): Promise<number | undefined>;
   relocationSnapshot(
     actorId: string,
     sealId: string
@@ -29,7 +33,7 @@ export interface ZLinkActorSessionBindingRuntimeOwner {
     sealId: string,
     applyFingerprint: string
   ): Promise<void>;
-  clearRelocation(actorId: string, error: unknown): Promise<void>;
+  clearRelocation(actorId: string, error: unknown, sealId?: string): Promise<void>;
   committedRoute(actorId: string): Promise<
     | {
         readonly actor: ActorRef;
