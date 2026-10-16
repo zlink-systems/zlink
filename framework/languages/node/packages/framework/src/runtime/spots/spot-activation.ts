@@ -326,6 +326,16 @@ export class ZLinkSpotActivationLifecycle {
             signal
           }
         );
+        // Node timer relocation: restored handlers resolve by name among the
+        // constructors announced in Configure (addTimer or addTimerHandler).
+        await timers.resolveRelocationHandlers(
+          handlers
+            .snapshot()
+            .filter((entry) => entry.kind === 'timer')
+            .map((entry) => entry.handlerType),
+          (name, periodMs, handlerType) =>
+            context.addTimer(name, periodMs, handlerType as never, undefined, signal)
+        );
       });
       activation = new ZLinkSpotActivation({
         meshName,

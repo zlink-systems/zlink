@@ -547,13 +547,7 @@ export class DefaultZLinkSpotManager {
     );
     await beforeAdmission?.();
     this.activations.publish(activation.meshName, activation.spotId);
-    for (const name of await activation.timers.publishRelocation()) {
-      console.warn(
-        '[zlink.runtime.relocation.timer_handler_missing]',
-        String(activation.spotId),
-        name
-      );
-    }
+    await activation.timers.publishRelocation();
   }
 
   async abortRelocationSpot(activation: ZLinkSpotActivation): Promise<void> {

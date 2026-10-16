@@ -7,16 +7,25 @@ const {
   ZLinkRuntimeTaskRunner
 } = require('../../packages/framework/dist/runtime/execution');
 const {
-  ZLinkHostServiceRelocationRuntime
+  ZLinkHostServiceRelocationRuntime,
+  relocationFailedFailureCode
 } = require('../../packages/framework/dist/runtime/host/service-relocation-host-runtime');
 const {
   encodeAuthorityKey
 } = require('../../packages/framework/dist/runtime/locations/authority-key-codec');
+const {
+  internalFrameworkErrorKind,
+  ZLinkFrameworkInternalErrorKind
+} = require('../../packages/framework/dist/runtime/framework-errors-internal');
 
 // Spot timer §1 exception: on a relocation target, Configure and the pre-Ready
 // OnInitialize reattach a handler to a key restored from the source payload. The
 // registration keeps the restored period, options, cursor and handle. Other
 // callbacks follow the ordinary generation rule and the frozen registry rejects them.
+// Node.js resolves a restored timer's handler by name among the constructors the
+// Spot announced in configure() (addTimer there, or handlers.addTimerHandler), so a
+// declared timer survives Ready without re-registration; no match or more than
+// one match fails the target restore (Node interface 04-spots, #1767).
 
 const detachedTaskRunner = new ZLinkRuntimeTaskRunner(
   new ZLinkRuntimeTaskErrorSink(),
@@ -82,7 +91,11 @@ function createDeferred() {
   return { promise, resolve, reject };
 }
 
-function relocationTarget(StageSpot, clock, { applicationSignaled = false } = {}) {
+function relocationTarget(
+  StageSpot,
+  clock,
+  { applicationSignaled = false, objectKind = 'user_spot' } = {}
+) {
   const mode = applicationSignaled
     ? framework.ZLinkSpotRelocationCoordinationMode.ApplicationSignaled
     : framework.ZLinkSpotRelocationCoordinationMode.FrameworkManaged;
@@ -100,7 +113,9 @@ function relocationTarget(StageSpot, clock, { applicationSignaled = false } = {}
         [
           MESH,
           {
-            spotFactoryRegistrations: {
+            [objectKind === 'user_spot'
+              ? 'spotFactoryRegistrations'
+              : 'instanceSpotFactoryRegistrations']: {
               Stage: {
                 implementation: StageSpot,
                 relocation: { kind: 'recreate' },
@@ -117,15 +132,15 @@ function relocationTarget(StageSpot, clock, { applicationSignaled = false } = {}
   return { manager, runtime };
 }
 
-function envelope(timers) {
+function envelope(timers, objectKind = 'user_spot') {
   return {
     aggregateId: 'aggregate-timer-rebind',
     aggregateGeneration: 1n,
     participants: [
       {
         participantId: 1n,
-        key: encodeAuthorityKey('user_spot', SPOT_ID).value,
-        objectKind: 'user_spot',
+        key: encodeAuthorityKey(objectKind, SPOT_ID).value,
+        objectKind,
         stableType: 'Stage',
         objectGeneration: 3n,
         authorityOwnerGeneration: 3n,
@@ -154,8 +169,8 @@ const committedAuthority = {
 };
 
 // Target restore before the authority CAS, then the post-CAS publication.
-async function restoreTarget(runtime, timers) {
-  const stage = await runtime.materializeTargetEnvelope(MESH, envelope(timers));
+async function restoreTarget(runtime, timers, objectKind = 'user_spot') {
+  const stage = await runtime.materializeTargetEnvelope(MESH, envelope(timers, objectKind));
   await stage.owner.restoreSavedWork(stage.staging);
   return stage;
 }
@@ -258,6 +273,9 @@ test('OnInitialize reattaches a restored key and a new key keeps ordinary regist
     }
   }
   class StageSpot {
+    configure() {
+      this.context.handlers.addTimerHandler(TickHandler);
+    }
     async onInitialize() {
       this.tick = await this.context.addTimer('tick', 50, TickHandler);
       this.fresh = await this.context.addTimer('fresh', 400, FreshHandler);
@@ -368,6 +386,9 @@ test('relocation-ready completion registration follows the frozen generation rul
     async handle() {}
   }
   class StageSpot {
+    configure() {
+      this.context.handlers.addTimerHandler(TickHandler);
+    }
     async onInitialize() {
       await this.context.addTimer('tick', 1_000, TickHandler);
     }
@@ -412,3 +433,117 @@ test('invalid registration arguments still fail before a restored key is reattac
   );
   assert.equal(manager.resolveRelocationActivation(MESH, SPOT_ID), undefined);
 });
+
+function isRelocationFailed(error) {
+  return (
+    internalFrameworkErrorKind(error) === ZLinkFrameworkInternalErrorKind.RelocationFailed &&
+    relocationFailedFailureCode(error) === 17
+  );
+}
+
+for (const [objectKind, declare] of [
+  ['user_spot', 'addTimerHandler'],
+  ['instance_spot', 'addTimerHandler'],
+  ['user_spot', 'configure addTimer']
+]) {
+  test(`${objectKind} restored timer declared by ${declare} fires after relocation without re-registration`, async () => {
+    const clock = createClock();
+    const ticks = [];
+    const delivered = createDeferred();
+    class TickHandler {
+      async handle(_spot, tick) {
+        ticks.push(tick);
+        delivered.resolve();
+      }
+    }
+    class OtherKeyHandler {
+      async handle() {}
+    }
+    class StageSpot {
+      async configure() {
+        if (declare === 'addTimerHandler') {
+          this.context.handlers.addTimerHandler(TickHandler);
+          // The same constructor declared twice is one declaration.
+          this.context.handlers.addTimerHandler(TickHandler);
+        } else {
+          // addTimer in configure() announces the constructor for another key.
+          await this.context.addTimer('other', 5_000, TickHandler);
+          await this.context.addTimer('unrelated', 5_000, OtherKeyHandler);
+        }
+      }
+    }
+    const { manager, runtime } = relocationTarget(StageSpot, clock, { objectKind });
+    const stage = await restoreTarget(runtime, [restoredTimer()], objectKind);
+    const activation = activationOf(stage);
+    try {
+      assert.equal(clock.pending, 0, 'no restored tick runs before Ready');
+      await stage.owner.publish(stage.staging, committedAuthority);
+      assert.equal(manager.resolveRelocationActivation(MESH, SPOT_ID), activation);
+      clock.fireNext();
+      await delivered.promise;
+      assert.deepEqual(
+        ticks.map((tick) => [tick.name, tick.deliveryIndex, tick.scheduledIndex, tick.periodMs]),
+        [['tick', 8n, 8n, 1_000]]
+      );
+      const states = await activation.timers.captureRelocation();
+      const tick = states.find((state) => state.name === 'tick');
+      assert.deepEqual(
+        [tick.handlerType, tick.deliveryIndex, tick.lastScheduledIndex],
+        ['TickHandler', 8n, 8n]
+      );
+    } finally {
+      await manager.abortRelocationSpot(activation);
+    }
+  });
+}
+
+for (const [objectKind, mode] of [
+  ['user_spot', 'undeclared'],
+  ['instance_spot', 'undeclared'],
+  ['user_spot', 'onInitialize only'],
+  ['user_spot', 'packet only'],
+  ['user_spot', 'duplicate name'],
+  ['instance_spot', 'duplicate name']
+]) {
+  test(`${objectKind} restored timer with ${mode} handler fails the target restore`, async () => {
+    const clock = createClock();
+    const initialized = [];
+    class TickHandler {
+      async handle() {}
+    }
+    const SameNameTickHandler = class TickHandler {
+      async handle() {}
+    };
+    class StageSpot {
+      async configure() {
+        if (mode === 'packet only') this.context.handlers.addPacket(TickHandler);
+        if (mode === 'duplicate name') {
+          this.context.handlers.addTimerHandler(TickHandler);
+          this.context.handlers.addTimerHandler(SameNameTickHandler);
+        }
+      }
+      async onInitialize() {
+        initialized.push('onInitialize');
+        if (mode === 'onInitialize only') {
+          await this.context.addTimer('tick', 1_000, TickHandler);
+        }
+      }
+    }
+    const { manager, runtime } = relocationTarget(StageSpot, clock, { objectKind });
+    await assert.rejects(
+      () => restoreTarget(runtime, [restoredTimer()], objectKind),
+      (error) => {
+        assert.equal(isRelocationFailed(error), true, String(error));
+        assert.match(error.message, /'tick'/);
+        assert.match(
+          error.message,
+          mode === 'duplicate name' ? /ambiguous/ : /addTimerHandler/
+        );
+        return true;
+      }
+    );
+    assert.equal(manager.resolveRelocationActivation(MESH, SPOT_ID), undefined);
+    assert.deepEqual(initialized, [], 'a failed restore never reaches OnInitialize');
+    assert.equal(clock.pending, 0);
+  });
+}

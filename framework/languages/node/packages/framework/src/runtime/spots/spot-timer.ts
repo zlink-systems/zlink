@@ -136,6 +136,13 @@ export class ZLinkSpotTimerRegistry {
    * restored key even when its asynchronous part finishes after the window.
    */
   private initializing = false;
+  /**
+   * Handler constructors the target Spot announced with `addTimer(...)` during
+   * Configure. Together with `handlers.addTimerHandler(...)` they form the
+   * table that resolves a restored timer's handler by name.
+   */
+  private readonly configureTimerHandlers = new Set<Type>();
+  private relocationHandlersResolved = false;
 
   constructor(
     _metrics?: import('../diagnostics').ZLinkRuntimeMetrics,
@@ -177,6 +184,9 @@ export class ZLinkSpotTimerRegistry {
   ): Promise<ZLinkTimer> {
     validateTimerRegistration(name, periodMs, options);
     const initializing = this.initializing;
+    if (initializing && !this.relocationHandlersResolved) {
+      this.configureTimerHandlers.add(handlerType);
+    }
     throwIfAborted(signal);
     prepareHandlerInstance(providerResolver, handlerType);
     const handler = await resolveLifecycleHandler(spot, handlerType, providerResolver);
@@ -267,26 +277,62 @@ export class ZLinkSpotTimerRegistry {
   }
 
   /**
-   * Ready: starts the restored and newly registered timers. A restored key that
-   * no initialization callback registered has no handler in this process; it is
-   * removed and its name returned to the lifecycle owner.
+   * After Configure, resolves every restored timer's handler constructor by
+   * name among the constructors the Spot announced in Configure: `addTimer(...)`
+   * there or `handlers.addTimerHandler(...)`. A restored key that Configure did
+   * not reattach is registered with the resolved constructor so it survives
+   * Ready without re-registration. No match or more than one match fails the
+   * target restore.
    */
-  async publishRelocation(): Promise<readonly string[]> {
-    const detached = await this.lane.run(() => {
-      this.frozen = false;
-      const missing: [string, ZLinkManagedTimer][] = [];
+  async resolveRelocationHandlers(
+    declared: readonly Type[],
+    register: (
+      name: string,
+      periodMs: number,
+      handlerType: Type
+    ) => Promise<unknown>
+  ): Promise<void> {
+    if (!this.frozen || !this.initializing || this.relocationHandlersResolved) {
+      throw new Error('Timer relocation handler resolution is not active.');
+    }
+    this.relocationHandlersResolved = true;
+    const constructors = [...new Set([...declared, ...this.configureTimerHandlers])];
+    const restored = await this.lane.run(() =>
+      [...this.timers.entries()].filter(([, entry]) => entry.restored)
+    );
+    for (const [name, entry] of restored) {
+      const matches = constructors.filter((type) => type.name === entry.handlerType);
+      if (matches.length !== 1) {
+        throw createInternalFrameworkException(
+          ZLinkFrameworkInternalErrorKind.RelocationFailed,
+          matches.length === 0
+            ? `Timer '${name}' handler '${entry.handlerType}' is not declared. Register its timer with context.addTimer(...) in configure(), or declare it with context.handlers.addTimerHandler(Handler) in configure().`
+            : `Timer '${name}' handler '${entry.handlerType}' is ambiguous: ${matches.length} declared constructors share the name.`
+        );
+      }
+      if (entry.slot.binding === undefined) {
+        await register(
+          name,
+          entry.timer.periodMs,
+          matches[0]!
+        );
+      }
+    }
+  }
+
+  /** Ready: starts the restored and newly registered timers. */
+  async publishRelocation(): Promise<void> {
+    await this.lane.run(() => {
       for (const [name, entry] of this.timers) {
         if (entry.slot.binding === undefined) {
-          this.timers.delete(name);
-          missing.push([name, entry.timer]);
-        } else {
-          startOutsideStateLane(() => entry.timer.resume());
+          throw new Error(`Restored timer '${name}' has no resolved handler at Ready.`);
         }
       }
-      return missing;
+      this.frozen = false;
+      for (const entry of this.timers.values()) {
+        startOutsideStateLane(() => entry.timer.resume());
+      }
     });
-    await Promise.all(detached.map(([, timer]) => timer.cancel()));
-    return detached.map(([name]) => name);
   }
 
   async dispose(): Promise<void> {
@@ -482,7 +528,7 @@ export class ZLinkManagedTimer implements ZLinkTimer {
 
   constructor(
     private readonly name: string,
-    private readonly periodMs: number,
+    readonly periodMs: number,
     private readonly options: Required<ZLinkTimerOptions>,
     private readonly onTick: (tick: ZLinkTimerTick) => Promise<void>,
     private readonly onFailure?: ZLinkTimerFailureReporter,
