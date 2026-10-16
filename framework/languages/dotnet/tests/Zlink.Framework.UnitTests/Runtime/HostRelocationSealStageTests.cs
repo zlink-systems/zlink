@@ -476,15 +476,18 @@ public sealed class HostRelocationSealStageTests
     // source. Either way the handler pushes through the bound Session with the
     // committed target binding.
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
     public async Task Held_member_work_replayed_on_target_pushes_through_bound_session(
-        bool heldAfterPayload
+        bool heldAfterPayload,
+        bool holdTargetCommitResponse
     )
     {
         var trace = new RelocationBehaviorTrace();
         trace.ReleaseSealStageWork.TrySetResult();
         var holdGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        CommitResponseGateStore? commitStore = null;
         if (heldAfterPayload)
             trace.TargetActorRestoreGate = holdGate.Task;
         else
@@ -508,12 +511,27 @@ public sealed class HostRelocationSealStageTests
                     .Backlog.WaitForBacklogAsync(context.ActorId)
                     .WaitAsync(TimeSpan.FromSeconds(10));
                 holdGate.TrySetResult();
-                Assert.Equal(
-                    ZLinkFrameworkRelocationOutcome.Relocated,
-                    (await relocation.WaitAsync(TimeSpan.FromSeconds(15))).Outcome
-                );
+                try
+                {
+                    if (commitStore is not null)
+                        await commitStore.Committed.Task.WaitAsync(TimeSpan.FromSeconds(10));
+                    Assert.Equal(
+                        ZLinkFrameworkRelocationOutcome.Relocated,
+                        (await relocation.WaitAsync(TimeSpan.FromSeconds(15))).Outcome
+                    );
+                    if (commitStore is not null)
+                        Assert.DoesNotContain("overlapHandlerStarted", trace.Events);
+                }
+                finally
+                {
+                    commitStore?.Release.TrySetResult();
+                }
                 await trace.WaitAsync("sealStagePushed:held-work@target");
-            }
+            },
+            holdTargetCommitResponse
+                ? (inner, actorId, sourceRid) =>
+                    commitStore = new CommitResponseGateStore(inner, actorId, sourceRid)
+                : null
         );
     }
 
@@ -586,9 +604,17 @@ public sealed class HostRelocationSealStageTests
     // the SpotWide Spot "zone-2" on the source.
     private static async Task RunBoundMemberRelocationAsync(
         RelocationBehaviorTrace trace,
-        Func<BoundMemberRelocationContext, Task> scenario
+        Func<BoundMemberRelocationContext, Task> scenario,
+        Func<IZLinkLocationStore, string, RoutingId, IZLinkLocationStore>? targetStore = null
     )
     {
+        using var debug = new SealStageDebugCapture();
+        using var flow = Environment.GetEnvironmentVariable(
+            RelocationBehaviorHost.FlowPathEnvironmentVariable
+        )
+            is { } path
+            ? new TestHostMessageFlowListener(path + $".bound-member-{Guid.NewGuid():N}")
+            : null;
         trace.ReleaseJoinHandler.TrySetResult();
         trace.ReleaseTargetLifecycle.TrySetResult();
         trace.ReleaseSourceLeave.TrySetResult();
@@ -620,7 +646,7 @@ public sealed class HostRelocationSealStageTests
         await using var target = await RelocationBehaviorHost.StartAsync(
             "target",
             trace,
-            store,
+            targetStore?.Invoke(store, actorId, source.LocalNodeRid) ?? store,
             roots,
             true,
             relocateSpots: true
@@ -639,6 +665,11 @@ public sealed class HostRelocationSealStageTests
                 .SetRoutingIdPrefix("aaa-session")
                 .Objects()
                 .Client();
+            options
+                .ConfigureDispatch()
+                .Diagnostics.SetLevel(
+                    flow is null ? ZLinkDiagnosticsLevel.Off : ZLinkDiagnosticsLevel.Detailed
+                );
             options
                 .AddStreamNode("bound-member-stream")
                 .Bind("tcp://127.0.0.1:0")
@@ -690,6 +721,56 @@ public sealed class HostRelocationSealStageTests
         {
             trace.ReleaseSealStageWork.TrySetResult();
             await session.StopAsync();
+        }
+    }
+
+    // Keep the committed Store state visible to the source while the target
+    // has not received the commit response or refreshed its local authority.
+    private sealed class CommitResponseGateStore(
+        IZLinkLocationStore inner,
+        string actorId,
+        RoutingId sourceRid
+    ) : IZLinkLocationStore
+    {
+        private readonly ZLinkProviderLocationRepository reader = new(inner);
+
+        internal TaskCompletionSource Committed { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource Release { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public ValueTask<ZLinkStoreReadResult> ReadAsync(
+            ZLinkStoreKey key,
+            CancellationToken cancellationToken = default
+        ) => inner.ReadAsync(key, cancellationToken);
+
+        public ValueTask<ZLinkStoreScanResult> ScanAsync(
+            ZLinkStoreScanRequest request,
+            CancellationToken cancellationToken = default
+        ) => inner.ScanAsync(request, cancellationToken);
+
+        public async ValueTask<ZLinkStoreWriteResult> WriteAsync(
+            ZLinkStoreWriteRequest request,
+            CancellationToken cancellationToken = default
+        )
+        {
+            var result = await inner.WriteAsync(request, cancellationToken);
+            if (result is ZLinkStoreWriteResult.Applied && !Release.Task.IsCompleted)
+            {
+                var authority = await reader.ReadAuthorityAsync(
+                    ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorId),
+                    cancellationToken
+                );
+                if (
+                    authority is ZLinkAuthorityReadResult.Found found
+                    && found.Snapshot.Allocation.Descriptor.Rid != sourceRid
+                )
+                {
+                    Committed.TrySetResult();
+                    await Release.Task.WaitAsync(cancellationToken);
+                }
+            }
+            return result;
         }
     }
 
@@ -776,7 +857,7 @@ internal sealed class SealStageDebugCapture : IDisposable
     {
         if (Environment.GetEnvironmentVariable("ZLINK_RELOCATION_TEST_FLOW_PATH") is { } path)
         {
-            writer = new StreamWriter(path + ".spot") { AutoFlush = true };
+            writer = new StreamWriter(path + ".spot", append: true) { AutoFlush = true };
             Console.SetError(TextWriter.Synchronized(writer));
         }
     }
