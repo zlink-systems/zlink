@@ -1911,6 +1911,10 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                             return SpotActivationBase.finishCleanup(failure, closing);
                         })
                 .thenCompose(stage -> stage)
+                .handle(
+                        (ignored, failure) ->
+                                SpotActivationBase.finishCleanup(failure, publishers.closeAsync()))
+                .thenCompose(stage -> stage)
                 .handleAsync(
                         (ignored, failure) -> {
                             RuntimeException firstFailure =
@@ -1923,7 +1927,6 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                 instanceSpotActivations.clear();
                                 signalCountChanged();
                             }
-                            firstFailure = closeRuntimeComponent(publishers::close, firstFailure);
                             for (ZLinkInternalSpotNode node : nodes) {
                                 firstFailure = closeRuntimeComponent(node::close, firstFailure);
                             }
