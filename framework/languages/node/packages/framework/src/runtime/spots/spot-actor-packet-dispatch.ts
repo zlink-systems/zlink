@@ -1,3 +1,4 @@
+import { actorMessageFollowContext } from '../actors/actor-message-follow-context';
 import type { ApplicationJobOrigin } from '../application-jobs/contracts';
 import {
   ZLinkFrameworkInternalErrorKind,
@@ -303,7 +304,9 @@ export class ZLinkSpotActorPacketDispatch {
       return undefined;
     }
     const missingActorError = createInternalFrameworkException(
-      ZLinkFrameworkInternalErrorKind.ActorDispatchHandlerNotFound,
+      actorMessageFollowContext(fallbackActorRef) === undefined
+        ? ZLinkFrameworkInternalErrorKind.ActorDispatchHandlerNotFound
+        : ZLinkFrameworkInternalErrorKind.ActorLocationStale,
       `SPOT actor is not registered locally: ${actorId}`
     );
     if (
