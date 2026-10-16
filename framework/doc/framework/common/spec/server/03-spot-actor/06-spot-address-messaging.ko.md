@@ -518,6 +518,19 @@ Close 절차는 다음 순서로 진행한다.
    relocation 중이면(seal 전후 모두) `Unavailable`로 끝나며 send는 diagnostics에 남는다. 이미 수락한 message를
    다시 배치하지 않는다([Submit과 완료 §5](../01-execution/01-submit-and-completion.ko.md#5-backpressure와-오류-분류)).
 
+**Ready 전에 요청한 context Close는 Ready 뒤에 시작한다.** Ready 전에는 handler와 timer callback이
+실행되지 않으므로([Spot timer §1](10-spot-timer.ko.md#1-timer-generation과-cancel)) 이런 요청은 `Configure`·`OnCreateAsync`·
+`OnInitializeAsync` 안에서만 생긴다. 이 요청은 1단계의 Close 작업 하나로 lifecycle lane에 들어가 그 Spot이
+Ready가 된 뒤 시작한다. Instance Spot cold activation에서는 Ready만으로 부족하다. 첫 업무 message의 handler가
+끝나고 replay cursor 갱신이 durable해져 activation recovery pointer를 해제한 뒤에야 시작한다([§4.1](#41-절차--resolve부터-activation까지) 12단계) —
+그 전에 authority를 `Closing`으로 바꾸면 `Closing` authority에 recovery pointer가 남게 된다. 시작한 Close는
+이 절의 membership 확인, owner·generation fence와 완료 규칙을 그대로 따른다. 미루었다고 `true`가 보장되지는
+않는다. 예를 들어 relocation target 초기화에서 요청한 Close는 member Actor가 있으면 `false`다. 요청한 callback은
+Close 완료를 기다리지 않는다 — Close는 그 callback이 끝나 Ready가 된 뒤에야 시작하므로 callback 안에서 기다리면
+완료될 수 없다. 새 User Spot 생성이나 Instance Spot cold activation이 Ready 전에 거부·실패해 끝나면 닫을 incarnation이
+없으므로 그 Close는 idempotent `false`로 끝난다. Relocation target 초기화는 authority CAS 뒤에 실행되므로 이 규칙에
+들지 않으며, 그 실패는 [relocation 규칙](../05-location-relocation/04-relocation-flow.ko.md#46-target은-기존-작업부터-점진적으로-queue를-연다)을 따른다.
+
 Close 작업 뒤에 놓인 message 가운데 Instance intent가 없는 message는 [§9](#9-실패와-관측)의 결과로
 끝난다. 같은 incarnation이 이미 없으면 idempotent `false`, 같은 Spot ID의 다른 generation이 있으면
 `InvalidOperation`, 이동 seal 중이면 `Unavailable`로 끝난다. Framework는 current ref를 다시

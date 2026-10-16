@@ -264,7 +264,6 @@ interface LocalHidden extends ServiceRelocationHiddenObject {
   readonly actor?: ZLinkActor;
   readonly activation?: ZLinkSpotActivation;
   initialized: boolean;
-  readonly restoredTimers: ServiceRelocationTimer[];
   readonly replayResults: ZLinkActorHandoffResult[];
   readonly replayPackets: ZLinkActorHandoffPacket[];
   targetAuthorityOwnerGeneration?: bigint;
@@ -4623,6 +4622,9 @@ class LocalTargetPort implements ServiceRelocationTargetObjectPort<LocalHidden> 
   ): Promise<LocalHidden> {
     const identity = decodeAuthorityKey({ value: participant.key } as ZLinkAuthorityKey).globalId;
     if (participant.objectKind === 'actor') {
+      if (participant.timers.length !== 0) {
+        throw new Error('Actor relocation cannot restore a Spot timer.');
+      }
       const membership = this.envelope.memberships.find(
         (value) => value.actorKey === participant.key
       );
@@ -4649,7 +4651,6 @@ class LocalTargetPort implements ServiceRelocationTargetObjectPort<LocalHidden> 
         participant,
         actor,
         initialized: false,
-        restoredTimers: [],
         replayResults: [],
         replayPackets: []
       };
@@ -4663,6 +4664,19 @@ class LocalTargetPort implements ServiceRelocationTargetObjectPort<LocalHidden> 
       identity as RoutingId,
       participant.objectGeneration,
       participant.authorityOwnerGeneration,
+      participant.timers.map((value) => ({
+        name: value.timerId,
+        handlerType: value.handlerType,
+        periodMs: value.intervalMs,
+        overrunPolicy: value.overrunPolicy as never,
+        maxCatchUpTicks: value.maxCatchUpTicks,
+        stopOnUnhandledException: value.stopOnUnhandledException,
+        startedAtUnixMs: value.startedAtUnixMs,
+        deliveryIndex: value.deliveryIndex,
+        lastScheduledIndex: value.lastScheduledIndex,
+        nextDueAtUnixMs: value.dueAtUnixMs,
+        pendingTicks: value.pendingTicks
+      })),
       signal
     );
     return {
@@ -4670,7 +4684,6 @@ class LocalTargetPort implements ServiceRelocationTargetObjectPort<LocalHidden> 
       participant,
       activation,
       initialized: false,
-      restoredTimers: [],
       replayResults: [],
       replayPackets: []
     };
@@ -4896,28 +4909,6 @@ class LocalTargetPort implements ServiceRelocationTargetObjectPort<LocalHidden> 
       }
     );
     hidden.replayResults.push(...results);
-  }
-
-  async restoreTimer(hidden: LocalHidden, timer: ServiceRelocationTimer): Promise<void> {
-    if (hidden.activation === undefined)
-      throw new Error('Actor relocation cannot restore a Spot timer.');
-    hidden.restoredTimers.push(timer);
-    if (hidden.restoredTimers.length !== hidden.participant.timers.length) return;
-    hidden.activation.timers.restoreRelocation(
-      hidden.restoredTimers.map((value) => ({
-        name: value.timerId,
-        handlerType: value.handlerType,
-        periodMs: value.intervalMs,
-        overrunPolicy: value.overrunPolicy as never,
-        maxCatchUpTicks: value.maxCatchUpTicks,
-        stopOnUnhandledException: value.stopOnUnhandledException,
-        startedAtUnixMs: value.startedAtUnixMs,
-        deliveryIndex: value.deliveryIndex,
-        lastScheduledIndex: value.lastScheduledIndex,
-        nextDueAtUnixMs: value.dueAtUnixMs,
-        pendingTicks: value.pendingTicks
-      }))
-    );
   }
 
   async normalize(_hidden: LocalHidden): Promise<void> {}

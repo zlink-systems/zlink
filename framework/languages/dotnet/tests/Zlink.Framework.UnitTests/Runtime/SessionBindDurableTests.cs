@@ -11,7 +11,14 @@ public sealed partial class EntrySpotActorDispatchTests
     [Fact]
     public async Task Logical_Disconnect_Submits_Actor_Unbound_Exactly_Once()
     {
-        var (runtime, actor) = await CreateStartedRuntimeAsync(new CapturingSpotNode());
+        var flowPath = Environment.GetEnvironmentVariable(
+            RelocationBehaviorHost.FlowPathEnvironmentVariable
+        );
+        using var flow = flowPath is null ? null : new TestHostMessageFlowListener(flowPath);
+        var (runtime, actor) = await CreateStartedRuntimeAsync(
+            new CapturingSpotNode(),
+            messageFlowMode: flowPath is null ? null : ZLinkDiagnosticsLevel.Normal
+        );
         var closeCount = 0;
         try
         {
