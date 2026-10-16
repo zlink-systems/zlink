@@ -47,7 +47,6 @@ runHost((_builder, config, mesh) => {
     listener: { kind: 'routeMesh', name: Names.mesh },
     ready: (status) => status.placement.isAvailable,
     async initialize(app) {
-      if (!config.bootstrap) return;
       const spots = app.get<ZLinkSpotManager>(ZLINK_SPOT_MANAGER);
       for (const id of config.zoneIds!) {
         const result = await spots.getOrCreate(id, Names.zone).inMesh(Names.mesh).submit();
