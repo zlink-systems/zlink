@@ -1,7 +1,11 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { ZLinkHostServiceRelocationRuntime } = require('../../packages/framework/dist/runtime/host/service-relocation-host-runtime');
-const { encodeAuthorityKey } = require('../../packages/framework/dist/runtime/locations/authority-key-codec');
+const {
+  ZLinkHostServiceRelocationRuntime
+} = require('../../packages/framework/dist/runtime/host/service-relocation-host-runtime');
+const {
+  encodeAuthorityKey
+} = require('../../packages/framework/dist/runtime/locations/authority-key-codec');
 
 // The target materializes a relocated Spot before the target-only CAS, so it
 // keeps the source authority fence (relocation-flow §4.3). A newOwner participant
@@ -19,7 +23,13 @@ for (const objectKind of ['instance_spot', 'user_spot']) {
       },
       rememberSpotRoute() {}
     };
-    const activation = { meshName: 'mesh', spotId };
+    const activation = {
+      meshName: 'mesh',
+      spotId,
+      spot: {},
+      handlers: { snapshot: () => [] },
+      timers: { handlerTypes: [] }
+    };
     const registration = { implementation: class Order {}, relocation: { kind: 'recreate' } };
     const runtime = new ZLinkHostServiceRelocationRuntime({
       registration: {
@@ -36,8 +46,22 @@ for (const objectKind of ['instance_spot', 'user_spot']) {
       spotManager: () => ({
         // The production manager creates the native Spot from these values
         // through createNativeSpot -> restoreSpotAuthority.
-        async prepareRelocationSpot(_mesh, kind, stableType, _type, id, objectGeneration, authorityOwnerGeneration) {
-          node.restoreSpotAuthority(id, kind, stableType, objectGeneration, authorityOwnerGeneration);
+        async prepareRelocationSpot(
+          _mesh,
+          kind,
+          stableType,
+          _type,
+          id,
+          objectGeneration,
+          authorityOwnerGeneration
+        ) {
+          node.restoreSpotAuthority(
+            id,
+            kind,
+            stableType,
+            objectGeneration,
+            authorityOwnerGeneration
+          );
           return activation;
         },
         async publishRelocationSpot() {}

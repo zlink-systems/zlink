@@ -1,13 +1,27 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const { spawnSync } = require('node:child_process');
-const { ZLinkSpotActivationLifecycle } = require('../../packages/framework/dist/runtime/spots/spot-activation');
+const {
+  ZLinkSpotActivationLifecycle
+} = require('../../packages/framework/dist/runtime/spots/spot-activation');
 const { DefaultZLinkActorManager } = require('../../packages/framework/dist/runtime/actors');
-const { ZLinkEntrySpotActivation } = require('../../packages/framework/dist/runtime/spots/spot-entry-activation');
-const { ZLinkRuntimeTaskErrorSink, ZLinkRuntimeTaskRunner } = require('../../packages/framework/dist/runtime/execution');
-const { resolveLifecycleHandler } = require('../../packages/framework/dist/runtime/handlers/handler-instance-scope');
+const {
+  ZLinkEntrySpotActivation
+} = require('../../packages/framework/dist/runtime/spots/spot-entry-activation');
+const {
+  ZLinkRuntimeTaskErrorSink,
+  ZLinkRuntimeTaskRunner
+} = require('../../packages/framework/dist/runtime/execution');
+const {
+  resolveLifecycleHandler
+} = require('../../packages/framework/dist/runtime/handlers/handler-instance-scope');
 
-const runner = new ZLinkRuntimeTaskRunner(new ZLinkRuntimeTaskErrorSink(), new AbortController().signal);
+const { ZLinkManagedTimer } = require('../../packages/framework/dist/runtime/spots/spot-timer');
+
+const runner = new ZLinkRuntimeTaskRunner(
+  new ZLinkRuntimeTaskErrorSink(),
+  new AbortController().signal
+);
 
 test('partial Spot creation attempts location cleanup when native cleanup throws synchronously', async () => {
   const original = new Error('provider creation failed');
@@ -17,18 +31,28 @@ test('partial Spot creation attempts location cleanup when native cleanup throws
   class Spot {}
   const lifecycle = new ZLinkSpotActivationLifecycle({
     detachedTaskRunner: runner,
-    providerResolver: { create() { throw original; } },
+    providerResolver: {
+      create() {
+        throw original;
+      }
+    },
     createNativeSpot: () => ({
       lifecycleGeneration: 1n,
-      dispose() { cleaned.push('native'); throw nativeFailure; }
+      dispose() {
+        cleaned.push('native');
+        throw nativeFailure;
+      }
     }),
     locationClaim: {
       enabled: true,
       claimUserSpot: async () => ({ claimed: true, meshName: 'r3-mesh' }),
-      release() { cleaned.push('location'); throw locationFailure; }
+      release() {
+        cleaned.push('location');
+        throw locationFailure;
+      }
     }
   });
-  await assert.rejects(lifecycle.create('r3-mesh', Spot, 'r3-partial', {}), error => {
+  await assert.rejects(lifecycle.create('r3-mesh', Spot, 'r3-partial', {}), (error) => {
     assert.ok(error instanceof AggregateError);
     assert.equal(error.errors[0], original);
     assert.deepEqual(error.errors[1].errors, [nativeFailure, locationFailure]);
@@ -44,9 +68,14 @@ test('lifecycle owners reject a missing detached task runner during construction
 });
 
 test('self disposal rejects a missing runner before starting cleanup without an unhandled rejection', () => {
-  const scopePath = require.resolve('../../packages/framework/dist/runtime/handlers/handler-instance-scope');
+  const scopePath =
+    require.resolve('../../packages/framework/dist/runtime/handlers/handler-instance-scope');
   const executionPath = require.resolve('../../packages/framework/dist/runtime/execution');
-  const child = spawnSync(process.execPath, ['-e', `
+  const child = spawnSync(
+    process.execPath,
+    [
+      '-e',
+      `
     const assert = require('node:assert/strict');
     const { runWithLifecycleHandler, disposeLifecycleHandlers } = require(${JSON.stringify(scopePath)});
     const { ZLinkRuntimeTaskErrorSink, ZLinkRuntimeTaskRunner } = require(${JSON.stringify(executionPath)});
@@ -64,7 +93,10 @@ test('self disposal rejects a missing runner before starting cleanup without an 
       await assert.rejects(disposeLifecycleHandlers(owner, runner), error => error === failure);
       assert.deepEqual(errors, []);
     })().catch(error => { console.error(error); process.exitCode = 1; });
-  `], { encoding: 'utf8', timeout: 5000 });
+  `
+    ],
+    { encoding: 'utf8', timeout: 5000 }
+  );
   assert.equal(child.status, 0, child.stdout + child.stderr);
 });
 
@@ -75,8 +107,15 @@ for (const operation of ['relocation', 'relocation-sync-native', 'instance']) {
     const handlerFailure = new Error('handler cleanup failed');
     const nativeFailure = new Error('native cleanup failed');
     const cleaned = [];
-    class Handler { dispose() { cleaned.push('handler'); throw handlerFailure; } }
-    class TimerHandler { handle() {} }
+    class Handler {
+      dispose() {
+        cleaned.push('handler');
+        throw handlerFailure;
+      }
+    }
+    class TimerHandler {
+      handle() {}
+    }
     class Spot {
       async configure() {
         await resolveLifecycleHandler(this, Handler);
@@ -90,7 +129,7 @@ for (const operation of ['relocation', 'relocation-sync-native', 'instance']) {
         now: () => 1,
         utcNow: () => 1,
         setTimeout: () => ({}),
-        clearTimeout() { cleaned.push('timer'); throw timerFailure; }
+        clearTimeout() {}
       },
       createNativeSpot: () => ({
         dispose() {
@@ -99,18 +138,45 @@ for (const operation of ['relocation', 'relocation-sync-native', 'instance']) {
           return Promise.reject(nativeFailure);
         }
       }),
-      registerActivation() { assert.fail('failed startup must not register an activation'); }
+      registerActivation() {
+        assert.fail('failed startup must not register an activation');
+      }
     });
-    const pending = operation !== 'instance'
-      ? lifecycle.materializeRelocation('r3-mesh', 'user_spot', 'r3-spot', Spot, 'r3-spot', 1n, 1n)
-      : lifecycle.materializeInstance('r3-mesh', 'r3-spot', Spot, 'r3-spot', 1n);
-    await assert.rejects(pending, error => {
-      assert.ok(error instanceof AggregateError);
-      assert.deepEqual(error.errors, operation !== 'instance'
-        ? [original, timerFailure, handlerFailure, nativeFailure]
-        : [original, timerFailure, handlerFailure]);
-      return true;
-    });
-    assert.deepEqual(cleaned.sort(), operation !== 'instance' ? ['handler', 'native', 'timer'] : ['handler', 'timer']);
+    const disposeTimer = ZLinkManagedTimer.prototype.dispose;
+    ZLinkManagedTimer.prototype.dispose = async function () {
+      await disposeTimer.call(this);
+      cleaned.push('timer');
+      throw timerFailure;
+    };
+    try {
+      const pending =
+        operation !== 'instance'
+          ? lifecycle.materializeRelocation(
+              'r3-mesh',
+              'user_spot',
+              'r3-spot',
+              Spot,
+              'r3-spot',
+              1n,
+              1n
+            )
+          : lifecycle.materializeInstance('r3-mesh', 'r3-spot', Spot, 'r3-spot', 1n);
+      await assert.rejects(pending, (error) => {
+        assert.ok(error instanceof AggregateError);
+        assert.deepEqual(
+          error.errors,
+          operation !== 'instance'
+            ? [original, timerFailure, handlerFailure, nativeFailure]
+            : [original, timerFailure, handlerFailure]
+        );
+        return true;
+      });
+      assert.deepEqual(
+        cleaned.sort(),
+        operation !== 'instance' ? ['handler', 'native', 'timer'] : ['handler', 'timer']
+      );
+    } finally {
+      ZLinkManagedTimer.prototype.dispose = disposeTimer;
+    }
   });
 }

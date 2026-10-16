@@ -537,9 +537,9 @@ export class DefaultZLinkSpotManager {
     activation: ZLinkSpotActivation,
     beforeAdmission?: () => Promise<void>
   ): Promise<void> {
-    await activation.serial.execute(() => activation.spot.onInitialize?.());
     await beforeAdmission?.();
     this.activations.publish(activation.meshName, activation.spotId);
+    activation.timers.resumeRelocation();
   }
 
   async abortRelocationSpot(activation: ZLinkSpotActivation): Promise<void> {

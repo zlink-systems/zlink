@@ -265,6 +265,7 @@ interface LocalHidden extends ServiceRelocationHiddenObject {
   readonly activation?: ZLinkSpotActivation;
   initialized: boolean;
   readonly restoredTimers: ServiceRelocationTimer[];
+  readonly timerHandlerTypes?: readonly Type[];
   readonly replayResults: ZLinkActorHandoffResult[];
   readonly replayPackets: ZLinkActorHandoffPacket[];
   targetAuthorityOwnerGeneration?: bigint;
@@ -4638,6 +4639,13 @@ class LocalTargetPort implements ServiceRelocationTargetObjectPort<LocalHidden> 
       authorityKey: participant.key,
       participant,
       activation,
+      timerHandlerTypes: [
+        ...activation.handlers
+          .snapshot()
+          .filter((entry) => entry.kind === 'timer')
+          .map((entry) => entry.handlerType),
+        ...activation.timers.handlerTypes
+      ],
       initialized: false,
       restoredTimers: [],
       replayResults: [],
@@ -4656,24 +4664,28 @@ class LocalTargetPort implements ServiceRelocationTargetObjectPort<LocalHidden> 
     );
     if (registration.relocation.kind === 'recreate') {
       if (payload.byteLength !== 0) throw new Error('Recreate relocation contains snapshot state.');
-      return;
+    } else {
+      if (registration.relocation.kind !== 'snapshot') {
+        throw new Error(`Relocation is disabled for '${hidden.participant.stableType}'.`);
+      }
+      const adapter = (await createProviderInstance(
+        registration.relocation.adapterType,
+        this.options.providerResolver
+      )) as
+        | ZLinkActorRelocationAdapter<ZLinkActor>
+        | ZLinkSpotRelocationAdapter<ZLinkSpot | ZLinkInstanceSpot>;
+      const instance = (hidden.actor ?? hidden.activation?.spot) as never;
+      await restoreRelocationAdapterState(
+        adapter as ZLinkRelocationStateAdapterLike<unknown>,
+        instance,
+        payload,
+        signal ?? new AbortController().signal
+      );
     }
-    if (registration.relocation.kind !== 'snapshot') {
-      throw new Error(`Relocation is disabled for '${hidden.participant.stableType}'.`);
+    const activation = hidden.activation;
+    if (activation?.spot.onInitialize !== undefined) {
+      await activation.serial.execute(() => activation.spot.onInitialize!());
     }
-    const adapter = (await createProviderInstance(
-      registration.relocation.adapterType,
-      this.options.providerResolver
-    )) as
-      | ZLinkActorRelocationAdapter<ZLinkActor>
-      | ZLinkSpotRelocationAdapter<ZLinkSpot | ZLinkInstanceSpot>;
-    const instance = (hidden.actor ?? hidden.activation?.spot) as never;
-    await restoreRelocationAdapterState(
-      adapter as ZLinkRelocationStateAdapterLike<unknown>,
-      instance,
-      payload,
-      signal ?? new AbortController().signal
-    );
   }
 
   async restoreMemberships(
@@ -4872,7 +4884,7 @@ class LocalTargetPort implements ServiceRelocationTargetObjectPort<LocalHidden> 
       throw new Error('Actor relocation cannot restore a Spot timer.');
     hidden.restoredTimers.push(timer);
     if (hidden.restoredTimers.length !== hidden.participant.timers.length) return;
-    hidden.activation.timers.restoreRelocation(
+    await hidden.activation.timers.restoreRelocation(
       hidden.restoredTimers.map((value) => ({
         name: value.timerId,
         handlerType: value.handlerType,
@@ -4885,7 +4897,10 @@ class LocalTargetPort implements ServiceRelocationTargetObjectPort<LocalHidden> 
         lastScheduledIndex: value.lastScheduledIndex,
         nextDueAtUnixMs: value.dueAtUnixMs,
         pendingTicks: value.pendingTicks
-      }))
+      })),
+      hidden.timerHandlerTypes ?? [],
+      (state, handlerType) =>
+        hidden.activation!.spot.context.addTimer(state.name, state.periodMs, handlerType, state)
     );
   }
 

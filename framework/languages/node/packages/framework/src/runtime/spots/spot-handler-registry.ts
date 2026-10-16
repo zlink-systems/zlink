@@ -4,7 +4,8 @@ import type {
   ZLinkEntrySpot,
   ZLinkInstanceSpotHandlerRegistry,
   ZLinkSpot,
-  ZLinkSpotHandlerRegistry
+  ZLinkSpotHandlerRegistry,
+  ZLinkSpotTimerHandler
 } from '../../contracts';
 import type {
   ZLinkEntrySpotActorRequestHandlerRegistration,
@@ -26,7 +27,7 @@ import { ZLinkActorPacketKind, ZLinkSpotActorHandlerRegistryRuntime } from '../a
 import { readZLinkDecoratorMetadata } from '../../contracts/Handlers/Attributes';
 
 export interface ZLinkSpotHandlerRegistration {
-  readonly kind: 'packet' | 'subscribe' | 'actorSend' | 'actorRequest' | 'spotHandler';
+  readonly kind: 'packet' | 'subscribe' | 'actorSend' | 'actorRequest' | 'timer';
   readonly handlerType: Type;
   readonly packetName?: string;
   readonly channelName?: string;
@@ -195,9 +196,11 @@ export class DefaultZLinkSpotHandlerRegistry<
     return this.addSubscribe(handlerType, channelName, topic);
   }
 
-  addSpotHandler(handlerType: Type): this {
+  addTimerHandler<THandler extends ZLinkSpotTimerHandler<ZLinkSpot>>(
+    handlerType: Type<THandler>
+  ): this {
     prepareHandlerInstance(this.providerResolver, handlerType);
-    this.entries.push({ kind: 'spotHandler', handlerType });
+    this.entries.push({ kind: 'timer', handlerType });
     return this;
   }
 

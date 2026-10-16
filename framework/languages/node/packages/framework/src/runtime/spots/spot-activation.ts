@@ -239,7 +239,8 @@ export class ZLinkSpotActivationLifecycle {
       this.options.statefulExecutionAllowed,
       (name, operation) => serialExecutor.executeTimer(name, operation),
       (name) => serialExecutor.isTimerExecuting(name),
-      this.options.timerClock
+      this.options.timerClock,
+      true
     );
     const outbound = new DefaultZLinkSpotOutbound({
       serial,

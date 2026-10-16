@@ -27,6 +27,10 @@ import { createInboundFlow, runWithFlow } from '../diagnostics/flow-context';
 import type { ZLinkExecutionBarrier } from '../execution';
 import { ZLinkStateLane } from '../execution/state-lane';
 import { AsyncResource } from 'node:async_hooks';
+import {
+  ZLinkFrameworkInternalErrorKind,
+  createInternalFrameworkException
+} from '../framework-errors-internal';
 
 const detachedTimerStateLaneResource = new AsyncResource('zlink:spot-timer');
 
@@ -91,7 +95,7 @@ export class ZLinkSpotTimerRegistry {
     string,
     {
       readonly generation: bigint;
-      readonly handlerType: string;
+      readonly handlerType: Type;
       readonly timer: ZLinkManagedTimer;
     }
   >();
@@ -111,7 +115,8 @@ export class ZLinkSpotTimerRegistry {
       operation: () => Promise<T> | T
     ) => Promise<T>,
     private readonly isTimerExecuting?: (name: string) => boolean,
-    private readonly clock?: ZLinkTimerClock
+    private readonly clock?: ZLinkTimerClock,
+    private relocationPending = false
   ) {}
 
   setExecutionBarrier(barrier: ZLinkExecutionBarrier): void {
@@ -119,6 +124,10 @@ export class ZLinkSpotTimerRegistry {
       throw new Error('ZLink timer registry already belongs to another execution barrier.');
     }
     this.executionBarrier = barrier;
+  }
+
+  get handlerTypes(): readonly Type[] {
+    return [...this.timers.values()].map((entry) => entry.handlerType);
   }
 
   get hasActiveTimers(): boolean {
@@ -184,11 +193,12 @@ export class ZLinkSpotTimerRegistry {
           },
           reportFailure,
           () => callbackStarted,
-          this.clock
+          this.clock,
+          this.relocationPending
         )
     );
     const registered = await this.lane.run(() =>
-      this.completeAddCore(name, prepared.generation, handlerType.name, timer)
+      this.completeAddCore(name, prepared.generation, handlerType, timer)
     );
     if (!registered) await timer.cancel(signal);
     return new ZLinkRegisteredTimer(this, name, prepared.generation, timer);
@@ -214,29 +224,66 @@ export class ZLinkSpotTimerRegistry {
     );
     const states: ZLinkTimerRelocationState[] = [];
     for (const [name, entry] of timers) {
-      const state = await entry.timer.captureRelocation(entry.handlerType);
+      const state = await entry.timer.captureRelocation(entry.handlerType.name);
       if (state.name !== name) throw new Error('Timer relocation identity changed during capture.');
       states.push(state);
     }
     return states;
   }
 
-  restoreRelocation(states: readonly ZLinkTimerRelocationState[]): void {
-    const byName = new Map(states.map((state) => [state.name, state]));
-    if (byName.size !== states.length || byName.size !== this.timers.size) {
-      throw new Error('Timer relocation inventory does not match registered handlers.');
-    }
-    for (const [name, entry] of this.timers) {
-      const state = byName.get(name);
-      if (state === undefined) {
-        throw new Error(`Timer '${name}' is missing from relocation state.`);
+  async restoreRelocation(
+    states: readonly ZLinkTimerRelocationState[],
+    handlerTypes: readonly Type[],
+    register: (
+      state: ZLinkTimerRelocationState,
+      handlerType: Type<ZLinkSpotTimerHandler<ZLinkSpot>>
+    ) => Promise<ZLinkTimer>
+  ): Promise<void> {
+    const names = new Set<string>();
+    const constructors = [...new Set(handlerTypes)];
+    for (const state of states) {
+      if (names.has(state.name)) {
+        throw createInternalFrameworkException(
+          ZLinkFrameworkInternalErrorKind.RelocationFailed,
+          `Duplicate timer '${state.name}' in relocation state.`
+        );
       }
-      entry.timer.restoreRelocation(state, entry.handlerType);
+      names.add(state.name);
+      const matches = constructors.filter((type) => type.name === state.handlerType);
+      if (matches.length !== 1) {
+        throw createInternalFrameworkException(
+          ZLinkFrameworkInternalErrorKind.RelocationFailed,
+          matches.length === 0
+            ? `Timer handler '${state.handlerType}' is not declared. Declare it with context.handlers.addTimerHandler(Handler) in configure(), or register its timer with context.addTimer(...) in configure().`
+            : `Timer handler '${state.handlerType}' is ambiguous. Declare uniquely named constructors with context.handlers.addTimerHandler(Handler) in configure().`
+        );
+      }
+      if (!this.timers.has(state.name)) {
+        await register(state, matches[0] as Type<ZLinkSpotTimerHandler<ZLinkSpot>>);
+      }
+      const entry = this.timers.get(state.name)!;
+      if (entry.handlerType !== matches[0]) {
+        throw createInternalFrameworkException(
+          ZLinkFrameworkInternalErrorKind.RelocationFailed,
+          `Timer '${state.name}' does not use the declared handler '${state.handlerType}'. Declare its constructor with context.handlers.addTimerHandler(Handler) in configure().`
+        );
+      }
+      entry.timer.restoreRelocation(state, entry.handlerType.name, this.relocationPending);
     }
   }
 
   abortRelocation(states: readonly ZLinkTimerRelocationState[]): void {
-    this.restoreRelocation(states);
+    for (const state of states) {
+      const entry = this.timers.get(state.name);
+      if (entry === undefined)
+        throw new Error(`Timer '${state.name}' is missing from relocation state.`);
+      entry.timer.restoreRelocation(state, entry.handlerType.name);
+    }
+  }
+
+  resumeRelocation(): void {
+    this.relocationPending = false;
+    for (const entry of this.timers.values()) entry.timer.resumeRelocation();
   }
 
   async commitRelocation(): Promise<void> {
@@ -258,7 +305,7 @@ export class ZLinkSpotTimerRegistry {
     readonly previous:
       | {
           readonly generation: bigint;
-          readonly handlerType: string;
+          readonly handlerType: Type;
           readonly timer: ZLinkManagedTimer;
         }
       | undefined;
@@ -274,7 +321,7 @@ export class ZLinkSpotTimerRegistry {
   private completeAddCore(
     name: string,
     generation: bigint,
-    handlerType: string,
+    handlerType: Type,
     timer: ZLinkManagedTimer
   ): boolean {
     if (this.generations.get(name) !== generation) return false;
@@ -340,8 +387,10 @@ export class ZLinkManagedTimer implements ZLinkTimer {
     private readonly onTick: (tick: ZLinkTimerTick) => Promise<void>,
     private readonly onFailure?: ZLinkTimerFailureReporter,
     private readonly shouldWaitForRunningOnCancel: () => boolean = () => true,
-    private readonly clock: ZLinkTimerClock = systemTimerClock
+    private readonly clock: ZLinkTimerClock = systemTimerClock,
+    startPaused = false
   ) {
+    this.pausedForRelocation = startPaused;
     this.startedAtMs = clock.now();
     this.startedAtUnixMs = clock.utcNow();
     this.scheduleNext();
@@ -396,7 +445,7 @@ export class ZLinkManagedTimer implements ZLinkTimer {
     }));
   }
 
-  restoreRelocation(state: ZLinkTimerRelocationState, handlerType = ''): void {
+  restoreRelocation(state: ZLinkTimerRelocationState, handlerType = '', stayPaused = false): void {
     if (this.disposed) throw new Error(`Timer '${this.name}' is disposed.`);
     if (
       state.name !== this.name ||
@@ -421,6 +470,12 @@ export class ZLinkManagedTimer implements ZLinkTimer {
     this.startedAtMs = this.clock.now() - Math.max(0, this.clock.utcNow() - state.startedAtUnixMs);
     this.deliveryIndex = state.deliveryIndex;
     this.lastScheduledIndex = state.lastScheduledIndex;
+    this.pausedForRelocation = stayPaused;
+    this.scheduleNext();
+  }
+
+  resumeRelocation(): void {
+    if (!this.pausedForRelocation) return;
     this.pausedForRelocation = false;
     this.scheduleNext();
   }
