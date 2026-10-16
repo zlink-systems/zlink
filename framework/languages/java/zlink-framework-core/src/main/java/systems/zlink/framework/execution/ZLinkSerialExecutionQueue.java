@@ -5,6 +5,7 @@ import systems.zlink.framework.runtime.internal.ZLinkCompletionBridge;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext;
 import systems.zlink.framework.runtime.internal.relocation.ZLinkRetainedSerialQueueCommit;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceCompletionDispatcher;
 import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorOrigin;
 
 import java.lang.invoke.MethodHandles;
@@ -1909,7 +1910,21 @@ public final class ZLinkSerialExecutionQueue {
         return CompletableFuture.allOf(gate, invocationReturned);
     }
 
+    /**
+     * Returns the caller's stage over a Framework-owned stage: inside a serial turn it resumes on
+     * that lane; with no lane to return to it resumes in a completion dispatcher turn (spec 01
+     * §11).
+     */
     public static <T> CompletionStage<T> manageCurrent(CompletionStage<T> stage) {
+        CompletionStage<T> managed = manageCurrentInTurn(stage);
+        return managed == stage ? ZLinkServiceCompletionDispatcher.deliver(stage) : managed;
+    }
+
+    /**
+     * Captures only an existing lane. Request admission uses this before exposing its lazily
+     * observed outside-caller view, so an unobserved admission needs no delivery work item.
+     */
+    public static <T> CompletionStage<T> manageCurrentInTurn(CompletionStage<T> stage) {
         Objects.requireNonNull(stage, "stage");
         SerialTurn turn = currentTurn();
         ZLinkSerialExecutionQueue queue = turn == null ? null : turn.queue;

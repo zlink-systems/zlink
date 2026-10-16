@@ -122,9 +122,9 @@ export class ZLinkClientServerLocationRuntime {
         ownerId: owner.ownerId,
         leaseGeneration: owner.leaseGeneration
       };
-      const result = await this.store.updateClientServer(
-        candidate,
-        ZLinkLocationWriteIntent.Takeover,
+      const result = await this.locationRuntime.writeDescriptor(
+        (writeSignal) =>
+          this.store.updateClientServer(candidate, ZLinkLocationWriteIntent.Takeover, writeSignal),
         signal
       );
       if (result.status !== ZLinkLocationWriteStatus.Stored) {
@@ -153,9 +153,9 @@ export class ZLinkClientServerLocationRuntime {
                 descriptorRevision: current.descriptorRevision + 1n,
                 weight: runtimeWeight
               };
-        const result = await this.store.updateClientServer(
-          candidate,
-          ZLinkLocationWriteIntent.Renew,
+        const result = await this.locationRuntime.writeDescriptor(
+          (writeSignal) =>
+            this.store.updateClientServer(candidate, ZLinkLocationWriteIntent.Renew, writeSignal),
           signal
         );
         if (result.status !== ZLinkLocationWriteStatus.Stored) {
@@ -182,9 +182,9 @@ export class ZLinkClientServerLocationRuntime {
         leaseGeneration: owner.leaseGeneration,
         updatedAt: new Date(0)
       };
-      const result = await this.store.updateClientServer(
-        descriptor,
-        ZLinkLocationWriteIntent.NewClaim,
+      const result = await this.locationRuntime.writeDescriptor(
+        (writeSignal) =>
+          this.store.updateClientServer(descriptor, ZLinkLocationWriteIntent.NewClaim, writeSignal),
         signal
       );
       if (result.status !== ZLinkLocationWriteStatus.Stored) {

@@ -53,6 +53,11 @@ internal interface IZLinkBackendRequestSourceFenceObserver
     void SetLocalRequestSourceFence(ZLinkServiceWireCodec.RequestSourceFence source);
 
     void ObserveRequestSourceFence(ZLinkServiceWireCodec.RequestSourceFence source);
+
+    ZLinkServiceWireCodec.RequestSourceFence? ResolveRequestSourceFence(
+        RoutingId sourceNodeRid,
+        ulong sourceNodeGeneration
+    );
 }
 
 internal interface IZLinkBackendLocalActorAuthorityReader

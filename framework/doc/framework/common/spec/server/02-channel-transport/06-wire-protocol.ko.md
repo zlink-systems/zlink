@@ -571,7 +571,9 @@ seal/route-update leg만 추가하므로, 수신자는 canonical `actorJoin`(28)
 ### Session seal과 source relay
 
 - Relocation coordinator는 source application dispatch를 멈추기 전에 command 42로 bound Session
-  binding을 seal한다. Command 43은 seal 설치 결과(`sealResult`: `sealed` 또는 `bindingAbsent`)를 알린다.
+  binding을 seal한다. Command 42는 relocation target node(`targetNodeRid`·`targetNodeGeneration`)를 함께 싣는다 —
+  Session owner는 이 값으로만 target과의 route 준비를 요청한다([Session과 Actor binding §8.1](../04-session/02-session-actor-binding.ko.md#81-seal-held-message와-route-전환)).
+  Command 43은 seal 설치 결과(`sealResult`: `sealed` 또는 `bindingAbsent`)를 알린다.
 - Session owner는 current Session identity, binding generation, ActorId·ObjectGeneration과
   relocation identity만 확인한다. Numeric high-water를 만들거나 Actor authority를 다시 조회하지
   않는다.
