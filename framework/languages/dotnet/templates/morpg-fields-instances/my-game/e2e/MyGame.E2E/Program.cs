@@ -52,15 +52,7 @@ try
         Console.Error.WriteLine("Startup failure: " + failure);
         throw;
     }
-    try
-    {
-        await Scenarios.RunAsync(run.Endpoint, run, selected, deadline.Token);
-    }
-    catch (Exception failure)
-    {
-        Console.Error.WriteLine("Scenario failure: " + failure);
-        throw;
-    }
+    await Scenarios.RunAsync(run.Endpoint, run, selected, deadline.Token);
     Console.WriteLine("morpg-fields-instances=completed");
     return 0;
 }

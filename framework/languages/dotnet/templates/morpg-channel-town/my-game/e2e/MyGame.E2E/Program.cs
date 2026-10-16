@@ -44,15 +44,7 @@ try
     {
         StructureCheck.Run(root, null);
         await run.StartAsync(deadline.Token);
-        try
-        {
-            await Scenarios.RunAsync(run.Endpoint, run, selected, deadline.Token);
-        }
-        catch (Exception failure)
-        {
-            Console.Error.WriteLine("Scenario failure: " + failure);
-            throw;
-        }
+        await Scenarios.RunAsync(run.Endpoint, run, selected, deadline.Token);
     }
     catch (Exception failure)
     {

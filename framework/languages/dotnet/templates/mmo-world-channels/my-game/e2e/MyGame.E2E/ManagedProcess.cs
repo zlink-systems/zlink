@@ -119,7 +119,6 @@ internal sealed class ManagedProcess : IAsyncDisposable
             catch (Exception error)
             {
                 failures.Add(error);
-                Console.Error.WriteLine("Process failure before cleanup: " + error);
             }
             finally
             {
@@ -157,11 +156,6 @@ internal sealed class ManagedProcess : IAsyncDisposable
         try
         {
             await StopAsync();
-        }
-        catch (Exception failure)
-        {
-            Console.Error.WriteLine("Process failure before dispose: " + failure);
-            throw;
         }
         finally
         {
@@ -203,7 +197,6 @@ internal static class Commands
         }
         catch (OperationCanceledException cancellation)
         {
-            Console.Error.WriteLine("Command failure before cleanup: " + cancellation);
             process.Kill(entireProcessTree: true);
             await process.WaitForExitAsync();
             canceled = cancellation;

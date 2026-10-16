@@ -51,18 +51,8 @@ internal static class Scenarios
                 {
                     await using (var run = new MatchRun(root))
                     {
-                        try
-                        {
-                            await run.StartAsync(ct);
-                            await PlayAsync(run.Endpoint, scenario, run, ct);
-                        }
-                        catch (Exception failureBeforeCleanup)
-                        {
-                            Console.Error.WriteLine(
-                                "Failure before cleanup: " + failureBeforeCleanup
-                            );
-                            throw;
-                        }
+                        await run.StartAsync(ct);
+                        await PlayAsync(run.Endpoint, scenario, run, ct);
                     }
                     Console.WriteLine($"✓ {scenario}");
                     passed++;
@@ -96,149 +86,99 @@ internal static class Scenarios
             "Lobby returned a different Session endpoint."
         );
         await using var p1 = await GameClient.ConnectAsync(assignment.SessionEndpoint, player1, ct);
-        try
+        await using var p2 = await GameClient.ConnectAsync(assignment.SessionEndpoint, player2, ct);
+        await p1.JoinAsync(assignment.RoomId, ct);
+        await p2.JoinAsync(assignment.RoomId, ct);
+        var ready1 = await p1.WaitAsync<RoomView>(
+            v => v.Players.Length == GameNames.PlayersPerRoom,
+            ct
+        );
+        var ready2 = await p2.WaitAsync<RoomView>(
+            v => v.Players.Length == GameNames.PlayersPerRoom,
+            ct
+        );
+        Require(
+            Equal(ready1, ready2) && ready1.Players.All(p => p.Hp == GameNames.InitialHp),
+            "Initial room state differs."
+        );
+        Require(ready1.RoomId == assignment.RoomId, "STREAM joined a different room.");
+        if (scenario == "lobby")
         {
-            await using var p2 = await GameClient.ConnectAsync(
-                assignment.SessionEndpoint,
-                player2,
-                ct
+            Require(
+                p1.Connector.IsConnected
+                    && p2.Connector.IsConnected
+                    && !p1.Disconnected
+                    && !p2.Disconnected,
+                "Lobby clients disconnected."
             );
-            try
-            {
-                await p1.JoinAsync(assignment.RoomId, ct);
-                await p2.JoinAsync(assignment.RoomId, ct);
-                var ready1 = await p1.WaitAsync<RoomView>(
-                    v => v.Players.Length == GameNames.PlayersPerRoom,
-                    ct
-                );
-                var ready2 = await p2.WaitAsync<RoomView>(
-                    v => v.Players.Length == GameNames.PlayersPerRoom,
-                    ct
-                );
-                Require(
-                    Equal(ready1, ready2) && ready1.Players.All(p => p.Hp == GameNames.InitialHp),
-                    "Initial room state differs."
-                );
-                Require(ready1.RoomId == assignment.RoomId, "STREAM joined a different room.");
-                if (scenario == "lobby")
-                {
-                    Require(
-                        p1.Connector.IsConnected
-                            && p2.Connector.IsConnected
-                            && !p1.Disconnected
-                            && !p2.Disconnected,
-                        "Lobby clients disconnected."
-                    );
-                    return;
-                }
-                var session1 = await p1.SessionAsync(ct);
-                var session2 = await p2.SessionAsync(ct);
-                await MoveAsync(p1, p2, p1, NearX, LaneY, 1, ct);
-                await MoveAsync(p1, p2, p2, TargetX, LaneY, 1, ct);
-                var before = await HitAsync(
+            return;
+        }
+        var session1 = await p1.SessionAsync(ct);
+        var session2 = await p2.SessionAsync(ct);
+        await MoveAsync(p1, p2, p1, NearX, LaneY, 1, ct);
+        await MoveAsync(p1, p2, p2, TargetX, LaneY, 1, ct);
+        var before = await HitAsync(p1, p2, 2, GameNames.InitialHp - GameNames.ShotDamage, ct);
+        if (scenario == "hit")
+        {
+            await MoveAsync(p1, p2, p2, WallBehindX, LaneY, 2, ct);
+            await RejectShotAsync(p1, p2, 3, Rejection.BlockedByWall, ct);
+            await MoveAsync(p1, p2, p2, FarX, LaneY, 3, ct);
+            await RejectShotAsync(p1, p2, 4, Rejection.OutOfRange, ct);
+            await RejectShotAsync(p1, p2, 5, Rejection.NoTarget, ct, "missing-player");
+            await MoveAsync(p1, p2, p2, TargetX, LaneY, 4, ct);
+            for (var sequence = 6L; sequence <= 8; sequence++)
+                await HitAsync(
                     p1,
                     p2,
-                    2,
-                    GameNames.InitialHp - GameNames.ShotDamage,
+                    sequence,
+                    GameNames.InitialHp - GameNames.ShotDamage * (int)(sequence - 4),
                     ct
                 );
-                if (scenario == "hit")
-                {
-                    await MoveAsync(p1, p2, p2, WallBehindX, LaneY, 2, ct);
-                    await RejectShotAsync(p1, p2, 3, Rejection.BlockedByWall, ct);
-                    await MoveAsync(p1, p2, p2, FarX, LaneY, 3, ct);
-                    await RejectShotAsync(p1, p2, 4, Rejection.OutOfRange, ct);
-                    await RejectShotAsync(p1, p2, 5, Rejection.NoTarget, ct, "missing-player");
-                    await MoveAsync(p1, p2, p2, TargetX, LaneY, 4, ct);
-                    for (var sequence = 6L; sequence <= 8; sequence++)
-                        await HitAsync(
-                            p1,
-                            p2,
-                            sequence,
-                            GameNames.InitialHp - GameNames.ShotDamage * (int)(sequence - 4),
-                            ct
-                        );
-                    Require(
-                        (await p1.WaitAsync<MatchEnded>(_ => true, ct)).Winner == p1.PlayerId
-                            && (await p2.WaitAsync<MatchEnded>(_ => true, ct)).Winner
-                                == p1.PlayerId,
-                        "Wrong match winner."
-                    );
-                }
-                else if (scenario == "reconnect")
-                {
-                    await p2.DisposeAsync();
-                    await using var again = await GameClient.ConnectAsync(
-                        endpoint,
-                        p2.PlayerId,
-                        ct
-                    );
-                    try
-                    {
-                        await again.JoinAsync(assignment.RoomId, ct);
-                        var restored = await again.WaitAsync<RoomView>(_ => true, ct);
-                        var identity = await again.SessionAsync(ct);
-                        Require(
-                            identity.SessionId != session2.SessionId
-                                && identity.ActorId == session2.ActorId
-                                && identity.ObjectGeneration == session2.ObjectGeneration,
-                            "Reconnect changed Actor identity."
-                        );
-                        SameState(before, restored);
-                        await HitAsync(
-                            p1,
-                            again,
-                            3,
-                            GameNames.InitialHp - GameNames.ShotDamage * 2,
-                            ct
-                        );
-                    }
-                    catch (Exception failureBeforeCleanup)
-                    {
-                        Console.Error.WriteLine("Failure before cleanup: " + failureBeforeCleanup);
-                        throw;
-                    }
-                }
-                else
-                {
-                    await run.DrainAsync(before.NodeId, ct);
-                    Require(
-                        await p1.SessionAsync(ct) == session1
-                            && await p2.SessionAsync(ct) == session2,
-                        "Update changed session binding."
-                    );
-                    var after1 = await p1.ViewAsync(v => v.NodeId != before.NodeId, ct);
-                    var after2 = await p2.ViewAsync(v => v.NodeId != before.NodeId, ct);
-                    SameState(before, after1);
-                    SameState(before, after2);
-                    await run.ReplaceAsync(before.NodeId, ct);
-                    // New actors exercise admission after replacement readiness.
-                    await NewMatchAsync(run, before.NodeId, ct);
-                    await HitAsync(p1, p2, 3, GameNames.InitialHp - GameNames.ShotDamage * 2, ct);
-                    Require(
-                        await p1.SessionAsync(ct) == session1
-                            && await p2.SessionAsync(ct) == session2,
-                        "Replacement changed session binding."
-                    );
-                }
-                Require(!p1.Disconnected && p1.Connector.IsConnected, "First player disconnected.");
-                if (scenario != "reconnect")
-                    Require(
-                        !p2.Disconnected && p2.Connector.IsConnected,
-                        "Second player disconnected."
-                    );
-            }
-            catch (Exception failureBeforeCleanup)
-            {
-                Console.Error.WriteLine("Failure before cleanup: " + failureBeforeCleanup);
-                throw;
-            }
+            Require(
+                (await p1.WaitAsync<MatchEnded>(_ => true, ct)).Winner == p1.PlayerId
+                    && (await p2.WaitAsync<MatchEnded>(_ => true, ct)).Winner == p1.PlayerId,
+                "Wrong match winner."
+            );
         }
-        catch (Exception failureBeforeCleanup)
+        else if (scenario == "reconnect")
         {
-            Console.Error.WriteLine("Failure before cleanup: " + failureBeforeCleanup);
-            throw;
+            await p2.DisposeAsync();
+            await using var again = await GameClient.ConnectAsync(endpoint, p2.PlayerId, ct);
+            await again.JoinAsync(assignment.RoomId, ct);
+            var restored = await again.WaitAsync<RoomView>(_ => true, ct);
+            var identity = await again.SessionAsync(ct);
+            Require(
+                identity.SessionId != session2.SessionId
+                    && identity.ActorId == session2.ActorId
+                    && identity.ObjectGeneration == session2.ObjectGeneration,
+                "Reconnect changed Actor identity."
+            );
+            SameState(before, restored);
+            await HitAsync(p1, again, 3, GameNames.InitialHp - GameNames.ShotDamage * 2, ct);
         }
+        else
+        {
+            await run.DrainAsync(before.NodeId, ct);
+            Require(
+                await p1.SessionAsync(ct) == session1 && await p2.SessionAsync(ct) == session2,
+                "Update changed session binding."
+            );
+            var after1 = await p1.ViewAsync(v => v.NodeId != before.NodeId, ct);
+            var after2 = await p2.ViewAsync(v => v.NodeId != before.NodeId, ct);
+            SameState(before, after1);
+            SameState(before, after2);
+            await run.ReplaceAsync(before.NodeId, ct);
+            // New actors exercise admission after replacement readiness.
+            await NewMatchAsync(run, before.NodeId, ct);
+            await HitAsync(p1, p2, 3, GameNames.InitialHp - GameNames.ShotDamage * 2, ct);
+            Require(
+                await p1.SessionAsync(ct) == session1 && await p2.SessionAsync(ct) == session2,
+                "Replacement changed session binding."
+            );
+        }
+        Require(!p1.Disconnected && p1.Connector.IsConnected, "First player disconnected.");
+        if (scenario != "reconnect")
+            Require(!p2.Disconnected && p2.Connector.IsConnected, "Second player disconnected.");
     }
 
     private static async Task<MatchResponse> MatchPairAsync(
@@ -282,38 +222,18 @@ internal static class Scenarios
         var player2 = "new-b-" + suffix;
         var assignment = await MatchPairAsync(run.LobbyEndpoint, player1, player2, ct);
         await using var a = await GameClient.ConnectAsync(assignment.SessionEndpoint, player1, ct);
-        try
-        {
-            await using var b = await GameClient.ConnectAsync(
-                assignment.SessionEndpoint,
-                player2,
-                ct
-            );
-            try
-            {
-                await a.JoinAsync(assignment.RoomId, ct);
-                await b.JoinAsync(assignment.RoomId, ct);
-                var room = await a.WaitAsync<RoomView>(
-                    v => v.Players.Length == GameNames.PlayersPerRoom,
-                    ct
-                );
-                await b.WaitAsync<RoomView>(v => v.Players.Length == GameNames.PlayersPerRoom, ct);
-                Require(
-                    room.RoomId == assignment.RoomId && room.NodeId == replacementId,
-                    "New Room is not on the replacement match node."
-                );
-            }
-            catch (Exception failureBeforeCleanup)
-            {
-                Console.Error.WriteLine("Failure before cleanup: " + failureBeforeCleanup);
-                throw;
-            }
-        }
-        catch (Exception failureBeforeCleanup)
-        {
-            Console.Error.WriteLine("Failure before cleanup: " + failureBeforeCleanup);
-            throw;
-        }
+        await using var b = await GameClient.ConnectAsync(assignment.SessionEndpoint, player2, ct);
+        await a.JoinAsync(assignment.RoomId, ct);
+        await b.JoinAsync(assignment.RoomId, ct);
+        var room = await a.WaitAsync<RoomView>(
+            v => v.Players.Length == GameNames.PlayersPerRoom,
+            ct
+        );
+        await b.WaitAsync<RoomView>(v => v.Players.Length == GameNames.PlayersPerRoom, ct);
+        Require(
+            room.RoomId == assignment.RoomId && room.NodeId == replacementId,
+            "New Room is not on the replacement match node."
+        );
     }
 
     private static async Task MoveAsync(
