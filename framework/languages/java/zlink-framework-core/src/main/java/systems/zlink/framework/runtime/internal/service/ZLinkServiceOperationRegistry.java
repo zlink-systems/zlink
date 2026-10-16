@@ -1,5 +1,7 @@
 package systems.zlink.framework.runtime.internal.service;
 
+import systems.zlink.framework.runtime.internal.dispatch.ZLinkReceiveBatchBudget;
+
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.Objects;
@@ -33,6 +35,15 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
     private final AtomicInteger freeSlot = new AtomicInteger();
     private int pendingCount;
     private final Throwable closeFailure;
+    private static final long DEADLINE_TICK_NANOS = TimeUnit.MILLISECONDS.toNanos(1);
+    private static final int DEADLINE_SLOTS = 256;
+    private static final int BITMAP_WORD_BITS = Long.SIZE;
+    private final Entry<?>[] deadlineHeads = new Entry<?>[DEADLINE_SLOTS];
+    private final Entry<?>[] deadlineTails = new Entry<?>[DEADLINE_SLOTS];
+    private final long[] deadlineOccupied = new long[DEADLINE_SLOTS / BITMAP_WORD_BITS];
+    private final long deadlineOrigin;
+    private long deadlineTick;
+    private Entry<?> deadlineCursor;
     private Entry<?> activeHead;
     private Entry<?> activeTail;
     private volatile boolean closed;
@@ -71,9 +82,14 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
         this.closeFailure = Objects.requireNonNull(closeFailure, "closeFailure");
         this.timeoutFailure = Objects.requireNonNull(timeoutFailure, "timeoutFailure");
         this.nanoTime = Objects.requireNonNull(nanoTime, "nanoTime");
+        this.deadlineOrigin = nanoTime.getAsLong();
         growSlots();
         this.maintenance =
-                scheduler.scheduleAtFixedRate(this::expireMaintenance, 1, 1, TimeUnit.MILLISECONDS);
+                scheduler.scheduleAtFixedRate(
+                        this::expireMaintenance,
+                        DEADLINE_TICK_NANOS,
+                        DEADLINE_TICK_NANOS,
+                        TimeUnit.NANOSECONDS);
     }
 
     public <T> Operation<T> register(Duration timeout) {
@@ -206,16 +222,11 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
             Entry<?> current = detachedHead;
             while (current != null) {
                 Entry<?> next = current.activeNext;
-                current.activePrevious = null;
-                current.activeNext = null;
+                takeLocked(current.id);
                 current.dispatchNext(next);
                 current.completeWithFailure(closeFailure);
                 current = next;
             }
-            Arrays.fill(buckets, null);
-            pendingCount = 0;
-            activeHead = null;
-            activeTail = null;
         }
         try {
             maintenance.cancel(false);
@@ -233,6 +244,7 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
     private Entry<?> takeLocked(UUID id) {
         Entry<?> entry = removeEntry(id);
         if (entry != null) {
+            unindexDeadline(entry);
             unlinkActive(entry);
         }
         return entry;
@@ -247,8 +259,7 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
                     || expected.completion.isDone()) {
                 return false;
             }
-            removeEntry(expected.id);
-            unlinkActive(expected);
+            takeLocked(expected.id);
         }
         expected.completeWithCancellation();
         completions.post(expected);
@@ -282,30 +293,91 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
         entry.activeNext = null;
     }
 
+    private long nextOccupiedTick() {
+        int slot = (int) (deadlineTick & (DEADLINE_SLOTS - 1));
+        int firstWord = slot / BITMAP_WORD_BITS;
+        int words = deadlineOccupied.length;
+        for (int step = 0; step <= words; step++) {
+            int word = (firstWord + step) % words;
+            long bits = deadlineOccupied[word];
+            if (step == 0) bits &= -1L << (slot % BITMAP_WORD_BITS);
+            if (step == words) bits &= ~(-1L << (slot % BITMAP_WORD_BITS));
+            if (bits != 0) {
+                int next = word * BITMAP_WORD_BITS + Long.numberOfTrailingZeros(bits);
+                return deadlineTick + ((next - slot) & (DEADLINE_SLOTS - 1));
+            }
+        }
+        return -1;
+    }
+
+    private void indexDeadline(Entry<?> entry, long targetTick) {
+        long tick = Math.max(targetTick, deadlineTick);
+        int slot = (int) (tick & (DEADLINE_SLOTS - 1));
+        entry.deadlineSlot = slot;
+        entry.deadlineRounds = (tick - deadlineTick) / DEADLINE_SLOTS;
+        entry.deadlinePrevious = deadlineTails[slot];
+        if (entry.deadlinePrevious == null) deadlineHeads[slot] = entry;
+        else entry.deadlinePrevious.deadlineNext = entry;
+        deadlineTails[slot] = entry;
+        deadlineOccupied[slot / BITMAP_WORD_BITS] |= 1L << (slot % BITMAP_WORD_BITS);
+    }
+
+    private void unindexDeadline(Entry<?> entry) {
+        int slot = entry.deadlineSlot;
+        Entry<?> previous = entry.deadlinePrevious;
+        Entry<?> next = entry.deadlineNext;
+        if (previous == null) deadlineHeads[slot] = next;
+        else previous.deadlineNext = next;
+        if (next == null) deadlineTails[slot] = previous;
+        else next.deadlinePrevious = previous;
+        if (deadlineCursor == entry) {
+            deadlineCursor = next;
+            if (next == null) deadlineTick++;
+        }
+        if (deadlineHeads[slot] == null)
+            deadlineOccupied[slot / BITMAP_WORD_BITS] &= ~(1L << (slot % BITMAP_WORD_BITS));
+        entry.deadlinePrevious = null;
+        entry.deadlineNext = null;
+    }
+
     int expire(long nowNanos) {
         Entry<?> expiredHead = null;
         Entry<?> expiredTail = null;
         int expired = 0;
-        synchronized (gate) {
-            Entry<?> current = activeHead;
-            while (current != null) {
-                Entry<?> next = current.activeNext;
-                if (deadlineReached(nowNanos, current.deadlineNanos)) {
-                    removeEntry(current.id);
-                    unlinkActive(current);
-                    current.completeWithFailure(
-                            Objects.requireNonNull(timeoutFailure.get(), "timeout failure"));
-                    current.dispatchNext(null);
-                    if (expiredTail == null) {
-                        expiredHead = current;
-                    } else {
-                        expiredTail.dispatchNext(current);
+        long startedNanos = nanoTime.getAsLong();
+        long nowTick = (nowNanos - deadlineOrigin) / DEADLINE_TICK_NANOS;
+        // §4.2: the budget counts from entry and bounds every slot visit, a rounds-only visit
+        // included; the cursor keeps the rest of the slot for the next maintenance turn.
+        while (nanoTime.getAsLong() - startedNanos
+                < ZLinkReceiveBatchBudget.DEFAULT_MAX_ELAPSED_NANOS) {
+            Entry<?> current;
+            synchronized (gate) {
+                if (deadlineCursor == null) {
+                    long next = nextOccupiedTick();
+                    if (next < 0) {
+                        deadlineTick = Math.max(deadlineTick, nowTick + 1);
+                        break;
                     }
-                    expiredTail = current;
-                    expired++;
+                    if (next > nowTick) break;
+                    deadlineTick = next;
+                    deadlineCursor = deadlineHeads[(int) (next & (DEADLINE_SLOTS - 1))];
                 }
-                current = next;
+                current = deadlineCursor;
+                if (current.deadlineRounds > 0) {
+                    current.deadlineRounds--;
+                    deadlineCursor = current.deadlineNext;
+                    if (deadlineCursor == null) deadlineTick++;
+                    continue;
+                }
+                takeLocked(current.id);
             }
+            current.completeWithFailure(
+                    Objects.requireNonNull(timeoutFailure.get(), "timeout failure"));
+            current.dispatchNext(null);
+            if (expiredTail == null) expiredHead = current;
+            else expiredTail.dispatchNext(current);
+            expiredTail = current;
+            expired++;
         }
         completions.postChain(expiredHead, expiredTail);
         return expired;
@@ -332,7 +404,15 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
         Entry<T> entry = (Entry<T>) claimSlot();
         completions.register(entry);
         entry.id = id;
-        entry.deadlineNanos = nanoTime.getAsLong() + timeoutNanos;
+        long elapsed = nanoTime.getAsLong() - deadlineOrigin;
+        long targetTick =
+                elapsed / DEADLINE_TICK_NANOS
+                        + timeoutNanos / DEADLINE_TICK_NANOS
+                        + (elapsed % DEADLINE_TICK_NANOS
+                                        + timeoutNanos % DEADLINE_TICK_NANOS
+                                        + DEADLINE_TICK_NANOS
+                                        - 1)
+                                / DEADLINE_TICK_NANOS;
         entry.generation++;
         Operation<T> operation = new Operation<>(this, entry.slot, entry.generation, id);
         entry.completion = operation;
@@ -340,6 +420,7 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
         entry.hashNext = buckets[bucket];
         buckets[bucket] = entry;
         pendingCount++;
+        indexDeadline(entry, targetTick);
         linkActive(entry);
         return operation;
     }
@@ -434,10 +515,6 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
         }
     }
 
-    private static boolean deadlineReached(long nowNanos, long deadlineNanos) {
-        return nowNanos - deadlineNanos >= 0;
-    }
-
     public static final class Operation<T> extends CompletableFuture<T> {
         private volatile ZLinkServiceOperationRegistry owner;
         // The submitted stage a caller cancellation reaches once this operation is cancelled.
@@ -496,7 +573,10 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
         private Entry<?> hashNext;
         private Operation<T> completion;
         private UUID id;
-        private long deadlineNanos;
+        private long deadlineRounds;
+        private int deadlineSlot;
+        private Entry<?> deadlinePrevious;
+        private Entry<?> deadlineNext;
         private Entry<?> activePrevious;
         private Entry<?> activeNext;
         private int terminalKind = NONE;
