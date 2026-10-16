@@ -1,4 +1,3 @@
-import { encodeRoutingIdStorageHex } from '../routing-id';
 import { UINT64_MAX, ZlinkStreamContentType } from '@zlink-systems/stream-wire';
 import { RELOCATION_STATE_CHUNK_DATA_MAX_BYTES } from '../../contracts/Configuration/InternalDefaults';
 import { isCanonicalWireReplyTerminal } from '../framework-errors-internal';
@@ -333,6 +332,7 @@ export interface ServiceSessionRelocationSeal {
 }
 
 export interface ServiceSessionRelocationSealed {
+  readonly sealResult: 'sealed' | 'bindingAbsent';
   readonly relocation: ServiceWireOperationId;
   readonly coordinator: ServiceWireRelocationCoordinatorFence;
   readonly actor: ServiceBoundSessionActorAuthority;
@@ -372,17 +372,13 @@ export function serviceSessionRelocationIdentityKey(
     ServiceSessionRelocationSeal | ServiceSessionRelocationSealed | ServiceSessionRelocationRoute
 ): string {
   const actor = 'targetNodeGeneration' in value.actor ? value.actor.actor : value.actor;
-  //  Session owner가 seal을 대조할 때 쓰는 값만 넣는다 — Session과 Actor binding
-  //  §8.1 "Session owner는 다음 값만 검증한다". coordinator identity는 transport가
-  //  검증하는 wire fence이므로 여기서 다시 대조하지 않는다.
-  return [
+  // Session–Actor binding §8.3: all original fields are checked against the
+  // recorded request; only relocation identity and ActorId select the record.
+  return JSON.stringify([
     value.relocation.high.toString(),
     value.relocation.low.toString(),
-    actor.actorId,
-    actor.generation.toString(),
-    encodeRoutingIdStorageHex(value.session.sessionRid),
-    value.session.bindingGeneration.toString()
-  ].join(':');
+    actor.actorId
+  ]);
 }
 
 function toGeneratedRoutingId(value: string, field: string): Uint8Array {
@@ -692,17 +688,15 @@ function toGeneratedSessionRelocationSealed(
     coordinator: toGeneratedCoordinatorFence(value.coordinator),
     actor: toGeneratedRouteFence(value.actor),
     ...toGeneratedSessionOwnerFence(value.session),
-    sealResult: 'sealed'
+    sealResult: value.sealResult
   };
 }
 
 function fromGeneratedSessionRelocationSealed(
   value: GeneratedSessionRelocationSealed43
 ): ServiceSessionRelocationSealed {
-  if (value.sealResult !== 'sealed') {
-    throw new RangeError('sessionRelocationSealed bindingAbsent is not supported by this runtime');
-  }
   return {
+    sealResult: value.sealResult,
     relocation: value.relocation,
     coordinator: fromGeneratedCoordinatorFence(value.coordinator),
     actor: fromGeneratedRouteFence(value.actor),
