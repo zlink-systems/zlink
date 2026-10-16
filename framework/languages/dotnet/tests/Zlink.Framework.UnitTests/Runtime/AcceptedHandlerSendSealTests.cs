@@ -574,9 +574,9 @@ public sealed partial class EntrySpotActorDispatchTests
         }
     }
 
-    // #1877: rollback still races with owner-opening inbound (relocation target
-    // staging). Such an inbound admitted before the fence keeps rollback
-    // refused until it leaves, exactly as before.
+    // #1877: rollback still races with new-owner admission (relocation target
+    // staging takes the drain gate's actor admission). One accepted before
+    // the fence keeps rollback refused until it leaves, exactly as before.
     [Fact]
     public async Task Relocation_rollback_is_refused_while_owner_opening_inbound_is_in_flight()
     {
@@ -588,13 +588,12 @@ public sealed partial class EntrySpotActorDispatchTests
         {
             staging = Task.Run(async () =>
             {
+                Assert.True(runtime.DrainAdmission.TryEnterActorAdmission(out var ownerAdmission));
                 var admission = (
-                    await runtime.TryAdmitInboundOperationAsync(
-                        countAsRequest: false,
-                        opensOwner: true
-                    )
+                    await runtime.TryAdmitInboundOperationAsync(countAsRequest: false)
                 ).EnterInbound();
                 Assert.True(admission.Accepted);
+                using (ownerAdmission)
                 using (admission.Lease)
                 {
                     admitted.TrySetResult();
@@ -609,16 +608,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 CancellationToken.None
             );
             Assert.NotNull(fence);
-            Assert.False(
-                (
-                    await runtime.TryAdmitInboundOperationAsync(
-                        countAsRequest: false,
-                        opensOwner: true
-                    )
-                )
-                    .EnterInbound()
-                    .Accepted
-            );
+            Assert.False(runtime.DrainAdmission.TryEnterActorAdmission(out _));
 
             Assert.Null(runtime.TryAcquireRelocationRollbackLease(fence.Value));
 
