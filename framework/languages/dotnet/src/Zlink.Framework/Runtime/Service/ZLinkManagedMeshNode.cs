@@ -146,7 +146,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     > _pendingSessionRelocationSeals = new();
     private readonly ConcurrentDictionary<
         PendingSessionRelocationKey,
-        ZLinkServiceWireCodec.SessionRelocationSealedRecord
+        PendingSessionRelocationSeal
     > _sessionRelocationSealReplyTerminals = new();
     private readonly ConcurrentDictionary<
         ObservedSpotAuthorityKey,
@@ -1492,11 +1492,15 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     )
     {
         var key = PendingSessionRelocationKey.Create(sessionOwnerNodeRid, seal);
-        if (_sessionRelocationSealReplyTerminals.TryGetValue(key, out var terminal))
-            return terminal;
-        Peer peer = RequireSessionRelocationPeer(sessionOwnerNodeRid);
         var encoded = ZLinkServiceWireCodec.EncodeSessionRelocationSeal(seal);
         var fingerprint = SHA256.HashData(encoded);
+        if (_sessionRelocationSealReplyTerminals.TryGetValue(key, out var terminal))
+        {
+            if (!CryptographicOperations.FixedTimeEquals(terminal.Fingerprint, fingerprint))
+                throw new InvalidDataException("A command 42 retry changed fields.");
+            return await terminal.Completion.Task.ConfigureAwait(false);
+        }
+        Peer peer = RequireSessionRelocationPeer(sessionOwnerNodeRid);
         var pending = new PendingSessionRelocationSeal(fingerprint, seal);
         if (!_pendingSessionRelocationSeals.TryAdd(key, pending))
         {
@@ -1525,7 +1529,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 if (ReferenceEquals(completed, pending.Completion.Task))
                 {
                     var response = await pending.Completion.Task.ConfigureAwait(false);
-                    RememberSessionRelocationSealReply(key, response);
+                    _sessionRelocationSealReplyTerminals.TryAdd(key, pending);
                     return response;
                 }
             }
@@ -7427,11 +7431,11 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     {
         var key = PendingSessionRelocationKey.Create(sourceNodeRid, sealedRecord);
         if (
-            _pendingSessionRelocationSeals.TryGetValue(key, out var pending)
-            && pending.TryComplete(sealedRecord)
+            (
+                _pendingSessionRelocationSeals.TryGetValue(key, out var pending)
+                || _sessionRelocationSealReplyTerminals.TryGetValue(key, out pending)
+            ) && pending.TryComplete(sealedRecord)
         )
-            return;
-        if (_sessionRelocationSealReplyTerminals.ContainsKey(key))
             return;
         Publish(MeshMonitorEventKind.ProtocolError, peerRid: sourceNodeRid);
     }
@@ -13223,10 +13227,19 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         ZLinkServiceWireCodec.RelocationCoordinatorFence Coordinator
     );
 
-    private void RememberSessionRelocationSealReply(
-        PendingSessionRelocationKey key,
-        ZLinkServiceWireCodec.SessionRelocationSealedRecord response
-    ) => _sessionRelocationSealReplyTerminals.TryAdd(key, response);
+    public void CompleteSessionRelocation(Guid relocationId)
+    {
+        var bytes = relocationId.ToByteArray(bigEndian: true);
+        var identity = new ZLinkServiceWireCodec.RelocationWireId(
+            BinaryPrimitives.ReadUInt64BigEndian(bytes.AsSpan(0, 8)),
+            BinaryPrimitives.ReadUInt64BigEndian(bytes.AsSpan(8, 8))
+        );
+        // Source terminal runs after success, abort restoration or failure.
+        // An absent participant has no command 44, so route submission cannot own this release.
+        foreach (var entry in _sessionRelocationSealReplyTerminals)
+            if (entry.Key.RelocationId == identity)
+                _sessionRelocationSealReplyTerminals.TryRemove(entry);
+    }
 
     private readonly record struct PendingSessionRelocationKey(
         RoutingId SessionOwnerNodeRid,
@@ -13256,8 +13269,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
 
         internal bool TryComplete(ZLinkServiceWireCodec.SessionRelocationSealedRecord response)
         {
-            if (Completion.Task.IsCompletedSuccessfully)
-                return true;
             if (
                 response.RelocationId != request.RelocationId
                 || response.Coordinator != request.Coordinator

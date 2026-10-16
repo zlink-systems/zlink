@@ -379,6 +379,13 @@ internal sealed class ZLinkActorRemoteJoiner(
             );
             throw;
         }
+        finally
+        {
+            runtime.CompleteSessionRelocation(
+                actor.Context.MeshName,
+                Guid.ParseExact(targetReservationRoute?.HandoffId ?? handoffId, "N")
+            );
+        }
     }
 
     private async ValueTask RollbackSourceHandoffAsync(

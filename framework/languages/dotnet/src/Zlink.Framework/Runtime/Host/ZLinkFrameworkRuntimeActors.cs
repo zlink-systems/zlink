@@ -34,8 +34,6 @@ internal sealed partial class ZLinkFrameworkRuntime
                 .ConfigureAwait(false);
             if (response is { } reply)
                 return reply;
-            await Task.Delay(Registration.DefaultRequestTimeout, cancellationToken)
-                .ConfigureAwait(false);
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.DeadlineExceeded,
                 "The session relocation seal was not acknowledged.",
@@ -56,6 +54,12 @@ internal sealed partial class ZLinkFrameworkRuntime
                 cancellationToken
             )
             .ConfigureAwait(false);
+    }
+
+    internal void CompleteSessionRelocation(string meshName, Guid relocationId)
+    {
+        if (GetMeshNodeRuntime(meshName).Node is IZLinkBackendSessionRelocationBarrier barrier)
+            barrier.CompleteSessionRelocation(relocationId);
     }
 
     internal async ValueTask RouteSessionRelocationAsync(

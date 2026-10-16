@@ -41,7 +41,121 @@ public sealed class ServiceWireSessionRelocationCodecTests
         );
         Assert.False(pending.Completion.Task.IsCompleted);
         Assert.True(pending.TryComplete(response));
+        Assert.False(pending.TryComplete(response with { RelocationId = new(8, 9) }));
+        Assert.False(
+            pending.TryComplete(
+                response with
+                {
+                    Coordinator = response.Coordinator with { OwnerId = "changed" },
+                }
+            )
+        );
+        Assert.False(
+            pending.TryComplete(
+                response with
+                {
+                    Actor = response.Actor with { OwnerLeaseGeneration = 9 },
+                }
+            )
+        );
+        Assert.False(
+            pending.TryComplete(
+                response with
+                {
+                    Session = response.Session with { BindingGeneration = 9 },
+                }
+            )
+        );
         Assert.True(pending.TryComplete(response with { SealResult = later }));
+        Assert.Equal(response, await pending.Completion.Task);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Late_command43_validates_fields_for_pending_and_terminal(bool terminal)
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = new ZLinkManagedMeshNode(context, "session-seal-replies");
+        await using var monitor = node.OpenMonitor();
+        var request = Seal();
+        var response = new ZLinkServiceWireCodec.SessionRelocationSealedRecord(
+            request.RelocationId,
+            request.Coordinator,
+            request.Actor,
+            request.Session
+        );
+        var pending = new ZLinkManagedMeshNode.PendingSessionRelocationSeal(
+            System.Security.Cryptography.SHA256.HashData(
+                ZLinkServiceWireCodec.EncodeSessionRelocationSeal(request)
+            ),
+            request
+        );
+        Assert.True(pending.TryComplete(response));
+        var flags = BindingFlags.NonPublic | BindingFlags.Instance;
+        var keyType = typeof(ZLinkManagedMeshNode).GetNestedType(
+            "PendingSessionRelocationKey",
+            BindingFlags.NonPublic
+        )!;
+        var key = keyType
+            .GetMethods(BindingFlags.NonPublic | BindingFlags.Static)
+            .Single(method =>
+                method.Name == "Create"
+                && method.GetParameters()[1].ParameterType == request.GetType()
+            )
+            .Invoke(null, [request.Session.SessionOwnerNodeRid, request])!;
+        var field = terminal
+            ? "_sessionRelocationSealReplyTerminals"
+            : "_pendingSessionRelocationSeals";
+        var entries = (System.Collections.IDictionary)
+            typeof(ZLinkManagedMeshNode).GetField(field, flags)!.GetValue(node)!;
+        entries.Add(key, pending);
+        var receive = typeof(ZLinkManagedMeshNode).GetMethod(
+            "ProcessSessionRelocationSealed",
+            flags
+        )!;
+        receive.Invoke(
+            node,
+            [
+                request.Session.SessionOwnerNodeRid,
+                response with
+                {
+                    SealResult = ServiceWirePilotCodec.SessionSealResult.BindingAbsent,
+                },
+            ]
+        );
+        Assert.Equal(0UL, monitor.Status().ProtocolErrors);
+        receive.Invoke(
+            node,
+            [
+                request.Session.SessionOwnerNodeRid,
+                response with
+                {
+                    Coordinator = response.Coordinator with { OwnerId = "changed" },
+                },
+            ]
+        );
+        receive.Invoke(
+            node,
+            [
+                request.Session.SessionOwnerNodeRid,
+                response with
+                {
+                    Actor = response.Actor with { OwnerLeaseGeneration = 9 },
+                },
+            ]
+        );
+        receive.Invoke(
+            node,
+            [
+                request.Session.SessionOwnerNodeRid,
+                response with
+                {
+                    Session = response.Session with { BindingGeneration = 9 },
+                },
+            ]
+        );
+        Assert.Equal(3UL, monitor.Status().ProtocolErrors);
         Assert.Equal(response, await pending.Completion.Task);
     }
 

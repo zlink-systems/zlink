@@ -497,6 +497,10 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                 );
             throw;
         }
+        finally
+        {
+            runtime.CompleteSessionRelocation(actor.Context.MeshName, relocationId);
+        }
     }
 
     private static bool IsExactSourceAuthority(

@@ -742,6 +742,10 @@ internal sealed class ZLinkSpotRetireScheduler(
                 }
             }
         }
+        finally
+        {
+            runtime.CompleteSessionRelocation(activation.MeshName, aggregateId);
+        }
 
         async ValueTask<ZLinkRelocationUnitResult> ReconcileUncertainCommitAsync()
         {
