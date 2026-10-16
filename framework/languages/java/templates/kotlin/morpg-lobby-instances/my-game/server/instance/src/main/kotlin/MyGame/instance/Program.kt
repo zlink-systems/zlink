@@ -1,6 +1,7 @@
 package MyGame.instance
 
 import MyGame.*
+import MyGame.admission.*
 import MyGame.instance.infrastructure.zlink.*
 import org.springframework.boot.autoconfigure.SpringBootApplication
 import org.springframework.context.annotation.Bean
