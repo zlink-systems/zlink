@@ -18,7 +18,6 @@
 #include "runtime/timers/timer_runtime.hpp"
 #include "runtime/timers/async_delay.hpp"
 #include "runtime/actors/actor_gateway_runtime.hpp"
-#include "runtime/diagnostics/dispatch_options_access.hpp"
 
 #include <nlohmann/json.hpp>
 
@@ -4698,6 +4697,7 @@ void test_application_relocation_remote_production_path (test_context_t &test,
     namespace detail = zlink::framework::detail;
     namespace framework = zlink::framework;
     namespace protocol = zlink::framework::runtime::protocol;
+    namespace host = zlink::framework::runtime::host;
 
     const auto core_context = std::make_shared<zlink::context_t> ();
     std::vector<framework::message_flow_event_t> resolver_failures;
@@ -4724,6 +4724,24 @@ void test_application_relocation_remote_production_path (test_context_t &test,
     detail::mesh_node_runtime_t source (source_state);
     detail::mesh_node_runtime_t target (make_state ("production-target"));
     detail::mesh_node_runtime_t session_owner (make_state ("production-session-owner"));
+    detail::actor_gateway_runtime_t target_gateway (
+      std::make_shared<detail::actor_gateway_state_t> ());
+    target.configure_bound_session_operations (host::bound_session_operations_t{
+      .bind = [] (const protocol::bound_session_bind_t &, const zlink::routing_id_t &,
+                  std::uint64_t,
+                  std::function<bool ()>) { return host::bound_session_bind_operation_result_t{}; },
+      .send = [] (const protocol::bound_session_send_t &,
+                  std::vector<zlink::message_t>) { return stateful_error_t::conflict; },
+      .replaced = [] (const protocol::bound_session_replaced_t &) {},
+      .commit_relocation_route = [] (const protocol::session_relocation_route_t &,
+                                     const stream_binding_t &,
+                                     const stream_binding_t &) { return false; },
+      .prepare_relocation_target_route =
+        [target_gateway] (const protocol::session_relocation_route_t &route,
+                          std::uint64_t owner_lease_generation) mutable {
+            return target_gateway.prepare_session_relocation_target_route (route,
+                                                                           owner_lease_generation);
+        }});
     source.bind_delay_owner (delays);
     target.bind_delay_owner (delays);
     session_owner.bind_delay_owner (delays);
@@ -5000,6 +5018,16 @@ void test_application_relocation_remote_production_path (test_context_t &test,
       "production-relocation-mesh", target.status ().routing_id ().to_string ()};
     const auto restored_target = target.native_node ().objects ().find (
       object_kind_t::actor, std::string (actor.actor_id ().value ()));
+    const auto target_actor = detail::actor_ref_access_t::make (
+      framework::node_rid_t::from_string (target.status ().routing_id ().to_string ()),
+      "production.actor", std::string (actor.actor_id ().value ()), actor.object_generation ());
+    const auto target_relay = target_gateway.admit_session_relay (
+      target_actor, session_owner.status ().routing_id (), bound_session_route->session,
+      session_binding.binding_generation,
+      continued_inbound ? continued_inbound->inbound_sequence : 0);
+    test.require (static_cast<bool> (target_relay),
+                  "generic relocation must restore the target gateway binding before Session "
+                  "ingress resumes");
     if (result.terminal != relocation_terminal_t::completed)
         std::cerr << "Session seal relocation terminal=" << static_cast<int> (result.terminal)
                   << " reason=" << static_cast<int> (result.reason)

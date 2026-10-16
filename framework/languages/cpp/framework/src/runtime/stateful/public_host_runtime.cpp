@@ -3630,10 +3630,9 @@ bool public_host_runtime_t::try_finalize_relocation_target (const relocation_att
     if (!stamped)
         return false;
 
-    // ZLJR-backed User-Spot Join owns a bound-Session prewarm at the
-    // target. A recovery-free maintenance/whole-node import has no joined
-    // Actor runtime to prewarm; it still submits its one-way Session route
-    // below, but must retain the generic import path.
+    // Native Actor authority adoption is specific to User-Spot Join.
+    // Every relocation prepares its carried Session routes before command 44
+    // can expose the target to Session ingress.
     const auto join_prepare = _actor_join_relocation_prepare_validator
                                 ? _actor_join_relocation_prepare_validator (attempt.prepare)
                                 : std::optional<bool>{};
@@ -3648,13 +3647,13 @@ bool public_host_runtime_t::try_finalize_relocation_target (const relocation_att
                 return false;
             }
         }
-        for (const auto &route_state : attempt.session_routes) {
-            const auto &route = route_state.route;
-            if (!_bound_session_operations.prepare_relocation_target_route
-                || !_bound_session_operations.prepare_relocation_target_route (
-                  route, attempt.prepare.target.target_owner_lease_generation))
-                return false;
-        }
+    }
+    for (const auto &route_state : attempt.session_routes) {
+        const auto &route = route_state.route;
+        if (!_bound_session_operations.prepare_relocation_target_route
+            || !_bound_session_operations.prepare_relocation_target_route (
+              route, attempt.prepare.target.target_owner_lease_generation))
+            return false;
     }
 
     try {
