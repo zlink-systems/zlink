@@ -37,8 +37,8 @@
 
 | 기능                        | 참고 파일과 가져올 내용                                                                                                                          |
 | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| 공유 Spot                   | `board-tables/my-game/server/table/infrastructure/table.ts`: 테이블 상태와 admission, `board-tables/my-game/server/table/main.ts`의 등록         |
-| 테이블 Actor                | `board-tables/my-game/server/table/infrastructure/player.ts`: 최소 플레이어 Actor, join 완료와 factory                                           |
+| Spot                        | `board-tables/my-game/server/table/infrastructure/table.ts`: 테이블 상태와 admission, `board-tables/my-game/server/table/main.ts`의 등록         |
+| Actor                       | `board-tables/my-game/server/table/infrastructure/player.ts`: 최소 플레이어 Actor, join 완료와 factory                                           |
 | Entry·첫 입장               | `morpg-channel-town/my-game/server/shared/entry.ts`: 첫 패킷 handler와 Town으로의 deferred join                                                  |
 | Session binding             | `board-tables/my-game/server/session/session.ts`: Actor 생성·조회, binding과 원래 typed 패킷 relay                                               |
 | Host relocation             | `board-tables/my-game/server/table/infrastructure/table.ts`: relocation adapter의 capture/restore, `e2e/client.mts`의 update 검증                |

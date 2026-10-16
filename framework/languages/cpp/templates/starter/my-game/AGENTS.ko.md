@@ -39,8 +39,8 @@
 
 | 기능 | 참고 파일과 가져올 내용 |
 | --- | --- |
-| 공유 Spot | `board-tables/my-game/server/table/table.hpp`: 테이블 상태와 admission, `server/table/main.cpp`의 등록 |
-| 테이블 Actor | `board-tables/my-game/server/table/table.hpp`: 최소 플레이어 Actor(`Player`, `PlayerFactory`)와 join 완료 |
+| Spot | `board-tables/my-game/server/table/table.hpp`: 테이블 상태와 admission, `server/table/main.cpp`의 등록 |
+| Actor | `board-tables/my-game/server/table/table.hpp`: 최소 플레이어 Actor(`Player`, `PlayerFactory`)와 join 완료 |
 | Entry·첫 입장 | `morpg-channel-town/my-game/server/shared/player.hpp`: `TownEntry`의 첫 패킷 handler와 Town으로의 deferred join |
 | Session binding | `board-tables/my-game/server/session/session.hpp`: Actor 생성·조회, binding과 원래 typed 패킷 relay |
 | Host relocation | `board-tables/my-game/server/table/table.hpp`: `TableRelocation`의 capture/restore, `e2e/scenarios.hpp`의 update 검증 |
@@ -74,14 +74,6 @@ OS가 배정한 포트, 고유 Redis key prefix와 Compose project를 사용한�
 `GameHosting.Configure`는 dispatch diagnostics를 `Normal`로 설정하고 Framework message flow를 node stderr에 기록한다. stdout과 stderr는 `.logs/run-<id>/`의 `session.out.log`와 `session.err.log`에 따로 보존한다. flow listener를 중복 추가하지 않는다.
 
 첫 예외와 직전 flow/correlation 기록을 읽는다. 연결만 검사하는 실행은 게임 패킷을 dispatch하지 않으므로 application message-flow 이벤트가 없을 수 있다. dispatch 이전 기동 실패도 예외와 stack을 보존한다.
-
-로컬 보조 trace는 실행 전에 부모 process 환경에서 설정한다.
-
-```powershell
-$env:ZLINK_DEBUG_FRAMEWORK_SPOT_DISCOVERY = "1"
-```
-
-Bash는 `export ZLINK_DEBUG_FRAMEWORK_SPOT_DISCOVERY=1`을 사용한다. Docker node는 host 환경 변수를 상속하지 않으므로 필요한 진단 값은 `e2e/world.hpp`의 `docker create`에 `-e NAME=value`로 명시한다. 이 버전별 진단 switch를 라우팅 API로 사용하지 않는다.
 
 ## 결함 보고
 

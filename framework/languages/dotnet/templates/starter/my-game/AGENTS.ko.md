@@ -38,8 +38,8 @@
 
 | 기능 | 참고 파일과 가져올 내용 |
 | --- | --- |
-| 공유 Spot | `board-tables/my-game/server/MyGame.Table/TableSpot.cs`: 테이블 상태와 admission, `Program.cs`의 등록 |
-| 테이블 Actor | `board-tables/my-game/server/MyGame.Table/PlayerActor.cs`: 최소 플레이어 Actor, join 완료와 factory |
+| Spot | `board-tables/my-game/server/MyGame.Table/TableSpot.cs`: 테이블 상태와 admission, `Program.cs`의 등록 |
+| Actor | `board-tables/my-game/server/MyGame.Table/PlayerActor.cs`: 최소 플레이어 Actor, join 완료와 factory |
 | Entry·첫 입장 | `morpg-channel-town/my-game/server/MyGame.Shared/TownEntry.cs`: 첫 패킷 handler와 Town으로의 deferred join |
 | Session binding | `board-tables/my-game/server/MyGame.Session/PlayerSession.cs`: Actor 생성·조회, binding과 원래 typed 패킷 relay |
 | Host relocation | `board-tables/my-game/server/MyGame.Table/TableSpot.cs`: TableRelocation의 capture/restore, `e2e/MyGame.E2E/Scenarios.cs`의 update 검증 |

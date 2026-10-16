@@ -40,11 +40,13 @@ Docker builds a shared role image and a runner image using the pinned `NODE_IMAG
 ```sh
 ./run-e2e.sh
 ./run-e2e.sh --scenario cross,border,reconnect
+./run-e2e.sh --check-structure
 ```
 
 ```powershell
 pwsh -NoProfile -File ./run-e2e.ps1
 pwsh -NoProfile -File ./run-e2e.ps1 -Scenario cross,border,reconnect
+pwsh -NoProfile -File ./run-e2e.ps1 --check-structure
 ```
 
 The default order is `cross`, `border`, `reconnect`, `update`. Cross verifies Zone A to Zone B movement, Actor identity, uninterrupted Session binding and Dungeon placement. Border verifies adjacent visibility across physical processes. Reconnect verifies preserved movement with a new physical Session. Update drains Zone A while movement continues, observes relocation and SafeToShutdown, stops the old process, starts its replacement and verifies continued game traffic.

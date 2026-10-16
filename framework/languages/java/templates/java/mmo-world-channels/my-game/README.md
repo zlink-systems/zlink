@@ -42,11 +42,13 @@ Bash:
 ```sh
 ./run-e2e.sh
 ./run-e2e.sh --scenario worlds,channel,reconnect,update
+./run-e2e.sh --check-structure
 ```
 PowerShell:
 ```powershell
 pwsh -NoProfile -File ./run-e2e.ps1
 pwsh -NoProfile -File ./run-e2e.ps1 -Scenario worlds,channel,reconnect,update
+pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
 ```
 
 The runner checks `zlink.structure.json`, starts its own two Redis containers and six application processes, and records logs under `.logs/run-<id>/`. Ports, Compose project names, and Redis key prefixes are unique per run. Cleanup failures fail the run. `--check-structure` (PowerShell `-CheckStructure`) validates files without starting infrastructure.

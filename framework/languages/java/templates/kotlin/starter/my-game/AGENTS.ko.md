@@ -37,8 +37,8 @@
 
 | 기능 | 참고 파일과 가져올 내용 |
 | --- | --- |
-| 공유 Spot | `board-tables/my-game/server/table/src/main/kotlin/MyGame/table/Table.kt`: 테이블 상태와 admission, `Program.kt`의 등록 |
-| 테이블 Actor | `board-tables/my-game/server/table/src/main/kotlin/MyGame/table/Player.kt`: 최소 플레이어 Actor와 join 완료 |
+| Spot | `board-tables/my-game/server/table/src/main/kotlin/MyGame/table/Table.kt`: 테이블 상태와 admission, `Program.kt`의 등록 |
+| Actor | `board-tables/my-game/server/table/src/main/kotlin/MyGame/table/Player.kt`: 최소 플레이어 Actor와 join 완료 |
 | Entry·첫 입장 | `morpg-channel-town/my-game/server/shared/src/main/kotlin/MyGame/admission/Entry.kt`: `Entry`와 Town으로의 deferred join을 하는 첫 패킷 handler |
 | Session binding | `board-tables/my-game/server/session/src/main/kotlin/MyGame/session/Program.kt`: `GameSession`의 Actor 생성·조회, binding과 원래 typed 패킷 relay |
 | Host relocation | `board-tables/my-game/server/table/src/main/kotlin/MyGame/table/Transfer.kt`: application 상태의 capture/restore, `e2e/src/main/kotlin/MyGame/e2e/Scenarios.kt`의 update 검증 |

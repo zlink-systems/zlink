@@ -14,8 +14,8 @@ Default builds and e2e run nodes and the client in Docker without a host SDK. Ru
 
 ```powershell
 pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
-./run-e2e.ps1
-./run-e2e.ps1 -Scenario channel,dungeon,reconnect,update
+pwsh -NoProfile -File ./run-e2e.ps1
+pwsh -NoProfile -File ./run-e2e.ps1 -Scenario channel,dungeon,reconnect,update
 pwsh -NoProfile -File ./run-e2e.ps1 --check-structure
 ```
 
@@ -114,7 +114,7 @@ Feature names match the feature table in the starter's `AGENTS.md`. Paths are re
 | Session binding | `server/MyGame.Session/PlayerSession.cs` | The first-packet check, then find or create the Actor, bind, and relay the original typed packet | The same first-packet type as `EnterTownHandler`; transfer it into the starter's `PlayerSession.cs` |
 | Host relocation | `TownRelocation` in `server/MyGame.Town/TownSpot.cs`, `DungeonRelocation` in `server/MyGame.Instance/DungeonSpot.cs`, `PlayerRelocation` in `server/MyGame.Shared/PlayerActor.cs`, `server/MyGame.Shared/NodeControl.cs` | The relocation adapters with `Capture` and `Restore`, and the `drain` and `shutdown` controls | The `PreserveStateWith` relocation registrations; the `update` scenario, which checks that connections and state survive a server replacement and that the replacement node accepts a new Dungeon |
 | Dynamic dungeon | `TownSpot.EnterAsync` in `server/MyGame.Town/TownSpot.cs`, `DungeonTravel` in `server/MyGame.Town/Handlers.cs`, `server/MyGame.Instance/DungeonSpot.cs`, `server/MyGame.Instance/Program.cs` | The `GetOrCreate` and typed preparation of a party Dungeon, the roster-only admission, and the stage | The dynamic `dungeon` Spots of each Instance and the `GetOrCreate` edge in `zlink.structure.json`; a `dungeon` scenario |
-| World and channel selection | `ChangeChannel` in `server/MyGame.Town/Handlers.cs`, the `TownIds` bootstrap in `server/MyGame.Town/Program.cs` | The deferred membership change between towns, and the fixed towns created at startup | The `TownIds` and `TownCapacity` settings; the fixed `town-1` and `town-2` Spots with their `logicalId` in `zlink.structure.json` |
+| World/channel selection | `ChangeChannel` in `server/MyGame.Town/Handlers.cs`, the `TownIds` bootstrap in `server/MyGame.Town/Program.cs` | The deferred membership change between towns, and the fixed towns created at startup | The `TownIds` and `TownCapacity` settings; the fixed `town-1` and `town-2` Spots with their `logicalId` in `zlink.structure.json` |
 
 ### Transfer order and rules
 

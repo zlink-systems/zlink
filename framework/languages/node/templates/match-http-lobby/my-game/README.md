@@ -41,11 +41,13 @@ Build and outer cleanup logs are in `.logs/docker-<project>/`; node configuratio
 ```sh
 ./run-e2e.sh
 ./run-e2e.sh --scenario lobby,hit,reconnect,update
+./run-e2e.sh --check-structure
 ```
 
 ```powershell
 pwsh -NoProfile -File ./run-e2e.ps1
 pwsh -NoProfile -File ./run-e2e.ps1 -Scenario lobby,hit,reconnect,update
+pwsh -NoProfile -File ./run-e2e.ps1 --check-structure
 ```
 
 `lobby` checks identical HTTP assignments and Room views for both players. `hit` checks HP damage, wall and range rejection, missing targets, and the winner. `reconnect` checks the same Actor generation, room, HP, and positions through a new Session. `update` checks relocation signals, unchanged Session bindings and state, process shutdown, and a replacement accepting a new Room.

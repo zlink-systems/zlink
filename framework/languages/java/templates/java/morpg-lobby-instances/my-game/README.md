@@ -39,11 +39,13 @@ For local process debugging, install JDK 25 and use `./run-e2e.sh --local` or `p
 ```sh
 ./run-e2e.sh
 ./run-e2e.sh --scenario party,reconnect,update
+./run-e2e.sh --check-structure
 ```
 
 ```powershell
 pwsh -NoProfile -File ./run-e2e.ps1
 pwsh -NoProfile -File ./run-e2e.ps1 -Scenario party,reconnect,update
+pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
 ```
 
 The runner validates `zlink.structure.json`, creates one isolated Redis Compose project per scenario, launches the node roles, and retains logs and effective configuration under `.logs/run-<id>/`. Listeners bind port zero; Redis uses an ephemeral loopback port. Cleanup failures fail the run.

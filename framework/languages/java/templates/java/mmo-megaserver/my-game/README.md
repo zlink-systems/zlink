@@ -41,11 +41,13 @@ For local process debugging, install JDK 25 and use `./run-e2e.sh --local` or `p
 ```sh
 ./run-e2e.sh
 ./run-e2e.sh --scenario region,dungeon,reconnect,update
+./run-e2e.sh --check-structure
 ```
 
 ```powershell
 pwsh -NoProfile -File ./run-e2e.ps1
 pwsh -NoProfile -File ./run-e2e.ps1 -Scenario region,dungeon,reconnect,update
+pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
 ```
 
 The runner checks `zlink.structure.json`, creates its own Redis Compose project and key prefix, starts each role, executes the selected scenarios, and removes only its processes and project. Logs and generated configuration are retained in `.logs/run-<id>/`.

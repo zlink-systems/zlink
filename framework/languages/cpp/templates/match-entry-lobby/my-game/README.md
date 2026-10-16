@@ -43,6 +43,7 @@ Bash:
 ```sh
 ./run-e2e.sh
 ./run-e2e.sh --scenario hit,reconnect,update
+./run-e2e.sh --check-structure
 ```
 
 PowerShell:
@@ -50,6 +51,7 @@ PowerShell:
 ```powershell
 pwsh -NoProfile -File ./run-e2e.ps1
 pwsh -NoProfile -File ./run-e2e.ps1 -Scenario hit,reconnect,update
+pwsh -NoProfile -File ./run-e2e.ps1 --check-structure
 ```
 
 The runner and nodes execute in containers. The script checks structure before Redis startup, then uses a unique Compose network, project, container names and Redis key prefixes. Nodes share the runner's network namespace, preserving loopback listeners and OS-assigned ports. Configuration is copied into each node before attaching stdin and stdout; `drain`, `shutdown` and lifecycle output retain their existing protocol.

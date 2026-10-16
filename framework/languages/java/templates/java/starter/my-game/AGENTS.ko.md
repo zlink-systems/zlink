@@ -37,8 +37,8 @@
 
 | 기능 | 참고 파일과 가져올 내용 |
 | --- | --- |
-| 공유 Spot | `board-tables/my-game/server/table/src/main/java/MyGame/table/Table.java`: 테이블 상태와 admission, `Program.java`의 등록 |
-| 테이블 Actor | `board-tables/my-game/server/table/src/main/java/MyGame/table/Player.java`: 최소 플레이어 Actor와 join 완료, `PlayerFactory.java`와 함께 확인 |
+| Spot | `board-tables/my-game/server/table/src/main/java/MyGame/table/Table.java`: 테이블 상태와 admission, `Program.java`의 등록 |
+| Actor | `board-tables/my-game/server/table/src/main/java/MyGame/table/Player.java`: 최소 플레이어 Actor와 join 완료, `PlayerFactory.java`와 함께 확인 |
 | Entry·첫 입장 | `morpg-channel-town/my-game/server/shared/src/main/java/MyGame/admission/EntryActions.java`: 첫 패킷 handler와 Town으로의 deferred join, `Entry.java`와 함께 확인 |
 | Session binding | `board-tables/my-game/server/session/src/main/java/MyGame/session/GameSession.java`: Actor 생성·조회, binding과 원래 typed 패킷 relay |
 | Host relocation | `board-tables/my-game/server/table/src/main/java/MyGame/table/TableTransfer.java`: application 상태의 capture/restore, `PlayerTransfer.java`와 `e2e/src/main/java/MyGame/e2e/Scenarios.java`의 update 검증 |

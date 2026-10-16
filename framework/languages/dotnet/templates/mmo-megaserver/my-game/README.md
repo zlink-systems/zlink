@@ -63,13 +63,15 @@ On Linux:
 ```sh
 ./run-e2e.sh
 ./run-e2e.sh --scenario region,dungeon,reconnect,update
+./run-e2e.sh --check-structure
 ```
 
 On PowerShell:
 
 ```powershell
-./run-e2e.ps1
-./run-e2e.ps1 -Scenario region,dungeon,reconnect,update
+pwsh -NoProfile -File ./run-e2e.ps1
+pwsh -NoProfile -File ./run-e2e.ps1 -Scenario region,dungeon,reconnect,update
+pwsh -NoProfile -File ./run-e2e.ps1 --check-structure
 ```
 
 `region` checks capacity overflow, shared positions, and instance isolation. `dungeon` checks the hosting node. `reconnect` checks Actor identity, membership, and position. `update` drains the current Region host, checks unchanged game state and Sessions, shuts down the drained process, and starts a replacement that accepts a new Region.
@@ -94,6 +96,6 @@ Message Follow is explicitly set to 30 seconds. The `SAFE_TO_SHUTDOWN` observati
 
 ## 한국어 실행 안내
 
-기본 실행은 Docker에서 node와 e2e runner를 함께 실행하므로 호스트 .NET SDK가 필요하지 않습니다. Docker Compose v2와 Linux container 환경을 준비하십시오. 로컬 process 디버깅은 .NET 8 SDK를 설치한 뒤 `./run-e2e.sh --local` 또는 `pwsh -NoProfile -File ./run-e2e.ps1 -Local`로 실행합니다. 이미지 빌드·정리 로그는 `.logs/docker-<project>/`, node 로그는 `.logs/run-<id>/`에 남습니다. Docker Compose v2를 설치한 뒤 이 디렉터리에서 `./run-e2e.sh --build-only`을 실행합니다. Linux에서는 `./run-e2e.sh`, PowerShell 7에서는 `./run-e2e.ps1`로 전체 시나리오를 실행합니다. 공개 0.30.1 패키지가 게시되어야 원본 템플릿을 복원할 수 있습니다.
+기본 실행은 Docker에서 node와 e2e runner를 함께 실행하므로 호스트 .NET SDK가 필요하지 않습니다. Docker Compose v2와 Linux container 환경을 준비하십시오. 로컬 process 디버깅은 .NET 8 SDK를 설치한 뒤 `./run-e2e.sh --local` 또는 `pwsh -NoProfile -File ./run-e2e.ps1 -Local`로 실행합니다. 이미지 빌드·정리 로그는 `.logs/docker-<project>/`, node 로그는 `.logs/run-<id>/`에 남습니다. Docker Compose v2를 설치한 뒤 이 디렉터리에서 `./run-e2e.sh --build-only`을 실행합니다. Linux에서는 `./run-e2e.sh`, PowerShell 7에서는 `pwsh -NoProfile -File ./run-e2e.ps1`로 전체 시나리오를 실행합니다. 공개 0.30.1 패키지가 게시되어야 원본 템플릿을 복원할 수 있습니다.
 
 지역 정원은 `server/config/regionA.json`과 `regionB.json`의 `Capacity`로 지정합니다. 실행마다 Redis key prefix와 Compose project 이름을 새로 생성하고 실제 listener endpoint를 사용합니다. 실패 원인과 message flow는 `.logs/run-<id>/`의 node stderr 로그에서 확인합니다.
