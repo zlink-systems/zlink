@@ -1116,7 +1116,7 @@ public final class ZLinkServiceM6BWireCodec {
                             toGenerated(sealed.coordinator()),
                             toGenerated(sealed.actor()),
                             toGenerated(sealed.session()),
-                            ServiceWirePilotCodec.SessionSealResult.SEALED));
+                            sealed.result()));
         } catch (IOException failure) {
             throw protocol("invalid sessionRelocationSealed command: " + failure.getMessage());
         }
@@ -1126,15 +1126,12 @@ public final class ZLinkServiceM6BWireCodec {
         Objects.requireNonNull(frame, "frame");
         try {
             var generated = ServiceWirePilotCodec.decodeSessionRelocationSealed43(frame);
-            if (generated.sealResult() != ServiceWirePilotCodec.SessionSealResult.SEALED) {
-                throw protocol(
-                        "sessionRelocationSealed bindingAbsent is not supported by this runtime");
-            }
             return new SessionRelocationSealed(
                     fromGenerated(generated.relocation()),
                     fromGenerated(generated.coordinator()),
                     fromGenerated(generated.actor()),
-                    fromGenerated(generated.session()));
+                    fromGenerated(generated.session()),
+                    generated.sealResult());
         } catch (IOException failure) {
             throw protocol("invalid sessionRelocationSealed command: " + failure.getMessage());
         }
@@ -1240,17 +1237,34 @@ public final class ZLinkServiceM6BWireCodec {
         }
     }
 
-    /** Command 43. Echoes every command 42 field except senderRole. */
+    /**
+     * Command 43. Echoes every command 42 field except senderRole and carries the Session owner's
+     * seal result (Session-Actor binding §8.2·§8.3).
+     */
     public record SessionRelocationSealed(
             RelocationIdentity relocation,
             RelocationCoordinatorFence coordinator,
             ActorRouteFence actor,
-            SessionOwnerFence session) {
+            SessionOwnerFence session,
+            ServiceWirePilotCodec.SessionSealResult result) {
         public SessionRelocationSealed {
             Objects.requireNonNull(relocation, "relocation");
             Objects.requireNonNull(coordinator, "coordinator");
             Objects.requireNonNull(actor, "actor");
             Objects.requireNonNull(session, "session");
+            Objects.requireNonNull(result, "result");
+        }
+
+        /** Builds the reply to {@code seal} with the given result. */
+        public static SessionRelocationSealed replyTo(
+                SessionRelocationSeal seal, ServiceWirePilotCodec.SessionSealResult result) {
+            return new SessionRelocationSealed(
+                    seal.relocation(), seal.coordinator(), seal.actor(), seal.session(), result);
+        }
+
+        /** True when the Session owner sealed the binding; false for bindingAbsent. */
+        public boolean sealed() {
+            return result == ServiceWirePilotCodec.SessionSealResult.SEALED;
         }
 
         /** True when this ACK echoes the seal it answers, field for field. */

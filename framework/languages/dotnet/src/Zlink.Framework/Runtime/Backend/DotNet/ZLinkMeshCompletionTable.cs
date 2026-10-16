@@ -283,33 +283,35 @@ internal sealed class ZLinkMeshCompletionTable
 
         internal ValueTask Completion => new(this, _source.Version);
 
+        // Called by the submitter before it returns Completion for an admission
+        // the binding decides later (spec 01 §10); it completes in a dispatcher turn.
         internal void Observe(Task admission)
         {
             _admission = admission;
-            if (admission.IsCompleted)
-                CompleteAdmission();
-            else
-                admission.ConfigureAwait(false).GetAwaiter().UnsafeOnCompleted(CompleteAdmission);
+            admission.ConfigureAwait(false).GetAwaiter().UnsafeOnCompleted(CompleteAdmission);
         }
 
         private void CompleteAdmission()
         {
-            Exception? failure = null;
+            var admission = _admission!;
+            _admission = null;
+            Owner.CompleteSend(CorrelationId, AdmissionFailure(admission));
+        }
+
+        private static Exception? AdmissionFailure(Task admission)
+        {
             try
             {
-                _admission!.GetAwaiter().GetResult();
+                admission.GetAwaiter().GetResult();
+                return null;
             }
             catch (Exception error)
             {
-                failure = error;
+                return error;
             }
-            _admission = null;
-            Owner.CompleteSend(CorrelationId, failure);
         }
 
         internal void PrepareSend(Exception? failure) => _failure = failure;
-
-        internal void Reject(Exception failure) => Owner.CompleteSend(CorrelationId, failure);
 
         internal override void PrepareFailure(RequestResult result) =>
             _failure = ZLinkRequestFailureMapper.CreateCompletionException(result, "MeshNode send");

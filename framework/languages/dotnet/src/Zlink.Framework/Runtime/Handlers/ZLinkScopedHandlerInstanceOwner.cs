@@ -92,8 +92,18 @@ internal sealed class ZLinkScopedHandlerInstanceOwner(IServiceProvider services)
         );
     }
 
-    internal static object CreateForDispatch(IServiceProvider services, Type handlerType) =>
-        GetFactory(GetActivationFactories(services), handlerType)(services);
+    // The activation catalog is shared by every scope of one provider. A
+    // dispatcher keeps the reference and reads each factory from that catalog.
+    internal sealed class DispatchCatalog(IServiceProvider services)
+    {
+        private readonly (
+            IServiceProviderIsService? Services,
+            ConcurrentDictionary<Type, Func<IServiceProvider, object>> Factories
+        ) _activation = GetActivationFactories(services);
+
+        internal object Create(IServiceProvider services, Type handlerType) =>
+            GetFactory(_activation, handlerType)(services);
+    }
 
     private Func<IServiceProvider, object> GetFactory(Type handlerType) =>
         GetFactory(_activation, handlerType);

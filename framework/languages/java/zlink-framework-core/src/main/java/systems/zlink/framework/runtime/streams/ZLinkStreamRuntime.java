@@ -6,6 +6,7 @@ import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.ZLinkMessageSerializer;
 import systems.zlink.framework.actors.ZLinkActorManager;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.monitoring.ZLinkFlowOrigin;
 import systems.zlink.framework.runtime.actors.ZLinkActorRuntime;
@@ -35,6 +36,7 @@ import systems.zlink.framework.runtime.internal.monitoring.ZLinkRuntimeEventDisp
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6AWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.messaging.ZLinkMessagePayloads;
+import systems.zlink.framework.runtime.protocol.ServiceWirePilotCodec;
 import systems.zlink.framework.runtime.spots.ZLinkSpotRuntime;
 import systems.zlink.framework.streams.ZLinkSession;
 import systems.zlink.framework.streams.ZLinkSessionContext;
@@ -111,6 +113,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
     private final AtomicLong sessionBindingGenerations = new AtomicLong();
     private final Map<String, ZLinkInternalSpotNode> streamSessionRelaySpotNodes = new HashMap<>();
     private final Map<String, SessionState> sessions = new HashMap<>();
+    private final Map<SealRecordKey, AbsentSealRecord> absentSealRecords = new HashMap<>();
     private final ZLinkStateLane stateLane = new ZLinkStateLane();
     private final ScheduledExecutorService livenessExecutor;
     private final LongSupplier nanoTime;
@@ -462,17 +465,32 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                     new ZLinkConfigurationException(
                             "command 44 transport source differs from its sender fence"));
         }
+        SealRecordKey absentKey =
+                new SealRecordKey(command.relocation(), command.actor().actorId());
         List<SessionState> matches =
                 inStateLane(
-                        () ->
-                                sessions.values().stream()
-                                        .filter(
-                                                state ->
-                                                        state.routingId()
-                                                                .equals(
-                                                                        command.session()
-                                                                                .sessionRid()))
-                                        .toList());
+                        () -> {
+                            //  §8.3: a command 44 for a bindingAbsent record never touches a
+                            //  binding created later or another relocation's seal.
+                            expireAbsentSealRecords();
+                            if (absentSealRecords.containsKey(absentKey)) {
+                                return null;
+                            }
+                            return sessions.values().stream()
+                                    .filter(
+                                            state ->
+                                                    state.routingId()
+                                                            .equals(command.session().sessionRid()))
+                                    .toList();
+                        });
+        if (matches == null) {
+            LOGGER.warning(
+                    "late_session_route_update actor="
+                            + command.actor().actorId()
+                            + " relocation="
+                            + command.relocation());
+            return CompletableFuture.completedFuture(null);
+        }
         if (matches.size() != 1) {
             return CompletableFuture.failedFuture(
                     new ZLinkConfigurationException("command 44 requires one exact local Session"));
@@ -481,10 +499,13 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
     }
 
     /**
-     * Command 42 endpoint. The relocation source addresses the seal to this Session owner; the
-     * sender fence is the Actor owner node the binding still points at. The exact command 42
-     * contract permits only the source role; command 43 echoes the seal fields without adding
-     * completion state.
+     * Command 42 endpoint (Session-Actor binding §8.3). The relocation source addresses the seal to
+     * this Session owner; the sender fence is the Actor owner node the binding still points at. The
+     * Session owner judges the command once, by the ActorId's current binding across every Session
+     * it owns: a recorded result first, then sealed, bindingAbsent or mismatch.
+     *
+     * <p>The stage completes with the encoded command 43, with {@code null} when the command
+     * duplicates a closed record and is not answered, or exceptionally for a mismatch.
      */
     public CompletionStage<byte[]> handleSessionRelocationSeal(
             RoutingId transportSource, byte[] command42) {
@@ -501,26 +522,92 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                     new ZLinkConfigurationException(
                             "command 42 transport source differs from the sender fence"));
         }
-        List<SessionState> matches =
-                inStateLane(
-                        () ->
-                                sessions.values().stream()
-                                        .filter(
-                                                state ->
-                                                        state.routingId()
-                                                                .equals(
-                                                                        command.session()
-                                                                                .sessionRid()))
-                                        .toList());
-        if (matches.size() != 1) {
-            return CompletableFuture.failedFuture(
-                    new ZLinkConfigurationException("command 42 requires one exact local Session"));
-        }
-        return matches.getFirst()
-                .context()
-                .applyRelocationSealCommand(command)
-                .thenApply(codec::encodeSessionRelocationSealed);
+        SealRecordKey key =
+                new SealRecordKey(command.relocation(), command.actor().actor().actorId());
+        CompletionStage<ZLinkServiceM6BWireCodec.SessionRelocationSealed> decided =
+                stateLane
+                        .<CompletionStage<ZLinkServiceM6BWireCodec.SessionRelocationSealed>>
+                                runAsync(() -> decideSessionRelocationSeal(key, command))
+                        .thenCompose(Function.identity());
+        return decided.thenCompose(
+                reply -> {
+                    if (reply == null) {
+                        return CompletableFuture.completedFuture(null);
+                    }
+                    CompletionStage<Void> recorded =
+                            reply.sealed()
+                                    ? CompletableFuture.completedFuture(null)
+                                    : stateLane.runAsync(
+                                            () -> {
+                                                recordBindingAbsent(key, command);
+                                                return null;
+                                            });
+                    return recorded.thenApply(
+                            ignored -> codec.encodeSessionRelocationSealed(reply));
+                });
     }
+
+    private CompletionStage<ZLinkServiceM6BWireCodec.SessionRelocationSealed>
+            decideSessionRelocationSeal(
+                    SealRecordKey key, ZLinkServiceM6BWireCodec.SessionRelocationSeal command) {
+        expireAbsentSealRecords();
+        AbsentSealRecord absent = absentSealRecords.get(key);
+        if (absent != null) {
+            if (!absent.command().equals(command)) {
+                return CompletableFuture.failedFuture(
+                        new ZLinkConfigurationException(
+                                ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                                "Session relocation seal changed fields of the recorded"
+                                        + " command 42: "
+                                        + key.actorId()));
+            }
+            return CompletableFuture.completedFuture(
+                    ZLinkServiceM6BWireCodec.SessionRelocationSealed.replyTo(
+                            command, ServiceWirePilotCodec.SessionSealResult.BINDING_ABSENT));
+        }
+        //  The current binding is the one with the largest node-wide binding generation;
+        //  the command's SessionRid does not narrow the search (§8.3 step 2).
+        SessionState current = null;
+        long currentGeneration = 0;
+        for (SessionState state : sessions.values()) {
+            ZLinkSessionActorsRuntime runtime = state.actorRuntime();
+            if (runtime == null) {
+                continue;
+            }
+            var generation = runtime.boundBindingGeneration(key.actorId());
+            if (generation.isPresent() && generation.getAsLong() > currentGeneration) {
+                current = state;
+                currentGeneration = generation.getAsLong();
+            }
+        }
+        if (current == null) {
+            return CompletableFuture.completedFuture(
+                    ZLinkServiceM6BWireCodec.SessionRelocationSealed.replyTo(
+                            command, ServiceWirePilotCodec.SessionSealResult.BINDING_ABSENT));
+        }
+        return current.actorRuntime().applyRelocationSealCommand(command);
+    }
+
+    private void expireAbsentSealRecords() {
+        long now = nanoTime.getAsLong();
+        absentSealRecords.values().removeIf(record -> now - record.expiresAtNanos() >= 0);
+    }
+
+    private void recordBindingAbsent(
+            SealRecordKey key, ZLinkServiceM6BWireCodec.SessionRelocationSeal command) {
+        absentSealRecords.putIfAbsent(
+                key,
+                new AbsentSealRecord(
+                        command, nanoTime.getAsLong() + sessionRelocationSealTimeout.toNanos()));
+    }
+
+    private record SealRecordKey(
+            ZLinkServiceM6BWireCodec.RelocationIdentity relocation, String actorId) {}
+
+    //  A bindingAbsent result is not a binding or a seal; it only answers the same command 42
+    //  for SessionRelocationSealTimeout (§8.3 result record lifetime).
+    private record AbsentSealRecord(
+            ZLinkServiceM6BWireCodec.SessionRelocationSeal command, long expiresAtNanos) {}
 
     /**
      * Routes command 36 to the one Session whose current binding it names. The transport boundary
