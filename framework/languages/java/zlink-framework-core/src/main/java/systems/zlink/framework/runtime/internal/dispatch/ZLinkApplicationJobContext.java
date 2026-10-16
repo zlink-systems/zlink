@@ -76,8 +76,9 @@ public final class ZLinkApplicationJobContext {
     public static void beforeFirstApplicationInstruction() {
         State state = CURRENT.get();
         if (state != null) {
+            QueuedOwnership ownership = state.ownership;
             state.ownership = null;
-            state.permit.handlerStarted();
+            if (ownership != null) ownership.close();
         }
     }
 

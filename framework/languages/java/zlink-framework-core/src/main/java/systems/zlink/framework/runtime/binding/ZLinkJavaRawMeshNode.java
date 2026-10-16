@@ -4787,10 +4787,13 @@ final class ZLinkJavaRawMeshNode
         boolean handedOff = false;
         try {
             List<byte[]> frames = inbound.frames();
-            if (frames.isEmpty() || frames.getFirst().length < PREFIX_BYTES) {
+            if (frames.isEmpty()) {
                 return;
             }
             byte[] head = frames.getFirst();
+            if (head.length < PREFIX_BYTES) {
+                return;
+            }
             int infrastructureCommand = allowedInfrastructureControlCommand(head);
             if (infrastructureCommand >= 0
                     && allowedInfrastructureControlCommand(frames) != infrastructureCommand) {
