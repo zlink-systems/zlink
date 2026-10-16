@@ -23,6 +23,7 @@ import {
   type ZLinkStoreKey,
   type ZLinkStoreReadResult,
   type ZLinkStoreScanCursor,
+  type ZLinkStoreValue,
   type ZLinkStoreVersion,
   type ZLinkStoreWriteRequest,
   ZLinkFrameworkException,
@@ -1256,8 +1257,6 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       this.provider.read(descriptorKey, signal),
       this.provider.read(capacityRowKey, signal)
     ]);
-    if (lease.kind === 'found' && lease.value.expiresAt === undefined)
-      throw new Error('Location Store owner lease record is invalid.');
     const ownerLive = sameLiveOwner(lease, snapshot);
     let members: EndedSpotMember[] = [];
     if (snapshot.allocation.state === 'active') {
@@ -1706,12 +1705,6 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         this.provider.read(leaseKey, signal),
         this.provider.read(capacityRowKey, signal)
       ]);
-      if (leaseRead.kind === 'found' && leaseRead.value.expiresAt === undefined) {
-        // A lease is always written with a positive TTL, so a missing expiry
-        // is a corrupt record. Abort deletes authority state, so refuse
-        // rather than read the absence as expiry.
-        throw new Error('Location Store owner lease record is invalid.');
-      }
       if (liveTargetDescriptor(descriptorRead, leaseRead, request.target) === undefined)
         return { kind: 'stale' };
       const capacity =
@@ -1988,14 +1981,15 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
   ): Promise<ZLinkOwnerLeaseReadResult> {
     const result = await this.provider.read(ownerKey(ownerId), signal);
     if (result.kind === 'missing') return { kind: 'missing' };
+    const leaseExpiresAt = requireOwnerLeaseExpiry(result.value);
     const record = decodeOwnerRecord(result.value.bytes);
-    if (record.ownerId !== ownerId || result.value.expiresAt === undefined) {
+    if (record.ownerId !== ownerId) {
       throw new Error('Location Store owner lease record is invalid.');
     }
     return {
       kind: 'found',
       token: { ownerId, leaseGeneration: BigInt(record.leaseGeneration) },
-      leaseExpiresAt: result.value.expiresAt,
+      leaseExpiresAt,
       storeNow: result.value.storeNow
     };
   }
@@ -3830,6 +3824,12 @@ function reviveCanonical(value: unknown, key = ''): unknown {
   return value;
 }
 
+function requireOwnerLeaseExpiry(value: ZLinkStoreValue): Date {
+  if (value.expiresAt === undefined)
+    throw new Error('Location Store owner lease record is invalid.');
+  return value.expiresAt;
+}
+
 function decodeOwnerRecord(bytes: Uint8Array): OwnerRecord {
   const record = decodeJson<OwnerRecord>(bytes);
   requireRecordVersion(record, 'owner lease');
@@ -4289,7 +4289,9 @@ function liveTargetDescriptor(
     readonly owner: ZLinkLocationOwnerToken;
   }
 ): ZLinkMeshNodeDescriptor | undefined {
-  if (descriptorRead.kind === 'missing' || leaseRead.kind === 'missing') return undefined;
+  if (leaseRead.kind === 'missing') return undefined;
+  const leaseExpiresAt = requireOwnerLeaseExpiry(leaseRead.value);
+  if (descriptorRead.kind === 'missing') return undefined;
   const descriptor = reviveMeshDescriptor(
     decodeCanonicalDescriptorRecord<ZLinkMeshNodeDescriptor>(descriptorRead.value.bytes).descriptor
   );
@@ -4302,8 +4304,7 @@ function liveTargetDescriptor(
     descriptor.objectRole === ZLinkObjectRole.Server &&
     lease.ownerId === target.owner.ownerId &&
     BigInt(lease.leaseGeneration) === target.owner.leaseGeneration &&
-    leaseRead.value.expiresAt !== undefined &&
-    leaseRead.value.expiresAt.getTime() > leaseRead.value.storeNow.getTime()
+    leaseExpiresAt.getTime() > leaseRead.value.storeNow.getTime()
     ? descriptor
     : undefined;
 }
@@ -4453,10 +4454,7 @@ function matchesLiveOwnerLease(
   ownerId: string,
   leaseGeneration: bigint
 ): boolean {
-  if (
-    lease.value.expiresAt === undefined ||
-    lease.value.expiresAt.getTime() <= lease.value.storeNow.getTime()
-  ) {
+  if (requireOwnerLeaseExpiry(lease.value).getTime() <= lease.value.storeNow.getTime()) {
     return false;
   }
   const owner = decodeOwnerRecord(lease.value.bytes);
@@ -4474,11 +4472,8 @@ function sameDescriptorPredecessor(
 }
 
 function liveOwnerLeaseGeneration(lease: ZLinkStoreReadResult): bigint | undefined {
-  if (
-    lease.kind === 'missing' ||
-    lease.value.expiresAt === undefined ||
-    lease.value.expiresAt.getTime() <= lease.value.storeNow.getTime()
-  ) {
+  if (lease.kind === 'missing') return undefined;
+  if (requireOwnerLeaseExpiry(lease.value).getTime() <= lease.value.storeNow.getTime()) {
     return undefined;
   }
   return BigInt(decodeOwnerRecord(lease.value.bytes).leaseGeneration);

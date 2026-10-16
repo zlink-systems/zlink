@@ -31,6 +31,7 @@ import {
   storeKey
 } from '../../packages/framework/src/runtime/locations/in-memory-provider-location-store';
 import { ZLinkLocationStoreRepository } from '../../packages/framework/src/runtime/locations/location-store-repository';
+import { opaqueRecordPreimage } from '../../packages/framework/src/runtime/locations/opaque-record-key';
 import { encodeAuthorityKey } from '../../packages/framework/src/runtime/locations/authority-key-codec';
 import { ZLinkUserSpotCreationCoordinator } from '../../packages/framework/src/runtime/host/user-spot-creation-coordinator';
 import { ZLinkActorPlacementCoordinator } from '../../packages/framework/src/runtime/host/actor-placement-coordinator';
@@ -511,7 +512,9 @@ for (const backend of ['provider', 'memory'] as const) {
     'unactivated',
     'batchBound',
     'batchFits',
-    ...(backend === 'provider' ? (['memberReclaimed', 'memberCapacityCorrupt'] as const) : [])
+    ...(backend === 'provider'
+      ? (['memberReclaimed', 'memberCapacityCorrupt', 'memberMissingExpiry'] as const)
+      : [])
   ] as const) {
     test(`ended User Spot member release: ${backend} ${scenario}`, async () => {
       let now = new Date(100);
@@ -650,7 +653,9 @@ for (const backend of ['provider', 'memory'] as const) {
         return actorRequest.key;
       };
       const memberDescriptor =
-        scenario === 'memberReclaimed' || scenario === 'memberCapacityCorrupt'
+        scenario === 'memberReclaimed' ||
+        scenario === 'memberCapacityCorrupt' ||
+        scenario === 'memberMissingExpiry'
           ? await configure(await writeTargetDescriptor(store, 'owner-d', 'node-d', 60_000))
           : old;
       const members =
@@ -748,6 +753,45 @@ for (const backend of ['provider', 'memory'] as const) {
         target: placement(live),
         actorRelocationPolicy: 'disabled' as const
       };
+      if (scenario === 'memberMissingExpiry') {
+        const memberOwnerKey = storeKey(
+          opaqueRecordPreimage('owner-lease', memberDescriptor.ownerId)
+        );
+        assert.equal(
+          (
+            await provider.write({
+              conditions: [],
+              mutations: [
+                {
+                  kind: 'put',
+                  key: memberOwnerKey,
+                  bytes: Buffer.from(
+                    JSON.stringify({
+                      recordVersion: 1,
+                      ownerId: memberDescriptor.ownerId,
+                      leaseGeneration: memberDescriptor.leaseGeneration.toString()
+                    })
+                  )
+                }
+              ]
+            })
+          ).kind,
+          'applied'
+        );
+        const capacityKey = storeKey('zlink:v11:capacity:mesh:node-d');
+        const capacityBefore = await provider.read(capacityKey);
+        const write = provider.write.bind(provider);
+        let writes = 0;
+        provider.write = async (...args: Parameters<typeof write>) => {
+          writes++;
+          return write(...args);
+        };
+        await assert.rejects(store.reserve(next), /owner lease record is invalid/i);
+        assert.equal(writes, 0);
+        assert.deepEqual(await versions(), before);
+        assert.deepEqual(await provider.read(capacityKey), capacityBefore);
+        return;
+      }
       if (scenario === 'memberCapacityCorrupt') {
         const capacityKey = storeKey('zlink:v11:capacity:mesh:node-d');
         const capacity = await provider.read(capacityKey);
@@ -1348,30 +1392,132 @@ test('provider reclaims Reserved after descriptor lifecycle replacement with a l
   assert.equal(next.kind, 'reserved');
 });
 
-test('owner lease uses exact claim read renew and release fencing', async () => {
-  let now = 100;
-  const store = new ZLinkInMemoryLocationStore(() => new Date(now));
-  const claimed = await store.claimOwnerLease('owner-a', 50);
-  assert.equal(claimed.kind, 'claimed');
-  if (claimed.kind !== 'claimed') return;
-  assert.equal(claimed.token.leaseGeneration, 1n);
-  assert.deepEqual(await store.claimOwnerLease('owner-a', 50), { kind: 'conflict' });
-  const found = await store.readOwnerLease('owner-a');
-  assert.equal(found.kind, 'found');
-  assert.deepEqual(await store.renewOwnerLease({ ownerId: 'owner-a', leaseGeneration: 2n }, 50), {
-    kind: 'stale'
+for (const backend of ['provider', 'memory'] as const) {
+  test(`owner lease uses exact claim read renew and release fencing: ${backend}`, async () => {
+    let now = 100;
+    const store =
+      backend === 'provider'
+        ? new ZLinkLocationStoreRepository(
+            new ZLinkInMemoryProviderLocationStore(() => new Date(now)),
+            () => new Date(now)
+          )
+        : new ZLinkInMemoryLocationStore(() => new Date(now));
+    assert.equal((await store.readOwnerLease('missing-owner')).kind, 'missing');
+    assert.deepEqual(await store.renewOwnerLease(owner('missing-owner', 1n), 50), {
+      kind: 'stale'
+    });
+    assert.equal(await store.releaseOwnerLease(owner('missing-owner', 1n)), 'stale');
+    const claimed = await store.claimOwnerLease('owner-a', 50);
+    assert.equal(claimed.kind, 'claimed');
+    if (claimed.kind !== 'claimed') return;
+    assert.equal(claimed.token.leaseGeneration, 1n);
+    assert.deepEqual(await store.claimOwnerLease('owner-a', 50), { kind: 'conflict' });
+    const found = await store.readOwnerLease('owner-a');
+    assert.equal(found.kind, 'found');
+    assert.deepEqual(await store.renewOwnerLease({ ownerId: 'owner-a', leaseGeneration: 2n }, 50), {
+      kind: 'stale'
+    });
+    const renewed = await store.renewOwnerLease(claimed.token, 50);
+    assert.equal(renewed.kind, 'renewed');
+    assert.equal(
+      await store.releaseOwnerLease({ ownerId: 'owner-a', leaseGeneration: 2n }),
+      'stale'
+    );
+    assert.equal(await store.releaseOwnerLease(claimed.token), 'released');
+    now++;
+    const reclaimed = await store.claimOwnerLease('owner-a', 50);
+    assert.equal(reclaimed.kind, 'claimed');
+    if (reclaimed.kind === 'claimed') {
+      assert.ok(reclaimed.token.leaseGeneration > claimed.token.leaseGeneration);
+      now += 50;
+      assert.equal((await store.readOwnerLease('owner-a')).kind, 'missing');
+      assert.deepEqual(await store.renewOwnerLease(reclaimed.token, 50), { kind: 'stale' });
+      assert.equal(await store.releaseOwnerLease(reclaimed.token), 'stale');
+    }
   });
-  const renewed = await store.renewOwnerLease(claimed.token, 50);
-  assert.equal(renewed.kind, 'renewed');
-  assert.equal(await store.releaseOwnerLease({ ownerId: 'owner-a', leaseGeneration: 2n }), 'stale');
-  assert.equal(await store.releaseOwnerLease(claimed.token), 'released');
-  now++;
-  const reclaimed = await store.claimOwnerLease('owner-a', 50);
-  assert.equal(reclaimed.kind, 'claimed');
-  if (reclaimed.kind === 'claimed') {
-    assert.ok(reclaimed.token.leaseGeneration > claimed.token.leaseGeneration);
-  }
-});
+}
+
+for (const operation of [
+  'read',
+  'reserve',
+  'publish',
+  'removeAll',
+  'abort',
+  'abortDescriptorMissing'
+] as const) {
+  test(`provider owner lease rejects missing expiry before ${operation}`, async () => {
+    const provider = new ZLinkInMemoryProviderLocationStore(() => new Date(100));
+    const store = new ZLinkLocationStoreRepository(provider, () => new Date(100));
+    const descriptor = await writeTargetDescriptor(store, 'owner-a', 'node-a', 60_000);
+    const token = owner(descriptor.ownerId, descriptor.leaseGeneration);
+    const request = reserveRequest('malformed-owner-object', {
+      ...target('node-a', 'owner-a'),
+      owner: token
+    });
+    const reserved = operation === 'reserve' ? undefined : await store.reserve(request);
+    if (reserved !== undefined) assert.equal(reserved.kind, 'reserved');
+    if (operation === 'abortDescriptorMissing') {
+      assert.equal(
+        await store.removeMeshNode({ meshName: 'mesh', rid: 'node-a' }, token),
+        ZLinkLocationWriteStatus.Stored
+      );
+      assert.deepEqual((await store.listMeshNodes('mesh')).items, []);
+    }
+    const ownerKey = storeKey(opaqueRecordPreimage('owner-lease', token.ownerId));
+    const existing = await provider.read(ownerKey);
+    if (existing.kind !== 'found') throw new Error('owner lease missing');
+    assert.equal(
+      (
+        await provider.write({
+          conditions: [{ kind: 'version', key: ownerKey, expected: existing.value.version }],
+          mutations: [{ kind: 'put', key: ownerKey, bytes: existing.value.bytes }]
+        })
+      ).kind,
+      'applied'
+    );
+    const corrupted = await provider.read(ownerKey);
+    if (corrupted.kind !== 'found') throw new Error('owner lease missing');
+    assert.equal(corrupted.value.expiresAt, undefined);
+    const authorityKey = encodeAuthorityKey(request.key.kind, request.key.globalId);
+    const authorityBefore = await store.readAuthority(authorityKey);
+    const capacityKey = storeKey('zlink:v11:capacity:mesh:node-a');
+    const capacityBefore = await provider.read(capacityKey);
+    const write = provider.write.bind(provider);
+    let writes = 0;
+    provider.write = async (...args: Parameters<typeof write>) => {
+      writes++;
+      return write(...args);
+    };
+    await assert.rejects(async () => {
+      switch (operation) {
+        case 'read':
+          return store.readOwnerLease(token.ownerId);
+        case 'reserve':
+          return store.reserve(request);
+        case 'publish':
+          return store.updateMeshNode(
+            { ...descriptor, descriptorRevision: 2n },
+            ZLinkLocationWriteIntent.Renew
+          );
+        case 'removeAll':
+          return store.removeAllByOwner(token);
+        case 'abort':
+        case 'abortDescriptorMissing':
+          if (reserved?.kind !== 'reserved') throw new Error('reservation missing');
+          return store.abort({
+            key: request.key,
+            target: request.target,
+            reservationId: reserved.reservationId,
+            expectedStoreVersion: reserved.creating.storeVersion.value
+          });
+      }
+    }, /owner lease record is invalid/i);
+    assert.equal(writes, 0);
+    assert.deepEqual(await provider.read(ownerKey), corrupted);
+    assert.deepEqual(await store.readAuthority(authorityKey), authorityBefore);
+    assert.deepEqual(await provider.read(capacityKey), capacityBefore);
+  });
+}
 
 test('User Spot target selection excludes an expired descriptor owner and continues with the live owner', async () => {
   let now = 100;
