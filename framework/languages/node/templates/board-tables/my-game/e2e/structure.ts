@@ -98,13 +98,15 @@ export function checkStructure(path = 'zlink.structure.json'): void {
     }
   }
   unique(logical, 'logical Spot ID');
+  for (const node of nodes.filter((node) => node.role === 'table')) {
+    assert(
+      spots.some((spot) => spot.kind === 'entry' && spot.owner === node.id),
+      `Table node lacks Entry Spot: ${node.id}`
+    );
+  }
   assert(
-    spots.some((s) => s.kind === 'entry'),
-    'Missing Entry Spot'
-  );
-  assert(
-    spots.some((s) => s.type === Names.table),
-    'Missing Table type'
+    spots.some((s) => s.kind === 'user' && s.type === Names.table && s.dynamic === true),
+    'Missing dynamic Table family'
   );
   for (const edge of array(s.edges).map(object)) {
     owner(edge.from);

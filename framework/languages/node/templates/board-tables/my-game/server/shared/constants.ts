@@ -14,11 +14,15 @@ export const Game = {
   cardsPerPlayer: 2,
   noSeat: -1
 } as const;
+const messageFollowMs = 30_000;
+const relocationMs = 25_000;
 export const Limits = {
   observationCapacity: 64,
   messageMs: 10_000,
   startupMs: 30_000,
-  relocationMs: 25_000,
+  messageFollowMs,
+  relocationMs,
+  safeMs: messageFollowMs + relocationMs,
   shutdownMs: 10_000
 } as const;
 export const Reasons = {
