@@ -49,6 +49,7 @@ test('raw receive waits for the host permit before touching the binding', async 
   let receives = 0;
   const router = {
     setRoutingId() {},
+    setReceiveFlowState(_state: Parameters<ZLinkRawRouterPort['setReceiveFlowState']>[0]) {},
     bind() {},
     localEndpoint: () => 'inproc://raw-job-queue',
     monitor: () => ({ statusReady: () => false, close() {} }),
@@ -92,6 +93,7 @@ test('raw shutdown cancels a pre-receive capacity wait without touching the bind
   let receives = 0;
   const router = {
     setRoutingId() {},
+    setReceiveFlowState(_state: Parameters<ZLinkRawRouterPort['setReceiveFlowState']>[0]) {},
     bind() {},
     localEndpoint: () => 'inproc://raw-job-queue-cancel',
     monitor: () => ({ statusReady: () => false, close() {} }),
@@ -132,6 +134,7 @@ test('raw protocol drop closes its retained Core record and permit exactly once'
   let retainedCloseCount = 0;
   const received = {
     sourceRid: 'malformed-peer',
+    routeGeneration: 1n,
     sourceRoute: Buffer.from('malformed-peer'),
     parts: [Buffer.from([0xff])],
     close() {
@@ -142,6 +145,7 @@ test('raw protocol drop closes its retained Core record and permit exactly once'
   let next = true;
   const router = {
     setRoutingId() {},
+    setReceiveFlowState(_state: Parameters<ZLinkRawRouterPort['setReceiveFlowState']>[0]) {},
     bind() {},
     localEndpoint: () => 'inproc://raw-job-queue-protocol',
     monitor: () => ({ statusReady: () => false, close() {} }),
@@ -166,6 +170,16 @@ test('raw protocol drop closes its retained Core record and permit exactly once'
     applicationJobQueue: applicationJobs
   });
   runtime.start();
+  runtime.topology.admit(
+    {
+      ...descriptor(),
+      nodeRoutingId: received.sourceRid,
+      advertisedEndpoint: `inproc://${received.sourceRid}`
+    },
+    received.routeGeneration,
+    undefined,
+    () => runtime.liveness.admit(received.sourceRid, received.routeGeneration, performance.now())
+  );
   try {
     assert.equal(await runtime.pumpOne(), 'protocolError');
     assert.equal(retainedCloseCount, 1);
