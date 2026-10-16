@@ -9,8 +9,7 @@ public sealed record NodeSettings(
     string MeshEndpoint,
     string? StreamEndpoint = null,
     string[]? ZoneIds = null,
-    int ZoneCapacity = 0,
-    bool Bootstrap = true
+    int ZoneCapacity = 0
 )
 {
     public static NodeSettings Load(string[] args)

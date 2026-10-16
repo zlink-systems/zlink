@@ -5,6 +5,5 @@
   "MeshEndpoint": "tcp://127.0.0.1:7103",
   "StreamEndpoint": null,
   "ZoneIds": [],
-  "ZoneCapacity": 0,
-  "Bootstrap": false
+  "ZoneCapacity": 0
 }
