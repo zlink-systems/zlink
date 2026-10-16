@@ -618,6 +618,15 @@ The close procedure proceeds in the following order.
    diagnostics. An already accepted message is not placed again
    ([Submit and Completion §5](../01-execution/01-submit-and-completion.en.md#5-backpressure-and-error-classification)).
 
+**A context Close requested before Ready starts after Ready.** Handlers and timer callbacks don't run
+before Ready ([Spot timer §1](10-spot-timer.en.md#1-timer-generation-and-cancel)), so such a request only comes from
+`Configure`, `OnCreateAsync` or `OnInitializeAsync`. The request enters the lifecycle lane as the single Close work
+item of step 1, starts after the Spot becomes Ready, and ends by the procedure above: `true` for the current
+incarnation this host created. The requesting callback doesn't wait for the Close to complete — the Close starts
+only after that callback returns and the Spot becomes Ready, so waiting inside it could never complete. If creation
+is rejected or fails, or the activation is discarded, before Ready, there is no incarnation to close and the Close
+ends with idempotent `false`.
+
 A message placed after the Close work item that has no Instance intent ends with the result of
 [§9](#9-failure-and-observability). If that incarnation no longer exists, idempotent `false`; if a
 different generation of the same Spot ID exists, `InvalidOperation`; if sealing for a move,
