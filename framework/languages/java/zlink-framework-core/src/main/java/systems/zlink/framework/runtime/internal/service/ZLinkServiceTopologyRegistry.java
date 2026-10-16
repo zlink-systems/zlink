@@ -2,6 +2,7 @@ package systems.zlink.framework.runtime.internal.service;
 
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
+import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -76,12 +77,13 @@ public final class ZLinkServiceTopologyRegistry {
      * the selected route's identity; a different connection for the same RID is Core's replacement
      * of the previous route (Core ROUTER §10.1), so this registry never chooses between pipes.
      */
-    public AdmissionResult admit(ZLinkServiceNodeDescriptor descriptor, String connectionId) {
-        return inStateLane(() -> admitOnLane(descriptor, connectionId));
+    public AdmissionResult admit(
+            ZLinkServiceNodeDescriptor descriptor, String connectionId, int command) {
+        return inStateLane(() -> admitOnLane(descriptor, connectionId, command));
     }
 
     private AdmissionResult admitOnLane(
-            ZLinkServiceNodeDescriptor descriptor, String connectionId) {
+            ZLinkServiceNodeDescriptor descriptor, String connectionId, int command) {
         if (descriptor == null || connectionId == null || connectionId.isBlank()) {
             return AdmissionResult.INVALID_DESCRIPTOR;
         }
@@ -92,43 +94,33 @@ public final class ZLinkServiceTopologyRegistry {
             return AdmissionResult.INVALID_DESCRIPTOR;
         }
         Peer current = peers.get(descriptor.nodeRoutingId());
-        if (current != null && current.connectionId().equals(connectionId)) {
-            return admitDescriptorUpdate(current, descriptor);
-        }
-        if (current != null
-                && current.descriptor().lifecycleGeneration() == descriptor.lifecycleGeneration()
-                && descriptor.descriptorRevision() > current.descriptor().descriptorRevision()
-                && !immutableFieldsMatch(current.descriptor(), descriptor)) {
-            return AdmissionResult.INVALID_DESCRIPTOR;
-        }
-        if (current != null
-                && current.descriptor().lifecycleGeneration() == descriptor.lifecycleGeneration()
-                && (current.descriptor().descriptorRevision() > descriptor.descriptorRevision()
-                        || current.descriptor().descriptorRevision()
-                                        == descriptor.descriptorRevision()
-                                && !current.descriptor().equals(descriptor))) {
+        boolean sameConnection = current != null && current.connectionId().equals(connectionId);
+        boolean sameLifecycle =
+                current != null
+                        && current.descriptor().lifecycleGeneration()
+                                == descriptor.lifecycleGeneration();
+        if (!sameLifecycle && (sameConnection || command == ServiceWireConstants.COMMAND_UPDATE))
             return AdmissionResult.STALE_DESCRIPTOR;
-        }
-        peers.put(descriptor.nodeRoutingId(), new Peer(descriptor, connectionId));
-        readyConnections.remove(descriptor.nodeRoutingId());
-        rebuildChannelPlansOnLane();
-        return AdmissionResult.ADMITTED;
-    }
-
-    private AdmissionResult admitDescriptorUpdate(
-            Peer current, ZLinkServiceNodeDescriptor descriptor) {
-        if (current.descriptor().lifecycleGeneration() != descriptor.lifecycleGeneration()
-                || current.descriptor().descriptorRevision() > descriptor.descriptorRevision()
-                || current.descriptor().descriptorRevision() == descriptor.descriptorRevision()
-                        && !current.descriptor().equals(descriptor)) {
-            return AdmissionResult.STALE_DESCRIPTOR;
-        }
-        if (!immutableFieldsMatch(current.descriptor(), descriptor)) {
-            return AdmissionResult.INVALID_DESCRIPTOR;
+        if (sameLifecycle) {
+            var previous = current.descriptor();
+            if (descriptor.descriptorRevision() < previous.descriptorRevision()
+                    || descriptor.descriptorRevision() == previous.descriptorRevision()
+                            && !descriptor.equals(previous)) {
+                return AdmissionResult.STALE_DESCRIPTOR;
+            }
+            if (descriptor.descriptorRevision() > previous.descriptorRevision()) {
+                if (command != ServiceWireConstants.COMMAND_UPDATE
+                        || !immutableFieldsMatch(previous, descriptor)) {
+                    return AdmissionResult.INVALID_DESCRIPTOR;
+                }
+            }
         }
         peers.put(
                 descriptor.nodeRoutingId(),
-                new Peer(descriptor, current.connectionId(), current.liveness()));
+                sameConnection
+                        ? new Peer(descriptor, connectionId, current.liveness())
+                        : new Peer(descriptor, connectionId));
+        if (!sameConnection) readyConnections.remove(descriptor.nodeRoutingId());
         rebuildChannelPlansOnLane();
         return AdmissionResult.ADMITTED;
     }
@@ -319,29 +311,28 @@ public final class ZLinkServiceTopologyRegistry {
         return inStateLane(() -> hasSelectableChannelOnLane(requiredChannelName));
     }
 
-    public boolean hasSelectableChannelFromOwner(String channelName) {
-        return stateLane.isOnLane()
-                ? hasSelectableChannelOnLane(requireChannelName(channelName))
-                : hasSelectableChannel(channelName);
-    }
-
     private boolean hasSelectableChannelOnLane(String channelName) {
         ChannelSelectionPlan plan = channelPlans.get(channelName);
         return plan != null && !plan.isEmpty();
     }
 
     public boolean hasReadyChannel(String channelName) {
-        return readyChannelMemberCount(channelName) > 0;
+        String requiredChannelName = requireChannelName(channelName);
+        return (stateLane.isOnLane()
+                        ? readyChannelMemberCountOnLane(requiredChannelName)
+                        : inStateLane(() -> readyChannelMemberCountOnLane(requiredChannelName)))
+                > 0;
     }
 
     /** Reads the selector's current candidates without advancing its cursor. */
     public long readyChannelMemberCount(String channelName) {
         String requiredChannelName = requireChannelName(channelName);
-        return inStateLane(
-                () -> {
-                    ChannelSelectionPlan plan = readyChannelPlans.get(requiredChannelName);
-                    return plan == null ? 0L : (long) plan.candidates.size();
-                });
+        return inStateLane(() -> readyChannelMemberCountOnLane(requiredChannelName));
+    }
+
+    private long readyChannelMemberCountOnLane(String channelName) {
+        ChannelSelectionPlan plan = readyChannelPlans.get(channelName);
+        return plan == null ? 0L : (long) plan.candidates.size();
     }
 
     public boolean hasSelectableChannel(String channelName, Predicate<Peer> isReady) {

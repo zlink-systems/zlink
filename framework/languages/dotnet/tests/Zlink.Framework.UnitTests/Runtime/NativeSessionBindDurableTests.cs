@@ -66,6 +66,17 @@ public sealed partial class StatefulServiceRuntimeTests
             17,
             1
         );
+        // Intent retirement fixes the outcome immediately; the durable owner
+        // publishes its record asynchronously. Keep the deadline clock frozen
+        // and wait for that record's ready edge before consuming it.
+        var completionReady = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        source.SetReadyHandler(domains =>
+        {
+            completionReady.TrySetResult();
+            return domains;
+        });
         var timeout = TimeSpan.FromSeconds(2);
         Assert.Equal(
             SubmitResult.Ok,
@@ -80,6 +91,7 @@ public sealed partial class StatefulServiceRuntimeTests
             )
         );
         source.RemovePeerExpectation(target, endpoint);
+        await completionReady.Task.WaitAsync(timeout);
         var completion = Assert.Single(
             DrainRecords(source),
             record => record.OperationId == operation && record.Kind == MeshRecordKind.Completion

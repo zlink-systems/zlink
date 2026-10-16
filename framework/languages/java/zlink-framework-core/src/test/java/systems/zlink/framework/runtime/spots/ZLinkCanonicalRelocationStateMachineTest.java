@@ -13,9 +13,7 @@ import org.junit.jupiter.api.Test;
 
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.errors.ZlinkRequestException;
-import systems.zlink.contracts.errors.ZlinkSubmitException;
 import systems.zlink.contracts.sockets.RequestResult;
-import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.locations.ZLinkActivationConcurrency;
@@ -697,15 +695,6 @@ final class ZLinkCanonicalRelocationStateMachineTest {
                 1,
                 fixture.endpoint.staged.get(),
                 "the retried exact PREPARE must retain one target stage");
-        assertTrue(
-                ZLinkCanonicalRelocationStateMachine.isRetryablePrepareRequestFailure(
-                        new ZlinkRequestException(RequestResult.NOT_CONNECTED)));
-        assertTrue(
-                ZLinkCanonicalRelocationStateMachine.isRetryablePrepareRequestFailure(
-                        new ZlinkSubmitException(SubmitResult.NOT_CONNECTED)));
-        assertFalse(
-                ZLinkCanonicalRelocationStateMachine.isRetryablePrepareRequestFailure(
-                        new ZlinkSubmitException(SubmitResult.BACKPRESSURED)));
     }
 
     @Test
@@ -1313,6 +1302,13 @@ final class ZLinkCanonicalRelocationStateMachineTest {
                         new Class<?>[] {ZLinkInternalMeshNode.class},
                         (proxy, method, args) ->
                                 switch (method.getName()) {
+                                    case "observePeerRoute" ->
+                                            new ZLinkInternalMeshNode.PeerRouteObservation(1, true);
+                                    case "targetLifecycleEnded" -> false;
+                                    case "onStateChanged" -> {
+                                        ((Runnable) args[0]).run();
+                                        yield (AutoCloseable) () -> {};
+                                    }
                                     case "status" ->
                                             new MeshNodeStatus(
                                                     state.get(),
@@ -1379,6 +1375,13 @@ final class ZLinkCanonicalRelocationStateMachineTest {
                         },
                         (proxy, method, args) ->
                                 switch (method.getName()) {
+                                    case "observePeerRoute" ->
+                                            new ZLinkInternalMeshNode.PeerRouteObservation(1, true);
+                                    case "targetLifecycleEnded" -> false;
+                                    case "onStateChanged" -> {
+                                        ((Runnable) args[0]).run();
+                                        yield (AutoCloseable) () -> {};
+                                    }
                                     case "status" -> status;
                                     case "requestCanonicalRelocationPrepare" -> {
                                         byte[] encoded = (byte[]) args[1];

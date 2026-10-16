@@ -164,15 +164,19 @@ class ZLinkSpotNodeAutoConnectExecutor implements IZLinkAutoConnectExecutor {
   }
 
   async connect(target: ZLinkAutoConnectTarget): Promise<boolean> {
-    if (this.manualConnections) return false;
     const key = connectionKey(target);
+    if (
+      !this.connectionIntents.has(key) &&
+      this.node.hasPeerRouteOrConnectionIntent?.(target.nodeRid, target.endpoint) === true
+    )
+      return false;
     const intent = await this.lane.run(() => this.prepareConnectCore(key));
     if (intent === undefined) return true;
     return await runDetachedSpotNodeAutoConnect(() => this.connectPeer(target, key, intent));
   }
 
   disconnect(target: ZLinkAutoConnectTarget): void {
-    if (this.manualConnections) return;
+    if (!this.connectionIntents.has(connectionKey(target))) return;
     this.disconnectPeer(target);
   }
 

@@ -7,25 +7,56 @@ namespace Zlink.Framework.UnitTests;
 public sealed partial class StatefulServiceRuntimeTests
 {
     [Theory]
-    [InlineData(true, false, false, true)]
-    [InlineData(false, false, false, true)]
-    [InlineData(true, true, false, true)]
-    [InlineData(true, true, true, true)]
-    [InlineData(false, false, false, false)]
+    [InlineData(true, false, false, true, false)]
+    [InlineData(false, false, false, true, false)]
+    [InlineData(true, true, false, true, false)]
+    [InlineData(true, true, true, true, false)]
+    [InlineData(false, false, false, false, false)]
+    [InlineData(true, true, false, true, true)]
     public async Task DurableSenderIntentRemovalEndsUnavailableWhilePhysicalDisconnectReplays(
         bool removeIntent,
         bool removeExpectationFirst,
         bool ownerDisconnects,
-        bool observeExpectation
+        bool observeExpectation,
+        bool holdIntentNotification
     )
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();
         var deadlineTime = new ControllableTimeProvider();
+        var timeout = TimeSpan.FromSeconds(5);
         await using var source = NewNode(
             context,
             "lifecycle-source",
             deadlineTimeProvider: deadlineTime
         );
+        var completionReady = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        source.SetReadyHandler(domains =>
+        {
+            completionReady.TrySetResult();
+            return domains;
+        });
+        if (holdIntentNotification)
+        {
+            // Hold cleanup outside the state turn until the durable owner has
+            // published its terminal. Retirement itself must already be visible.
+            typeof(ZLinkManagedMeshNode)
+                .GetEvent(
+                    "PeerConnectionIntentRemoved",
+                    System.Reflection.BindingFlags.Instance
+                        | System.Reflection.BindingFlags.NonPublic
+                )!
+                .GetAddMethod(nonPublic: true)!
+                .Invoke(
+                    source,
+                    [
+                        new Func<RoutingId, Action?>(_ =>
+                            () => completionReady.Task.WaitAsync(timeout).GetAwaiter().GetResult()
+                        ),
+                    ]
+                );
+        }
         var replySubmissions = 0;
         await using var target = new ZLinkManagedMeshNode(
             context,
@@ -64,7 +95,6 @@ public sealed partial class StatefulServiceRuntimeTests
         await WaitUntilAsync(() =>
             source.Status().AdmittedPeerCount == 1 && target.Status().AdmittedPeerCount == 1
         );
-        var timeout = TimeSpan.FromSeconds(5);
         var reservation = new ObjectReservationFence(
             "lifecycle-reservation",
             "lifecycle-store",
@@ -99,6 +129,7 @@ public sealed partial class StatefulServiceRuntimeTests
             source.RemovePeerExpectation(target.RoutingId, targetEndpoint);
             if (terminalBeforeRouteLoss)
             {
+                await completionReady.Task.WaitAsync(timeout);
                 var completion = Assert.Single(
                     DrainRecords(source),
                     record =>
@@ -135,6 +166,7 @@ public sealed partial class StatefulServiceRuntimeTests
             }
             else
             {
+                await completionReady.Task.WaitAsync(timeout);
                 var completion = Assert.Single(
                     DrainRecords(source),
                     record =>
