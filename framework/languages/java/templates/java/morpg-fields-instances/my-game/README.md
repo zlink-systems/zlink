@@ -42,8 +42,8 @@ For local process debugging, install JDK 25 and use `./run-e2e.sh --local` or `p
 ```
 
 ```powershell
-./run-e2e.ps1
-./run-e2e.ps1 -Scenario field,dungeon,reconnect,update
+pwsh -NoProfile -File ./run-e2e.ps1
+pwsh -NoProfile -File ./run-e2e.ps1 -Scenario field,dungeon,reconnect,update
 ```
 
 The Java runner checks the structure, starts an isolated Redis Compose project and starts the Field, Instance and Session entrypoints. Redis and Framework listeners bind ephemeral loopback ports. Every run uses a unique Redis prefix and `.logs/run-<id>/` directory. Normal message-flow diagnostics are recorded in node stderr. Cleanup failures produce a nonzero exit code.
@@ -55,7 +55,7 @@ The Java runner checks the structure, starts an isolated Redis Compose project a
 | reconnect | A new physical Session binds the same Actor and observes the same Dungeon, members and stage. |
 | update | The occupied instance drains through all relocation signals; both Sessions and Dungeon state persist; the replacement instance accepts a new party. |
 
-Non-field scenarios share their party fixture. Selecting reconnect or update alone creates that fixture first. Structure-only validation is available through `./run-e2e.sh --check-structure` or `./run-e2e.ps1 -CheckStructure`.
+Non-field scenarios share their party fixture. Selecting reconnect or update alone creates that fixture first. Structure-only validation is available through `./run-e2e.sh --check-structure` or `pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure`.
 
 ## Known issues
 

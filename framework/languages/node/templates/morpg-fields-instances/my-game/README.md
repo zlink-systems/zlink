@@ -44,8 +44,8 @@ Build and outer cleanup logs are in `.logs/docker-<project>/`; node configuratio
 ```
 
 ```powershell
-./run-e2e.ps1
-./run-e2e.ps1 -Scenario field,dungeon,reconnect,update
+pwsh -NoProfile -File ./run-e2e.ps1
+pwsh -NoProfile -File ./run-e2e.ps1 -Scenario field,dungeon,reconnect,update
 ```
 
 | Scenario    | Verification                                                                                                      |

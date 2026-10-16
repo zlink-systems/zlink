@@ -14,8 +14,8 @@ Default builds and e2e run nodes and the client in Docker without a host SDK. Ru
 
 ```powershell
 pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
-./run-e2e.ps1
-./run-e2e.ps1 -Scenario channel,dungeon,reconnect,update
+pwsh -NoProfile -File ./run-e2e.ps1
+pwsh -NoProfile -File ./run-e2e.ps1 -Scenario channel,dungeon,reconnect,update
 pwsh -NoProfile -File ./run-e2e.ps1 --check-structure
 ```
 

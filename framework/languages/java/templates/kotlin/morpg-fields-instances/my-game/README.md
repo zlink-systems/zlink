@@ -52,7 +52,7 @@ The Kotlin runner checks the structure, starts an isolated Redis Compose project
 | reconnect | A new physical Session binds the same Actor and observes the same Dungeon, members and stage. |
 | update | The occupied instance drains through all relocation signals; both Sessions and Dungeon state persist; the replacement instance accepts a new party. |
 
-Non-field scenarios share their party fixture. Selecting reconnect or update alone creates that fixture first. Structure-only validation is available through `./run-e2e.sh --check-structure` or `./run-e2e.ps1 -CheckStructure`.
+Non-field scenarios share their party fixture. Selecting reconnect or update alone creates that fixture first. Structure-only validation is available through `./run-e2e.sh --check-structure` or `pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure`.
 
 ## Known issues
 

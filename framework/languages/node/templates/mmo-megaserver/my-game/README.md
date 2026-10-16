@@ -43,8 +43,8 @@ Build and outer cleanup logs are in `.logs/docker-<project>/`; node configuratio
 ```
 
 ```powershell
-./run-e2e.ps1
-./run-e2e.ps1 -Scenario region,dungeon,reconnect,update
+pwsh -NoProfile -File ./run-e2e.ps1
+pwsh -NoProfile -File ./run-e2e.ps1 -Scenario region,dungeon,reconnect,update
 ```
 
 | Scenario  | Assertions                                                                                                             |
@@ -76,4 +76,4 @@ Message Follow is explicitly set to 30 seconds. The `SAFE_TO_SHUTDOWN` observati
 
 기본 빌드와 e2e는 Docker에서 runner와 node를 실행한다. Bash는 `./run-e2e.sh`, PowerShell 7은 `pwsh -NoProfile -File ./run-e2e.ps1`을 사용한다. 로컬 프로세스 디버깅은 Node.js와 npm을 설치한 뒤 `--local` 또는 `-Local`로 실행한다. Docker 빌드·정리 로그는 `.logs/docker-<project>/`에 남는다.
 
-Docker Compose v2를 준비한 뒤 이 디렉터리에서 위 Build 명령으로 이미지를 빌드한다. Bash에서는 `./run-e2e.sh`, PowerShell 7에서는 `./run-e2e.ps1`로 지역 분리, 던전 생성, 재접속, host 교체 시나리오를 실행합니다. 개별 실행 방법은 위 Docker e2e 절에 있습니다. 각 실행은 고유 Redis prefix와 Compose project를 사용하며 로그를 `.logs/run-<id>/`에 보존합니다. 지역 host를 교체할 때는 `drain` 이후 relocation 완료와 `SAFE_TO_SHUTDOWN`을 확인하고 종료합니다. Framework 패키지 0.30.1의 공개 게시가 빌드 전제입니다.
+Docker Compose v2를 준비한 뒤 이 디렉터리에서 위 Build 명령으로 이미지를 빌드한다. Bash에서는 `./run-e2e.sh`, PowerShell 7에서는 `pwsh -NoProfile -File ./run-e2e.ps1`로 지역 분리, 던전 생성, 재접속, host 교체 시나리오를 실행합니다. 개별 실행 방법은 위 Docker e2e 절에 있습니다. 각 실행은 고유 Redis prefix와 Compose project를 사용하며 로그를 `.logs/run-<id>/`에 보존합니다. 지역 host를 교체할 때는 `drain` 이후 relocation 완료와 `SAFE_TO_SHUTDOWN`을 확인하고 종료합니다. Framework 패키지 0.30.1의 공개 게시가 빌드 전제입니다.
