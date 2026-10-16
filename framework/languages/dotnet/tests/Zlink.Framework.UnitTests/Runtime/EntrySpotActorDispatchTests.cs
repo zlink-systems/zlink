@@ -5677,6 +5677,125 @@ public sealed partial class EntrySpotActorDispatchTests
         Assert.True(await activation.AbortRelocationAsync(seal));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Relocation_completion_cannot_reattach_restored_timer_before_initialization(
+        bool configureFails
+    )
+    {
+        await using var services = new ServiceCollection().BuildServiceProvider();
+        var registration = new ZLinkFrameworkRegistration();
+        var runtime = new ZLinkFrameworkRuntime(
+            services,
+            new ThrowingBackendAdapterFactory(),
+            registration,
+            new ZLinkHandlerRegistry([]),
+            new ZLinkHandlerDispatcher(
+                services.GetRequiredService<IServiceScopeFactory>(),
+                registration
+            )
+        );
+        var activation = new ZLinkUserSpotActivation(
+            runtime,
+            services.CreateAsyncScope(),
+            new CapturingSpot(),
+            "completion-timer-target",
+            RoutingId.From("node"),
+            "node",
+            "channel",
+            TimeSpan.FromSeconds(1),
+            ZLinkUserSpotExecutionMode.SpotWide,
+            ZLinkSpotRelocationCoordinationMode.ApplicationSignaled,
+            restoreLogicalTimers: true
+        );
+        var spot = new RelocationCompletionTimerSpot(activation);
+        activation.AttachSpot(spot);
+        await using var cleanup = activation.ConfigureAwait(false);
+        await activation.RestoreLogicalTimersAsync([
+            ZLinkSpotTimerRelocationCodec.Encode(
+                new ZLinkSpotLogicalTimerSnapshot(
+                    typeof(RelocationCompletionTimerHandler),
+                    typeof(RelocationCompletionTimerSpot),
+                    new ZLinkTimerLogicalSnapshot(
+                        "round",
+                        TimeSpan.FromHours(1),
+                        new ZLinkTimerOptions(),
+                        DateTimeOffset.UnixEpoch,
+                        5,
+                        5,
+                        DateTimeOffset.UnixEpoch + TimeSpan.FromHours(6),
+                        null
+                    )
+                )
+            ),
+        ]);
+        if (configureFails)
+        {
+            var failure = new InvalidOperationException("Target configuration failed.");
+            Assert.Same(
+                failure,
+                await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+                    await activation.ConfigureAsync(
+                        [],
+                        () => throw failure,
+                        null,
+                        CancellationToken.None
+                    )
+                )
+            );
+        }
+        var seal = await activation.TrySealRelocationAsync();
+        Assert.NotNull(seal);
+        Assert.Single(seal.LogicalTimers);
+        Assert.False(activation.IsRelocationReady);
+        var error = await Assert.ThrowsAsync<ZLinkConfigurationException>(async () =>
+            await activation.InvokeTargetRelocationReadyCompletedAsync(seal, CancellationToken.None)
+        );
+        Assert.True(spot.CallbackEntered);
+        Assert.False(spot.Initialized);
+        Assert.False(activation.IsRelocationReady);
+        Assert.Equal("SPOT timer registration is sealed for relocation.", error.Message);
+        Assert.Contains(nameof(ZLinkSpotTimerRegistry), error.StackTrace);
+    }
+
+    private sealed class RelocationCompletionTimerSpot(IZLinkSpotContext context) : IZLinkSpot
+    {
+        public IZLinkSpotContext Context { get; } = context;
+        internal bool CallbackEntered { get; private set; }
+        internal bool Initialized { get; private set; }
+
+        public ValueTask OnInitializeAsync(CancellationToken cancellationToken)
+        {
+            Initialized = true;
+            return ValueTask.CompletedTask;
+        }
+
+        public async ValueTask OnRelocationReadyCompletedAsync(
+            ZLinkSpotRelocationReadyCompletion completion,
+            CancellationToken cancellationToken
+        )
+        {
+            Assert.Equal(ZLinkSpotRelocationReadyOutcome.Relocated, completion.Outcome);
+            CallbackEntered = true;
+            await Context.AddTimer<RelocationCompletionTimerHandler>(
+                "round",
+                TimeSpan.FromHours(2),
+                cancellationToken: cancellationToken
+            );
+        }
+    }
+
+    private sealed class RelocationCompletionTimerHandler
+        : IZLinkSpotTimerHandler<RelocationCompletionTimerSpot>
+    {
+        public ValueTask HandleAsync(
+            RelocationCompletionTimerSpot spot,
+            ZLinkTimerTick tick,
+            CancellationToken cancellationToken
+        ) => ValueTask.CompletedTask;
+    }
+
     [Fact]
     public async Task User_spot_concurrent_dispose_callers_wait_for_native_cleanup()
     {

@@ -1,7 +1,4 @@
-import { AsyncResource } from 'node:async_hooks';
-import { ZLinkStateLane } from '../execution/state-lane';
-
-const detachedStateLaneResource = new AsyncResource('zlink:service-maintenance-runtime');
+import { startOutsideStateLane, ZLinkStateLane } from '../execution/state-lane';
 
 export type ServiceMaintenanceKind = 'retire' | 'shutdown';
 export type ServiceMaintenanceState =
@@ -247,8 +244,4 @@ export class ServiceMaintenanceRuntime {
   }): void {
     for (const observer of publication.observers) observer(publication.snapshot);
   }
-}
-
-function startOutsideStateLane<T>(work: () => T): T {
-  return detachedStateLaneResource.runInAsyncScope(work);
 }
