@@ -1560,8 +1560,7 @@ void app_t::_apply_zlink_framework ()
                             route->node_generation,
                             {owner->owner_id, owner->lease_generation},
                             *route->session_rid,
-                            route->binding_generation,
-                            route->session_sequence};
+                            route->binding_generation};
                       }
                       page.continuation_token = std::move (listed.continuation_token);
                   } while (page.continuation_token);
