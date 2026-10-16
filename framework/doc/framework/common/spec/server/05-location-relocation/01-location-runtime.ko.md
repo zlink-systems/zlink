@@ -1396,15 +1396,17 @@ target route를 채택한다.
 이 경우 source는 보관 사본을 해제하고 source 정리를 한 번 수행한다. Message Follow route는 다시 읽은
 owner에 따라 다르다.
 
-- **Owner가 첫 target이면**(첫 target이 steady로 정규화만 했다) `Preserve` 정규화는 owner와
-  generation을 유지하므로(§6.1) 다시 읽은 authority의 `AuthorityOwnerGeneration`이 첫 target의 commit
-  값이다. Source는 이 값으로 §7.3의 route를 평소대로 설치한다.
+- **Owner가 첫 target이면** source는 다시 읽은 authority의 현재 `AuthorityOwnerGeneration`으로 §7.3의
+  route를 설치한다. 첫 target이 정규화만 했다면 이 값은 첫 commit 값과 같고(§6.1의 `Preserve`는 owner와
+  generation을 유지한다), 다른 node를 거쳐 첫 target으로 돌아왔다면 첫 target이 지금 보유한 authority의
+  값이다. 어느 경우든 route가 전달하는 message는 그 값을 가진 현재 owner가 받는다.
 - **Owner가 첫 target도 source도 아니면**(첫 target에서 다음 이동이 이어졌다) 다시 읽은 authority에는
   첫 target의 commit 값이 남지 않고, Store는 generation을 전역 counter로 발급하므로 source는 그 값을
   알 수 없다. Source는 §7.3의 route를 설치하지 않는다. 이 **연속 이동 예외**에서 이후 source로 도착한
   message는 §7.3의 route 없음 결과(`Unavailable`)로 끝난다. Source는 다시 읽은 현재 owner로 직접 가는
-  route를 만들거나 첫 target의 generation을 추측하지 않는다. 첫 target은 다음 이동 전에 dispatch를 열고
-  Session owner에 command 44를 보냈으므로, bound Session의 route는 이미 source를 거치지 않는다. `ObjectGeneration`이
+  route를 만들거나 첫 target의 generation을 추측하지 않는다. Bound Session의 route는 각 target의 command 44와 이후
+  이동의 seal·route 전환([Session과 Actor binding §8](../04-session/02-session-actor-binding.ko.md#8-actor-relocation-중-session의-책임))이
+  옮기며, source의 Message Follow route에 의존하지 않는다. `ObjectGeneration`이
 다르거나 `AuthorityOwnerGeneration`이 커지지 않았는데 owner가 source도 첫 target도 아니면 기존대로
 실패(`DataLost`)로 판정한다. `Preserve` 응답이 불확정이면 source lease가 유효한 동안 새 timer 없이 이 절의 Store-failure 정책으로 반복한다. Source lease 만료 또는 source가 다시 읽은 authority가 없음(`Missing`)은 source의 작업을 [공통 relocation §4.4](04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)의 expired-owner terminal로 끝낸다. `Missing`이면 source fence가 성립하지 않으므로 source는 `Preserve`를 시도하지 않는다. Source는 owner lease가
 §5에 따라 유효할 때만 dispatch를 재개한다.

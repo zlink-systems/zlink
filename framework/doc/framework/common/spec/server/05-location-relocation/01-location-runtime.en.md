@@ -1549,16 +1549,20 @@ separate commit record.
 In that case the source releases the retained copy and runs source cleanup once. The Message Follow
 route depends on the reread owner.
 
-- **If the owner is the first target** (the first target only normalized to steady), `Preserve`
-  normalization keeps the owner and generation (§6.1), so the reread `AuthorityOwnerGeneration` is the
-  first target's commit value. The source installs the §7.3 route with it as usual.
+- **If the owner is the first target**, the source installs the §7.3 route with the reread authority's
+  current `AuthorityOwnerGeneration`. If the first target only normalized, this equals the first commit
+  value (§6.1's `Preserve` keeps owner and generation); if the object came back to the first target through
+  another node, it is the value the first target holds now. Either way, a message the route forwards is
+  received by the current owner holding that value.
 - **If the owner is neither the first target nor the source** (a further move followed from the first
   target), the reread authority no longer holds the first target's commit value, and the Store issues
   generations from a global counter, so the source cannot know it. The source installs no §7.3 route.
   Under this **chained-move exception**, a message that later reaches the source ends with §7.3's
   no-route result (`Unavailable`). The source neither creates a route straight to the reread current
-  owner nor guesses the first target's generation. The first target opened dispatch and sent command 44
-  to the Session owners before the further move, so bound Session routes already bypass the source.
+  owner nor guesses the first target's generation. Bound Session routes are moved by each target's command 44
+  and the seal and route switch of later moves
+  ([Session and Actor Binding §8](../04-session/02-session-actor-binding.en.md#8-session-responsibilities-during-actor-relocation)),
+  and don't depend on the source's Message Follow route.
 If `ObjectGeneration` differs, or `AuthorityOwnerGeneration` did not increase and the owner is neither the
 source nor the first target, the source still fails with `DataLost`. An indeterminate `Preserve` result repeats under this section's Store-failure policy without a new timer while the source lease is valid. Source lease expiry, or an authority that the source rereads as absent (`Missing`), ends source work under the expired-owner terminal in [common relocation §4.4](04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover). On `Missing` the source fence no longer holds, so the source does not attempt `Preserve`. The source may resume dispatch only
 while its owner lease remains valid under §5.
