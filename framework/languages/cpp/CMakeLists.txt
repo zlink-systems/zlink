@@ -1805,6 +1805,26 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     test_cpp_framework_http_sync_submit
     PROPERTIES
       RESOURCE_LOCK zlink_cpp_framework_http_ports)
+  # Observe native synchronization in the real DI module independently of
+  # whether the Framework package is built as a static or shared library.
+  add_executable(test_cpp_framework_DI_singleton
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_di_singleton.cpp
+    framework/src/runtime/configuration/services.cpp)
+  target_compile_features(test_cpp_framework_DI_singleton PRIVATE cxx_std_20)
+  target_include_directories(test_cpp_framework_DI_singleton PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/include)
+  target_link_libraries(test_cpp_framework_DI_singleton PRIVATE Threads::Threads)
+  zlink_enable_coverage(test_cpp_framework_DI_singleton)
+  if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_link_options(test_cpp_framework_DI_singleton PRIVATE
+      "LINKER:--wrap=pthread_once" "LINKER:--wrap=pthread_mutex_lock")
+  endif()
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_DI_singleton
+    COMMAND test_cpp_framework_DI_singleton
+    LABELS "framework-unit;framework-regression;DI;scope"
+    TIER unit
+    TIMEOUT 0)
   add_zlink_framework_test(
     test_cpp_framework_DI_scope
     tests/Zlink.Framework.UnitTests/test_cpp_framework_di.cpp

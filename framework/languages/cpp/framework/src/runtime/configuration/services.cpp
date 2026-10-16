@@ -2,6 +2,9 @@
 
 #include "service_scope.hpp"
 
+#include <atomic>
+#include <mutex>
+#include <stdexcept>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -11,9 +14,42 @@ namespace zlink::framework::detail
 
 struct service_descriptor_t
 {
+    service_descriptor_t (service_lifetime_t lifetime_,
+                          service_collection_t::service_factory_t factory_) :
+        lifetime (lifetime_), factory (std::move (factory_))
+    {
+    }
+
     service_lifetime_t lifetime;
     service_collection_t::service_factory_t factory;
+    std::once_flag initialization;
+    std::atomic<bool> published{false};
+    std::shared_ptr<void> instance;
 };
+
+namespace
+{
+class singleton_resolution_t
+{
+  public:
+    explicit singleton_resolution_t (service_descriptor_t &descriptor_) :
+        descriptor (&descriptor_), previous (current)
+    {
+        current = this;
+    }
+
+    ~singleton_resolution_t () { current = previous; }
+
+    singleton_resolution_t (const singleton_resolution_t &) = delete;
+    singleton_resolution_t &operator= (const singleton_resolution_t &) = delete;
+
+    service_descriptor_t *descriptor;
+    singleton_resolution_t *previous;
+    static thread_local singleton_resolution_t *current;
+};
+
+thread_local singleton_resolution_t *singleton_resolution_t::current = nullptr;
+} // namespace
 
 class service_instance_store_t
 {
@@ -93,20 +129,33 @@ class service_instance_store_t
 class service_registry_t
 {
   public:
-    void add (std::type_index type, service_descriptor_t descriptor)
+    ~service_registry_t ()
     {
-        const auto [_, inserted] = descriptors.emplace (type, std::move (descriptor));
+        while (!owned_singletons.empty ()) {
+            auto *descriptor = owned_singletons.back ();
+            owned_singletons.pop_back ();
+            descriptor->instance.reset ();
+        }
+    }
+
+    service_descriptor_t &add (std::type_index type,
+                               service_lifetime_t lifetime,
+                               service_collection_t::service_factory_t factory)
+    {
+        const auto [found, inserted] =
+          descriptors.try_emplace (type, lifetime, std::move (factory));
         if (!inserted) {
             throw framework_exception_t (framework_error_kind_t::protocol_error,
                                          "duplicate service registration");
         }
+        return found->second;
     }
 
     void add_singleton_instance (std::type_index type, std::shared_ptr<void> instance)
     {
-        add (type, service_descriptor_t{service_lifetime_t::singleton, {}});
+        auto &descriptor = add (type, service_lifetime_t::singleton, {});
         try {
-            instances.cache (type, std::move (instance));
+            own_singleton (descriptor, std::move (instance));
         }
         catch (...) {
             descriptors.erase (type);
@@ -130,8 +179,38 @@ class service_registry_t
         return descriptors.find (type) != descriptors.end ();
     }
 
+    std::shared_ptr<void> singleton (service_descriptor_t &descriptor, service_provider_t &provider)
+    {
+        if (descriptor.published.load (std::memory_order_acquire)) {
+            // Publication makes the owning handle safe to read without a store lock.
+            return descriptor.instance;
+        }
+        // Reject a synchronous cycle before call_once can wait for this thread.
+        for (auto *active = singleton_resolution_t::current; active; active = active->previous) {
+            if (active->descriptor == &descriptor) {
+                throw std::logic_error ("recursive singleton resolution");
+            }
+        }
+        std::call_once (descriptor.initialization, [&] {
+            singleton_resolution_t resolution (descriptor);
+            own_singleton (descriptor, descriptor.factory (provider));
+        });
+        return descriptor.instance;
+    }
+
+  private:
+    void own_singleton (service_descriptor_t &descriptor, std::shared_ptr<void> instance)
+    {
+        // Ownership order is shared; factories run outside this critical section.
+        std::lock_guard<std::mutex> guard (ownership_mutex);
+        owned_singletons.push_back (&descriptor);
+        descriptor.instance = std::move (instance);
+        descriptor.published.store (true, std::memory_order_release);
+    }
+
     std::unordered_map<std::type_index, service_descriptor_t> descriptors;
-    service_instance_store_t instances;
+    std::mutex ownership_mutex;
+    std::vector<service_descriptor_t *> owned_singletons;
 };
 
 class service_scope_state_t
@@ -218,10 +297,7 @@ std::shared_ptr<void> service_provider_t::resolve (std::type_index type)
     auto &descriptor = _registry->required (type);
     switch (descriptor.lifetime) {
         case service_lifetime_t::singleton:
-            if (auto instance = _registry->instances.find (type)) {
-                return instance;
-            }
-            return _registry->instances.cache (type, descriptor.factory (*this));
+            return _registry->singleton (descriptor, *this);
         case service_lifetime_t::scoped: {
             if (!_scope->scoped_context) {
                 throw framework_exception_t (framework_error_kind_t::protocol_error,
@@ -312,7 +388,7 @@ service_collection_t &service_collection_t::add_descriptor (std::type_index type
                                                             service_lifetime_t lifetime,
                                                             service_factory_t factory)
 {
-    _registry->add (type, detail::service_descriptor_t{lifetime, std::move (factory)});
+    _registry->add (type, lifetime, std::move (factory));
     return *this;
 }
 
