@@ -145,27 +145,7 @@ export class ZLinkInMemoryLocationStore
                     typeCapacity.limit)))
           );
         },
-        identityClaimed: (authorityKey) => this.entrySpotClaims.has(authorityKey),
-        spotMemberRows: (spotId, objectGeneration) =>
-          [...this.actors.rows]
-            .filter(
-              ([, actor]) =>
-                actor.spotKind === ZLinkSpotKind.User &&
-                String(actor.spotId) === spotId &&
-                actor.spotGeneration === objectGeneration
-            )
-            .map(([key, actor]) => ({
-              key,
-              owner: { ownerId: actor.ownerId, leaseGeneration: actor.leaseGeneration }
-            })),
-        removeActorRows: (keys) => {
-          for (const key of keys) {
-            const actor = this.actors.rows.get(key);
-            if (actor === undefined) continue;
-            this.actors.rows.delete(key);
-            this.bump(ZLinkLocationKind.Actor, actor.meshName);
-          }
-        }
+        identityClaimed: (authorityKey) => this.entrySpotClaims.has(authorityKey)
       },
       now
     );

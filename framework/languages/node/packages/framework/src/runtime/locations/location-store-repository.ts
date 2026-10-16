@@ -138,8 +138,7 @@ interface EndedSpotMember {
   readonly version: ZLinkStoreVersion;
   readonly ownerId: string;
   readonly leaseGeneration: bigint;
-  /** Present for an Actor authority; an Actor location row holds no capacity. */
-  readonly allocation?: StoredAuthoritySnapshot['allocation'];
+  readonly allocation: StoredAuthoritySnapshot['allocation'];
 }
 
 interface CapacityRecord {
@@ -1331,9 +1330,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     ]);
     const releases: { allocation: StoredAuthoritySnapshot['allocation'] }[] = [
       { allocation: snapshot.allocation },
-      ...members.flatMap((member) =>
-        member.allocation === undefined ? [] : [{ allocation: member.allocation }]
-      )
+      ...members.map((member) => ({ allocation: member.allocation }))
     ];
     try {
       for (const { allocation } of releases) {
@@ -1392,7 +1389,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
 
   /**
    * Reads every Actor membership of one User Spot incarnation from complete snapshot scans
-   * (location runtime §6.1): Actor authorities and Actor location rows. An expired snapshot
+   * (location runtime §6.1), from Actor authorities alone. An expired snapshot
    * discards the earlier pages and restarts; a Store failure propagates. A member authority
    * that is relocating, part of an aggregate or not yet activated keeps the Spot.
    */
@@ -1401,72 +1398,54 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     spotGeneration: bigint,
     signal?: AbortSignal
   ): Promise<EndedSpotMember[]> {
-    const members: EndedSpotMember[] = [];
-    for (const prefix of [`${PREFIX}actor:`, `${AUTHORITY_PREIMAGE_PREFIX}actor\0`]) {
-      membershipSnapshot: for (;;) {
-        const snapshotMembers: EndedSpotMember[] = [];
-        let cursor: ZLinkStoreScanCursor | undefined;
-        do {
-          const page = await this.provider.scan(
-            { prefix, cursor, limit: ZLINK_PROVIDER_MAX_PAGE_SIZE },
-            signal
+    membershipSnapshot: for (;;) {
+      const members: EndedSpotMember[] = [];
+      let cursor: ZLinkStoreScanCursor | undefined;
+      do {
+        const page = await this.provider.scan(
+          {
+            prefix: `${AUTHORITY_PREIMAGE_PREFIX}actor\0`,
+            cursor,
+            limit: ZLINK_PROVIDER_MAX_PAGE_SIZE
+          },
+          signal
+        );
+        if (page.kind === 'expired') continue membershipSnapshot;
+        for (const item of page.value.items) {
+          const record = decodeAuthorityRecord(item.value.bytes);
+          const authority = record.snapshot;
+          if (authority.allocation.objectKind !== 'actor') continue;
+          const actor = decodeActorAuthorityPayload(
+            serviceRelocationAuthorityApplicationPayload(authority.payload)
           );
-          if (page.kind === 'expired') continue membershipSnapshot;
-          for (const item of page.value.items) {
-            if (prefix === `${PREFIX}actor:`) {
-              const actor = normalizeActor(
-                decodeJson<DescriptorRecord<ZLinkActorLocation>>(item.value.bytes).descriptor
-              );
-              if (
-                actor.spotKind === ZLinkSpotKind.User &&
-                String(actor.spotId) === spotId &&
-                actor.spotGeneration === spotGeneration
-              )
-                snapshotMembers.push({
-                  key: item.key,
-                  version: item.value.version,
-                  ownerId: actor.ownerId,
-                  leaseGeneration: BigInt(actor.leaseGeneration)
-                });
-              continue;
-            }
-            const record = decodeAuthorityRecord(item.value.bytes);
-            const authority = record.snapshot;
-            if (authority.allocation.objectKind !== 'actor') continue;
-            const actor = decodeActorAuthorityPayload(
-              serviceRelocationAuthorityApplicationPayload(authority.payload)
+          if (
+            actor?.currentSpotKind !== ZLinkSpotKind.User ||
+            actor.currentSpotId !== spotId ||
+            actor.currentSpotGeneration !== spotGeneration
+          )
+            continue;
+          if (
+            authority.allocation.state !== 'active' ||
+            record.aggregate !== undefined ||
+            hasRelocationAuthority(authority.payload) ||
+            decodeActorAuthorityPayload(authority.payload)?.state !== 'ready'
+          )
+            throw new ZLinkFrameworkException(
+              ZLinkFrameworkErrorKind.Unavailable,
+              'User Spot still has a relocating or unactivated member.'
             );
-            if (
-              actor?.currentSpotKind !== ZLinkSpotKind.User ||
-              actor.currentSpotId !== spotId ||
-              actor.currentSpotGeneration !== spotGeneration
-            )
-              continue;
-            if (
-              authority.allocation.state !== 'active' ||
-              record.aggregate !== undefined ||
-              hasRelocationAuthority(authority.payload) ||
-              decodeActorAuthorityPayload(authority.payload)?.state !== 'ready'
-            )
-              throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.Unavailable,
-                'User Spot still has a relocating or unactivated member.'
-              );
-            snapshotMembers.push({
-              key: item.key,
-              version: item.value.version,
-              ownerId: authority.ownerId,
-              leaseGeneration: authority.ownerLeaseGeneration,
-              allocation: authority.allocation
-            });
-          }
-          cursor = page.value.nextCursor;
-        } while (cursor !== undefined);
-        members.push(...snapshotMembers);
-        break;
-      }
+          members.push({
+            key: item.key,
+            version: item.value.version,
+            ownerId: authority.ownerId,
+            leaseGeneration: authority.ownerLeaseGeneration,
+            allocation: authority.allocation
+          });
+        }
+        cursor = page.value.nextCursor;
+      } while (cursor !== undefined);
+      return members;
     }
-    return members;
   }
 
   override async reserve(

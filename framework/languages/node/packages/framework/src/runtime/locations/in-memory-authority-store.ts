@@ -75,12 +75,6 @@ export interface ZLinkInMemoryAuthorityValidation {
     currentActive: ZLinkCapacityVector
   ): boolean;
   identityClaimed?(authorityKey: string): boolean;
-  /** Actor location rows that place an Actor in this User Spot incarnation. */
-  spotMemberRows?(
-    spotId: string,
-    objectGeneration: bigint
-  ): readonly { readonly key: string; readonly owner: ZLinkLocationOwnerToken }[];
-  removeActorRows?(keys: readonly string[]): void;
 }
 
 interface AuthorityRow {
@@ -353,7 +347,7 @@ export class ZLinkInMemoryAuthorityStore {
         : current.creation === undefined)
     )
       return false;
-    let members: { authorities: string[]; rows: string[] } = { authorities: [], rows: [] };
+    let members: string[] = [];
     if (current.snapshot.allocation.state === 'active') {
       let unavailable = false;
       for (const aggregate of this.aggregates.values()) {
@@ -413,12 +407,11 @@ export class ZLinkInMemoryAuthorityStore {
       -1
     );
     this.rows.delete(key.value);
-    for (const memberKey of members.authorities) {
+    for (const memberKey of members) {
       const member = this.rows.get(memberKey)!;
       this.adjustCapacity(this.activeCapacity, member.snapshot.allocation, -1);
       this.rows.delete(memberKey);
     }
-    if (members.rows.length > 0) this.validation.removeActorRows?.(members.rows);
     if (current.snapshot.allocation.state === 'reserved' && current.creation !== undefined)
       this.creationTerminals.set(current.creation.reservationId, 'aborted');
     this.scanRevision++;
@@ -427,16 +420,11 @@ export class ZLinkInMemoryAuthorityStore {
 
   /**
    * Every Actor membership of the old User Spot incarnation must belong to an ended-owner
-   * member (location runtime §6.1): a steady Ready, activated authority outside any aggregate,
-   * or an Actor location row, each with an invalid owner lease. The release must fit one
-   * provider batch; the key set mirrors the provider repository batch (authority and location
-   * rows, owner leases, descriptor and capacity records).
+   * member (location runtime §6.1): a steady Ready, activated authority outside any aggregate
+   * with an invalid owner lease. The release must fit one provider batch; its key set mirrors
+   * the provider repository batch (authorities, owner leases, descriptor and capacity records).
    */
-  private endedSpotMembers(
-    spotKey: string,
-    spot: StoredSnapshot,
-    spotId: string
-  ): { authorities: string[]; rows: string[] } {
+  private endedSpotMembers(spotKey: string, spot: StoredSnapshot, spotId: string): string[] {
     const descriptorKey = (descriptor: ZLinkMeshNodeDescriptorKey) =>
       `${descriptor.meshName}\0${String(descriptor.rid)}`;
     const batchKeys = new Set<string>([
@@ -450,7 +438,7 @@ export class ZLinkInMemoryAuthorityStore {
         ZLinkFrameworkErrorKind.Unavailable,
         'User Spot still has a member with a live owner lease.'
       );
-    const members = { authorities: [] as string[], rows: [] as string[] };
+    const members: string[] = [];
     for (const [memberKey, row] of this.rows) {
       if (row.snapshot.allocation.objectKind !== 'actor') continue;
       const actor = decodeActorAuthorityPayload(
@@ -485,16 +473,10 @@ export class ZLinkInMemoryAuthorityStore {
         })
       )
         throw liveMember();
-      members.authorities.push(memberKey);
+      members.push(memberKey);
       batchKeys.add(`authority:${memberKey}`);
       batchKeys.add(`owner:${row.snapshot.ownerId}`);
       batchKeys.add(`capacity:${descriptorKey(row.snapshot.allocation.descriptor)}`);
-    }
-    for (const row of this.validation.spotMemberRows?.(spotId, spot.objectGeneration) ?? []) {
-      if (this.validation.isOwnerLive(row.owner)) throw liveMember();
-      members.rows.push(row.key);
-      batchKeys.add(`row:${row.key}`);
-      batchKeys.add(`owner:${row.owner.ownerId}`);
     }
     if (batchKeys.size > ZLINK_PROVIDER_MAX_WRITE_KEYS)
       throw new ZLinkFrameworkException(
