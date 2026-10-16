@@ -1268,8 +1268,6 @@ internal sealed class ZLinkActorRuntimeState(
         public object? GetService(Type serviceType) => null;
     }
 
-    public void PrepareForTransferredActivation() => RunState(PrepareForTransferredActivationCore);
-
     internal async ValueTask PrepareForTransferredActivationAsync(
         CancellationToken cancellationToken
     )
