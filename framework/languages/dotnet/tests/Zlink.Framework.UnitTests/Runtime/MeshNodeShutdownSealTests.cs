@@ -57,23 +57,172 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
         );
 
         // Hot-path E3: a timer wheel rounds deadlines up to the next 1ms occupied tick.
-        var wait = typeof(ZLinkManagedMeshNode).GetMethod("OperationWaitBound", flags)!;
-        Assert.Equal(TimeSpan.FromMilliseconds(11), wait.Invoke(node, null));
+        // §4.2: the rotation's expiry turn also returns the next wait bound.
+        Assert.Equal(TimeSpan.FromMilliseconds(11), expire.Invoke(node, null));
         clock.Timestamp = 9 * TimeSpan.TicksPerMillisecond;
-        expire.Invoke(node, null);
+        Assert.Equal(TimeSpan.FromMilliseconds(2), expire.Invoke(node, null));
         Assert.Equal(2, count.GetValue(operations));
         clock.Timestamp = 10 * TimeSpan.TicksPerMillisecond;
-        expire.Invoke(node, null);
+        Assert.Equal(TimeSpan.FromMilliseconds(1), expire.Invoke(node, null));
         Assert.Equal(2, count.GetValue(operations));
         clock.Timestamp = 11 * TimeSpan.TicksPerMillisecond;
-        expire.Invoke(node, null);
+        Assert.Equal(TimeSpan.FromMilliseconds(9), expire.Invoke(node, null));
         Assert.Equal(1, count.GetValue(operations));
         clock.Timestamp = 20 * TimeSpan.TicksPerMillisecond;
-        expire.Invoke(node, null);
+        Assert.Equal(TimeSpan.FromMilliseconds(100), expire.Invoke(node, null));
         Assert.Equal(0, count.GetValue(operations));
-        expire.Invoke(node, null);
+        Assert.Equal(TimeSpan.FromMilliseconds(100), expire.Invoke(node, null));
         Assert.Equal(0, count.GetValue(operations));
-        Assert.Equal(TimeSpan.FromMilliseconds(100), wait.Invoke(node, null));
+    }
+
+    [Fact]
+    public async Task OperationDeadline_ReplyAndTimeoutRaceHasOneAtomicTakeOwner()
+    {
+        var clock = new OperationDeadlineClock();
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = new ZLinkManagedMeshNode(
+            context,
+            MeshName,
+            deadlineTimeProvider: clock
+        );
+        var deadline = OperationDeadlineAccess.For(node);
+
+        // The reply takes the operation first: its deadline leaves the index, the
+        // expiry turn finds nothing and the bound falls back to the poll interval.
+        var replied = deadline.Begin(TimeSpan.FromMilliseconds(10));
+        clock.Timestamp = 5 * TimeSpan.TicksPerMillisecond;
+        Assert.Equal(TimeSpan.FromMilliseconds(5), deadline.Expire());
+        Assert.True(deadline.TakeForReply(replied));
+        clock.Timestamp = 10 * TimeSpan.TicksPerMillisecond;
+        Assert.Equal(TimeSpan.FromMilliseconds(100), deadline.Expire());
+        Assert.False(deadline.Token(replied).IsCancellationRequested);
+        Assert.Equal(0, deadline.Count);
+
+        // The deadline takes the operation first: it completes as timed out
+        // and the late reply finds no owner.
+        var timedOut = deadline.Begin(TimeSpan.FromMilliseconds(10));
+        Assert.Equal(TimeSpan.FromMilliseconds(10), deadline.Expire());
+        clock.Timestamp = 20 * TimeSpan.TicksPerMillisecond;
+        Assert.Equal(TimeSpan.FromMilliseconds(100), deadline.Expire());
+        Assert.True(deadline.Token(timedOut).IsCancellationRequested);
+        Assert.False(deadline.TakeForReply(timedOut));
+        Assert.Equal(0, deadline.Count);
+    }
+
+    [Fact]
+    public async Task OperationDeadline_ExpiryAtTheBudgetReturnsAZeroBoundForTheRestOfTheSlot()
+    {
+        var clock = new OperationDeadlineClock();
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = new ZLinkManagedMeshNode(
+            context,
+            MeshName,
+            deadlineTimeProvider: clock
+        );
+        var deadline = OperationDeadlineAccess.For(node);
+        var first = deadline.Begin(TimeSpan.FromMilliseconds(1));
+        deadline.Begin(TimeSpan.FromMilliseconds(1));
+        deadline.Begin(TimeSpan.FromMilliseconds(30));
+        // The first terminal spends the whole management budget on the injected clock.
+        using var slowTerminal = deadline
+            .Token(first)
+            .Register(() =>
+                clock.Timestamp +=
+                    Zlink.Framework.Runtime.Dispatch.ZLinkReceiveBatchBudget.MaximumMilliseconds
+                    * TimeSpan.TicksPerMillisecond
+            );
+        clock.Timestamp = TimeSpan.TicksPerMillisecond;
+
+        // The rotation stops after one expiry; the bound read in that turn is
+        // zero because the rest of the slot is already due, so the receive owner
+        // does not block before it resumes the slot.
+        Assert.Equal(TimeSpan.Zero, deadline.Expire());
+        Assert.Equal(2, deadline.Count);
+        Assert.Equal(TimeSpan.FromMilliseconds(28), deadline.Expire());
+        Assert.Equal(1, deadline.Count);
+    }
+
+    [Fact]
+    public async Task OperationDeadline_CloseDrainCancelsPendingOperationsAndEmptiesTheIndex()
+    {
+        var clock = new OperationDeadlineClock();
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        var node = new ZLinkManagedMeshNode(context, MeshName, deadlineTimeProvider: clock);
+        var deadline = OperationDeadlineAccess.For(node);
+        var pending = new[]
+        {
+            deadline.Begin(TimeSpan.FromMilliseconds(5)),
+            deadline.Begin(TimeSpan.FromMilliseconds(600)),
+        };
+        Assert.Equal(TimeSpan.FromMilliseconds(5), deadline.Expire());
+
+        await node.DisposeAsync();
+
+        // Close drain owns these terminals. A later expiry turn finds no
+        // deadline without an owner and reports the idle bound.
+        Assert.All(
+            pending,
+            operation => Assert.True(deadline.Token(operation).IsCancellationRequested)
+        );
+        Assert.Equal(0, deadline.Count);
+        clock.Timestamp = 600 * TimeSpan.TicksPerMillisecond;
+        Assert.Equal(TimeSpan.FromMilliseconds(100), deadline.Expire());
+    }
+
+    private sealed class OperationDeadlineAccess
+    {
+        private const System.Reflection.BindingFlags Flags =
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+        private static readonly Type NodeType = typeof(ZLinkManagedMeshNode);
+        private static readonly System.Reflection.MethodInfo BeginMethod = NodeType
+            .GetMethods(Flags)
+            .Single(method =>
+                method.Name == "TryBeginOperation" && method.GetParameters().Length == 3
+            );
+        private static readonly System.Reflection.MethodInfo ExpireMethod = NodeType.GetMethod(
+            "ExpireOperations",
+            Flags
+        )!;
+        private static readonly System.Reflection.MethodInfo TakeMethod = NodeType
+            .GetMethods(Flags)
+            .Single(method =>
+                method.Name == "TryRemoveOperation"
+                && method.GetParameters()[0].ParameterType == typeof(ulong)
+            );
+        private readonly ZLinkManagedMeshNode _node;
+        private readonly object _operations;
+
+        private OperationDeadlineAccess(ZLinkManagedMeshNode node)
+        {
+            _node = node;
+            _operations = NodeType.GetField("_operations", Flags)!.GetValue(node)!;
+        }
+
+        internal static OperationDeadlineAccess For(ZLinkManagedMeshNode node) => new(node);
+
+        internal int Count =>
+            (int)_operations.GetType().GetProperty("Count")!.GetValue(_operations)!;
+
+        internal object Begin(TimeSpan timeout)
+        {
+            object?[] registration = [MeshOperationKind.NodeRequest, timeout, null];
+            Assert.True((bool)BeginMethod.Invoke(_node, registration)!);
+            return registration[2]!;
+        }
+
+        internal TimeSpan Expire() => (TimeSpan)ExpireMethod.Invoke(_node, null)!;
+
+        // The reply path's atomic take (spec E5): exactly one terminal owner.
+        internal bool TakeForReply(object operation)
+        {
+            var identity = (MeshOperationId)
+                operation.GetType().GetProperty("OperationId", Flags)!.GetValue(operation)!;
+            return (bool)TakeMethod.Invoke(_node, [identity.Low, null, true])!;
+        }
+
+        internal CancellationToken Token(object operation) =>
+            (CancellationToken)
+                operation.GetType().GetProperty("Token", Flags)!.GetValue(operation)!;
     }
 
     [Fact]
