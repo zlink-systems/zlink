@@ -359,17 +359,18 @@ timer registration, so the application doesn't re-register the timer in restore.
 Only the currently running timer handler finishes on the source, and
 the restored tick isn't run before target Ready.
 
-Node.js can't find a constructor from the handler name in the payload,
-so the target finds a restored timer's handler constructor among the
-constructors that Spot announced in `configure()`. There are two ways to
-announce one: `addTimer(...)` inside `configure()`, and
-`handlers.addTimerHandler(Handler)`. `addTimerHandler` registers no
-endpoint; it only announces the constructor. A handler used with
-`addTimer(...)` only in `onInitialize()` or in a handler must be
-announced with `addTimerHandler` in `configure()`. If two or more
-announced constructors share the name, or no announced constructor
-matches, target restore fails and the relocation follows the restore
-failure rule of the
+Node.js can't find a constructor from the handler name recorded in
+the payload, so the target uses, as a restored timer's handler, the
+constructor among those its Spot announced in `configure()` whose
+`name` property equals the payload's handler name. A Spot announces a
+constructor with `addTimer(...)` inside `configure()` or with
+`handlers.addTimerHandler(Handler)`. The same constructor object
+announced both ways counts as one candidate. `addTimerHandler`
+registers no endpoint. A handler used with `addTimer(...)` only in
+`onInitialize()` or in a handler must be announced with
+`addTimerHandler` in `configure()`. If no constructor has that name, or
+two or more different constructor objects share it, target restore
+fails and the relocation follows the restore failure rule of the
 [host relocation flow](../../../05-location-relocation/05-host-relocation-flow.en.md#13-relocate-completion-and-failure).
 
 The public trace categories are `spot-instance`, `actor-relocation`.

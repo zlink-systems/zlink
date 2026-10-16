@@ -322,11 +322,12 @@ tick sequence, 다음 예정 시각과 아직 실행하지 않은 pending tick�
 logical timer registration을 복원하므로 application이 restore에서 timer를 다시 등록하지 않는다. Target의 `configure`·Ready 전 `onInitialize`가 복원된 key를 등록하면 [Spot timer §1](../../../03-spot-actor/10-spot-timer.ko.md#1-timer-generation과-cancel) 예외대로 복원된 registration에 다시 연결된다. 현재 실행 중인 timer handler만 source에서
 완료하고 target Ready 전에는 복원한 tick을 실행하지 않는다.
 
-Node.js는 payload의 handler 이름으로 생성자를 찾을 수 없으므로, target은 복원한 timer의 handler 생성자를
-그 Spot이 `configure()`에서 알린 생성자 중에서 찾는다. 알리는 방법은 `configure()` 안의 `addTimer(...)`와
-`handlers.addTimerHandler(Handler)` 둘이다. `addTimerHandler`는 endpoint를 등록하지 않고 생성자만 알린다.
-`onInitialize()`나 handler에서만 `addTimer(...)`로 쓰는 handler는 `configure()`에서 `addTimerHandler`로 알려야
-한다. 같은 이름의 생성자가 둘 이상이거나 알린 생성자가 없으면 target 복원이 실패하고 relocation은
+Node.js는 payload에 기록된 handler 이름으로 생성자를 찾을 수 없으므로, target은 그 Spot이 `configure()`에서
+알린 생성자 중 `name` 속성이 payload의 handler 이름과 같은 생성자를 복원한 timer의 handler로 쓴다. Spot은
+`configure()` 안의 `addTimer(...)`나 `handlers.addTimerHandler(Handler)`로 생성자를 알린다. 두 방법으로 같은
+생성자 객체를 알리면 후보 하나로 센다. `addTimerHandler`는 endpoint를 등록하지 않는다. `onInitialize()`나
+handler에서만 `addTimer(...)`에 쓰는 handler는 `configure()`에서 `addTimerHandler`로 알려야 한다. 이름이 같은
+생성자가 없거나 이름이 같은 서로 다른 생성자 객체가 둘 이상이면 target 복원이 실패하고, relocation은
 [host relocation 흐름](../../../05-location-relocation/05-host-relocation-flow.ko.md#13-relocate-완료와-실패)의 복원 실패 규칙을 따른다.
 
 Public trace category는 `spot-instance`, `actor-relocation`다. 의미와 검증 기준은
