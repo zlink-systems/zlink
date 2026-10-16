@@ -280,9 +280,7 @@ internal abstract partial class ZLinkSpotActivation
     {
         try
         {
-            // Materialize membership during prepare, but do not expose the join to application
-            // code until the distributed handoff has committed. A joined callback may push a
-            // client notification, and that notification must not overtake source cutover.
+            // Maintenance restores membership without application join callbacks.
             _ = await StageActorMembershipAsync(actor, cancellationToken).ConfigureAwait(false);
         }
         catch
@@ -345,26 +343,6 @@ internal abstract partial class ZLinkSpotActivation
             actorState.Handoff.RetryJoinedNotification(handoffId);
             throw;
         }
-    }
-
-    internal ValueTask CompleteTransferredActorJoinSealedAsync(
-        ZLinkActorRuntimeState actorState,
-        ZLinkSpotRelocationSeal seal,
-        CancellationToken cancellationToken
-    )
-    {
-        ArgumentNullException.ThrowIfNull(seal);
-        var actor =
-            actorState.Actor
-            ?? throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.NotFound,
-                $"Actor '{actorState.ActorId}' has no transferred instance at commit."
-            );
-        return _serial.ExecuteSealedRelocationAsync(
-            seal.QueueSeal,
-            (activation, ct) => activation.NotifyJoinedActorCoreAsync(actor, ct),
-            cancellationToken
-        );
     }
 
     internal async ValueTask ReplayTransferredActorHandoffAsync(

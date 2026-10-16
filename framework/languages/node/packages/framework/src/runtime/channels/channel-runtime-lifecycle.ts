@@ -350,7 +350,7 @@ export class ZLinkChannelRuntimeLifecycle {
     meshName: string,
     record: ReceiveRecord,
     signal?: AbortSignal
-  ): Promise<void> {
+  ): void | Promise<void> {
     const channelName = record.channelName;
     if (channelName === null) {
       throw new ZLinkConfigurationException('MeshNode channel record is missing channelName.');
@@ -364,7 +364,11 @@ export class ZLinkChannelRuntimeLifecycle {
     return dispatcher.dispatchMesh(record, signal);
   }
 
-  dispatchMeshRoute(meshName: string, record: ReceiveRecord, signal?: AbortSignal): Promise<void> {
+  dispatchMeshRoute(
+    meshName: string,
+    record: ReceiveRecord,
+    signal?: AbortSignal
+  ): void | Promise<void> {
     const dispatcher = this.meshRouteDispatchers.get(meshName);
     if (dispatcher === undefined) {
       throw new ZLinkConfigurationException(

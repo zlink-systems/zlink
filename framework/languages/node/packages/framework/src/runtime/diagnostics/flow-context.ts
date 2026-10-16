@@ -2,7 +2,6 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomBytes } from 'node:crypto';
 import type { ZLinkFlowOrigin } from '../../contracts';
 const FLOW_UUID_BYTES = 16;
-const FLOW_UUID_VARIANT_BYTE = 8;
 
 /**
  * Spec 27 §3 defines the flow_origin value set as lowercase
@@ -97,13 +96,27 @@ export function createInboundFlow(
   return { flowId: flowId ?? createFlowId(), flowOrigin: flowOrigin ?? 'Inbound', streamSessionId };
 }
 
+/**
+ * UUIDv7 with a dedicated counter (RFC 9562 §6.2 method 1): the 48-bit
+ * millisecond timestamp, then a 42-bit counter that starts at a random value
+ * and spans `rand_a` and the top of `rand_b`, then 32 random bits drawn once
+ * per process. Flow ids stay unique within the process without drawing
+ * random bytes for every message.
+ */
+const flowRandom = randomBytes(FLOW_UUID_BYTES);
+const FLOW_COUNTER_SPAN = 2 ** 42;
+let flowCounter = flowRandom.readUIntBE(0, 6) % FLOW_COUNTER_SPAN;
+const FLOW_ID_TAIL = flowRandom.toString('hex', FLOW_UUID_BYTES - 4);
+
 function createFlowId(): string {
-  const bytes = randomBytes(FLOW_UUID_BYTES);
+  const counter = flowCounter;
+  flowCounter = (flowCounter + 1) % FLOW_COUNTER_SPAN;
   // Date.now() is always within 48 bits, which is exactly the UUIDv7
   // timestamp field.
-  bytes.writeUIntBE(Date.now(), 0, 6);
-  bytes[6] = 0x70 | (bytes[6] & 0x0f);
-  bytes[FLOW_UUID_VARIANT_BYTE] = 0x80 | (bytes[FLOW_UUID_VARIANT_BYTE] & 0x3f);
-  const hex = bytes.toString('hex');
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+  const timestamp = Date.now().toString(16).padStart(12, '0');
+  const randA = Math.floor(counter / 2 ** 30); // 12 bits
+  const randB = counter % 2 ** 30; // 30 bits after the 2 variant bits
+  const variantHigh = (0x8000 | Math.floor(randB / 2 ** 16)).toString(16);
+  const randBLow = (randB % 2 ** 16).toString(16).padStart(4, '0');
+  return `${timestamp.slice(0, 8)}-${timestamp.slice(8)}-7${randA.toString(16).padStart(3, '0')}-${variantHigh}-${randBLow}${FLOW_ID_TAIL}`;
 }

@@ -550,6 +550,38 @@ test('inbound selected route sends HELLO without an outbound intent', async () =
     assert.equal(h.sent.filter(([, command]) => command === wire.M6aServiceWireCommand.hello).length, 1);
   } finally { h.runtime.close(); }
 });
+// MeshNode §7.1 and hot-path §4.2: an inbound-only route must retain its
+// management wake until ADMIT, even after a crossed HELLO admits its descriptor.
+for (const crossedHello of [false, true]) {
+  test(`maintenance stays due until inbound selected route receives ADMIT (crossedHello=${crossedHello})`, async (t) => {
+    const now = 1000;
+    t.mock.method(performance, 'now', () => now);
+    const h = selectedRouteRuntime(new Map([['peer', 11n]]));
+    const receive = (command) => h.processReceived({
+      sourceRid: 'peer',
+      routeGeneration: 11n,
+      parts: [wire.encodeRouteMeshAdmission(command, descriptor('peer'))]
+    });
+    try {
+      await h.runtime.observeSelectedRoutes();
+      if (crossedHello) await receive(wire.M6aServiceWireCommand.hello);
+      h.runtime.liveness.tick(now);
+      assert.equal(h.runtime.nextMaintenanceDeadlineMs(now), now);
+      const hellos = () => h.sent.filter(([, command]) => command === wire.M6aServiceWireCommand.hello).length;
+      const initial = hellos();
+      h.runtime.tickLiveness(now);
+      assert.equal(hellos(), initial + 1);
+      await receive(wire.M6aServiceWireCommand.admit);
+      h.runtime.liveness.tick(now);
+      assert.ok(h.runtime.nextMaintenanceDeadlineMs(now) > now);
+      h.runtime.tickLiveness(now);
+      assert.equal(hellos(), initial + 1);
+    } finally {
+      h.runtime.close();
+    }
+  });
+}
+
 test('liveness maintenance resends HELLO until the selected route receives ADMIT', async () => {
   const h = selectedRouteRuntime(new Map([['peer', 11n]]));
   try {

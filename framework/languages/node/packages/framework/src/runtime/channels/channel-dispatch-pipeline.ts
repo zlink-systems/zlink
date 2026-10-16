@@ -3,6 +3,7 @@ import {
   createInternalFrameworkException,
   internalFrameworkErrorKind
 } from '../framework-errors-internal';
+import { isPromiseLike } from '../abort';
 import type {
   ZLinkMessageContext,
   ZLinkHandlerFilter,
@@ -65,7 +66,7 @@ interface ZLinkOneWayDispatch<TContext extends ZLinkMessageContext> {
   readonly signal?: AbortSignal;
 }
 
-interface ZLinkRequestDispatch<TContext extends ZLinkMessageContext> {
+export interface ZLinkRequestDispatch<TContext extends ZLinkMessageContext> {
   readonly fields: ZLinkChannelDispatchFields;
   readonly envelope: ZLinkChannelEnvelope;
   readonly codecs?: ZLinkChannelEnvelopeCodecRegistry;
@@ -86,158 +87,187 @@ export class ZLinkChannelDispatchPipeline {
     this.unhandled = options.unhandled ?? DEFAULT_UNHANDLED_DISPATCH;
   }
 
-  async dispatchOneWay<TContext extends ZLinkMessageContext>(
+  /**
+   * Runs the handler in the caller's execution turn. A synchronous handler
+   * completes here; an asynchronous handler adds exactly one continuation
+   * for its terminal trace or error record.
+   */
+  dispatchOneWay<TContext extends ZLinkMessageContext>(
     dispatch: ZLinkOneWayDispatch<TContext>
-  ): Promise<void> {
+  ): void | Promise<void> {
     this.trace(ZLinkMessageFlowOutcome.Received, dispatch.fields);
     this.trace(ZLinkMessageFlowOutcome.Admitted, dispatch.fields);
-    if (dispatch.handler === undefined) {
-      const action =
-        dispatch.fields.messageKind === ZLinkDispatchMessageKind.Publish
-          ? this.unhandled.publish
-          : this.unhandled.send;
-      this.report(
-        dispatch.fields,
-        ZLinkDispatchErrorReason.HandlerMissing,
-        ZLinkDispatchErrorAction.Drop
-      );
-      this.applyOneWayUnhandled(action, dispatch.fields);
+    if (dispatch.handler === undefined) return this.dispatchMissingOneWay(dispatch.fields);
+    let invocation: unknown;
+    try {
+      invocation = this.invokeInFlow(dispatch, dispatch.handler);
+    } catch (error) {
+      this.failOneWay(dispatch.fields, error);
       return;
     }
+    if (!isPromiseLike(invocation)) {
+      this.completeOneWay(dispatch.fields, invocation);
+      return;
+    }
+    return Promise.resolve(invocation).then(
+      (value) => this.completeOneWay(dispatch.fields, value),
+      (error: unknown) => this.failOneWay(dispatch.fields, error)
+    );
+  }
 
-    try {
-      const flow = createInboundFlow(
-        dispatch.fields.flowId,
-        dispatch.fields.flowOrigin,
-        this.options.dispatchErrors.flow.flowCreationEnabled(),
-        undefined
-      );
-      const invocation = await (flow === undefined
-        ? this.invoke(
-            dispatch.envelope,
-            dispatch.codecs,
-            dispatch.handler,
-            dispatch.context,
-            dispatch.fields,
-            dispatch.signal
-          )
-        : runWithFlow(flow, () =>
-            this.invoke(
-              dispatch.envelope,
-              dispatch.codecs,
-              dispatch.handler!,
-              dispatch.context,
-              dispatch.fields,
-              dispatch.signal
-            )
-          ));
+  private async dispatchMissingOneWay(fields: ZLinkChannelDispatchFields): Promise<void> {
+    const action =
+      fields.messageKind === ZLinkDispatchMessageKind.Publish
+        ? this.unhandled.publish
+        : this.unhandled.send;
+    this.report(fields, ZLinkDispatchErrorReason.HandlerMissing, ZLinkDispatchErrorAction.Drop);
+    this.applyOneWayUnhandled(action, fields);
+  }
 
-      if (invocation !== HANDLER_FILTER_REJECTED) {
-        this.trace(ZLinkMessageFlowOutcome.Completed, dispatch.fields);
-      }
-    } catch (error) {
-      this.report(dispatch.fields, this.failureReason(error), ZLinkDispatchErrorAction.Drop, error);
+  private completeOneWay(fields: ZLinkChannelDispatchFields, invocation: unknown): void {
+    if (invocation !== HANDLER_FILTER_REJECTED) {
+      this.trace(ZLinkMessageFlowOutcome.Completed, fields);
     }
   }
 
-  async dispatchRequest<TContext extends ZLinkMessageContext>(
+  private failOneWay(fields: ZLinkChannelDispatchFields, error: unknown): void {
+    this.report(fields, this.failureReason(error), ZLinkDispatchErrorAction.Drop, error);
+  }
+
+  /**
+   * Runs the handler in the caller's execution turn and writes its reply in
+   * the same turn when the handler completes synchronously. An asynchronous
+   * handler adds exactly one continuation that writes the reply.
+   */
+  dispatchRequest<TContext extends ZLinkMessageContext>(
     dispatch: ZLinkRequestDispatch<TContext>
-  ): Promise<void> {
+  ): void | Promise<void> {
     this.trace(ZLinkMessageFlowOutcome.Received, dispatch.fields);
     this.trace(ZLinkMessageFlowOutcome.Admitted, dispatch.fields);
-    if (dispatch.handler === undefined) {
-      const missing = createInternalFrameworkException(
-        ZLinkFrameworkInternalErrorKind.HandlerNotFound,
-        dispatch.missingHandlerMessage
-      );
-      if (this.unhandled.request === ZLinkUnhandledDispatchAction.ReplyError) {
-        await dispatch.writeError(missing);
-      }
-      this.report(
-        dispatch.fields,
-        ZLinkDispatchErrorReason.HandlerMissing,
-        this.unhandled.request === ZLinkUnhandledDispatchAction.ReplyError
-          ? ZLinkDispatchErrorAction.ReplyError
-          : ZLinkDispatchErrorAction.Drop
-      );
-      if (this.unhandled.request === ZLinkUnhandledDispatchAction.Throw) {
-        throw missing;
-      }
-      return;
-    }
-
-    let reply: unknown;
+    if (dispatch.handler === undefined) return this.dispatchMissingRequest(dispatch);
+    let invocation: unknown;
     try {
-      const flow = createInboundFlow(
-        dispatch.fields.flowId,
-        dispatch.fields.flowOrigin,
-        this.options.dispatchErrors.flow.flowCreationEnabled(),
-        undefined
-      );
-      const invocation = await (flow === undefined
-        ? this.invoke(
+      invocation = this.invokeInFlow(dispatch, dispatch.handler);
+    } catch (error) {
+      return this.failRequest(dispatch, error);
+    }
+    if (!isPromiseLike(invocation)) return this.completeRequest(dispatch, invocation);
+    return Promise.resolve(invocation).then(
+      (value) => this.completeRequest(dispatch, value),
+      (error: unknown) => this.failRequest(dispatch, error)
+    );
+  }
+
+  private async dispatchMissingRequest<TContext extends ZLinkMessageContext>(
+    dispatch: ZLinkRequestDispatch<TContext>
+  ): Promise<void> {
+    const missing = createInternalFrameworkException(
+      ZLinkFrameworkInternalErrorKind.HandlerNotFound,
+      dispatch.missingHandlerMessage
+    );
+    if (this.unhandled.request === ZLinkUnhandledDispatchAction.ReplyError) {
+      await dispatch.writeError(missing);
+    }
+    this.report(
+      dispatch.fields,
+      ZLinkDispatchErrorReason.HandlerMissing,
+      this.unhandled.request === ZLinkUnhandledDispatchAction.ReplyError
+        ? ZLinkDispatchErrorAction.ReplyError
+        : ZLinkDispatchErrorAction.Drop
+    );
+    if (this.unhandled.request === ZLinkUnhandledDispatchAction.Throw) {
+      throw missing;
+    }
+  }
+
+  private invokeInFlow<TContext extends ZLinkMessageContext, TResult>(
+    dispatch: ZLinkOneWayDispatch<TContext> | ZLinkRequestDispatch<TContext>,
+    handler: ZLinkChannelDispatchHandler<TContext, TResult>
+  ): unknown {
+    const flow = createInboundFlow(
+      dispatch.fields.flowId,
+      dispatch.fields.flowOrigin,
+      this.options.dispatchErrors.flow.flowCreationEnabled(),
+      undefined
+    );
+    return flow === undefined
+      ? this.invoke(
+          dispatch.envelope,
+          dispatch.codecs,
+          handler,
+          dispatch.context,
+          dispatch.fields,
+          dispatch.signal
+        )
+      : runWithFlow(flow, () =>
+          this.invoke(
             dispatch.envelope,
             dispatch.codecs,
-            dispatch.handler,
+            handler,
             dispatch.context,
             dispatch.fields,
             dispatch.signal
           )
-        : runWithFlow(flow, () =>
-            this.invoke(
-              dispatch.envelope,
-              dispatch.codecs,
-              dispatch.handler!,
-              dispatch.context,
-              dispatch.fields,
-              dispatch.signal
-            )
-          ));
+        );
+  }
 
-      if (invocation === HANDLER_FILTER_REJECTED) {
-        throw createInternalFrameworkException(
+  private completeRequest<TContext extends ZLinkMessageContext>(
+    dispatch: ZLinkRequestDispatch<TContext>,
+    invocation: unknown
+  ): void | Promise<void> {
+    if (invocation === HANDLER_FILTER_REJECTED) {
+      return this.failRequest(
+        dispatch,
+        createInternalFrameworkException(
           ZLinkFrameworkInternalErrorKind.RequestRejected,
           `A handler filter rejected '${this.options.channelName}:${dispatch.fields.packetName}'.`
-        );
-      }
-      reply = invocation;
-    } catch (error) {
-      try {
-        await dispatch.writeError(error);
-      } catch (replyError) {
-        // Spec 26 §3.1: a failed reply write means the reply delivery path is
-        // gone; `unexpected_reply` names a surplus/late reply instead.
-        this.report(
-          dispatch.fields,
-          ZLinkDispatchErrorReason.ReplyPathMissing,
-          ZLinkDispatchErrorAction.Drop,
-          replyError
-        );
-        return;
-      }
-      this.report(
-        dispatch.fields,
-        this.failureReason(error),
-        ZLinkDispatchErrorAction.ReplyError,
-        error
+        )
       );
+    }
+    let written: void | Promise<void>;
+    try {
+      written = dispatch.writeReply(invocation);
+    } catch (error) {
+      this.replyPathMissing(dispatch.fields, error);
       return;
     }
-
-    try {
-      const written = dispatch.writeReply(reply);
-      if (written !== undefined) await written;
+    if (written === undefined) {
       this.trace(ZLinkMessageFlowOutcome.Replied, dispatch.fields);
-    } catch (error) {
-      // Spec 26 §3.1: a failed reply write means the reply delivery path is
-      // gone; `unexpected_reply` names a surplus/late reply instead.
-      this.report(
-        dispatch.fields,
-        ZLinkDispatchErrorReason.ReplyPathMissing,
-        ZLinkDispatchErrorAction.Drop,
-        error
-      );
+      return;
     }
+    return written.then(
+      () => this.trace(ZLinkMessageFlowOutcome.Replied, dispatch.fields),
+      (error: unknown) => this.replyPathMissing(dispatch.fields, error)
+    );
+  }
+
+  private replyPathMissing(fields: ZLinkChannelDispatchFields, error: unknown): void {
+    // Spec 26 §3.1: a failed reply write means the reply delivery path is
+    // gone; `unexpected_reply` names a surplus/late reply instead.
+    this.report(
+      fields,
+      ZLinkDispatchErrorReason.ReplyPathMissing,
+      ZLinkDispatchErrorAction.Drop,
+      error
+    );
+  }
+
+  private async failRequest<TContext extends ZLinkMessageContext>(
+    dispatch: ZLinkRequestDispatch<TContext>,
+    error: unknown
+  ): Promise<void> {
+    try {
+      await dispatch.writeError(error);
+    } catch (replyError) {
+      this.replyPathMissing(dispatch.fields, replyError);
+      return;
+    }
+    this.report(
+      dispatch.fields,
+      this.failureReason(error),
+      ZLinkDispatchErrorAction.ReplyError,
+      error
+    );
   }
 
   dropMissingReplyPath(fields: ZLinkChannelDispatchFields): void {
