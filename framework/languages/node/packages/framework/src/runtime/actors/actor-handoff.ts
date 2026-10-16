@@ -206,6 +206,12 @@ interface ActiveHandoff {
   pendingBytes: number;
   releaseTask?: Promise<void>;
   prefixRelease?: ActivePrefixRelease;
+  /**
+   * Settles when the released handoff this hold replaced has drained its
+   * durable prefix. This hold releases its own records only after that
+   * prefix, so ingress stays durable while an earlier durable record waits.
+   */
+  readonly predecessorRelease?: Promise<void>;
 }
 
 interface MessageFollowRoute {
@@ -324,7 +330,10 @@ export class ZLinkActorHandoffCoordinator {
     oldGeneration: bigint,
     phase: 'relocating' | 'provisional'
   ): void {
-    if (this.active.has(actorId)) {
+    // A releasing handoff has returned its hold to the Actor FIFO; only its
+    // durable prefix drain remains, and the next hold takes over its ingress.
+    const previous = this.active.get(actorId);
+    if (this.isActive(actorId)) {
       throw new Error(`Actor '${actorId}' already has an active packet handoff.`);
     }
     if (oldGeneration <= 0n) {
@@ -376,12 +385,19 @@ export class ZLinkActorHandoffCoordinator {
       pending: [],
       nextIndex: 0,
       snapshotIndex: -1,
-      pendingBytes: 0
+      pendingBytes: 0,
+      // The predecessor reports its own replay failures; only its drain order matters here.
+      predecessorRelease: previous?.releaseTask?.then(
+        () => undefined,
+        () => undefined
+      )
     });
   }
 
+  /** True while a hold owns this Actor's ingress, before its release to the Actor FIFO. */
   isActive(actorId: string): boolean {
-    return this.active.has(actorId);
+    const handoff = this.active.get(actorId);
+    return handoff !== undefined && handoff.phase !== 'releasing';
   }
 
   isProvisional(actorId: string): boolean {
@@ -472,6 +488,9 @@ export class ZLinkActorHandoffCoordinator {
       return { terminal: handoff.releaseTask };
     }
     handoff.phase = 'releasing';
+    if (handoff.predecessorRelease !== undefined) {
+      start = Promise.all([handoff.predecessorRelease, start]).then(() => undefined);
+    }
     let resolveTerminal!: () => void;
     let rejectTerminal!: (reason: unknown) => void;
     const terminal = new Promise<void>((resolve, reject) => {
@@ -666,6 +685,7 @@ export class ZLinkActorHandoffCoordinator {
     admission?: ZLinkActorHandoffReplayAdmission
   ): Promise<void> {
     try {
+      await handoff.predecessorRelease;
       if (handoff.pending.length === 0) return;
       if (replay === undefined) {
         const error = new Error(
