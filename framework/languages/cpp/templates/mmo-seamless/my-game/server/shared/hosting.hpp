@@ -53,7 +53,7 @@ class NodeControl final : public fx::hosted_service_t
           });
         co_await ready->task ();
         observation->close ();
-        if (config_.Bootstrap && !config_.ZoneIds.empty ()) {
+        if (!config_.ZoneIds.empty ()) {
             auto &spots = services.get_required<fx::spot_manager_t> ();
             for (const auto &id : config_.ZoneIds) {
                 const auto created =
