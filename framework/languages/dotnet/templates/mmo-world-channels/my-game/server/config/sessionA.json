@@ -1,0 +1,8 @@
+{
+  "Id": "sessionA",
+  "RedisEndpoint": "localhost:6379",
+  "KeyPrefix": "my-game-world-a:",
+  "MeshEndpoint": "tcp://127.0.0.1:0",
+  "WorldId": "A",
+  "StreamEndpoint": "ws://127.0.0.1:0"
+}
