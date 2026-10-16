@@ -17,7 +17,7 @@ done
 mkdir -p "$ROOT/.logs"
 if $local_mode; then
   if ! $no_build; then
-    if ! dotnet build "$ROOT/server/MyGame.sln" --nologo --verbosity minimal -m:2 >"$ROOT/.logs/build.log" 2>&1; then
+    if ! dotnet build "$ROOT/server/MyGame.sln" --nologo --verbosity minimal >"$ROOT/.logs/build.log" 2>&1; then
       tail -n 20 "$ROOT/.logs/build.log" >&2
       exit 1
     fi

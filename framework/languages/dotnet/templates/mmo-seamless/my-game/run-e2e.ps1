@@ -13,7 +13,7 @@ New-Item -ItemType Directory -Force (Join-Path $root '.logs') | Out-Null
 if ($Scenario) { $RunnerArguments = @('--scenario', $Scenario) + $RunnerArguments }
 if ($Local) {
     if (-not $NoBuild) {
-        & dotnet build (Join-Path $root 'server/MyGame.sln') --nologo --verbosity minimal -m:2 *> (Join-Path $root '.logs/build.log')
+        & dotnet build (Join-Path $root 'server/MyGame.sln') --nologo --verbosity minimal *> (Join-Path $root '.logs/build.log')
         if ($LASTEXITCODE -ne 0) {
             Get-Content (Join-Path $root '.logs/build.log') -Tail 20 | Write-Host
             exit 1

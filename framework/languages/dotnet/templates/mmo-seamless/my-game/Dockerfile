@@ -10,13 +10,13 @@ COPY server/MyGame.Session/MyGame.Session.csproj server/MyGame.Session/
 COPY server/MyGame.Zone/MyGame.Zone.csproj server/MyGame.Zone/
 COPY server/MyGame.Instance/MyGame.Instance.csproj server/MyGame.Instance/
 COPY e2e/MyGame.E2E/MyGame.E2E.csproj e2e/MyGame.E2E/
-RUN dotnet restore server/MyGame.sln --disable-parallel
+RUN dotnet restore server/MyGame.sln
 COPY server server
 COPY e2e e2e
-RUN dotnet publish server/MyGame.Session/MyGame.Session.csproj --no-restore -c Release -o /out/session -m:2 \
-    && dotnet publish server/MyGame.Zone/MyGame.Zone.csproj --no-restore -c Release -o /out/zone -m:2 \
-    && dotnet publish server/MyGame.Instance/MyGame.Instance.csproj --no-restore -c Release -o /out/instance -m:2 \
-    && dotnet publish e2e/MyGame.E2E/MyGame.E2E.csproj --no-restore -c Release -o /out/e2e -m:2
+RUN dotnet publish server/MyGame.Session/MyGame.Session.csproj --no-restore -c Release -o /out/session \
+    && dotnet publish server/MyGame.Zone/MyGame.Zone.csproj --no-restore -c Release -o /out/zone \
+    && dotnet publish server/MyGame.Instance/MyGame.Instance.csproj --no-restore -c Release -o /out/instance \
+    && dotnet publish e2e/MyGame.E2E/MyGame.E2E.csproj --no-restore -c Release -o /out/e2e
 
 FROM ${RUNTIME_IMAGE} AS node
 WORKDIR /app
