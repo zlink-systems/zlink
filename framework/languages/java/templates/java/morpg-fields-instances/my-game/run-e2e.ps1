@@ -31,6 +31,12 @@ if ($NoBuild) { throw '-NoBuild requires -Local; Docker builds reuse the layer c
 $project = 'my-game-e2e-' + [guid]::NewGuid().ToString('N')
 $logs = Join-Path $root ".logs/docker-$project"
 New-Item -ItemType Directory $logs | Out-Null
+# BuildKit reuses the previous transfer of a build context with the same directory name and
+# compares only file size and modification time, so two projects named my-game with equal
+# timestamps would build each other's files. A link with a per-run name gives every build its own
+# transfer.
+$env:MY_GAME_BUILD_CONTEXT = Join-Path $logs $project
+New-Item -ItemType Junction -Path $env:MY_GAME_BUILD_CONTEXT -Target $root | Out-Null
 $compose = @('compose', '-f', (Join-Path $root 'docker-compose.yml'), '-p', $project, '--profile', 'docker')
 $result = 1
 Write-Host "Docker logs: $logs"
@@ -72,5 +78,6 @@ finally {
             if ($LASTEXITCODE -ne 0) { $result = 1 }
         }
     }
+    [IO.Directory]::Delete($env:MY_GAME_BUILD_CONTEXT)
 }
 exit $result

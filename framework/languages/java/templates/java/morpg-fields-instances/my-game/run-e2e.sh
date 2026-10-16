@@ -38,10 +38,16 @@ fi
 project="my-game-e2e-$(date +%s)-$$-$RANDOM"
 logs="$ROOT/.logs/docker-$project"
 mkdir -p "$logs"
+# BuildKit reuses the previous transfer of a build context with the same directory name and
+# compares only file size and modification time, so two projects named my-game with equal
+# timestamps would build each other's files. A link with a per-run name gives every build its own
+# transfer.
+export MY_GAME_BUILD_CONTEXT="$logs/$project"
 compose=(docker compose -f "$ROOT/docker-compose.yml" -p "$project" --profile docker)
 cleanup() {
   local result=$?
   trap - EXIT
+  rm -f "$MY_GAME_BUILD_CONTEXT"
   local containers
   containers=$(docker ps -aq --filter "label=my-game.e2e=$project") || result=1
   if [[ -n "$containers" ]]; then
@@ -61,6 +67,7 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 echo "Docker logs: $logs"
+ln -s "$ROOT" "$MY_GAME_BUILD_CONTEXT"
 if ! "${compose[@]}" build >"$logs/build.log" 2>&1; then
   tail -n 30 "$logs/build.log" >&2
   exit 1
