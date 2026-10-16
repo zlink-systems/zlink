@@ -1,3 +1,4 @@
+import { routingIdsEqual } from '../routing-id';
 import { ZLINK_DEFAULT_PUBLIC_WEIGHT } from '../../contracts/Configuration/RegistrationBuilderPolicy';
 import type { ZLinkLocationOptionOverrides } from '../../contracts/Locations/Options';
 import type { ZLinkPeerLocationFilter } from '../../contracts/Locations/Keys';
@@ -130,7 +131,7 @@ function meshDescriptorPeerResolver(runtime: ZLinkLocationRuntime): ZLinkPeerLoc
         }))
         .filter(
           (peer) =>
-            (filter.nodeRid === undefined || String(peer.nodeRid) === String(filter.nodeRid)) &&
+            (filter.nodeRid === undefined || routingIdsEqual(peer.nodeRid, filter.nodeRid)) &&
             (filter.endpoint === undefined || peer.endpoint === filter.endpoint)
         );
     }
@@ -209,7 +210,7 @@ class ZLinkSpotNodeAutoConnectExecutor implements IZLinkAutoConnectExecutor {
         (peer) =>
           peer.routingId !== null &&
           peer.endpoint === target.endpoint &&
-          (target.nodeRid === undefined || String(peer.routingId) === String(target.nodeRid)) &&
+          (target.nodeRid === undefined || routingIdsEqual(peer.routingId, target.nodeRid)) &&
           peer.lifecycleGeneration === target.lifecycleGeneration &&
           peer.state === MeshPeerRuntimeState.Serving
       );
@@ -291,7 +292,7 @@ class ZLinkSpotNodeAutoConnectExecutor implements IZLinkAutoConnectExecutor {
       if (peer.endpoint !== target.endpoint) {
         continue;
       }
-      if (target.nodeRid !== undefined && String(peer.routingId) !== String(target.nodeRid)) {
+      if (target.nodeRid !== undefined && !routingIdsEqual(peer.routingId, target.nodeRid)) {
         continue;
       }
       this.node.disconnectPeer(peer.routingId, peer.lifecycleGeneration);
