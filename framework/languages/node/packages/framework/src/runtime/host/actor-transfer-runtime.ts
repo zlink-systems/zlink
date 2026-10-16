@@ -61,7 +61,7 @@ import type {
   ZLinkOwnerLeaseStore
 } from '../locations/internal-store-contracts';
 import { wrapFrameworkPayloadMessage } from '../messaging/payload-codec';
-import { decodeRoutingId, encodeRoutingIdStorageHex, routingIdsEqual } from '../routing-id';
+import { encodeRoutingIdStorageHex, routingIdsEqual } from '../routing-id';
 import type { DefaultZLinkSpotManager } from '../spots';
 import type { ZLinkSpotRouteResolver, ZLinkSpotRouteTarget } from '../spots/spot-routing-internal';
 import { BoundedReplayMap } from './bounded-replay-map';
@@ -1009,10 +1009,7 @@ export class ZLinkActorTransferRuntime {
         `Actor '${actor.context.actorId}' Session route service-wire source fence is stale.`
       );
     }
-    const sourceNodeRid = decodeRoutingId(
-      String(local.routingId),
-      encodeRoutingIdStorageHex(local.routingId)
-    );
+    const sourceNodeRid = local.routingId;
     const coordinator = {
       ownerId: authority.ownerId,
       leaseGeneration: authority.ownerLeaseGeneration,
@@ -1021,17 +1018,11 @@ export class ZLinkActorTransferRuntime {
       expectedAuthorityStoreVersion: authority.storeVersion.value
     };
     const session = {
-      sessionOwnerNodeRid: decodeRoutingId(
-        String(target.targetNodeRid),
-        encodeRoutingIdStorageHex(target.targetNodeRid)
-      ),
+      sessionOwnerNodeRid: target.targetNodeRid,
       sessionOwnerNodeGeneration: sessionOwner.lifecycleGeneration,
       sessionOwnerId: sessionOwner.ownerId,
       sessionOwnerLeaseGeneration: sessionOwner.leaseGeneration,
-      sessionRid: decodeRoutingId(
-        String(target.sessionRid),
-        encodeRoutingIdStorageHex(target.sessionRid)
-      ),
+      sessionRid: target.sessionRid,
       bindingGeneration: target.bindingGeneration
     };
     const request: ServiceSessionRelocationSeal = {
@@ -1095,10 +1086,7 @@ export class ZLinkActorTransferRuntime {
       actor: {
         actorId: actor.context.actorId,
         generation: actorRef.generation,
-        nodeRid: decodeRoutingId(
-          String(actorRef.nodeRid),
-          encodeRoutingIdStorageHex(actorRef.nodeRid)
-        )
+        nodeRid: actorRef.nodeRid
       },
       session: serviceFence.session,
       route: {
@@ -1548,7 +1536,7 @@ export class ZLinkActorTransferRuntime {
     if (
       authority?.kind === 'snapshot' &&
       authority.allocation.state === 'active' &&
-      String(authority.allocation.descriptor.rid) === String(node.status().routingId) &&
+      routingIdsEqual(authority.allocation.descriptor.rid, node.status().routingId) &&
       authority.allocation.descriptorLifecycleGeneration === ownerNodeGeneration
     ) {
       state.setLocationGeneration(authority.authorityOwnerGeneration);
@@ -1717,10 +1705,7 @@ export class ZLinkActorTransferRuntime {
       ) {
         throw new Error(`Actor '${actorId}' command 44 target authority fence is stale.`);
       }
-      const targetNodeRid = decodeRoutingId(
-        String(actorRef.nodeRid),
-        encodeRoutingIdStorageHex(actorRef.nodeRid)
-      );
+      const targetNodeRid = actorRef.nodeRid;
       await serviceWire.sendSessionRelocationRoute(
         target.routerChannelId,
         target.targetNodeRid,

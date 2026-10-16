@@ -1433,7 +1433,10 @@ export class ZLinkActorHandoffCoordinator {
       return BigInt(context.targetOwner.authorityOwnerGeneration);
     }
     const current = this.options.currentOwnerFence?.(actorId);
-    if (current !== undefined && current.nodeRid === String(actor.nodeRid)) {
+    if (
+      current !== undefined &&
+      routingIdsEqual(messageFollowOwnerNodeRid(current), actor.nodeRid)
+    ) {
       return BigInt(current.authorityOwnerGeneration);
     }
     return undefined;

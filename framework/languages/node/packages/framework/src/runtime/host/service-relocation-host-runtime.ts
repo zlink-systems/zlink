@@ -917,7 +917,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         this.targetAssemblies.get(operationKey)?.fingerprint ??
         this.targetStages.get(operationKey)?.offer.prepareFingerprint ??
         this.terminalTargets.get(operationKey);
-      if (request.sourceNodeRid !== String(record.sourceNodeRid)) return true;
+      if (!routingIdsEqual(request.sourceNodeRid, record.sourceNodeRid)) return true;
       if (acceptedFingerprint !== undefined && acceptedFingerprint !== fingerprint) {
         if (!samePrepareIdentity(acceptedFingerprint, request)) return true;
         this.replyPrepare(
@@ -947,7 +947,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         // finish the restore and the Ready reply asynchronously.
         let promise: Promise<ServiceMaintenanceRelocationReady>;
         try {
-          this.registerTargetAssembly(operationKey, request, String(record.sourceNodeRid));
+          this.registerTargetAssembly(operationKey, request, record.sourceNodeRid);
           promise = this.handlePrepareControl(
             meshName,
             operationKey,
@@ -1082,7 +1082,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     if (
       pending === undefined ||
       sourceNodeRid === null ||
-      String(sourceNodeRid) !== pending.authenticatedSourceNodeRid ||
+      !routingIdsEqual(sourceNodeRid, pending.authenticatedSourceNodeRid) ||
       request.senderRole !== 'source' ||
       !sameCoordinator(request.coordinator, pending.prepare.coordinator) ||
       !sameRelocationObject(request.object, pending.prepare.object)
@@ -1161,7 +1161,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     //  to itself; RouteMesh has no self connection (NotConnected), so the
     //  control dispatches through the same inbound handler locally.
     const localRid = this.requireMeshNode(meshName).status().routingId;
-    if (String(localRid) === String(targetNodeRid)) {
+    if (routingIdsEqual(localRid, targetNodeRid)) {
       await this.handleSessionRelocationRoute(meshName, request, localRid, signal);
       return;
     }
@@ -1574,7 +1574,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     );
     target ??= await this.selectTarget(
       meshName,
-      String(this.requireMeshNode(meshName).status().routingId),
+      this.requireMeshNode(meshName).status().routingId,
       targetApplicationVersion,
       relocationTargetRequirements([
         {
@@ -1868,7 +1868,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     );
     target ??= await this.selectTarget(
       meshName,
-      String(this.requireMeshNode(meshName).status().routingId),
+      this.requireMeshNode(meshName).status().routingId,
       targetApplicationVersion,
       [
         {
@@ -1999,7 +1999,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     );
     target ??= await this.selectTarget(
       meshName,
-      String(this.requireMeshNode(meshName).status().routingId),
+      this.requireMeshNode(meshName).status().routingId,
       targetApplicationVersion,
       [
         {
@@ -2289,12 +2289,12 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     const coordinator = {
       ownerId: primary.ownerId,
       leaseGeneration: primary.ownerLeaseGeneration,
-      nodeRid: String(localStatus.routingId),
+      nodeRid: localStatus.routingId,
       nodeGeneration: localStatus.lifecycleGeneration,
       expectedAuthorityStoreVersion: primary.storeVersion.value
     } satisfies ServiceWireRelocationCoordinatorFence;
     const targetFence = {
-      nodeRid: String(target.rid),
+      nodeRid: target.rid,
       nodeGeneration: target.lifecycleGeneration,
       ownerId: target.ownerId,
       ownerLeaseGeneration: target.leaseGeneration
@@ -2805,7 +2805,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         current.ownerId === target.ownerId &&
         current.ownerLeaseGeneration === target.ownerLeaseGeneration &&
         current.authorityOwnerGeneration > participant.authorityOwnerGeneration &&
-        String(current.allocation.descriptor.rid) === target.nodeRid &&
+        routingIdsEqual(current.allocation.descriptor.rid, target.nodeRid) &&
         current.allocation.descriptorLifecycleGeneration === target.nodeGeneration
       ) {
         committed += 1;
@@ -2868,7 +2868,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     const targetDescriptor = this.options.localDescriptor?.(meshName);
     if (
       targetOwner === undefined ||
-      String(targetStatus.routingId) !== request.target.nodeRid ||
+      !routingIdsEqual(targetStatus.routingId, request.target.nodeRid) ||
       targetStatus.lifecycleGeneration !== request.target.nodeGeneration ||
       targetOwner.ownerId !== request.target.ownerId ||
       targetOwner.leaseGeneration !== request.target.ownerLeaseGeneration ||
@@ -2938,7 +2938,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       const offer: TargetRelocationOffer = {
         prepare: request,
         prepareFingerprint: fingerprint,
-        authenticatedSourceNodeRid: String(sourceNodeRid),
+        authenticatedSourceNodeRid: sourceNodeRid,
         envelope: inventoryEnvelope,
         reservation
       };
@@ -3380,7 +3380,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     if (sourceNodeRid === null) {
       throw new Error('Relocation reply relay has no authenticated target node.');
     }
-    await this.requireAdmittedPeer(meshName, String(sourceNodeRid), relay.coordinator, signal);
+    await this.requireAdmittedPeer(meshName, sourceNodeRid, relay.coordinator, signal);
     const relocationId = wireIdText(relay.relocation);
     const authorityKey = this.relocationAuthorityKeys.get(relocationId);
     if (authorityKey === undefined) {
@@ -3395,7 +3395,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       authority.storeVersion.value !== relay.coordinator.expectedAuthorityStoreVersion ||
       authority.ownerId !== relay.coordinator.ownerId ||
       authority.ownerLeaseGeneration !== relay.coordinator.leaseGeneration ||
-      String(authority.allocation.descriptor.rid) !== relay.coordinator.nodeRid ||
+      !routingIdsEqual(authority.allocation.descriptor.rid, relay.coordinator.nodeRid) ||
       authority.allocation.descriptorLifecycleGeneration !== relay.coordinator.nodeGeneration
     ) {
       throw new Error('Relocation reply relay coordinator authority fence is stale.');
@@ -3549,14 +3549,14 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     signal?: AbortSignal
   ): Promise<void> {
     const descriptor = (await this.options.liveDescriptors(meshName, signal)).find(
-      (value) => String(value.rid) === authenticatedRid && value.state === 1
+      (value) => routingIdsEqual(value.rid, authenticatedRid) && value.state === 1
     );
     if (
       descriptor === undefined ||
       (expected !== undefined &&
         (descriptor.ownerId !== expected.ownerId ||
           descriptor.leaseGeneration !== expected.leaseGeneration ||
-          String(descriptor.rid) !== expected.nodeRid ||
+          !routingIdsEqual(descriptor.rid, expected.nodeRid) ||
           descriptor.lifecycleGeneration !== expected.nodeGeneration))
     ) {
       throw new Error('Relocation reply relay peer is not the exact admitted source fence.');
@@ -3575,7 +3575,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       owner === undefined ||
       owner.ownerId !== target.ownerId ||
       owner.leaseGeneration !== target.ownerLeaseGeneration ||
-      String(status.routingId) !== target.nodeRid ||
+      !routingIdsEqual(status.routingId, target.nodeRid) ||
       status.lifecycleGeneration !== target.nodeGeneration
     ) {
       throw new Error('Relocation reply relay target coordinator fence is stale.');
@@ -3583,7 +3583,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     return {
       ownerId: owner.ownerId,
       leaseGeneration: owner.leaseGeneration,
-      nodeRid: String(status.routingId),
+      nodeRid: status.routingId,
       nodeGeneration: status.lifecycleGeneration,
       expectedAuthorityStoreVersion: authority.storeVersion.value
     };
@@ -3699,13 +3699,13 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     const descriptors = await this.options.liveDescriptors(meshName, signal);
     const local =
       this.options.localDescriptor?.(meshName) ??
-      descriptors.find((descriptor) => String(descriptor.rid) === localRid);
+      descriptors.find((descriptor) => routingIdsEqual(descriptor.rid, localRid));
     const requiredVersion = targetApplicationVersion ?? local?.applicationVersion;
     const peers = this.requireMeshNode(meshName).peers();
     const candidates = descriptors
       .filter(
         (descriptor) =>
-          String(descriptor.rid) !== localRid &&
+          !routingIdsEqual(descriptor.rid, localRid) &&
           descriptor.state === ZLinkFrameworkRuntimeState.Serving &&
           descriptor.objectRole === ZLinkObjectRole.Server &&
           descriptor.placementWeight > 0 &&
@@ -3715,7 +3715,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
           peers.some(
             (peer) =>
               peer.routingId !== null &&
-              String(peer.routingId) === String(descriptor.rid) &&
+              routingIdsEqual(peer.routingId, descriptor.rid) &&
               peer.lifecycleGeneration === descriptor.lifecycleGeneration &&
               peer.state === MeshPeerRuntimeState.Serving
           ) &&
@@ -5388,7 +5388,7 @@ function isSourceOwner(current: ZLinkAuthoritySnapshot, expected: ZLinkAuthority
     current.allocation.state === expected.allocation.state &&
     current.allocation.objectKind === expected.allocation.objectKind &&
     current.allocation.stableType === expected.allocation.stableType &&
-    String(current.allocation.descriptor.rid) === String(expected.allocation.descriptor.rid) &&
+    routingIdsEqual(current.allocation.descriptor.rid, expected.allocation.descriptor.rid) &&
     current.allocation.descriptorLifecycleGeneration ===
       expected.allocation.descriptorLifecycleGeneration
   );
@@ -5405,7 +5405,7 @@ function isExactCommittedTarget(
     current.authorityOwnerGeneration > expected.authorityOwnerGeneration &&
     current.ownerId === target.ownerId &&
     current.ownerLeaseGeneration === target.ownerLeaseGeneration &&
-    String(current.allocation.descriptor.rid) === target.nodeRid &&
+    routingIdsEqual(current.allocation.descriptor.rid, target.nodeRid) &&
     current.allocation.descriptorLifecycleGeneration === target.nodeGeneration &&
     Buffer.from(current.payload).equals(Buffer.from(payload))
   );
@@ -5647,7 +5647,7 @@ function validateTargetOneWayControl(
 ): void {
   const prepare = stage.offer.prepare;
   if (
-    String(sourceNodeRid) !== stage.offer.authenticatedSourceNodeRid ||
+    !routingIdsEqual(sourceNodeRid, stage.offer.authenticatedSourceNodeRid) ||
     !sameWireId(request.relocation, prepare.relocation) ||
     request.targetAttemptGeneration !== prepare.targetAttemptGeneration ||
     !sameCoordinator(request.coordinator, prepare.coordinator) ||

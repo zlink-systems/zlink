@@ -244,6 +244,9 @@ for (const [name, ids] of Object.entries({
     try {
       const sealed = await h.seal();
       const request = h.sent[0];
+      assert.equal(request.coordinator.nodeRid, ids.source, 'source RoutingId is preserved');
+      assert.equal(request.session.sessionOwnerNodeRid, ids.owner, 'owner RoutingId is preserved');
+      assert.equal(request.session.sessionRid, ids.session, 'Session RoutingId is preserved');
       for (const [actual, expected] of [
         [request.actor.actor.nodeRid, ids.source],
         [request.coordinator.nodeRid, ids.source],
@@ -258,6 +261,8 @@ for (const [name, ids] of Object.entries({
         'byte-identical duplicate seal joins its ACK'
       );
       await h.commit(sealed);
+      assert.equal(h.sent.at(-1).actor.nodeRid, ids.target, 'commit retains the target RoutingId');
+      assert.equal(h.sent.at(-1).route.targetNodeRid, ids.target);
       assert.equal(
         encodeRoutingIdStorageHex(
           (await h.host.streamBindingRuntime.find(h.actor.context.actorId)).ref.nodeRid
@@ -287,6 +292,11 @@ test('binary Session seal abort preserves its identity and releases the source r
   try {
     const sealed = await h.seal();
     await h.transfer.abortBoundSessionRouteSeal(h.actor, h.state, sealed);
+    assert.equal(
+      h.sent.at(-1).actor.nodeRid,
+      binaryIds.source,
+      'abort retains the source RoutingId'
+    );
     assert.equal(
       await h.host.streamBindingRuntime.validateActorRouteSeal(
         h.actor.context.actorId,

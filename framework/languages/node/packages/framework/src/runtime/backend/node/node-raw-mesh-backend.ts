@@ -1,3 +1,4 @@
+import { routingIdsEqual } from '../../routing-id';
 import { requestDurableService } from '../../foundation/durable-service-request';
 import { encodeRoutingIdStorageHex, toBackendRoutingId } from '../../routing-id';
 import {
@@ -365,7 +366,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   }
 
   setRoutingId(routingId: unknown): void {
-    if (String(routingId) !== this.routingId) {
+    if (!routingIdsEqual(toBackendRoutingId(routingId), this.routingId)) {
       throw new Error('MeshNode routing id is immutable after construction.');
     }
   }
@@ -2031,7 +2032,7 @@ class RawStreamSessionService implements StreamSessionService {
     if (parts.length === 0) return false;
     const actorSlot = await serviceSessionBindingIngressPortIfRegistered(this)?.actorSlot(
       actorId,
-      sessionRid
+      target
     );
     if (actorSlot === undefined) return false;
     parts[0] = Buffer.from(streamFrameWithActorSlot(parts[0]!, actorSlot));
