@@ -5467,7 +5467,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     private void ReceiveLoop(CancellationToken cancellationToken)
     {
         var events = new PollEvent[ReceivePollSourceCount];
-        var admissions = new ZLinkApplicationJobQueueLease?[ReceiveBatchSize];
         try
         {
             while (!cancellationToken.IsCancellationRequested)
@@ -5506,7 +5505,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     if (cancellationToken.IsCancellationRequested)
                         return;
                     if (receiveReady)
-                        DrainRawSocket(cancellationToken, admissions);
+                        DrainRawSocket(cancellationToken);
                     ProcessInfrastructure(now);
                     ExpireOperations();
                 }
@@ -5570,39 +5569,37 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         }
     }
 
-    private void DrainRawSocket(
-        CancellationToken cancellationToken,
-        ZLinkApplicationJobQueueLease?[] admissions
-    )
+    private void DrainRawSocket(CancellationToken cancellationToken)
     {
         var queue = _applicationJobQueue;
         if (queue is null)
         {
-            ReceiveRawBatch(admissions, ReceiveBatchSize);
+            var unbounded = new ZLinkApplicationJobQueueReservation(
+                null,
+                ZLinkApplicationJobOrigin.Remote,
+                null,
+                ReceiveBatchSize
+            );
+            ReceiveRawBatch(ref unbounded);
             return;
         }
+        var reservation = new ZLinkApplicationJobQueueReservation(
+            queue,
+            ZLinkApplicationJobOrigin.Remote,
+            Interlocked.Exchange(ref _reservedRawApplicationAdmission, null)
+        );
         var count = 0;
         try
         {
-            var reserved = Interlocked.Exchange(ref _reservedRawApplicationAdmission, null);
-            admissions[0] = reserved;
-            if (reserved is not null)
-            {
-                count = 1;
+            if (reservation.Count != 0)
                 _poller!.Modify(_socket!, PollEventFlags.PollIn | InfrastructurePollEvents);
-            }
-            count += queue.TryAcquireBatch(
-                admissions,
-                count,
-                ReceiveBatchSize - count,
-                ZLinkApplicationJobOrigin.Remote
-            );
-            ReceiveRawBatch(admissions, count);
+            reservation.ReserveAvailable(ReceiveBatchSize);
+            count = reservation.Count;
+            ReceiveRawBatch(ref reservation);
         }
         finally
         {
-            queue.ReleaseBatch(admissions);
-            Array.Clear(admissions);
+            reservation.Dispose();
         }
 
         if (count == 0 || _pendingRawMulticast is not null)
@@ -5618,28 +5615,28 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         }
     }
 
-    // Each permit of the batch admits one record, or the next child of a
-    // fanout this source received before.
-    private void ReceiveRawBatch(ZLinkApplicationJobQueueLease?[] admissions, int count)
+    // Each reserved permit admits one claimed record, or the next child of a
+    // fanout this source received before; its lease is created at that claim.
+    private void ReceiveRawBatch(ref ZLinkApplicationJobQueueReservation reservation)
     {
         var startedAt = Stopwatch.GetTimestamp();
         long bytes = 0;
-        for (var index = 0; index < count; index++)
+        for (var index = 0; reservation.Count != 0; index++)
         {
             if (ZLinkReceiveBatchBudget.IsExhausted(index, bytes, startedAt))
                 return;
-            var admission = admissions[index];
-            admissions[index] = null;
             if (_pendingRawMulticast is { } fanout)
             {
-                ContinueRawMulticast(fanout, admission);
+                ContinueRawMulticast(fanout, reservation.Claim());
                 continue;
             }
             Received? received = Received.Create();
+            ZLinkApplicationJobQueueLease? admission = null;
             try
             {
                 if (!_socket!.Recv(received, RecvFlags.DontWait))
                     return;
+                admission = reservation.Claim();
                 bytes = checked(bytes + ZLinkReceiveBatchBudget.MeasureParts(received.Parts));
                 using var ownership = new RawIngressOwnership(received, admission);
                 received = null;
