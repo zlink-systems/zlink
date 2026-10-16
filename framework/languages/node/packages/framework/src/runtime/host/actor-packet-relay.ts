@@ -286,7 +286,14 @@ export class ZLinkActorPacketRelay {
         return { ok: true, response: { acknowledged: true } };
       }
       if (frameHeader.name === ZLINK_REMOTE_ACTOR_SESSION_DISCONNECTED_PACKET) {
-        this.requireCurrentRemoteBinding(relay, _routeContext);
+        // Session–Actor binding §8.3: disconnect can arrive after its binding
+        // has been removed. A successor binding suppresses it; no current binding
+        // still permits the already accepted notification to reach the Actor.
+        if (
+          this.options.actorManager()?.getState(relay.actorId)?.boundSession !== undefined &&
+          !this.matchesCurrentRemoteBinding(relay, _routeContext)
+        )
+          return { ok: true };
         await this.notifyLocalActorDisconnectedById(relay.actorId);
         return {
           ok: true,
@@ -810,22 +817,28 @@ export class ZLinkActorPacketRelay {
     relay: ReturnType<typeof decodeRemoteActorPacketRelayPayload>,
     routeContext: ZLinkRouteMessageContext
   ): void {
-    const state = this.options.actorManager()?.getState(relay.actorId);
-    const current = state?.boundSession;
-    if (
-      current === undefined ||
-      current.sessionNodeRid === undefined ||
-      !routingIdsEqual(current.sessionNodeRid, routeContext.sourceNodeRid) ||
-      current.bindingGeneration === undefined ||
-      relay.bindingGeneration === undefined ||
-      current.bindingGeneration !== BigInt(relay.bindingGeneration)
-    ) {
+    if (!this.matchesCurrentRemoteBinding(relay, routeContext)) {
       throw createInternalFrameworkException(
         ZLinkFrameworkInternalErrorKind.ActorSessionNotBound,
         `Actor '${relay.actorId}' bound session identity is stale.`,
         true
       );
     }
+  }
+
+  private matchesCurrentRemoteBinding(
+    relay: ReturnType<typeof decodeRemoteActorPacketRelayPayload>,
+    routeContext: ZLinkRouteMessageContext
+  ): boolean {
+    const current = this.options.actorManager()?.getState(relay.actorId)?.boundSession;
+    return (
+      current !== undefined &&
+      current.sessionNodeRid !== undefined &&
+      routingIdsEqual(current.sessionNodeRid, routeContext.sourceNodeRid) &&
+      current.bindingGeneration !== undefined &&
+      relay.bindingGeneration !== undefined &&
+      current.bindingGeneration === BigInt(relay.bindingGeneration)
+    );
   }
 
   private async requestRemoteTarget<TReply>(
