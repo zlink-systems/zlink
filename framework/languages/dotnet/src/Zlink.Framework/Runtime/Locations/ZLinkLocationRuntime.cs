@@ -456,7 +456,12 @@ internal sealed class ZLinkLocationRuntime : IAsyncDisposable
             UpdatedAt = _time.GetUtcNow(),
         };
         var result = await ExecuteLocationWriteAsync(
-                () => _store.UpdateMeshNodeAsync(stamped, intent, cancellationToken),
+                () =>
+                    ZLinkDescriptorPublicationUnconfirmedException.WriteAsync(
+                        token => _store.UpdateMeshNodeAsync(stamped, intent, token),
+                        _options.OwnerLeaseRenewTimeout,
+                        cancellationToken
+                    ),
                 ZLinkLocationKind.MeshNode,
                 ZLinkLocationKeyCodec.EncodeMeshNodeKey(
                     new ZLinkMeshNodeDescriptorKey(descriptor.MeshName, descriptor.Rid)
