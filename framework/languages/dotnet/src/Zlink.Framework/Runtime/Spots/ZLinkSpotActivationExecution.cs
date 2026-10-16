@@ -524,11 +524,42 @@ internal abstract partial class ZLinkSpotActivation
             )
         )
             return;
+        var requestSource = received.RequestSource;
+        if (
+            requestSource is null
+            && received.SourceNodeRid is { } sourceNodeRid
+            && _runtime.Registration.Locations.ResolveStore() is { } store
+        )
+        {
+            try
+            {
+                requestSource = await ZLinkRequestSourceFenceResolver
+                    .ResolveAsync(
+                        _runtime.GetSpotNodeRuntime(NodeRid).Node,
+                        store,
+                        RuntimeMeshName.Value,
+                        sourceNodeRid,
+                        received.SourceNodeGeneration,
+                        _stopSource.Token
+                    )
+                    .ConfigureAwait(false);
+            }
+            catch (Exception error)
+            {
+                _dispatcher.RejectApplicationRouteForFailure(
+                    received,
+                    ChannelName,
+                    error,
+                    _runtime.Flow.CaptureEnabled
+                );
+                return;
+            }
+        }
         var operationAdmission = (
             await _runtime.TryAdmitInboundOperationAsync(received.CanReply).ConfigureAwait(false)
         ).EnterInbound();
         ZLinkRuntimeTaskRunner.WithoutExecutionContextFlow(() =>
-            QueueApplicationRouteSerialized(received, operationAdmission)
+            QueueApplicationRouteSerialized(received, operationAdmission, requestSource)
         );
     }
 
@@ -1576,7 +1607,8 @@ internal abstract partial class ZLinkSpotActivation
 
     private bool QueueApplicationRouteSerialized(
         ZLinkBackendRouteReceived received,
-        ZLinkInboundOperationAdmission operationAdmission
+        ZLinkInboundOperationAdmission operationAdmission,
+        ZLinkServiceWireCodec.RequestSourceFence? requestSource
     )
     {
         var replyRouteId = 0UL;
@@ -1602,7 +1634,8 @@ internal abstract partial class ZLinkSpotActivation
         {
             acceptedJournalLength = ZLinkSpotAcceptedJournal.MeasureEncodedLength(
                 received,
-                replyRouteId
+                replyRouteId,
+                requestSource
             );
         }
         catch
@@ -1612,7 +1645,7 @@ internal abstract partial class ZLinkSpotActivation
             throw;
         }
         Func<ReadOnlyMemory<byte>> acceptedJournalFactory = () =>
-            ZLinkSpotAcceptedJournal.Encode(received, replyRouteId);
+            ZLinkSpotAcceptedJournal.Encode(received, replyRouteId, requestSource);
 
         var state = received.InstanceIntent
             ? new DurableActivationDispatch(
