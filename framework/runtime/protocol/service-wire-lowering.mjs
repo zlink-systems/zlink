@@ -2635,7 +2635,7 @@ function runSelfTests(schemaPath) {
     LoweringCoverageError,
   );
   assert.deepEqual(JSON.parse(JSON.stringify(ir)), ir);
-  assert.equal(ir.types.length, 158);
+  assert.equal(ir.types.length, 159);
   assert.equal(ir.commands.length, 40);
   assert.equal(
     ir.semanticConstraints.filter((constraint) => constraint.runtimePredicate)

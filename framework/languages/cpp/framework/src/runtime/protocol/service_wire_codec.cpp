@@ -946,7 +946,8 @@ encode_session_relocation_sealed (const session_relocation_sealed_t &record)
     return generated_codec_call ([&] {
         return encode_session_relocation_sealed_43 (
           {to_generated (record.relocation), to_generated (record.coordinator),
-           to_generated (record.actor), to_generated_session (record)});
+           to_generated (record.actor), to_generated_session (record),
+           service_wire_pilot_session_seal_result::sealed});
     });
 }
 
@@ -954,6 +955,9 @@ session_relocation_sealed_t decode_session_relocation_sealed (std::span<const st
 {
     const auto generated = generated_codec_call (
       [&] { return decode_session_relocation_sealed_43 (wire_bytes (bytes)); });
+    if (generated.seal_result != service_wire_pilot_session_seal_result::sealed)
+        throw service_wire_error_t (
+          "sessionRelocationSealed bindingAbsent is not supported by this runtime");
     session_relocation_sealed_t record;
     record.relocation = from_generated (generated.relocation);
     record.coordinator = from_generated (generated.coordinator);

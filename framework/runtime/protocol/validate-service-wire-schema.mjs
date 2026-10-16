@@ -1504,15 +1504,15 @@ function validateSemanticConstraints(constraints, contexts, fail) {
     ["bound-session-relocation-barrier-integrity", {
       sequence: [
         "source-sessionRelocationSeal",
-        "session-owner-reversible-ingress-seal",
-        "session-owner-holds-post-seal-ingress-with-payload-and-reply-context",
-        "session-owner-sessionRelocationSealed-exact-result-without-sequence-or-high-water",
+        "session-owner-reversible-ingress-seal-only-if-sealed",
+        "session-owner-holds-post-seal-ingress-with-payload-and-reply-context-only-if-sealed",
+        "session-owner-sessionRelocationSealed-terminal-sealResult-without-sequence-or-high-water",
         "source-captured-relocation",
         "target-restores-saved-session-work-once-and-receives-post-capture-ingress-relay",
         "target-owner-membership-cas",
         "target-merges-queues-switches-regular-route-finishes-lifecycle-and-opens-dispatch",
-        "target-sessionRelocationRoute-commit-one-way",
-        "session-owner-atomically-switches-route-submits-held-and-releases-seal",
+        "target-sessionRelocationRoute-commit-one-way-only-for-sealed-participants",
+        "session-owner-atomically-switches-route-submits-held-and-releases-exact-seal",
       ],
       asyncConvergence: [
         "completed-authority-cas",
@@ -1529,9 +1529,21 @@ function validateSemanticConstraints(constraints, contexts, fail) {
       commitPhase: "after-target-cas-queue-merge-route-switch-lifecycle-and-dispatch-open",
       routeControl: "one-way-no-response-command-45-reserved-never-sent-or-accepted",
       sealTimeout: "3000ms-then-close-physical-session-and-clean-binding-held-messages-and-seal",
-      abort: "before-cutover-source-sends-matching-sessionRelocationRoute-abort-one-way-session-owner-releases-only-exact-seal-and-resubmits-held-to-source-route-target-discards-temporary-queue-and-source-restores-store-payload",
-      duplicate: "idempotent-if-identical-else-protocol-error",
+      abort: "before-cutover-durable-abort-and-source-queue-restore-before-matching-sessionRelocationRoute-abort-one-way-only-for-sealed-participants",
+      duplicate: "same-relocation-identity-returns-recorded-sealResult-within-result-lifetime-coordinator-uses-first-result-only",
       sessionOwnerRestart: "stale-node-generation-protocol-error-no-route-switch",
+      sealResultType: "session-seal-result",
+      sealDecisionOwner: "session-actor-binding-section-8.3-session-owner-only",
+      bindingAbsent: "terminal-without-binding-seal-held-messages-or-seal-timeout-excluded-from-sessionBindings-and-command-44",
+      resultRecord: {
+        identity: "relocation-identity",
+        lookup: "recorded-result-before-current-binding-reassessment",
+        sealedLifetime: "existing-seal-lifetime-command-44-abort-seal-timeout-or-physical-session-end",
+        bindingAbsentLifetime: "SessionRelocationSealTimeout-from-decision",
+        afterExpiry: "reassess-current-binding-under-session-actor-binding-section-8.3",
+        duplicateFence: "original-request-fields-must-match-else-protocol-error",
+      },
+      lateBindingAbsentRoute: "warning-late_session_route_update-ignore-without-changing-new-binding-or-another-relocation-seal",
     }],
     ["transport-admission-integrity", {
       admissionType: "service-admission",
@@ -4625,15 +4637,15 @@ function validateRelocationStateMachine(machine, commands, types, fail) {
       phases: ["preparing"],
       duplicate: "idempotent-if-identical-else-protocol-error",
       reorder: "hold-until-preparing-authority",
-      loss: "retransmit-until-sealed-or-deadline",
+      loss: "retransmit-until-sealed-or-bindingAbsent-terminal-or-deadline",
     }],
     ["sessionRelocationSealed", {
       command: "sessionRelocationSealed",
       senderKind: "sessionOwner",
       phases: ["preparing"],
-      duplicate: "idempotent-if-identical-else-protocol-error",
-      reorder: "hold-until-matching-sessionRelocationSeal",
-      loss: "retransmit-until-captured-or-abort",
+      duplicate: "same-relocation-identity-returns-recorded-sealResult-within-result-lifetime-coordinator-uses-first-result-only",
+      reorder: "first-result-for-matching-sessionRelocationSeal-is-terminal-ignore-later-results",
+      loss: "duplicate-sessionRelocationSeal-replays-recorded-result-within-result-lifetime",
     }],
     ["sessionRelocationRoute", {
       command: "sessionRelocationRoute",
@@ -4860,6 +4872,14 @@ function validateServiceInvariants(schema, types, fail) {
   if (rejectReason?.encoding !== "u32"
       || JSON.stringify(rejectReason.values) !== JSON.stringify(expectedRejectReasons)) {
     fail("$.types", "admission reject reason must use the stable closed v1 table");
+  }
+  const sessionSealResult = types.get("session-seal-result");
+  if (sessionSealResult?.kind !== "enum" || sessionSealResult.encoding !== "u8"
+      || JSON.stringify(sessionSealResult.values) !== JSON.stringify([
+        { name: "sealed", value: 1 },
+        { name: "bindingAbsent", value: 2 },
+      ])) {
+    fail("$.types", "session seal result must use the closed u8 sealed=1, bindingAbsent=2 table");
   }
   if (JSON.stringify(types.get("reply-relay-ack-status")?.values) !== JSON.stringify([
     { name: "terminalReceived", value: 1 },
@@ -5611,6 +5631,7 @@ function validateServiceInvariants(schema, types, fail) {
       { name: "sessionOwnerLeaseGeneration", $ref: "nonzero-u64" },
       { name: "sessionRid", $ref: "rid" },
       { name: "bindingGeneration", $ref: "nonzero-u64" },
+      { name: "sealResult", $ref: "session-seal-result" },
     ],
     sessionRelocationRoute: [
       { name: "relocation", $ref: "relocation-id" },
@@ -7771,6 +7792,42 @@ function runSelfTests(schema) {
         (entry) => entry.kind === "relocation-authority-phase-boundaries",
       );
       constraint.closedOwnerTargetRules.preparingAndCaptured = "target-may-be-present";
+    }],
+    ["session seal result enum omitted", (candidate) => {
+      candidate.types = candidate.types.filter((type) => type.name !== "session-seal-result");
+    }],
+    ["session seal result encoding widened", (candidate) => {
+      candidate.types.find((type) => type.name === "session-seal-result").encoding = "u16";
+    }],
+    ["session seal result unknown value admitted", (candidate) => {
+      candidate.types.find((type) => type.name === "session-seal-result").values.push({ name: "unknown", value: 3 });
+    }],
+    ["session seal result value changed", (candidate) => {
+      candidate.types.find((type) => type.name === "session-seal-result").values[1].value = 0;
+    }],
+    ["session seal result field omitted", (candidate) => {
+      candidate.commands.find((command) => command.id === 43).body.pop();
+    }],
+    ["session seal result field reordered", (candidate) => {
+      candidate.commands.find((command) => command.id === 43).body.reverse();
+    }],
+    ["session seal absent result lifetime changed", (candidate) => {
+      candidate.semanticConstraints.find((entry) => entry.kind === "bound-session-relocation-barrier-integrity").resultRecord.bindingAbsentLifetime = "until-session-end";
+    }],
+    ["session seal record lookup reordered", (candidate) => {
+      candidate.semanticConstraints.find((entry) => entry.kind === "bound-session-relocation-barrier-integrity").resultRecord.lookup = "current-binding-first";
+    }],
+    ["sessionRelocationSeal loss ignores absent terminal", (candidate) => {
+      candidate.relocationStateMachine.commandRules.find((entry) => entry.command === "sessionRelocationSeal").loss = "retransmit-until-sealed-or-deadline";
+    }],
+    ["sessionRelocationSealed duplicate ignores absent terminal", (candidate) => {
+      candidate.relocationStateMachine.commandRules.find((entry) => entry.command === "sessionRelocationSealed").duplicate = "idempotent-if-identical-else-protocol-error";
+    }],
+    ["sessionRelocationSealed reorder ignores absent terminal", (candidate) => {
+      candidate.relocationStateMachine.commandRules.find((entry) => entry.command === "sessionRelocationSealed").reorder = "hold-until-matching-sessionRelocationSeal";
+    }],
+    ["sessionRelocationSealed loss ignores absent terminal", (candidate) => {
+      candidate.relocationStateMachine.commandRules.find((entry) => entry.command === "sessionRelocationSealed").loss = "retransmit-until-captured-or-abort";
     }],
     ["route commit allowed before completed authority", (candidate) => {
       const rule = candidate.relocationStateMachine.commandRules.find(

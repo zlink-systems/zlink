@@ -691,13 +691,17 @@ function toGeneratedSessionRelocationSealed(
     relocation: value.relocation,
     coordinator: toGeneratedCoordinatorFence(value.coordinator),
     actor: toGeneratedRouteFence(value.actor),
-    ...toGeneratedSessionOwnerFence(value.session)
+    ...toGeneratedSessionOwnerFence(value.session),
+    sealResult: 'sealed'
   };
 }
 
 function fromGeneratedSessionRelocationSealed(
   value: GeneratedSessionRelocationSealed43
 ): ServiceSessionRelocationSealed {
+  if (value.sealResult !== 'sealed') {
+    throw new RangeError('sessionRelocationSealed bindingAbsent is not supported by this runtime');
+  }
   return {
     relocation: value.relocation,
     coordinator: fromGeneratedCoordinatorFence(value.coordinator),
