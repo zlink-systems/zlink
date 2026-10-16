@@ -96,6 +96,58 @@ Actor가 소속 Spot을 바꾸는 동작은 membership 변경이다. 대상 Spot
 
 주기적으로 handler를 실행하는 timer를 사용하여 `BorderTick`이 경계 근처 플레이어 정보를 publish한다. 이 pub/sub 방식에서는 `BorderHandler`가 구독한 정보를 받고, `BorderDelivery`가 수신 Actor의 binding된 Session으로 알림을 전달한다. 주기 작업의 등록과 실행은 [Timers and workers](https://docs.zlink.systems/ko/dotnet/guide/server/36-timer-worker/)가 설명한다.
 
+## 요청 흐름
+
+예시 게임의 요청은 다음 경로로 처리된다. 기능을 더하거나 예시를 바꾸기 전에 이 경로를 따라 코드를 읽으면 바꿀 위치를 빠르게 찾을 수 있다.
+
+1. client가 Session node에 STREAM으로 연결하고 첫 패킷 `JoinWorldRequest`를 보낸다. `PlayerSession`은 첫 패킷 타입을 확인하고 `playerId`로 Player Actor를 `GetOrCreate`한 뒤 Session에 binding하고 원래 패킷을 relay한다.
+2. 새 Actor는 Entry Spot `WorldEntry`에서 시작한다. `EnterWorldHandler`가 identity를 확인하고 `PlayerActor.Move`로 좌표에 해당하는 Zone에 `JoinSpot(...).Defer()`를 요청한다.
+3. 참가가 끝나면 `PlayerActor.OnJoinCompletedAsync`가 binding된 Session으로 `WorldState`를 보낸다. 이후 같은 client의 패킷은 Actor가 속한 Zone의 handler(`MoveHandler` 등)가 처리하고 결과를 같은 Session으로 보낸다.
+4. 이동이 다른 Zone의 좌표에 닿으면 `MoveHandler`가 다시 `PlayerActor.Move`를 호출한다. 다른 node에 있는 Zone이어도 client 연결은 바뀌지 않는다.
+5. node를 교체할 때 `NodeControl`의 `drain`이 relocation을 요청한다. Framework는 `PlayerRelocation`·`ZoneRelocation`의 `Capture`로 게임 상태를 받아 다른 node에서 `Restore`한다.
+
+## 예시 게임 로직 교체
+
+이 템플릿에는 구조와 운영 동작을 실제로 확인하기 위한 작은 예시 게임이 들어 있다. 예시 게임은 한 줄 좌표 위의 이동, Zone 경계 근처의 가시성 알림, Dungeon 열기다. 자기 게임을 만들 때는 이 예시 로직을 바꾸고, Session 연결·Actor와 Spot 등록·relocation·drain·e2e 실행기는 그대로 사용한다. 실행기와 relocation 틀은 게임 내용과 무관하게 서버 교체와 재접속을 검증하기 때문이다.
+
+### 바꾸기 전 확인
+
+교체를 시작하기 전에 [개발 명령](#개발-명령)으로 빌드와 e2e를 한 번 실행해 받은 상태가 동작하는지 확인한다. 이 결과가 이후 변경의 기준이 된다. 실패하면 먼저 [README](README.md)의 Known issues와 대조한다.
+
+### 바꾸는 부분과 남기는 부분
+
+| 파일 | 예시 게임 로직(바꾼다) | 구조(남긴다) |
+| --- | --- | --- |
+| `server/MyGame.Shared/Contracts.cs` | `WorldState`, `JoinWorldRequest`, `MoveRequest`, `EnterZone`, `BorderPresence`, `BorderVisible`, `OpenDungeonRequest`, `DungeonOpened` | `GameNames`의 등록 이름, `SessionInfoRequest`, `SessionInfo`, `NodeReady`, `NodeProtocol` |
+| `server/MyGame.Zone/PlayerActor.cs` | 좌표 `X`, `Sequence`와 이동 규칙 | Actor 등록, `Capture`·`Restore`, `PlayerRelocation` |
+| `server/MyGame.Zone/ZoneSpot.cs` | 가시성 정보, 도착 대기 정보, 경계 계산 | Spot 등록, `Capture`·`Restore`, `ZoneRelocation` |
+| `server/MyGame.Zone/Handlers.cs` | `MoveHandler`, `BorderTick`, `BorderHandler`, `BorderDelivery`, `OpenDungeonHandler` | 첫 입장·재접속을 처리하는 `ReconnectHandler`의 identity 확인과 상태 재전송 형태 |
+| `server/MyGame.Zone/WorldEntry.cs` | `EnterWorldHandler`가 받는 첫 패킷 내용 | Entry Spot 등록과 첫 입장 경로 |
+| `server/MyGame.Instance/DungeonSpot.cs` | Dungeon 정보 | 동적 User Spot 생성 형태 |
+| `server/MyGame.Session/`, `GameHosting.cs`, `NodeControl.cs`, `NodeSettings.cs` | — | 전부 남긴다 |
+
+`NodeControl`의 `drain`·`shutdown`은 운영 제어이고, `vacate-zone`은 e2e가 대체 node 배치를 확인하는 데 쓰는 제어다. 둘 다 남긴다.
+
+### 교체 순서
+
+메시지 contract부터 바꾼다. `Contracts.cs`에서 예시 메시지를 지우고 자기 게임의 typed record를 정의한 뒤, 컴파일 오류가 나는 handler를 하나씩 새 메시지로 옮긴다. 첫 입장 패킷을 바꾸면 `PlayerSession`의 첫 패킷 검사, `EnterWorldHandler`, `ReconnectHandler`가 같은 타입을 받도록 함께 고친다.
+
+상태는 그 상태를 결정하는 객체에 둔다. 플레이어별 상태는 `PlayerActor`, 여러 플레이어가 공유하는 상태는 Spot에 둔다. 상태 필드를 바꿀 때는 같은 객체의 snapshot record와 `Capture`·`Restore`를 함께 고친다. 빠뜨린 필드는 relocation 뒤 사라지고, update 시나리오가 그 손실을 잡는다.
+
+경계 알림처럼 쓰지 않는 기능은 handler와 등록을 함께 지운다. `border` channel을 지우면 `ZoneSpot.Configure()`의 구독, `Program.cs`의 channel 등록, `zlink.structure.json`의 `channels` 선언을 같은 변경에서 지운다. 셋이 다르면 구조 검사가 실행 전에 실패한다.
+
+Zone·Dungeon처럼 역할 이름을 바꾸려면 타입 이름, `GameNames`, `server/config/`, `zlink.structure.json`을 한 번에 바꾼다. 이름만 바꾸는 작업은 게임 로직 교체와 나눠서 진행하면 실패 원인을 찾기 쉽다.
+
+### e2e 시나리오 교체
+
+`cross`와 `border`는 예시 게임을 검사하므로 자기 게임의 시나리오로 바꾼다. `reconnect`와 `update`는 남기고 상태 비교만 새 상태로 바꾼다. 이 두 시나리오가 재접속 뒤 같은 Actor와 상태가 유지되는지, 서버 교체 뒤에도 연결·상태가 유지되고 대체 node가 새 작업을 받는지를 판정하기 때문이다.
+
+시나리오를 더하거나 지우면 `e2e/MyGame.E2E/Scenarios.cs`의 목록과 `zlink.structure.json`의 `run.scenarios`, `run.commands`의 시나리오 선택 예시를 함께 고친다. 판정은 실제로 받은 응답과 이벤트로 하고, 고정 대기나 기한 확대로 통과시키지 않는다.
+
+### 교체 뒤 확인
+
+빌드, 구조 검사, 전체 e2e를 차례로 실행한다. `update`가 실패하면 snapshot에 빠진 상태가 있는지 먼저 확인한다. 그다음 [디버깅](#디버깅)의 message flow로 첫 실패 단계를 찾는다.
+
 ## 아이템 줍기 기능 추가
 
 ### 메시지와 handler

@@ -96,6 +96,58 @@ Relocation changes an object's execution host; drain moves a host's workload els
 
 A timer runs a handler periodically; `BorderTick` uses one to publish information about players near a border. In this pub/sub exchange, `BorderHandler` receives subscribed information, and `BorderDelivery` forwards notifications through the receiving Actor's bound Session. [Timers and workers](https://docs.zlink.systems/dotnet/guide/server/36-timer-worker/) explains registration and execution of periodic work.
 
+## Request flow
+
+Requests in the example game follow this path. Reading the code along this path before adding a feature or replacing the example locates the places to change.
+
+1. The client connects to the Session node over STREAM and sends the first packet, `JoinWorldRequest`. `PlayerSession` checks the first packet type, calls `GetOrCreate` for the Player Actor by `playerId`, binds it to the Session, and relays the original packet.
+2. A new Actor starts in the Entry Spot `WorldEntry`. `EnterWorldHandler` checks the identity and calls `PlayerActor.Move`, which requests `JoinSpot(...).Defer()` for the Zone that covers the coordinate.
+3. When the join completes, `PlayerActor.OnJoinCompletedAsync` sends `WorldState` through the bound Session. Later packets from the same client are handled by the handlers of the Zone that holds the Actor (such as `MoveHandler`), which send results through the same Session.
+4. When movement reaches a coordinate in another Zone, `MoveHandler` calls `PlayerActor.Move` again. The client connection does not change, even when that Zone is on another node.
+5. To replace a node, `drain` in `NodeControl` requests relocation. Framework takes the game state from `Capture` in `PlayerRelocation` and `ZoneRelocation` and calls `Restore` on another node.
+
+## Replacing the example game logic
+
+This template contains a small example game that exercises the structure and operations in practice. The example is movement along a single coordinate, visibility notifications near Zone borders, and opening a Dungeon. When building your own game, replace this example logic and keep the Session connection, Actor and Spot registration, relocation, drain, and the e2e runner. The runner and relocation scaffolding verify server replacement and reconnection independently of game content.
+
+### Check before replacing
+
+Before replacing anything, run the build and e2e once with the [Development commands](#development-commands) to confirm the downloaded project works. This result is the baseline for later changes. If it fails, compare the failure with Known issues in the [README](README.md) first.
+
+### What to replace and what to keep
+
+| File | Example game logic (replace) | Structure (keep) |
+| --- | --- | --- |
+| `server/MyGame.Shared/Contracts.cs` | `WorldState`, `JoinWorldRequest`, `MoveRequest`, `EnterZone`, `BorderPresence`, `BorderVisible`, `OpenDungeonRequest`, `DungeonOpened` | Registration names in `GameNames`, `SessionInfoRequest`, `SessionInfo`, `NodeReady`, `NodeProtocol` |
+| `server/MyGame.Zone/PlayerActor.cs` | Coordinate `X`, `Sequence`, and movement rules | Actor registration, `Capture`/`Restore`, `PlayerRelocation` |
+| `server/MyGame.Zone/ZoneSpot.cs` | Visibility, pending arrivals, border calculation | Spot registration, `Capture`/`Restore`, `ZoneRelocation` |
+| `server/MyGame.Zone/Handlers.cs` | `MoveHandler`, `BorderTick`, `BorderHandler`, `BorderDelivery`, `OpenDungeonHandler` | The identity check and state resend in `ReconnectHandler`, which handles first entry and reconnection |
+| `server/MyGame.Zone/WorldEntry.cs` | The first-packet content that `EnterWorldHandler` receives | Entry Spot registration and the first-entry path |
+| `server/MyGame.Instance/DungeonSpot.cs` | Dungeon information | The dynamic User Spot creation pattern |
+| `server/MyGame.Session/`, `GameHosting.cs`, `NodeControl.cs`, `NodeSettings.cs` | — | Keep all |
+
+`drain` and `shutdown` in `NodeControl` are operational controls, and `vacate-zone` is the control e2e uses to verify replacement placement. Keep both.
+
+### Replacement order
+
+Start with the message contracts. Remove the example messages from `Contracts.cs`, define the typed records for your game, and move each handler that fails to compile to the new messages. When you change the first-entry packet, update the first-packet check in `PlayerSession`, `EnterWorldHandler`, and `ReconnectHandler` to receive the same type.
+
+Keep each piece of state in the object that decides it. Per-player state belongs in `PlayerActor`; state shared by several players belongs in a Spot. When you change state fields, update that object's snapshot record and its `Capture` and `Restore` together. A missing field disappears after relocation, and the update scenario detects the loss.
+
+Remove features you do not use, such as border notifications, together with their registrations. If you remove the `border` channel, remove the subscription in `ZoneSpot.Configure()`, the channel registration in `Program.cs`, and the `channels` declaration in `zlink.structure.json` in the same change. If the three disagree, the structure check fails before startup.
+
+To rename roles such as Zone or Dungeon, change the type names, `GameNames`, `server/config/`, and `zlink.structure.json` at once. Doing the rename separately from the logic replacement makes failures easier to trace.
+
+### Replacing e2e scenarios
+
+`cross` and `border` test the example game, so replace them with scenarios for your game. Keep `reconnect` and `update`, and change only their state comparisons to your new state. These two scenarios verify that reconnection keeps the same Actor and state, and that a server replacement keeps connections and state while the replacement node accepts new work.
+
+When you add or remove scenarios, update the list in `e2e/MyGame.E2E/Scenarios.cs` and `run.scenarios` and the scenario selection examples in `run.commands` in `zlink.structure.json` together. Judge results by the replies and events actually received; do not make tests pass with fixed sleeps or longer deadlines.
+
+### After replacing
+
+Run the build, the structure check, and the full e2e in that order. If `update` fails, first check whether the snapshot is missing any state, then use the message flow in [Debugging](#debugging) to find the first failing step.
+
 ## Adding item pickup
 
 ### Messages and handlers
