@@ -38,7 +38,7 @@ Channel마다 비어 있지 않은 `name`, 소유 node ID인 `owner`, `mesh` 이
 
 ## Spot
 
-Spot마다 구성 안에서 비어 있지 않은 고유 `id`, `kind`(`entry`, `user`, `instance`), `type`, 소유 node ID인 `owner`를 둔다. User·Instance Spot의 `type`은 Framework stable type이다. Entry Spot은 runtime ID를 Framework가 발급하며 stable-type 등록이 없으므로 `type`을 `null`로 둔다. Owner는 내려받는 구성의 초기 host다. Runtime relocation으로 현재 owner가 바뀔 수 있다. 구조 파일은 Location Store의 authority를 대신하지 않는다.
+Spot마다 구성 안에서 비어 있지 않은 고유 `id`, `kind`(`entry`, `user`, `instance`), `type`, 소유 node ID인 `owner`를 둔다. User·Instance Spot의 `type`은 Framework stable type이다. Entry Spot은 runtime ID를 Framework가 발급하며 stable-type 등록이 없으므로 `type`을 `null`로 둔다. Entry Spot은 application이 Entry와 첫 입장 handler를 등록한 node에만 선언한다. Framework가 Object Server마다 내부에서 만드는 기본 Entry는 선언하지 않는다. Owner는 내려받는 구성의 초기 host다. Runtime relocation으로 현재 owner가 바뀔 수 있다. 구조 파일은 Location Store의 authority를 대신하지 않는다.
 
 고정 User·Instance Spot은 정확한 runtime logical ID인 `logicalId`가 필수다. Spot의 runtime identity는 mesh와 logical ID이므로, 고정 logical ID는 한 mesh 안에서 stable type과 무관하게 고유해야 한다. Spot은 선택 필드 `mesh`로 자기 mesh를 적는다. 구성이 mesh를 둘 이상 선언하면(예: 월드마다 mesh 하나) 이 필드가 필수다. `dynamic`이 `true`이면 runtime 요청이 logical ID를 선택하며 `logicalId`를 두지 않는다. 예를 들어 구성 ID `dungeon`은 party ID를 사용한 `GetOrCreate`로 만드는 `Dungeon` User Spot 종류를 나타낸다. Entry Spot은 `logicalId`와 `dynamic`을 모두 두지 않는다. Framework가 replacement node의 새 runtime ID를 발급해도 구성 ID는 유지된다.
 
