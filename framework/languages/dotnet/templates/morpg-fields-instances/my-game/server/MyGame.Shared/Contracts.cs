@@ -39,8 +39,9 @@ public static class GameNames
 
 public static class GameTiming
 {
-    public static readonly TimeSpan MessageFollow = TimeSpan.FromSeconds(20);
-    public static readonly TimeSpan SafeShutdown = MessageFollow + TimeSpan.FromSeconds(10);
+    public static readonly TimeSpan MessageFollow = TimeSpan.FromSeconds(30);
+    public static readonly TimeSpan Relocation = TimeSpan.FromSeconds(30);
+    public static readonly TimeSpan SafeShutdown = MessageFollow + Relocation;
 }
 
 public static class Rejection
