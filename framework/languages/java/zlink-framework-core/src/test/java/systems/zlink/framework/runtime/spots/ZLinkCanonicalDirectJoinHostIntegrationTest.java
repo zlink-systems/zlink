@@ -1226,7 +1226,8 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                                     changedPayload.length,
                                     prepare.manifest().chunkCount(),
                                     checksum.getValue()),
-                            prepare.applicationVersion());
+                            prepare.applicationVersion(),
+                            prepare.deadlineUnixMs());
             return targetMachine
                     .get()
                     .apply(
@@ -1321,6 +1322,9 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                                                 new ZLinkInternalMeshNode.PeerRouteObservation(
                                                         1, true);
                                         case "targetLifecycleEnded" -> false;
+                                        // The linked peers model an admitted Session owner route.
+                                        case "secureSessionOwnerRoute" ->
+                                                CompletableFuture.completedFuture(null);
                                         case "onStateChanged" -> {
                                             ((Runnable) arguments[0]).run();
                                             yield (AutoCloseable) () -> {};
@@ -1385,28 +1389,30 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                                         }
                                         case "requestSessionRelocationSeal" -> {
                                             var seal =
-                                                    ServiceWirePilotCodec
-                                                            .decodeSessionRelocationSeal42(
-                                                                    (byte[]) arguments[1]);
+                                                    codec.decodeSessionRelocationSeal(
+                                                            (byte[]) arguments[1]);
+                                            assertEquals(TARGET_RID, seal.targetNodeRid());
+                                            assertEquals(
+                                                    target.status().lifecycleGeneration(),
+                                                    seal.targetNodeGeneration());
                                             EVENTS.add("command42");
                                             yield CompletableFuture.completedFuture(
-                                                    ServiceWirePilotCodec
-                                                            .encodeSessionRelocationSealed43(
-                                                                    new ServiceWirePilotCodec
-                                                                            .SessionRelocationSealed43(
-                                                                            seal.relocation(),
-                                                                            seal.coordinator(),
-                                                                            seal.actor(),
-                                                                            seal.session(),
-                                                                            scenario
-                                                                                            == Scenario
-                                                                                                    .BINDING_ABSENT
-                                                                                    ? ServiceWirePilotCodec
-                                                                                            .SessionSealResult
+                                                    codec.encodeSessionRelocationSealed(
+                                                            new ZLinkServiceM6BWireCodec
+                                                                    .SessionRelocationSealed(
+                                                                    seal.relocation(),
+                                                                    seal.coordinator(),
+                                                                    seal.actor(),
+                                                                    seal.session(),
+                                                                    scenario
+                                                                                    == Scenario
                                                                                             .BINDING_ABSENT
-                                                                                    : ServiceWirePilotCodec
-                                                                                            .SessionSealResult
-                                                                                            .SEALED)));
+                                                                            ? ServiceWirePilotCodec
+                                                                                    .SessionSealResult
+                                                                                    .BINDING_ABSENT
+                                                                            : ServiceWirePilotCodec
+                                                                                    .SessionSealResult
+                                                                                    .SEALED)));
                                         }
                                         case "sendSessionRelocationRoute" -> {
                                             var route =
@@ -1423,7 +1429,8 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                                                 relocation.setAccessible(true);
                                                 assertNull(
                                                         relocation.get(sourceQueue),
-                                                        "source queue must leave its relocation cut before abort");
+                                                        "source queue must leave its relocation cut"
+                                                                + " before abort");
                                                 EVENTS.add("source.queue.restored");
                                                 EVENTS.add("command44.abort");
                                                 yield CompletableFuture.completedFuture(null);

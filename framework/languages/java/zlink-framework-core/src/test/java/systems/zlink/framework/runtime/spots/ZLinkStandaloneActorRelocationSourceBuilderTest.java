@@ -40,6 +40,8 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 
 final class ZLinkStandaloneActorRelocationSourceBuilderTest {
+    private static final java.time.Instant STAGE_DEADLINE =
+            java.time.Instant.parse("2100-01-01T00:00:00Z");
     private static final ZLinkStoreCancellation NEVER = () -> false;
     private static final String MESH = "actor-retire-source";
     private static final String ACTOR_TYPE = "player";
@@ -454,7 +456,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
             Duration timeout = Duration.ofSeconds(5);
             sourceMachine
                     .get()
-                    .stage(TARGET_RID, prepared.stageRequest(), timeout)
+                    .stage(TARGET_RID, prepared.stageRequest(), timeout, STAGE_DEADLINE)
                     .toCompletableFuture()
                     .get();
             List<CompletableFuture<Void>> accepted = new java.util.ArrayList<>();

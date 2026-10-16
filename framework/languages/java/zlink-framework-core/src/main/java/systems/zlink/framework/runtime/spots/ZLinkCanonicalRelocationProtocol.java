@@ -36,6 +36,7 @@ final class ZLinkCanonicalRelocationProtocol {
         writer.nonzero(value.sourceNodeGeneration());
         manifest(writer, value.manifest());
         writer.u64(value.applicationVersion());
+        writer.nonzero(value.deadlineUnixMs());
         return writer.bytes();
     }
 
@@ -52,7 +53,8 @@ final class ZLinkCanonicalRelocationProtocol {
                         reader.rid(),
                         reader.nonzero(),
                         manifest(reader),
-                        reader.u64());
+                        reader.u64(),
+                        reader.nonzero());
         reader.end();
         return value;
     }
@@ -378,7 +380,10 @@ final class ZLinkCanonicalRelocationProtocol {
             RoutingId sourceNodeRid,
             long sourceNodeGeneration,
             Manifest manifest,
-            long applicationVersion) {
+            long applicationVersion,
+            // The source operation's absolute deadline; the target ends its Session-route
+            // wait with it (relocation §4.3).
+            long deadlineUnixMs) {
         Prepare {
             requireIdentity(id, targetAttemptGeneration);
             Objects.requireNonNull(coordinator, "coordinator");
@@ -390,6 +395,7 @@ final class ZLinkCanonicalRelocationProtocol {
             Objects.requireNonNull(sourceNodeRid, "sourceNodeRid");
             requireNonZero(sourceNodeGeneration, "sourceNodeGeneration");
             Objects.requireNonNull(manifest, "manifest");
+            requireNonZero(deadlineUnixMs, "deadlineUnixMs");
         }
     }
 

@@ -406,7 +406,8 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                                                 return sealSessionRoute(
                                                                 admission.owned(),
                                                                 relocationId,
-                                                                capturedRoute)
+                                                                capturedRoute,
+                                                                admission.target())
                                                         .thenApply(
                                                                 sessionRoute ->
                                                                         new PreparedSource(
@@ -822,7 +823,8 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
     private CompletionStage<Optional<SealedSessionRoute>> sealSessionRoute(
             Owned actor,
             UUID relocationId,
-            Optional<ZLinkSpotRetireControl.SessionRouteFence> captured) {
+            Optional<ZLinkSpotRetireControl.SessionRouteFence> captured,
+            ZLinkMeshNodeDescriptor targetNode) {
         if (captured.isEmpty()) {
             return CompletableFuture.completedFuture(Optional.empty());
         }
@@ -862,7 +864,9 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                                 route.sessionOwnerId(),
                                 route.sessionOwnerLeaseGeneration(),
                                 route.sessionRid(),
-                                route.bindingGeneration()));
+                                route.bindingGeneration()),
+                        targetNode.rid(),
+                        targetNode.lifecycleGeneration());
         //  The command 43 ACK completes on the mesh transport dispatch thread;
         //  staging the relocation root must not run there.
         return sessionSealer
@@ -1205,7 +1209,8 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                                             () -> {
                                                 if (terminal || committed)
                                                     throw new IllegalStateException(
-                                                            "Actor relocation relay boundary is terminal");
+                                                            "Actor relocation relay boundary is"
+                                                                    + " terminal");
                                                 return relayed;
                                             }))
                     .thenCompose(relayed -> relayJournal(relayed, client, timeout));

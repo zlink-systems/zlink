@@ -60,6 +60,7 @@
 | bench 포트가 비어 있나 | LISTEN 목록에 없음 | TIME_WAIT 포트나 다른 loopback 주소의 listener는 LISTEN 조회에서 빠지지만 실제 bind는 실패한다. 실제 bind로 확인하고 TIME_WAIT·LISTEN·빈 포트 세 경우를 모두 시험한다 | #1390 |
 | 엔진 E2E가 server 종료까지 검증하나 | connector client 성공과 CTest 통과 | 하네스가 server 종료를 기다리지 않고 Redis를 제거하면 `ForceStopped/TeardownFailed`도 통과한다. Client 결과와 server 종료 결과를 함께 확인한다 | #1646 |
 | Configure 거부 뒤 source가 복원됐나 | `RelocationFailed` reason만 일치 | Source lease가 만료돼 `Error`가 되어도 같은 reason이다. `Blocked/RelocationFailed`와 source `Serving`을 함께 단언한다 | #1877 |
+| Session route 준비 전 READY가 막혔나 | stage 호출 직후 future 미완료와 READY 부재 | target stage가 아직 실행되지 않았어도 같은 결과다. command 52 처리 완료를 기다린 뒤 route 요청과 READY를 검사하고, 대기 호출을 뺀 구현에서 실패하는지 확인한다 | #1775 |
 
 ## 4. 무엇이 실제로 답을 줬나
 

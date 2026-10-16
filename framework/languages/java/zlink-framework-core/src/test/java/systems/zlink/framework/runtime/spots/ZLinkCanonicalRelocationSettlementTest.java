@@ -77,6 +77,8 @@ import java.util.concurrent.atomic.AtomicReference;
  * Location Store, and a won source {@code Preserve} fence ends the target staging.
  */
 final class ZLinkCanonicalRelocationSettlementTest {
+    private static final java.time.Instant STAGE_DEADLINE =
+            java.time.Instant.parse("2100-01-01T00:00:00Z");
     private static final ZLinkStoreCancellation OPEN = () -> false;
     private static final byte[] R1 = {11, 1};
     private static final byte[] R2 = {22, 2, 2};
@@ -144,7 +146,11 @@ final class ZLinkCanonicalRelocationSettlementTest {
         fixture.endpoint.stageCompletion = new CompletableFuture<>();
         var staging =
                 fixture.source
-                        .stage(fixture.targetRid, fixture.request, Duration.ofSeconds(2))
+                        .stage(
+                                fixture.targetRid,
+                                fixture.request,
+                                Duration.ofSeconds(2),
+                                STAGE_DEADLINE)
                         .toCompletableFuture();
         fixture.endpoint.stageEntered.get(3, TimeUnit.SECONDS);
         var terminal = fixture.target.sealAcceptedTargetRelocations().toCompletableFuture();
@@ -170,7 +176,11 @@ final class ZLinkCanonicalRelocationSettlementTest {
                         () -> terminal.set(fixture.target.sealAcceptedTargetRelocations()));
         var staging =
                 fixture.source
-                        .stage(fixture.targetRid, fixture.request, Duration.ofSeconds(2))
+                        .stage(
+                                fixture.targetRid,
+                                fixture.request,
+                                Duration.ofSeconds(2),
+                                STAGE_DEADLINE)
                         .toCompletableFuture();
         shutdownEntered.get(3, TimeUnit.SECONDS);
         assertNotNull(terminal.get());
@@ -189,7 +199,11 @@ final class ZLinkCanonicalRelocationSettlementTest {
         fixture.prepareCompletion = new CompletableFuture<>();
         var staging =
                 fixture.source
-                        .stage(fixture.targetRid, fixture.request, Duration.ofSeconds(2))
+                        .stage(
+                                fixture.targetRid,
+                                fixture.request,
+                                Duration.ofSeconds(2),
+                                STAGE_DEADLINE)
                         .toCompletableFuture();
         fixture.prepareEntered.get(3, TimeUnit.SECONDS);
         var terminal = fixture.target.sealAcceptedTargetRelocations().toCompletableFuture();
@@ -208,7 +222,11 @@ final class ZLinkCanonicalRelocationSettlementTest {
         fixture.endpoint.stageCompletion = new CompletableFuture<>();
         var staging =
                 fixture.source
-                        .stage(fixture.targetRid, fixture.request, Duration.ofSeconds(2))
+                        .stage(
+                                fixture.targetRid,
+                                fixture.request,
+                                Duration.ofSeconds(2),
+                                STAGE_DEADLINE)
                         .toCompletableFuture();
         fixture.endpoint.stageEntered.get(3, TimeUnit.SECONDS);
         var terminal = fixture.target.sealAcceptedTargetRelocations().toCompletableFuture();
@@ -259,7 +277,11 @@ final class ZLinkCanonicalRelocationSettlementTest {
         fixture.stateDelivery = new CompletableFuture<>();
         var staging =
                 fixture.source
-                        .stage(fixture.targetRid, fixture.request, Duration.ofSeconds(2))
+                        .stage(
+                                fixture.targetRid,
+                                fixture.request,
+                                Duration.ofSeconds(2),
+                                STAGE_DEADLINE)
                         .toCompletableFuture();
         fixture.stateEntered.get(3, TimeUnit.SECONDS);
         fixture.target
@@ -642,7 +664,8 @@ final class ZLinkCanonicalRelocationSettlementTest {
                                                                         CompletableFuture
                                                                                 .failedFuture(
                                                                                         new IllegalStateException(
-                                                                                                "CAS response lost")));
+                                                                                                "CAS response"
+                                                                                                        + " lost")));
                                             }
                                         }
                                         if (method.getName().equals("readAggregateProgress")
@@ -762,7 +785,9 @@ final class ZLinkCanonicalRelocationSettlementTest {
         }
 
         void stage() {
-            source.stage(targetRid, request, Duration.ofSeconds(2)).toCompletableFuture().join();
+            source.stage(targetRid, request, Duration.ofSeconds(2), STAGE_DEADLINE)
+                    .toCompletableFuture()
+                    .join();
         }
 
         ZLinkFrameworkRuntime startTargetHost() throws Exception {

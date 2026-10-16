@@ -139,7 +139,10 @@ final class ZLinkRelocationHandOffTest {
         return new ZLinkRelocationTransitionClient() {
             @Override
             public CompletionStage<Void> stage(
-                    RoutingId rid, ZLinkSpotRetireControl.StageRequest value, Duration timeout) {
+                    RoutingId rid,
+                    ZLinkSpotRetireControl.StageRequest value,
+                    Duration timeout,
+                    java.time.Instant deadline) {
                 return CompletableFuture.completedFuture(null);
             }
 
