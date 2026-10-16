@@ -185,7 +185,7 @@ Actor·Spot은 message를 정상적으로 처리한다 — 예산 때문에 시�
 
 `Relocated`는 source가 cutover 전송을 마쳤다는 뜻이지, 이전 route를 cache한 호출자가
 모두 새 owner를 향하게 됐다는 뜻이 아니다. Source runtime은 모든 unit의 Message Follow를
-끝낼 수 있고 cutover 재전송 창이 닫힌 뒤 `SafeToShutdown` 상태를 자기 runtime status에
+끝낼 수 있고 cutover 재전송 창이 닫힌 뒤 `safe_to_shutdown` 상태를 자기 runtime status에
 게시한다. Deployment orchestrator는 `Relocated`를 확인한 뒤 이 상태까지 관찰하고 나서
 `shutdown`을 호출하는 것을 권장한다 — 게시 전에 종료해도 되지만, 남아 있던 follow
 route가 사라져 이전 route를 cache한 호출자의 request가 `Unavailable`로 끝날 수 있다.
@@ -209,7 +209,7 @@ fallback 횟수는 `cutover_timeout` counter로 게시된다. 지표 이름·단
 
 여기서 정리되는 Spot의 state는 남지 않는다. 배포 자동화가 상태를 살려서 내려야 한다면 종료
 전에 `relocate(...)`를 먼저 호출하고 그 결과가 `Relocated`인지 확인한 뒤 이 호출로
-넘어간다([운영 호출과 readiness 연결](#5-운영-호출과-readiness-연결)의 예제). 가능하면 `SafeToShutdown` 게시까지 확인한다([SafeToShutdown](#33-safetoshutdown--종료해도-안전한-시점)).
+넘어간다([운영 호출과 readiness 연결](#5-운영-호출과-readiness-연결)의 예제). 가능하면 `safe_to_shutdown` 게시까지 확인한다([SafeToShutdown](#33-safetoshutdown--종료해도-안전한-시점)).
 
 Spot의 수명은 request와 무관하다. 일반 request가 끝났다는 이유만으로 User·Instance Spot을 닫지
 않는다. 없는 Instance Spot을 준비시키는 것도 마찬가지로 별도 address나 manager create가 아니라,
@@ -221,7 +221,7 @@ SpotId direct 호출에 Instance intent를 붙였을 때만 시작한다([Spot](
 호출한다. 이 interface는 host maintenance를 소유하는 DI singleton이다.
 
 배포에서 사용하는 순서는 "먼저 옮기고, 성공했으면 종료한다"다. `Relocated`를 확인한 뒤
-`SafeToShutdown` 게시([SafeToShutdown](#33-safetoshutdown--종료해도-안전한-시점))까지 관찰하고 종료하면 이전 route를 cache한 호출자의 실패를
+`safe_to_shutdown` 게시([SafeToShutdown](#33-safetoshutdown--종료해도-안전한-시점))까지 관찰하고 종료하면 이전 route를 cache한 호출자의 실패를
 피할 수 있다.
 
 ```cpp
