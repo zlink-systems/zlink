@@ -1548,8 +1548,9 @@ separate commit record.
 
 In that case the source installs §7.3's Message Follow route to the committed first target, releases the
 retained copy, and runs source cleanup once. The expiry still counts from this relocation's commit. Moves
-after the first target are forwarded hop by hop by the first target's own Message Follow route (within
-§7.3's hop limit). The source does not create a route straight to the reread current owner.
+after the first target are forwarded hop by hop by the first target's own Message Follow route only while
+each hop's route is valid (within §7.3's hop limit). If any hop's route is absent or expired, the result is
+`Unavailable` under §7.3. The source does not create a route straight to the reread current owner.
 If `ObjectGeneration` differs, or `AuthorityOwnerGeneration` did not increase and the owner is neither the
 source nor the first target, the source still fails with `DataLost`. An indeterminate `Preserve` result repeats under this section's Store-failure policy without a new timer while the source lease is valid. Source lease expiry, or an authority that the source rereads as absent (`Missing`), ends source work under the expired-owner terminal in [common relocation §4.4](04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover). On `Missing` the source fence no longer holds, so the source does not attempt `Preserve`. The source may resume dispatch only
 while its owner lease remains valid under §5.
