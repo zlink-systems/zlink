@@ -455,6 +455,13 @@ in which the other resource's whole upper call stack has returned is not require
 [Messaging Hot Path "4.4"](08-messaging-hot-path.en.md#44-placing-the-execution-resource--handing-off-the-receive-role)
 decides which execution resource runs that turn.
 
+**Where a wait started doesn't change this condition.** Even when it started outside a runtime execution
+context, such as on an application thread, and has no lane to return to, the completion callbacks and
+asynchronous resumptions that the Framework delivers follow the new-execution-turn conditions above and the
+execution-resource placement in Messaging Hot Path "4.4". Where dependent actions that the application registers directly on a
+language future, task, or promise run, and the thread on which a synchronous blocking wait returns, follow
+that language API's contract.
+
 **Putting a completion callback on the dispatcher cannot fail.** The dispatcher has no limit.
 Nothing rejects a request for lack of a slot, and nothing throws away the completion of a
 call already accepted.

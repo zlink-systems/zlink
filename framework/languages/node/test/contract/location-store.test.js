@@ -511,6 +511,122 @@ test('Framework-issued Entry Spot IDs are lowercase UUID v4 identities', () => {
   assert.throws(() => internal.createFrameworkEntrySpotId('bad prefix'), /diagnostic prefix/);
 });
 
+test('provider repository confirms a repeated MeshNode NewClaim whose first response was lost', async () => {
+  const now = () => new Date(Date.UTC(2026, 6, 3, 0, 0, 0));
+  const store = new internal.ZLinkLocationStoreRepository(
+    new internal.ZLinkInMemoryProviderLocationStore(now),
+    now
+  );
+  const lease = await store.claimOwnerLease('mesh-owner', 30_000);
+  const other = await store.claimOwnerLease('other-owner', 30_000);
+  const descriptor = {
+    meshName: 'game',
+    rid: rid('claim-retry'),
+    lifecycleGeneration: 7n,
+    descriptorRevision: 1n,
+    endpoint: 'tcp://10.0.0.1:7300',
+    objectRole: framework.ZLinkObjectRole.Server,
+    entrySpotId: 'game-entry-123e4567-e89b-42d3-a456-426614174000',
+    placementWeight: 100,
+    populationCapacity: {
+      actors: { active: 0, reserved: 0, limit: 100 },
+      spots: { active: 0, reserved: 0, limit: 100 },
+      spotTypes: []
+    },
+    activationConcurrency: { active: 0, limit: 100 },
+    channelWeights: { game: 100 },
+    applicationVersion: 1n,
+    spotTypes: [],
+    objectCapabilities: [],
+    state: framework.ZLinkFrameworkRuntimeState.Preparing,
+    securityIdentity: 'plaintext',
+    ownerId: 'mesh-owner',
+    leaseGeneration: lease.token.leaseGeneration,
+    updatedAt: new Date(1_000)
+  };
+  const first = await store.updateMeshNode(
+    descriptor,
+    locationWrites.ZLinkLocationWriteIntent.NewClaim
+  );
+  assert.equal(first.status, locationWrites.ZLinkLocationWriteStatus.Stored);
+
+  // The caller never saw the first result and claims again; the runtime
+  // stamps a new write time on every attempt (location runtime §10).
+  const retry = await store.updateMeshNode(
+    { ...descriptor, updatedAt: new Date(2_000) },
+    locationWrites.ZLinkLocationWriteIntent.NewClaim
+  );
+  assert.equal(retry.status, locationWrites.ZLinkLocationWriteStatus.Stored);
+  assert.notEqual(retry.generation, 0n);
+
+  const foreign = await store.updateMeshNode(
+    {
+      ...descriptor,
+      ownerId: 'other-owner',
+      leaseGeneration: other.token.leaseGeneration
+    },
+    locationWrites.ZLinkLocationWriteIntent.NewClaim
+  );
+  assert.equal(foreign.status, locationWrites.ZLinkLocationWriteStatus.RejectedConflict);
+});
+
+test('provider repository confirms a MeshNode descriptor write whose response was lost', async () => {
+  const now = () => new Date(Date.UTC(2026, 6, 3, 0, 0, 0));
+  const inner = new internal.ZLinkInMemoryProviderLocationStore(now);
+  let loseNextMeshWrite = false;
+  const provider = {
+    read: (key, signal) => inner.read(key, signal),
+    scan: (request, signal) => inner.scan(request, signal),
+    async write(request, signal) {
+      const result = await inner.write(request, signal);
+      const meshPut = request.mutations.some(
+        (mutation) => mutation.kind === 'put' && mutation.key.value.includes('mesh-node')
+      );
+      if (loseNextMeshWrite && meshPut) {
+        loseNextMeshWrite = false;
+        throw new Error('connection reset after the write was sent');
+      }
+      return result;
+    }
+  };
+  const store = new internal.ZLinkLocationStoreRepository(provider, now);
+  const lease = await store.claimOwnerLease('mesh-owner', 30_000);
+  loseNextMeshWrite = true;
+
+  const claim = await store.updateMeshNode(
+    {
+      meshName: 'game',
+      rid: rid('lost-response'),
+      lifecycleGeneration: 7n,
+      descriptorRevision: 1n,
+      endpoint: 'tcp://10.0.0.1:7300',
+      objectRole: framework.ZLinkObjectRole.Server,
+      entrySpotId: 'game-entry-123e4567-e89b-42d3-a456-426614174000',
+      placementWeight: 100,
+      populationCapacity: {
+        actors: { active: 0, reserved: 0, limit: 100 },
+        spots: { active: 0, reserved: 0, limit: 100 },
+        spotTypes: []
+      },
+      activationConcurrency: { active: 0, limit: 100 },
+      channelWeights: { game: 100 },
+      applicationVersion: 1n,
+      spotTypes: [],
+      objectCapabilities: [],
+      state: framework.ZLinkFrameworkRuntimeState.Preparing,
+      securityIdentity: 'plaintext',
+      ownerId: 'mesh-owner',
+      leaseGeneration: lease.token.leaseGeneration,
+      updatedAt: new Date(1_000)
+    },
+    locationWrites.ZLinkLocationWriteIntent.NewClaim
+  );
+
+  assert.equal(loseNextMeshWrite, false);
+  assert.equal(claim.status, locationWrites.ZLinkLocationWriteStatus.Stored);
+  assert.equal((await store.listMeshNodes('game')).items.length, 1);
+});
+
 function rid(value) {
   return zlink.RoutingId.from(value);
 }

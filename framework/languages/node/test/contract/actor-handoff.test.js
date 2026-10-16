@@ -22,6 +22,7 @@ const {
   resolveApplicationJobQueueConfiguration
 } = require('../../packages/framework/dist/runtime/host/application-job-queue');
 const {
+  releaseApplicationJobPermitBeforeHandler,
   runWithApplicationJobPermit
 } = require('../../packages/framework/dist/runtime/application-jobs/application-job-queue-scope');
 
@@ -611,6 +612,146 @@ test('rejected provisional Join releases its current Actor mailbox record before
     await spotSerial.whenIdle();
   }
 });
+
+// #1771 and #1884: a record that runs while the previous deferred Join is
+// still draining its durable prefix starts the next deferred Join. Ingress
+// that arrives after the next Join completes stays behind the remaining
+// durable record under a capacity-one host permit.
+for (const firstJoin of ['accepted', 'rejected']) {
+  test(`a record replayed after a ${firstJoin} deferred Join starts the next deferred Join`, async () => {
+    const { coordinator } = harness();
+    const queue = new ApplicationJobQueue(
+      resolveApplicationJobQueueConfiguration({ maxQueuedApplicationJobs: 1n }, () => 1n)
+    );
+    const actorMailbox = new ZLinkActorSerialExecutor('actor-1', 'source-spot');
+    const actor = { context: { actorId: 'actor-1' } };
+    const state = { spotId: 'source-spot', nativeActorRef: { generation: 1n } };
+    const events = [];
+    const errors = [];
+    const handlers = new Map();
+    const lateIngress = [];
+    const runHandler = async (value) => {
+      releaseApplicationJobPermitBeforeHandler();
+      events.push(value);
+      await handlers.get(value)?.();
+    };
+    const transfer = new ZLinkActorTransferRuntime({
+      actorHandoff: coordinator,
+      spotManager: () => ({
+        admitRoutedActorPacketPrefix(_spotId, _actorId, records) {
+          const terminals = actorMailbox.admitDurablePrefix(
+            records.map((record) => ({
+              operation: (executeChild) =>
+                record.drain((parts) => {
+                  const value = parts[1].data().toString();
+                  return executeChild(() => runHandler(value));
+                }),
+              preparation: record.preparation,
+              workOptions: { payloadBytes: record.payloadBytes }
+            }))
+          );
+          return { terminal: Promise.all(terminals).then(() => undefined) };
+        }
+      }),
+      reportPostCommitError(error) {
+        errors.push(error);
+      },
+      async prepareApplicationJob(signal, origin) {
+        const permit = await queue.acquire(signal, origin);
+        return {
+          run(operation) {
+            return runWithApplicationJobPermit(permit, operation);
+          },
+          cancel() {
+            permit.releaseAfterInternalProcessing();
+          }
+        };
+      }
+    });
+    // Remote ingress acquires its host permit before the Actor FIFO claim.
+    const ingress = async (value) => {
+      const permit = await queue.acquire(undefined, 'remote');
+      const parts = frame(value);
+      try {
+        return await runWithApplicationJobPermit(
+          permit,
+          () =>
+            coordinator.capture('remote', 'actor-1', parts, false, undefined, actorRef()) ??
+            actorMailbox.execute(() => runHandler(value))
+        );
+      } finally {
+        parts.forEach((part) => part.close());
+      }
+    };
+    const finishJoin = (outcome) =>
+      outcome === 'accepted'
+        ? transfer.completeDeferredActorHandoff(actor, { spotId: 'target-spot' }, actorRef())
+        : transfer.cancelDeferredActorHandoff(actor, state);
+    // The handler of the replayed record registers the next deferred Join,
+    // which installs its provisional hold after the handler terminal and is
+    // accepted with no held ingress.
+    handlers.set('next-join', async () => {
+      transfer.beginDeferredActorHandoff(actor, state);
+      await finishJoin('accepted');
+      lateIngress.push(ingress('late'));
+    });
+
+    try {
+      transfer.beginDeferredActorHandoff(actor, state);
+      if (firstJoin === 'accepted') {
+        // #1771: a Spot send held by the first Join replays at the target.
+        await ingress('next-join');
+        await ingress('held');
+        await finishJoin('accepted');
+      } else {
+        // #1884: the rejected completion callback sends to its own Actor
+        // before the source hold returns to the Actor FIFO.
+        await ingress('held');
+        lateIngress.push(actorMailbox.execute(() => runHandler('next-join')));
+        await finishJoin('rejected');
+      }
+
+      const expected = ['next-join', 'held', 'late'];
+      let timeout;
+      try {
+        await Promise.race([
+          (async () => {
+            while (events.length < expected.length && errors.length === 0) {
+              await new Promise((resolve) => setImmediate(resolve));
+            }
+            await Promise.all(lateIngress);
+          })(),
+          new Promise((_, reject) => {
+            timeout = setTimeout(
+              () =>
+                reject(
+                  new Error(
+                    `consecutive deferred Join did not drain: ${events.join(',')} ` +
+                      `permits=${queue.snapshot().permitsInUse}`
+                  )
+                ),
+              1_000
+            );
+          })
+        ]);
+      } finally {
+        clearTimeout(timeout);
+      }
+      await actorMailbox.execute(() => undefined);
+      await new Promise((resolve) => setImmediate(resolve));
+
+      assert.deepEqual(errors.map(String), []);
+      assert.deepEqual(events, expected);
+      assert.equal(queue.snapshot().permitsInUse, 0n);
+      assert.equal(coordinator.isActive('actor-1'), false);
+    } catch (error) {
+      // A stalled FIFO cannot close; report the first failure instead.
+      void actorMailbox.close();
+      throw error;
+    }
+    await actorMailbox.close();
+  });
+}
 
 test('provisional Join ingress preserves request completion when replayed locally', async () => {
   const { coordinator } = harness();

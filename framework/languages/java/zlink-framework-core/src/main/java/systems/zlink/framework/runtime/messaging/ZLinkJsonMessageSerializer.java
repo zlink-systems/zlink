@@ -18,6 +18,7 @@ import systems.zlink.framework.ZLinkEncodedPayload;
 import systems.zlink.framework.ZLinkMessageSerializer;
 import systems.zlink.framework.actors.ActorRef;
 import systems.zlink.framework.runtime.internal.json.ZLinkFrameworkJsonProfile;
+import systems.zlink.framework.runtime.internal.messaging.ZLinkOwnedMessageSerializer;
 import systems.zlink.framework.spots.SpotRef;
 
 import java.io.IOException;
@@ -25,7 +26,8 @@ import java.nio.charset.StandardCharsets;
 import java.util.HashSet;
 import java.util.Set;
 
-public final class ZLinkJsonMessageSerializer implements ZLinkMessageSerializer {
+public final class ZLinkJsonMessageSerializer
+        implements ZLinkMessageSerializer, ZLinkOwnedMessageSerializer {
     private static final String FIELD_ACTOR_ID = "actorId";
     private static final String FIELD_OBJECT_GENERATION = "objectGeneration";
     private static final String FIELD_MESH_NAME = "meshName";
@@ -49,23 +51,23 @@ public final class ZLinkJsonMessageSerializer implements ZLinkMessageSerializer 
         if (value instanceof byte[] bytes) {
             return ZLinkEncodedPayload.from(bytes);
         }
-        try {
-            return ZLinkEncodedPayload.from(mapper.writeValueAsBytes(value));
-        } catch (JsonProcessingException ex) {
-            throw new IllegalArgumentException(
-                    "failed to serialize message as JSON: " + valueTypeName(value), ex);
-        }
+        return ZLinkEncodedPayload.from(encodeJson(value));
     }
 
-    Message serializeOwned(Object value) {
+    @Override
+    public Message serializeOwned(Object value) {
         if (value instanceof Message message) {
             return Message.from(message);
         }
         if (value instanceof byte[] bytes) {
             return Message.from(bytes);
         }
+        return Message.from(encodeJson(value));
+    }
+
+    private byte[] encodeJson(Object value) {
         try {
-            return Message.from(mapper.writeValueAsBytes(value));
+            return mapper.writeValueAsBytes(value);
         } catch (JsonProcessingException ex) {
             throw new IllegalArgumentException(
                     "failed to serialize message as JSON: " + valueTypeName(value), ex);
@@ -74,7 +76,15 @@ public final class ZLinkJsonMessageSerializer implements ZLinkMessageSerializer 
 
     @Override
     public <T> T deserialize(ZLinkEncodedPayload payload, Class<T> type) {
-        byte[] bytes = payload.bytes();
+        return decodeJson(payload.bytes(), type);
+    }
+
+    @Override
+    public <T> T deserializeBorrowed(Message message, Class<T> type) {
+        return decodeJson(message.toByteArray(), type);
+    }
+
+    private <T> T decodeJson(byte[] bytes, Class<T> type) {
         if (type == Message.class) {
             return type.cast(Message.from(bytes));
         }

@@ -572,8 +572,9 @@ internal sealed class ZLinkActorClient(ZLinkFrameworkRuntime runtime) : IZLinkAc
                 ZLinkNestedRequestTerminator.Async,
                 _executionScope
             );
-            return ZLinkRequestAdmission.Run<TReply>(admission =>
-                ExecuteAsync<TReply>(cancellationToken, admission)
+            return ZLinkRequestAdmission.Run(
+                (Call: this, Token: cancellationToken),
+                static (state, admission) => state.Call.ExecuteAsync<TReply>(state.Token, admission)
             );
         }
 

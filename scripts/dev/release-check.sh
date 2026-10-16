@@ -25,7 +25,9 @@ usage() {
   release-check.sh --write [--dry-run] framework cpp <X.Y.Z>
 
 --write는 vcpkg port·Conan recipe(vcpkg.json·portfile.cmake·conandata.yml·
-conanfile.py)에 릴리스 태그·자산의 버전·SHA를 채운다. core 대상과
+conanfile.py)에 릴리스 태그·자산의 버전·SHA를 채운다. framework cpp는 게시된 자산을
+받지 않고 framework/languages/cpp/scripts/package-source.py로 HEAD에서 만든 아카이브
+(dist/package-source/)의 해시를 쓰므로 태그 전에 릴리스 브랜치에서 실행한다. core 대상과
 bindings/framework의 cpp 언어에서만 의미가 있다(다른 언어는 package registry나
 Go module tag를 사용하므로
 이 자동화의 대상이 아니다). --write와 함께 쓴 --dry-run은 값을 계산해 보여주기만
@@ -136,6 +138,7 @@ import hashlib
 import json
 import os
 import re
+import subprocess
 import sys
 import urllib.error
 import urllib.request
@@ -399,6 +402,7 @@ CPP_TARGETS = {
         "conanfile": None,
         "tag_template": "core/v{version}",
         "asset_template": "zlink-{version}-source.tar.gz",
+        "source_producer": None,
     },
     ("bindings", "cpp"): {
         "vcpkg_manifest": "vcpkg/ports/zlink-cpp/vcpkg.json",
@@ -407,6 +411,7 @@ CPP_TARGETS = {
         "conanfile": "bindings/cpp/packaging/conan/conanfile.py",
         "tag_template": "cpp/v{version}",
         "asset_template": "zlink-cpp-{version}.tar.gz",
+        "source_producer": None,
     },
     ("framework", "cpp"): {
         "vcpkg_manifest": "vcpkg/ports/zlink-framework/vcpkg.json",
@@ -415,6 +420,11 @@ CPP_TARGETS = {
         "conanfile": "framework/languages/cpp/packaging/conan/conanfile.py",
         "tag_template": "framework-cpp/v{version}",
         "asset_template": "zlink-framework-cpp-{version}.tar.gz",
+        # Built from the release commit before the tag, so its hashes go into
+        # the tag's own recipes; the release workflow rebuilds it with the same
+        # producer and fails when the recorded hashes differ (#1941). Its
+        # conandata.yml keeps only this release's sources: entry.
+        "source_producer": "framework/languages/cpp/scripts/package-source.py",
     },
 }
 
@@ -486,10 +496,12 @@ def validate_cpp():
 
 # --- write mode -------------------------------------------------------
 #
-# Fills the same fields validate_cpp() checks, from the published release
-# tag and asset. Values depend on state that only exists after a release is
-# published (the tag and its GitHub Release asset), so this network access
-# is unavoidable; it happens only in write mode, never in check mode.
+# Fills the same fields validate_cpp() checks. A target with a
+# source_producer hashes the archive that producer builds from HEAD, written
+# to dist/<producer name>/ where the release workflow uploads it from. The
+# other targets hash their published release tag and asset, which exist only
+# after the release, so this network access is unavoidable; it happens only
+# in write mode, never in check mode.
 
 
 def download(url):
@@ -500,6 +512,24 @@ def download(url):
     except (OSError, urllib.error.URLError) as exc:
         error(f"{url}: 다운로드 실패: {exc}")
         return None
+
+
+def produce(producer, asset):
+    output_dir = root / "dist" / Path(producer).stem
+    result = subprocess.run(
+        [sys.executable, str(root / producer), str(output_dir)],
+        cwd=root, stdout=subprocess.PIPE, text=True,
+    )
+    if result.returncode != 0:
+        error(f"{producer}: 아카이브 생성 실패(exit {result.returncode})")
+        return None
+    lines = result.stdout.strip().splitlines()
+    output = Path(lines[-1]) if lines else None
+    if output is None or output.name != asset or not output.is_file():
+        error(f"{producer}: 산출물 {output}이 릴리스 자산 {asset}과 다름(VERSION 확인)")
+        return None
+    print(f"아카이브: {output}")
+    return output.read_bytes()
 
 
 def detect_archive_kind(portfile_source, portfile):
@@ -654,11 +684,12 @@ def conan_section_range(conandata_source, section):
     return header.start(), body_match.end()
 
 
-def write_conan_version_entry(conandata, section, version, body_lines):
+def write_conan_version_entry(conandata, section, version, body_lines, only_entry=False):
     """Add or replace this version's entry under the top-level `section:` key,
     scoped strictly to that section -- `sources:` and `binaries:` both key
     their versions the same way, and a naive whole-file search for
-    '  "{version}":' would find whichever section happens to come first."""
+    '  "{version}":' would find whichever section happens to come first.
+    With only_entry, this entry replaces every entry of the section."""
     conandata_source = text(conandata)
     if not conandata_source:
         return
@@ -669,6 +700,14 @@ def write_conan_version_entry(conandata, section, version, body_lines):
     start, end = bounds
     section_text = conandata_source[start:end]
     new_entry = f'  "{version}":\n' + "".join(body_lines)
+    if only_entry:
+        # Keep the blank lines that separate this section from the next one.
+        separator = section_text[len(section_text.rstrip("\n")) + 1:]
+        write_text_if_changed(
+            conandata,
+            conandata_source[:start] + f"{section}:\n" + new_entry + separator + conandata_source[end:],
+        )
+        return
     # A blank line ends the entry too, not just the next version key or a
     # column-0 line -- otherwise the last entry in a section swallows the
     # blank line that separates this section from the next one, and
@@ -703,10 +742,14 @@ def write_cpp():
     # with no prebuilt archive) still builds Core from, whether or not this
     # port also has platform archives.
     asset_url = f"{GITHUB_BASE_URL}/{GITHUB_REPO}/releases/download/{t['tag']}/{t['asset']}"
-    asset_bytes = download(asset_url)
+    if t["source_producer"]:
+        asset_bytes = produce(t["source_producer"], t["asset"])
+    else:
+        asset_bytes = download(asset_url)
     if asset_bytes is None:
         return
     asset_sha256 = hashlib.sha256(asset_bytes).hexdigest()
+    print(f"sha256 {asset_sha256}  {t['asset']}")
 
     github_sha512 = None
     if kind["github"]:
@@ -784,6 +827,7 @@ def write_cpp():
     write_conan_version_entry(
         t["conandata"], "sources", version,
         [f'    url: "{asset_url}"\n', f'    sha256: "{asset_sha256}"\n'],
+        only_entry=bool(t["source_producer"]),
     )
     if platform_hashes is not None:
         body_lines = []

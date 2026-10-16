@@ -76,6 +76,7 @@ import {
   ZLinkRuntimeTaskErrorSink,
   ZLinkRuntimeTaskRunner
 } from '../../packages/framework/src/runtime/execution';
+import { ZLinkRuntimeMetrics } from '../../packages/framework/src/runtime/diagnostics/runtime-metrics';
 import { ZLinkFormalRemoteActorAdmissionRegistry } from '../../packages/framework/src/runtime/spots/formal-remote-actor-admission-registry';
 import {
   ZLinkFrameworkErrorKind,
@@ -104,6 +105,34 @@ const object = {
   objectGeneration: 5n,
   expectedAuthorityOwnerGeneration: 11n
 } as const;
+
+function createRuntimeMetricCollector() {
+  const records: Array<{
+    readonly name: string;
+    readonly value: number;
+    readonly attributes?: Readonly<Record<string, string>>;
+  }> = [];
+  const instrument = (name: string) => ({
+    add(value: number, attributes?: Readonly<Record<string, string>>) {
+      records.push({ name, value, attributes });
+    },
+    record(value: number, attributes?: Readonly<Record<string, string>>) {
+      records.push({ name, value, attributes });
+    }
+  });
+  const provider = {
+    getMeter() {
+      return {
+        createCounter: (name: string) => instrument(name),
+        createUpDownCounter: (name: string) => instrument(name),
+        createHistogram: (name: string) => instrument(name),
+        createObservableCounter: () => ({ addCallback() {} }),
+        createObservableGauge: () => ({ addCallback() {} })
+      };
+    }
+  };
+  return { provider, records };
+}
 
 function actorJoinApplicationJobOwner() {
   const permit = {
@@ -267,7 +296,6 @@ test('pre-cutover rollback restores the source queue and state before one-way Se
       status: () => ({ routingId: 'source-node', lifecycleGeneration: 2n })
     }),
     async notifyEntrySpotActorLeft() {},
-    async restoreEntrySpotActorJoined() {},
     locationLifecycle: () => undefined,
     actorHandoff: {
       begin() {},
@@ -288,7 +316,6 @@ test('pre-cutover rollback restores the source queue and state before one-way Se
         return { terminal: start.then(() => undefined) };
       }
     },
-    actorTransferRegistry: {},
     authorityStore: () => ({ readAuthority: async () => authority }),
     relocationStore: () => undefined,
     liveDescriptors: async () => [
@@ -336,9 +363,10 @@ test('pre-cutover rollback restores the source queue and state before one-way Se
   await prepared.rollback();
   await Promise.resolve();
 
+  // Relocation 04 §4.1: the Session seal precedes the source dispatch stop.
   assert.deepEqual(events, [
-    'move-begun',
     'session-sealed',
+    'move-begun',
     'queue-restored',
     'state-restored',
     'session-abort'
@@ -1799,6 +1827,45 @@ test('public ActorJoin profile crosses the Host Prepare READY DATA CUTOVER owner
   }
 });
 
+test('public ActorJoin relocation records one object metric from start through terminal result', async () => {
+  const collector = createRuntimeMetricCollector();
+  const metrics = new ZLinkRuntimeMetrics(collector.provider as never);
+  const harness = createActorJoinHostHarness({ metrics });
+  try {
+    await harness.relocate();
+    await harness.targetIdle();
+
+    const started = collector.records.filter(
+      (record) => record.name === 'zlink.relocation.started'
+    );
+    const completed = collector.records.filter(
+      (record) => record.name === 'zlink.relocation.completed'
+    );
+    const duration = collector.records.filter(
+      (record) => record.name === 'zlink.relocation.duration'
+    );
+    const bytes = collector.records.filter((record) => record.name === 'zlink.relocation.bytes');
+    assert.equal(started.length, 1);
+    assert.equal(completed.length, 1);
+    assert.deepEqual(started[0]?.attributes, {
+      mesh_name: 'mesh-a',
+      object_kind: 'actor',
+      policy: 'recreate'
+    });
+    assert.deepEqual(completed[0]?.attributes, {
+      mesh_name: 'mesh-a',
+      object_kind: 'actor',
+      policy: 'recreate',
+      outcome: 'completed'
+    });
+    assert.equal(duration.length, 1);
+    assert.equal(bytes.length, 1);
+    assert.ok(bytes[0]!.value > 0);
+  } finally {
+    await harness.dispose();
+  }
+});
+
 test('canonical ActorJoin admission recovery crosses command 28 into command 40 without preloaded admission state', async () => {
   const harness = createActorJoinHostHarness({ canonicalRecovery: true });
   const prepare = harness.targetActorManager.prepareRelocationActor;
@@ -2649,6 +2716,7 @@ interface ActorJoinHarnessOptions {
   readonly dropCutover?: boolean;
   readonly canonicalRecovery?: boolean;
   readonly activationAdmission?: ZLinkActivationAdmission;
+  readonly metrics?: ZLinkRuntimeMetrics;
 }
 
 function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
@@ -3346,6 +3414,7 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
     liveDescriptors: async () => [targetDescriptor],
     completions: () => undefined,
     spotNodeRuntime: () => undefined,
+    metrics: options.metrics,
     boundSessionRelocation: undefined
   };
   sourceRuntime = new ZLinkHostServiceRelocationRuntime({

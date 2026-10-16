@@ -631,7 +631,10 @@ receiver MUST NOT require a bound Session to admit a canonical `actorJoin`(28).
 ### Session Seal and Source Relay
 
 - Before stopping source application dispatch, the relocation coordinator seals a bound
-  Session binding with command 42. Command 43 reports the seal result (`sealResult`: `sealed` or `bindingAbsent`).
+  Session binding with command 42. Command 42 also carries the relocation target node
+  (`targetNodeRid`, `targetNodeGeneration`); the Session owner requests route preparation to the target
+  only from these values ([Session and Actor Binding §8.1](../04-session/02-session-actor-binding.en.md#81-seal-held-messages-and-route-switchover)).
+  Command 43 reports the seal result (`sealResult`: `sealed` or `bindingAbsent`).
 - The Session owner validates only current Session identity, binding generation,
   ActorId/ObjectGeneration, and relocation identity. It doesn't create a numeric
   high-water or re-read Actor authority.
@@ -645,8 +648,11 @@ receiver MUST NOT require a bound Session to admit a canonical `actorJoin`(28).
 
 - Source sends command 40, `relocationPrepare`, as `[request]` to request temporary-queue
   installation and declare the payload manifest for the transfer that follows. Its body
-  carries the object identity, source node RID/generation, and `payloadTotalLength`,
-  `payloadChunkCount`, and `payloadChecksumCrc32c` describing the payload. No
+  carries the object identity, source node RID/generation, `payloadTotalLength`,
+  `payloadChunkCount`, and `payloadChecksumCrc32c` describing the payload, and
+  `deadlineUnixMs`, the absolute deadline of the source operation that started the relocation.
+  The target ends its wait for being ready to receive relay with this value
+  ([relocation §4.3](../05-location-relocation/04-relocation-flow.en.md#43-restore-the-target-without-running-it)). No
   relocation-root pointer or Relocation Store lookup key is
   carried; Prepare fully describes the direct transfer that follows, sourced from source
   memory. Target sends command 30, `relocationReady`, as `[reply]` only after

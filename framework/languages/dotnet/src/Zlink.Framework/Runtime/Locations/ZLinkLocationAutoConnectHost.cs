@@ -51,7 +51,7 @@ internal sealed class ZLinkLocationAutoConnectHost
     private readonly ZLinkStateLane _lane = new();
     private ZLinkClientServerDiscovery? _clientServerDiscovery;
     private ZLinkFanoutDiscovery? _fanoutDiscovery;
-    private ZLinkFrameworkComponentState? _deferredStartState;
+    private DeferredStart? _deferredStart;
     private int _disposed;
     private Task? _disposeTask;
 
@@ -75,9 +75,16 @@ internal sealed class ZLinkLocationAutoConnectHost
         _runtime.OwnerLeaseRenewed += OnOwnerLeaseRenewed;
     }
 
+    /// <summary>
+    /// Starts this generation's descriptor publication. <paramref name="published"/>
+    /// runs once every local descriptor is published. Location runtime §5: a
+    /// host without an owner lease defers the whole start, so it stays
+    /// Preparing until the start resumes after the lease is claimed.
+    /// </summary>
     internal async ValueTask StartAsync(
         ZLinkFrameworkComponentState state,
-        CancellationToken cancellationToken = default
+        CancellationToken cancellationToken = default,
+        Action? published = null
     )
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
@@ -92,12 +99,17 @@ internal sealed class ZLinkLocationAutoConnectHost
                 return;
             if (!_runtime.IsOwnerAdmissionOpen)
             {
-                Interlocked.Exchange(ref _deferredStartState, state);
+                Interlocked.Exchange(ref _deferredStart, new DeferredStart(state, published));
                 if (_runtime.IsOwnerAdmissionOpen)
                     ResumeDeferredDescriptorPublication();
                 return;
             }
-            Interlocked.Exchange(ref _deferredStartState, null);
+            Interlocked.Exchange(ref _deferredStart, null);
+            // Location runtime §5: MeshNodes of a host that started without
+            // an owner lease run their owner-bound startup step here, once the
+            // lease is held, before their descriptors are published.
+            foreach (var node in state.SpotNodes.Values)
+                await node.StartOwnerBoundAsync().ConfigureAwait(false);
             var registration = state.Registration;
             if (
                 registration.Channels.Values.Any(static channel =>
@@ -199,9 +211,12 @@ internal sealed class ZLinkLocationAutoConnectHost
                 {
                     if (!await reconciler.MarkServingAsync(cancellationToken).ConfigureAwait(false))
                         throw new ZLinkConfigurationException(
-                            "The claimed MeshNode descriptor could not enter Serving state."
+                            "The claimed MeshNode descriptor could not enter Serving state: "
+                                + (reconciler.LocalWriteStatus?.ToString() ?? "not written")
+                                + "."
                         );
                 }
+                published?.Invoke();
             }
             catch (Exception startFailure)
             {
@@ -423,7 +438,7 @@ internal sealed class ZLinkLocationAutoConnectHost
 
     private async ValueTask DisposeGenerationAsync()
     {
-        Interlocked.Exchange(ref _deferredStartState, null);
+        Interlocked.Exchange(ref _deferredStart, null);
         var clientServerDiscovery = _clientServerDiscovery;
         _clientServerDiscovery = null;
         var fanoutDiscovery = _fanoutDiscovery;
@@ -480,28 +495,31 @@ internal sealed class ZLinkLocationAutoConnectHost
 
     private void ResumeDeferredDescriptorPublication()
     {
-        var state = Interlocked.Exchange(ref _deferredStartState, null);
-        if (state is null || Volatile.Read(ref _disposed) != 0)
+        var deferred = Interlocked.Exchange(ref _deferredStart, null);
+        if (deferred is null || Volatile.Read(ref _disposed) != 0)
             return;
-        _ = ResumeDescriptorPublicationAsync(state);
+        _ = ResumeDescriptorPublicationAsync(deferred);
     }
 
-    private async Task ResumeDescriptorPublicationAsync(ZLinkFrameworkComponentState state)
+    private async Task ResumeDescriptorPublicationAsync(DeferredStart deferred)
     {
         try
         {
-            await StartAsync(state, CancellationToken.None).ConfigureAwait(false);
+            await StartAsync(deferred.State, CancellationToken.None, deferred.Published)
+                .ConfigureAwait(false);
         }
         catch (Exception exception)
         {
             if (Volatile.Read(ref _disposed) == 0)
-                Interlocked.CompareExchange(ref _deferredStartState, state, null);
-            state.ErrorSink.ReportRuntimeTaskException(
+                Interlocked.CompareExchange(ref _deferredStart, deferred, null);
+            deferred.State.ErrorSink.ReportRuntimeTaskException(
                 "location-descriptor-publication",
                 exception
             );
         }
     }
+
+    private sealed record DeferredStart(ZLinkFrameworkComponentState State, Action? Published);
 
     private void AddLoop(
         IZLinkRuntimeFailureReporter errorSink,

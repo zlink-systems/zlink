@@ -20,6 +20,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRecvMode;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResult;
 import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry;
 
 import java.time.Duration;
 import java.util.List;
@@ -55,17 +56,29 @@ final class ZLinkJavaSocketSupport {
         return mode == ZLinkBackendRecvMode.DONT_WAIT ? RecvFlags.DONT_WAIT : RecvFlags.NONE;
     }
 
-    static CompletionStage<Void> submit(SendOperation operation, List<Message> parts) {
+    static CompletionStage<Void> submit(
+            SendOperation operation,
+            List<Message> parts,
+            ZLinkServiceOperationRegistry operations) {
         var submit = operation.message(parts.get(0));
         for (int i = 1; i < parts.size(); i++) {
             submit.message(parts.get(i));
         }
-        return submit(submit);
+        return submit(submit, operations);
     }
 
-    static CompletionStage<Void> submit(SendSubmitOperation operation) {
+    static CompletionStage<Void> submit(
+            SendSubmitOperation operation, ZLinkServiceOperationRegistry operations) {
+        if (operations.isClosed()) {
+            return CompletableFuture.failedStage(
+                    ZLinkOneWayCalls.failureForStatus(ZLinkOneWayCalls.SHUTDOWN));
+        }
         var submission = operation.submit();
-        return admission(submission.result(), submission::admitted);
+        var result = submission.result();
+        if (result == SubmitResult.BACKPRESSURED) {
+            return operations.submitSend(submission::admitted);
+        }
+        return admission(result, submission::admitted);
     }
 
     static CompletionStage<List<Message>> reply(
@@ -74,22 +87,24 @@ final class ZLinkJavaSocketSupport {
             Runnable admission,
             CompletableFuture<Void> requestAdmission) {
         SubmitResult submitResult = submission.result();
-        CompletionStage<Void> admitted = admission(submitResult, submission::admitted);
         CompletionStage<List<Message>> bindingReply = submission.reply();
         CompletableFuture<List<Message>> result = new CompletableFuture<>();
+        if (submitResult == SubmitResult.OK) {
+            // Admitted at submit: nothing waits for admission and only the reply can be cancelled.
+            if (requestAdmission != null) requestAdmission.complete(null);
+            bindingReply.whenComplete(
+                    (parts, failure) -> completeReply(result, parts, failure, admission));
+            ZLinkCompletionBridge.forwardCancellation(result, bindingReply);
+            return result;
+        }
+        CompletionStage<Void> admitted = admission(submitResult, submission::admitted);
         admitted.whenComplete(
                 (ignored, failure) -> {
                     if (failure != null) result.completeExceptionally(failure);
                     else if (requestAdmission != null) requestAdmission.complete(null);
                 });
         bindingReply.whenComplete(
-                (parts, failure) -> {
-                    if (failure != null) result.completeExceptionally(failure);
-                    else {
-                        if (admission != null) admission.run();
-                        ZLinkCompletionBridge.completeOrDiscard(result, parts, Message::closeAll);
-                    }
-                });
+                (parts, failure) -> completeReply(result, parts, failure, admission));
         ZLinkCompletionBridge.forwardCancellation(result, admitted, bindingReply);
         if (submitResult == SubmitResult.BACKPRESSURED && !result.isDone()) {
             var deadline =
@@ -104,6 +119,18 @@ final class ZLinkJavaSocketSupport {
             result.whenComplete((ignored, failure) -> deadline.cancel(false));
         }
         return result;
+    }
+
+    private static void completeReply(
+            CompletableFuture<List<Message>> result,
+            List<Message> parts,
+            Throwable failure,
+            Runnable admission) {
+        if (failure != null) result.completeExceptionally(failure);
+        else {
+            if (admission != null) admission.run();
+            ZLinkCompletionBridge.completeOrDiscard(result, parts, Message::closeAll);
+        }
     }
 
     private static CompletionStage<Void> admission(
