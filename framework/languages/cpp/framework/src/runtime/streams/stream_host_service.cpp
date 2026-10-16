@@ -840,6 +840,7 @@ class stream_host_service_t::listener_t
                 std::optional<std::string> advertise_host,
                 detail::stream_session_factory_t session_factory,
                 service_provider_t &services,
+                detail::delay_owner_t *delay_owner,
                 std::atomic_bool &stop,
                 std::shared_ptr<std::atomic_bool> drain_flag,
                 std::shared_ptr<framework::detail::monitoring_runtime_state_t> monitoring,
@@ -853,6 +854,7 @@ class stream_host_service_t::listener_t
         _advertise_host (std::move (advertise_host)),
         _session_factory (std::move (session_factory)),
         _services (&services),
+        _delay_owner (delay_owner),
         _stop (&stop),
         _drain_flag (std::move (drain_flag)),
         _monitoring (std::move (monitoring)),
@@ -1843,7 +1845,8 @@ class stream_host_service_t::listener_t
                 if (detail::can_retry_application_actor_session_bind (
                       detail::application_actor_session_bind_outcome_t::actor_not_ready)
                     && remaining > std::chrono::milliseconds::zero ()) {
-                    co_await detail::delay (std::min (remaining, std::chrono::milliseconds (10)));
+                    co_await detail::delay (_delay_owner,
+                                            std::min (remaining, std::chrono::milliseconds (10)));
                     co_await detail::request_submission (bind_actor_session (
                       transport_connection, session_rid, actor, replacement, binding_generation,
                       publish_client_binding,
@@ -2027,7 +2030,8 @@ class stream_host_service_t::listener_t
                  * yet. Refresh before retrying so a reconnect cannot pin the
                  * removed source Actor for the entire binding deadline. */
                 (void) co_await _mesh_node->refresh_application_actor_route (actor, *actor_route);
-                co_await detail::delay (std::min (remaining, std::chrono::milliseconds (10)));
+                co_await detail::delay (_delay_owner,
+                                        std::min (remaining, std::chrono::milliseconds (10)));
             }
             co_await detail::request_submission (bind_actor_session (
               transport_connection, session_rid, actor, replacement, binding_generation,
@@ -3630,6 +3634,7 @@ class stream_host_service_t::listener_t
     std::optional<std::string> _advertise_host;
     detail::stream_session_factory_t _session_factory;
     service_provider_t *_services;
+    detail::delay_owner_t *_delay_owner;
     std::atomic_bool *_stop;
     std::shared_ptr<std::atomic_bool> _drain_flag;
     std::shared_ptr<framework::detail::monitoring_runtime_state_t> _monitoring;
@@ -3729,8 +3734,8 @@ task_t<void> stream_host_service_t::start (service_provider_t &services)
                                           : advertise->second;
             validate_stream_listener_identity (stream, advertise_host);
             auto listener = std::make_unique<listener_t> (
-              _runtime, stream, advertise_host, factory->second, services, _stop, _drain_flag,
-              _monitoring, _runtime_failures, _mesh_node, _application_jobs,
+              _runtime, stream, advertise_host, factory->second, services, _delay_owner, _stop,
+              _drain_flag, _monitoring, _runtime_failures, _mesh_node, _application_jobs,
               _session_replacement_callback_timeout,
               [this] { asio::post (_liveness_io, [this] { refresh_heartbeat_deadline (); }); });
             auto *raw = listener.get ();
