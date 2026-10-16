@@ -122,9 +122,7 @@ final class ZLinkCodecSelectionConformanceTest {
                     scenario.path("name").asText());
 
             ZLinkMessageSerializer composite = registration.serializerWithFallback(JSON);
-            ZLinkEncodedPayload declaredEncoded =
-                    ZLinkCodecRegistration.serializeForDeclaredType(
-                            composite, runtimeValue, declaredType);
+            ZLinkEncodedPayload declaredEncoded = composite.serialize(runtimeValue, declaredType);
             assertTrue(
                     text(declaredEncoded).startsWith(expectedCodec + ":"),
                     scenario.path("name").asText());

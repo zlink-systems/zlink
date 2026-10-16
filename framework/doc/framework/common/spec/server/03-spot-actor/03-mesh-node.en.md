@@ -327,6 +327,14 @@ The intention to keep a connection to a specific peer is expressed as a
 application configuration or the auto-connect owner registers once per peer. The runtime
 attempts connect and reconnect only while the intent exists.
 
+**When the auto-connect owner receives an immediate-reconcile request for a specific peer, it applies
+the ordinary reconcile decision to that peer without waiting for its period.** It rereads that peer's
+descriptor through the existing Location resolver, and in automatic mode the rule that only the
+smaller RID starts connect still holds. The request creates no new kind of intent or separate state;
+the requester observes the peer's ready route as the result. Who sends the request and when is
+defined by [relocation §4.3](../05-location-relocation/04-relocation-flow.en.md#43-restore-the-target-without-running-it)
+and [Session and Actor Binding §8.1](../04-session/02-session-actor-binding.en.md#81-seal-held-messages-and-route-switchover).
+
 - **Removing an outbound intent also removes the binding's connection registration for
   that endpoint, as one decision.** The intent owner calls the binding's public disconnect.
   An inbound peer on the same endpoint doesn't own the outbound registration, so its

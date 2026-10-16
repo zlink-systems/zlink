@@ -96,12 +96,20 @@ public final class ZLinkMessageFlowTracer {
     }
 
     /**
-     * Spec 27 §4 capture gate: flow context is created, installed and copied forward at every level
-     * except Off. At Off the processing point must not validate, install or propagate flow state
-     * (correlation_id is unaffected).
+     * Flow-correlation §4 capture gate, the one place that decides whether message-flow tracing is
+     * on: flow context is created, validated, installed and copied forward only at Normal and
+     * Detailed. At Off and Errors the processing point must not create, validate, install or
+     * propagate flow state (correlation_id is unaffected; Errors still records dispatch errors,
+     * backpressure and drops through {@link #dispatchErrorsEnabled()}).
      */
     public boolean captureEnabled() {
-        return options.diagnostics().effectiveMessageFlow() != ZLinkMessageFlowLogMode.OFF;
+        return options.diagnostics().effectiveMessageFlow().value()
+                >= ZLinkMessageFlowLogMode.NORMAL.value();
+    }
+
+    /** Whether dispatch error, backpressure and drop records are written (every level but Off). */
+    public boolean dispatchErrorsEnabled() {
+        return accepts(options.diagnostics().effectiveMessageFlow(), ZLinkMessageFlowResult.FAILED);
     }
 
     public TracePoint begin(ZLinkMessageFlowOutcome phase) {

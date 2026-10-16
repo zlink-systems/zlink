@@ -14,8 +14,8 @@ public sealed class AutoConnectLifecycleCoordinatorTests
         var coordinator = CreateCoordinator(() => starts++, () => stops++);
         var state = UninitializedState();
 
-        await coordinator.FrameworkReadyAsync(state, CancellationToken.None);
-        await coordinator.FrameworkReadyAsync(state, CancellationToken.None);
+        await coordinator.FrameworkReadyAsync(state, static () => { }, CancellationToken.None);
+        await coordinator.FrameworkReadyAsync(state, static () => { }, CancellationToken.None);
         await coordinator.StopAsync(CancellationToken.None);
         await coordinator.StopAsync(CancellationToken.None);
 
@@ -29,7 +29,7 @@ public sealed class AutoConnectLifecycleCoordinatorTests
     )
     {
         return new ZLinkAutoConnectLifecycleCoordinator(
-            (_, _) =>
+            (_, _, _) =>
             {
                 started();
                 return ValueTask.CompletedTask;

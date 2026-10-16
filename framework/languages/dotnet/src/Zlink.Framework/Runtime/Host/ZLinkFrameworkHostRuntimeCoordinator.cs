@@ -34,10 +34,11 @@ internal sealed class ZLinkFrameworkHostRuntimeCoordinator(
             var state = await runtime
                 .EnsureStartedStateAsync(cancellationToken)
                 .ConfigureAwait(false);
+            // The host enters Serving when its descriptors are published; a
+            // host without an owner lease stays Preparing until then (§5).
             await autoConnectLifecycle
-                .FrameworkReadyAsync(state, cancellationToken)
+                .FrameworkReadyAsync(state, maintenance.MarkServing, cancellationToken)
                 .ConfigureAwait(false);
-            maintenance.MarkServing();
         }
         catch (Exception startFailure)
         {

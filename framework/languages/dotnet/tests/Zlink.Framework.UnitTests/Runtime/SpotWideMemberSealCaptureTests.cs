@@ -159,11 +159,20 @@ public sealed class SpotWideMemberSealCaptureTests
     // handoff backlog (ZLinkActorHandoffState capture). The marker is the
     // runtime's own ActorHandoff log line, so the test waits on the event
     // instead of polling state.
-    private sealed class HandoffBacklogLoggerProvider : ILoggerProvider
+    internal sealed class HandoffBacklogLoggerProvider : ILoggerProvider
     {
         private readonly object _gate = new();
         private readonly List<string> _lines = [];
         private readonly List<(string Actor, TaskCompletionSource Signal)> _waiters = [];
+
+        public IReadOnlyList<string> Lines
+        {
+            get
+            {
+                lock (_gate)
+                    return _lines.ToArray();
+            }
+        }
 
         public Task WaitForBacklogAsync(string actorId)
         {

@@ -50,7 +50,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 runtime.GetSpotNodeRuntime("entry").Catalog,
                 node,
                 runtime.Registration.SpotNodes["entry"],
-                new ZLinkLocationOwnerToken(descriptor.OwnerId, descriptor.LeaseGeneration)
+                () => new ZLinkLocationOwnerToken(descriptor.OwnerId, descriptor.LeaseGeneration)
             );
             InstanceSpotActivationOperation Operation(ulong id, bool request) =>
                 new(
@@ -406,7 +406,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 runtime.GetSpotNodeRuntime("entry").Catalog,
                 node,
                 registration,
-                new ZLinkLocationOwnerToken(descriptor.OwnerId, descriptor.LeaseGeneration)
+                () => new ZLinkLocationOwnerToken(descriptor.OwnerId, descriptor.LeaseGeneration)
             );
             InstanceSpotActivationOperation Operation(ulong id) =>
                 new(
@@ -536,7 +536,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 runtime.GetSpotNodeRuntime("entry").Catalog,
                 node,
                 runtime.Registration.SpotNodes["entry"],
-                new ZLinkLocationOwnerToken(descriptor.OwnerId, descriptor.LeaseGeneration)
+                () => new ZLinkLocationOwnerToken(descriptor.OwnerId, descriptor.LeaseGeneration)
             );
             InstanceSpotActivationOperation Operation(bool request, ulong id) =>
                 new(

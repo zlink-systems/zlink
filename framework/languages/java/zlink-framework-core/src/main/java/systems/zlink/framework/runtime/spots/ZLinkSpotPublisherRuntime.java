@@ -14,6 +14,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
+import systems.zlink.framework.runtime.internal.execution.ZLinkTeardownExecutor;
 import systems.zlink.framework.runtime.messaging.ZLinkApplicationMetadata;
 import systems.zlink.framework.runtime.messaging.ZLinkPayloadEncoding;
 import systems.zlink.framework.spots.ZLinkSpotPublisherClient;
@@ -46,7 +47,6 @@ final class ZLinkSpotPublisherRuntime implements AutoCloseable {
     private final ZLinkMessageFlowTracer flow;
     private final ZLinkStateLane stateLane = new ZLinkStateLane();
     private volatile Map<String, ZLinkInternalSpotNode> nodesByChannel = Map.of();
-    private volatile boolean closed;
 
     ZLinkSpotPublisherRuntime(ZLinkMessageSerializer serializer, ZLinkSpotRouteMessages messages) {
         this(
@@ -328,19 +328,16 @@ final class ZLinkSpotPublisherRuntime implements AutoCloseable {
 
     @Override
     public void close() {
-        boolean started =
-                inStateLane(
-                        () -> {
-                            if (closed) return false;
-                            closed = true;
-                            return true;
-                        });
-        if (!started) return;
-        multicastExecutor.shutdownNow().forEach(ZLinkSpotPublisherRuntime::rejectDropped);
+        multicastExecutor.shutdown();
+        Runnable task;
+        while ((task = multicastExecutor.getQueue().poll()) != null) {
+            ((MulticastTask) task).rejectShutdown();
+        }
     }
 
-    private static void rejectDropped(Runnable task) {
-        ((MulticastTask) task).rejectShutdown();
+    CompletionStage<Void> closeAsync() {
+        close();
+        return ZLinkTeardownExecutor.submit(multicastExecutor::close);
     }
 
     private final class MulticastTask implements Runnable {
@@ -355,7 +352,7 @@ final class ZLinkSpotPublisherRuntime implements AutoCloseable {
         @Override
         public void run() {
             if (result.isDone()) return;
-            if (isClosed() || multicastExecutor.isShutdown()) rejectShutdown();
+            if (isClosed()) rejectShutdown();
             else action.run();
         }
 
@@ -407,7 +404,7 @@ final class ZLinkSpotPublisherRuntime implements AutoCloseable {
     }
 
     private boolean isClosed() {
-        return closed;
+        return multicastExecutor.isShutdown();
     }
 
     private <T> T inStateLane(java.util.function.Supplier<T> work) {

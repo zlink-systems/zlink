@@ -26,6 +26,7 @@ import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.internal.configuration.ZLinkCodecRegistration;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
+import systems.zlink.framework.runtime.internal.messaging.ZLinkOwnedMessageSerializer;
 import systems.zlink.framework.runtime.messaging.ZLinkStringMessageSerializer;
 
 import java.nio.charset.StandardCharsets;
@@ -36,6 +37,36 @@ import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 
 final class ZLinkChannelHandlerFilterContractTest {
+    @Test
+    void requestReplyTransfersTheDeclaredCodecsOwnedOutput() {
+        var codecs = new ZLinkCodecRegistration();
+        var codec = new OwnedReplySerializer();
+        codecs.addSerializer("application/x-owned-reply", codec, BaseReply.class::equals);
+        var invoker =
+                new ZLinkChannelHandlerInvoker(
+                        codecs.serializerWithFallback(new ZLinkStringMessageSerializer()),
+                        codecs,
+                        type -> new DerivedReplyHandler(),
+                        Runnable::run,
+                        List.of());
+        try (var request = text("request");
+                var reply =
+                        invoker.invokeRequestHandler(
+                                        "channel-a",
+                                        new ChannelRequestHandlerRegistration(
+                                                DerivedReplyHandler.class,
+                                                String.class,
+                                                BaseReply.class,
+                                                "request",
+                                                List.of()),
+                                        request)
+                                .toCompletableFuture()
+                                .join()) {
+            assertEquals("owned", reply.toUtf8String());
+            Assertions.assertSame(codec.output, reply);
+        }
+    }
+
     @Test
     void requestReplyUsesDeclaredReplyTypeInsteadOfRuntimeSubtype() {
         ZLinkCodecRegistration codecs = new ZLinkCodecRegistration();
@@ -353,6 +384,32 @@ final class ZLinkChannelHandlerFilterContractTest {
     }
 
     private static class BaseReply {}
+
+    private static final class OwnedReplySerializer
+            implements ZLinkMessageSerializer, ZLinkOwnedMessageSerializer {
+        private Message output;
+
+        @Override
+        public Message serializeOwned(Object value) {
+            output = Message.from("owned");
+            return output;
+        }
+
+        @Override
+        public <T> ZLinkEncodedPayload serialize(T value) {
+            throw new AssertionError("reply must transfer the codec output without payload copies");
+        }
+
+        @Override
+        public <T> T deserialize(ZLinkEncodedPayload payload, Class<T> type) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public <T> T deserializeBorrowed(Message payload, Class<T> type) {
+            throw new UnsupportedOperationException();
+        }
+    }
 
     private static final class DerivedReply extends BaseReply {}
 
