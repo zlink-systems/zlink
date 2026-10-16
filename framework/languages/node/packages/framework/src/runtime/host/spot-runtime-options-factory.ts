@@ -138,6 +138,15 @@ export class ZLinkSpotRuntimeOptionsFactory {
         }
         await runtime.dispatchEntryActorJoin(meshName, actor, handoffBacklog);
       },
+      admitEntryActorPacketPrefix: (meshName, actorId, records) => {
+        const runtime = this.options.spotNodeRuntime();
+        if (runtime === undefined) {
+          throw new ZLinkConfigurationException(
+            'Entry Actor replay requires the MeshNode runtime.'
+          );
+        }
+        return runtime.admitEntryActorPacketPrefix(meshName, actorId, records);
+      },
       executeEntryActor: (meshName, actorId, operation) => {
         const runtime = this.options.spotNodeRuntime();
         if (runtime === undefined) {
@@ -298,10 +307,10 @@ export class ZLinkSpotRuntimeOptionsFactory {
           state?.nativeActorRef === undefined
             ? undefined
             : toFrameworkActorRef(state.nativeActorRef, state.meshName ?? '');
-        const localNodeRid = this.primaryNodeRoutingId();
+        const localNodeRid =
+          state?.meshName === undefined ? undefined : this.meshNodeRoutingId(state.meshName);
         if (
           state?.actor === undefined ||
-          state.spot === undefined ||
           state.remoteActorPacketTarget !== undefined ||
           actorRef === undefined ||
           localNodeRid === undefined ||
