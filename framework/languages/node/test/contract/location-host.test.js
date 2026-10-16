@@ -716,14 +716,58 @@ for (const fault of ['error', 'noAnswer']) {
       backendAdapterFactory: fakeBackendAdapterFactory(calls, rid('play-node'))
     });
 
+    const locationStoreErrorOperations = [];
+    runtime.metrics.recordLocationStoreError = operation =>
+      locationStoreErrorOperations.push(operation);
+    const runtimeTaskFailures = [];
+    let removeRuntimeTaskFailureHandler;
+
     const observation = new AbortController();
     try {
       await runtime.start();
+      removeRuntimeTaskFailureHandler = runtime.errorSink.onRuntimeTaskException(({ taskName }) =>
+        runtimeTaskFailures.push(taskName)
+      );
       assert.ok(faultedWrites > 0);
-      assert.equal(runtime.locationOwner.currentRuntime.currentOwnerToken !== undefined, true);
+      const locationRuntime = runtime.locationOwner.currentRuntime;
+      assert.equal(locationRuntime.currentOwnerToken !== undefined, true);
+      assert.deepEqual(
+        {
+          ownerLeaseUsable: locationRuntime.ownerLeaseUsable,
+          ownerAdmissionOpen: runtime.admission.ownerAdmissionOpen(),
+          ownerLeaseRecoveryRecorded: locationStoreErrorOperations.includes(
+            'owner_lease_recovery'
+          )
+        },
+        {
+          ownerLeaseUsable: true,
+          ownerAdmissionOpen: true,
+          ownerLeaseRecoveryRecorded: false
+        }
+      );
       assert.equal(runtime.status.state, framework.ZLinkFrameworkRuntimeState.Preparing);
       assert.equal(runtime.status.isReady, false);
       assert.equal((await store.listMeshNodes('play')).items.length, 0);
+
+      await waitForCondition(() => faultedWrites >= 2 && runtimeTaskFailures.length > 0);
+      assert.deepEqual(
+        {
+          retryFailureTask: runtimeTaskFailures.at(-1),
+          ownerLeaseUsable: locationRuntime.ownerLeaseUsable,
+          ownerAdmissionOpen: runtime.admission.ownerAdmissionOpen(),
+          ownerLeaseRecoveryRecorded: locationStoreErrorOperations.includes(
+            'owner_lease_recovery'
+          ),
+          state: runtime.status.state
+        },
+        {
+          retryFailureTask: 'startup descriptor publication',
+          ownerLeaseUsable: true,
+          ownerAdmissionOpen: true,
+          ownerLeaseRecoveryRecorded: false,
+          state: framework.ZLinkFrameworkRuntimeState.Preparing
+        }
+      );
 
       const observed = runtime.observe(observation.signal);
       clearFault();
@@ -736,11 +780,116 @@ for (const fault of ['error', 'noAnswer']) {
       assert.equal(descriptor.state, framework.ZLinkFrameworkRuntimeState.Serving);
     } finally {
       observation.abort();
+      removeRuntimeTaskFailureHandler?.();
       clearFault();
       await runtime.stop();
     }
   });
 }
+
+test('framework host does not overlap owner lease recovery attempts', async () => {
+  const scenario = recoverableHostScenario(1_000);
+  const runtime = scenario.runtime;
+  const recoveryCounts = {
+    startStatefulAuthority: 0,
+    spotAutoConnect: 0,
+    channelAutoConnect: 0,
+    enterServing: 0
+  };
+  let preparingPublicationAttempts = 0;
+  let activeRecoveryAttempts = 0;
+  let maximumActiveRecoveryAttempts = 0;
+  let unblockRecoveryPublication;
+  const recoveryPublicationGate = new Promise(resolve => {
+    unblockRecoveryPublication = resolve;
+  });
+  let removeRenewalObserver;
+
+  try {
+    await runtime.start();
+    const locationRuntime = runtime.locationOwner.currentRuntime;
+    const spotNodeRuntime = runtime.spotNodeRuntime;
+    const channelRuntime = runtime.channelRuntime;
+
+    const publishMeshNodeState = spotNodeRuntime.publishMeshNodeState.bind(spotNodeRuntime);
+    spotNodeRuntime.publishMeshNodeState = async (state, ...args) => {
+      if (state === framework.ZLinkFrameworkRuntimeState.Preparing) {
+        preparingPublicationAttempts += 1;
+        await recoveryPublicationGate;
+      }
+      return await publishMeshNodeState(state, ...args);
+    };
+
+    const resumeOwnerLeaseOwnedWork = runtime.resumeOwnerLeaseOwnedWork.bind(runtime);
+    runtime.resumeOwnerLeaseOwnedWork = async (...args) => {
+      activeRecoveryAttempts += 1;
+      maximumActiveRecoveryAttempts = Math.max(
+        maximumActiveRecoveryAttempts,
+        activeRecoveryAttempts
+      );
+      try {
+        await resumeOwnerLeaseOwnedWork(...args);
+      } finally {
+        activeRecoveryAttempts -= 1;
+      }
+    };
+
+    const startStatefulAuthority = runtime.startStatefulAuthority.bind(runtime);
+    runtime.startStatefulAuthority = async (...args) => {
+      recoveryCounts.startStatefulAuthority += 1;
+      return await startStatefulAuthority(...args);
+    };
+    const startSpotAutoConnect = spotNodeRuntime.startLocationAutoConnect.bind(spotNodeRuntime);
+    spotNodeRuntime.startLocationAutoConnect = async (...args) => {
+      recoveryCounts.spotAutoConnect += 1;
+      return await startSpotAutoConnect(...args);
+    };
+    const startChannelAutoConnect = channelRuntime.startLocationAutoConnect.bind(channelRuntime);
+    channelRuntime.startLocationAutoConnect = async (...args) => {
+      recoveryCounts.channelAutoConnect += 1;
+      return await startChannelAutoConnect(...args);
+    };
+    const enterServing = runtime.enterServing.bind(runtime);
+    runtime.enterServing = async (...args) => {
+      recoveryCounts.enterServing += 1;
+      return await enterServing(...args);
+    };
+
+    let renewals = 0;
+    const renewalObserver = () => {
+      renewals += 1;
+    };
+    locationRuntime.addOwnerLeaseRenewedHandler(renewalObserver);
+    removeRenewalObserver = () => locationRuntime.removeOwnerLeaseRenewedHandler(renewalObserver);
+
+    scenario.recover();
+    await locationRuntime.renewOwnerLeaseOnce();
+    await waitForCondition(() => preparingPublicationAttempts === 1);
+    await locationRuntime.renewOwnerLeaseOnce();
+    assert.ok(renewals >= 2);
+    assert.equal(maximumActiveRecoveryAttempts, 1);
+    assert.equal(preparingPublicationAttempts, 1);
+
+    unblockRecoveryPublication();
+    await waitForCondition(() => runtime.status.state === framework.ZLinkFrameworkRuntimeState.Serving);
+    await waitForCondition(() => activeRecoveryAttempts === 0);
+    assert.deepEqual(recoveryCounts, {
+      startStatefulAuthority: 1,
+      spotAutoConnect: 1,
+      channelAutoConnect: 1,
+      enterServing: 1
+    });
+  } finally {
+    unblockRecoveryPublication();
+    removeRenewalObserver?.();
+    scenario.recover();
+    try {
+      await waitForCondition(() => activeRecoveryAttempts === 0);
+    } finally {
+      await runtime.stop();
+    }
+  }
+});
 
 test('framework host whose descriptor is claimed by another owner fails startup', async () => {
   const now = () => new Date(Date.UTC(2026, 6, 3, 0, 0, 0));
@@ -1221,7 +1370,7 @@ test('concurrent relocation with a different deadline joins the running operatio
   }
 });
 
-function recoverableHostScenario() {
+function recoverableHostScenario(ownerLeaseRenewIntervalMs = 20) {
   const now = () => new Date(Date.UTC(2026, 6, 3, 0, 0, 0));
   const inner = new framework.ZLinkInMemoryProviderLocationStore(now);
   let unavailable = true;
@@ -1245,7 +1394,7 @@ function recoverableHostScenario() {
       locations: {
         storeInstance: provider,
         options: {
-          ownerLeaseRenewIntervalMs: 20,
+          ownerLeaseRenewIntervalMs,
           ownerLeaseRenewTimeoutMs: 5,
           pollingIntervalMs: 20
         }

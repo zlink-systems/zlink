@@ -562,7 +562,9 @@ internal sealed class ZLinkInstanceSpotActivationTarget(
                 $"Instance Spot type '{operation.Target.StableType}' is not registered."
             );
 
-        var requestSource = await ResolveRequestSourceAsync(
+        var requestSource = await ZLinkRequestSourceFenceResolver.ResolveAsync(
+                node,
+                authorityStore,
                 operation.Target.MeshName,
                 operation.SourceNodeRid,
                 operation.SourceNodeGeneration,
@@ -977,7 +979,9 @@ internal sealed class ZLinkInstanceSpotActivationTarget(
                 "The activation recovery root does not match its authority."
             );
         var sourceNodeRid = RoutingId.From(record.SourceNodeRid.Value);
-        var requestSource = await ResolveRequestSourceAsync(
+        var requestSource = await ZLinkRequestSourceFenceResolver.ResolveAsync(
+                node,
+                authorityStore,
                 authority.MeshName,
                 sourceNodeRid,
                 record.SourceNodeGeneration.Value,
@@ -1183,32 +1187,6 @@ internal sealed class ZLinkInstanceSpotActivationTarget(
             operation,
             recordTerminal
         );
-
-    private async ValueTask<ZLinkServiceWireCodec.RequestSourceFence> ResolveRequestSourceAsync(
-        string meshName,
-        RoutingId sourceNodeRid,
-        ulong sourceNodeGeneration,
-        CancellationToken cancellationToken
-    )
-    {
-        var descriptors = await authorityStore
-            .ListAllMeshNodesAsync(meshName, cancellationToken)
-            .ConfigureAwait(false);
-        var descriptor = descriptors.SingleOrDefault(value =>
-            value.Rid == sourceNodeRid && value.LifecycleGeneration == sourceNodeGeneration
-        );
-        if (descriptor is null || descriptor.LeaseGeneration <= 0)
-            throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.Rejected,
-                "The Instance Spot activation request-source fence is unavailable."
-            );
-        return new ZLinkServiceWireCodec.RequestSourceFence(
-            descriptor.OwnerId,
-            checked((ulong)descriptor.LeaseGeneration),
-            sourceNodeRid,
-            sourceNodeGeneration
-        );
-    }
 
     private async ValueTask CompleteAndClearRecoveryAsync(
         ZLinkAuthorityKey key,
