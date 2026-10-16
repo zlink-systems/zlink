@@ -9,7 +9,7 @@
 #include "runtime/locations/location_key_codec.hpp"
 #include "runtime/locations/aggregate_inventory.hpp"
 #include "runtime/locations/authority_key_codec.hpp"
-#include "runtime/locations/in_memory_store_providers.hpp"
+#include "runtime/locations/location_store_limits.hpp"
 #include <runtime/locations/location_repository.hpp>
 #include "runtime/locations/pending_creation_projection.hpp"
 #include "runtime/execution/state_lane.hpp"

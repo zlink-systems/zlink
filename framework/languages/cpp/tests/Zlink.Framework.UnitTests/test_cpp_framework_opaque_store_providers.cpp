@@ -757,7 +757,11 @@ class reclaim_scan_store_t final : public location_store_t
   public:
     task_t<store_read_result_t> read (store_key_t key) override
     {
-        return inner.read (std::move (key));
+        if (before_read && key.value == before_read_key.value) {
+            auto callback = std::exchange (before_read, {});
+            co_await callback ();
+        }
+        co_return co_await inner.read (std::move (key));
     }
     task_t<store_write_result_t> write (store_write_request_t request) override
     {
@@ -794,6 +798,8 @@ class reclaim_scan_store_t final : public location_store_t
     bool armed = false;
     bool fail_scan = false;
     bool expire_next_page = false;
+    store_key_t before_read_key;
+    std::function<task_t<void> ()> before_read;
     std::function<task_t<void> ()> before_member_write;
     unsigned scans = 0;
     unsigned expired = 0;
@@ -1169,7 +1175,8 @@ TEST_P (EndedSpotMemberReleaseTest, ReleasesOnlyEndedOwnerMembers)
     reclaim_scan_store_t opaque;
     provider_location_repository_t provider (opaque);
     in_memory_location_repository_t memory;
-    location_repository_t &repository = std::get<0> (GetParam ())
+    const bool use_provider = std::get<0> (GetParam ());
+    location_repository_t &repository = use_provider
                                           ? static_cast<location_repository_t &> (provider)
                                           : static_cast<location_repository_t &> (memory);
     const auto scenario = std::get<1> (GetParam ());
@@ -1207,7 +1214,7 @@ TEST_P (EndedSpotMemberReleaseTest, ReleasesOnlyEndedOwnerMembers)
         descriptor.capacity.actors.limit = static_cast<std::int32_t> (members_wanted + 2);
         descriptor.capacity.spots.limit = scenario == "aggregate" ? 2 : 1;
         descriptor.capacity.spot_types.push_back (
-          {placement_object_kind_t::user_spot, "room", {scenario == "aggregate" ? 2 : 1, 0, 0}});
+          {placement_object_kind_t::user_spot, "room", {scenario == "aggregate" ? 2u : 1u, 0, 0}});
         ASSERT_EQ (repository.update_mesh_node (descriptor, location_write_intent_t::new_claim)
                      .result ()
                      .value ()
@@ -1352,24 +1359,114 @@ TEST_P (EndedSpotMemberReleaseTest, ReleasesOnlyEndedOwnerMembers)
     };
     const auto before = versions ();
     repository.release_owner_lease (old_owner).result ().value ();
+    std::optional<object_reserved_t> independently_recreated;
+    std::optional<store_found_t> corrupted_capacity;
+    if (scenario == "memberReclaimed" || scenario == "memberCapacityCorrupt") {
+        mesh_node_descriptor_t source_descriptor;
+        source_descriptor.mesh_name = source.mesh_name;
+        source_descriptor.rid = zlink::routing_id_t::from (std::string (source.node_rid.value ()));
+        opaque.before_read_key = capacity_key (source_descriptor);
+        if (scenario == "memberReclaimed") {
+            const auto capacity = capacity_record (opaque.inner, source_descriptor);
+            EXPECT_EQ (
+              capacity.at (location_record_fields::active).at (location_record_fields::actors), 1);
+            EXPECT_EQ (
+              capacity.at (location_record_fields::active).at (location_record_fields::spots), 1);
+            mesh_node_descriptor_t target_descriptor;
+            target_descriptor.mesh_name = target.mesh_name;
+            target_descriptor.rid =
+              zlink::routing_id_t::from (std::string (target.node_rid.value ()));
+            // No allocation has used this target. Missing capacity is zero pending usage
+            // (provider read_capacity_async), before either new reservation is created.
+            ASSERT_TRUE (std::holds_alternative<store_missing_t> (
+              opaque.inner.read (capacity_key (target_descriptor)).result ().value ()));
+        }
+    }
+    if (scenario == "memberCapacityCorrupt") {
+        const auto current =
+          std::get<store_found_t> (opaque.inner.read (opaque.before_read_key).result ().value ());
+        auto capacity =
+          nlohmann::json::parse (current.value.bytes.begin (), current.value.bytes.end ());
+        capacity.at (location_record_fields::active).at (location_record_fields::actors) = 0;
+        ASSERT_TRUE (std::holds_alternative<store_write_applied_t> (
+          opaque.inner
+            .write ({{store_version_condition_t{opaque.before_read_key, current.value.version}},
+                     {store_put_t{opaque.before_read_key, bytes (capacity.dump ()), std::nullopt}}})
+            .result ()
+            .value ()));
+        corrupted_capacity =
+          std::get<store_found_t> (opaque.inner.read (opaque.before_read_key).result ().value ());
+    }
+    if (scenario == "memberReclaimed") {
+        // The Spot has already captured the old member in its snapshot when it reads
+        // source capacity. Reclaim that member independently before returning capacity.
+        opaque.before_read = [&] () -> task_t<void> {
+            object_reserve_request_t concurrent;
+            concurrent.key = {placement_object_kind_t::actor, "member-a"};
+            concurrent.intent.stable_type = "player";
+            concurrent.target = target;
+            concurrent.creating_payload = bytes ("creating");
+            concurrent.capacity_bundle.actor_slots = 1;
+            concurrent.relocation_policy = detail::factory_relocation_kind_t::disabled;
+            independently_recreated =
+              std::get<object_reserved_t> (co_await repository.reserve (concurrent));
+        };
+    }
     opaque.armed = scenario == "deadPage" || scenario == "deadExpired";
     opaque.expire_next_page = scenario == "deadExpired";
     request.target = target;
     const auto result = repository.reserve (request).result ();
     if (scenario == "dead" || scenario == "deadPage" || scenario == "deadExpired"
-        || scenario == "batchFits") {
-        ASSERT_TRUE (result);
+        || scenario == "batchFits" || scenario == "memberReclaimed") {
+        ASSERT_TRUE (result) << (result.error () ? result.error ()->what () : "untyped failure");
         const auto *winner = std::get_if<object_reserved_t> (&result.value ());
         ASSERT_NE (winner, nullptr);
         EXPECT_GT (winner->creating.object_generation, spot.object_generation);
-        for (const auto &version : versions ())
-            EXPECT_EQ (version, "missing");
+        if (scenario != "memberReclaimed")
+            for (const auto &version : versions ())
+                EXPECT_EQ (version, "missing");
         const auto nodes = repository.list_mesh_nodes ("member-spot-mesh").result ().value ().items;
         const auto old_node = std::find_if (nodes.begin (), nodes.end (), [] (const auto &node) {
             return node.rid.to_string () == "member-spot-source";
         });
         ASSERT_NE (old_node, nodes.end ());
-        EXPECT_EQ (old_node->capacity.actors.active, 0u);
+        if (use_provider) {
+            const auto capacity = capacity_record (opaque.inner, *old_node);
+            EXPECT_EQ (
+              capacity.at (location_record_fields::active).at (location_record_fields::actors), 0);
+            EXPECT_EQ (
+              capacity.at (location_record_fields::active).at (location_record_fields::spots), 0);
+            EXPECT_EQ (
+              capacity.at (location_record_fields::pending).at (location_record_fields::actors), 0);
+            EXPECT_EQ (
+              capacity.at (location_record_fields::pending).at (location_record_fields::spots), 0);
+        } else {
+            EXPECT_EQ (old_node->capacity.actors.active, 0u);
+            EXPECT_EQ (old_node->capacity.spots.active, 0u);
+        }
+        if (scenario == "memberReclaimed") {
+            ASSERT_TRUE (independently_recreated);
+            const auto member = std::get<authority_snapshot_t> (
+              repository.read_authority (actor_authority_key ("member-a")).result ().value ());
+            EXPECT_EQ (member.store_version, independently_recreated->creating.store_version);
+            EXPECT_EQ (member.object_generation,
+                       independently_recreated->creating.object_generation);
+            const auto new_node =
+              std::find_if (nodes.begin (), nodes.end (), [] (const auto &node) {
+                  return node.rid.to_string () == "member-spot-target";
+              });
+            ASSERT_NE (new_node, nodes.end ());
+            const auto capacity = capacity_record (opaque.inner, *new_node);
+            EXPECT_EQ (
+              capacity.at (location_record_fields::pending).at (location_record_fields::actors), 1);
+            EXPECT_EQ (
+              capacity.at (location_record_fields::pending).at (location_record_fields::spots), 1);
+            EXPECT_EQ (
+              capacity.at (location_record_fields::active).at (location_record_fields::actors), 0);
+            EXPECT_EQ (
+              capacity.at (location_record_fields::active).at (location_record_fields::spots), 0);
+            return;
+        }
         if (scenario == "deadExpired")
             EXPECT_EQ (opaque.expired, 1u);
         // A released member is Missing: its next creation starts a new incarnation.
@@ -1388,11 +1485,19 @@ TEST_P (EndedSpotMemberReleaseTest, ReleasesOnlyEndedOwnerMembers)
         return;
     }
     ASSERT_FALSE (result);
-    EXPECT_EQ (result.error_kind (), framework_error_kind_t::unavailable);
+    EXPECT_EQ (result.error_kind (), scenario == "memberCapacityCorrupt"
+                                       ? framework_error_kind_t::data_lost
+                                       : framework_error_kind_t::unavailable);
     const auto after = std::get<authority_snapshot_t> (
       repository.read_authority (spot_authority_key ("member-spot")).result ().value ());
     EXPECT_EQ (after.store_version, spot.store_version);
     EXPECT_EQ (versions (), before);
+    if (corrupted_capacity) {
+        const auto capacity =
+          std::get<store_found_t> (opaque.inner.read (opaque.before_read_key).result ().value ());
+        EXPECT_EQ (capacity.value.version.value, corrupted_capacity->value.version.value);
+        EXPECT_EQ (capacity.value.bytes, corrupted_capacity->value.bytes);
+    }
 }
 
 INSTANTIATE_TEST_SUITE_P (ProviderAndInMemory, EndedSpotMemberReleaseTest, ::testing::ValuesIn ([] {
@@ -1404,6 +1509,8 @@ INSTANTIATE_TEST_SUITE_P (ProviderAndInMemory, EndedSpotMemberReleaseTest, ::tes
                                       inputs.emplace_back (provider, scenario);
                               inputs.emplace_back (true, "deadPage");
                               inputs.emplace_back (true, "deadExpired");
+                              inputs.emplace_back (true, "memberReclaimed");
+                              inputs.emplace_back (true, "memberCapacityCorrupt");
                               return inputs;
                           }()));
 
