@@ -169,9 +169,7 @@ internal sealed partial class ZLinkActorSessionManager
                 .ConfigureAwait(false);
         }
 
-        await state
-            .ExecuteLockedAsync(state.PrepareForTransferredActivationOnLane, cancellationToken)
-            .ConfigureAwait(false);
+        await state.PrepareForTransferredActivationAsync(cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>

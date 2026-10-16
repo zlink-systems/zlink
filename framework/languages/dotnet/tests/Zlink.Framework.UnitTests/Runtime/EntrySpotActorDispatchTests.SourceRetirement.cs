@@ -182,6 +182,193 @@ public sealed partial class EntrySpotActorDispatchTests
         Assert.Same(restored.Actor, state.Actor);
     }
 
+    [Theory]
+    [InlineData(false, false, false, false)]
+    [InlineData(true, false, false, false)]
+    [InlineData(false, true, false, false)]
+    [InlineData(true, false, true, false)]
+    [InlineData(false, false, false, true)]
+    public async Task ReturningTarget_WaitsForPreviousActivationDisposal(
+        bool deferred,
+        bool prepareBeforeRetirement,
+        bool disposalFails,
+        bool cancelPreparation
+    )
+    {
+        await using var services = new ServiceCollection()
+            .AddScoped<ProbeActorFactory>()
+            .BuildServiceProvider();
+        var node = new CapturingSpotNode();
+        node.SetRoutingId(RoutingId.From("old-source"));
+        var registration = new ZLinkFrameworkRegistration();
+        registration.SpotNodes["source-node"] = new ZLinkSpotNodeRegistration
+        {
+            SpotNodeName = "source-node",
+            ActorFactories =
+            {
+                ["probe"] = new ZLinkActorFactoryRegistration(
+                    typeof(ProbeActorFactory),
+                    new ZLinkObjectRelocationRegistration(
+                        typeof(ProbeActor),
+                        new ZLinkObjectPlacementOptions(),
+                        ZLinkObjectRelocationRegistration.DisabledPolicy,
+                        null,
+                        null
+                    )
+                ),
+            },
+        };
+        registration.ActorCatalog.Build(registration.SpotNodes.Values);
+        var runtime = new ZLinkFrameworkRuntime(
+            services,
+            new CapturingBackendAdapterFactory(node),
+            registration,
+            new ZLinkHandlerRegistry([]),
+            new ZLinkHandlerDispatcher(
+                services.GetRequiredService<IServiceScopeFactory>(),
+                registration
+            )
+        );
+        var sessions = new ZLinkActorSessionManager(
+            runtime,
+            services,
+            () => node,
+            null,
+            new ZLinkBoundSessionService(runtime)
+        );
+        var created = await sessions.CreateAndBindActorAsync("returning-target", "probe");
+        Assert.True(sessions.TryGetCreatedActorState("returning-target", out var state));
+        var source = state.NativeActorRef!.Value;
+        var target = new ZLinkBackendActorRef(RoutingId.From("first-target"), state.ActorId, 1);
+        state.BindNativeActorRef(source);
+        void CommitSource()
+        {
+            state.Handoff.BeginCapture();
+            _ = state.Handoff.CutoverCaptureToMessageFollow(
+                0,
+                source,
+                target,
+                "mesh",
+                1,
+                1,
+                1,
+                2,
+                1,
+                2,
+                TimeSpan.FromSeconds(1)
+            );
+        }
+        var handler = state.HandlerInstances.Resolve<SourceRetirementBlockingHandler>();
+        handler.FailDisposal = disposalFails;
+        var diagnosed = new TaskCompletionSource<Exception>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        runtime.ErrorSink.UnhandledCallbackException += error => diagnosed.TrySetResult(error);
+        using var preparationCancellation = new CancellationTokenSource();
+        Task retirement = Task.CompletedTask;
+        Task preparation = Task.CompletedTask;
+        try
+        {
+            if (deferred)
+                retirement = state
+                    .ExecuteDispatchAsync(
+                        token =>
+                        {
+                            CommitSource();
+                            return sessions.FinalizeMigratedSourceAsync(state, source, token);
+                        },
+                        CancellationToken.None
+                    )
+                    .AsTask();
+            else
+            {
+                CommitSource();
+                if (prepareBeforeRetirement)
+                {
+                    preparation = sessions
+                        .PrepareForTransferredActivationAsync(state, preparationCancellation.Token)
+                        .AsTask();
+                    Assert.False(preparation.IsCompleted);
+                    Assert.Same(created.Actor, state.Actor);
+                }
+                retirement = sessions.FinalizeMigratedSourceAsync(state, source).AsTask();
+            }
+            _ = await Task.WhenAny(handler.DisposalStarted.Task, retirement);
+            if (retirement.IsFaulted || retirement.IsCanceled)
+                await retirement;
+            await handler.DisposalStarted.Task;
+            await state.Handoff.WaitForSourceCompletionAsync(CancellationToken.None);
+            Assert.Null(state.Actor);
+            Assert.Throws<InvalidOperationException>(() => state.HandlerInstances);
+
+            if (!prepareBeforeRetirement)
+                preparation = sessions
+                    .PrepareForTransferredActivationAsync(state, preparationCancellation.Token)
+                    .AsTask();
+            Assert.False(preparation.IsCompleted, preparation.Exception?.ToString());
+            Assert.Equal(0, handler.DisposeCount);
+            Assert.Throws<InvalidOperationException>(() => state.HandlerInstances);
+
+            if (cancelPreparation)
+            {
+                preparationCancellation.Cancel();
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(() => preparation);
+                Assert.Equal(0, handler.DisposeCount);
+                Assert.Throws<InvalidOperationException>(() => state.HandlerInstances);
+            }
+            handler.ReleaseDisposal.SetResult();
+            await retirement;
+            if (cancelPreparation)
+                await sessions.PrepareForTransferredActivationAsync(state, CancellationToken.None);
+            else
+                await preparation;
+            if (disposalFails)
+                Assert.Equal("source disposal failed", (await diagnosed.Task).Message);
+
+            Assert.Equal(1, handler.DisposeCount);
+            var replacement = state.HandlerInstances.Resolve<SourceRetirementBlockingHandler>();
+            Assert.NotSame(handler, replacement);
+            replacement.ReleaseDisposal.SetResult();
+            var dispatched = false;
+            await state.ExecuteDispatchAsync(
+                _ =>
+                {
+                    dispatched = true;
+                    return ValueTask.CompletedTask;
+                },
+                CancellationToken.None
+            );
+            Assert.True(dispatched);
+        }
+        finally
+        {
+            handler.ReleaseDisposal.TrySetResult();
+            await retirement;
+            // Observe a failed preparation as well as joining a suspended one.
+            _ = await Record.ExceptionAsync(() => preparation);
+            await state.DisposeHandlerActivationAsync();
+        }
+    }
+
+    private sealed class SourceRetirementBlockingHandler : IAsyncDisposable
+    {
+        internal TaskCompletionSource DisposalStarted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource ReleaseDisposal { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal int DisposeCount { get; private set; }
+        internal bool FailDisposal { get; set; }
+
+        public async ValueTask DisposeAsync()
+        {
+            DisposalStarted.TrySetResult();
+            await ReleaseDisposal.Task;
+            DisposeCount++;
+            if (FailDisposal)
+                throw new InvalidOperationException("source disposal failed");
+        }
+    }
+
     [Fact]
     public async Task CommittedSource_UnfinishedLeave_StopsWaitingAtCleanupDeadline()
     {

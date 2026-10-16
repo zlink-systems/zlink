@@ -1,6 +1,7 @@
 import { macrotaskBoundary } from '../abort';
 import {
   diagnosticWorkName,
+  startOutsideStateLane,
   guardStateLaneCompletion,
   isStructuralGuardEnabled,
   trackDiagnosticCompletion
@@ -286,10 +287,12 @@ export class ZLinkSerialExecutionQueue {
     const consumer = this.consumer!;
     if (consumer.scheduled || consumer.running) return;
     consumer.scheduled = true;
-    queueMicrotask(() => {
-      consumer.scheduled = false;
-      void this.drain();
-    });
+    startOutsideStateLane(() =>
+      queueMicrotask(() => {
+        consumer.scheduled = false;
+        void this.drain();
+      })
+    );
   }
 
   /** Notifications carry no payload, admission sequence, result Promise, or host permit. */

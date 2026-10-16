@@ -66,7 +66,6 @@ final class ZLinkSpotTimerRegistryTest {
                         scheduler,
                         ignored -> new PreviousTimerHandler(handled),
                         List.of(),
-                        null,
                         "test",
                         (timerName, operation) -> {
                             try {
@@ -178,7 +177,6 @@ final class ZLinkSpotTimerRegistryTest {
                         executor,
                         handlers,
                         List.of(),
-                        null,
                         "test",
                         (timerName, operation) -> operation.get());
         registry.setSpot(new TestSpot());
@@ -219,7 +217,6 @@ final class ZLinkSpotTimerRegistryTest {
                         executor,
                         handlers,
                         List.of(),
-                        null,
                         "test",
                         (timerName, operation) -> operation.get());
         registry.setSpot(new TestSpot());
@@ -256,7 +253,6 @@ final class ZLinkSpotTimerRegistryTest {
                         executor,
                         ignored -> handler,
                         List.of(),
-                        null,
                         "test",
                         (timerName, operation) -> {
                             enteredDispatch.set(true);
@@ -285,7 +281,6 @@ final class ZLinkSpotTimerRegistryTest {
                         executor,
                         ignored -> new BlockingTimerHandler(started, release),
                         List.of(),
-                        null,
                         "test",
                         (timerName, operation) -> operation.get());
         registry.setSpot(new TestSpot());
@@ -323,7 +318,6 @@ final class ZLinkSpotTimerRegistryTest {
                         executor,
                         ignored -> new PreviousTimerHandler(new AtomicBoolean()),
                         List.of(),
-                        null,
                         "test",
                         (timerName, operation) -> operation.get());
         registry.setSpot(new TestSpot());
@@ -369,7 +363,6 @@ final class ZLinkSpotTimerRegistryTest {
                                         ? new PreviousTimerHandler(previousHandled)
                                         : new ReplacementTimerHandler(replacementHandled),
                         List.of(),
-                        null,
                         "test",
                         (timerName, operation) -> operation.get());
         registry.setSpot(new TestSpot());
@@ -400,7 +393,6 @@ final class ZLinkSpotTimerRegistryTest {
                         sourceExecutor,
                         ignored -> new PreviousTimerHandler(sourceHandled),
                         List.of(),
-                        null,
                         "source",
                         (timerName, operation) -> {
                             queued.set(operation);
@@ -443,7 +435,6 @@ final class ZLinkSpotTimerRegistryTest {
                         targetExecutor,
                         ignored -> new RestoredTimerHandler(restored, restoredTick),
                         List.of(),
-                        null,
                         "target",
                         (timerName, operation) -> operation.get());
         target.setSpot(new TestSpot());
@@ -478,7 +469,6 @@ final class ZLinkSpotTimerRegistryTest {
                         executor,
                         ignored -> new PreviousTimerHandler(new AtomicBoolean()),
                         List.of(),
-                        null,
                         "test",
                         (timerName, operation) -> operation.get());
         registry.setSpot(new TestSpot());
@@ -512,7 +502,6 @@ final class ZLinkSpotTimerRegistryTest {
                         executor,
                         ignored -> new ReplacementTimerHandler(handled),
                         List.of(),
-                        null,
                         "test",
                         (timerName, operation) -> operation.get());
         registry.setSpot(new TestSpot());
@@ -550,7 +539,6 @@ final class ZLinkSpotTimerRegistryTest {
                         executor,
                         ignored -> new PreviousTimerHandler(new AtomicBoolean()),
                         List.of(),
-                        null,
                         "test",
                         (timerName, operation) ->
                                 operation
@@ -580,7 +568,6 @@ final class ZLinkSpotTimerRegistryTest {
                         executor,
                         ignored -> new ThrowingTimerHandler(new AtomicInteger()),
                         List.of(),
-                        null,
                         "freeze-observer",
                         (timerName, operation) -> operation.get());
         registry.setSpot(new TestSpot());
@@ -628,7 +615,6 @@ final class ZLinkSpotTimerRegistryTest {
                         executor,
                         ignored -> new ThrowingTimerHandler(new AtomicInteger()),
                         List.of(),
-                        null,
                         "stop-freeze-observer",
                         (timerName, operation) -> operation.get());
         registry.setSpot(new TestSpot());
