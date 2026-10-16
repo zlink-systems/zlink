@@ -1126,6 +1126,7 @@ export class ZLinkFrameworkRuntimeHost
     return await this.runWithShutdownDeadline(deadlineMs, async () => {
       const deadlineAtMs = performance.now() + (this.runtimeDeadline!.getTime() - Date.now());
       let stopping: Promise<void> | undefined;
+      let drain: Awaited<ReturnType<ZLinkRouteMeshRuntimeCoordinator['shutdownHost']>> | undefined;
       try {
         this.admission.close();
         if (this.runtimeState === ZLinkFrameworkRuntimeState.Preparing) {
@@ -1146,29 +1147,16 @@ export class ZLinkFrameworkRuntimeHost
           this.runtimeDeadline!,
           this.shutdownDeadline!.signal
         );
-        const drain = await shutdown;
+        drain = await shutdown;
         await unscopedStreamDrain;
         if (drain.kind === 'forceStopped' && drain.error !== undefined) {
           this.runtimeOrPreStartErrorSink.reportRuntimeTaskException('host shutdown', drain.error);
         }
         stopping = this.stop();
         await stopping;
-        if (drain.kind === 'forceStopped') {
-          return this.completeTermination({
-            outcome: ZLinkFrameworkTerminationOutcome.ForceStopped,
-            reason:
-              drain.reason === 'deadline_exceeded'
-                ? ZLinkFrameworkTerminationReason.DeadlineExceeded
-                : ZLinkFrameworkTerminationReason.TeardownFailed
-          });
-        }
-        if (performance.now() >= deadlineAtMs) {
+        if (drain.kind !== 'forceStopped' && performance.now() >= deadlineAtMs) {
           throw createDeadlineExceededError('Shutdown resource cleanup exceeded its deadline.');
         }
-        return this.completeTermination({
-          outcome: ZLinkFrameworkTerminationOutcome.Stopped,
-          reason: ZLinkFrameworkTerminationReason.None
-        });
       } catch (error) {
         if (stopping === undefined) {
           try {
@@ -1177,13 +1165,30 @@ export class ZLinkFrameworkRuntimeHost
             error = new AggregateError([error, cleanupError], 'Host shutdown failed.');
           }
         }
-        return this.completeTermination({
-          outcome: ZLinkFrameworkTerminationOutcome.ForceStopped,
-          reason: hasTeardownFailure(error)
-            ? ZLinkFrameworkTerminationReason.TeardownFailed
-            : ZLinkFrameworkTerminationReason.DeadlineExceeded
-        });
+        drain = {
+          kind: 'forceStopped',
+          reason:
+            (drain?.kind === 'forceStopped' && drain.reason !== 'deadline_exceeded') ||
+            hasTeardownFailure(error)
+              ? 'teardown_failed'
+              : 'deadline_exceeded',
+          error
+        };
       }
+      return this.completeTermination(
+        drain.kind === 'forceStopped'
+          ? {
+              outcome: ZLinkFrameworkTerminationOutcome.ForceStopped,
+              reason:
+                drain.reason === 'deadline_exceeded'
+                  ? ZLinkFrameworkTerminationReason.DeadlineExceeded
+                  : ZLinkFrameworkTerminationReason.TeardownFailed
+            }
+          : {
+              outcome: ZLinkFrameworkTerminationOutcome.Stopped,
+              reason: ZLinkFrameworkTerminationReason.None
+            }
+      );
     });
   }
 
