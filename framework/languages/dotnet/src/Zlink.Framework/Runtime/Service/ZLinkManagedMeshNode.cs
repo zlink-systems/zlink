@@ -5819,20 +5819,26 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         }
     }
 
-    private bool HasCurrentSource(RoutingId sourceRid, ulong routeGeneration)
-    {
-        return RunState(() =>
-        {
-            var admitted =
-                _peersByRid.TryGetValue(sourceRid, out var peer)
-                && peer.Admission is not null
-                && peer.State != MeshPeerState.NotRequired
-                && peer.RouteGeneration == routeGeneration;
-            if (admitted)
-                peer!.Liveness?.RecordReceived(Stopwatch.GetTimestamp());
-            return admitted;
-        });
-    }
+    // One node-lane turn decides the record's source authority and records
+    // its liveness (mesh-node/transport-liveness). The state travels as a
+    // value, so the per-record check creates no closure or delegate.
+    private bool HasCurrentSource(RoutingId sourceRid, ulong routeGeneration) =>
+        AwaitStateLane(
+            _lane.RunAsync(
+                static state =>
+                {
+                    var admitted =
+                        state.Node._peersByRid.TryGetValue(state.SourceRid, out var peer)
+                        && peer.Admission is not null
+                        && peer.State != MeshPeerState.NotRequired
+                        && peer.RouteGeneration == state.RouteGeneration;
+                    if (admitted)
+                        peer!.Liveness?.RecordReceived(Stopwatch.GetTimestamp());
+                    return admitted;
+                },
+                (Node: this, SourceRid: sourceRid, RouteGeneration: routeGeneration)
+            )
+        );
 
     internal static bool IsAllowedInfrastructureControl(
         IReadOnlyList<Message> parts,
@@ -6581,33 +6587,9 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             ServiceWireConstants.Command.ChannelRequest => MeshRecordKind.ChannelRequest,
             _ => throw new InvalidOperationException(),
         };
-        Func<IReadOnlyList<Message>, SubmitResult>? replyHandler = null;
-        if (request)
-        {
-            var nativeReply = received.Reply();
-            var replied = 0;
-            replyHandler = replyParts =>
-            {
-                if (Interlocked.CompareExchange(ref replied, 1, 0) != 0)
-                    return SubmitResult.InvalidState;
-                var (preparedReply, wire) = PrepareNativeTerminalReply(
-                    sourceRid,
-                    nativeReply,
-                    application.Correlation,
-                    RequestResult.Ok,
-                    0,
-                    replyParts
-                );
-                try
-                {
-                    return SubmitNativeTerminalReply(preparedReply);
-                }
-                finally
-                {
-                    ZLinkMessageParts.DisposeAll(wire);
-                }
-            };
-        }
+        var replyHandler = request
+            ? CreateNativeReplyHandler(sourceRid, received.Reply(), application.Correlation)
+            : null;
         return EnqueueOwned(
             MailboxKey.ForNode(MeshReadyDomains.Application, application.ChannelName),
             new MeshReceiveRecord(
@@ -6638,6 +6620,38 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             true,
             ownership.TakeApplicationOwner()
         );
+    }
+
+    // The request's one-shot native reply capability. Its capture lives in
+    // this method, so the send path of ProcessReceived allocates none of it.
+    private Func<IReadOnlyList<Message>, SubmitResult> CreateNativeReplyHandler(
+        RoutingId sourceRid,
+        ReplyOperation nativeReply,
+        ulong correlation
+    )
+    {
+        var replied = 0;
+        return replyParts =>
+        {
+            if (Interlocked.CompareExchange(ref replied, 1, 0) != 0)
+                return SubmitResult.InvalidState;
+            var (preparedReply, wire) = PrepareNativeTerminalReply(
+                sourceRid,
+                nativeReply,
+                correlation,
+                RequestResult.Ok,
+                0,
+                replyParts
+            );
+            try
+            {
+                return SubmitNativeTerminalReply(preparedReply);
+            }
+            finally
+            {
+                ZLinkMessageParts.DisposeAll(wire);
+            }
+        };
     }
 
     private bool ProcessCanonicalActorJoin(

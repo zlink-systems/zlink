@@ -309,6 +309,90 @@ public sealed class MeshPermitHandoffTests
         Assert.Equal(0UL, fixture.Queue.GetStatus().PermitsInUse);
     }
 
+    [Fact]
+    public async Task RawIngress_SourceAuthorityAdmitsOnlyTheCurrentRouteAndRecordsItsLiveness()
+    {
+        await using var fixture = await RawIngressFixture.CreateAsync(4, "source-authority");
+        var peer = fixture.Peer;
+        peer.Liveness = new ZLinkServiceLiveness(0);
+        var admittedDeadline = peer.Liveness.DeadlineTimestamp;
+
+        // A record from a route generation the node did not observe is not
+        // admitted, is not delivered and records no liveness.
+        var current = peer.RouteGeneration;
+        peer.RouteGeneration = current + 1;
+        fixture.SupplyNodeSend(0);
+        Drain(fixture.Node, CancellationToken.None);
+        Assert.Equal(0UL, fixture.Queue.GetStatus().PermitsInUse);
+        Assert.Equal(0U, fixture.Node.Status().PendingApplicationMessages);
+        Assert.Equal(admittedDeadline, peer.Liveness.DeadlineTimestamp);
+
+        // A peer that no longer requires a connection is not a current source.
+        peer.RouteGeneration = current;
+        peer.State = MeshPeerState.NotRequired;
+        fixture.SupplyNodeSend(1);
+        Drain(fixture.Node, CancellationToken.None);
+        Assert.Equal(0U, fixture.Node.Status().PendingApplicationMessages);
+        Assert.Equal(admittedDeadline, peer.Liveness.DeadlineTimestamp);
+
+        // The current admitted route is delivered and its receipt extends the
+        // peer's liveness deadline in the same node turn.
+        peer.State = MeshPeerState.Admitted;
+        fixture.SupplyNodeSend(2);
+        Drain(fixture.Node, CancellationToken.None);
+        Assert.Equal(1U, fixture.Node.Status().PendingApplicationMessages);
+        Assert.True(peer.Liveness.DeadlineTimestamp > admittedDeadline);
+        Assert.Equal(1, DrainAndDisposeAllApplicationRecords(fixture.Node));
+    }
+
+    [Fact]
+    public async Task RawIngress_OnlyARequestCarriesItsOneShotNativeReply()
+    {
+        await using var fixture = await RawIngressFixture.CreateAsync(4, "reply-capture");
+        fixture.SupplyNodeSend(0);
+        var request = fixture.SupplyNodeRequest(7);
+        Drain(fixture.Node, CancellationToken.None);
+        if (fixture.Node.Status().PendingApplicationMessages < 2)
+            Drain(fixture.Node, CancellationToken.None);
+
+        using var ready = new MeshReadyBatch();
+        fixture.Node.DrainReady(MeshReadyDomains.Application, ready, RecvFlags.DontWait);
+        Assert.Equal(1, ready.Count);
+        using var claim = ready.TakeClaim(0);
+        using var received = new MeshReceiveBatch();
+        Assert.True(claim.Receive(received, RecvFlags.DontWait));
+        Assert.Equal(2, received.Count);
+        Assert.Equal(MeshRecordKind.NodeSend, received[0].Kind);
+        Assert.Null(received[0].CaptureReplyRoute());
+        Assert.Equal(MeshRecordKind.NodeRequest, received[1].Kind);
+        var reply = received[1].CaptureReplyRoute();
+        Assert.NotNull(reply);
+
+        // The capability submits one terminal on the native reply and then
+        // refuses any second use with the original InvalidState result.
+        using var replyPart = Message.From("reply-7");
+        Assert.Equal(SubmitResult.Ok, reply([replyPart]));
+        Assert.Equal(SubmitResult.InvalidState, reply([replyPart]));
+        fixture.AwaitDealerCompletion();
+        var replied = await request.Reply.WaitAsync(TimeSpan.FromSeconds(5));
+        try
+        {
+            Assert.True(
+                ZLinkServiceWireCodec.TryDecodeReply(
+                    replied[0].AsReadOnlySpan(),
+                    out var terminal,
+                    out _
+                )
+            );
+            Assert.Equal(7UL, terminal.Correlation);
+        }
+        finally
+        {
+            foreach (var part in replied)
+                part.Dispose();
+        }
+    }
+
     private static int DrainAndDisposeAllApplicationRecords(ZLinkManagedMeshNode node)
     {
         using var ready = new MeshReadyBatch();
@@ -332,8 +416,10 @@ public sealed class MeshPermitHandoffTests
         private IDealerSocket _dealer = null!;
         private IRouterSocket _socket = null!;
         private IPoller _poller = null!;
+        private IPoller? _completionPoller;
 
         internal Systems.Zlink.IContext Context { get; private init; } = null!;
+        internal ZLinkMeshPeer Peer { get; private init; } = null!;
         internal ZLinkApplicationJobQueue Queue { get; private init; } = null!;
         internal ZLinkManagedMeshNode Node { get; private init; } = null!;
 
@@ -360,6 +446,7 @@ public sealed class MeshPermitHandoffTests
             );
             var node = new ZLinkManagedMeshNode(context, name, applicationJobQueue: queue);
             AddAdmittedPeer(node, sourceRid, SourceGeneration, routeGeneration);
+            var peer = Field<Dictionary<RoutingId, ZLinkMeshPeer>>(node, "_peersByRid")[sourceRid];
             SetField(node, "_socket", socket);
             var poller = CreateReceivePoller(socket);
             SetField(node, "_poller", poller);
@@ -367,6 +454,7 @@ public sealed class MeshPermitHandoffTests
             return new RawIngressFixture
             {
                 Context = context,
+                Peer = peer,
                 Queue = queue,
                 Node = node,
                 _dealer = dealer,
@@ -385,6 +473,44 @@ public sealed class MeshPermitHandoffTests
                 ),
                 index
             );
+
+        internal RequestSubmission SupplyNodeRequest(int correlation)
+        {
+            using var header = Message.From(
+                ZLinkServiceWireCodec.EncodeApplication(
+                    ServiceWireConstants.Command.NodeRequest,
+                    checked((ulong)correlation),
+                    null,
+                    false
+                )
+            );
+            using var payload = Message.From(
+                ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipart(
+                    new ReadOnlyMemory<byte>[] { new byte[] { checked((byte)correlation) } }
+                )
+            );
+            // A dealer request needs a completion owner; the test waits on it.
+            if (_completionPoller is null)
+            {
+                _completionPoller = Systems.Zlink.Zlink.CreatePoller();
+                _completionPoller.Add(_dealer, PollEventFlags.PollCompletion, 1);
+            }
+            var submission = _dealer
+                .Request()
+                .Message(header)
+                .Message(payload)
+                .Timeout(TimeSpan.FromSeconds(30))
+                .Async();
+            Assert.Equal(SubmitResult.Ok, submission.Result);
+            return submission;
+        }
+
+        // Blocks until the dealer's completion owner reports a ready completion.
+        internal void AwaitDealerCompletion()
+        {
+            var events = new PollEvent[1];
+            Assert.Equal(1, _completionPoller!.Wait(events, TimeSpan.FromSeconds(5)));
+        }
 
         internal void Supply(byte[] head, int index)
         {
@@ -405,6 +531,7 @@ public sealed class MeshPermitHandoffTests
             SetField(Node, "_poller", null);
             await Node.DisposeAsync();
             Queue.Dispose();
+            _completionPoller?.Dispose();
             _poller.Dispose();
             await _socket.DisposeAsync();
             await _dealer.DisposeAsync();
