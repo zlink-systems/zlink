@@ -557,10 +557,13 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
      * The owner lease work the location runtime runs after it holds the lease: a host that left
      * Preparing republishes its descriptors; a Preparing host runs the given startup step.
      */
-    private Supplier<CompletionStage<Void>> ownerLeaseWork(
+    private java.util.function.Function<Boolean, CompletionStage<Void>> ownerLeaseWork(
             Supplier<CompletionStage<Void>> preparing) {
-        return () -> {
+        return admissionWasOpen -> {
             ZLinkFrameworkRuntimeState state = runtimeState.get();
+            if (admissionWasOpen && state != ZLinkFrameworkRuntimeState.PREPARING) {
+                return CompletableFuture.completedFuture(null);
+            }
             return state == ZLinkFrameworkRuntimeState.PREPARING
                     ? preparing.get()
                     : recoverOwnerLeaseDescriptors(state);
@@ -618,9 +621,9 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
 
     /**
      * Location runtime §5: the one place that decides how owner-bound startup ends. A confirmed
-     * publication enters Serving. An unconfirmed one fails the stage, so the location runtime
-     * closes admission before startup finishes as Preparing and runs it at the next renewal. Any
-     * other failure, including another owner's definite rejection, is a startup error.
+     * publication enters Serving. An unconfirmed one leaves admission open and startup finishes as
+     * Preparing; each renewal retries it. Any other failure, including another owner's definite
+     * rejection, is a startup error.
      */
     private CompletionStage<Void> endOwnerBoundStartup(CompletionStage<Void> ownerBoundStartup) {
         return ownerBoundStartup
@@ -633,7 +636,12 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                                     systems.zlink.framework.runtime.internal.locations
                                             .ZLinkObjectServerDescriptorPublisher
                                             .UnconfirmedPublicationException) {
-                                return CompletableFuture.failedFuture(cause);
+                                Logger.getLogger(ZLinkFrameworkRuntime.class.getName())
+                                        .log(
+                                                java.util.logging.Level.WARNING,
+                                                "Startup descriptor publication unconfirmed",
+                                                cause);
+                                return CompletableFuture.completedFuture(null);
                             }
                             failStartup(cause);
                             return CompletableFuture.failedFuture(cause);

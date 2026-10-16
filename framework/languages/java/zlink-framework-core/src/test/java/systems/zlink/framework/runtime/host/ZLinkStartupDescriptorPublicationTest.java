@@ -1,5 +1,6 @@
 package systems.zlink.framework.runtime.host;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
@@ -12,6 +13,7 @@ import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.framework.channels.ZLinkRouteMeshRuntimeOptions;
 import systems.zlink.framework.locationprovider.ZLinkLocationStore;
 import systems.zlink.framework.locationprovider.ZLinkStoreCancellation;
 import systems.zlink.framework.locationprovider.ZLinkStoreKey;
@@ -48,6 +50,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -70,6 +73,11 @@ final class ZLinkStartupDescriptorPublicationTest {
             assertEquals(ZLinkFrameworkRuntimeState.PREPARING, runtime.state());
             assertFalse(runtime.isReady());
             assertTrue(descriptors(store.inner).isEmpty());
+            var placement =
+                    ((ZLinkRouteMeshRuntimeOptions) runtime.routeMeshRuntime()).mesh("game");
+            var rejected =
+                    assertThrows(RuntimeException.class, () -> placement.setPlacementWeight(90));
+            assertTrue(rejected.getCause().getMessage().contains("admission deadline has expired"));
 
             store.available.set(true);
             assertTrue(renew(runtime));
@@ -78,6 +86,25 @@ final class ZLinkStartupDescriptorPublicationTest {
             assertEquals(
                     ZLinkFrameworkRuntimeState.SERVING,
                     descriptors(store.inner).getFirst().state());
+        }
+    }
+
+    @Test
+    void unconfirmedPublicationKeepsPublicOwnerAdmissionOpen() throws Exception {
+        var store =
+                new LostDescriptorResponseStore(ZLinkFrameworkRuntimeState.PREPARING, false, false);
+        try (var runtime = start(options(store, "publication-admission", Duration.ofSeconds(10)))) {
+            ZLinkFrameworkRuntimeTestAccess.startupCompletion(runtime)
+                    .toCompletableFuture()
+                    .get(WAIT_SECONDS, TimeUnit.SECONDS);
+            assertEquals(ZLinkFrameworkRuntimeState.PREPARING, runtime.state());
+            // Restore the provider without renewing the lease. A public descriptor mutation must
+            // still be admitted under the lease that startup already confirmed.
+            store.losing.set(false);
+            var placement =
+                    ((ZLinkRouteMeshRuntimeOptions) runtime.routeMeshRuntime()).mesh("game");
+            assertDoesNotThrow(() -> placement.setPlacementWeight(90));
+            assertEquals(90, placement.placementWeight());
         }
     }
 
@@ -112,9 +139,14 @@ final class ZLinkStartupDescriptorPublicationTest {
             } else {
                 assertTrue(descriptors(store.inner).isEmpty());
             }
-            assertFalse(renew(runtime));
-            assertEquals(ZLinkFrameworkRuntimeState.PREPARING, runtime.state());
-            assertFalse(runtime.isReady());
+            for (int renewal = 0; renewal < 2; renewal++) {
+                int attemptsBeforeRenewal = store.publicationRequests.get();
+                assertTrue(renew(runtime));
+                assertTrue(store.publicationRequests.get() > attemptsBeforeRenewal);
+                assertTrue(ZLinkFrameworkRuntimeTestAccess.ownerAdmissionOpen(runtime));
+                assertEquals(ZLinkFrameworkRuntimeState.PREPARING, runtime.state());
+                assertFalse(runtime.isReady());
+            }
 
             store.losing.set(false);
             assertTrue(renew(runtime));
@@ -343,6 +375,7 @@ final class ZLinkStartupDescriptorPublicationTest {
         private final ZLinkInMemoryProviderLocationStore inner =
                 new ZLinkInMemoryProviderLocationStore();
         private final AtomicBoolean losing = new AtomicBoolean(true);
+        private final AtomicInteger publicationRequests = new AtomicInteger();
         private final AtomicReference<ZLinkStoreKey> lostRow = new AtomicReference<>();
         private final ZLinkFrameworkRuntimeState failedState;
         private final boolean applied;
@@ -362,6 +395,7 @@ final class ZLinkStartupDescriptorPublicationTest {
         @Override
         public CompletionStage<ZLinkStoreReadResult> read(
                 ZLinkStoreKey key, ZLinkStoreCancellation cancellation) {
+            if (key.equals(lostRow.get())) publicationRequests.incrementAndGet();
             if (losing.get() && !confirmingReadAvailable && key.equals(lostRow.get())) {
                 return CompletableFuture.failedFuture(
                         new IllegalStateException("location store read unavailable"));
@@ -388,6 +422,7 @@ final class ZLinkStartupDescriptorPublicationTest {
                                                     + "\""))) {
                 return inner.write(request, cancellation);
             }
+            publicationRequests.incrementAndGet();
             lostRow.set(put.key());
             return (applied
                             ? inner.write(request, cancellation)
