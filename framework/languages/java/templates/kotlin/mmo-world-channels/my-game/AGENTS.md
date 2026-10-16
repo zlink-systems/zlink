@@ -2,7 +2,7 @@
 
 ## Project overview
 
-This Kotlin project (Kotlin 2.3.10 on a Java 25 toolchain, built with Gradle) is an MMORPG example with two independent worlds, each with switchable field channels. It runs an Accounts node that lists the worlds over HTTP, two Session nodes (`sessionA` and `sessionB`), three Channel nodes (`channelA1`, `channelA2`, and `channelB`), and Redis for location and relocation state. `build.gradle.kts` pins the ZLink Framework packages to `0.30.1` (`frameworkVersion`) and the ZLink binding to `1.19.0` (`bindingVersion`).
+This Kotlin project (Kotlin 2.3.21 on a Java 25 toolchain, built with Gradle) is an MMORPG example with two independent worlds, each with switchable field channels. It runs an Accounts node that lists the worlds over HTTP, two Session nodes (`sessionA` and `sessionB`), three Channel nodes (`channelA1`, `channelA2`, and `channelB`), and Redis for location and relocation state. `build.gradle.kts` pins the ZLink Framework packages to `0.30.1` (`frameworkVersion`) and the ZLink binding to `1.19.1` (`bindingVersion`).
 
 The project layout and feature procedure below describe where to add gameplay. The [README](README.md) covers prerequisites, deployment, and known issues in the public packages. [zlink.structure.json](zlink.structure.json) describes the initial node composition and scenarios; Framework and Redis manage object placement at runtime.
 

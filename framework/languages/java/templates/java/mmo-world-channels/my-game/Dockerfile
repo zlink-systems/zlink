@@ -1,5 +1,5 @@
-ARG JDK_IMAGE=eclipse-temurin:25.0.1_8-jdk-noble
-ARG JRE_IMAGE=eclipse-temurin:25.0.1_8-jre-noble
+ARG JDK_IMAGE=eclipse-temurin:25.0.2_10-jdk-noble
+ARG JRE_IMAGE=eclipse-temurin:25.0.2_10-jre-noble
 ARG DOCKER_CLI_IMAGE=docker:28.5.1-cli
 FROM ${JDK_IMAGE} AS build
 WORKDIR /src

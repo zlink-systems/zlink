@@ -10,9 +10,9 @@ flowchart LR
 
 ## Prerequisites
 
-Install Docker with Compose v2 and access to a Linux container daemon. Bash or PowerShell 7 runs the scripts. Docker builds use Eclipse Temurin JDK and JRE `25.0.1+8` and Docker CLI `28.5.1`; the image references are at the top of `Dockerfile`. Network access to Maven Central and the Redis container registry is required. Host debugging also requires JDK 25.
+Install Docker with Compose v2 and access to a Linux container daemon. Bash or PowerShell 7 runs the scripts. Docker builds use Eclipse Temurin JDK and JRE `25.0.2+10` and Docker CLI `28.5.1`; the image references are at the top of `Dockerfile`. Network access to Maven Central and the Redis container registry is required. Host debugging also requires JDK 25.
 
-`build.gradle.kts` pins Framework `0.30.1` and binding `1.19.0`. Gradle resolves them from Maven Central only. That Framework version must be published before building this setup; do not add repository source references or a private repository.
+`build.gradle.kts` pins Framework `0.30.1` and binding `1.19.1`. Gradle resolves them from Maven Central only. That Framework version must be published before building this setup; do not add repository source references or a private repository.
 
 The Gradle wrapper and both server modules are included. Copy this directory to build it independently.
 

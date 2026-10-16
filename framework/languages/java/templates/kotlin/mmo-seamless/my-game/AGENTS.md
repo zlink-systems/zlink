@@ -2,7 +2,7 @@
 
 ## Project overview
 
-This Kotlin project (Kotlin 2.3.10 on a Java 25 toolchain, built with Gradle) is an MMO server example in which players move across Zone boundaries. It runs a Session gateway for connections, Zone hosts A and B, an Instance host for Dungeons, and Redis for location and relocation state. `build.gradle.kts` pins the ZLink Framework packages to `0.30.1` (`frameworkVersion`) and the ZLink binding to `1.19.0` (`bindingVersion`).
+This Kotlin project (Kotlin 2.3.21 on a Java 25 toolchain, built with Gradle) is an MMO server example in which players move across Zone boundaries. It runs a Session gateway for connections, Zone hosts A and B, an Instance host for Dungeons, and Redis for location and relocation state. `build.gradle.kts` pins the ZLink Framework packages to `0.30.1` (`frameworkVersion`) and the ZLink binding to `1.19.1` (`bindingVersion`).
 
 The project layout and feature procedure below describe where to add gameplay. The [README](README.md) covers prerequisites, deployment, and the scenario assertions. [zlink.structure.json](zlink.structure.json) describes the initial node composition and scenarios; Framework and Redis manage object placement at runtime.
 

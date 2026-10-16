@@ -13,7 +13,7 @@ flowchart LR
 
 - Docker with Compose v2, and PowerShell 7 on Windows.
 - Network access to Maven Central and the Redis container registry.
-- Published ZLink Framework 0.30.1 and binding 1.19.0. Versions are owned by `build.gradle.kts`.
+- Published ZLink Framework 0.30.1 and binding 1.19.1. Versions are owned by `build.gradle.kts`.
 
 The Gradle wrapper and all server modules are included. Copy this directory to build it independently. On Windows, run the commands in PowerShell 7; launchers use the JDK selected by Gradle and enable native access.
 
@@ -39,7 +39,7 @@ Docker runs the Java e2e runner and every node role in containers. Nodes share t
 
 For local process debugging, install JDK 25 and use `./run-e2e.sh --local` or `pwsh -NoProfile -File ./run-e2e.ps1 -Local`. Add `--no-build` or `-NoBuild` to reuse a local build. Docker uses its image layer cache.
 
-> **Base images.** Dockerfile ARG defaults pin Eclipse Temurin JDK/JRE 25.0.1+8 and Docker CLI 28.5.1. Replace these defaults when adopting a deployment base image.
+> **Base images.** Dockerfile ARG defaults pin Eclipse Temurin JDK/JRE 25.0.2+10 and Docker CLI 28.5.1. Replace these defaults when adopting a deployment base image.
 
 
 Linux or WSL:

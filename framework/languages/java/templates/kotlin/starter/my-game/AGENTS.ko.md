@@ -1,6 +1,6 @@
 # MyGame 개발 지침
 
-이 Kotlin 셋업(Java 25 toolchain 위의 Kotlin 2.3.10)은 Session node, Redis hosting, 진단, stdin 제어와 연결 e2e 실행기를 제공한다. 게임 상태와 게임 패킷은 포함하지 않는다. 빌드·실행·배포 명령은 [README](README.md)가 소유하며, [영어 지침](AGENTS.md)도 같은 구성을 설명한다.
+이 Kotlin 셋업(Java 25 toolchain 위의 Kotlin 2.3.21)은 Session node, Redis hosting, 진단, stdin 제어와 연결 e2e 실행기를 제공한다. 게임 상태와 게임 패킷은 포함하지 않는다. 빌드·실행·배포 명령은 [README](README.md)가 소유하며, [영어 지침](AGENTS.md)도 같은 구성을 설명한다.
 
 ## Node 책임
 

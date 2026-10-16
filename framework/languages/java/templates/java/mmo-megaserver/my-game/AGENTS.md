@@ -2,7 +2,7 @@
 
 ## Project overview
 
-This Java 25 project is an MMO megaserver example in which every player connects to one server group and a crowded region opens another region instance. It runs a Session gateway for connections, Region hosts A and B that hold capacity-limited Region instances, an Instance host for Dungeons, and Redis for location and relocation state. `build.gradle.kts` pins the ZLink Framework to `0.30.1` and the binding to `1.19.0`.
+This Java 25 project is an MMO megaserver example in which every player connects to one server group and a crowded region opens another region instance. It runs a Session gateway for connections, Region hosts A and B that hold capacity-limited Region instances, an Instance host for Dungeons, and Redis for location and relocation state. `build.gradle.kts` pins the ZLink Framework to `0.30.1` and the binding to `1.19.1`.
 
 The project layout below describes where to add gameplay, and "Developing from this sample" describes how to carry its features into your own project. The [README](README.md) covers prerequisites, deployment, and known issues in the public packages. [zlink.structure.json](zlink.structure.json) describes the initial node composition and scenarios; Framework and Redis manage object placement at runtime.
 

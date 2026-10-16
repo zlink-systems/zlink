@@ -2,7 +2,7 @@
 
 ## Project overview
 
-This Kotlin project (Kotlin 2.3.10 on a Java 25 toolchain, built with Gradle) is a duel server that pairs two players through HTTP and runs the duel over ZLink STREAM. It runs an HTTP lobby, a Session gateway for connections, two Match hosts (`matchA` and `matchB`), and Redis for location and relocation state. `build.gradle.kts` pins the ZLink Framework packages to `0.30.1` (`frameworkVersion`) and the ZLink binding to `1.19.0` (`bindingVersion`).
+This Kotlin project (Kotlin 2.3.21 on a Java 25 toolchain, built with Gradle) is a duel server that pairs two players through HTTP and runs the duel over ZLink STREAM. It runs an HTTP lobby, a Session gateway for connections, two Match hosts (`matchA` and `matchB`), and Redis for location and relocation state. `build.gradle.kts` pins the ZLink Framework packages to `0.30.1` (`frameworkVersion`) and the ZLink binding to `1.19.1` (`bindingVersion`).
 
 The project layout and feature procedure below describe where to add gameplay. The [README](README.md) covers prerequisites, deployment, and known issues in the public packages. [zlink.structure.json](zlink.structure.json) describes the initial node composition and scenarios; Framework and Redis manage object placement at runtime.
 

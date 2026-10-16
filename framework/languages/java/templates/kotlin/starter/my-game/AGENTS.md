@@ -1,6 +1,6 @@
 # MyGame development guide
 
-This Kotlin starter (Kotlin 2.3.10 on a Java 25 toolchain) provides one Session node, Redis hosting, diagnostics, stdin control, and a connection e2e runner. It has no game state or game packets. [README](README.md) owns build, run, and deployment instructions; [한국어](AGENTS.ko.md) provides the same development guide in Korean.
+This Kotlin starter (Kotlin 2.3.21 on a Java 25 toolchain) provides one Session node, Redis hosting, diagnostics, stdin control, and a connection e2e runner. It has no game state or game packets. [README](README.md) owns build, run, and deployment instructions; [한국어](AGENTS.ko.md) provides the same development guide in Korean.
 
 ## Node responsibilities
 
