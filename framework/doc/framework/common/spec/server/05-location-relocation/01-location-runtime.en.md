@@ -1685,6 +1685,9 @@ store record golden fixture. Each item maps to one test.
   startup succeeds and the four targets above are blocked.
 - A host that finished startup without a lease claims at each renew interval and
   publishes descriptors only after the lease is held.
+- A host that holds the lease but can't confirm its descriptor publication succeeds in
+  startup, stays `Preparing`, and retries the publication at each renew interval. A definite
+  rejection because another owner holds the row is a startup error.
 - The claim results `Conflict` and `GenerationExhausted` are startup errors.
 - Cancelling startup ends it as cancelled; an already committed claim is released and
   no heartbeat starts.
