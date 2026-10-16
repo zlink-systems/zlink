@@ -1,7 +1,8 @@
 # Framework archives are static; dependencies retain the triplet's linkage.
 vcpkg_check_linkage(ONLY_STATIC_LIBRARY)
 
-# Replace the inherited SHA512 with the published framework-cpp/v0.30.1 source archive digest.
+# scripts/dev/release-check.sh --write framework cpp writes SHA512 from the archive that
+# framework/languages/cpp/scripts/package-source.py builds on the release branch before the tag.
 vcpkg_download_distfile(ARCHIVE
     URLS "https://github.com/zlink-systems/zlink/releases/download/framework-cpp/v${VERSION}/zlink-framework-cpp-${VERSION}.tar.gz"
     FILENAME "zlink-framework-cpp-${VERSION}.tar.gz"
@@ -9,7 +10,7 @@ vcpkg_download_distfile(ARCHIVE
 )
 vcpkg_extract_source_archive(SOURCE_PATH ARCHIVE "${ARCHIVE}")
 if(NOT EXISTS "${SOURCE_PATH}/runtime/protocol/generated/cpp/service_wire_constants.hpp")
-    message(FATAL_ERROR "The framework release archive is incomplete. Rebuild it with cmake/prepare-source-archive.cmake and update SHA512.")
+    message(FATAL_ERROR "The framework release archive is incomplete. Rebuild it with framework/languages/cpp/scripts/package-source.py.")
 endif()
 
 vcpkg_cmake_configure(
