@@ -289,9 +289,19 @@ test('pre-cutover rollback restores the source queue and state before one-way Se
       }
     ],
     sessionRelocationWire: () => ({
-      async requestSessionRelocationSeal() {
+      async requestSessionRelocationSeal(
+        _meshName: string,
+        _targetNodeRid: unknown,
+        seal: ServiceSessionRelocationSeal
+      ) {
         events.push('session-sealed');
-        return undefined as never;
+        return {
+          relocation: seal.relocation,
+          coordinator: seal.coordinator,
+          actor: seal.actor,
+          session: seal.session,
+          sealResult: 'sealed'
+        } satisfies ServiceSessionRelocationSealed;
       },
       async sendSessionRelocationRoute(
         _meshName: string,
@@ -345,6 +355,7 @@ test('Session relocation is exact 42-to-43 and command 44 is one-way', async () 
     }
   };
   const sealed: ServiceSessionRelocationSealed = {
+    sealResult: 'sealed',
     relocation: seal.relocation,
     coordinator: seal.coordinator,
     actor: seal.actor,
@@ -379,6 +390,7 @@ test('Session relocation is exact 42-to-43 and command 44 is one-way', async () 
     }
   };
   const selfSealed: ServiceSessionRelocationSealed = {
+    sealResult: 'sealed',
     relocation: selfSeal.relocation,
     coordinator: selfSeal.coordinator,
     actor: selfSeal.actor,
@@ -1509,6 +1521,7 @@ test('ActorJoin target invalidates a previous-owner Actor route before lifecycle
     lane: Promise.resolve(),
     cutoverReceived: true,
     boundaryRelay: [],
+    releaseJoinAdmission: () => undefined,
     releaseActivation: () => undefined
   };
   const originalWarn = console.warn;
@@ -1638,6 +1651,7 @@ test('target admission opens after one publication-clear conflict and a later cl
     lane: Promise.resolve(),
     cutoverReceived: true,
     boundaryRelay: [],
+    releaseJoinAdmission: () => undefined,
     releaseActivation: () => undefined
   };
   const originalWarn = console.warn;
@@ -1771,6 +1785,11 @@ test('public ActorJoin profile crosses the Host Prepare READY DATA CUTOVER owner
 
 test('canonical ActorJoin admission recovery crosses command 28 into command 40 without preloaded admission state', async () => {
   const harness = createActorJoinHostHarness({ canonicalRecovery: true });
+  const prepare = harness.targetActorManager.prepareRelocationActor;
+  harness.targetActorManager.prepareRelocationActor = async (...args) => {
+    assert.equal(harness.canonicalAdmissionState(), 'restoring', 'PREPARE claims before factory');
+    return await prepare(...args);
+  };
   try {
     const relocated = await harness.relocate();
     await harness.targetIdle();
@@ -1819,7 +1838,8 @@ test('canonical ActorJoin admission recovery crosses command 28 into command 40 
   }
 });
 
-test('canonical ActorJoin recovery retains the admitted typed reply content type inside outer multipart', async () => {
+test('canonical ActorJoin recovery retains admission and typed reply until attempt terminal', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
   const actorRef = {
     actorId: 'actor-canonical-reply-type',
     objectGeneration: 5n,
@@ -1895,14 +1915,67 @@ test('canonical ActorJoin recovery retains the admitted typed reply content type
     replyContentType: SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE,
     reply
   };
+  const release = DefaultZLinkSpotManager.prototype.beginActorJoinRelocation.call(
+    manager as never,
+    handoffId
+  );
   try {
     await DefaultZLinkSpotManager.prototype.restoreCanonicalActorJoinRecovery.call(
       manager as never,
       recovery
     );
     assert.equal(preparedContentType, 'application/json');
+    t.mock.timers.tick(30_001);
+    assert.notEqual(
+      admissions.get(handoffId),
+      undefined,
+      'started restore owns admission lifetime'
+    );
   } finally {
-    admissions.delete(handoffId);
+    release();
+    assert.equal(admissions.get(handoffId), undefined, 'unsuccessful terminal releases admission');
+  }
+});
+
+test('canonical ActorJoin admission expires while only prepared', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const admissions = new ZLinkFormalRemoteActorAdmissionRegistry();
+  const actorRef = {
+    actorId: 'prepared-only',
+    objectGeneration: 5n,
+    nodeRid: 'source',
+    meshName: 'mesh-a'
+  };
+  admissions.begin({
+    actorId: actorRef.actorId,
+    actorType: 'Player',
+    actorRef,
+    spotId: 'room-target',
+    targetSpotGeneration: 6n,
+    expectedMembershipEpoch: 1n,
+    requestFingerprint: '',
+    transferId: 'prepared-only'
+  });
+  admissions.complete('prepared-only', { accepted: true, actorRef });
+  t.mock.timers.tick(30_001);
+  assert.equal(admissions.get('prepared-only'), undefined);
+});
+
+test('canonical ActorJoin factory failure releases the claimed admission', async () => {
+  const harness = createActorJoinHostHarness({ canonicalRecovery: true });
+  harness.targetActorManager.prepareRelocationActor = async () => {
+    assert.equal(harness.canonicalAdmissionState(), 'restoring');
+    throw new Error('Canonical target factory failed.');
+  };
+  try {
+    await assert.rejects(harness.relocate(), (error: unknown) => {
+      assert.ok(error instanceof ZLinkFrameworkException);
+      assert.equal(error.kind, ZLinkFrameworkErrorKind.InternalFailure);
+      return true;
+    });
+    assert.equal(harness.canonicalAdmissionState(), undefined);
+  } finally {
+    await harness.dispose();
   }
 });
 
@@ -2867,6 +2940,7 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
     }
   };
   const targetSpotManager = {
+    beginActorJoinRelocation: DefaultZLinkSpotManager.prototype.beginActorJoinRelocation,
     formalRemoteActorAdmissions: admissions,
     formalRemoteTransfers: { delete() {} },
     activations: { resolve: () => undefined },
@@ -3248,6 +3322,8 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
     targetActorManager,
     targetAuthorityGeneration: () => targetNativeAuthority?.authorityOwnerGeneration,
     canonicalRecoveryIdentity: () => restoredCanonicalRecovery,
+    canonicalAdmissionState: () =>
+      canonicalHandoffId === undefined ? undefined : admissions.get(canonicalHandoffId)?.state,
     canonicalAdmissionActorNodeRid: () => {
       if (canonicalHandoffId === undefined) return undefined;
       return String(admissions.get(canonicalHandoffId)?.admission.actorRef.nodeRid);

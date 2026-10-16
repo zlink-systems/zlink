@@ -10,5 +10,7 @@ import java.lang.annotation.Target;
 public @interface ZLinkSpotSubscription {
     String spotNodeName() default "";
 
+    String channelName();
+
     String topic();
 }

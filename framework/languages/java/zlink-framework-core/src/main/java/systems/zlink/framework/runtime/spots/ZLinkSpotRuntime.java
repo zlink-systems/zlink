@@ -158,7 +158,6 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
     private final ZLinkSpotPublisherRuntime publishers;
     private final ZLinkHandlerActivator handlerFactory;
     private final ZLinkDispatchErrorReporter dispatchErrors;
-    private final ZLinkRuntimeEventDispatcher eventDispatcher;
     private final Executor handlerExecutor;
     private final systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue
             applicationJobQueue;
@@ -433,7 +432,6 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         this.serializer = Objects.requireNonNull(serializer, "serializer");
         this.routeMessages = new ZLinkSpotRouteMessages(this.serializer);
         this.handlerFactory = handlerFactory;
-        this.eventDispatcher = eventDispatcher;
         this.handlerExecutor =
                 ZLinkFlowContext.propagating(
                         Objects.requireNonNull(registration.handlerExecutor(), "handlerExecutor"));
@@ -4699,7 +4697,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                             "canonical actor Join target fence is not local"));
         }
         ZLinkActorSpotRoutePackets.TransferRequest request =
-                canonicalActorJoinRequest(join, sourcePeerRid);
+                canonicalActorJoinRequest(join, sourcePeerRid, defaultRequestTimeout);
         if (join.entry()) {
             EntrySpotActivation entry = entrySpotActivationFor(target.id());
             if (entry == null || entry.backendSpot.lifecycleGeneration() != target.generation()) {
@@ -4758,7 +4756,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
     }
 
     static ZLinkActorSpotRoutePackets.TransferRequest canonicalActorJoinRequest(
-            ServiceWirePilotCodec.ActorJoin28 join, RoutingId sourcePeerRid) {
+            ServiceWirePilotCodec.ActorJoin28 join, RoutingId sourcePeerRid, Duration timeout) {
         ServiceWirePilotCodec.Fence actor = join.actor();
         RoutingId actorNode = RoutingId.from(actor.targetNodeRid());
         UUID handoffId =
@@ -4771,7 +4769,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         return new ZLinkActorSpotRoutePackets.TransferRequest(
                 ZLinkActorSpotRoutePackets.ADMISSION_PHASE,
                 handoffId.toString(),
-                1_000L,
+                timeout.toMillis(),
                 actor.id(),
                 "",
                 actorNode,
@@ -5241,7 +5239,6 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                 timerExecutor,
                 handlers,
                 suspendHandlerInvokers,
-                eventDispatcher,
                 primaryNodeSourceName,
                 (timerName, operation) ->
                         dispatch.enqueue(

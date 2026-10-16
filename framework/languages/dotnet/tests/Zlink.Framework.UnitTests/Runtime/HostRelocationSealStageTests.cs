@@ -13,6 +13,166 @@ namespace Zlink.Framework.UnitTests.Runtime;
 
 public sealed class HostRelocationSealStageTests
 {
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task Relocated_timer_handler_mismatch_obeys_callback_commit_boundary(
+        bool configure,
+        bool catchMismatch
+    )
+    {
+        using var flow = Environment.GetEnvironmentVariable("ZLINK_RELOCATION_TEST_FLOW_PATH")
+            is { } path
+            ? new TestHostMessageFlowListener(path + ".mismatch")
+            : null;
+        var trace = new RelocationBehaviorTrace();
+        trace.ReleaseJoinHandler.TrySetResult();
+        trace.ReleaseTargetLifecycle.TrySetResult();
+        trace.ReleaseSourceLeave.TrySetResult();
+        var initialization = 0;
+        var targetFailure = new TaskCompletionSource<Exception?>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        async ValueTask RegisterAsync(
+            IZLinkSpotContext context,
+            CancellationToken cancellationToken
+        )
+        {
+            if (Interlocked.Increment(ref initialization) == 1)
+                await context.AddTimer<SourceTimerHandler>(
+                    "pulse",
+                    TimeSpan.FromHours(1),
+                    cancellationToken: cancellationToken
+                );
+            else
+            {
+                IZLinkTimer? restored = catchMismatch
+                    ? await context.AddTimer<SourceTimerHandler>(
+                        "pulse",
+                        TimeSpan.FromHours(2),
+                        cancellationToken: cancellationToken
+                    )
+                    : null;
+                var snapshot = restored is Zlink.Framework.Runtime.Timers.ZLinkTimer timer
+                    ? timer.Snapshot()
+                    : null;
+                try
+                {
+                    await context.AddTimer<TargetTimerHandler>(
+                        "pulse",
+                        TimeSpan.FromHours(1),
+                        cancellationToken: cancellationToken
+                    );
+                    targetFailure.TrySetResult(null);
+                }
+                catch (Exception exception)
+                {
+                    if (!catchMismatch)
+                    {
+                        targetFailure.TrySetResult(exception);
+                        throw;
+                    }
+                    var reattached = await context.AddTimer<SourceTimerHandler>(
+                        "pulse",
+                        TimeSpan.FromHours(3),
+                        cancellationToken: cancellationToken
+                    );
+                    Assert.Same(restored, reattached);
+                    Assert.Equal(
+                        snapshot,
+                        Assert
+                            .IsType<Zlink.Framework.Runtime.Timers.ZLinkTimer>(reattached)
+                            .Snapshot()
+                    );
+                    Assert.Equal(TimeSpan.FromHours(1), snapshot!.Period);
+                    targetFailure.TrySetResult(exception);
+                }
+            }
+        }
+        if (configure)
+            trace.ConfigureTarget = context =>
+                RegisterAsync(context, CancellationToken.None).GetAwaiter().GetResult();
+        else
+            trace.InitializeTarget = RegisterAsync;
+        var store = new ZLinkInMemoryProviderLocationStore();
+        var roots = new SynchronizedRelocationStore();
+        await using var source = await RelocationBehaviorHost.StartAsync(
+            "source",
+            trace,
+            store,
+            roots,
+            true,
+            relocateSpots: true
+        );
+        await source
+            .Services.GetRequiredService<IZLinkSpotManager>()
+            .GetOrCreate("mismatched-timer", RelocationBehaviorHost.SpotType)
+            .InMesh(RelocationBehaviorHost.MeshName)
+            .Async();
+        await using var target = await RelocationBehaviorHost.StartAsync(
+            "target",
+            trace,
+            store,
+            roots,
+            true,
+            relocateSpots: true
+        );
+        using var ready = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        await Task.WhenAll(
+            WaitForReadyPeersAsync(source.Services, 1, ready.Token),
+            WaitForReadyPeersAsync(target.Services, 1, ready.Token)
+        );
+        var relocation = source
+            .Services.GetRequiredService<IZLinkFrameworkRuntime>()
+            .RelocateAsync(
+                new ZLinkFrameworkRelocationOptions
+                {
+                    Mode = ZLinkFrameworkRelocationMode.PlannedMaintenance,
+                    Deadline = TimeSpan.FromSeconds(10),
+                }
+            )
+            .AsTask();
+        var failure = Assert.IsType<ZLinkFrameworkException>(
+            await targetFailure.Task.WaitAsync(TimeSpan.FromSeconds(5))
+        );
+        Assert.Equal(ZLinkFrameworkErrorKind.InvalidOperation, failure.Kind);
+        var result = await relocation;
+        if (configure && !catchMismatch)
+        {
+            Assert.Equal(ZLinkFrameworkRelocationOutcome.Blocked, result.Outcome);
+            Assert.Equal(ZLinkFrameworkRelocationReason.RelocationFailed, result.Reason);
+            Assert.Equal(
+                ZLinkFrameworkRuntimeState.Serving,
+                source.Services.GetRequiredService<IZLinkFrameworkRuntime>().Status.State
+            );
+        }
+        else
+        {
+            Assert.Equal(ZLinkFrameworkRelocationOutcome.Relocated, result.Outcome);
+            Assert.Equal(ZLinkFrameworkRelocationReason.None, result.Reason);
+        }
+    }
+
+    private sealed class SourceTimerHandler : IZLinkSpotTimerHandler<BehaviorTargetSpot>
+    {
+        public ValueTask HandleAsync(
+            BehaviorTargetSpot spot,
+            ZLinkTimerTick tick,
+            CancellationToken cancellationToken
+        ) => ValueTask.CompletedTask;
+    }
+
+    private sealed class TargetTimerHandler : IZLinkSpotTimerHandler<BehaviorTargetSpot>
+    {
+        public ValueTask HandleAsync(
+            BehaviorTargetSpot spot,
+            ZLinkTimerTick tick,
+            CancellationToken cancellationToken
+        ) => ValueTask.CompletedTask;
+    }
+
     [Fact]
     public void Canonical_binding_handle_survives_capture_without_private_token_bytes()
     {
@@ -82,8 +242,15 @@ public sealed class HostRelocationSealStageTests
         );
     }
 
-    [Fact]
-    public async Task Three_nodes_relocate_bound_actor_during_handler_and_stop_cleanly()
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task Three_nodes_relocate_bound_actor_during_handler_and_stop_cleanly(
+        bool bindBeforeJoin,
+        bool reuseTerminalMailbox
+    )
     {
         using var debug = new SealStageDebugCapture();
         using var flow = Environment.GetEnvironmentVariable("ZLINK_RELOCATION_TEST_FLOW_PATH")
@@ -117,11 +284,14 @@ public sealed class HostRelocationSealStageTests
             .InMesh(RelocationBehaviorHost.MeshName)
             .Request(new BehaviorCreate(7))
             .Async();
-        _ = await source
-            .Services.GetRequiredService<IZLinkActorClient>()
-            .RequestToActor(actorId, new BeginBehaviorJoin("zone-2"))
-            .Async<BehaviorAck>();
-        await trace.WaitAsync("publicJoinCompleted");
+        if (!bindBeforeJoin)
+        {
+            _ = await source
+                .Services.GetRequiredService<IZLinkActorClient>()
+                .RequestToActor(actorId, new BeginBehaviorJoin("zone-2"))
+                .Async<BehaviorAck>();
+            await trace.WaitAsync("publicJoinCompleted");
+        }
         await using var target = await RelocationBehaviorHost.StartAsync(
             "target",
             trace,
@@ -130,6 +300,18 @@ public sealed class HostRelocationSealStageTests
             true,
             relocateSpots: true
         );
+        if (reuseTerminalMailbox)
+        {
+            var previous = target.Runtime.GetOrCreateActorState(actorId);
+            var retired = previous.BeginHandlerActivationCompletion(
+                previous.ClearAfterDestroyOnLane
+            );
+            _ = await retired.Completion;
+            var failure = Assert.Throws<ZLinkFrameworkException>(() =>
+                previous.ReserveHandoffRestoreBarrier()
+            );
+            Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, failure.Kind);
+        }
         var builder = Host.CreateApplicationBuilder();
         var handler = new SealStageHandler();
         builder.Services.AddSingleton(handler);
@@ -178,9 +360,17 @@ public sealed class HostRelocationSealStageTests
             }
         );
         await connector.Connect.Async();
-        var pushed = connector.WaitFor<BehaviorAck>().Timeout(TimeSpan.FromSeconds(5)).Async();
         await connector.Send(new SealStageBind(actorId)).Async();
         await handler.Bound.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        if (bindBeforeJoin)
+        {
+            await connector.Request(new BeginBehaviorJoin("zone-2")).Async<BehaviorAck>();
+            await trace.WaitAsync("publicJoinCompleted");
+        }
+        var before = await connector
+            .Request(new SealStageSessionInfoRequest())
+            .Async<SealStageSessionInfo>();
+        var pushed = connector.WaitFor<BehaviorAck>().Timeout(TimeSpan.FromSeconds(5)).Async();
         await connector.Send(new SealStageWork("relocation-overlap")).Async();
         await trace.WaitAsync("overlapHandlerStarted");
         var relocation = source
@@ -209,6 +399,7 @@ public sealed class HostRelocationSealStageTests
                 ZLinkFrameworkRelocationOutcome.Relocated,
                 (await relocation.WaitAsync(TimeSpan.FromSeconds(15))).Outcome
             );
+            Assert.Equal(1, trace.TargetLifecycleAttemptCount);
             if (flow is not null)
             {
                 var stages = flow.ReadLines()
@@ -252,6 +443,10 @@ public sealed class HostRelocationSealStageTests
                         stage.Dispose();
                 }
             }
+            var after = await connector
+                .Request(new SealStageSessionInfoRequest())
+                .Async<SealStageSessionInfo>();
+            Assert.Equal(before, after);
             await connector.Send(new SealStageWork("after-relocation")).Async();
             await trace.WaitAsync("afterRelocationPush");
             Assert.False(handler.Disconnected.Task.IsCompleted);
@@ -304,6 +499,10 @@ public sealed class HostRelocationSealStageTests
 }
 
 internal sealed record SealStageBind(string ActorId);
+
+internal sealed record SealStageSessionInfoRequest;
+
+internal sealed record SealStageSessionInfo(string SessionId, string ActorId, ulong Generation);
 
 internal sealed record SealStageWork(string Marker);
 
@@ -391,6 +590,20 @@ internal sealed class SealStageSession(
             var actor = Assert.IsType<ZLinkActorCreateResult.Existing>(result).Actor;
             await Context.Actors.BindOrGetAsync(actor, cancellationToken);
             handler.Bound.TrySetResult();
+            return;
+        }
+        if (dispatch.PacketName == nameof(SealStageSessionInfoRequest))
+        {
+            var actor = Context.Actors.Bound.Single().Ref;
+            await Context
+                .Client.Reply(
+                    new SealStageSessionInfo(
+                        Context.SessionId,
+                        actor.ActorId,
+                        actor.ObjectGeneration
+                    )
+                )
+                .Async();
             return;
         }
         await Context.Actors.Bound.Single().RelayAsync(payload);

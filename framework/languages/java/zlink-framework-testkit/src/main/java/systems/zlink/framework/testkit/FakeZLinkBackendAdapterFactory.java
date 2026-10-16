@@ -1729,7 +1729,7 @@ public final class FakeZLinkBackendAdapterFactory implements ZLinkBackendAdapter
         }
 
         @Override
-        public void setSubscription(String topic) {
+        public void setSubscription(String channelName, String topic) {
             record("setSubscription." + topic);
         }
 

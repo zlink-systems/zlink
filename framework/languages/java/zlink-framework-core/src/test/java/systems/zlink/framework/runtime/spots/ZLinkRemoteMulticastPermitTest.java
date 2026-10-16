@@ -190,7 +190,7 @@ final class ZLinkRemoteMulticastPermitTest {
         }
     }
 
-    @ZLinkSpotSubscription(topic = "orders")
+    @ZLinkSpotSubscription(channelName = "events", topic = "orders")
     public static final class OrdersHandler
             implements ZLinkSpotSubscriptionHandler<SubscriberSpot, String> {
         @Override

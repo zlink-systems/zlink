@@ -258,6 +258,12 @@ internal static class ServiceWireCodec
         SourceLeaseExpired = 2
     }
 
+    internal enum SessionSealResult : byte
+    {
+        Sealed = 1,
+        BindingAbsent = 2
+    }
+
     internal enum ReplyRelayAckStatus : byte
     {
         TerminalReceived = 1,
@@ -741,7 +747,7 @@ internal static class ServiceWireCodec
 
     internal sealed record SessionRelocationSeal42(byte Flags,RelocationId Relocation,RelocationCoordinatorFence Coordinator,RelocationRole SenderRole,ActorRouteFence Actor,Rid SessionOwnerNodeRid,NonzeroU64 SessionOwnerNodeGeneration,Text8 SessionOwnerId,NonzeroU64 SessionOwnerLeaseGeneration,Rid SessionRid,NonzeroU64 BindingGeneration);
 
-    internal sealed record SessionRelocationSealed43(byte Flags,RelocationId Relocation,RelocationCoordinatorFence Coordinator,ActorRouteFence Actor,Rid SessionOwnerNodeRid,NonzeroU64 SessionOwnerNodeGeneration,Text8 SessionOwnerId,NonzeroU64 SessionOwnerLeaseGeneration,Rid SessionRid,NonzeroU64 BindingGeneration);
+    internal sealed record SessionRelocationSealed43(byte Flags,RelocationId Relocation,RelocationCoordinatorFence Coordinator,ActorRouteFence Actor,Rid SessionOwnerNodeRid,NonzeroU64 SessionOwnerNodeGeneration,Text8 SessionOwnerId,NonzeroU64 SessionOwnerLeaseGeneration,Rid SessionRid,NonzeroU64 BindingGeneration,SessionSealResult SealResult);
 
     internal sealed record SessionRelocationRoute44(byte Flags,RelocationId Relocation,RelocationCoordinatorFence Coordinator,RelocationRole SenderRole,ActorRef Actor,Rid SessionOwnerNodeRid,NonzeroU64 SessionOwnerNodeGeneration,Text8 SessionOwnerId,NonzeroU64 SessionOwnerLeaseGeneration,Rid SessionRid,NonzeroU64 BindingGeneration,SessionRelocationRouteUpdate Route);
 
@@ -1687,6 +1693,19 @@ internal static class ServiceWireCodec
     private static void WriteSourceCleanupState(Writer writer, SourceCleanupState value, DecodeContext context)
     {
         if (!Enum.IsDefined(value)) throw Error("source-cleanup-state: unknown enum");
+        writer.U8((byte)value);
+    }
+
+    internal static SessionSealResult DecodeSessionSealResult(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadSessionSealResult(reader, context); reader.End("session-seal-result"); return value; }
+    internal static byte[] EncodeSessionSealResult(SessionSealResult value, DecodeContext context) { var writer = new Writer(); WriteSessionSealResult(writer, value, context); return writer.ToArray(); }
+    private static SessionSealResult ReadSessionSealResult(Reader reader, DecodeContext context)
+    {
+        var raw = reader.U8();
+        return raw switch { 1 => SessionSealResult.Sealed, 2 => SessionSealResult.BindingAbsent, _ => throw Error("session-seal-result: unknown enum") };
+    }
+    private static void WriteSessionSealResult(Writer writer, SessionSealResult value, DecodeContext context)
+    {
+        if (!Enum.IsDefined(value)) throw Error("session-seal-result: unknown enum");
         writer.U8((byte)value);
     }
 
@@ -6934,10 +6953,11 @@ internal static class ServiceWireCodec
         var SessionOwnerLeaseGeneration = ReadNonzeroU64(body, context);
         var SessionRid = ReadRid(body, context);
         var BindingGeneration = ReadNonzeroU64(body, context);
+        var SealResult = ReadSessionSealResult(body, context);
         body.End("body");
         var index=1;
         if(index!=frames.Count)throw Error("extra frame");
-        var value=new SessionRelocationSealed43(flags,Relocation,Coordinator,Actor,SessionOwnerNodeRid,SessionOwnerNodeGeneration,SessionOwnerId,SessionOwnerLeaseGeneration,SessionRid,BindingGeneration);
+        var value=new SessionRelocationSealed43(flags,Relocation,Coordinator,Actor,SessionOwnerNodeRid,SessionOwnerNodeGeneration,SessionOwnerId,SessionOwnerLeaseGeneration,SessionRid,BindingGeneration,SealResult);
         return value;
     }
     internal static SessionRelocationSealed43 DecodeSessionRelocationSealed43(byte[] frame,DecodeContext context)=>DecodeSessionRelocationSealed43(new[]{frame},context);
@@ -6957,6 +6977,7 @@ internal static class ServiceWireCodec
         WriteNonzeroU64(body, value.SessionOwnerLeaseGeneration, context);
         WriteRid(body, value.SessionRid, context);
         WriteNonzeroU64(body, value.BindingGeneration, context);
+        WriteSessionSealResult(body, value.SealResult, context);
         var frames=new List<byte[]>{body.ToArray()};
         return frames.ToArray();
     }

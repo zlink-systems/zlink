@@ -154,42 +154,16 @@ class ZLinkNativeFallbackBoundSessionSendCall implements ZLinkBoundSessionSendCa
   private async executeScoped(packetName: string): Promise<ZLinkSubmitResult> {
     const localActor = this.options.localActorProvider?.() === true;
     const remoteTarget = this.options.remoteBoundSessionTargetProvider();
-    let nativeAttempted = false;
-    if (localActor) {
-      const result = await this.options.runtime.submitLocalBoundSession(
+    if (localActor || remoteTarget === undefined) {
+      const localResult = await this.options.runtime.submitLocalBoundSession(
         this.options.actorId,
         this.message,
         packetName,
         this.selectedMetadata
       );
-      if (result.status !== ZLinkSubmitStatus.TargetNotFound) {
-        this.traceSubmitted(result, packetName);
-        return result;
-      }
-
-      // A local Actor with a concrete native owner has a direct binding path.
-      // Use that path before a routed transfer target. The transfer target is
-      // retained for actors whose current owner is remote or whose native
-      // binding is no longer available.
-      const actorRef = this.options.actorRefProvider();
-      const node = this.options.nativeActorNodeProvider();
-      const bindingGeneration = currentBindingGeneration(actorRef);
-      if (actorRef !== undefined && node !== undefined && bindingGeneration !== undefined) {
-        nativeAttempted = true;
-        const result = await this.options.runtime.sendNativeBoundSession(
-          node,
-          actorRef,
-          this.message,
-          packetName,
-          this.selectedMetadata
-        );
-        if (result.status !== ZLinkSubmitStatus.TargetNotFound) {
-          this.traceSubmitted(result, packetName);
-          return result;
-        }
-        if (remoteTarget === undefined) {
-          return result;
-        }
+      if (localResult.status !== ZLinkSubmitStatus.TargetNotFound) {
+        this.traceSubmitted(localResult, packetName);
+        return localResult;
       }
     }
     if (remoteTarget !== undefined) {
@@ -238,25 +212,10 @@ class ZLinkNativeFallbackBoundSessionSendCall implements ZLinkBoundSessionSendCa
       this.traceSubmitted(result, packetName);
       return result;
     }
-    const localResult = await this.options.runtime.submitLocalBoundSession(
-      this.options.actorId,
-      this.message,
-      packetName,
-      this.selectedMetadata
-    );
-    if (localResult.status !== ZLinkSubmitStatus.TargetNotFound) {
-      this.traceSubmitted(localResult, packetName);
-      return localResult;
-    }
     const actorRef = this.options.actorRefProvider();
     const node = this.options.nativeActorNodeProvider();
     const bindingGeneration = currentBindingGeneration(actorRef);
-    if (
-      !nativeAttempted &&
-      actorRef !== undefined &&
-      node !== undefined &&
-      bindingGeneration !== undefined
-    ) {
+    if (actorRef !== undefined && node !== undefined && bindingGeneration !== undefined) {
       const result = await this.options.runtime.sendNativeBoundSession(
         node,
         actorRef,

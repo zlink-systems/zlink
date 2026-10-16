@@ -1115,7 +1115,8 @@ public final class ZLinkServiceM6BWireCodec {
                             toGenerated(sealed.relocation()),
                             toGenerated(sealed.coordinator()),
                             toGenerated(sealed.actor()),
-                            toGenerated(sealed.session())));
+                            toGenerated(sealed.session()),
+                            ServiceWirePilotCodec.SessionSealResult.SEALED));
         } catch (IOException failure) {
             throw protocol("invalid sessionRelocationSealed command: " + failure.getMessage());
         }
@@ -1125,6 +1126,10 @@ public final class ZLinkServiceM6BWireCodec {
         Objects.requireNonNull(frame, "frame");
         try {
             var generated = ServiceWirePilotCodec.decodeSessionRelocationSealed43(frame);
+            if (generated.sealResult() != ServiceWirePilotCodec.SessionSealResult.SEALED) {
+                throw protocol(
+                        "sessionRelocationSealed bindingAbsent is not supported by this runtime");
+            }
             return new SessionRelocationSealed(
                     fromGenerated(generated.relocation()),
                     fromGenerated(generated.coordinator()),

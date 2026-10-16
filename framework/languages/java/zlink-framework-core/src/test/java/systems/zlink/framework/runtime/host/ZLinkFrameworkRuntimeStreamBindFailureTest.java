@@ -3,7 +3,6 @@ package systems.zlink.framework.runtime.host;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
 
@@ -19,7 +18,6 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkMeshBackendAdapter;
 import systems.zlink.framework.runtime.internal.backend.ZLinkMonitoringBackendAdapter;
 import systems.zlink.framework.runtime.internal.backend.ZLinkSpotBackendAdapter;
 import systems.zlink.framework.runtime.internal.backend.ZLinkStreamBackendAdapter;
-import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.streams.ZLinkSession;
 import systems.zlink.framework.streams.ZLinkSessionContext;
 import systems.zlink.framework.streams.ZLinkStreamError;
@@ -130,6 +128,7 @@ final class ZLinkFrameworkRuntimeStreamBindFailureTest {
                             AssertionError.class,
                             () -> ZLinkFrameworkRuntimeTestAccess.start(options, provider));
             assertSame(provider.streamAdapterFailure, failure);
+            assertEquals(0, failure.getSuppressed().length);
         }
         assertListenersReleased(provider, 0);
         assertEquals(1, provider.contexts.size());
@@ -141,27 +140,24 @@ final class ZLinkFrameworkRuntimeStreamBindFailureTest {
     }
 
     @Test
-    void failureBeforeChannelCreationPreservesTheStartupCauseAndCompletesRollback() {
+    void contextCreationFailurePreservesCauseAndClosesPreparedExecutors() throws Exception {
         RecordingProvider provider = new RecordingProvider(new ZLinkJavaBackendAdapterFactory());
-        provider.channelAdapterFailure =
-                new IllegalStateException("channel adapter creation failed");
+        provider.contextFailure = new UnsatisfiedLinkError("injected context creation failure");
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
-        ZLinkFrameworkRuntime runtime = ZLinkFrameworkRuntime.prepareHost(options, null);
+        var handlers =
+                (java.util.concurrent.ExecutorService) options.registration().handlerExecutor();
+        var serial = options.registration().serialExecutor();
 
-        RuntimeException failure =
+        var failure =
                 assertThrows(
-                        RuntimeException.class,
-                        () ->
-                                ZLinkFrameworkRuntime.startPreparedHost(
-                                        runtime,
-                                        options,
-                                        provider,
-                                        ZLinkHandlerActivator.reflection()));
+                        UnsatisfiedLinkError.class,
+                        () -> ZLinkFrameworkRuntimeTestAccess.start(options, provider));
 
-        assertSame(provider.channelAdapterFailure, failure);
+        assertSame(provider.contextFailure, failure);
         assertEquals(0, failure.getSuppressed().length);
-        assertEquals(ZLinkFrameworkRuntimeState.STOPPED, runtime.status().state());
-        assertTrue(provider.contexts.isEmpty());
+        assertEquals(0, provider.contexts.size());
+        org.junit.jupiter.api.Assertions.assertTrue(handlers.isShutdown());
+        org.junit.jupiter.api.Assertions.assertTrue(serial.isShutdown());
     }
 
     private static void assertListenersReleased(RecordingProvider provider, int streamCount)
@@ -206,7 +202,7 @@ final class ZLinkFrameworkRuntimeStreamBindFailureTest {
         private final List<String> streamEndpoints = new ArrayList<>();
         private final List<ZLinkInternalMeshNode> meshNodes = new ArrayList<>();
         private Error streamAdapterFailure;
-        private RuntimeException channelAdapterFailure;
+        private Error contextFailure;
 
         RecordingProvider(ZLinkBackendAdapterProvider delegate) {
             this.delegate = delegate;
@@ -214,15 +210,16 @@ final class ZLinkFrameworkRuntimeStreamBindFailureTest {
 
         @Override
         public ZLinkChannelBackendAdapter createChannelAdapter(ZLinkBackendAdapterOptions options) {
-            if (channelAdapterFailure != null) {
-                throw channelAdapterFailure;
-            }
             ZLinkChannelBackendAdapter adapter = delegate.createChannelAdapter(options);
             return (ZLinkChannelBackendAdapter)
                     Proxy.newProxyInstance(
                             ZLinkChannelBackendAdapter.class.getClassLoader(),
                             new Class<?>[] {ZLinkChannelBackendAdapter.class},
                             (proxy, method, arguments) -> {
+                                if (method.getName().equals("createContext")
+                                        && contextFailure != null) {
+                                    throw contextFailure;
+                                }
                                 Object result = invoke(adapter, method, arguments);
                                 if (method.getName().equals("createContext")) {
                                     contexts.add((ZLinkBackendContext) result);

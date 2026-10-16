@@ -13,9 +13,13 @@
 #include "runtime/host/hosted_service_lifecycle.hpp"
 #include "runtime/mesh/mesh_node_runtime.hpp"
 #include "runtime/streams/stream_host_service.hpp"
+#include "runtime/dispatch/coroutine_executor.hpp"
+#include "runtime/locations/in_memory_store_providers.hpp"
 #include <zlink.hpp>
 #include <zlink/framework.hpp>
 #include <cassert>
+#include <barrier>
+#include <condition_variable>
 #include <future>
 #include <string_view>
 
@@ -30,6 +34,23 @@ bool check_close_lane = false;
 bool closed_on_lane = false;
 int socket_attempts = 0;
 int poller_attempts = 0;
+std::atomic_bool observe_delay_wait{false};
+std::atomic_bool capture_delay_timer{false};
+std::atomic<void *> observed_delay_timer{nullptr};
+std::atomic_int delay_worker_exits{0};
+std::promise<void> delay_wait_entered;
+struct delay_thread_exit_t
+{
+    bool observed = false;
+    ~delay_thread_exit_t ()
+    {
+        if (observed) {
+            delay_worker_exits.fetch_add (1, std::memory_order_release);
+            delay_worker_exits.notify_all ();
+        }
+    }
+};
+thread_local delay_thread_exit_t delay_thread_exit;
 }
 
 extern "C" void *__real_zlink_socket (void *, zlink_socket_type_t);
@@ -41,6 +62,18 @@ extern "C" void *__wrap_zlink_socket (void *context, zlink_socket_type_t type)
     return socket;
 }
 extern "C" zlink_close_result_t __real_zlink_poller_destroy (void **);
+extern "C" zlink_config_result_t __real_zlink_timer_start (void *, uint64_t, uint64_t);
+extern "C" zlink_config_result_t
+__wrap_zlink_timer_start (void *timer, uint64_t interval_ns, uint64_t repeat_count)
+{
+    if (interval_ns
+          > std::chrono::duration_cast<std::chrono::nanoseconds> (std::chrono::hours (1)).count ()
+        && capture_delay_timer.exchange (false)) {
+        observed_delay_timer.store (timer, std::memory_order_release);
+        observed_delay_timer.notify_all ();
+    }
+    return __real_zlink_timer_start (timer, interval_ns, repeat_count);
+}
 extern "C" zlink_close_result_t __wrap_zlink_poller_destroy (void **handle)
 {
     ++poller_attempts;
@@ -67,6 +100,10 @@ extern "C" int __wrap_zlink_poller_wait (void *poller,
                                          long timeout,
                                          zlink_config_result_t *error)
 {
+    if (observe_delay_wait.exchange (false)) {
+        delay_thread_exit.observed = true;
+        delay_wait_entered.set_value ();
+    }
     if (fail_timer_wait.exchange (false) || (stream_worker && fail_wait.exchange (false))) {
         fail_wait.notify_all ();
         if (error)
@@ -126,16 +163,218 @@ class failing_stop_service_t final : public zlink::framework::hosted_service_t,
     bool _runtime_report;
 };
 
+class pending_delay_service_t final : public zlink::framework::hosted_service_t
+{
+  public:
+    explicit pending_delay_service_t (zlink::framework::app_t &app) : _app (app) {}
+
+    zlink::framework::task_t<void> start (zlink::framework::service_provider_t &services) override
+    {
+        observe_delay_wait = true;
+        capture_delay_timer = true;
+        _pending.emplace (zlink::framework::detail::delay (
+          services.get_required<zlink::framework::detail::delay_owner_t> (),
+          std::chrono::hours (24)));
+        delay_wait_entered.get_future ().wait ();
+        _app.stop ();
+        return zlink::framework::task_t<void> (zlink::framework::result_t<void>::success ());
+    }
+
+    void stop () noexcept override {}
+
+    bool stopped_with_delay () const
+    {
+        if (!_pending || !_pending->await_ready ())
+            return false;
+        const auto &result = _pending->result ();
+        return !result
+               && result.error_kind () == zlink::framework::framework_error_kind_t::shutting_down;
+    }
+
+    void wait_for_completion () const { _pending->result (); }
+
+  private:
+    zlink::framework::app_t &_app;
+    std::optional<zlink::framework::task_t<void>> _pending;
+};
+
 int main (int argc, char **argv)
 {
     assert (argc == 2);
     const std::string_view owner = argv[1];
+    if (owner == "host-pending-delay") {
+        zlink::framework::app_t app;
+        auto service = std::make_unique<pending_delay_service_t> (app);
+        auto *pending = service.get ();
+        app.add_hosted_service (std::move (service));
+        assert (app.run (argc, argv) == 0);
+        const bool stopped = pending->stopped_with_delay () && delay_worker_exits.load () == 1;
+        if (!stopped) {
+            auto *timer = observed_delay_timer.load (std::memory_order_acquire);
+            assert (timer);
+            assert (__real_zlink_timer_start (timer, 1, 1) == ZLINK_CONFIG_OK);
+            pending->wait_for_completion ();
+            delay_worker_exits.wait (0);
+        }
+        return stopped ? 0 : 1;
+    }
+    if (owner == "delay-after-stop") {
+        std::mutex delay_mutex;
+        zlink::framework::detail::delay_owner_t delays (delay_mutex);
+        delays.request_stop ();
+        auto pending = zlink::framework::detail::delay (delays, std::chrono::hours (24));
+        return pending.await_ready () && !pending.result ()
+                   && pending.result ().error_kind ()
+                        == zlink::framework::framework_error_kind_t::shutting_down
+                   && delays.worker_count () == 0
+                 ? 0
+                 : 1;
+    }
+    if (owner == "delay-stop-registration-race") {
+        std::mutex delay_mutex;
+        zlink::framework::detail::delay_owner_t delays (delay_mutex);
+        std::barrier gate (2);
+        std::optional<zlink::framework::task_t<void>> pending;
+        std::thread registering ([&] {
+            gate.arrive_and_wait ();
+            pending.emplace (zlink::framework::detail::delay (delays, std::chrono::hours (24)));
+        });
+        gate.arrive_and_wait ();
+        delays.request_stop ();
+        registering.join ();
+        delays.stop_and_join ();
+        return pending && !pending->result ()
+                   && pending->result ().error_kind ()
+                        == zlink::framework::framework_error_kind_t::shutting_down
+                   && delays.worker_count () == 0
+                 ? 0
+                 : 1;
+    }
+    if (owner == "delay-reap-completed") {
+        std::mutex delay_mutex;
+        zlink::framework::detail::delay_owner_t delays (delay_mutex);
+        observe_delay_wait = true;
+        capture_delay_timer = true;
+        auto pending = zlink::framework::detail::delay (delays, std::chrono::hours (24));
+        delay_wait_entered.get_future ().wait ();
+        auto *timer = observed_delay_timer.load (std::memory_order_acquire);
+        assert (timer);
+        assert (__real_zlink_timer_start (timer, 1, 1) == ZLINK_CONFIG_OK);
+        if (!pending.result ())
+            return 1;
+        delay_worker_exits.wait (0);
+        auto next = zlink::framework::detail::delay (delays, std::chrono::hours (24));
+        const bool reaped_on_registration = delays.worker_count () == 1;
+        delays.request_stop ();
+        const auto stopped = next.result ();
+        delays.stop_and_join ();
+        return reaped_on_registration && !stopped
+                   && stopped.error_kind ()
+                        == zlink::framework::framework_error_kind_t::shutting_down
+                 ? 0
+                 : 1;
+    }
+    if (owner == "delay-preflight-host-teardown") {
+        auto location_store =
+          std::make_shared<zlink::framework::runtime::in_memory_location_store_t> ();
+        auto relocation_store =
+          std::make_shared<zlink::framework::runtime::in_memory_relocation_store_t> ();
+        zlink::framework::app_t keeper;
+        keeper.add_zlink_framework ([] (zlink::framework::zlink_framework_options_t &options) {
+            options.handler_coroutine_workers (1);
+        });
+        char keeper_program[] = "delay-preflight-keeper";
+        char *keeper_arguments[] = {keeper_program, nullptr};
+        int keeper_exit = -1;
+        std::atomic_bool keeper_finished{false};
+        std::thread keeper_thread ([&] {
+            keeper_exit = keeper.run (1, keeper_arguments);
+            keeper_finished.store (true, std::memory_order_release);
+        });
+        while (!keeper.is_ready () && !keeper_finished.load (std::memory_order_acquire))
+            std::this_thread::yield ();
+        if (!keeper.is_ready ()) {
+            keeper_thread.join ();
+            return 1;
+        }
+
+        zlink::framework::app_t source;
+        source.add_zlink_framework ([location_store, relocation_store] (
+                                      zlink::framework::zlink_framework_options_t &options) {
+            options.handler_coroutine_workers (1);
+            options.add_location_store (location_store);
+            options.add_relocation_store (relocation_store);
+            options.configure_locations ().polling_interval = std::chrono::hours (24);
+        });
+        char source_program[] = "delay-preflight-source";
+        char *source_arguments[] = {source_program, nullptr};
+        int source_exit = -1;
+        std::atomic_bool source_finished{false};
+        std::thread source_thread ([&] {
+            source_exit = source.run (1, source_arguments);
+            source_finished.store (true, std::memory_order_release);
+        });
+        while (!source.is_ready () && !source_finished.load (std::memory_order_acquire))
+            std::this_thread::yield ();
+        if (!source.is_ready ()) {
+            source_thread.join ();
+            keeper.request_stop ();
+            keeper_thread.join ();
+            return 1;
+        }
+
+        capture_delay_timer = true;
+        auto pending =
+          source.relocate ({.mode = zlink::framework::relocation_mode_t::planned_maintenance,
+                            .deadline = std::chrono::hours (48)});
+        if (pending.await_ready ()) {
+            source.request_stop ();
+            source_thread.join ();
+            keeper.request_stop ();
+            keeper_thread.join ();
+            return 1;
+        }
+        observed_delay_timer.wait (nullptr);
+
+        std::promise<void> executor_entered;
+        std::promise<void> executor_release;
+        auto release = executor_release.get_future ().share ();
+        zlink::framework::runtime::handler_coroutine_executor ().post_native_continuation (
+          [&, release] {
+              executor_entered.set_value ();
+              release.wait ();
+          });
+        executor_entered.get_future ().wait ();
+
+        source.request_stop ();
+        // The bound releases the executor on either implementation path so the fixture can join.
+        const auto source_completed_while_blocked = [&] {
+            const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (3);
+            while (!source_finished.load (std::memory_order_acquire)
+                   && std::chrono::steady_clock::now () < deadline)
+                std::this_thread::yield ();
+            return source_finished.load (std::memory_order_acquire);
+        }();
+        const bool pending_completed_while_blocked = pending.await_ready ();
+        executor_release.set_value ();
+        source_thread.join ();
+        const auto terminal = pending.result ().value ();
+        keeper.request_stop ();
+        keeper_thread.join ();
+        return !source_completed_while_blocked && !pending_completed_while_blocked
+                   && source_exit == 0 && keeper_exit == 0
+                   && terminal.reason == zlink::framework::relocation_reason_t::shutdown_requested
+                 ? 0
+                 : 1;
+    }
     if (owner == "delay-close" || owner == "delay-wait" || owner == "delay-success") {
+        std::mutex delay_mutex;
+        zlink::framework::detail::delay_owner_t delays (delay_mutex);
         if (owner == "delay-close")
             fail_poller = true;
         else if (owner == "delay-wait")
             fail_timer_wait = true;
-        const auto result = zlink::framework::detail::delay (std::chrono::milliseconds (1))
+        const auto result = zlink::framework::detail::delay (delays, std::chrono::milliseconds (1))
                               .result_for (std::chrono::seconds (1));
         assert (result);
         if (owner == "delay-success")

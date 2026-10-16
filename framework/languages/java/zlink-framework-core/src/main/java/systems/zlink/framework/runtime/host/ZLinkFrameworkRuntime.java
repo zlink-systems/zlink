@@ -2013,6 +2013,10 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                                 return null;
                             });
         }
+        signalRuntimeStatus(terminationFailure);
+    }
+
+    private void signalRuntimeStatus(Throwable terminationFailure) {
         var status = status();
         if (eventDispatcher != null) {
             Throwable actual =
@@ -2038,16 +2042,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                         ? CompletableFuture.completedFuture(null)
                         : objectDescriptors.publish(state);
         return publication
-                .thenRun(
-                        () -> {
-                            var status = status();
-                            if (eventDispatcher != null) {
-                                eventDispatcher.publishHostStatus(status);
-                            }
-                            runtimeStatusSource.signal(RUNTIME_STATUS_SOURCE);
-                            routeMeshRuntime.signalAll();
-                            channels.signalTopologyStatus();
-                        })
+                .thenRun(() -> signalRuntimeStatus(null))
                 .exceptionallyCompose(
                         failure -> {
                             runtimeState.set(ZLinkFrameworkRuntimeState.SERVING);
