@@ -8035,6 +8035,8 @@ task_t<bool> spot_node_runtime_t::materialize_actor_relocation_state (
   std::optional<runtime::stateful::object_ref_t> target_spot,
   std::stop_token cancellation)
 {
+    co_await _state->actor_transfer_coordinator.wait_for_source_completion (frozen.stable_type + ":"
+                                                                            + target.key);
     detail::spot_node_builder_state_t::actor_factory_registration_t factory;
     std::shared_ptr<spot_context_state_t> context;
     actor_gateway_runtime_t *actor_gateway = nullptr;

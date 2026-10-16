@@ -17,10 +17,7 @@ import {
   materializeZLinkMessageValue,
   readZLinkMessageDeclaredType
 } from '../../contracts/Common/ZLinkMessage';
-import {
-  adoptEncodedPayload,
-  borrowEncodedPayload
-} from '../../contracts/Common/encoded-payload-storage';
+import { borrowEncodedPayload } from '../../contracts/Common/encoded-payload-storage';
 import { ZLinkConfigurationException } from '../configuration';
 import { parseFrameworkJsonV1, stringifyFrameworkJsonV1 } from './framework-json-v1';
 import type { ZLinkJsonSchema } from '../../contracts/Handlers/JsonContract';
@@ -440,13 +437,7 @@ function toRuntimeMessage(payload: ZLinkEncodedPayload): Message {
  * them, so the payload may adopt them; the public from() and data() still copy.
  */
 export function encodedPayloadFromOwned(bytes: Uint8Array): ZLinkEncodedPayload {
-  if (!Buffer.isBuffer(bytes)) {
-    return ZLinkEncodedPayload.from(bytes);
-  }
-  // The private constructor only stores a copy; adopting skips that copy.
-  const payload = Object.create(ZLinkEncodedPayload.prototype) as ZLinkEncodedPayload;
-  adoptEncodedPayload(payload, bytes);
-  return payload;
+  return ZLinkEncodedPayload.fromOwned(bytes);
 }
 
 function rememberContentType(message: Message, contentType: string): Message {
