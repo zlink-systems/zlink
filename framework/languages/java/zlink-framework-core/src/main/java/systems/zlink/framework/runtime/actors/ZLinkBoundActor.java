@@ -212,12 +212,6 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
         rebindNativeActor(targetActor);
     }
 
-    CompletionStage<Void> compensatePreparedNativeActorRoute(
-            ZLinkBackendActorRef sourceActor, Duration timeout) {
-        return stream.relocateBoundActor(
-                sessionRid, sourceActor.actorId(), bindingGeneration, sourceActor, timeout);
-    }
-
     void setUnbindListener(Runnable unbindListener) {
         this.unbindListener = unbindListener == null ? () -> {} : unbindListener;
     }
@@ -597,7 +591,9 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
                         Optional.empty(),
                         ZLinkActorSpotRoutePackets.SESSION_DISCONNECTED_PACKET_NAME,
                         Map.of());
-        try (Message payloadPart = Message.from(new byte[0])) {
+        // The body names the Session of this binding so the Actor owner can tell it from
+        // a later binding of the same Actor (Session-Actor binding §8.3).
+        try (Message payloadPart = Message.from(sessionRid.toBytes())) {
             return stream.requestExactActor(
                             ref,
                             header,

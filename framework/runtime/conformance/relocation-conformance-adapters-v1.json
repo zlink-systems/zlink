@@ -174,9 +174,9 @@
           "path": "framework/languages/java/zlink-framework-core/src/test/java/systems/zlink/framework/runtime/actors/ZLinkStreamPhysicalSubmitOwnershipTest.java",
           "behaviorGroups": ["actorBoundSession", "failureAndIdempotency"],
           "tests": [
-            "targetOutboundFifoWaitsForOneBackendPhysicalTerminalAtATime",
-            "targetOutboundErrorSettlesOnceAndAdvancesTheOwnedFifo",
-            "targetOutboundShutdownCancelsThePendingBackendPhysicalTerminal"
+            "sealedOutboundDelegatesBothPhysicalTerminalsToTheBackend",
+            "outboundFailureSettlesOnceWithoutResubmittingEitherFrame",
+            "outboundDisconnectLeavesThePhysicalTerminalToItsBackendOwner"
           ]
         },
         {
