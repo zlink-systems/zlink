@@ -200,7 +200,9 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
                           std::function<bool ()> stop_requested = {});
     bool try_post_deferred (std::string name, std::function<void ()> work);
     result_t<std::shared_ptr<detail::deferred_barrier_t>>
-    reserve_barrier_next (std::string name, bool holds_application_while_waiting = false);
+    reserve_barrier_next (std::string name,
+                          bool holds_application_while_waiting = false,
+                          serial_work_lane_t lane = serial_work_lane_t::lifecycle);
     result_t<std::shared_ptr<detail::deferred_barrier_t>>
     reserve_handoff_barrier (std::string name);
     void post (std::string name, std::function<void ()> work);

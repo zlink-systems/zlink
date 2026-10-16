@@ -1054,15 +1054,18 @@ void serial_execution_queue_t::schedule_after_settle_owned ()
 
 result_t<std::shared_ptr<detail::deferred_barrier_t>>
 serial_execution_queue_t::reserve_barrier_next (std::string name,
-                                                bool holds_application_while_waiting)
+                                                bool holds_application_while_waiting,
+                                                serial_work_lane_t lane)
 {
     auto barrier = std::make_shared<serial_deferred_barrier_t> ();
+    if (lane == serial_work_lane_t::application)
+        barrier->hold_application_turn ();
     const auto submission = try_post_cancellable_async (
       std::move (name),
       [barrier] (auto complete) mutable { barrier->reached (std::move (complete)); },
       [barrier] { barrier->cancel (); },
-      [holds_application_while_waiting] {
-          serial_work_options_t options{serial_work_lane_t::lifecycle};
+      [holds_application_while_waiting, lane] {
+          serial_work_options_t options{lane};
           options.holds_application_while_waiting = holds_application_while_waiting;
           return options;
       }());

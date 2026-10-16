@@ -2285,22 +2285,50 @@ result_t<actor_ref_t> mesh_node_runtime_t::create_application_actor (
 }
 
 task_t<actor_join_reply_t>
-mesh_node_runtime_t::join_application_actor_to_entry_spot (const actor_ref_t &actor,
-                                                           const node_rid_t &target_node,
-                                                           const zlink::message_t &request,
+mesh_node_runtime_t::join_application_actor_to_entry_spot (actor_ref_t actor,
+                                                           node_rid_t target_node,
+                                                           zlink::message_t request,
                                                            std::chrono::milliseconds timeout)
 {
-    // The operation completion delivers the reply (submit_application_actor_entry_spot_join).
-    auto joined = std::make_shared<task_completion_source_t<actor_join_reply_t>> ();
-    auto result = joined->task ();
+    spot_node_runtime_t spots (_state->spot_state);
+    const auto source = spots.actor_spot (actor);
+    auto joined = std::make_shared<task_completion_source_t<result_t<actor_join_reply_t>>> ();
+    host::pending_operation_t operation;
     const auto submitted = submit_application_actor_entry_spot_join (
-      actor, target_node, request, timeout, [joined] (result_t<actor_join_reply_t> reply) mutable {
-          joined->complete (std::move (reply));
+      actor, target_node, request, timeout, operation,
+      [joined] (result_t<actor_join_reply_t> reply) mutable {
+          joined->complete (result_t<result_t<actor_join_reply_t>>::success (std::move (reply)));
       });
     if (!submitted)
-        joined->complete (detail::propagate_failure<actor_join_reply_t> (
-          submitted, "Actor entry Spot join failed"));
-    return result;
+        co_return detail::propagate_failure<actor_join_reply_t> (submitted,
+                                                                 "Actor entry Spot join failed");
+    auto reply = co_await joined->task ();
+    const auto delivered =
+      co_await deliver_actor_join (actor, source, operation.id.high, operation.id.low, reply);
+    if (!delivered)
+        co_return detail::propagate_failure<actor_join_reply_t> (
+          delivered, "Entry Actor Join completion callback failed");
+    if (reply && reply.value ().result_code == 0) {
+        const auto opened = spots.open_local_actor_handoff (reply.value ().actor);
+        if (!opened)
+            co_return detail::propagate_failure<actor_join_reply_t> (
+              opened, "Entry Actor handoff prefix could not be opened");
+    }
+    co_return reply;
+}
+
+void mesh_node_runtime_t::settle_application_actor_creation (const actor_ref_t &actor, bool ready)
+{
+    spot_node_runtime_t spots (_state->spot_state);
+    if (!ready) {
+        spots.cancel_local_actor_handoff (actor);
+        return;
+    }
+    const auto opened = spots.open_local_actor_handoff (actor);
+    if (!opened) {
+        spots.cancel_local_actor_handoff (actor);
+        _state->spot_state->runtime_failures ()->report (opened.exception ());
+    }
 }
 
 result_t<void>
@@ -2308,17 +2336,18 @@ mesh_node_runtime_t::submit_application_actor_entry_spot_join (const actor_ref_t
                                                                const node_rid_t &target_node,
                                                                const zlink::message_t &request,
                                                                std::chrono::milliseconds timeout,
+                                                               host::pending_operation_t &operation,
                                                                actor_join_completion_t completion)
 {
     if (!completion)
         return result_t<void>::failure (framework_error_kind_t::internal_failure,
                                         "Actor entry Spot join completion is required");
-    const auto found = _actors.find (std::string (actor.actor_id ().value ()));
-    if (found == _actors.end ())
+    const auto current = _node ? _node->resolve_actor (actor) : std::nullopt;
+    if (!current)
         return result_t<void>::failure (framework_error_kind_t::not_found,
                                         "local Actor handle was not found");
 
-    host::pending_operation_t operation;
+    host::actor_handle_t handle (_node, actor, *current);
     auto pending = operation.completion->task ();
     detail::observe_task_completion (
       pending, [actor, state = _state, completion = std::move (completion)] (
@@ -2332,7 +2361,7 @@ mesh_node_runtime_t::submit_application_actor_entry_spot_join (const actor_ref_t
                                                         result.value ().parts, actor, state));
       });
     const std::vector<zlink::message_t> parts{request};
-    const auto submitted = found->second.join_entry_spot (
+    const auto submitted = handle.join_entry_spot (
       zlink::routing_id_t::from (std::string (target_node.value ())), parts, operation, timeout);
     if (submitted != zlink::submit_result_t::ok)
         return result_t<void>::failure (framework_error_kind_t::internal_failure,
@@ -2469,6 +2498,12 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::join_application_actor_to_spot (
         if (!delivered)
             co_return detail::propagate_failure<actor_join_reply_t> (
               delivered, "local Actor Join completion callback failed");
+        if (joined && joined.value ().result_code == 0) {
+            const auto opened = spot_runtime.open_local_actor_handoff (joined.value ().actor);
+            if (!opened)
+                co_return detail::propagate_failure<actor_join_reply_t> (
+                  opened, "local Actor Join backlog prefix could not be opened");
+        }
         co_return joined;
     }
     auto state = std::make_shared<remote_actor_join_state_t> (remote_actor_join_state_t{
