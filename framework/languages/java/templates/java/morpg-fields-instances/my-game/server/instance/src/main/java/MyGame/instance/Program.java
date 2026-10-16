@@ -21,11 +21,13 @@ public class Program {
                 throw new IllegalArgumentException("Dungeon capacity must be positive");
             Hosting.configure(options, locations, relocations);
             options.addHandlersFromPackageOf(Program.class);
+            options.addHandlersFromPackageOf(EnterWorld.class);
             options.addRouteMesh(Names.MESH)
                     .listen(config.meshEndpoint())
                     .setRoutingIdPrefix(config.id())
                     .objects()
                     .server()
+                    .addEntrySpot(Entry.class)
                     .addSpotFactory(
                             Names.DUNGEON,
                             Dungeon.class,

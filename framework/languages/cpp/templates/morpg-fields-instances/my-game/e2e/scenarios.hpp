@@ -110,8 +110,9 @@ inline void dungeon_scenario (const std::string &endpoint, Scenario scenario, Wo
         source.command (Control::drain);
         source.wait_line (Control::requested, Limits::relocation);
         source.wait_line (Control::relocated, Limits::relocation);
-        source.wait_line (Control::safe, Limits::relocation);
-        const auto relocated = leader.dungeon (), second = member->dungeon ();
+        source.wait_line (Control::safe, Limits::safe_shutdown);
+        const auto relocated = leader.dungeon (advanced.nodeId),
+                   second = member->dungeon (advanced.nodeId);
         same_dungeon (advanced, relocated);
         same_dungeon (relocated, second);
         require (relocated.nodeId != advanced.nodeId && relocated.nodeId == second.nodeId,

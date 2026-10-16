@@ -78,11 +78,14 @@ inline void check_structure (const std::filesystem::path &root)
     }
     std::set<std::string> nodes, spot_ids, logical_ids;
     std::map<std::string, nlohmann::json> configurations;
+    std::map<std::string, std::string> roles;
+    std::set<std::string> entries, user_types;
     require (j.at ("nodes").is_array () && j.at ("spots").is_array ()
                && j.at ("channels").is_array () && j.at ("edges").is_array (),
              "Structure collections must be arrays");
     for (const auto &node : j.at ("nodes")) {
         const auto id = nonempty (node, "id"), role = nonempty (node, "role");
+        roles[id] = role;
         (void) nonempty (node, "title");
         require (nodes.insert (id).second, "Duplicate node ID");
         if (role == "external")
@@ -114,12 +117,14 @@ inline void check_structure (const std::filesystem::path &root)
             require (spot.at ("type").is_null () && !spot.contains ("logicalId")
                        && !spot.contains ("dynamic"),
                      "Entry Spot cannot declare type or logical ID");
-            require (configurations.at (owner).contains ("FieldIds"),
-                     "Entry owner must register WorldEntry");
+            require (roles.at (owner) == "field" || roles.at (owner) == "instance",
+                     "Entry owner must register an Object Server");
+            require (entries.insert (owner).second, "Duplicate Entry owner");
             continue;
         }
         require (kind == "user", "Unknown application Spot kind");
         const auto type = nonempty (spot, "type");
+        user_types.insert (type);
         require (type == Names::field || type == Names::dungeon, "Unknown stable type");
         if (spot.contains ("dynamic"))
             require (spot.at ("dynamic").is_boolean (), "Dynamic must be boolean");
@@ -131,6 +136,10 @@ inline void check_structure (const std::filesystem::path &root)
             if (type == Names::field)
                 fields[owner].insert (id);
         }
+        require (roles.at (owner) == (type == Names::field ? "field" : "instance"),
+                 "Stable type owner mismatch");
+        require (spot.value ("dynamic", false) == (type == Names::dungeon),
+                 "Spot family dynamic mismatch");
         if (type == Names::field)
             require (configurations.at (owner).contains ("FieldIds")
                        && channels.contains ({Names::border, owner}),
@@ -140,6 +149,13 @@ inline void check_structure (const std::filesystem::path &root)
                        && !configurations.at (owner).contains ("StreamEndpoint")
                        && configurations.at (owner).value ("DungeonCapacity", 0) > 0,
                      "Dungeon owner must register Dungeon");
+    }
+    require (user_types == std::set<std::string>{Names::field, Names::dungeon},
+             "Missing registered User Spot type");
+    for (const auto &[id, role] : roles) {
+        if (role != "field" && role != "instance")
+            continue;
+        require (entries.contains (id), "Missing Entry owner: " + id);
     }
     for (const auto &[id, config] : configurations) {
         if (!config.contains ("FieldIds"))

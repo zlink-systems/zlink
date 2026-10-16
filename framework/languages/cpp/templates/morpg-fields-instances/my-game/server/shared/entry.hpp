@@ -1,5 +1,5 @@
 #pragma once
-#include "server/shared/player.hpp"
+#include "player.hpp"
 namespace MyGame
 {
 class WorldEntry final : public fx::entry_spot_t<Player>

@@ -3,8 +3,6 @@ import { ZLINK_ACTOR_CLIENT, ZLINK_SPOT_MANAGER } from '@zlink-systems/nestjs';
 import {
   ZLinkSpotCreateState,
   type ZLinkActorClient,
-  type ZLinkEntrySpot,
-  type ZLinkEntrySpotContext,
   type ZLinkMessage,
   type ZLinkSpot,
   type ZLinkSpotContext,
@@ -33,12 +31,6 @@ import {
 import { Player } from '../shared/player';
 import { FieldState } from './domain';
 import { BorderHandler, BorderTick } from './handlers';
-@Injectable({ scope: Scope.TRANSIENT })
-export class Entry implements ZLinkEntrySpot<Player> {
-  readonly context!: ZLinkEntrySpotContext<Player, Entry>;
-  async onJoinedActor(_actor: Player): Promise<void> {}
-  async onLeaveActor(_actor: Player): Promise<void> {}
-}
 @Injectable({ scope: Scope.TRANSIENT })
 export class Field implements ZLinkSpot<Player> {
   readonly context!: ZLinkSpotContext<Player, Field>;

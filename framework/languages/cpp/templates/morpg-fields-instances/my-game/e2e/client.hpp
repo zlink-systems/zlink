@@ -45,24 +45,45 @@ class Client
         std::lock_guard lock (error_mutex_);
         require (error_.empty (), "Connector error: " + error_);
     }
-    template <class Request, class Reply> Reply exchange (const Request &request)
+    template <class Request, class Reply, class Predicate>
+    Reply exchange (const Request &request, Predicate predicate)
     {
         healthy ();
         connector_.send (request).submit ();
-        const auto reply = checked (connector_.wait_for<Reply> ().submit ()).payload;
+        const auto reply = checked (connector_.wait_for<Reply> ()
+                                      .where ([predicate] (const auto &message) {
+                                          return predicate (message.payload);
+                                      })
+                                      .submit ())
+                             .payload;
         healthy ();
         return reply;
     }
-    WorldState join (int x) { return exchange<JoinWorldRequest, WorldState> ({player_id, x}); }
+    WorldState join (int x)
+    {
+        return exchange<JoinWorldRequest, WorldState> ({player_id, x}, [x] (const auto &view) {
+            return view.fieldId == Names::field_id (x) && view.x == x && view.sequence == 0;
+        });
+    }
     WorldState move (int x, int sequence)
     {
-        return exchange<MoveRequest, WorldState> ({x, sequence});
+        return exchange<MoveRequest, WorldState> ({x, sequence}, [x, sequence] (const auto &view) {
+            return view.x == x && view.sequence == sequence;
+        });
     }
-    SessionInfo info () { return exchange<SessionInfoRequest, SessionInfo> ({}); }
-    DungeonView dungeon () { return exchange<ViewRequest, DungeonView> ({}); }
+    SessionInfo info ()
+    {
+        return exchange<SessionInfoRequest, SessionInfo> ({}, [] (const auto &) { return true; });
+    }
+    DungeonView dungeon (const std::string &previous_host = "")
+    {
+        return exchange<ViewRequest, DungeonView> (
+          {}, [previous_host] (const auto &view) { return view.nodeId != previous_host; });
+    }
     DungeonView reconnect_dungeon ()
     {
-        return exchange<JoinWorldRequest, DungeonView> ({player_id, 250});
+        return exchange<JoinWorldRequest, DungeonView> ({player_id, 250},
+                                                        [] (const auto &) { return true; });
     }
     template <class T, class Predicate> T receive (Predicate predicate)
     {

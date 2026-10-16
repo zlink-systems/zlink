@@ -1,6 +1,4 @@
-package MyGame.field;
-
-import MyGame.Player;
+package MyGame;
 
 import systems.zlink.framework.spots.*;
 

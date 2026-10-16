@@ -26,3 +26,5 @@ Keep `zlink.structure.json`, server configuration, contracts, and scenario order
 Run formatters and installation commands only from this project directory, with explicit file paths that exclude `.logs`, `.validation`, and build outputs. Node logging writes one Normal message-flow stream to stderr. The runner retains logs under `.logs/run-<id>/`, uses unique Redis prefixes and Compose project names, and cleans up only processes and containers it created. Cleanup failures must return exit code 1.
 
 README and instructions are English. Code comments are English. Keep the short Korean execution guidance at the end of README.
+
+Register the shared Entry and first-login handler on every node that registers the Player Actor factory. Structure validation must require exactly one Entry for each Field and Instance owner and every registered User Spot type. Keep Message Follow and the derived safe-shutdown observation deadline in shared timing constants.

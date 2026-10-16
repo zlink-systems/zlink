@@ -157,6 +157,8 @@ internal static class StructureCheck
         );
         var spotIds = new HashSet<string>(StringComparer.Ordinal);
         var logicalIds = new HashSet<string>(StringComparer.Ordinal);
+        var entries = new HashSet<string>(StringComparer.Ordinal);
+        var userTypes = new HashSet<string>(StringComparer.Ordinal);
         var fields = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
         foreach (var spot in Array(document, "spots"))
         {
@@ -166,7 +168,11 @@ internal static class StructureCheck
             var kind = Text(spot, "kind");
             if (kind == "entry")
             {
-                Require(roles[owner] == "field", "Entry owner must host the Field Entry factory.");
+                Require(
+                    roles[owner] is "field" or "instance",
+                    "Entry owner must host an Object Server."
+                );
+                Require(entries.Add(owner), "Duplicate Entry owner.");
                 Require(
                     spot!["type"] is null && spot["logicalId"] is null && spot["dynamic"] is null,
                     "Entry must not claim a stable type, logical ID or dynamic family."
@@ -182,6 +188,7 @@ internal static class StructureCheck
                 roles[owner] == (type == GameNames.FieldType ? "field" : "instance"),
                 "Spot type differs from its owner registration."
             );
+            userTypes.Add(type);
             var dynamic = false;
             if (spot!["dynamic"] is JsonNode dynamicNode)
             {
@@ -190,18 +197,33 @@ internal static class StructureCheck
                     "Invalid dynamic flag."
                 );
             }
+            Require(
+                dynamic == (type == GameNames.DungeonType),
+                "Spot family dynamic flag differs from registration."
+            );
             if (dynamic)
                 Require(spot["logicalId"] is null, "Dynamic Spot family must omit logicalId.");
             else
                 Require(logicalIds.Add(Text(spot, "logicalId")), "Duplicate logical Spot ID.");
             if (type == GameNames.FieldType)
             {
-                Require(!dynamic, "Configured Field Spots must have fixed logical IDs.");
                 if (!fields.TryGetValue(owner, out var hosted))
                     fields.Add(owner, hosted = new HashSet<string>(StringComparer.Ordinal));
                 hosted.Add(Text(spot, "logicalId"));
             }
         }
+        var objectOwners = roles
+            .Where(pair => pair.Value is "field" or "instance")
+            .Select(pair => pair.Key)
+            .ToHashSet(StringComparer.Ordinal);
+        Require(
+            entries.SetEquals(objectOwners),
+            "Entry owners differ from Object Server registrations."
+        );
+        Require(
+            userTypes.SetEquals([GameNames.FieldType, GameNames.DungeonType]),
+            "Missing registered User Spot type."
+        );
         foreach (var (id, configured) in settings)
         {
             var expected = configured.FieldIds ?? System.Array.Empty<string>();

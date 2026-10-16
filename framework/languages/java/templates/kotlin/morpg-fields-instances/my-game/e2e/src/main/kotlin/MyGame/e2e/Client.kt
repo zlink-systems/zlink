@@ -86,9 +86,9 @@ class Client(endpoint: String, val playerId: String) {
         return state
     }
 
-    suspend fun dungeon(): DungeonView {
+    suspend fun dungeon(previousHost: String? = null): DungeonView {
         send(ViewRequest())
-        return next<DungeonView>()
+        return next<DungeonView> { it.nodeId != previousHost }
     }
 
     suspend fun sessionInfo(): SessionInfo =

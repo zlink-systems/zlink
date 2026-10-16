@@ -13,6 +13,7 @@ GameHosting.Configure(
     options =>
     {
         options.AddHandlersFromAssemblyOf<FieldSpot>();
+        options.AddHandlersFromAssemblyOf<WorldEntry>();
         var mesh = options
             .AddRouteMesh(GameNames.WorldMesh)
             .SetRoutingIdPrefix(settings.Id)

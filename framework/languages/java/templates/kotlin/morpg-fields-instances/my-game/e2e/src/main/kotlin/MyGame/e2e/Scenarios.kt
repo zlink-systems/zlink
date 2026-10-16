@@ -144,8 +144,8 @@ class Scenarios(private val nodes: Nodes) {
                 val s1 = leader.sessionInfo()
                 val s2 = member.sessionInfo()
                 nodes.drain(state.nodeId)
-                val relocated = leader.dungeon()
-                val other = member.dungeon()
+                val relocated = leader.dungeon(state.nodeId)
+                val other = member.dungeon(state.nodeId)
                 sameDungeon(state, relocated)
                 sameDungeon(relocated, other)
                 check(relocated.nodeId != state.nodeId && relocated.nodeId == other.nodeId) {

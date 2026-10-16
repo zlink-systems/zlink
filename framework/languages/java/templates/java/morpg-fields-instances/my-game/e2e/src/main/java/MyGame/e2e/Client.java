@@ -87,8 +87,12 @@ public final class Client implements AutoCloseable {
     }
 
     DungeonView dungeon() throws Exception {
+        return dungeon(null);
+    }
+
+    DungeonView dungeon(String previousHost) throws Exception {
         send(new ViewRequest());
-        return next(DungeonView.class);
+        return next(DungeonView.class, view -> !view.nodeId().equals(previousHost));
     }
 
     SessionInfo sessionInfo() {

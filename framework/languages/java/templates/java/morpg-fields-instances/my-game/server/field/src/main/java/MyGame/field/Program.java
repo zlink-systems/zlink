@@ -21,6 +21,7 @@ public class Program {
                 throw new IllegalArgumentException("Field capacity must be positive");
             Hosting.configure(options, locations, relocations);
             options.addHandlersFromPackageOf(Program.class);
+            options.addHandlersFromPackageOf(EnterWorld.class);
             var mesh =
                     options.addRouteMesh(Names.MESH)
                             .listen(config.meshEndpoint())

@@ -20,12 +20,14 @@ class Program {
         require(config.dungeonCapacity > 0) { "Dungeon capacity must be positive" }
         configure(options, locations, relocations)
         options.addHandlersFromPackageOf<Program>()
+        options.addHandlersFromPackageOf<EnterWorld>()
         options
             .addRouteMesh(Names.MESH)
             .listen(config.meshEndpoint)
             .setRoutingIdPrefix(config.id)
             .objects()
             .server()
+            .addEntrySpot<Entry>()
             .addSpotFactory<Dungeon>(Names.DUNGEON) {
                 stableTypeLimit(config.dungeonCapacity)
                 executionMode(ZLinkUserSpotExecutionMode.SPOT_WIDE)

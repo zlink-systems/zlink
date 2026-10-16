@@ -202,9 +202,9 @@ internal static class Scenarios
                         await source.WaitLineAsync(NodeProtocol.RelocationRequested, ct);
                         await source.WaitLineAsync(NodeProtocol.Relocated, ct);
                         await source.WaitLineAsync(NodeProtocol.SafeToShutdown, ct);
-                        var relocated = await p1.DungeonAsync(ct);
+                        var relocated = await p1.DungeonAsync(ct, advanced.NodeId);
                         SameDungeon(advanced, relocated);
-                        var relocatedMember = await p2.DungeonAsync(ct);
+                        var relocatedMember = await p2.DungeonAsync(ct, advanced.NodeId);
                         SameDungeon(relocated, relocatedMember);
                         Require(
                             relocatedMember.NodeId == relocated.NodeId

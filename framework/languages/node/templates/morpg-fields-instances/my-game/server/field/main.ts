@@ -6,10 +6,10 @@ import {
 import { ZLINK_SPOT_MANAGER } from '@zlink-systems/nestjs';
 import { runHost, failHost } from '../shared/hosting';
 import { Names } from '../shared/constants';
+import { Entry, EnterWorld } from '../shared/entry';
 import { PlayerFactory, PlayerRelocation } from '../shared/player';
-import { Entry, Field, FieldRelocation } from './spots';
+import { Field, FieldRelocation } from './spots';
 import {
-  EnterWorld,
   Reconnect,
   Move,
   CreateParty,
@@ -33,11 +33,11 @@ runHost((_builder, config, mesh) => {
   return {
     providers: [
       Entry,
+      EnterWorld,
       Field,
       FieldRelocation,
       PlayerFactory,
       PlayerRelocation,
-      EnterWorld,
       Reconnect,
       Move,
       CreateParty,

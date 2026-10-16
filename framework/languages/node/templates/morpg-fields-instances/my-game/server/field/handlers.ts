@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { zlinkEntrySpotActorSendHandler, zlinkSpotActorSendHandler } from '@zlink-systems/nestjs';
+import { zlinkSpotActorSendHandler } from '@zlink-systems/nestjs';
 import type {
   ZLinkMessageContext,
   ZLinkPublishMessageContext,
@@ -19,24 +19,7 @@ import {
   FieldView
 } from '../shared/messages';
 import { Player } from '../shared/player';
-import { Entry, Field } from './spots';
-@Injectable()
-@zlinkEntrySpotActorSendHandler({
-  entrySpot: () => Entry,
-  actor: () => Player,
-  packetName: PacketNames.joinWorldRequest
-})
-export class EnterWorld {
-  async handle(
-    _spot: Entry,
-    actor: Player,
-    _context: ZLinkMessageContext,
-    request: JoinWorldRequest
-  ): Promise<void> {
-    if (request.playerId !== actor.context.actorId) throw new Error('Player identity mismatch');
-    actor.move(new EnterField(request.x, 0));
-  }
-}
+import { Field } from './spots';
 @Injectable()
 @zlinkSpotActorSendHandler({
   spot: () => Field,

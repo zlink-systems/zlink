@@ -147,8 +147,8 @@ public final class Scenarios implements AutoCloseable {
                 var s1 = leader.sessionInfo();
                 var s2 = member.sessionInfo();
                 nodes.drain(advanced.nodeId());
-                var relocated = leader.dungeon();
-                var other = member.dungeon();
+                var relocated = leader.dungeon(advanced.nodeId());
+                var other = member.dungeon(advanced.nodeId());
                 sameDungeon(advanced, relocated);
                 sameDungeon(relocated, other);
                 require(

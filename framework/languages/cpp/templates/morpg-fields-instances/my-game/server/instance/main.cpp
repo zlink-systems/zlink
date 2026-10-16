@@ -1,4 +1,5 @@
 #include "dungeon.hpp"
+#include "server/shared/entry.hpp"
 #include "server/shared/hosting.hpp"
 int main (int argc, char **argv)
 {
@@ -19,6 +20,7 @@ int main (int argc, char **argv)
           });
         mesh.objects ()
           .server ()
+          .add_entry_spot<MyGame::WorldEntry> ()
           .add_spot_factory<MyGame::Dungeon, MyGame::NodeConfig, MyGame::fx::actor_client_t> (
             MyGame::Names::dungeon)
           .set_stable_type_limit (config.DungeonCapacity)

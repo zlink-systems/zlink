@@ -37,6 +37,12 @@ public static class GameNames
     public static string DungeonId(string partyId) => $"dungeon-{partyId}";
 }
 
+public static class GameTiming
+{
+    public static readonly TimeSpan MessageFollow = TimeSpan.FromSeconds(20);
+    public static readonly TimeSpan SafeShutdown = MessageFollow + TimeSpan.FromSeconds(10);
+}
+
 public static class Rejection
 {
     public const string InvalidParty = "INVALID_PARTY";

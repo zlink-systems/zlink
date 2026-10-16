@@ -92,7 +92,6 @@ export function checkStructure(path = 'zlink.structure.json'): void {
     assert(host.role === 'field' || host.role === 'instance');
     assert(['entry', 'user'].includes(text(spot.kind)), 'Unknown Spot kind');
     if (spot.kind === 'entry') {
-      assert.equal(host.role, 'field', 'Entry Spot owner must host Field runtime');
       assert.equal(spot.type, null);
       assert(!('dynamic' in spot) && !('logicalId' in spot));
     } else {
@@ -113,15 +112,17 @@ export function checkStructure(path = 'zlink.structure.json'): void {
     }
   }
   unique(logical, 'logical Spot ID');
-  assert(
-    spots.some((s) => s.kind === 'entry'),
-    'Missing Entry Spot'
-  );
-  assert(
-    spots.some((s) => s.type === Names.dungeon),
-    'Missing Dungeon type'
-  );
+  for (const type of [Names.field, Names.dungeon])
+    assert(
+      spots.some((s) => s.kind === 'user' && s.type === type),
+      `Missing registered User Spot type: ${type}`
+    );
   for (const node of nodes.filter((n) => n.role === 'field' || n.role === 'instance')) {
+    assert.equal(
+      spots.filter((s) => s.owner === node.id && s.kind === 'entry').length,
+      1,
+      'Object Server must declare one Entry'
+    );
     const cfg = object(JSON.parse(readFileSync(text(node.config), 'utf8')));
     const capacity = node.role === 'field' ? cfg.fieldCapacity : cfg.dungeonCapacity;
     assert(Number.isSafeInteger(capacity) && Number(capacity) > 0, 'Invalid Spot capacity');

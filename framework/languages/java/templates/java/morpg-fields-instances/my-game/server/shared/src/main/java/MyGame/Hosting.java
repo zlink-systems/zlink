@@ -23,7 +23,7 @@ public final class Hosting {
             ZLinkRedisLocationStore locations,
             ZLinkRedisRelocationStore relocations) {
         options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL);
-        options.configureLocations();
+        options.configureLocations().setMessageFollowDuration(Control.MESSAGE_FOLLOW);
         options.addLocationStore(locations);
         options.addRelocationStore(relocations);
     }
@@ -129,7 +129,7 @@ public final class Hosting {
                             if (result.outcome() != ZLinkFrameworkRelocationOutcome.RELOCATED)
                                 throw new IllegalStateException(result.toString());
                             System.out.println(Control.RELOCATED);
-                            safe.get(Control.HOST_DEADLINE.toSeconds(), TimeUnit.SECONDS);
+                            safe.get(Control.SAFE_DEADLINE.toSeconds(), TimeUnit.SECONDS);
                             System.out.println(Control.SAFE_TO_SHUTDOWN);
                         }
                         case Control.SHUTDOWN -> {

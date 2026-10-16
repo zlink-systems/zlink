@@ -87,36 +87,37 @@ fun checkStructure(root: Path) {
     val spots = array("spots")
     unique(spots.map { text(it, "id") })
     val logicalIds = mutableListOf<String>()
-    var dynamicDungeon = false
+    val userTypes = mutableSetOf<String>()
     for (spot in spots) {
         check(roles[owner(spot)] in listOf("field", "instance"))
         when (text(spot, "kind")) {
             "entry" ->
                 check(
-                    roles[owner(spot)] == "field" &&
-                        spot["type"]?.isNull == true &&
-                        !spot.has("logicalId") &&
-                        !spot.has("dynamic")
+                    spot["type"]?.isNull == true && !spot.has("logicalId") && !spot.has("dynamic")
                 )
             "user" -> {
+                userTypes += text(spot, "type")
                 check(
                     text(spot, "type") ==
                         if (roles[owner(spot)] == "field") Names.FIELD else Names.DUNGEON
                 )
+                check(
+                    (spot["dynamic"]?.asBoolean() == true) == (text(spot, "type") == Names.DUNGEON)
+                ) {
+                    "Spot family dynamic mismatch"
+                }
                 if (spot["dynamic"]?.asBoolean() == true) {
-                    check(!spot.has("logicalId") && text(spot, "type") == Names.DUNGEON)
-                    dynamicDungeon = true
+                    check(!spot.has("logicalId"))
                 } else logicalIds += text(spot, "logicalId")
                 if (spot.has("dynamic")) check(spot["dynamic"].isBoolean)
             }
             else -> error("Unregistered Spot kind")
         }
     }
-    check(dynamicDungeon) { "Missing dynamic Dungeon family" }
+    check(userTypes == setOf(Names.FIELD, Names.DUNGEON)) { "Missing registered User Spot type" }
     unique(logicalIds)
     for (node in nodes.filter { roles[it["id"].asText()] == "field" }) {
         val id = text(node, "id")
-        check(spots.any { it["owner"].asText() == id && it["kind"].asText() == "entry" })
         val configured = requireNotNull(configs[id]).fieldIds
         val declared =
             spots
@@ -131,6 +132,12 @@ fun checkStructure(root: Path) {
             "Configured FieldIds differ from fixed Spots: $id"
         }
         check(channels.any { it["owner"].asText() == id }) { "Missing border channel: $id" }
+    }
+    for (node in nodes.filter { roles[it["id"].asText()] in listOf("field", "instance") }) {
+        val id = text(node, "id")
+        check(spots.count { it["owner"].asText() == id && it["kind"].asText() == "entry" } == 1) {
+            "Object Server must declare one Entry: $id"
+        }
     }
     for (edge in array("edges")) {
         check(text(edge, "from") in ids && text(edge, "to") in ids)

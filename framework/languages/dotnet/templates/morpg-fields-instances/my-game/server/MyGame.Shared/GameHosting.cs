@@ -22,6 +22,7 @@ public static class GameHosting
         builder.Services.AddSingleton(settings);
         builder.Services.AddZLinkFramework(options =>
         {
+            options.ConfigureLocations().MessageFollowDuration = GameTiming.MessageFollow;
             options.AddLocationStore(
                 new ZLinkRedisLocationStore(redis =>
                 {

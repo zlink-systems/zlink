@@ -110,7 +110,7 @@ public final class Structure {
         var spots = array(s, "spots");
         unique(spots.stream().map(p -> text(p, "id")).toList());
         var logical = new ArrayList<String>();
-        boolean dynamic = false;
+        var userTypes = new HashSet<String>();
         for (var spot : spots) {
             require(
                     Set.of(Roles.FIELD, Roles.INSTANCE).contains(roles.get(owner(spot, roles))),
@@ -118,12 +118,12 @@ public final class Structure {
             switch (text(spot, "kind")) {
                 case "entry" ->
                         require(
-                                roles.get(owner(spot, roles)).equals(Roles.FIELD)
-                                        && spot.path("type").isNull()
+                                spot.path("type").isNull()
                                         && !spot.has("logicalId")
                                         && !spot.has("dynamic"),
                                 "Invalid Entry Spot declaration");
                 case "user" -> {
+                    userTypes.add(text(spot, "type"));
                     require(
                             text(spot, "type")
                                     .equals(
@@ -133,19 +133,21 @@ public final class Structure {
                             "Unregistered stable type");
                     if (spot.has("dynamic"))
                         require(spot.path("dynamic").isBoolean(), "Invalid dynamic flag");
+                    require(
+                            spot.path("dynamic").asBoolean()
+                                    == text(spot, "type").equals(Names.DUNGEON),
+                            "Spot family dynamic mismatch");
                     if (spot.path("dynamic").asBoolean()) {
                         require(!spot.has("logicalId"), "Dynamic Spot declares logicalId");
-                        require(
-                                text(spot, "type").equals(Names.DUNGEON),
-                                "Only Dungeon is dynamic");
-                        dynamic = true;
                     } else logical.add(text(spot, "logicalId"));
                 }
                 default -> throw new IllegalStateException("Unregistered Spot kind");
             }
         }
         unique(logical);
-        require(dynamic, "Missing dynamic Dungeon family");
+        require(
+                userTypes.equals(Set.of(Names.FIELD, Names.DUNGEON)),
+                "Missing registered User Spot type");
         for (var node : nodes)
             if (roles.get(text(node, "id")).equals(Roles.FIELD)) {
                 var id = text(node, "id");
@@ -168,14 +170,22 @@ public final class Structure {
                 require(
                         channels.stream().anyMatch(c -> c.path("owner").asText().equals(id)),
                         "Missing border channel: " + id);
-                require(
-                        spots.stream()
-                                .anyMatch(
-                                        p ->
-                                                p.path("owner").asText().equals(text(node, "id"))
-                                                        && p.path("kind").asText().equals("entry")),
-                        "Field node lacks Entry Spot");
             }
+        for (var node : nodes) {
+            var id = text(node, "id");
+            if (!Set.of(Roles.FIELD, Roles.INSTANCE).contains(roles.get(id))) continue;
+            require(
+                    spots.stream()
+                                    .filter(
+                                            p ->
+                                                    p.path("owner").asText().equals(id)
+                                                            && p.path("kind")
+                                                                    .asText()
+                                                                    .equals("entry"))
+                                    .count()
+                            == 1,
+                    "Object Server must declare one Entry: " + id);
+        }
         for (var edge : array(s, "edges")) {
             require(
                     ids.contains(text(edge, "from")) && ids.contains(text(edge, "to")),

@@ -25,7 +25,7 @@ import {
   type ZLinkRouteMeshRuntime,
   type ZLinkRouteMeshStatus
 } from '@zlink-systems/framework';
-import { Names, Limits, Control } from './constants';
+import { Names, Limits, Control, MessageFollowMs } from './constants';
 import { NODE_CONFIG, readConfig, type NodeConfig } from './config';
 interface HostComposition {
   providers: Type[];
@@ -57,6 +57,7 @@ export async function runHost(
   class Configuration {}
   class Host {}
   const builder = zlinkFramework();
+  builder.configureLocations().messageFollowDurationMs(MessageFollowMs);
   builder.addLocationStore(location);
   builder.addRelocationStore(relocation);
   builder.configureDispatch().messageFlow('normal');
@@ -90,7 +91,7 @@ export async function runHost(
     throw new Error('Readiness observation deadline expired');
   }
   async function waitSafe(): Promise<void> {
-    for await (const observed of runtime.observe(AbortSignal.timeout(Limits.relocationMs))) {
+    for await (const observed of runtime.observe(AbortSignal.timeout(Limits.safeShutdownMs))) {
       if (observed.loss.discardedTerminalCount !== 0n)
         throw new Error('Lifecycle observation lost');
       if (observed.status.safeToShutdown) return;

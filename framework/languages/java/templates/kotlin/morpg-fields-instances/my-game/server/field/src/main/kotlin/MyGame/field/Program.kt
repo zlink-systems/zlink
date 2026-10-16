@@ -20,6 +20,7 @@ class Program {
         require(config.fieldCapacity > 0)
         configure(options, locations, relocations)
         options.addHandlersFromPackageOf<Program>()
+        options.addHandlersFromPackageOf<EnterWorld>()
         val mesh =
             options
                 .addRouteMesh(Names.MESH)

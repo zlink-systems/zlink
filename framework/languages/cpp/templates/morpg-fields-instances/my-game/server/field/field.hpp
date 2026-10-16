@@ -1,5 +1,5 @@
 #pragma once
-#include "entry.hpp"
+#include "server/shared/player.hpp"
 #include "domain.hpp"
 #include <cstdlib>
 #include <iostream>

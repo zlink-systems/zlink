@@ -21,3 +21,5 @@ Use typed messages and the default Framework JSON serializer. Relocation adapter
 ## Changes and verification
 
 Keep `field`, `dungeon`, `reconnect` and `update` in that order. Update configuration and `zlink.structure.json` together. Run the structure checker and the selected e2e scenarios after changes. A single intermittent failure is a defect. Preserve the first failure and message-flow records in `.logs/run-<id>/`; do not treat a later successful run as a correction.
+
+Register the shared Entry and first-login handler on every node that registers the Player Actor factory. Structure validation must require exactly one Entry for each Field and Instance owner and every registered User Spot type. Keep Message Follow and the derived safe-shutdown observation deadline in shared timing constants.

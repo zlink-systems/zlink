@@ -17,7 +17,9 @@ export const Game = {
   maximumPartyMembers: 4
 } as const;
 export const Rejection = { invalidParty: 'INVALID_PARTY', notLeader: 'NOT_LEADER' } as const;
+export const MessageFollowMs = 20_000;
 export const Limits = {
+  safeShutdownMs: MessageFollowMs + 10_000,
   observationCapacity: 64,
   messageMs: 10_000,
   startupMs: 30_000,
