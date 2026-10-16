@@ -1,7 +1,6 @@
 package MyGame.admission
 
 import MyGame.*
-
 import systems.zlink.framework.kotlin.*
 import systems.zlink.framework.spots.*
 

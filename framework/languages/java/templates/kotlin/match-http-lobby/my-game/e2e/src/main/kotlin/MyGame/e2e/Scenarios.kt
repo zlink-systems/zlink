@@ -18,7 +18,7 @@ suspend fun scenario(id: String, nodes: Nodes) {
     val assignment = match(nodes, "p1-$suffix", "p2-$suffix")
     val a = Client(assignment.sessionEndpoint, "p1-$suffix", assignment.roomId)
     val b = Client(assignment.sessionEndpoint, "p2-$suffix", assignment.roomId)
-    try {
+    withCleanup(cleanup = { withCleanup(cleanup = { a.close() }) { b.close() } }) {
         a.connect()
         b.connect()
         val initial = both(a, b) { it.players.size == Rules.PLAYERS }
@@ -56,7 +56,7 @@ suspend fun scenario(id: String, nodes: Nodes) {
             Scenario.RECONNECT -> {
                 b.close()
                 val again = Client(nodes.endpoint, b.playerId, assignment.roomId)
-                try {
+                withCleanup(cleanup = { again.close() }) {
                     again.connect()
                     sameState(before, again.next<RoomView>())
                     val identity = again.sessionInfo()
@@ -69,8 +69,6 @@ suspend fun scenario(id: String, nodes: Nodes) {
                     again.clear()
                     hit(a, again, 3, Rules.INITIAL_HP - Rules.DAMAGE * 2)
                     connected(a, again)
-                } finally {
-                    again.close()
                 }
                 return
             }
@@ -92,12 +90,6 @@ suspend fun scenario(id: String, nodes: Nodes) {
             Scenario.LOBBY -> error("Unexpected scenario")
         }
         connected(a, b)
-    } finally {
-        try {
-            b.close()
-        } finally {
-            a.close()
-        }
     }
 }
 
@@ -138,7 +130,7 @@ private suspend fun newMatch(nodes: Nodes, replacementId: String) {
     val assignment = match(nodes, "new-a-$suffix", "new-b-$suffix")
     val a = Client(assignment.sessionEndpoint, "new-a-$suffix", assignment.roomId)
     val b = Client(assignment.sessionEndpoint, "new-b-$suffix", assignment.roomId)
-    try {
+    withCleanup(cleanup = { withCleanup(cleanup = { a.close() }) { b.close() } }) {
         a.connect()
         b.connect()
         val room = both(a, b) { it.players.size == Rules.PLAYERS }
@@ -146,12 +138,6 @@ private suspend fun newMatch(nodes: Nodes, replacementId: String) {
             "New Room is not on the replacement match node"
         }
         connected(a, b)
-    } finally {
-        try {
-            b.close()
-        } finally {
-            a.close()
-        }
     }
 }
 

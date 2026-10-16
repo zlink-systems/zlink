@@ -204,13 +204,15 @@ private class Node(private val id: String, module: String, config: Path, root: P
     }
 
     fun cleanup() {
-        try {
-            stop()
-        } finally {
-            if (process.isAlive) {
-                process.destroyForcibly()
-                process.waitFor()
+        withCleanup(
+            cleanup = {
+                if (process.isAlive) {
+                    process.destroyForcibly()
+                    process.waitFor()
+                }
             }
+        ) {
+            stop()
         }
     }
 }
