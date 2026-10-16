@@ -1,6 +1,7 @@
 package systems.zlink.framework.runtime.streams;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -17,8 +18,36 @@ import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.atomic.AtomicReference;
 
 final class ZLinkFlowHeaderContractTest {
+    @Test
+    void executorWithoutFlowPassesTheOriginalWork() {
+        AtomicReference<Runnable> submitted = new AtomicReference<>();
+        Runnable work = () -> {};
+        try (var ignored = ZLinkFlowContext.suppress()) {
+            ZLinkFlowContext.propagating(submitted::set).execute(work);
+        }
+        assertSame(work, submitted.get());
+    }
+
+    @Test
+    void executorPreservesCapturedFlowAndRestoresTheWorker() {
+        AtomicReference<Runnable> submitted = new AtomicReference<>();
+        AtomicReference<ZLinkFlowContext.State> observed = new AtomicReference<>();
+        var captured = ZLinkFlowContext.create(ZLinkFlowOrigin.APPLICATION);
+        try (var ignored = ZLinkFlowContext.enter(captured)) {
+            ZLinkFlowContext.propagating(submitted::set)
+                    .execute(() -> observed.set(ZLinkFlowContext.current()));
+        }
+        var worker = ZLinkFlowContext.create(ZLinkFlowOrigin.INBOUND);
+        try (var ignored = ZLinkFlowContext.enter(worker)) {
+            submitted.get().run();
+            assertSame(worker, ZLinkFlowContext.current());
+        }
+        assertSame(captured, observed.get());
+    }
+
     @Test
     void markerAndFlowPairRoundTrip() {
         ZLinkFlowContext.State flow = ZLinkFlowContext.create(ZLinkFlowOrigin.APPLICATION);

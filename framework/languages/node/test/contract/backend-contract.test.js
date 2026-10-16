@@ -1056,7 +1056,10 @@ test('backend mesh dispatch pump marks application and infrastructure execution 
 });
 
 test('backend mesh dispatch pump yields between continuous ready batches without messages', async () => {
-  const totalBatches = 32;
+  //  The pump yields after 16 counted records, and every Application worker (up to
+  //  max(2, availableParallelism)) can already hold one uncounted drain in the same microtask wave.
+  //  The batch count must exceed both so the yield stays observable on any core count.
+  const totalBatches = 32 + 2 * Math.max(2, require('node:os').availableParallelism());
   let readyHandler;
   let drainedBatches = 0;
   let timerObservedAt;

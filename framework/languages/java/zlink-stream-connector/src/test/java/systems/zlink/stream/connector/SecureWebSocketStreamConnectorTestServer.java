@@ -15,7 +15,6 @@ import io.netty.handler.codec.http.HttpServerCodec;
 import io.netty.handler.codec.http.websocketx.BinaryWebSocketFrame;
 import io.netty.handler.codec.http.websocketx.WebSocketServerProtocolHandler;
 import io.netty.handler.ssl.SslContext;
-import io.netty.handler.ssl.SslContextBuilder;
 
 import java.io.Closeable;
 import java.net.InetSocketAddress;
@@ -36,10 +35,7 @@ final class SecureWebSocketStreamConnectorTestServer implements Closeable {
     private volatile Channel clientChannel;
 
     SecureWebSocketStreamConnectorTestServer() throws Exception {
-        SslContext sslContext =
-                SslContextBuilder.forServer(
-                                TlsTestCertificates.certificate(), TlsTestCertificates.privateKey())
-                        .build();
+        SslContext sslContext = TlsTestCertificates.serverContext();
         serverChannel =
                 new ServerBootstrap()
                         .group(boss, worker)

@@ -147,7 +147,11 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
     }
 
     default void observePeerAdmissionExpectation(
-            RoutingId peerRid, String endpoint, long lifecycleGeneration, String securityIdentity) {
+            RoutingId peerRid,
+            String endpoint,
+            long lifecycleGeneration,
+            String securityIdentity,
+            ZLinkMeshNodeObjectRole objectRole) {
         // Optional for alternate backends without descriptor admission.
     }
 

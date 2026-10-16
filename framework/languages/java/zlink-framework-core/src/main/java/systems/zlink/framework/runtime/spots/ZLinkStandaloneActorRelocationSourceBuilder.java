@@ -868,9 +868,11 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
         return sessionSealer
                 .sealRouteUntilAck(seal, sessionRelocationSealTimeout)
                 .<Optional<SealedSessionRoute>>thenApplyAsync(
-                        sealedResult -> {
-                            return Optional.of(new SealedSessionRoute(route, seal));
-                        })
+                        //  §8.3: a bindingAbsent Actor moves without a Session binding.
+                        sealedResult ->
+                                sealedResult.sealed()
+                                        ? Optional.of(new SealedSessionRoute(route, seal))
+                                        : Optional.empty())
                 .exceptionallyCompose(
                         failure ->
                                 CompletableFuture.failedFuture(

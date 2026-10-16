@@ -93,7 +93,7 @@ public sealed class InstanceSpotActivationJournalTests
             catalog,
             node,
             registration,
-            reservation.TargetOwner
+            () => reservation.TargetOwner
         );
         if (ready)
         {
@@ -193,7 +193,7 @@ public sealed class InstanceSpotActivationJournalTests
             null!,
             node,
             null!,
-            reservation.TargetOwner
+            () => reservation.TargetOwner
         );
         await target.RecoverAsync(CancellationToken.None);
         Assert.IsType<ZLinkAuthorityReadResult.Missing>(
@@ -486,10 +486,11 @@ public sealed class InstanceSpotActivationJournalTests
             null!,
             node,
             null!,
-            new ZLinkLocationOwnerToken(
-                creating.OwnerId,
-                checked((long)creating.OwnerLeaseGeneration)
-            )
+            () =>
+                new ZLinkLocationOwnerToken(
+                    creating.OwnerId,
+                    checked((long)creating.OwnerLeaseGeneration)
+                )
         );
 
         await target.RecoverAsync(CancellationToken.None);

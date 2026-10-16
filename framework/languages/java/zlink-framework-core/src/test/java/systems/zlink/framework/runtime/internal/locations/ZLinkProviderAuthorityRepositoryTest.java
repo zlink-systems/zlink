@@ -1292,7 +1292,9 @@ final class ZLinkProviderAuthorityRepositoryTest {
                                             .toCompletableFuture()
                                             .join())
                             .token();
-            var descriptor = capacityDescriptor(owner);
+            // The relocation stays on this node, so the target needs room for the reserved
+            // bundle next to the Spot's own slot.
+            var descriptor = capacityDescriptor(owner, "game", RoutingId.from("capacity-node"), 2);
             assertEquals(
                     ZLinkLocationWriteStatus.STORED,
                     repository
@@ -2219,6 +2221,7 @@ final class ZLinkProviderAuthorityRepositoryTest {
                                         .toCompletableFuture()
                                         .get())
                         .token();
+        publishAggregateTarget(provider, owner);
         String authorityA = ZLinkAuthorityKeyCodec.actor("ceiling-a");
         String authorityB = ZLinkAuthorityKeyCodec.actor("ceiling-b");
         var keyA = authorityKey(authorityA);
@@ -2402,6 +2405,7 @@ final class ZLinkProviderAuthorityRepositoryTest {
                                 .claim("owner-a", Duration.ofHours(1))
                                 .toCompletableFuture()
                                 .join();
+        publishAggregateTarget(delegate, owner.token());
         var authorityA = authorityKey(authorityAContractKey);
         var authorityB = authorityKey(authorityBContractKey);
         var seed = encodedAuthorityRecord();
@@ -2491,6 +2495,7 @@ final class ZLinkProviderAuthorityRepositoryTest {
                                 .claim("owner-a", Duration.ofHours(1))
                                 .toCompletableFuture()
                                 .join();
+        publishAggregateTarget(delegate, owner.token());
         ZLinkStoreKey authority = authorityKey(authorityContractKey);
         var seeded =
                 (systems.zlink.framework.locationprovider.ZLinkStoreWriteApplied)
@@ -2558,6 +2563,7 @@ final class ZLinkProviderAuthorityRepositoryTest {
                                 .claim("owner-a", Duration.ofHours(1))
                                 .toCompletableFuture()
                                 .join();
+        publishAggregateTarget(delegate, owner.token());
         var seeded =
                 (systems.zlink.framework.locationprovider.ZLinkStoreWriteApplied)
                         delegate.write(
@@ -2625,6 +2631,7 @@ final class ZLinkProviderAuthorityRepositoryTest {
                                 .claim("owner-a", Duration.ofHours(1))
                                 .toCompletableFuture()
                                 .join();
+        publishAggregateTarget(delegate, owner.token());
         var seeded =
                 (systems.zlink.framework.locationprovider.ZLinkStoreWriteApplied)
                         delegate.write(
@@ -2685,6 +2692,7 @@ final class ZLinkProviderAuthorityRepositoryTest {
                                 .claim("owner-a", Duration.ofHours(1))
                                 .toCompletableFuture()
                                 .join();
+        publishAggregateTarget(delegate, owner.token(), 2);
         var seeded =
                 (systems.zlink.framework.locationprovider.ZLinkStoreWriteApplied)
                         delegate.write(
@@ -2770,6 +2778,7 @@ final class ZLinkProviderAuthorityRepositoryTest {
                                 .claim("owner-a", Duration.ofHours(1))
                                 .toCompletableFuture()
                                 .join();
+        publishAggregateTarget(delegate, owner.token());
         var seeded =
                 (systems.zlink.framework.locationprovider.ZLinkStoreWriteApplied)
                         delegate.write(
@@ -2899,6 +2908,8 @@ final class ZLinkProviderAuthorityRepositoryTest {
                         relocationRequest.targetDescriptorLifecycleGeneration(),
                         relocationRequest.capacityBundle(),
                         relocationRequest.targetOwner());
+        // A PREPARED aggregate holds its target capacity reservation (Location runtime §6.1).
+        seedPendingActorReservation(delegate, request.targetDescriptor());
         Object marker = aggregateParticipantMarker(request, participant, 0);
         delegate.write(
                         new ZLinkStoreWriteRequest(
@@ -2970,7 +2981,9 @@ final class ZLinkProviderAuthorityRepositoryTest {
                                         .toCompletableFuture()
                                         .join())
                         .token();
-        var descriptor = capacityDescriptor(owner);
+        // The relocation stays on this node, so the target needs room for the reserved bundle
+        // next to the Spot's own slot.
+        var descriptor = capacityDescriptor(owner, "game", RoutingId.from("capacity-node"), 2);
         assertEquals(
                 ZLinkLocationWriteStatus.STORED,
                 repository
@@ -3228,6 +3241,11 @@ final class ZLinkProviderAuthorityRepositoryTest {
 
     private static ZLinkMeshNodeDescriptor capacityDescriptor(
             ZLinkLocationOwnerToken owner, String meshName, RoutingId nodeRid) {
+        return capacityDescriptor(owner, meshName, nodeRid, 1);
+    }
+
+    private static ZLinkMeshNodeDescriptor capacityDescriptor(
+            ZLinkLocationOwnerToken owner, String meshName, RoutingId nodeRid, int limit) {
         return new ZLinkMeshNodeDescriptor(
                 meshName,
                 nodeRid,
@@ -3242,13 +3260,13 @@ final class ZLinkProviderAuthorityRepositoryTest {
                                 "room",
                                 ZLinkObjectMaintenancePolicyKind.DISABLED,
                                 false,
-                                1)),
+                                limit)),
                 ZLinkMeshNodeObjectRole.SERVER,
                 Optional.of("capacity-node-entry-00000000-0000-4000-8000-000000000001"),
                 100,
                 new ZLinkPlacementCapacity(
-                        new ZLinkCapacityUsage(0, 0, 1),
-                        new ZLinkCapacityUsage(0, 0, 1),
+                        new ZLinkCapacityUsage(0, 0, limit),
+                        new ZLinkCapacityUsage(0, 0, limit),
                         List.of()),
                 new ZLinkActivationConcurrency(0, 64),
                 Optional.empty(),
@@ -3257,6 +3275,50 @@ final class ZLinkProviderAuthorityRepositoryTest {
                 owner.ownerId(),
                 owner.leaseGeneration(),
                 Instant.parse("2026-08-06T00:00:00Z"));
+    }
+
+    /** The relocation target ("game", node-a, lifecycle 1) that aggregate fixtures prepare to. */
+    private static void publishAggregateTarget(
+            ZLinkLocationStore provider, ZLinkLocationOwnerToken owner) {
+        publishAggregateTarget(provider, owner, 1);
+    }
+
+    private static void publishAggregateTarget(
+            ZLinkLocationStore provider, ZLinkLocationOwnerToken owner, int limit) {
+        assertEquals(
+                ZLinkLocationWriteStatus.STORED,
+                new ZLinkProviderDescriptorRepository(provider)
+                        .updateMeshNode(
+                                capacityDescriptor(owner, "game", RoutingId.from("node-a"), limit),
+                                ZLinkLocationWriteIntent.NEW_CLAIM)
+                        .toCompletableFuture()
+                        .join()
+                        .status());
+    }
+
+    private static void seedPendingActorReservation(
+            ZLinkLocationStore provider, ZLinkMeshNodeDescriptorKey target)
+            throws ReflectiveOperationException {
+        Method capacityKey =
+                ZLinkProviderAuthorityRepository.class.getDeclaredMethod(
+                        "capacityKey", ZLinkMeshNodeDescriptorKey.class);
+        capacityKey.setAccessible(true);
+        provider.write(
+                        new ZLinkStoreWriteRequest(
+                                List.of(),
+                                List.of(
+                                        new ZLinkStorePut(
+                                                (ZLinkStoreKey) capacityKey.invoke(null, target),
+                                                ("{\"active\":{\"actors\":0,\"spots\":0,"
+                                                                + "\"spotTypes\":{}},\"pending\":{\"actors\":1,"
+                                                                + "\"spots\":0,\"spotTypes\":{}}}")
+                                                        .getBytes(
+                                                                java.nio.charset.StandardCharsets
+                                                                        .UTF_8),
+                                                null))),
+                        () -> false)
+                .toCompletableFuture()
+                .join();
     }
 
     private static byte[] encodedAuthorityRecord(Object aggregate)

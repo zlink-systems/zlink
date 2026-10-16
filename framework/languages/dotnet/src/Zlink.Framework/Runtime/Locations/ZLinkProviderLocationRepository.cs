@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Runtime.ExceptionServices;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 
 namespace Zlink.Framework.Runtime.Locations;
@@ -592,8 +593,16 @@ internal sealed partial class ZLinkProviderLocationRepository(IZLinkLocationStor
                 .ReadAsync(OwnerKey(storedOwner), cancellationToken)
                 .ConfigureAwait(false);
             var storedOwnerLive = storedOwnerLease is ZLinkStoreReadResult.Found;
+            // Location runtime §10: a claim whose result was lost is confirmed by
+            // reading the same key. A row that differs from this claim only in
+            // the stamped write time is that claim, not a conflicting owner.
             if (intent == ZLinkLocationWriteIntent.NewClaim && storedOwnerLive)
-                return ZLinkLocationWriteResult.RejectedConflict;
+                return SameDescriptorExceptWriteTime(record.Descriptor, descriptor)
+                    ? ZLinkLocationWriteResult.Stored(
+                        VersionOf(found.Value.Version),
+                        found.Value.StoreNow
+                    )
+                    : ZLinkLocationWriteResult.RejectedConflict;
             if (intent == ZLinkLocationWriteIntent.Takeover && storedOwnerLive)
                 return ZLinkLocationWriteResult.IgnoredStale;
             if (
@@ -645,6 +654,15 @@ internal sealed partial class ZLinkProviderLocationRepository(IZLinkLocationStor
     // to a stable 1 when the provider's version string isn't a plain
     // decimal integer -- true for the live Redis provider, whose per-key Put
     // version is a freshly issued GUID, not a counter.
+    private static bool SameDescriptorExceptWriteTime<T>(T stored, T next)
+    {
+        var left = JsonSerializer.SerializeToNode(stored, ZLinkJsonSerializerOptions.Default)!;
+        var right = JsonSerializer.SerializeToNode(next, ZLinkJsonSerializerOptions.Default)!;
+        left.AsObject().Remove(ZLinkLocationRecordJsonFields.UpdatedAtEpochMs);
+        right.AsObject().Remove(ZLinkLocationRecordJsonFields.UpdatedAtEpochMs);
+        return JsonNode.DeepEquals(left, right);
+    }
+
     private static ulong VersionOf(ZLinkStoreVersion version) =>
         ulong.TryParse(
             version.Value,
