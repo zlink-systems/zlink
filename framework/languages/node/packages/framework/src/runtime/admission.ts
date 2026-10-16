@@ -2,6 +2,7 @@ import {
   ZLinkFrameworkInternalErrorKind,
   createInternalFrameworkException
 } from './framework-errors-internal';
+import { isPromiseLike } from './abort';
 const BACKING_ARRAY_COMPACTION_MIN_HEAD = 1024;
 
 /** 소비한 배열 prefix가 정리 조건에 도달했는지 판정합니다. */
@@ -64,48 +65,63 @@ export class ZLinkRuntimeAdmissionGate {
   }
 
   claim(meshName: string, operation: string): ZLinkApplicationWorkClaim {
+    const state = this.enter(meshName, operation);
+    let closed = false;
+    return {
+      close: () => {
+        if (closed) return;
+        closed = true;
+        exitAdmission(state);
+      }
+    };
+  }
+
+  /**
+   * Runs one admitted unit of work. Work that completes synchronously leaves
+   * admission in the same turn; asynchronous work leaves it from the single
+   * continuation on its result.
+   */
+  run<T>(meshName: string, operation: string, work: () => T | Promise<T>): T | Promise<T> {
+    let state: ZLinkMeshAdmissionState;
+    let result: T | Promise<T>;
+    try {
+      state = this.enter(meshName, operation);
+    } catch (error) {
+      // A closed admission and a failing dispatch stay asynchronous rejections.
+      return Promise.reject(error);
+    }
+    try {
+      result = work();
+    } catch (error) {
+      exitAdmission(state);
+      return Promise.reject(error);
+    }
+    if (!isPromiseLike(result)) {
+      exitAdmission(state);
+      return result;
+    }
+    return Promise.resolve(result).then(
+      (value) => {
+        exitAdmission(state);
+        return value;
+      },
+      (error: unknown) => {
+        exitAdmission(state);
+        throw error;
+      }
+    );
+  }
+
+  private enter(meshName: string, operation: string): ZLinkMeshAdmissionState {
     const state = this.requireState(meshName);
     if (this.ownerAdmissionOpen() && !state.sealed) {
       state.active += 1;
-      let closed = false;
-      return {
-        close: () => {
-          if (closed) return;
-          closed = true;
-          state.active -= 1;
-          if (state.active === 0) {
-            let resolve: (() => void) | undefined;
-            while ((resolve = takeWaiter(state)) !== undefined) resolve();
-          }
-        }
-      };
+      return state;
     }
     throw createInternalFrameworkException(
       state.sealedReason,
       `${operation} was rejected because framework admission is closed.`
     );
-  }
-
-  run<T>(meshName: string, operation: string, work: () => T | Promise<T>): Promise<T> {
-    let claim: ZLinkApplicationWorkClaim | undefined;
-    try {
-      claim = this.claim(meshName, operation);
-      const result = work();
-      const close = claim.close;
-      return Promise.resolve(result).then(
-        (value) => {
-          close();
-          return value;
-        },
-        (error) => {
-          close();
-          throw error;
-        }
-      );
-    } catch (error) {
-      claim?.close();
-      return Promise.reject(error);
-    }
   }
 
   awaitZero(meshName: string, signal?: AbortSignal): Promise<void> {
@@ -189,6 +205,14 @@ interface ZLinkMeshAdmissionState {
   readonly waiters: Array<(() => void) | undefined>;
   waiterHead: number;
   waiterCount: number;
+}
+
+function exitAdmission(state: ZLinkMeshAdmissionState): void {
+  state.active -= 1;
+  if (state.active === 0) {
+    let resolve: (() => void) | undefined;
+    while ((resolve = takeWaiter(state)) !== undefined) resolve();
+  }
 }
 
 function takeWaiter(state: ZLinkMeshAdmissionState): (() => void) | undefined {

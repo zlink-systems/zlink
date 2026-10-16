@@ -233,6 +233,9 @@ final class ZLinkInterfaceHandlerScanner {
             return;
         }
         ZLinkSpotSubscription annotation = candidate.getAnnotation(ZLinkSpotSubscription.class);
+        if (annotation == null) {
+            return;
+        }
         String topic = ZLinkHandlerScanValidation.requireTopic(candidate, annotation);
         Type[] arguments = matched.getActualTypeArguments();
         Class<?> spotType = requireClassArgument(candidate, arguments[0]);

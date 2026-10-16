@@ -2315,3 +2315,48 @@ test('ClientServer admission and disconnect publish after their facts change', a
   await raw.dispose();
   await sockets.dispose();
 });
+
+
+test('automatic ClientServer admission preserves opaque server RID byte identity', async () => {
+  const store = new internal.ZLinkInMemoryLocationStore();
+  const localRuntime = new internal.ZLinkLocationRuntime({
+    stores: stores(store),
+    ownerId: 'client-owner'
+  });
+  await localRuntime.start('client-host');
+  let discovery;
+  try {
+    const remoteOwner = await store.claimOwnerLease('remote-owner', 30_000);
+    assert.equal(remoteOwner.kind, 'claimed');
+    const expected = descriptor(remoteOwner, {
+      serverRid: routingIds.decodeRoutingId('server-display', 'ff000001')
+    });
+    await store.updateClientServer(expected, internal.ZLinkLocationWriteIntent.NewClaim);
+    const registration = internal.createFrameworkRegistration({
+      channels: { orders: { client: { manualConnections: [] } } },
+      locations: { useInMemoryStores: true }
+    });
+    const sockets = automaticClientServerSockets();
+    discovery = new internal.ZLinkClientServerLocationRuntime(
+      registration,
+      sockets,
+      localRuntime,
+      stores(store),
+      { pollingIntervalMs: 60_000 }
+    );
+    await discovery.start();
+    await sockets.admit(expected);
+    assert.equal(
+      discovery.activeTargets('orders').length,
+      1,
+      'matching opaque RID bytes admit the server'
+    );
+    assert.equal(
+      routingIds.encodeRoutingIdStorageHex(discovery.activeTargets('orders')[0].serverRid),
+      'ff000001'
+    );
+  } finally {
+    await discovery?.stop();
+    await localRuntime.stop();
+  }
+});

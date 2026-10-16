@@ -4,6 +4,7 @@ import systems.zlink.framework.ZLinkMessageContext;
 import systems.zlink.framework.channels.ZLinkPublishMessageContext;
 import systems.zlink.framework.runtime.handlers.ZLinkHandlerMethodInvoker;
 import systems.zlink.framework.runtime.handlers.ZLinkHandlerMethodInvoker.PreparedMethod;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSubscription;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationAdapter;
 
 import java.lang.reflect.Method;
@@ -44,14 +45,14 @@ record SpotPacketHandlerRegistration(
 }
 
 record SpotSubscriptionHandlerRegistration(
-        String topic,
+        ZLinkBackendSubscription subscription,
         Class<?> handlerType,
         Class<?> spotType,
         Class<?> messageType,
         String packetName,
         PreparedMethod invocation) {
     SpotSubscriptionHandlerRegistration(
-            String topic,
+            ZLinkBackendSubscription subscription,
             Class<?> handlerType,
             Method method,
             Class<?> spotType,
@@ -59,7 +60,7 @@ record SpotSubscriptionHandlerRegistration(
             String packetName,
             Collection<ZLinkSuspendInvocationAdapter> invokers) {
         this(
-                topic,
+                subscription,
                 handlerType,
                 spotType,
                 messageType,

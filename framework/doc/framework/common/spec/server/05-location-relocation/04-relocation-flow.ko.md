@@ -132,10 +132,11 @@ participant/order sequence, timer name, delivery·scheduled index, scheduled tim
 skipped-tick count가 들어간다. Native timer handle과 callback continuation은 이 frozen
 saved-work record에 넣지 않는다.
 
-`sessionBindings`에는 §4.1에서 seal한 participant마다 command 43이 확인한 Session owner
+`sessionBindings`에는 §4.1에서 seal한 participant마다 command 43이 `sealResult = sealed`로 확인한 Session owner
 identity(`sessionOwnerNodeRid`, `sessionOwnerNodeGeneration`, `sessionOwnerId`,
 `sessionOwnerLeaseGeneration`)와 `sessionRid`, `bindingGeneration`이 들어간다. Bind되지 않은
-participant는 항목이 없다. Target은 이 항목으로
+participant와 command 43이 `bindingAbsent`인 participant는 항목이 없다
+([Session과 Actor binding §8.3](../04-session/02-session-actor-binding.ko.md#83-이미-정리된-binding에-대한-seal)). Target은 이 항목으로
 [Session과 Actor binding §8.2](../04-session/02-session-actor-binding.ko.md#82-control-message-424344)의
 command 44 commit을 만든다.
 
@@ -534,6 +535,8 @@ Session owner가 검증하는 값, seal과 route 전환의 정확한 시점·tim
 | 발생 시점 | 유지하는 owner와 queue | 결과와 후속 처리 |
 |---|---|---|
 | Target 선택 또는 준비 전 실패 | Source | Source dispatch를 막지 않고 operation을 실패시킨다. |
+| Command 43이 `bindingAbsent` | Source, relocation 계속 | 그 participant를 bind되지 않은 participant로 다루고 `sessionBindings`와 command 44에서 뺀다([Session과 Actor binding §8.3](../04-session/02-session-actor-binding.ko.md#83-이미-정리된-binding에-대한-seal)). |
+| Command 42 거부 또는 seal 대기 deadline | Source | 이미 시작한 모든 participant capture를 source queue로 복원해 확정한 뒤, 이미 `sealed`인 participant에 matching command 44 abort를 보내고 operation을 실패로 끝낸다. 순서는 [Session과 Actor binding §8.1](../04-session/02-session-actor-binding.ko.md#81-seal-held-message와-route-전환)의 abort 순서다. |
 | Session seal 뒤, relay 수신 준비 reply가 accepted 상태가 되기 전 명시적인 실패 | Source | Target temporary queue를 실행하지 않는다. Memory에 유지한 payload로 source queue와 matching Session seal을 복원한다. |
 | Chunk 조립 결과가 Restore 요청의 checksum과 다름 | Source | Target은 복원을 시작하지 않고 명시적 실패 reply를 보내며 조립 중인 chunk를 제거한다. Source는 memory의 payload로 queue를 복원하고 operation을 실패로 끝낸다. 재시도하지 않는다. |
 | 같은 relocation identity의 Restore 요청에 처음과 다른 길이나 checksum이 도착 | Source | Target은 기존 조립을 재사용하지도 덮어쓰지도 않고 명시적 conflict 실패로 끝낸다. Source는 위 명시적 실패와 같이 복원한다. |
@@ -568,7 +571,8 @@ reply route를 유지한다. Store를 다시 읽거나 application handler를 so
 
 - **Session 연결과 중계가 이 전달 경로에 의존한다.** 이 경로가 없으면 이동한 Actor에 연결된
   session은 이동 자체가 성공해도 조용히 끊긴다. 따라서 Message Follow는 선택적인 성능
-  최적화가 아니다.
+  최적화가 아니다. 유일한 예외는 [Location runtime §10](01-location-runtime.ko.md#10-store-응답을-받지-못했을-때)의
+  연속 이동 예외이며, 그때 Session route는 각 target의 command 44가 옮긴다.
 - Message Follow의 전달량에는 이 handoff가 별도로 두는 상한이 없다 — Location runtime이 정한
   hop 수와 기간 제한 외에 relocation 전용 record 수·byte 상한을 추가하지 않는다.
 

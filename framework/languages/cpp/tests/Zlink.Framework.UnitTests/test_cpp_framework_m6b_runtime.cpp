@@ -34,6 +34,7 @@
 #include "runtime/stateful/raw_stateful_dispatch.hpp"
 #include "runtime/stateful/public_host_runtime.hpp"
 #include "runtime/stateful/stateful_object_runtime.hpp"
+#include "runtime/timers/async_delay.hpp"
 #include "runtime/stateful/stream_session_registry.hpp"
 #include "runtime/spots/actor_transfer_coordinator.hpp"
 #include "runtime/spots/spot_runtime.hpp"
@@ -330,6 +331,8 @@ void verify_actor_calls_keep_selected_route_until_follow_notice ()
         store->claim_owner_lease ("actor-send-new-owner", 30s).result ().value ())
         .token;
 
+    std::mutex delay_mutex;
+    detail::delay_owner_t delays (delay_mutex);
     const auto core_context = std::make_shared<zlink::context_t> ();
     const auto make_runtime = [core_context] (std::string rid) {
         auto state = zlink::framework::test::runtime_failure_fixture<
@@ -486,8 +489,8 @@ void verify_actor_calls_keep_selected_route_until_follow_notice ()
     serializer_registry_t serializers;
     old_target->bind_serializers (serializers);
     new_target->bind_serializers (serializers);
-    auto client =
-      runtime::make_actor_client (live_locations, serializers, {source}, {}, location_options);
+    auto client = runtime::make_actor_client (live_locations, serializers, {source}, {},
+                                              location_options, delays);
 
     const auto collect_actor_sends = [] (detail::mesh_node_runtime_t &target,
                                          std::chrono::milliseconds budget,
@@ -528,8 +531,8 @@ void verify_actor_calls_keep_selected_route_until_follow_notice ()
     // A second application scope can resolve the same singleton MeshNode
     // after this client has already cached A. Its notice registration cannot
     // replace the first client's exact-fence invalidation subscription.
-    auto second_client =
-      runtime::make_actor_client (live_locations, serializers, {source}, {}, location_options);
+    auto second_client = runtime::make_actor_client (live_locations, serializers, {source}, {},
+                                                     location_options, delays);
 
     const auto new_actor = detail::actor_ref_access_t::make (
       new_placement.node_rid, "route-probe", key.global_id, committed.ready.object_generation);

@@ -60,9 +60,9 @@ Issue·PR·보드 없이 쓰고, 끝나면 [§4.3의 worktree 정리](#43-그-�
 ## 3. 묶음 — Milestone과 Project
 
 - **Milestone** = 릴리스. `1.0`(Core 1.0 · bindings 1.0.0 · framework 1.0.0)처럼 릴리스 이름으로 만들고,
-  그 릴리스에 들어가야 하는 Issue에 붙인다. 릴리스 태그 전 조건은 "milestone의 Issue가 모두 **merge된
-  PR로** 닫혔고, 태그할 main 커밋이 그 PR들을 모두 포함한다"이다(수동 close는 세지 않는다; `work.sh status
-  --milestone 1.0`이 이 두 조건을 검사한다). milestone 이름은 `work.sh start --milestone`으로 주고,
+  그 릴리스에 들어가야 하는 Issue에 붙인다. 릴리스 태그 전 조건은 "milestone의 Issue가 모두 **main에
+  merge된 PR로** 닫혔고, 태그할 릴리스 브랜치 커밋(§7)이 그 PR들의 변경을 모두 포함한다"이다(수동 close는
+  세지 않는다; `work.sh status --milestone 1.0`이 앞의 조건을, §7의 `git cherry`가 뒤의 조건을 확인한다). milestone 이름은 `work.sh start --milestone`으로 주고,
   기본값은 `scripts/dev/work.conf`의 `current_milestone`이다(릴리스 뒤 한 곳만 바꾼다).
 - **Project** = 보드 `ZLink`(https://github.com/users/zlink-systems/projects/1, 저장소 Projects 탭에도 연결).
   보드의 행은 **Issue만**이다(PR은 Issue의 연결 정보로 본다). Status `Todo → In progress → Review → Done`,
@@ -163,8 +163,23 @@ PR을 거치지 않는 것은 커밋이 아닌 다음 하나뿐이다.
 
 ## 7. 릴리스와의 관계
 
-- 릴리스는 `CONTRIBUTING.ko.md` §8과 `doc/building/release-pipeline.ko.md`대로 태그로 시작한다. 태그 대상
-  커밋은 §3의 milestone 조건을 만족하는 main 커밋이다(`work.sh status --milestone`).
+브랜치 전략은 **트렁크 기반 개발에 릴리스 브랜치를 더한 방식**이다(Microsoft의 Release Flow, Chromium·
+Kubernetes의 release branch와 같은 구조). main은 하나의 트렁크로 계속 PR을 받고, 릴리스는 main에서 갈라진
+릴리스 브랜치에서 검증하고 태그한다.
+
+- **분기.** 릴리스 범위를 정하는 순간 그 시점의 main에서 `release/framework-<버전>`(binding은
+  `release/bindings-<언어>-<버전>`)을 만든다.
+- **main은 멈추지 않는다.** 릴리스 검증 중에도 승인한 PR은 즉시 main에 merge한다. "태그 뒤 merge" 같은
+  조건을 붙여 PR을 쌓아 두지 않는다 — 쌓인 PR은 main을 다시 받고 전체 label·리뷰를 다시 해야 한다.
+- **수정은 main 먼저(upstream first).** 그 릴리스에 넣을 수정도 Issue 브랜치 → PR → main merge를 거친 뒤,
+  릴리스 브랜치에는 그 커밋을 `git cherry-pick -x`로 옮긴다. 릴리스 브랜치에 main을 merge하지 않는다 —
+  다음 버전의 변경이 섞인다. 릴리스 브랜치에만 있는 수정을 만들지 않는다.
+- **릴리스 브랜치에서 하는 일.** gate와 부분 재검증, 버전 갱신(`sync-version.py --write`), 릴리스 노트,
+  `release-check.sh`, 태그. 태그는 `CONTRIBUTING.ko.md` §8과 `doc/building/release-pipeline.ko.md`대로
+  릴리스 브랜치의 커밋에 건다. 포함 확인은 `git cherry -v release/framework-<버전> origin/main`으로 milestone
+  PR의 변경이 빠지지 않았는지 본다.
+- **태그 뒤.** 릴리스 브랜치의 버전 갱신·릴리스 노트 커밋은 PR로 main에 merge한다. 그 뒤 릴리스 브랜치는
+  지운다(태그가 기준점이다). 이미 게시한 버전의 후속 수정은 같은 방식으로 다음 patch 브랜치를 태그에서 만든다.
 - 릴리스 중 드러난 수정도 PR로 넣는다.
 
 ## 8. 첫 적용 (2026-09-10) — `work.sh`가 생기기 전의 수동 절차

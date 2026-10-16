@@ -306,6 +306,7 @@ public interface systems.zlink.framework.handlers.ZLinkSpotRequest extends java.
 }
 public interface systems.zlink.framework.handlers.ZLinkSpotSubscription extends java.lang.annotation.Annotation {
  public abstract java.lang.String spotNodeName();
+ public abstract java.lang.String channelName();
  public abstract java.lang.String topic();
 }
 public interface systems.zlink.framework.handlers.ZLinkSpotTimer extends java.lang.annotation.Annotation {

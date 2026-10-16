@@ -523,9 +523,9 @@ test('backend mesh adapter creates a named MeshNode through the public binding A
     meshNode.start();
     assert.equal(meshNode.status().meshName, 'backend.contract');
     assert.equal(meshNode.status().channelCount, 1);
-    assert.equal(meshNode.shutdown(1000), zlink.RequestResult.Ok);
+    assert.equal(await meshNode.shutdown(1000), zlink.RequestResult.Ok);
   } finally {
-    meshNode.close();
+    await meshNode.close();
     await context.dispose();
   }
 });
@@ -554,8 +554,8 @@ test('new MeshNode processes receive distinct lifecycle generations', async () =
     assert.ok(secondGeneration <= BigInt(Number.MAX_SAFE_INTEGER));
     assert.notEqual(firstGeneration, secondGeneration);
   } finally {
-    first.close();
-    second.close();
+    await first.close();
+    await second.close();
     await context.dispose();
   }
 });
@@ -631,10 +631,10 @@ test('backend mesh dispatch pump drains a local channel record through claim and
   } finally {
     await senderPump?.dispose();
     await pump?.dispose();
-    sender.shutdown(1000);
-    sender.close();
-    receiver.shutdown(1000);
-    receiver.close();
+    await sender.shutdown(1000);
+    await sender.close();
+    await receiver.shutdown(1000);
+    await receiver.close();
     await context.dispose();
   }
 });
@@ -686,8 +686,8 @@ test('backend mesh dispatch pump requeues records beyond the receive batch capac
     assert.deepEqual(received, ['first', 'second']);
   } finally {
     await pump?.dispose();
-    node.shutdown(1000);
-    node.close();
+    await node.shutdown(1000);
+    await node.close();
     await context.dispose();
   }
 });
@@ -1655,8 +1655,8 @@ test('MeshNode runtime manager owns lifecycle and forwards pull-dispatch records
     assert.equal(record.payload, 'runtime-pump');
   } finally {
     await senderPump?.dispose();
-    sender.shutdown(1000);
-    sender.close();
+    await sender.shutdown(1000);
+    await sender.close();
     await runtime.dispose();
     await context.dispose();
   }
@@ -1955,8 +1955,8 @@ test('framework host dispatches a MeshNode channel record through registered han
     assert.equal(result.context.packetName, 'MeshNotice');
   } finally {
     await senderPump?.dispose();
-    sender.shutdown(1000);
-    sender.close();
+    await sender.shutdown(1000);
+    await sender.close();
     await context.dispose();
     await host.stop();
   }
@@ -2104,7 +2104,7 @@ test('backend adapter applies receive timeout to the binding socket', async () =
     assert.equal(router.nativeInstance.options.recvTimeout, 37);
     assert.equal(meshNode.runtime.router.socket.options.recvTimeout, 41);
   } finally {
-    meshNode.close();
+    await meshNode.close();
     await router.dispose();
     await context.dispose();
   }
