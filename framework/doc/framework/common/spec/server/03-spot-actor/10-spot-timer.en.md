@@ -22,6 +22,8 @@ generation that's already on the queue does not run its callback — if a tick s
 before re-registration ran after re-registration, it would use a period and callback other
 than the new ones the caller expects.
 
+**Exception: a relocation target's initialization callback that registers a restored key does not create a new generation.** A relocation target recreates the Spot instance and runs `Configure` and `OnInitializeAsync` ([Spot model §5](01-spot-model.en.md)). If that callback registers the same key as a logical timer moved from the source, the registration only reattaches a handler to the restored registration (period, next fire time, pending tick, delivery and scheduled index). If the handler type in the registration differs from the restored registration, the registration fails and the relocation ends `RelocationFailed`. Treating it as a new generation would drop the pending tick and next fire time that [host relocation](../05-location-relocation/05-host-relocation-flow.en.md) requires to move, just because application code registers its timers during initialization. A registration of a key that wasn't restored, and any re-registration after Ready, follow the generation rule above.
+
 **`cancel` blocks new callbacks for that timer generation and completes with the generation's
 single result after any callback already running and all timer-owned resource cleanup have
 finished.** A callback already started is not forcibly interrupted — forcibly terminating a

@@ -21,6 +21,8 @@ Service runtime은 platform timer의 만료를 callback work로 변환한다. Ca
 generation의 record는 callback을 실행하지 않는다 — 재등록 전에 예약된 tick이 재등록 뒤에
 실행되면 caller가 기대한 새 주기·새 callback과 다른 것이 실행되기 때문이다.
 
+**예외: relocation target의 초기화 callback이 복원된 key를 등록하면 새 generation을 만들지 않는다.** Relocation target은 Spot instance를 다시 만들며 `Configure`와 `OnInitializeAsync`를 실행한다([Spot model §5](01-spot-model.ko.md)). 이 callback이 source에서 이전된 logical timer와 같은 key를 등록하면, 그 등록은 복원된 registration(주기, 다음 실행 시각, pending tick, delivery·scheduled index)에 handler를 다시 연결하는 것으로 끝난다. 등록 인자의 handler type이 복원된 registration과 다르면 그 등록은 실패하고 relocation은 `RelocationFailed`로 끝난다. 새 generation으로 처리하면 [host relocation](../05-location-relocation/05-host-relocation-flow.ko.md)이 이전하도록 정한 pending tick과 다음 실행 시각이 application 코드가 초기화에서 timer를 등록한다는 이유만으로 사라지기 때문이다. 복원된 key가 아닌 새 key의 등록과, Ready 뒤의 재등록에는 위 generation 규칙이 그대로 적용된다.
+
 **`cancel`은 해당 timer generation의 새 callback 시작을 막고, 이미 시작한 callback과 timer
 resource 정리가 끝난 뒤 그 generation에 하나뿐인 결과로 완료된다.** 이미 시작한 callback은
 강제로 중단하지 않는다 — cancel 시점에 실행 중인 handler를 강제 종료하면 handler가 다루던
