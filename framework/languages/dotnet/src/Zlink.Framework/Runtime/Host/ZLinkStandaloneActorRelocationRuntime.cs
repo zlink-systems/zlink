@@ -402,7 +402,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                             : ZLinkFrameworkErrorKind.Unavailable,
                         preserved
                             ? $"Actor '{actorState.ActorId}' target commit was not confirmed before the Restore deadline; the source Preserve fence won."
-                            : $"Actor '{actorState.ActorId}' source owner lease expired before the Preserve fence."
+                            : $"Actor '{actorState.ActorId}' source owner lease expired or its authority is Missing."
                     )
                 );
             }
@@ -620,7 +620,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
     /// From the Restore deadline on, with the target commit unconfirmed, the
     /// source runs its <c>Preserve</c> fence on the version the target CAS
     /// expects → <see cref="ZLinkSourceSettlement.SourcePreserved"/>; its own
-    /// lease already ended → <see cref="ZLinkSourceSettlement.SourceLeaseExpired"/>.
+    /// lease already ended or authority Missing → <see cref="ZLinkSourceSettlement.SourceLeaseExpired"/>.
     /// A Store failure or a lost Preserve race is not an answer: the source
     /// keeps every copy and reads again. A different selected route makes
     /// the whole boundary batch and cutover eligible for retransmission.
@@ -677,30 +677,29 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                 )
             )
                 return new(ZLinkSourceSettlement.TargetCommitted, found.Snapshot);
+            if (read is ZLinkAuthorityReadResult.Missing || settleNow && !isSourceLeaseValid())
+                return new(ZLinkSourceSettlement.SourceLeaseExpired, null);
             if (
-                read is ZLinkAuthorityReadResult.Missing
-                || read is ZLinkAuthorityReadResult.Found moved
-                    && !ZLinkStandaloneActorRelocationPrecommitCoordinator.IsSourcePrecommit(
-                        moved.Snapshot,
-                        relocationId
-                    )
-                    && !IsExactCommittedTargetAuthority(
-                        read,
-                        source,
-                        root,
-                        relocationId,
-                        target,
-                        targetAttemptGeneration,
-                        requireActivated: false
-                    )
+                read is ZLinkAuthorityReadResult.Found moved
+                && !ZLinkStandaloneActorRelocationPrecommitCoordinator.IsSourcePrecommit(
+                    moved.Snapshot,
+                    relocationId
+                )
+                && !IsExactCommittedTargetAuthority(
+                    read,
+                    source,
+                    root,
+                    relocationId,
+                    target,
+                    targetAttemptGeneration,
+                    requireActivated: false
+                )
             )
                 throw DataLost(
                     "Standalone Actor authority changed to an unrelated owner during relocation."
                 );
             if (settleNow)
             {
-                if (!isSourceLeaseValid())
-                    return new(ZLinkSourceSettlement.SourceLeaseExpired, null);
                 if (
                     read is ZLinkAuthorityReadResult.Found captured
                     && ZLinkStandaloneActorRelocationPrecommitCoordinator.IsSourcePrecommit(

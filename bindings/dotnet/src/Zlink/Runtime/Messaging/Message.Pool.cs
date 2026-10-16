@@ -23,7 +23,7 @@ public sealed partial class Message : IDisposable, IAsyncDisposable
     internal static Message AdoptNativeFromPool(ref ZlinkMsg source)
     {
         var result = RentFromPool();
-        result._msg = source;
+        result.NativeMsg = source;
         result.IsValid = true;
         result._knownSize = -1;
         source = default;
@@ -42,34 +42,48 @@ public sealed partial class Message : IDisposable, IAsyncDisposable
             pool[count] = null!;
             t_poolCount = count;
             result.Invalidate(clearHandle: true);
-            result._pooled = true;
+            result._poolState = PoolState.Rented;
             return result;
         }
 
-        return new Message(false) { _pooled = true };
+        return new Message(false) { _poolState = PoolState.Rented };
     }
 
+    // Deterministic cleanup ends here. A released pooled wrapper keeps its
+    // native block for the next rent; every other wrapper releases the block
+    // now, so the finalizer has nothing left to do.
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void TryReturnToPool()
+    private void ReturnToPoolOrRelease()
     {
-        if (!_pooled)
+        // Defensive: a wrapper with a live native handle is neither pooled nor
+        // released here; its owner closes it first.
+        // The pool holds a strong reference until rent or thread teardown.
+        // Repeated disposal must leave that entry and its native block intact;
+        // an unreachable pool still lets the finalizer reclaim its wrappers.
+        if (IsValid || _poolState == PoolState.Returned)
             return;
-        // Defensive: only return when fully released with no native handle
-        // pending close.
-        if (IsValid)
-            return;
-        _pooled = false;
-        var pool = t_pool;
-        if (pool == null)
+        if (_poolState == PoolState.Rented)
         {
-            pool = new Message[PoolCapacity];
-            t_pool = pool;
+            var pool = t_pool;
+            if (pool == null)
+            {
+                pool = new Message[PoolCapacity];
+                t_pool = pool;
+            }
+
+            var count = t_poolCount;
+            if (count < PoolCapacity)
+            {
+                _poolState = PoolState.Returned;
+                pool[count] = this;
+                t_poolCount = count + 1;
+                return;
+            }
+
+            _poolState = PoolState.Owned;
         }
 
-        var count = t_poolCount;
-        if (count >= PoolCapacity)
-            return;
-        pool[count] = this;
-        t_poolCount = count + 1;
+        ReleaseNativeStorage();
+        GC.SuppressFinalize(this);
     }
 }

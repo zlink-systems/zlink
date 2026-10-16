@@ -16,7 +16,7 @@ const { randomOperationId } = require('../../packages/framework/dist/runtime/loc
 const operationKinds = ['userSpotCreate', 'userSpotClose', 'actorCreate', 'streamBind', 'actorJoin'];
 const turn = () => new Promise(resolve => setImmediate(resolve));
 
-function fixture(request) {
+function fixture(request, disconnectOnFailure = true) {
   const descriptor = rid => ({
     meshName: 'durable-lifecycle', nodeRoutingId: rid, lifecycleGeneration: 7n,
     descriptorRevision: 1n, advertisedEndpoint: `inproc://${rid}`, channels: [], state: 'serving',
@@ -35,11 +35,21 @@ function fixture(request) {
     receive: () => incoming.shift(), send: async () => {},
     submitSend: () => ({ result: SubmitResult.Ok, admitted: Promise.resolve() }),
     routesSnapshot: () => [...routes].map(([routingId, routeGeneration]) => ({ routingId, routeGeneration })),
-    request: async (rid, parts, timeoutMs) => {
+    request: async (rid, parts, timeoutMs, _recordReceived, onAdmitted) => {
       const record = parts[0][3] === 28 ? decodeActorJoin28(parts) : wire.decodeStatefulHeader(parts[0]);
       const attempt = { rid, parts, timeoutMs, record };
       attempts.push(attempt);
-      return request(attempt, attempts.length);
+      try {
+        const result = request(attempt, attempts.length);
+        onAdmitted?.();
+        return await result;
+      } catch (error) {
+        if (disconnectOnFailure && error instanceof ZLinkBackendResultError) {
+          routes.delete(target.nodeRoutingId);
+          await raw.observeSelectedRoutes();
+        }
+        throw error;
+      }
     }
   };
   const raw = new RawServiceMeshRuntime({
@@ -107,6 +117,7 @@ for (const kind of operationKinds) {
         ? new Promise(resolve => { finishAttempt = resolve; })
         : Promise.reject(new ZLinkBackendResultError('submit', SubmitResult.NotConnected)));
       try {
+        await f.admit();
         let outcome;
         const operation = f.start(kind).then(value => { outcome = { value }; }, error => { outcome = { error }; });
         await turn();
@@ -142,7 +153,7 @@ for (const kind of operationKinds) {
       t.mock.timers.tick(20);
       await turn();
       assert.equal(outcome, undefined, 'peer absence alone is transient');
-      assert.equal(f.attempts.length, 2);
+      assert.equal(f.attempts.length, 1, 'absent routes receive no submission');
       f.raw.disconnectPeerEndpoint(f.target.advertisedEndpoint);
       await turn();
       assert.equal(outcome?.error?.kind, framework.ZLinkFrameworkErrorKind.Unavailable);
@@ -176,13 +187,13 @@ for (const kind of operationKinds) {
         return f.terminal(attempt);
       });
       try {
+        await f.admit();
         let outcome;
         const operation = f.start(kind).then(value => { outcome = { value }; }, error => { outcome = { error }; });
         await turn();
         if (replay) {
           assert.equal(outcome, undefined);
-          now += 20;
-          t.mock.timers.tick(20);
+          await f.admit();
           await turn();
           assert.equal(outcome?.value?.terminalResult, RequestResult.Rejected);
           assert.equal(f.attempts.length, 2);
@@ -200,6 +211,7 @@ for (const kind of operationKinds) {
   test(`${kind}: malformed terminal envelope ends replay as ProtocolError`, async () => {
     const f = fixture(() => [Buffer.from('malformed')]);
     try {
+      await f.admit();
       await assert.rejects(f.start(kind), error => error.kind === framework.ZLinkFrameworkErrorKind.ProtocolError);
       assert.equal(f.attempts.length, 1);
       assert.equal(f.raw.peerConnectionIntentRemoved.size, 0);
@@ -212,7 +224,7 @@ test('removing a stale lifecycle intent does not terminate the admitted replacem
   const f = fixture((attempt, count) => {
     if (count === 1) throw new ZLinkBackendResultError('request', RequestResult.NotConnected);
     return f.terminal(attempt);
-  });
+  }, false);
   try {
     await f.admit();
     const operation = f.start('actorCreate');
@@ -240,3 +252,31 @@ test('raw binding request maps the installed binding failure through the existin
     });
   } finally { host.close(); }
 });
+
+for (const kind of operationKinds) {
+  test(`${kind}: a new selected ready route replays a pending request without a timer tick`, async t => {
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    let originalReply;
+    let outcome;
+    const f = fixture((attempt, count) => count === 1
+      ? new Promise(resolve => { originalReply = () => resolve(f.terminal(attempt)); })
+      : f.terminal(attempt));
+    try {
+      await f.admit();
+      const operation = f.start(kind).then(value => { outcome = value; }, error => { outcome = { error }; });
+      await turn();
+      assert.equal(f.attempts.length, 1);
+      await f.raw.observeSelectedRoutes();
+      await turn();
+      assert.equal(f.attempts.length, 1, 'unchanged selection does not replay');
+      await f.admit();
+      await turn();
+      assert.equal(f.attempts.length, 2, 'new ready selection replays immediately');
+      assert.equal(outcome?.terminalResult, RequestResult.Rejected);
+      assert.deepEqual(f.attempts[1].parts, f.attempts[0].parts);
+      originalReply();
+      await operation;
+      assert.equal(f.attempts.length, 2);
+    } finally { f.close(); }
+  });
+}

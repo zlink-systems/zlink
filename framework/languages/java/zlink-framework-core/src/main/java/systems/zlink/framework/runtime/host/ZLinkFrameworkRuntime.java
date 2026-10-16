@@ -38,6 +38,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkMeshBackendAdapter;
 import systems.zlink.framework.runtime.internal.binding.spot.MeshPeerEntry;
 import systems.zlink.framework.runtime.internal.drain.ZLinkMeshDrainCoordinator;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
+import systems.zlink.framework.runtime.internal.execution.ZLinkTeardownExecutor;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAutoConnectPeer;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
@@ -2012,6 +2013,10 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                                 return null;
                             });
         }
+        signalRuntimeStatus(terminationFailure);
+    }
+
+    private void signalRuntimeStatus(Throwable terminationFailure) {
         var status = status();
         if (eventDispatcher != null) {
             Throwable actual =
@@ -2025,7 +2030,9 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
         }
         runtimeStatusSource.signal(RUNTIME_STATUS_SOURCE);
         routeMeshRuntime.signalAll();
-        channels.signalTopologyStatus();
+        if (channels != null) {
+            channels.signalTopologyStatus();
+        }
     }
 
     private CompletionStage<Void> publishRuntimeStateAwaited(ZLinkFrameworkRuntimeState state) {
@@ -2035,16 +2042,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                         ? CompletableFuture.completedFuture(null)
                         : objectDescriptors.publish(state);
         return publication
-                .thenRun(
-                        () -> {
-                            var status = status();
-                            if (eventDispatcher != null) {
-                                eventDispatcher.publishHostStatus(status);
-                            }
-                            runtimeStatusSource.signal(RUNTIME_STATUS_SOURCE);
-                            routeMeshRuntime.signalAll();
-                            channels.signalTopologyStatus();
-                        })
+                .thenRun(() -> signalRuntimeStatus(null))
                 .exceptionallyCompose(
                         failure -> {
                             runtimeState.set(ZLinkFrameworkRuntimeState.SERVING);

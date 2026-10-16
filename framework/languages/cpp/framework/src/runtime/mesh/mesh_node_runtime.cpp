@@ -628,15 +628,8 @@ admit_wire_actor_join (const std::shared_ptr<spot_node_builder_state_t> &spot_st
                   request.actor.owner_lease_generation, true, request.target_spot.object_generation,
                   request.target_spot.authority_owner_generation)
                 .result ();
-            if (!admitted)
-                return actor_join_typed_terminal (admitted.error_kind (),
-                                                  detail::failure_code (*admitted.error ()));
             auto application_reply =
               canonical_actor_join_application_reply (admitted.value ().reply, serializers);
-            if (!application_reply)
-                return actor_join_typed_terminal (
-                  application_reply.error_kind (),
-                  detail::failure_code (*application_reply.error ()));
             if (!admitted.value ().accepted) {
                 rejected.application_reply = std::move (application_reply.value ());
                 return rejected;
@@ -663,8 +656,11 @@ admit_wire_actor_join (const std::shared_ptr<spot_node_builder_state_t> &spot_st
         result.application_reply = std::move (result_application_reply);
         return result;
     }
+    catch (const framework_exception_t &error) {
+        return actor_join_typed_terminal (error.kind (), detail::failure_code (error));
+    }
     catch (...) {
-        return actor_join_typed_terminal (framework_error_kind_t::unavailable);
+        return actor_join_typed_terminal (framework_error_kind_t::internal_failure);
     }
 }
 
@@ -802,6 +798,8 @@ void mesh_node_runtime_t::start ()
       })
       .get ();
     auto node = std::make_shared<host::public_host_runtime_t> (std::move (node_options));
+    if (_delay_owner)
+        node->set_delay_owner (*_delay_owner);
     /* flow-correlation §4: thread the flow-capture provider so the host's
      * cold decode paths skip flow validation/materialization at level Off. */
     node->set_flow_capture_provider (
@@ -854,7 +852,7 @@ void mesh_node_runtime_t::start ()
             .consume_actor_join_recovery (frozen, target, prepare);
       },
       [spot_state] (const runtime::stateful::object_ref_t &target) {
-          return spot_node_runtime_t (spot_state).actor_join_relocation_authority_spot (target);
+          return spot_node_runtime_t (spot_state).actor_relocation_authority (target);
       },
       [spot_state] (const std::string &stable_type, const runtime::stateful::object_ref_t &target) {
           spot_node_runtime_t (spot_state).discard_actor_join_recovery (stable_type, target);
@@ -1403,18 +1401,17 @@ task_t<runtime::stateful::relocation_result_t> mesh_node_runtime_t::relocate_app
               static_cast<std::uint64_t> (target.lease_generation),
               _state->default_request_timeout);
         },
-      .send_cutover = [this, target] (const runtime::protocol::relocation_cutover_t &cutover)
-        -> task_t<runtime::stateful::eligible_relocation_unit_t::canonical_wire_context_t::
-                    cutover_enqueue_t> {
-          using context_t = runtime::stateful::eligible_relocation_unit_t::canonical_wire_context_t;
-          co_return co_await _node->cutover_relocation_remote (target.rid, cutover)
-            ? context_t::cutover_enqueue_t::enqueued
-            : context_t::cutover_enqueue_t::not_enqueued;
+      .send_cutover =
+        [this, target] (const runtime::protocol::relocation_cutover_t &cutover) -> task_t<bool> {
+          co_return co_await _node->cutover_relocation_remote (target.rid, cutover);
       },
       .restore_deadline = restore_deadline,
       .source_stopped = [this] { return relocation_source_stopped (); },
-      .target_connected =
-        [this, target] { return has_admitted_peer (target.rid, target.lifecycle_generation); },
+      .target_route =
+        [this, target] {
+            return _node->transport ().peer_route (target.rid.to_bytes (),
+                                                   target.lifecycle_generation);
+        },
       .abort_target_before_cutover = [] { return true; }};
 
     std::vector<std::byte> inventory_bytes;
@@ -1650,17 +1647,17 @@ mesh_node_runtime_t::relocate_application_unit (
               static_cast<std::uint64_t> (target.lease_generation),
               _state->default_request_timeout);
         },
-      .send_cutover = [this, target] (const runtime::protocol::relocation_cutover_t &cutover)
-        -> task_t<eligible_relocation_unit_t::canonical_wire_context_t::cutover_enqueue_t> {
-          using context_t = eligible_relocation_unit_t::canonical_wire_context_t;
-          co_return co_await _node->cutover_relocation_remote (target.rid, cutover)
-            ? context_t::cutover_enqueue_t::enqueued
-            : context_t::cutover_enqueue_t::not_enqueued;
+      .send_cutover =
+        [this, target] (const runtime::protocol::relocation_cutover_t &cutover) -> task_t<bool> {
+          co_return co_await _node->cutover_relocation_remote (target.rid, cutover);
       },
       .restore_deadline = restore_deadline,
       .source_stopped = [this] { return relocation_source_stopped (); },
-      .target_connected =
-        [this, target] { return has_admitted_peer (target.rid, target.lifecycle_generation); },
+      .target_route =
+        [this, target] {
+            return _node->transport ().peer_route (target.rid.to_bytes (),
+                                                   target.lifecycle_generation);
+        },
       .abort_target_before_cutover = [] { return true; }};
 
     std::vector<std::byte> inventory;
@@ -1939,7 +1936,8 @@ void mesh_node_runtime_t::stop ()
 void mesh_node_runtime_t::connect_peer (const zlink::routing_id_t &expected_routing_id,
                                         const std::string &endpoint,
                                         std::uint64_t expected_lifecycle_generation,
-                                        std::string security_identity)
+                                        std::string security_identity,
+                                        bool automatic)
 {
     if (!_node || endpoint.empty ())
         return;
@@ -1950,7 +1948,7 @@ void mesh_node_runtime_t::connect_peer (const zlink::routing_id_t &expected_rout
               return;
           const auto submitted =
             _node->connect_peer (endpoint, expected_routing_id, expected_lifecycle_generation,
-                                 std::move (security_identity));
+                                 std::move (security_identity), automatic);
           if (submitted)
               _peer_connection_intents.emplace (endpoint, next_connection_intent_id ());
       })
@@ -2010,13 +2008,29 @@ void mesh_node_runtime_t::disconnect_peer (const std::string &endpoint) noexcept
 }
 
 void mesh_node_runtime_t::disconnect_peer (const zlink::routing_id_t &expected_routing_id,
-                                           const std::string &endpoint) noexcept
+                                           const std::string &endpoint,
+                                           bool automatic) noexcept
 {
     if (!_node || endpoint.empty ())
         return;
-    try {
+    (void) _state->spot_state->runtime_failures ()->capture ([&] {
+        const bool manual =
+          automatic
+          && _state->lane
+               .run ([&] {
+                   return std::any_of (_state->peer_connections.begin (),
+                                       _state->peer_connections.end (), [&] (const auto &manual) {
+                                           return manual.endpoint == endpoint
+                                                  || (manual.expected_routing_id
+                                                      && *manual.expected_routing_id
+                                                           == expected_routing_id);
+                                       });
+               })
+               .get ();
         _peer_connection_intent_lane
           .run ([&] {
+              if (automatic && (manual || !_peer_connection_intents.contains (endpoint)))
+                  return;
               const auto endpoint_retained =
                 _node->disconnect_peer (expected_routing_id.to_bytes (), endpoint);
               /* A replacement RID can already be admitted through the same
@@ -2028,9 +2042,7 @@ void mesh_node_runtime_t::disconnect_peer (const zlink::routing_id_t &expected_r
                   _peer_connection_intents.erase (endpoint);
           })
           .get ();
-    }
-    catch (...) {
-    }
+    });
 }
 
 bool mesh_node_runtime_t::wait_for_peer_ready (const zlink::routing_id_t &target,
@@ -2453,28 +2465,6 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::join_application_actor_to_spot (
 {
     spot_node_runtime_t spot_runtime (_state->spot_state);
     const auto completion_source_spot = spot_runtime.actor_spot (actor);
-    auto deliver_completion =
-      [&] (std::uint64_t operation_high, std::uint64_t operation_low,
-           const result_t<actor_join_reply_t> &joined) -> task_t<result_t<void>> {
-        if (!joined) {
-            co_return co_await spot_runtime.deliver_actor_join_completion (
-              actor, actor_join_failed_t{operation_high, operation_low, joined.error_kind ()},
-              completion_source_spot);
-        }
-        const auto reply =
-          joined.value ().reply.is_empty ()
-            ? std::optional<message_t>{}
-            : std::make_optional (message_t::from_raw (joined.value ().reply, _serializers));
-        if (joined.value ().result_code == 0) {
-            co_return co_await spot_runtime.deliver_actor_join_completion (
-              actor,
-              actor_join_accepted_t{operation_high, operation_low, joined.value ().actor, reply},
-              completion_source_spot);
-        }
-        co_return co_await spot_runtime.deliver_actor_join_completion (
-          actor, actor_join_rejected_t{operation_high, operation_low, reply},
-          completion_source_spot);
-    };
     const auto local_routing_id = routing_id ();
     const bool remote =
       local_routing_id && local_routing_id->to_hex () != target.node_rid.to_hex ();
@@ -2502,8 +2492,8 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::join_application_actor_to_spot (
         auto completed = co_await await_completion (operation);
         auto joined =
           actor_join_reply_from_completion (completed.record, completed.parts, actor, _state);
-        const auto delivered =
-          co_await deliver_completion (operation.id.high, operation.id.low, joined);
+        const auto delivered = co_await deliver_actor_join (
+          actor, completion_source_spot, operation.id.high, operation.id.low, joined);
         if (!delivered)
             co_return detail::propagate_failure<actor_join_reply_t> (
               delivered, "local Actor Join completion callback failed");
@@ -2537,37 +2527,39 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::join_application_actor_to_spot (
 }
 
 task_t<result_t<void>>
-mesh_node_runtime_t::deliver_remote_actor_join (const remote_actor_join_state_t &s,
-                                                const result_t<actor_join_reply_t> &r)
+mesh_node_runtime_t::deliver_actor_join (actor_ref_t actor,
+                                         std::optional<spot_id_t> source_spot,
+                                         std::uint64_t operation_high,
+                                         std::uint64_t operation_low,
+                                         const result_t<actor_join_reply_t> &r)
 {
     spot_node_runtime_t spot (_state->spot_state);
     if (!r)
         co_return co_await spot.deliver_actor_join_completion (
-          s.actor,
-          actor_join_failed_t{s.completion_operation_id_high, s.completion_operation_id_low,
-                              r.error_kind ()},
-          s.source_spot);
+          actor,
+          actor_join_failed_t{operation_high, operation_low,
+                              r.error () ? r.error ()->kind ()
+                                         : framework_error_kind_t::internal_failure},
+          source_spot);
     const auto reply =
       r.value ().reply.is_empty ()
         ? std::optional<message_t>{}
         : std::make_optional (message_t::from_raw (r.value ().reply, _serializers));
     if (r.value ().result_code == 0)
         co_return co_await spot.deliver_actor_join_completion (
-          s.actor,
-          actor_join_accepted_t{s.completion_operation_id_high, s.completion_operation_id_low,
-                                r.value ().actor, reply},
-          s.source_spot);
+          actor, actor_join_accepted_t{operation_high, operation_low, r.value ().actor, reply},
+          source_spot);
     co_return co_await spot.deliver_actor_join_completion (
-      s.actor,
-      actor_join_rejected_t{s.completion_operation_id_high, s.completion_operation_id_low, reply},
-      s.source_spot);
+      actor, actor_join_rejected_t{operation_high, operation_low, reply}, source_spot);
 }
 
 task_t<actor_join_reply_t> mesh_node_runtime_t::fail_remote_actor_join (
   const remote_actor_join_state_t &s, const result_t<actor_join_reply_t> &r, std::string m)
 {
     const auto failed = detail::propagate_failure<actor_join_reply_t> (r, std::move (m));
-    const auto delivered = co_await deliver_remote_actor_join (s, failed);
+    const auto delivered =
+      co_await deliver_actor_join (s.actor, s.source_spot, s.completion_operation_id_high,
+                                   s.completion_operation_id_low, failed);
     co_return delivered ? failed
                         : detail::propagate_failure<actor_join_reply_t> (
                             delivered, "remote Actor Join failure completion callback failed");
@@ -2670,7 +2662,9 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::admit_remote_application_actor_j
     if (!reply.value ().accepted) {
         const auto rejected = result_t<actor_join_reply_t>::success (
           actor_join_reply_t{1, s->actor, zlink::message_t::from (reply.value ().payload)});
-        const auto delivered = co_await deliver_remote_actor_join (*s, rejected);
+        const auto delivered =
+          co_await deliver_actor_join (s->actor, s->source_spot, s->completion_operation_id_high,
+                                       s->completion_operation_id_low, rejected);
         co_return delivered ? rejected
                             : detail::propagate_failure<actor_join_reply_t> (
                                 delivered, "remote Actor Join rejected completion callback failed");
@@ -2838,7 +2832,7 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::admit_remote_application_actor_j
           "local owner lease is unavailable for wire Actor join");
     }
     const auto local = _node->status ();
-    // deliver_remote_actor_join / spot's completion delivery requires a
+    // deliver_actor_join / spot's completion delivery requires a
     // non-zero completion operation id, exactly like the JSON path's
     // admit_remote_application_actor_join sets before it can send its
     // request.
@@ -2964,7 +2958,9 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::admit_remote_application_actor_j
     if (tail.join_result == runtime::protocol::actor_join_result_t::rejected) {
         const auto rejected = result_t<actor_join_reply_t>::success (
           actor_join_reply_t{1, s->actor, application_reply});
-        const auto delivered = co_await deliver_remote_actor_join (*s, rejected);
+        const auto delivered =
+          co_await deliver_actor_join (s->actor, s->source_spot, s->completion_operation_id_high,
+                                       s->completion_operation_id_low, rejected);
         co_return delivered ? rejected
                             : detail::propagate_failure<actor_join_reply_t> (
                                 delivered, "remote Actor Join completion callback failed");
@@ -3291,18 +3287,17 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::prepare_remote_application_actor
               static_cast<std::uint64_t> (target.owner.lease_generation),
               _state->default_request_timeout);
         },
-      .send_cutover = [this, s] (const runtime::protocol::relocation_cutover_t &cutover)
-        -> task_t<runtime::stateful::eligible_relocation_unit_t::canonical_wire_context_t::
-                    cutover_enqueue_t> {
-          using context_t = runtime::stateful::eligible_relocation_unit_t::canonical_wire_context_t;
-          co_return co_await _node->cutover_relocation_remote (s->target.node_rid, cutover)
-            ? context_t::cutover_enqueue_t::enqueued
-            : context_t::cutover_enqueue_t::not_enqueued;
+      .send_cutover = [this,
+                       s] (const runtime::protocol::relocation_cutover_t &cutover) -> task_t<bool> {
+          co_return co_await _node->cutover_relocation_remote (s->target.node_rid, cutover);
       },
       .restore_deadline = s->deadline,
       .source_stopped = [this] { return relocation_source_stopped (); },
-      .target_connected =
-        [this, s] { return has_admitted_peer (s->target.node_rid, s->target.node_generation); },
+      .target_route =
+        [this, s] {
+            return _node->transport ().peer_route (s->target.node_rid.to_bytes (),
+                                                   s->target.node_generation);
+        },
       .abort_target_before_cutover = [] { return true; }};
     const auto inventory_digest =
       runtime::stateful::maintenance_runtime_t::compute_inventory_digest ({s->source_actor});
@@ -3858,7 +3853,7 @@ mesh_node_runtime_t::wait_for_application_actor_route_change (
         const auto candidate = co_await resolve_application_actor_route (actor);
         if (candidate && changed (*candidate))
             co_return candidate;
-        co_await detail::delay (std::chrono::milliseconds (1));
+        co_await detail::delay (_delay_owner, std::chrono::milliseconds (1));
     } while (std::chrono::steady_clock::now () < deadline);
     const auto candidate = co_await resolve_application_actor_route (actor);
     co_return candidate &&changed (*candidate) ? candidate

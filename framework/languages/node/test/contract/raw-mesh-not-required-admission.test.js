@@ -11,13 +11,11 @@ for (const endpointOnly of [false, true]) {
       const pair = createPair({ endpointOnly, hostAttached, notify: true });
       const { left, right, disconnected, sent } = pair;
       try {
-        // The acceptor's Hello reaches the connector before the acceptor has
-        // consumed any descriptor. Closing here discards the queued response.
+        // Both canonical HELLO records precede descriptor consumption.
         assert.equal(await right.pumpOne(), 'infrastructure');
         assert.equal(await left.pumpOne(), 'infrastructure');
-        assert.equal(await left.pumpOne(), 'infrastructure');
         assert.equal(left.topology.notRequiredPeers().length, 1);
-        assert.equal(right.topology.notRequiredPeers().length, 0);
+        assert.equal(right.topology.notRequiredPeers().length, 1);
         assert.deepEqual(disconnected, [], 'Hello alone must not terminate the outbound intent');
         const response = sent.at(-1);
         assert.equal(wire.decodeHeader(response.parts[0]).command, wire.M6aServiceWireCommand.admit);
@@ -64,52 +62,39 @@ async function assertTerminalPair({ left, right, disconnected, sent, selectRoute
   assert.equal(right.liveness.size, 0);
   assert.deepEqual(disconnected, [right.topology.localDescriptor().advertisedEndpoint]);
 
-  // A later selected route cannot revive a terminal intent (MeshNode §7.1).
+  // A later selected route handshakes without recreating the retired intent (MeshNode §7.1).
   const sentBeforeReady = sent.length;
   selectRoute(17n);
   assert.equal(await left.observeSelectedRoutes(), 1);
   assert.equal(await left.announceExpectedPeers(), 0);
   assert.equal(await right.announceExpectedPeers(), 0);
-  assert.equal(await left.announcePeer('right'), false);
-  assert.equal(sent.length, sentBeforeReady);
+  assert.equal(sent.length, sentBeforeReady + 1);
+  assert.equal(left.expectedPeers.size, 0);
+  assert.equal(left.endpointOnlyPeers.size, 0);
   assert.deepEqual(disconnected, [right.topology.localDescriptor().advertisedEndpoint]);
   assert.equal(left.topology.notRequiredPeers().length, 1);
   assert.equal(right.topology.notRequiredPeers().length, 1);
 }
 
-test('HELLO is submitted once per selected route before admission', async () => {
+test('HELLO repeats on liveness maintenance until NotRequired ADMIT retires the intent', async () => {
   const pair = createPair({ endpointOnly: false, hostAttached: false, notify: false });
-  const { left, right, sent, selectRoute } = pair;
+  const { left, right, sent } = pair;
   try {
     assert.equal(await left.observeSelectedRoutes(), 1);
     assert.equal(sent.length, 1);
     await left.pumpBatch(false);
     await left.pumpBatch(false);
-    assert.equal(sent.length, 1, 'idle pumps must preserve the accepted HELLO');
+    assert.equal(sent.length, 3);
+    assert.equal(await right.pumpOne(), 'infrastructure');
+    assert.equal(await left.pumpOne(), 'infrastructure');
+    const admitted = sent.length;
+    left.topology.replaceDiscoveredNotRequired([right.topology.localDescriptor()]);
+    left.tickLiveness();
     assert.equal(await left.announcePeer('right'), false);
-    const descriptor = right.topology.localDescriptor();
-    left.connectPeer(descriptor.advertisedEndpoint, descriptor);
-    left.connectPeerByRoutingId(descriptor.advertisedEndpoint, descriptor.nodeRoutingId);
-    left.expectPeerByRoutingId(descriptor.advertisedEndpoint, descriptor.nodeRoutingId);
-    assert.equal(await left.announceExpectedPeers(), 0);
-    assert.equal(sent.length, 1, 'intent refresh must preserve the accepted HELLO');
-    selectRoute(17n);
-    assert.equal(await left.observeSelectedRoutes(), 1);
-    assert.equal(sent.length, 2, 'a replacement route needs one new HELLO');
-    await left.pumpBatch(false);
-    assert.equal(sent.length, 2);
-    left.disconnectPeer(right.topology.localDescriptor().advertisedEndpoint, 'right');
-    left.connectPeer(
-      right.topology.localDescriptor().advertisedEndpoint,
-      right.topology.localDescriptor()
-    );
-    await left.observeSelectedRoutes();
-    await left.announceExpectedPeers();
-    assert.equal(sent.length, 3, 'a removed intent must forget its accepted HELLO');
-  } finally {
-    left.close();
-    right.close();
-  }
+    assert.equal(sent.length, admitted, 'remote ADMIT stops HELLO on the admitted route');
+    assert.equal(left.expectedPeers.size, 0);
+    assert.equal(left.liveness.size, 0);
+  } finally { left.close(); right.close(); }
 });
 
 test('a rejected HELLO does not record acceptance for its selected route', async () => {
@@ -121,8 +106,8 @@ test('a rejected HELLO does not record acceptance for its selected route', async
     assert.equal(sent.length, 0);
     assert.equal(await left.announceExpectedPeers(), 1);
     assert.equal(sent.length, 1);
-    assert.equal(await left.announceExpectedPeers(), 0);
-    assert.equal(sent.length, 1);
+    assert.equal(await left.announceExpectedPeers(), 1);
+    assert.equal(sent.length, 2);
   } finally {
     left.close();
     right.close();
@@ -154,8 +139,8 @@ test('late HELLO acceptance belongs to the route generation submitted', async ()
     accept();
     await oldObservation;
     assert.equal(sent.length, 2);
-    assert.equal(await left.announceExpectedPeers(), 0);
-    assert.equal(sent.length, 2, 'old acceptance must not overwrite the new route acceptance');
+    assert.equal(await left.announceExpectedPeers(), 1);
+    assert.equal(sent.length, 3, 'local acceptance alone must not stop HELLO');
   } finally {
     left.close();
     right.close();
@@ -185,8 +170,8 @@ function createPair({ endpointOnly, hostAttached, notify }) {
       assert.equal(endpoint, descriptors[remote].advertisedEndpoint);
       connected = true;
       if (notify) {
-        queues.left.push({ sourceRid: 'right', routeGeneration, parts: [] });
-        queues.right.push({ sourceRid: 'left', routeGeneration, parts: [] });
+        queues.left.push({ sourceRid: 'right', routeGeneration, parts: [wire.encodeRouteMeshAdmission(wire.M6aServiceWireCommand.hello, right.topology.localDescriptor())] });
+        queues.right.push({ sourceRid: 'left', routeGeneration, parts: [wire.encodeRouteMeshAdmission(wire.M6aServiceWireCommand.hello, left.topology.localDescriptor())] });
       }
     };
     const router = {

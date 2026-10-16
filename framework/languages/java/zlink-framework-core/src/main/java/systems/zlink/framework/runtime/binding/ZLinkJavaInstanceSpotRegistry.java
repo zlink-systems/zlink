@@ -154,6 +154,12 @@ final class ZLinkJavaInstanceSpotRegistry {
                             result.completeExceptionally(failure);
                             return;
                         }
+                        // This operation's queue admission is submitted first, so joined
+                        // operations enter in arrival order (06-spot-address-messaging.ko.md:423).
+                        // The registry then records Ready, which also releases the next joined
+                        // operation, before this caller observes the join
+                        // (09-object-lifecycle.ko.md:134-137). Ready stays even when this
+                        // operation's queue admission fails.
                         CompletionStage<Void> admission;
                         try {
                             admission =
@@ -163,8 +169,6 @@ final class ZLinkJavaInstanceSpotRegistry {
                         } catch (RuntimeException | Error refusal) {
                             admission = CompletableFuture.failedFuture(refusal);
                         }
-                        // Publish Ready before callers can observe admission completion. A failed
-                        // admission still preserves the existing activation for later operations.
                         candidate.complete(value);
                         admission.whenComplete(
                                 (ignored, terminalFailure) -> {

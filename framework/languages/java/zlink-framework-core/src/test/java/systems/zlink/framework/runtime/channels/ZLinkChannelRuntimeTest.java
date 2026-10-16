@@ -3177,10 +3177,6 @@ final class ZLinkChannelRuntimeTest {
         }
 
         @Override
-        public void bindRemoteActorBoundSession(
-                ZLinkBackendActorRef actor, RoutingId sourceNodeRid, RoutingId sourceSessionRid) {}
-
-        @Override
         public void closeActorBoundSession(ZLinkBackendActorRef actor, Duration timeout) {}
 
         @Override

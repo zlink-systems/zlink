@@ -29,6 +29,7 @@ namespace zlink::framework::detail
 {
 class monitoring_runtime_state_t;
 class mesh_node_runtime_t;
+class delay_owner_t;
 } // namespace zlink::framework::detail
 
 namespace zlink::framework::runtime
@@ -84,6 +85,7 @@ class stream_host_service_t final : public hosted_service_t, public hosted_servi
     {
         _monitoring = std::move (monitoring);
     }
+    void bind_delay_owner (detail::delay_owner_t &owner) noexcept { _delay_owner = &owner; }
 
     /* graceful-drain-handoff §7: sends session-closing(reason) to every
      * active session (bounded, best effort). The caller decides whether to
@@ -117,6 +119,7 @@ class stream_host_service_t final : public hosted_service_t, public hosted_servi
     std::shared_ptr<listener_status_registry_t> _listener_statuses;
     std::shared_ptr<detail::mesh_node_runtime_t> _mesh_node;
     std::shared_ptr<application_job_queue_t> _application_jobs;
+    detail::delay_owner_t *_delay_owner = nullptr;
     service_provider_t *_services = nullptr;
     std::atomic_bool _stop{false};
     std::vector<std::unique_ptr<listener_t>> _listeners;

@@ -237,7 +237,7 @@ final class ZLinkJavaRawMeshNodeShutdownSealTest {
                         });
                 await(() -> selectedRouteObserved.getCount() == 0);
                 assertFalse(
-                        local.announcedRouteGenerations.containsKey(remoteRid),
+                        local.helloExchanges.containsKey(remoteRid),
                         "sealed selected route must not have an announcement");
                 assertEquals(MeshNodeState.DRAINING, local.status().state());
                 assertEquals(ZLinkServiceNodeDescriptor.State.DRAINING, descriptor(local).state());
@@ -400,14 +400,11 @@ final class ZLinkJavaRawMeshNodeShutdownSealTest {
     }
 
     private static boolean ready(ZLinkJavaRawMeshNode node, RoutingId peer) {
-        try {
-            var method =
-                    ZLinkJavaRawMeshNode.class.getDeclaredMethod("isReadyPeer", RoutingId.class);
-            method.setAccessible(true);
-            return (boolean) method.invoke(node, peer);
-        } catch (ReflectiveOperationException e) {
-            throw new AssertionError(e);
-        }
+        return node.peers().stream()
+                .anyMatch(
+                        entry ->
+                                entry.routingId().equals(peer)
+                                        && entry.state() == MeshPeerState.ADMITTED);
     }
 
     private static Object livenessEpoch(ZLinkJavaRawMeshNode node, RoutingId peer)
