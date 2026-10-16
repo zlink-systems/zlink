@@ -25,7 +25,7 @@ const {
   OperationKind
 } = require('../../packages/framework/dist/runtime/foundation/service-runtime-contracts');
 
-async function relocationHarness(ids, nativeBinding = false) {
+async function relocationHarness(ids, nativeBinding = false, hooks = {}) {
   const host = new framework.ZLinkFrameworkRuntimeHost({
     registration: framework.createFrameworkRegistration()
   });
@@ -77,7 +77,7 @@ async function relocationHarness(ids, nativeBinding = false) {
     sessionService.start();
   }
   const stream = new framework.ZLinkManagedStream(
-    { async bindActor() {}, async unbindActor() {} },
+    { async bindActor() {}, async unbindActor() {}, disconnectPeer() {} },
     ids.session,
     undefined,
     sessionService,
@@ -98,7 +98,7 @@ async function relocationHarness(ids, nativeBinding = false) {
       });
   }
   const context = host.streamBindingRuntime.createSessionContext(stream);
-  const actorId = 'opaque-relocation-actor';
+  const actorId = hooks.actorId ?? 'opaque-relocation-actor';
   await context.actors.bindOrGet({
     actorId,
     objectGeneration: 5n,
@@ -134,7 +134,10 @@ async function relocationHarness(ids, nativeBinding = false) {
     controls.push(bytes[3]);
     const task = Promise.resolve(dispatch(runtime, sourceNodeRid, bytes));
     tasks.push(task);
-    task.catch((error) => abort.abort(error));
+    task.catch((error) => {
+      if (hooks.onDrop) hooks.onDrop(error);
+      else abort.abort(error);
+    });
     return SubmitResult.Ok;
   };
   sourceRuntime = new ZLinkHostServiceRelocationRuntime({
@@ -154,8 +157,13 @@ async function relocationHarness(ids, nativeBinding = false) {
       sendToNode: (_target, bytes) => submit(sourceRuntime, ids.owner, bytes)
     }),
     boundSessionRelocation: {
-      receiveSeal: (value, signal) =>
-        host.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationSeal(value, signal),
+      receiveSeal: async (value, signal) => {
+        await hooks.beforeSeal?.();
+        return host.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationSeal(
+          value,
+          signal
+        );
+      },
       receiveRoute: (value) =>
         host.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationRoute(value),
       clear: () => host.boundSessionRelay.boundSessions.clearServiceWireSessionRelocations()
@@ -199,6 +207,9 @@ async function relocationHarness(ids, nativeBinding = false) {
     state.boundSession.sessionRid = sessionService.bindings(ids.session)[0].sessionRid;
   return {
     host,
+    stream,
+    context,
+    abort,
     bindWireSession,
     actor,
     state,
@@ -360,3 +371,200 @@ test('native Session bind preserves RID 00000001 through command 38 and relocati
     await h.close();
   }
 });
+
+function barrier() {
+  let release;
+  const joined = new Promise((resolve) => {
+    release = resolve;
+  });
+  return { joined, release };
+}
+
+const {
+  ZLinkSpotSerialTurnExecutor
+} = require('../../packages/framework/dist/runtime/spots/spot-serial-turn-executor');
+
+for (const peerOrder of ['none', 'before failure', 'after failure']) {
+  test(`aggregate capture restores the Spot and every prepared Session (${peerOrder})`, async () => {
+    const entered = barrier();
+    const allowSeal = barrier();
+    const dropped = barrier();
+    const closedTerminal = barrier();
+    const allowPeer = barrier();
+    const peerPrepared = barrier();
+    const closed = await relocationHarness(
+      { source: 'source', owner: 'session-owner', session: 'closed-session', target: 'target' },
+      false,
+      {
+        beforeSeal: async () => {
+          entered.release();
+          await allowSeal.joined;
+        },
+        onDrop: (error) => dropped.release(error)
+      }
+    );
+    const peer =
+      peerOrder === 'none'
+        ? undefined
+        : await relocationHarness(
+            { source: 'source', owner: 'session-owner', session: 'live-session', target: 'target' },
+            false,
+            {
+              actorId: 'live-peer',
+              beforeSeal: () => allowPeer.joined
+            }
+          );
+    const events = [];
+    let peerSeal;
+    const activation = {
+      spotId: 'spot',
+      serial: new ZLinkSpotSerialTurnExecutor(),
+      captureRelocation() {
+        events.push('spot:capture');
+        return Promise.resolve({ timers: [] });
+      },
+      abortRelocation() {
+        events.push('spot:abort');
+      }
+    };
+    const runtime = new ZLinkHostServiceRelocationRuntime({
+      locationStore: () => ({
+        readAuthority: async () => ({
+          kind: 'snapshot',
+          storeVersion: { value: 'v1' },
+          payload: Buffer.alloc(0),
+          objectGeneration: 5n,
+          authorityOwnerGeneration: 11n,
+          ownerId: 'owner',
+          ownerLeaseGeneration: 13n,
+          allocation: { state: 'active', objectKind: 'user_spot', stableType: 'Spot' },
+          storeNow: new Date()
+        })
+      }),
+      spotManager: () => ({
+        pendingSpotCloseDecision: () => undefined,
+        isSpotClosing: () => false
+      }),
+      meshNode: () => ({
+        status: () => ({ routingId: 'source', lifecycleGeneration: 2n }),
+        sealSpotMessageFollowIngress() {
+          events.push('spot:follow-seal');
+          return { spotId: 'spot' };
+        },
+        abortSpotMessageFollowIngress() {
+          events.push('spot:follow-abort');
+          return true;
+        },
+        commitSpotMessageFollowIngress() {}
+      }),
+      actorTransfer: {
+        async prepareMaintenanceSession(actor) {
+          if (actor === closed.actor) {
+            try {
+              await closed.seal();
+            } finally {
+              closedTerminal.release();
+            }
+            throw new Error('the closed Session seal unexpectedly succeeded');
+          }
+          peerSeal = await peer.seal();
+          events.push('peer:prepared');
+          peerPrepared.release();
+          return {
+            async rollback() {
+              events.push('peer:rollback');
+              await peer.transfer.abortBoundSessionRouteSeal(peer.actor, peer.state, peerSeal);
+            }
+          };
+        }
+      }
+    });
+    runtime.spotRegistration = () => ({ relocation: { kind: 'allowed' } });
+    runtime.actorRegistration = () => ({ relocation: { kind: 'allowed' } });
+    runtime.waitForRelocationBudgetHeadroom = async () => {};
+    runtime.runCoordinator = async () => {
+      events.push('target:prepare');
+    };
+    const states = [closed, ...(peer ? [peer] : [])].map((h) => ({
+      actorId: h.actor.context.actorId,
+      actor: h.actor,
+      actorType: 'Actor',
+      spotMembershipEpoch: 1n
+    }));
+    const failure = new Error('release the failed seal at its terminal boundary');
+    const operation = runtime.relocateSpotAggregate(
+      'mesh',
+      activation,
+      'user_spot',
+      states,
+      { rid: 'target' },
+      undefined,
+      closed.abort.signal
+    );
+    const outcome = operation.then(
+      () => null,
+      (error) => error
+    );
+    try {
+      await Promise.race([
+        entered.joined,
+        outcome.then((error) => {
+          throw error ?? new Error('capture ended before seal');
+        })
+      ]);
+      await closed.stream.close();
+      await closed.host.streamBindingRuntime.cleanup(closed.context);
+      assert.equal(
+        await closed.host.streamBindingRuntime.sessionRouteFence(closed.actor.context.actorId),
+        undefined
+      );
+      if (peerOrder === 'before failure') {
+        allowPeer.release();
+        await peerPrepared.joined;
+      }
+      allowSeal.release();
+      assert.ok((await dropped.joined) instanceof framework.ZLinkRemoteBoundSessionFenceError);
+      closed.abort.abort(failure);
+      await closedTerminal.joined;
+      if (peerOrder === 'after failure') {
+        allowPeer.release();
+        await peerPrepared.joined;
+      }
+      assert.equal(await outcome, failure);
+      assert.equal(
+        events.filter((event) => event === 'spot:abort').length,
+        1,
+        'partially captured Spot must be restored'
+      );
+      assert.equal(
+        events.filter((event) => event === 'spot:follow-abort').length,
+        1,
+        'Message Follow ingress must be restored'
+      );
+      assert.equal(events.includes('target:prepare'), false);
+      if (peer) {
+        assert.equal(
+          events.filter((event) => event === 'peer:rollback').length,
+          1,
+          'every successful participant must be restored, including a late completion'
+        );
+        assert.equal(
+          await peer.host.streamBindingRuntime.validateActorRouteSeal(
+            peer.actor.context.actorId,
+            peerSeal.relocationSealId
+          ),
+          false
+        );
+        assert.equal(peer.sent.at(-1).route.action, 'abort');
+      }
+    } finally {
+      allowSeal.release();
+      allowPeer.release();
+      closed.abort.abort(failure);
+      await outcome;
+      await closed.close();
+      await peer?.close();
+      await runtime.dispose();
+    }
+  });
+}

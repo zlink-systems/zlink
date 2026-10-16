@@ -1617,8 +1617,9 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
             return { spotCaptureOperation: activation.captureRelocation(captureSignal) };
           }
         );
-        const preparedSessions = Promise.all(
-          actorStates.map(async (state) => ({
+        const [capture, ...preparations] = await Promise.allSettled([
+          spotCaptureOperation,
+          ...actorStates.map(async (state) => ({
             state,
             actor: state.actor!,
             prepared: await this.options.actorTransfer.prepareMaintenanceSession(
@@ -1629,19 +1630,22 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
               relocationWireId(aggregateId)
             )
           }))
-        );
-        const preparedSessionsOutcome = preparedSessions.then(
-          (value) => ({ value }),
-          (error) => ({ error })
-        );
-        spotCapture = await spotCaptureOperation;
-        const preparation = await preparedSessionsOutcome;
-        if ('error' in preparation) throw preparation.error;
-        sessions.push(...preparation.value);
+        ] as const);
+        const failures: unknown[] = [];
+        if (capture.status === 'fulfilled') spotCapture = capture.value;
+        else failures.push(capture.reason);
+        for (const preparation of preparations) {
+          if (preparation.status === 'fulfilled') sessions.push(preparation.value);
+          else failures.push(preparation.reason);
+        }
+        if (failures.length === 1) throw failures[0];
+        if (failures.length > 1) {
+          throw new AggregateError(failures, 'Spot relocation source preparation failed.');
+        }
         return {
           boundSessionState: Buffer.alloc(0),
           queuedMessages: [],
-          timers: spotCapture.timers.map(toServiceTimer)
+          timers: spotCapture!.timers.map(toServiceTimer)
         };
       },
       captureApplicationState: (captureSignal) =>
