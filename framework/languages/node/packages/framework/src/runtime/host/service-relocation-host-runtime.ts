@@ -1190,7 +1190,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     const key = sessionRelocationPendingKey(request);
     const bytes = encodeSessionRelocationSeal(request);
     const requestFingerprint = bytes.toString('base64');
-    const expectedTarget = String(targetNodeRid);
+    const expectedTarget = encodeRoutingIdStorageHex(targetNodeRid);
     const terminal = this.terminalSessionRelocations.get(key);
     if (terminal !== undefined) {
       if (
@@ -1267,7 +1267,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       //  connection (NotConnected); dispatch through the inbound handler
       //  locally instead of the wire.
       const localRid = this.requireMeshNode(meshName).status().routingId;
-      if (String(localRid) === expectedTarget) {
+      if (encodeRoutingIdStorageHex(localRid) === expectedTarget) {
         try {
           const response = await this.handleSessionRelocationSeal(
             meshName,
@@ -1374,7 +1374,10 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     if (pending === undefined) {
       const terminal = this.terminalSessionRelocations.get(key);
       if (terminal === undefined) return;
-      if (sourceNodeRid === null || String(sourceNodeRid) !== terminal.targetNodeRid) {
+      if (
+        sourceNodeRid === null ||
+        encodeRoutingIdStorageHex(sourceNodeRid) !== terminal.targetNodeRid
+      ) {
         throw new ServiceWireProtocolError(`Session relocation ACK '${key}' source node changed.`);
       }
       validateSessionRelocationResponse(terminal.request, response);
@@ -1386,7 +1389,10 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       this.terminalSessionRelocations.touch(key);
       return;
     }
-    if (sourceNodeRid === null || String(sourceNodeRid) !== pending.targetNodeRid) {
+    if (
+      sourceNodeRid === null ||
+      encodeRoutingIdStorageHex(sourceNodeRid) !== pending.targetNodeRid
+    ) {
       pending.reject(
         new ServiceWireProtocolError(`Session relocation ACK '${key}' source node changed.`)
       );
@@ -1410,12 +1416,12 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     if (sourceNodeRid === null) return undefined;
     const node = this.requireMeshNode(meshName);
     const status = node.status();
-    if (String(status.routingId) === String(sourceNodeRid)) {
+    if (routingIdsEqual(status.routingId, sourceNodeRid)) {
       return status.lifecycleGeneration;
     }
     return node
       .peers()
-      .find((peer) => peer.routingId !== null && String(peer.routingId) === String(sourceNodeRid))
+      .find((peer) => peer.routingId !== null && routingIdsEqual(peer.routingId, sourceNodeRid))
       ?.lifecycleGeneration;
   }
 
@@ -1427,8 +1433,8 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
   ): Promise<ServiceSessionRelocationSealed> {
     if (
       sourceNodeRid === null ||
-      String(sourceNodeRid) !== request.coordinator.nodeRid ||
-      String(sourceNodeRid) !== request.actor.actor.nodeRid
+      !routingIdsEqual(sourceNodeRid, request.coordinator.nodeRid) ||
+      !routingIdsEqual(sourceNodeRid, request.actor.actor.nodeRid)
     ) {
       throw new ServiceWireProtocolError(
         'Session relocation seal source does not match its coordinator and Actor fence.'
@@ -1460,7 +1466,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     this.validateSessionOwnerFence(meshName, request.session);
     const expectedSource =
       request.route.action === 'commit' ? request.route.targetNodeRid : request.coordinator.nodeRid;
-    if (sourceNodeRid === null || String(sourceNodeRid) !== expectedSource) {
+    if (sourceNodeRid === null || !routingIdsEqual(sourceNodeRid, expectedSource)) {
       throw new ServiceWireProtocolError(
         'Session relocation route source does not match its action fence.'
       );
@@ -5862,7 +5868,7 @@ function sessionRelocationRouteSubmitKey(
   request: ServiceSessionRelocationRoute,
   targetNodeRid: RoutingId
 ): string {
-  return `${sessionRelocationIdentityKey(request)}:${String(targetNodeRid)}`;
+  return `${sessionRelocationIdentityKey(request)}:${encodeRoutingIdStorageHex(targetNodeRid)}`;
 }
 
 function sessionRelocationResponseKey(response: ServiceSessionRelocationSealed): string {
@@ -5887,16 +5893,16 @@ function validateSessionRelocationResponse(
   const sameCoordinator =
     request.coordinator.ownerId === response.coordinator.ownerId &&
     request.coordinator.leaseGeneration === response.coordinator.leaseGeneration &&
-    request.coordinator.nodeRid === response.coordinator.nodeRid &&
+    routingIdsEqual(request.coordinator.nodeRid, response.coordinator.nodeRid) &&
     request.coordinator.nodeGeneration === response.coordinator.nodeGeneration &&
     request.coordinator.expectedAuthorityStoreVersion ===
       response.coordinator.expectedAuthorityStoreVersion;
   const sameSession =
-    request.session.sessionOwnerNodeRid === response.session.sessionOwnerNodeRid &&
+    routingIdsEqual(request.session.sessionOwnerNodeRid, response.session.sessionOwnerNodeRid) &&
     request.session.sessionOwnerNodeGeneration === response.session.sessionOwnerNodeGeneration &&
     request.session.sessionOwnerId === response.session.sessionOwnerId &&
     request.session.sessionOwnerLeaseGeneration === response.session.sessionOwnerLeaseGeneration &&
-    request.session.sessionRid === response.session.sessionRid &&
+    routingIdsEqual(request.session.sessionRid, response.session.sessionRid) &&
     request.session.bindingGeneration === response.session.bindingGeneration;
   if (
     request.relocation.high !== response.relocation.high ||
@@ -5909,7 +5915,7 @@ function validateSessionRelocationResponse(
   if (
     request.actor.actor.actorId !== response.actor.actor.actorId ||
     request.actor.actor.generation !== response.actor.actor.generation ||
-    request.actor.actor.nodeRid !== response.actor.actor.nodeRid ||
+    !routingIdsEqual(request.actor.actor.nodeRid, response.actor.actor.nodeRid) ||
     request.actor.targetNodeGeneration !== response.actor.targetNodeGeneration ||
     request.actor.authorityOwnerGeneration !== response.actor.authorityOwnerGeneration ||
     request.actor.ownerLeaseGeneration !== response.actor.ownerLeaseGeneration
@@ -6092,6 +6098,7 @@ function encodeActorSession(target: ZLinkRemoteBoundSessionTarget | undefined): 
       version: ACTOR_SESSION_JOURNAL_VERSION,
       routerChannelId: target.routerChannelId,
       targetNodeRid: String(target.targetNodeRid),
+      targetNodeRidHex: encodeRoutingIdStorageHex(target.targetNodeRid),
       spotId: String(target.spotId),
       sessionNodeRid:
         target.sessionNodeRid === undefined ? undefined : String(target.sessionNodeRid),
@@ -6118,12 +6125,15 @@ function encodeActorSession(target: ZLinkRemoteBoundSessionTarget | undefined): 
               coordinatorOwnerId: target.serviceWireRelocation.coordinator.ownerId,
               coordinatorLeaseGeneration:
                 target.serviceWireRelocation.coordinator.leaseGeneration.toString(),
-              coordinatorNodeRid: target.serviceWireRelocation.coordinator.nodeRid,
+              coordinatorNodeRid: String(target.serviceWireRelocation.coordinator.nodeRid),
+              coordinatorNodeRidHex: encodeRoutingIdStorageHex(
+                target.serviceWireRelocation.coordinator.nodeRid
+              ),
               coordinatorNodeGeneration:
                 target.serviceWireRelocation.coordinator.nodeGeneration.toString(),
               expectedAuthorityStoreVersion:
                 target.serviceWireRelocation.coordinator.expectedAuthorityStoreVersion,
-              sessionOwnerNodeRid: target.serviceWireRelocation.session.sessionOwnerNodeRid,
+              sessionOwnerNodeRid: String(target.serviceWireRelocation.session.sessionOwnerNodeRid),
               sessionOwnerNodeRidHex: encodeRoutingIdStorageHex(
                 target.serviceWireRelocation.session.sessionOwnerNodeRid as RoutingId
               ),
@@ -6132,7 +6142,7 @@ function encodeActorSession(target: ZLinkRemoteBoundSessionTarget | undefined): 
               sessionOwnerId: target.serviceWireRelocation.session.sessionOwnerId,
               sessionOwnerLeaseGeneration:
                 target.serviceWireRelocation.session.sessionOwnerLeaseGeneration.toString(),
-              sessionRid: target.serviceWireRelocation.session.sessionRid,
+              sessionRid: String(target.serviceWireRelocation.session.sessionRid),
               sessionRidHex: encodeRoutingIdStorageHex(
                 target.serviceWireRelocation.session.sessionRid as RoutingId
               ),
@@ -6159,7 +6169,7 @@ function decodeActorSession(payload: Uint8Array): ZLinkRemoteBoundSessionTarget 
   const serviceWire = decodeActorSessionServiceWireFence(value.serviceWireRelocation);
   return {
     routerChannelId: value.routerChannelId,
-    targetNodeRid: value.targetNodeRid as RoutingId,
+    targetNodeRid: decodeRoutingId(value.targetNodeRid, value.targetNodeRidHex),
     spotId: value.spotId as RoutingId,
     ...(typeof value.sessionNodeRid === 'string'
       ? { sessionNodeRid: decodeRoutingId(value.sessionNodeRid, value.sessionNodeRidHex) }
@@ -6230,7 +6240,7 @@ function decodeActorSessionServiceWireFence(
     coordinator: {
       ownerId: text('coordinatorOwnerId'),
       leaseGeneration: positive('coordinatorLeaseGeneration'),
-      nodeRid: text('coordinatorNodeRid'),
+      nodeRid: decodeRoutingId(text('coordinatorNodeRid'), value.coordinatorNodeRidHex),
       nodeGeneration: positive('coordinatorNodeGeneration'),
       expectedAuthorityStoreVersion: text('expectedAuthorityStoreVersion')
     },

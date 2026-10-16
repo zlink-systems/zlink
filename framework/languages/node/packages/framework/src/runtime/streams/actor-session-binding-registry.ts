@@ -6,6 +6,7 @@ import {
 import { zlinkDefaultLocationOptions } from '../../contracts/Locations/Options';
 import { createAbortError, throwIfAborted } from '../abort';
 import { ZLinkStateLane } from '../execution/state-lane';
+import { routingIdsEqual } from '../routing-id';
 import {
   ZLinkFrameworkInternalErrorKind,
   createInternalFrameworkException
@@ -384,7 +385,7 @@ export class ZLinkActorSessionBindingRegistry<
     return await this.lane.run(() => {
       const route = this.routeCore(actorId);
       const generation = route?.actor.ref.bindingGeneration;
-      return route?.sessionIdentity === sessionRid &&
+      return route?.sessionIdentity?.toString() === sessionRid &&
         (bindingGeneration === undefined || generation === bindingGeneration)
         ? route
         : undefined;
@@ -1044,7 +1045,7 @@ export class ZLinkActorSessionBindingRegistry<
     const ownsActiveSeal =
       activeState !== undefined &&
       activeState.phase !== 'terminal' &&
-      activeState.sessionIdentity === route.sessionIdentity;
+      routingIdsEqual(activeState.sessionIdentity, route.sessionIdentity);
     if (!ownsActiveSeal) {
       // Nothing this exact route still holds open — leave terminal
       // retention and any other Session's active seal untouched.
@@ -1356,8 +1357,8 @@ function assertRelocationClaim(
   if (
     state.actorGeneration !== claim.actorGeneration ||
     state.bindingGeneration !== claim.bindingGeneration ||
-    state.sessionIdentity !== claim.sessionIdentity ||
-    state.actorNodeRid !== claim.actorNodeRid ||
+    !routingIdsEqual(state.sessionIdentity, claim.sessionIdentity) ||
+    !routingIdsEqual(state.actorNodeRid, claim.actorNodeRid) ||
     state.actorNodeGeneration !== claim.actorNodeGeneration
   ) {
     throw createInternalFrameworkException(
@@ -1379,7 +1380,7 @@ function assertSuccessorSessionIdentity(
   if (
     predecessor.actorGeneration !== successor.actorGeneration ||
     predecessor.bindingGeneration !== successor.bindingGeneration ||
-    predecessor.sessionIdentity !== successor.sessionIdentity
+    !routingIdsEqual(predecessor.sessionIdentity, successor.sessionIdentity)
   ) {
     throw createInternalFrameworkException(
       ZLinkFrameworkInternalErrorKind.ActorLocationStale,

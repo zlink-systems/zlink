@@ -26,7 +26,7 @@ import {
   ZLinkRemoteBoundSessionFenceError
 } from '../actors/bound-session-wire';
 import { encodeRemoteActorPacketTarget } from '../actors/actor-packet-relay-wire';
-import { decodeRoutingId as decodeWireRoutingId, routingIdsEqual } from '../routing-id';
+import { routingIdsEqual } from '../routing-id';
 import type { MeshRouterResolver } from './mesh-router-resolver';
 import {
   encodeSessionRelocationRoute,
@@ -524,7 +524,7 @@ export class ZLinkRemoteBoundSessionRelay {
         actorId: value.actor.actorId,
         objectGeneration: value.actor.generation,
         meshName: current.meshName,
-        nodeRid: decodeWireRoutingId(committedRoute.targetNodeRid, undefined),
+        nodeRid: committedRoute.targetNodeRid,
         bindingGeneration: value.session.bindingGeneration,
         ownershipGeneration: committedRoute.targetAuthorityOwnerGeneration,
         ownerNodeGeneration: committedRoute.targetNodeGeneration,
@@ -560,7 +560,7 @@ export class ZLinkRemoteBoundSessionRelay {
       current === undefined ||
       current.actor.objectGeneration !== value.actor.actor.generation ||
       !routingIdsEqual(current.actor.nodeRid, value.actor.actor.nodeRid) ||
-      current.sessionRid.toString() !== value.session.sessionRid ||
+      !routingIdsEqual(current.sessionRid, value.session.sessionRid) ||
       current.bindingGeneration !== value.session.bindingGeneration
     ) {
       throw new ZLinkRemoteBoundSessionFenceError(
