@@ -204,10 +204,10 @@ Relocation envelope의 `sessionBindings`(§4.2) 항목 중 Session owner가 targ
 target은 그 Session owner node와 [ready](../00-foundation/02-glossary.ko.md#ready) route가 있는지 확인한다.
 Session owner가 target node 자신이면 확보할 route가 없다. 없으면 자신의 auto-connect
 owner에 그 peer의 즉시 reconcile을 요청하고([MeshNode §7.1](../03-spot-actor/03-mesh-node.ko.md#71-peer-연결)),
-route가 ready가 될 때까지 relay 수신 준비 완료를 보내지 않는다. 이 대기는 relocation을 시작한 operation의
-기존 deadline 안에서만 하며 새 timer나 retry를 만들지 않는다. Target attempt의 continuation에서 기다리며
-infrastructure 수신 loop나 application handler turn을 점유하지 않는다. Deadline이나 target 종료로 대기가
-끝나면 relay 수신 준비 완료 대신 명시적 실패 reply를 보낸다. Source는 아직 owner이므로 §9의 명시적 실패와
+route가 ready가 될 때까지 relay 수신 준비 완료를 보내지 않는다. 이 대기의 기한은 command 40이 실어 오는
+source operation deadline(`deadlineUnixMs`)이며, target은 새 timer나 retry를 만들지 않는다. Target attempt의
+continuation에서 기다리며 infrastructure 수신 loop나 application handler turn을 점유하지 않는다. 그 deadline이나
+target 종료로 대기가 끝나면 relay 수신 준비 완료 대신 명시적 실패 reply를 보내고 조립 중인 staging을 정리한다. Source는 아직 owner이므로 §9의 명시적 실패와
 같이 source queue와 matching Session seal을 복원한다. Target이 이 준비를 끝낸 뒤 commit해야 commit 뒤의 첫
 Actor→Session push가 route 부재로 실패하지 않는다.
 
