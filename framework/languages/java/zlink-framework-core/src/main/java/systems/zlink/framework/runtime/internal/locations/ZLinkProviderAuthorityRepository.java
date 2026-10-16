@@ -1828,18 +1828,28 @@ final class ZLinkProviderAuthorityRepository {
                                                                                                                     ZLinkAggregateCommitResult
                                                                                                                             .STALE));
                                                                                         }
-                                                                                        return provider.write(
-                                                                                                        new ZLinkStoreWriteRequest(
-                                                                                                                conditions,
-                                                                                                                List
-                                                                                                                        .of(
-                                                                                                                                new ZLinkStorePut(
-                                                                                                                                        marker,
-                                                                                                                                        encodeAggregate(
-                                                                                                                                                AGGREGATE_COMMITTED,
-                                                                                                                                                request),
-                                                                                                                                        null))),
+                                                                                        return aggregateCapacityMutations(
+                                                                                                        request,
+                                                                                                        rows,
+                                                                                                        conditions,
                                                                                                         opaqueCancellation)
+                                                                                                .thenCompose(
+                                                                                                        mutations -> {
+                                                                                                            mutations
+                                                                                                                    .add(
+                                                                                                                            new ZLinkStorePut(
+                                                                                                                                    marker,
+                                                                                                                                    encodeAggregate(
+                                                                                                                                            AGGREGATE_COMMITTED,
+                                                                                                                                            request),
+                                                                                                                                    null));
+                                                                                                            return provider
+                                                                                                                    .write(
+                                                                                                                            new ZLinkStoreWriteRequest(
+                                                                                                                                    conditions,
+                                                                                                                                    mutations),
+                                                                                                                            opaqueCancellation);
+                                                                                                        })
                                                                                                 .thenCompose(
                                                                                                         result -> {
                                                                                                             if (!(result
@@ -1867,6 +1877,74 @@ final class ZLinkProviderAuthorityRepository {
                                                                 });
                                             });
                         });
+    }
+
+    private CompletionStage<List<ZLinkStoreMutation>> aggregateCapacityMutations(
+            ZLinkAggregatePrepareRequest request,
+            List<LoadedParticipant> rows,
+            List<ZLinkStoreCondition> conditions,
+            systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
+        Map<ZLinkStoreKey, CapacityRecord> capacities = new HashMap<>();
+        List<ZLinkPlacementAllocation> allocations = new ArrayList<>();
+        ZLinkStoreKey target = capacityKey(request.targetDescriptor());
+        for (int index = 0; index < rows.size(); index++) {
+            if (request.participants().get(index).ownerTransition()
+                    != ZLinkAuthorityGenerationTransition.NEW_OWNER) continue;
+            AuthorityRecord record = decode(rows.get(index).value().bytes());
+            capacities.put(capacityKey(record.allocation().descriptor()), CapacityRecord.empty());
+            capacities.put(target, CapacityRecord.empty());
+            allocations.add(record.allocation());
+        }
+        CompletionStage<Void> loaded = completed(null);
+        for (ZLinkStoreKey key : capacities.keySet()) {
+            loaded =
+                    loaded.thenCompose(
+                            ignored ->
+                                    provider.read(key, cancellation)
+                                            .thenAccept(
+                                                    read -> {
+                                                        if (read
+                                                                instanceof
+                                                                ZLinkStoreReadFound found) {
+                                                            capacities.put(
+                                                                    key,
+                                                                    decodeCapacity(
+                                                                            found.value().bytes()));
+                                                            conditions.add(
+                                                                    new ZLinkStoreVersionCondition(
+                                                                            key,
+                                                                            found.value()
+                                                                                    .version()));
+                                                        } else {
+                                                            conditions.add(
+                                                                    new ZLinkStoreMissingCondition(
+                                                                            key));
+                                                        }
+                                                    }));
+        }
+        return loaded.thenApply(
+                ignored -> {
+                    for (var allocation : allocations) {
+                        ZLinkStoreKey source = capacityKey(allocation.descriptor());
+                        var bundle = allocation.capacityBundle();
+                        CapacityRecord released = capacities.get(source).adjustActive(bundle, -1);
+                        if (released == null)
+                            throw new IllegalStateException(
+                                    "Location Store capacity record is inconsistent");
+                        capacities.put(source, released);
+                        CapacityRecord acquired = capacities.get(target).adjustActive(bundle, 1);
+                        if (acquired == null)
+                            throw new IllegalStateException(
+                                    "Location Store capacity record is inconsistent");
+                        capacities.put(target, acquired);
+                    }
+                    List<ZLinkStoreMutation> mutations = new ArrayList<>();
+                    capacities.forEach(
+                            (key, value) ->
+                                    mutations.add(
+                                            new ZLinkStorePut(key, encodeCapacity(value), null)));
+                    return mutations;
+                });
     }
 
     private CompletionStage<Optional<ZLinkAggregateCommitResult>> retryAggregateCommit(

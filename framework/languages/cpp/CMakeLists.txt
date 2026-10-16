@@ -2140,6 +2140,11 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     tests/Zlink.Framework.UnitTests/test_cpp_framework_backpressure_reliability.cpp
     "framework-unit;framework-regression;backpressure;reliability")
   add_zlink_framework_test(
+    test_cpp_framework_stream_typed_reply
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_stream_typed_reply.cpp
+    "framework-unit;framework-contract;stream;reply"
+    unit)
+  add_zlink_framework_test(
     test_cpp_framework_stream_framework
     tests/Zlink.Framework.UnitTests/test_cpp_framework_stream_framework.cpp
     "framework-integration;framework-regression;framework-zlink;framework-zlink-stream;stream")

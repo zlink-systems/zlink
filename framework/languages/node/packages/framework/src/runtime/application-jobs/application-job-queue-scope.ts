@@ -5,9 +5,36 @@ import type { ApplicationJobOrigin, ApplicationJobPermitPort } from './contracts
 const applicationJobPermitScope = new AsyncLocalStorage<ApplicationJobPermitPort | undefined>();
 
 function releasePermitTurn(): void {
-  const permit = applicationJobPermitScope.getStore();
+  releaseApplicationJobPermitTurn(applicationJobPermitScope.getStore());
+}
+
+/** Ends the internal processing of one record turn unless its handler detached the permit. */
+export function releaseApplicationJobPermitTurn(
+  permit: ApplicationJobPermitPort | undefined
+): void {
   if (permit !== undefined && !permit.detachedForHandlerTurn)
     permit.releaseAfterInternalProcessing();
+}
+
+/**
+ * Makes `permit` the current record's permit for the synchronous part of a
+ * dispatch. The caller restores the returned previous scope with
+ * {@link leaveApplicationJobPermitScope} and releases the turn itself, so a
+ * dispatcher that already continues on the handler result needs no second
+ * continuation here.
+ */
+export function enterApplicationJobPermitScope(
+  permit: ApplicationJobPermitPort
+): ApplicationJobPermitPort | undefined {
+  const previous = applicationJobPermitScope.getStore();
+  applicationJobPermitScope.enterWith(permit);
+  return previous;
+}
+
+export function leaveApplicationJobPermitScope(
+  previous: ApplicationJobPermitPort | undefined
+): void {
+  applicationJobPermitScope.enterWith(previous);
 }
 
 function releasePermitSuccess<TResult>(value: TResult): TResult {

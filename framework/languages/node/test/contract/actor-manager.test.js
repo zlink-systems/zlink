@@ -2874,7 +2874,7 @@ test('target ownership publication submits one exact command 44 without a comple
     actor: {
       actorId: 'actor-route',
       generation: 9n,
-      nodeRid: 'target-node'
+      nodeRid: rid('target-node')
     },
     session: serviceWireRelocation.session,
     route: {
@@ -2882,7 +2882,7 @@ test('target ownership publication submits one exact command 44 without a comple
       previousAuthorityOwnerGeneration: 16n,
       targetAuthorityOwnerGeneration: 17n,
       targetOwnerLeaseGeneration: 23n,
-      targetNodeRid: 'target-node',
+      targetNodeRid: rid('target-node'),
       targetNodeGeneration: 19n
     }
   });
@@ -3076,25 +3076,39 @@ test('source command 42 seal captures the exact fence and rollback submits one-w
     locationLifecycle: () => undefined,
     actorHandoff: {
       begin() {},
-      isActive() { return false; },
+      isActive() {
+        return false;
+      },
       sealConnectionBoundIngress() {},
-      snapshotCoreBacklog() { return [{ index: 0, header: 'aA==', payload: 'Yg==', returnResponse: false }]; },
+      snapshotCoreBacklog() {
+        return [{ index: 0, header: 'aA==', payload: 'Yg==', returnResponse: false }];
+      },
       cancel() {},
-      pendingCount() { return 1; }
+      pendingCount() {
+        return 1;
+      }
     },
     actorTransferRegistry: {
-      async transferOut() { return { state: encodedMessage('state') }; }
+      async transferOut() {
+        return { state: encodedMessage('state') };
+      }
     },
-    authorityStore: () => ({ async readAuthority() { return authority; } }),
+    authorityStore: () => ({
+      async readAuthority() {
+        return authority;
+      }
+    }),
     relocationStore: () => undefined,
     liveDescriptors: async (meshName) => {
       assert.equal(meshName, 'session.route');
-      return [{
-        rid: rid('session-node'),
-        lifecycleGeneration: 4n,
-        ownerId: 'session-owner',
-        leaseGeneration: 8n
-      }];
+      return [
+        {
+          rid: rid('session-node'),
+          lifecycleGeneration: 4n,
+          ownerId: 'session-owner',
+          leaseGeneration: 8n
+        }
+      ];
     },
     sessionRelocationWire: () => ({
       async requestSessionRelocationSeal(meshName, targetNodeRid, request) {
@@ -3129,23 +3143,23 @@ test('source command 42 seal captures the exact fence and rollback submits one-w
     coordinator: {
       ownerId: 'source-owner',
       leaseGeneration: 5n,
-      nodeRid: 'source-node',
+      nodeRid: rid('source-node'),
       nodeGeneration: 2n,
       expectedAuthorityStoreVersion: 'authority-source-1'
     },
     senderRole: 'source',
     actor: {
-      actor: { actorId: 'actor-seal', generation: 9n, nodeRid: 'source-node' },
+      actor: { actorId: 'actor-seal', generation: 9n, nodeRid: rid('source-node') },
       targetNodeGeneration: 2n,
       authorityOwnerGeneration: 3n,
       ownerLeaseGeneration: 5n
     },
     session: {
-      sessionOwnerNodeRid: 'session-node',
+      sessionOwnerNodeRid: rid('session-node'),
       sessionOwnerNodeGeneration: 4n,
       sessionOwnerId: 'session-owner',
       sessionOwnerLeaseGeneration: 8n,
-      sessionRid: 'session-rid',
+      sessionRid: rid('session-rid'),
       bindingGeneration: 11n
     }
   });
@@ -3165,7 +3179,7 @@ test('source command 42 seal captures the exact fence and rollback submits one-w
     relocation,
     coordinator: seals[0].request.coordinator,
     senderRole: 'source',
-    actor: { actorId: 'actor-seal', generation: 9n, nodeRid: 'source-node' },
+    actor: { actorId: 'actor-seal', generation: 9n, nodeRid: rid('source-node') },
     session: seals[0].request.session,
     route: {
       action: 'abort',

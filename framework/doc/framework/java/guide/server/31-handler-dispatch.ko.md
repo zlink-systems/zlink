@@ -206,13 +206,19 @@ serializer는 하나만 두고, 타입 조건을 받는 serializer는 서로 겹
 | --- | --- | --- |
 | Spot 앞 one-way packet | `ZLinkSpotPacketHandler<TSpot, TMessage>` | `addHandler(THandler.class)` |
 | Spot 앞 request | `ZLinkSpotRequestHandler<TSpot, TRequest, TReply>` | `addHandler(THandler.class)` |
-| Logical Multicast 구독 이벤트 | `ZLinkSpotSubscriptionHandler<TSpot, TEvent>` | handler에 `@ZLinkSpotSubscription(topic)` + `addHandler(THandler.class)` |
+| Logical Multicast 구독 이벤트 | `ZLinkSpotSubscriptionHandler<TSpot, TEvent>` | handler에 `@ZLinkSpotSubscription(spotNodeName = "game", channelName = "events", topic = "orders")` + `addHandler(THandler.class)` |
 | timer tick | `ZLinkSpotTimerHandler<TSpot>` | `context.addTimer(name, period, THandler.class, options)`([Timer와 worker](36-timer-worker.ko.md)) |
 | member Actor 앞 one-way packet | `ZLinkSpotActorSendHandler<TSpot, TActor, TMessage>` | handler에 `@ZLinkSpotActorSend` + `addHandler(THandler.class)` |
 | member Actor 앞 request | `ZLinkSpotActorRequestHandler<TSpot, TActor, TRequest, TReply>` | handler에 `@ZLinkSpotActorRequest` + `addHandler(THandler.class)` |
 
-**등록 method는 `addHandler` 하나다.** 무엇을 받는 handler인지는 구현한 interface와
-annotation이 정한다. packet 이름은 message 타입의 `@ZLinkPacket`에서 온다.
+**`addHandler`는 구현한 interface와 annotation으로 handler 종류를 정합니다.**
+packet 이름은 message 타입의 `@ZLinkPacket`에서 옵니다. 실행 중 정한 channel과 topic은 다음과 같이 등록합니다.
+
+```java
+context().handlers().addSubscribe(ProjectionUpdatedHandler.class, channelName, topic);
+```
+
+annotation은 선택이며, 함께 있으면 annotation의 세 값으로 정한 subscription을 별도로 등록합니다.
 
 handler는 대상 Spot instance를 첫 인자로 받는다. Spot 안에서 실행되므로 상태를 락 없이
 직접 만진다.

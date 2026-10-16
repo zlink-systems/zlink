@@ -9,25 +9,37 @@ test('SIGINT runs while heartbeat admission is pending in the real binding', asy
     silent: true
   });
   let stderr = '';
-  child.stderr.on('data', chunk => { stderr += chunk; });
+  child.stderr.on('data', (chunk) => {
+    stderr += chunk;
+  });
   const exited = once(child, 'exit');
-  const watchdog = setTimeout(() => child.kill('SIGKILL'), 5000);
+  let watchdogError;
+  const watchdog = setTimeout(() => {
+    watchdogError = new Error('heartbeat shutdown did not complete within 5000ms');
+    if (child.connected) child.send({ type: 'raise-sigint' });
+  }, 5000);
   const messages = [];
-  child.on('message', message => {
+  child.on('message', (message) => {
     messages.push(message);
     if (message.type === 'pending') {
-      if (process.platform === 'win32') child.send({ type: 'raise-sigint' });
-      else child.kill('SIGINT');
+      child.send({ type: 'raise-sigint' });
     }
   });
   try {
     const [code, signal] = await exited;
+    assert.ifError(watchdogError);
     assert.equal(signal, null, stderr);
     assert.equal(code, 0, stderr);
-    assert.deepEqual(messages.map(message => message.type), ['pending', 'closed']);
+    assert.deepEqual(
+      messages.map((message) => message.type),
+      ['pending', 'closed']
+    );
     assert.equal(messages[1].heartbeatCompleted, true);
   } finally {
     clearTimeout(watchdog);
-    if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+    if (child.exitCode === null && child.signalCode === null) {
+      if (child.connected) child.send({ type: 'raise-sigint' });
+      await exited;
+    }
   }
 });

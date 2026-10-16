@@ -430,16 +430,27 @@ function validationFailed(actorId) {
 function startStreamServer(endpoint) {
   const child = childProcess.spawn(process.execPath, [serverScript, '--endpoint', endpoint], {
     cwd: workspaceRoot,
-    stdio: ['ignore', 'pipe', 'pipe']
+    stdio: ['ignore', 'pipe', 'pipe', 'ipc']
   });
   let output = '';
   let stdout = '';
-  child.stdout.on('data', (chunk) => { stdout += chunk; output += chunk; });
-  child.stderr.on('data', (chunk) => { output += chunk; });
+  child.stdout.on('data', (chunk) => {
+    stdout += chunk;
+    output += chunk;
+  });
+  child.stderr.on('data', (chunk) => {
+    output += chunk;
+    child.stderrOutput = output;
+  });
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`Stream server start timeout: ${output}`)), 30_000);
+    const timer = setTimeout(
+      () => reject(new Error(`Stream server start timeout: ${output}`)),
+      30_000
+    );
     const check = () => {
-      const readyLine = stdout.split('\n').slice(0, -1)
+      const readyLine = stdout
+        .split('\n')
+        .slice(0, -1)
         .find((line) => line.includes('"event":"ready"'));
       if (readyLine === undefined) return;
       clearTimeout(timer);
@@ -460,12 +471,17 @@ function startStreamServer(endpoint) {
 
 function stopStreamServer(child) {
   if (!child || child.exitCode !== null) return Promise.resolve();
-  return new Promise((resolve) => {
-    child.once('exit', () => resolve());
-    child.kill('SIGTERM');
-    setTimeout(() => {
-      if (child.exitCode === null) child.kill('SIGKILL');
-    }, 5_000).unref();
+  return new Promise((resolve, reject) => {
+    child.once('exit', (code, signal) => {
+      if (code === 0 && signal === null) resolve();
+      else
+        reject(
+          new Error(
+            `Stream server shutdown failed: code=${code}, signal=${signal}: ${child.stderrOutput || ''}`
+          )
+        );
+    });
+    child.send({ type: 'shutdown' });
   });
 }
 

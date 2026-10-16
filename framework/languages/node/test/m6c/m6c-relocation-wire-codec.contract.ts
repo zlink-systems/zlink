@@ -388,7 +388,7 @@ test('commands 42, 43, and 44 match the shared Session golden vectors', () => {
 
   assert.deepEqual(
     entries.map((entry) => entry.command),
-    [42, 43, 44, 44]
+    [42, 43, 43, 44, 44]
   );
   assertGoldenRoundTrip(
     entries[0]!,
@@ -402,20 +402,24 @@ test('commands 42, 43, and 44 match the shared Session golden vectors', () => {
     encodeSessionRelocationSealed,
     decodeSessionRelocationSealed
   );
+  assert.throws(
+    () => decodeSessionRelocationSealed(Buffer.from(entries[2]!.hex, 'hex')),
+    /bindingAbsent/
+  );
   assertGoldenRoundTrip(
-    entries[2]!,
+    entries[3]!,
     commit,
     encodeSessionRelocationRoute,
     decodeSessionRelocationRoute
   );
   assertGoldenRoundTrip(
-    entries[3]!,
+    entries[4]!,
     abort,
     encodeSessionRelocationRoute,
     decodeSessionRelocationRoute
   );
 
-  const reserved = Buffer.from(entries[2]!.hex, 'hex');
+  const reserved = Buffer.from(entries[3]!.hex, 'hex');
   reserved[3] = 45;
   assert.throws(() => decodeSessionRelocationRoute(reserved));
   assert.throws(
@@ -431,8 +435,11 @@ test('commands 42, 43, and 44 match the shared Session golden vectors', () => {
 test('batch-3 Session barrier hand/generated codecs are byte-equal and reject the same malformed bytes', () => {
   for (const entry of sessionGolden()) {
     const encoded = Buffer.from(entry.hex, 'hex');
-    const hand =
-      entry.command === 42
+    const absent = entry.name === 'sessionRelocationBindingAbsent';
+    if (absent) assert.throws(() => decodeSessionRelocationSealed(encoded), /bindingAbsent/);
+    const hand = absent
+      ? undefined
+      : entry.command === 42
         ? encodeSessionRelocationSeal(decodeSessionRelocationSeal(encoded))
         : entry.command === 43
           ? encodeSessionRelocationSealed(decodeSessionRelocationSealed(encoded))
@@ -443,7 +450,7 @@ test('batch-3 Session barrier hand/generated codecs are byte-equal and reject th
         : entry.command === 43
           ? encodeSessionRelocationSealed43(decodeSessionRelocationSealed43(encoded))
           : encodeSessionRelocationRoute44(decodeSessionRelocationRoute44(encoded));
-    assert.equal(hand.toString('hex'), entry.hex, `hand:${entry.name}`);
+    if (!absent) assert.equal(hand!.toString('hex'), entry.hex, `hand:${entry.name}`);
     assert.equal(Buffer.from(generated).toString('hex'), entry.hex, `generated:${entry.name}`);
 
     const truncated = encoded.subarray(0, -1);
@@ -728,4 +735,17 @@ test('restoreRelocationAdapterState restores through the adapter and returns the
   );
   assert.equal(resolved, instance);
   assert.deepEqual(events, ['restore:7:payload-bytes']);
+});
+
+test('command 43 rejects the shared malformed sealResult bytes', () => {
+  const fixture = JSON.parse(
+    readFileSync('../../runtime/protocol/golden/session-relocation-barrier-v1.json', 'utf8')
+  ) as {
+    readonly malformed: readonly { readonly name: string; readonly hex: string }[];
+  };
+  for (const entry of fixture.malformed) {
+    const bytes = Buffer.from(entry.hex, 'hex');
+    assert.throws(() => decodeSessionRelocationSealed43(bytes), Error, entry.name);
+    assert.throws(() => decodeSessionRelocationSealed(bytes), Error, entry.name);
+  }
 });

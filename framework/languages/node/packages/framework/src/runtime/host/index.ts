@@ -113,6 +113,7 @@ import {
   currentOrCreateFlow,
   DefaultZLinkRuntimeEventPublisher,
   flowIfEnabled,
+  messageFlowTracingEnabled,
   runWithFlow,
   ZLinkRuntimeMetrics,
   type ZLinkDiagnosticsContext,
@@ -170,7 +171,12 @@ import {
   encodeFrameworkPayloadMessage
 } from '../messaging/payload-codec';
 import { ZLinkSubmitStatus } from '../messaging/submission-result';
-import { decodeRoutingId, encodeRoutingIdStorageHex, routingIdsEqual } from '../routing-id';
+import {
+  decodeRoutingId,
+  encodeRoutingIdStorageHex,
+  routingIdsEqual,
+  toBackendRoutingId
+} from '../routing-id';
 import {
   DefaultZLinkSpotManager,
   ZLinkPublicSpotManager,
@@ -2228,7 +2234,7 @@ export class ZLinkFrameworkRuntimeHost
               descriptor.objectRole === 'server' &&
               descriptor.placementWeight > 0 &&
               descriptor.entrySpotId !== undefined &&
-              excludedNodeRids?.has(String(descriptor.rid)) !== true &&
+              excludedNodeRids?.has(encodeRoutingIdStorageHex(descriptor.rid)) !== true &&
               capability !== undefined
             );
           }
@@ -2253,7 +2259,7 @@ export class ZLinkFrameworkRuntimeHost
             leaseGeneration: selected.leaseGeneration
           },
           isLocal:
-            String(localStatus.routingId) === String(selected.rid) &&
+            routingIdsEqual(localStatus.routingId, selected.rid) &&
             localStatus.lifecycleGeneration === selected.lifecycleGeneration
         };
       }
@@ -2344,7 +2350,7 @@ export class ZLinkFrameworkRuntimeHost
               descriptor.state === 1 &&
               descriptor.objectRole === 'server' &&
               descriptor.placementWeight > 0 &&
-              excludedNodeRids?.has(String(descriptor.rid)) !== true &&
+              excludedNodeRids?.has(encodeRoutingIdStorageHex(descriptor.rid)) !== true &&
               (spots.limit === 0 || spots.active + spots.reserved < spots.limit) &&
               capability !== undefined &&
               (spotTypeCapacity === undefined ||
@@ -2365,7 +2371,7 @@ export class ZLinkFrameworkRuntimeHost
           },
           isLocal:
             localStatus !== undefined &&
-            String(localStatus.routingId) === String(selected.rid) &&
+            routingIdsEqual(localStatus.routingId, selected.rid) &&
             localStatus.lifecycleGeneration === selected.lifecycleGeneration
         };
       }
@@ -2526,7 +2532,7 @@ export class ZLinkFrameworkRuntimeHost
                 }
                 if (
                   local.actorRef.objectGeneration !== authority.objectGeneration ||
-                  String(local.actorRef.nodeRid) !== record.reservation.targetNodeRid
+                  !routingIdsEqual(local.actorRef.nodeRid, record.reservation.targetNodeRid)
                 ) {
                   throw createInternalFrameworkException(
                     ZLinkFrameworkInternalErrorKind.ActorCreateFailed,
@@ -2603,7 +2609,7 @@ export class ZLinkFrameworkRuntimeHost
       },
       isLocalNode: (meshName, nodeRid) => {
         const status = this.spotNodeRuntime?.meshNode(meshName)?.status();
-        return status !== undefined && String(status.routingId) === String(nodeRid);
+        return status !== undefined && routingIdsEqual(status.routingId, nodeRid);
       },
       remoteClose: (meshName, targetNodeRid, request, timeoutMs) => {
         const node = this.spotNodeRuntime?.meshNode(meshName);
@@ -3189,7 +3195,7 @@ export class ZLinkFrameworkRuntimeHost
       this.executionState === undefined
         ? (this.options.registration.dispatch?.diagnostics.messageFlow ?? 'errors')
         : this.messageFlowModeCell.mode;
-    return mode !== 'off';
+    return messageFlowTracingEnabled(mode);
   }
 
   private runLifecycle<T>(operation: () => T): T {
@@ -3317,7 +3323,7 @@ export function hasExactPeerReadiness(
   const replacementDescriptors = descriptors.filter(
     (descriptor) =>
       !(
-        String(descriptor.rid) === String(local.routingId) &&
+        routingIdsEqual(descriptor.rid, toBackendRoutingId(local.routingId)) &&
         descriptor.lifecycleGeneration === local.lifecycleGeneration
       ) &&
       descriptor.state === ZLinkFrameworkRuntimeState.Serving &&
@@ -3332,7 +3338,7 @@ export function hasExactPeerReadiness(
       peers.some(
         (peer) =>
           peer.routingId !== null &&
-          String(peer.routingId) === String(descriptor.rid) &&
+          routingIdsEqual(toBackendRoutingId(peer.routingId), descriptor.rid) &&
           peer.lifecycleGeneration === descriptor.lifecycleGeneration &&
           peer.state === MeshPeerRuntimeState.Serving
       )
@@ -3544,7 +3550,7 @@ function isPlacementTargetReady(
   if (node === undefined) return true;
   if (
     localStatus !== undefined &&
-    String(localStatus.routingId) === String(descriptor.rid) &&
+    routingIdsEqual(localStatus.routingId, descriptor.rid) &&
     localStatus.lifecycleGeneration === descriptor.lifecycleGeneration
   ) {
     return true;

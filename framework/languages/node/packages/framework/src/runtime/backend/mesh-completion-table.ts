@@ -71,7 +71,11 @@ export class ZLinkMeshCompletionTable {
       this.slots.push(slot);
       this.free = index;
     }
+    // New slots hold no identity yet. Only a larger bucket array needs the
+    // pending identities placed again; it doubles, so growth to N pending
+    // operations re-indexes O(N) slots in total.
     const minimumBuckets = this.slots.length * COMPLETION_HASH_BUCKETS_PER_SLOT;
+    if (minimumBuckets <= this.buckets.length) return;
     this.buckets = new Int32Array(2 ** Math.ceil(Math.log2(minimumBuckets))).fill(-1);
     for (let index = 0; index < this.slots.length; index++) {
       const slot = this.slots[index]!;

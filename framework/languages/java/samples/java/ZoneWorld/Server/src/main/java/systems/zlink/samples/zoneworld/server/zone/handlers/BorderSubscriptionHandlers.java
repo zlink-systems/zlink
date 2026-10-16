@@ -36,7 +36,7 @@ public final class BorderSubscriptionHandlers {
         return CompletableFuture.completedFuture(null);
     }
 
-    @ZLinkSpotSubscription(topic = ZoneWorldNames.NW_NE)
+    @ZLinkSpotSubscription(channelName = ZoneWorldNames.ZONE_CHANNEL, topic = ZoneWorldNames.NW_NE)
     public static final class NorthWestToNorthEast
             implements ZLinkSpotSubscriptionHandler<ZoneSpot, Messages.ZoneBorderEvent> {
         @Override
@@ -45,7 +45,7 @@ public final class BorderSubscriptionHandlers {
         }
     }
 
-    @ZLinkSpotSubscription(topic = ZoneWorldNames.NW_SW)
+    @ZLinkSpotSubscription(channelName = ZoneWorldNames.ZONE_CHANNEL, topic = ZoneWorldNames.NW_SW)
     public static final class NorthWestToSouthWest
             implements ZLinkSpotSubscriptionHandler<ZoneSpot, Messages.ZoneBorderEvent> {
         @Override
@@ -54,7 +54,7 @@ public final class BorderSubscriptionHandlers {
         }
     }
 
-    @ZLinkSpotSubscription(topic = ZoneWorldNames.NE_NW)
+    @ZLinkSpotSubscription(channelName = ZoneWorldNames.ZONE_CHANNEL, topic = ZoneWorldNames.NE_NW)
     public static final class NorthEastToNorthWest
             implements ZLinkSpotSubscriptionHandler<ZoneSpot, Messages.ZoneBorderEvent> {
         @Override
@@ -63,7 +63,7 @@ public final class BorderSubscriptionHandlers {
         }
     }
 
-    @ZLinkSpotSubscription(topic = ZoneWorldNames.NE_SE)
+    @ZLinkSpotSubscription(channelName = ZoneWorldNames.ZONE_CHANNEL, topic = ZoneWorldNames.NE_SE)
     public static final class NorthEastToSouthEast
             implements ZLinkSpotSubscriptionHandler<ZoneSpot, Messages.ZoneBorderEvent> {
         @Override
@@ -72,7 +72,7 @@ public final class BorderSubscriptionHandlers {
         }
     }
 
-    @ZLinkSpotSubscription(topic = ZoneWorldNames.SW_NW)
+    @ZLinkSpotSubscription(channelName = ZoneWorldNames.ZONE_CHANNEL, topic = ZoneWorldNames.SW_NW)
     public static final class SouthWestToNorthWest
             implements ZLinkSpotSubscriptionHandler<ZoneSpot, Messages.ZoneBorderEvent> {
         @Override
@@ -81,7 +81,7 @@ public final class BorderSubscriptionHandlers {
         }
     }
 
-    @ZLinkSpotSubscription(topic = ZoneWorldNames.SW_SE)
+    @ZLinkSpotSubscription(channelName = ZoneWorldNames.ZONE_CHANNEL, topic = ZoneWorldNames.SW_SE)
     public static final class SouthWestToSouthEast
             implements ZLinkSpotSubscriptionHandler<ZoneSpot, Messages.ZoneBorderEvent> {
         @Override
@@ -90,7 +90,7 @@ public final class BorderSubscriptionHandlers {
         }
     }
 
-    @ZLinkSpotSubscription(topic = ZoneWorldNames.SE_NE)
+    @ZLinkSpotSubscription(channelName = ZoneWorldNames.ZONE_CHANNEL, topic = ZoneWorldNames.SE_NE)
     public static final class SouthEastToNorthEast
             implements ZLinkSpotSubscriptionHandler<ZoneSpot, Messages.ZoneBorderEvent> {
         @Override
@@ -99,7 +99,7 @@ public final class BorderSubscriptionHandlers {
         }
     }
 
-    @ZLinkSpotSubscription(topic = ZoneWorldNames.SE_SW)
+    @ZLinkSpotSubscription(channelName = ZoneWorldNames.ZONE_CHANNEL, topic = ZoneWorldNames.SE_SW)
     public static final class SouthEastToSouthWest
             implements ZLinkSpotSubscriptionHandler<ZoneSpot, Messages.ZoneBorderEvent> {
         @Override

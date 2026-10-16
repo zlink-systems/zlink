@@ -1374,7 +1374,32 @@ Restore 유효시간(relocation을 시작한 operation의 deadline)은 source가
 `Preserve`를 실행한다. Source `Preserve` 성공이 확인되면 target의 늦은 CAS는 commit할 수
 없다. Source는 owner로 남아 [공통 relocation §4.4](04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)의
 보관 작업을 다시 처리한다. 같은 `RelocationId`의 target owner가 이미 확인되면 source는
-target route를 채택한다. `Preserve` 응답이 불확정이면 source lease가 유효한 동안 새 timer 없이 이 절의 Store-failure 정책으로 반복한다. Source lease 만료 또는 source가 다시 읽은 authority가 없음(`Missing`)은 source의 작업을 [공통 relocation §4.4](04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)의 expired-owner terminal로 끝낸다. `Missing`이면 source fence가 성립하지 않으므로 source는 `Preserve`를 시도하지 않는다. Source는 owner lease가
+target route를 채택한다.
+
+**이후 이동이 이어진 경우.** Target이 commit한 뒤 authority를 steady로 정규화하거나 같은 object를 다시
+이동하면, source가 다시 읽은 authority에는 이 `RelocationId`도 첫 target owner도 남지 않는다. Source는
+다시 읽은 authority가 다음 세 조건을 모두 만족하면 이 relocation의 target commit이 확인된 것으로
+판정한다.
+
+- `ObjectGeneration`이 source가 이동한 object와 같다.
+- `AuthorityOwnerGeneration`이 source가 relocation을 시작할 때의 값보다 크다.
+- Owner가 source가 아니다.
+
+근거는 §6.1의 owner 변경 종류다. `ObjectGeneration`을 유지하고 `AuthorityOwnerGeneration`을 올리는
+것은 `NewOwner`와 `SpotWide`의 whole-unit batch(§8.1)뿐이다. Owner lease 만료 뒤의 재생성과
+`Reincarnate`는 새 `ObjectGeneration`을 만든다. Source가 owner인 동안 source에서 owner를 옮기는 이
+두 변경은 진행 중인 이 relocation의 target CAS뿐이다. Source는 한 object에 relocation을 하나만 진행하며,
+이는 그 object가 속한 aggregate relocation에도 같다. 이전 relocation의 늦은 CAS는 source `Preserve`가
+배제한다. 따라서 세 조건이 성립하면 이 relocation의 target CAS가 먼저 commit됐고, 그 뒤의 owner 변경은
+그 target에서 이어진 이동이다. 이 판정은 별도 commit 기록을 추가하지 않는다.
+
+이 경우 source는 commit된 첫 target으로 §7.3의 Message Follow route를 설치하고, 보관 사본을 해제하고
+source 정리를 한 번 수행한다. 만료 시각은 기존대로 이 relocation의 commit을 기준으로 한다. 첫 target
+이후의 이동은 첫 target이 가진 자신의 Message Follow route가 유효할 때만 hop으로 이어 전달한다(§7.3의
+hop 한도). 어느 hop의 route가 없거나 만료됐으면 §7.3대로 `Unavailable`이다.
+Source는 다시 읽은 현재 owner로 직접 가는 route를 만들지 않는다. `ObjectGeneration`이
+다르거나 `AuthorityOwnerGeneration`이 커지지 않았는데 owner가 source도 첫 target도 아니면 기존대로
+실패(`DataLost`)로 판정한다. `Preserve` 응답이 불확정이면 source lease가 유효한 동안 새 timer 없이 이 절의 Store-failure 정책으로 반복한다. Source lease 만료 또는 source가 다시 읽은 authority가 없음(`Missing`)은 source의 작업을 [공통 relocation §4.4](04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)의 expired-owner terminal로 끝낸다. `Missing`이면 source fence가 성립하지 않으므로 source는 `Preserve`를 시도하지 않는다. Source는 owner lease가
 §5에 따라 유효할 때만 dispatch를 재개한다.
 
 `StoreFailureGrace` 동안에는 마지막으로 완전히 읽은 descriptor 목록을 유지한다. 그 목록의

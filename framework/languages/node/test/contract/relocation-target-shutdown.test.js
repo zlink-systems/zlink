@@ -77,6 +77,7 @@ function targetFixture(runtime = new ZLinkHostServiceRelocationRuntime({}), mesh
     lane: Promise.resolve(),
     cutoverReceived: false,
     boundaryRelay: [],
+    releaseJoinAdmission() {},
     releaseActivation() {
       events.push('release');
     }

@@ -72,7 +72,8 @@ final class HandlerContractTest {
         assertAnnotationMethods(ZLinkSpotRequest.class, "packetName");
         assertAnnotationMethods(ZLinkSpotActorRequest.class, "packetName");
         assertAnnotationMethods(ZLinkSpotActorSend.class, "packetName");
-        assertAnnotationMethods(ZLinkSpotSubscription.class, "spotNodeName", "topic");
+        assertAnnotationMethods(
+                ZLinkSpotSubscription.class, "spotNodeName", "channelName", "topic");
         assertAnnotationMethods(ZLinkSpotTimer.class, "name", "periodMillis");
         assertAnnotationMethods(ZLinkStreamPacket.class);
         assertAnnotationMethods(ZLinkStreamRaw.class);
@@ -178,7 +179,8 @@ final class HandlerContractTest {
     void spotHandlerRegistryMatchesDotnetRegistrationSurface() throws NoSuchMethodException {
         ZLinkSpotHandlerRegistry.class.getMethod("addHandler", Class.class);
         assertFalse(hasMethod(ZLinkSpotHandlerRegistry.class, "addPacket"));
-        assertFalse(hasMethod(ZLinkSpotHandlerRegistry.class, "addSubscribe"));
+        ZLinkSpotHandlerRegistry.class.getMethod(
+                "addSubscribe", Class.class, String.class, String.class);
         assertFalse(hasMethod(ZLinkSpotHandlerRegistry.class, "addActorPacket"));
         assertFalse(hasMethod(ZLinkSpotHandlerRegistry.class, "addActorSend"));
         assertFalse(hasMethod(ZLinkSpotHandlerRegistry.class, "addActorRequest"));
