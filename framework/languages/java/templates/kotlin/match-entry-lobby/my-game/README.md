@@ -12,23 +12,27 @@ flowchart LR
 
 ## Prerequisites
 
-Install JDK 25, Docker with Compose v2, and PowerShell 7 on Windows. The Gradle wrapper is included. Dependencies resolve from Maven Central: ZLink Framework 0.30.1 and binding 1.19.0. Copy this directory independently before building. `action-entry-lobby` and `fps-entry-lobby` share this composition.
+Docker with Compose v2 and Linux containers, network access to Maven Central and the Gradle Plugin Portal, and PowerShell 7 on Windows. JDK 25 is required only for local process debugging. The Gradle wrapper is included; public package versions are pinned in `build.gradle.kts`.
 
 ## Build
 
 Bash:
 
 ```sh
-./gradlew --no-daemon installDist
+./run-e2e.sh --build-only
 ```
 
 PowerShell:
 
 ```powershell
-./gradlew.bat --no-daemon installDist
+pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
 ```
 
-## Local e2e
+## Docker e2e
+
+Docker builds a shared node image for all roles and a runner image. The pinned Eclipse Temurin JDK/JRE bases are defined by the Dockerfile ARGs. The runner uses the Docker socket to create sibling nodes sharing its network namespace, preserving loopback listeners and stdin/stdout control. Each invocation removes its containers, network and image tags; cleanup errors return exit 1. Logs remain in `.logs/`.
+
+For local process debugging, run `./run-e2e.sh --local` or `pwsh -NoProfile -File ./run-e2e.ps1 -Local`. Local mode uses JDK 25 and Compose Redis. Scenario and structure options work in both modes.
 
 Bash:
 
@@ -66,6 +70,6 @@ Players start with 100 HP. Shots have range 80 and damage 25. A closed vertical 
 
 ## 한국어 실행 안내
 
-JDK 25와 Docker Compose를 준비한 뒤 위 Build 명령과 Local e2e 명령을 실행합니다. runner는 시나리오마다 Redis와 node process를 생성하고 자신이 만든 자원만 정리합니다. 실행 설정과 message-flow 기록은 `.logs/run-<id>/`에 남습니다.
+기본 e2e는 Docker에서 실행합니다. 로컬 process 디버깅은 JDK 25를 준비하고 `--local` 또는 `-Local`로 실행합니다. Docker Compose를 준비한 뒤 위 Build 명령과 Docker e2e 명령을 실행합니다. runner는 시나리오마다 Redis와 node process를 생성하고 자신이 만든 자원만 정리합니다. 실행 설정과 message-flow 기록은 `.logs/run-<id>/`에 남습니다.
 
 대기열은 Matchmaking User Spot이 소유하며 Room Spot이 위치·HP·명중을 판정합니다. 운영 중 갱신할 때는 room host에 `drain`을 보내고 `SAFE_TO_SHUTDOWN`을 확인한 뒤 종료합니다. 대체 process는 같은 설정으로 시작하며 bootstrap의 GetOrCreate가 기존 Matchmaking object를 사용합니다.

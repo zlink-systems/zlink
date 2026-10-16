@@ -18,4 +18,6 @@ Use only public Framework and connector APIs with the default typed JSON seriali
 
 ## Changes and verification
 
+Run `./run-e2e.sh` or `pwsh -NoProfile -File ./run-e2e.ps1` for Docker e2e. Use `--local` or `-Local` for JDK 25 process debugging. Build images with `--build-only` or `-BuildOnly`. Preserve the Docker socket control path and remove only resources owned by the current run.
+
 Keep the ordered worlds, channel, reconnect, and update scenarios and structure checks consistent. Validate real responses and events on Windows and Linux. An intermittent failure is a defect. Preserve the first failure and message-flow output in `.logs/run-<id>/`; investigate API usage before reporting a Framework blocker. Keep build artifacts and license files out of source control.

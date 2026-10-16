@@ -44,12 +44,14 @@ class Nodes(private val root: Path) : AutoCloseable {
     }
 
     fun start() {
-        composeStarted = true
-        compose("up", "-d", "--wait")
+        if (!DockerRuntime.enabled) {
+            composeStarted = true
+            compose("up", "-d", "--wait")
+        }
         val redis =
             mapOf(
-                Names.WORLD_A to compose("port", "dbA", "6379"),
-                Names.WORLD_B to compose("port", "dbB", "6379"),
+                Names.WORLD_A to if (DockerRuntime.enabled) "dbA:6379" else compose("port", "dbA", "6379"),
+                Names.WORLD_B to if (DockerRuntime.enabled) "dbB:6379" else compose("port", "dbB", "6379"),
             )
         val structure = Json.mapper.readTree(root.resolve("zlink.structure.json").toFile())
         val declarations =
@@ -140,14 +142,17 @@ private class Node(private val id: String, module: String, config: Path, root: P
     private val windows = System.getProperty("os.name").startsWith("Windows")
     private val output = LinkedBlockingQueue<String>()
     private val process =
-        ProcessBuilder(
-                Path.of(System.getProperty("java.home"), "bin", if (windows) "java.exe" else "java")
-                    .toString(),
-                "--enable-native-access=ALL-UNNAMED",
-                "-cp",
-                root.resolve("server/$module/build/install/$module/lib").toString() + "/*",
-                "MyGame.$module.ProgramKt",
-                config.toString(),
+        DockerRuntime.process(
+                listOf(
+                    Path.of(System.getProperty("java.home"), "bin", if (windows) "java.exe" else "java")
+                        .toString(),
+                    "--enable-native-access=ALL-UNNAMED",
+                    "-cp",
+                    root.resolve("server/$module/build/install/$module/lib").toString() + "/*",
+                    "MyGame.$module.ProgramKt",
+                    config.toString(),
+                ),
+                config,
             )
             .directory(root.toFile())
             .redirectError(logs.resolve("$id-stderr.log").toFile())

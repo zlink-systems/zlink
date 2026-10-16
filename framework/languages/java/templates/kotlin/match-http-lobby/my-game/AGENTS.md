@@ -20,4 +20,6 @@ Do not add internal APIs, reflection, raw-frame parsing, manual message codecs, 
 
 ## Changes and verification
 
+Run `./run-e2e.sh` or `pwsh -NoProfile -File ./run-e2e.ps1` for Docker e2e. Use `--local` or `-Local` for JDK 25 process debugging. Build images with `--build-only` or `-BuildOnly`. Preserve the Docker socket control path and remove only resources owned by the current run.
+
 Keep the canonical scenario order `lobby,hit,reconnect,update` in the runner and structure file. Run the structural check before node startup and preserve `.logs/run-<id>/` files. Verify Windows and Linux builds and e2e. A single intermittent failure is a defect; retain its first failure and message-flow records. Use only the runner's own Compose project and child processes for cleanup. Maintain the shared hosting and control protocol rather than duplicating it per role.

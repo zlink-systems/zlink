@@ -20,4 +20,6 @@ Do not use internal APIs, reflection, raw frames, per-message codecs, manual pac
 
 ## Changes and verification
 
+Run `./run-e2e.sh` or `pwsh -NoProfile -File ./run-e2e.ps1` for Docker e2e. Use `--local` or `-Local` for JDK 25 process debugging. Build images with `--build-only` or `-BuildOnly`. Preserve the Docker socket control path and remove only resources owned by the current run.
+
 Keep the ordered scenarios `hit,reconnect,update`. Run structure validation before starting nodes. Verify Windows and Linux builds and e2e with public packages. A single intermittent failure is a defect. Logs are in `.logs/run-<id>/`; preserve the first failure. Every run must use unique Redis keys and a Compose project, OS-assigned ports, and cleanup only its own processes and containers. Check performance, POSDDD ownership, and unused code in changed functions before completion. Code comments are English.

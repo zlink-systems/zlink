@@ -15,19 +15,23 @@ flowchart LR
 
 ## Prerequisites
 
-JDK 25, Docker with Compose v2, and PowerShell 7 on Windows. The Gradle wrapper is included. Published Maven Central packages are used; a repository checkout is unnecessary. Framework and binding versions are pinned in `build.gradle.kts`.
+Docker with Compose v2 and Linux containers, network access to Maven Central and the Gradle Plugin Portal, and PowerShell 7 on Windows. JDK 25 is required only for local process debugging. The Gradle wrapper is included; public package versions are pinned in `build.gradle.kts`.
 
 ## Build
 
 ```sh
-./gradlew --no-daemon installDist
+./run-e2e.sh --build-only
 ```
 
 ```powershell
-./gradlew.bat --no-daemon installDist
+pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
 ```
 
-## Local e2e
+## Docker e2e
+
+Docker builds a shared node image for all roles and a runner image. The pinned Eclipse Temurin JDK/JRE bases are defined by the Dockerfile ARGs. The runner uses the Docker socket to create sibling nodes sharing its network namespace, preserving loopback listeners and stdin/stdout control. Each invocation removes its containers, network and image tags; cleanup errors return exit 1. Logs remain in `.logs/`.
+
+For local process debugging, run `./run-e2e.sh --local` or `pwsh -NoProfile -File ./run-e2e.ps1 -Local`. Local mode uses JDK 25 and Compose Redis. Scenario and structure options work in both modes.
 
 ```sh
 ./run-e2e.sh
@@ -35,8 +39,8 @@ JDK 25, Docker with Compose v2, and PowerShell 7 on Windows. The Gradle wrapper 
 ```
 
 ```powershell
-./run-e2e.ps1
-./run-e2e.ps1 -Scenario field,dungeon,reconnect,update
+pwsh -NoProfile -File ./run-e2e.ps1
+pwsh -NoProfile -File ./run-e2e.ps1 -Scenario field,dungeon,reconnect,update
 ```
 
 The Kotlin runner checks the structure, starts an isolated Redis Compose project and starts the Field, Instance and Session entrypoints. Redis and Framework listeners bind ephemeral loopback ports. Every run uses a unique Redis prefix and `.logs/run-<id>/` directory. Normal message-flow diagnostics are recorded in node stderr. Cleanup failures produce a nonzero exit code.
@@ -68,6 +72,6 @@ Initial Field placement uses public stable-type capacity and sequential startup.
 
 ## 한국어 실행 안내
 
-JDK 25와 Docker Compose v2를 준비한 뒤 위 Build와 Local e2e 명령을 실행합니다. Windows에서는 PowerShell 7을 사용합니다. 기본 실행은 `field`, `dungeon`, `reconnect`, `update`를 순서대로 검증하며 시나리오 선택도 지원합니다.
+기본 e2e는 Docker에서 실행합니다. 로컬 process 디버깅은 JDK 25를 준비하고 `--local` 또는 `-Local`로 실행합니다. Docker Compose v2를 준비한 뒤 위 Build와 Docker e2e 명령을 실행합니다. Windows에서는 PowerShell 7을 사용합니다. 기본 실행은 `field`, `dungeon`, `reconnect`, `update`를 순서대로 검증하며 시나리오 선택도 지원합니다.
 
 실행별 설정과 node 로그는 `.logs/run-<id>/`에 기록됩니다. update는 Dungeon을 소유한 instance의 drain과 종료, 대체 process의 신규 파티 수락을 확인합니다. Framework 결함이 발생하면 첫 실패와 message-flow 기록을 보존하고 해당 공개 패키지의 수정 여부를 확인합니다.

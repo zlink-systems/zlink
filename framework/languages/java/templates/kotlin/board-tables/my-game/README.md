@@ -11,28 +11,27 @@ flowchart LR
 
 ## Prerequisites
 
-- JDK 17 or later, enough to start Gradle. The Gradle 9.3.0 wrapper and the Foojay resolver download the JDK 25 that compilation and execution require.
-- Docker Compose v2 and a Docker daemon that supports Linux containers.
-- PowerShell 7 on Windows.
-- Network access to Maven Central, the Gradle Plugin Portal, the JDK distribution server, and a Docker registry for the first build and run.
-
-The project uses Framework 0.30.0 and binding 1.19.0 as public Maven packages. The versions are set in the root `build.gradle.kts`. The project references neither repository sources nor a local package feed, so this directory can be copied and used on its own.
+Docker with Compose v2 and Linux containers, network access to Maven Central and the Gradle Plugin Portal, and PowerShell 7 on Windows. JDK 25 is required only for local process debugging. The Gradle wrapper is included; public package versions are pinned in `build.gradle.kts`.
 
 ## Build
 
 Linux/WSL:
 
 ```sh
-./gradlew --no-daemon installDist
+./run-e2e.sh --build-only
 ```
 
 Windows:
 
 ```powershell
-./gradlew.bat --no-daemon installDist
+pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
 ```
 
-## Local e2e
+## Docker e2e
+
+Docker builds a shared node image for all roles and a runner image. The pinned Eclipse Temurin JDK/JRE bases are defined by the Dockerfile ARGs. The runner uses the Docker socket to create sibling nodes sharing its network namespace, preserving loopback listeners and stdin/stdout control. Each invocation removes its containers, network and image tags; cleanup errors return exit 1. Logs remain in `.logs/`.
+
+For local process debugging, run `./run-e2e.sh --local` or `pwsh -NoProfile -File ./run-e2e.ps1 -Local`. Local mode uses JDK 25 and Compose Redis. Scenario and structure options work in both modes.
 
 ```sh
 ./run-e2e.sh
@@ -84,7 +83,7 @@ The e2e runner sets each node's optional `tableCapacity` to the number of select
 
 ## 한국어 실행 안내
 
-이 프로젝트는 Session node 하나와 Table node 두 개, Redis를 실행하는 4인 보드 테이블 서버입니다. `run-e2e.sh` 또는 `run-e2e.ps1`을 실행하면 구조를 검사하고 `table`, `reconnect`, `update` 시나리오로 좌석·카드·베팅·재연결·노드 교체의 실제 동작을 확인합니다. 시나리오 실패나 정리 실패가 있으면 종료 코드는 1입니다.
+기본 e2e는 Docker에서 실행합니다. 로컬 process 디버깅은 JDK 25를 준비하고 `--local` 또는 `-Local`로 실행합니다. 이 프로젝트는 Session node 하나와 Table node 두 개, Redis를 실행하는 4인 보드 테이블 서버입니다. `run-e2e.sh` 또는 `run-e2e.ps1`을 실행하면 구조를 검사하고 `table`, `reconnect`, `update` 시나리오로 좌석·카드·베팅·재연결·노드 교체의 실제 동작을 확인합니다. 시나리오 실패나 정리 실패가 있으면 종료 코드는 1입니다.
 
 시나리오를 고르려면 `./run-e2e.sh --scenario table,reconnect,update`(Windows는 `-Scenario`)를 사용합니다. 포트는 실행마다 OS가 배정하며, runner는 자신이 만든 process와 Compose project만 정리합니다.
 

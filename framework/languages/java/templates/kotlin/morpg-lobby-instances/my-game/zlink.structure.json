@@ -6,12 +6,12 @@
   "run": {
     "commands": {
       "sh": [
-        "./gradlew --no-daemon installDist",
+        "./run-e2e.sh --build-only",
         "./run-e2e.sh",
         "./run-e2e.sh --scenario party,reconnect,update"
       ],
       "powershell": [
-        "./gradlew.bat --no-daemon installDist",
+        "pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly",
         "pwsh -NoProfile -File ./run-e2e.ps1",
         "pwsh -NoProfile -File ./run-e2e.ps1 -Scenario party,reconnect,update"
       ]
