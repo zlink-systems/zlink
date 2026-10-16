@@ -4195,6 +4195,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                 () -> {
                     DefaultActorContext context = actorRegistry.context(actor);
                     if (context != null
+                            && sessionRid != null
                             && context.hasBoundSession()
                             && !context.hasBoundSession(sessionOwnerNodeRid, sessionRid)) {
                         return CompletableFuture.completedFuture(null);

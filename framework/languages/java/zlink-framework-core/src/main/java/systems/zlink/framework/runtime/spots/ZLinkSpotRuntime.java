@@ -6395,14 +6395,19 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
     CompletionStage<Void> dispatchActorControlPacket(
             ActorPacketFrames.Header packetHeader,
             ZLinkBackendActorReceived headerPart,
+            ZLinkBackendActorReceived bodyPart,
             ZLinkActor actor,
             boolean pendingHeader) {
         if (ZLinkActorSpotRoutePackets.SESSION_DISCONNECTED_PACKET_NAME.equals(
                 packetHeader.packetName())) {
+            byte[] namedSession = bodyPart == null ? new byte[0] : bodyPart.message().toByteArray();
+            RoutingId sessionRid =
+                    namedSession.length == 0
+                            ? headerPart.sourceSessionRid()
+                            : RoutingId.from(namedSession);
             return actorSessions
                     .runtime()
-                    .notifyDisconnected(
-                            actor, headerPart.sourceNodeRid(), headerPart.sourceSessionRid())
+                    .notifyDisconnected(actor, headerPart.sourceNodeRid(), sessionRid)
                     .handle(
                             (ignored, error) -> {
                                 try {
