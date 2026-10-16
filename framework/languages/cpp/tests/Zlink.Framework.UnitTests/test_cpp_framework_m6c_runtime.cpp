@@ -11,6 +11,7 @@
 #include "runtime/stateful/raw_stateful_dispatch.hpp"
 #include "runtime/mesh/raw_mesh_node_owner.hpp"
 #include "runtime/mesh/mesh_node_runtime.hpp"
+#include "runtime/messaging/request_failure_mapper.hpp"
 #include "runtime/locations/actor_authority_payload.hpp"
 #include "runtime/locations/in_memory_location_store.hpp"
 #include "runtime/spots/spot_runtime.hpp"
@@ -4250,7 +4251,8 @@ class settlement_authority_t final : public authority_relocation_port_t
 };
 
 void test_boundary_application_preserves_original_reply (test_context_t &test,
-                                                         bool no_follow = false)
+                                                         bool no_follow = false,
+                                                         bool source_expired = false)
 {
     using namespace std::chrono_literals;
     namespace framework = zlink::framework;
@@ -4369,13 +4371,20 @@ void test_boundary_application_preserves_original_reply (test_context_t &test,
              actor.authority_owner_generation, 1},
             {"ActorPacket", "application/json", {static_cast<std::uint8_t> (id)}}, 5s,
             [&, id] (foundation::operation_terminal_t terminal, std::vector<std::uint8_t> bytes) {
-                if (id == 92) {
-                    reply_matches =
-                      reply_matches
-                      && terminal == foundation::operation_terminal_t::transport_failed
-                      && protocol::decode_reply_header (bytes).terminal_result
-                           == static_cast<std::uint32_t> (
-                             protocol::request_terminal_result::conflict);
+                if (id == 92 || (source_expired && id == 77)) {
+                    if (terminal != foundation::operation_terminal_t::transport_failed
+                        || bytes.empty ())
+                        reply_matches = false;
+                    else {
+                        const auto reply = protocol::decode_reply_header (bytes);
+                        reply_matches =
+                          reply_matches
+                          && framework::runtime::messaging::request_failure_mapper_t{}
+                                 .reply_header_exception (reply.terminal_result, reply.failure_code,
+                                                          "source relocation")
+                                 .kind ()
+                               == framework::framework_error_kind_t::unavailable;
+                    }
                 } else if (id == 91) {
                     reply_matches =
                       reply_matches
@@ -4454,6 +4463,21 @@ void test_boundary_application_preserves_original_reply (test_context_t &test,
              == stateful_error_t::none,
       "owner commit must release the target queue and source retained copy");
     ingress.release_relocated_payloads (actor);
+    if (source_expired) {
+        test.require (completed.load () == 0,
+                      "source expiry must precede the original request terminal");
+        test.require (ingress.fail_pending_unavailable (actor) == stateful_error_t::none,
+                      "expired source must terminate its accepted requests without mailbox claims");
+        test.require (pump_until ([&] { return completed.load () == 1; }),
+                      "expired source must reply on the original request route");
+        test.require (reply_matches && completed == 1
+                        && objects.pending (actor, turn_domain_t::application) == 0,
+                      "expired source must complete the original request with Unavailable once");
+        (void) source.unregister_local_operation (occupied);
+        source.close ();
+        target.close ();
+        return;
+    }
     if (no_follow) {
         test.require (request (92) && pump_until ([&] { return completed.load () == 1; }),
                       "late noFollow request must receive Unavailable before the earlier target "
@@ -7472,6 +7496,16 @@ int main (int argc, char **argv)
         }
     } executor_shutdown;
     test_context_t test;
+    if (argc == 2 && std::string_view (argv[1]) == "--boundary-reply") {
+        std::cerr << "Boundary reply follow=enabled\n";
+        test_boundary_application_preserves_original_reply (test);
+        std::cerr << "Boundary reply follow=none\n";
+        test_boundary_application_preserves_original_reply (test, true);
+        std::cerr << "Boundary reply source=expired\n";
+        test_boundary_application_preserves_original_reply (test, false, true);
+        std::cerr << "Boundary reply cases=3 failures=" << test.failures << '\n';
+        return test.failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
     if (argc == 2 && std::string_view (argv[1]) == "--source-settlement-chain") {
         test_source_settlement_after_subsequent_moves (test);
         test_source_settlement_preserve_and_members (test);
@@ -7558,6 +7592,7 @@ int main (int argc, char **argv)
     test_source_relocation_failure_stops_state_chunks_and_unseals (test);
     test_boundary_application_preserves_original_reply (test);
     test_boundary_application_preserves_original_reply (test, true);
+    test_boundary_application_preserves_original_reply (test, false, true);
     test_boundary_preserve_restores_acceptance_order (test);
     test_cutover_replays_over_selected_network_route (test);
     test_source_relocation_settles_by_authority (test);

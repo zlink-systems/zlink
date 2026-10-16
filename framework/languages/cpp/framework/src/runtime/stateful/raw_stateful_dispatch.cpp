@@ -6,6 +6,7 @@
 #include "runtime/locations/authority_key_codec.hpp"
 #include "runtime/locations/sha256.hpp"
 #include "runtime/execution/task_result.hpp"
+#include "runtime/messaging/request_failure_mapper.hpp"
 
 #include <algorithm>
 #include <cstring>
@@ -60,12 +61,12 @@ void reply_failure_then_release_claim (mesh::raw_mesh_node_owner_t &transport,
                                        std::uint32_t failure_code,
                                        std::shared_ptr<mesh::service_mailbox_claim_t> claim)
 {
+    mailbox_claim_release_guard_t release (transport, std::move (claim));
     try {
         (void) transport.reply_failure (request, terminal_result, failure_code);
     }
     catch (...) {
     }
-    (void) transport.mailbox ().release (*claim);
 }
 
 bool nonzero (const protocol::wire_operation_id_t &value) noexcept
@@ -336,6 +337,9 @@ raw_stateful_dispatch_t::forward_accepted (object_ref_t owner,
         if (!application.reply_route_id) {
             co_return discard_pending (owner, sequence) == stateful_error_t::none;
         }
+        const auto failure = messaging::request_failure_mapper_t{}
+                               .target_failure_reply (framework_error_kind_t::unavailable)
+                               .value ();
         const protocol::reply_relay_t relay{
           application.operation,
           *application.reply_route_id,
@@ -344,8 +348,8 @@ raw_stateful_dispatch_t::forward_accepted (object_ref_t owner,
           {},
           0,
           sequence,
-          static_cast<std::uint32_t> (protocol::request_terminal_result::conflict),
-          protocol::framework_error_code::none};
+          failure.terminal_result,
+          static_cast<protocol::framework_error_code> (failure.failure_code)};
         co_return co_await complete_relocated_source_async (owner, sequence, relay, std::nullopt);
     }
 
@@ -915,13 +919,16 @@ stateful_error_t raw_stateful_dispatch_t::discard_owner_pending (const object_re
     }
     for (auto &item : cleanup) {
         (void) _objects->discard_application (owner, item.sequence);
-        if (item.request && item.claim)
-            reply_failure_then_release_claim (
-              *_transport, std::move (*item.request),
-              static_cast<std::uint32_t> (protocol::request_terminal_result::conflict), 0,
-              item.claim);
-        else if (item.claim)
-            (void) _transport->mailbox ().release (*item.claim);
+        if (item.request) {
+            const auto failure = messaging::request_failure_mapper_t{}
+                                   .target_failure_reply (framework_error_kind_t::unavailable)
+                                   .value ();
+            reply_failure_then_release_claim (*_transport, std::move (*item.request),
+                                              failure.terminal_result, failure.failure_code,
+                                              std::move (item.claim));
+        } else {
+            mailbox_claim_release_guard_t release (*_transport, std::move (item.claim));
+        }
     }
     {
         std::lock_guard lock (_mutex);

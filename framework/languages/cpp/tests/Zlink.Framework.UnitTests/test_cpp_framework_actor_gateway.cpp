@@ -3072,7 +3072,7 @@ int sweep_preserves_pending_leave_added_after_snapshot ()
           .source_actor = actor,
           .source_spot_id = spot_id_t ("source-spot"),
           .target_spot_id = spot_id_t ("target-spot"),
-          .target_identity = runtime::protocol::relocation_target_fence_t{}};
+          .target_fence = runtime::protocol::actor_route_fence_t{}};
     };
     node->pending_remote_actor_leaves.push_back (pending ("old-transfer"));
     spot_node_runtime_t spots (node);
@@ -4064,6 +4064,7 @@ int known_generation_source_leave_claims_transfer ()
     entry_spot->spot_id = spot_id_t ("actor-a-entry");
     entry_spot->spot_name = "entry";
     entry_spot->spot_instance = std::make_shared<int> (1);
+    entry_spot->actor_count = 1;
     auto native_spot = std::make_shared<service::spot_t> (
       nullptr, stateful::object_ref_t{stateful::object_kind_t::user_spot, "actor-a-entry", 7, 0,
                                       "mesh", "actor-a"});
@@ -4088,7 +4089,7 @@ int known_generation_source_leave_claims_transfer ()
     authority->record = stateful::authority_relocation_reference_t{
       .source = stateful::object_ref_t{stateful::object_kind_t::actor, "known-leave-actor", 7, 0,
                                        "", "actor-a"},
-      .target = stateful::object_ref_t{stateful::object_kind_t::actor, "known-leave-actor", 7, 5,
+      .target = stateful::object_ref_t{stateful::object_kind_t::actor, "known-leave-actor", 7, 28,
                                        "", "actor-b"},
       .relocation_reference = transfer_id,
       .target_owner = location_owner_token_t{"owner-b", 9}};
@@ -4115,7 +4116,63 @@ int known_generation_source_leave_claims_transfer ()
     if (!completed || !*completed || node->pending_remote_source_cleanups.size () != 1
         || !node->pending_remote_source_cleanups.front ().leave_submitted)
         return 3;
-    return node->lane.run ([&] { return node->actor_spot_ids.contains (key); }).get () ? 4 : 0;
+    const auto cleanup_at = node->pending_remote_source_cleanups.front ().not_before;
+    for (auto duplicate = 0; duplicate < 2; ++duplicate) {
+        if (!node->lane
+               .run ([&] {
+                   const auto &cleanup = node->pending_remote_source_cleanups.front ();
+                   return cleanup.leave_submitted && cleanup.leave_completed
+                          && node->pending_remote_actor_leaves.empty ()
+                          && entry_spot->actor_count == 0;
+               })
+               .get ())
+            return 4;
+        if (!node->lane
+               .run ([&] {
+                   return node->actor_spot_ids.contains (key)
+                          && node->actor_spot_ids.at (key) == spot_id_t ("spot-b-target")
+                          && node->actor_routes.contains (key)
+                          && node->actor_routes.at (key).node_rid.value () == "actor-b"
+                          && node->actor_routes.at (key).spot_id == spot_id_t ("spot-b-target");
+               })
+               .get ())
+            return 5;
+        const auto follow =
+          node->actor_transfer_coordinator.message_follow_target (key, source_fence);
+        if (!follow || follow->route.node_rid.value () != "actor-b"
+            || follow->route.spot_id != spot_id_t ("spot-b-target")
+            || follow->target_fence.authority_owner_generation != 28)
+            return 6;
+        if (duplicate == 0
+            && !spots.submit_remote_actor_leave (transfer_id, actor, entry_spot->spot_id, 7,
+                                                 spot_id_t ("spot-b-target"), fence))
+            return 7;
+    }
+
+    // Advance the existing cleanup boundary without waiting for wall-clock time.
+    const auto cleaned =
+      finite_task_result (spots.cleanup_expired_actor_admissions_at_async (cleanup_at));
+    if (!cleaned || !*cleaned || cleaned->value () != 1)
+        return 8;
+    if (!node->lane
+           .run ([&] {
+               return !node->actor_instances.contains (key)
+                      && node->pending_remote_source_cleanups.empty ()
+                      && node->pending_remote_actor_leaves.empty () && entry_spot->actor_count == 0
+                      && node->actor_spot_ids.contains (key)
+                      && node->actor_spot_ids.at (key) == spot_id_t ("spot-b-target")
+                      && node->actor_routes.contains (key)
+                      && node->actor_routes.at (key).node_rid.value () == "actor-b"
+                      && node->actor_routes.at (key).spot_id == spot_id_t ("spot-b-target");
+           })
+           .get ())
+        return 9;
+    const auto follow = node->actor_transfer_coordinator.message_follow_target (key, source_fence);
+    return follow && follow->route.node_rid.value () == "actor-b"
+               && follow->route.spot_id == spot_id_t ("spot-b-target")
+               && follow->target_fence.authority_owner_generation == 28
+             ? 0
+             : 10;
 }
 
 int early_zero_generation_leave_waits_for_source_transfer_completion (bool no_follow = false)
@@ -4463,9 +4520,10 @@ int early_zero_generation_leave_waits_for_source_transfer_completion (bool no_fo
     if (no_follow) {
         service_collection_t services;
         auto provider = services.build_provider ();
-        const auto late = finite_task_result (
-          spots.relay_actor_packet (actor, actor_context_t{}, stream_message_kind_t::request,
-                                    "NoFollowProbe", zlink::message_t{}, provider, serializers));
+        actor_gateway_runtime_t gateway;
+        const auto late = finite_task_result (spots.relay_actor_packet (
+          actor, gateway.actor_context (actor), stream_message_kind_t::request, "NoFollowProbe",
+          zlink::message_t{}, provider, serializers));
         if (!late || *late
             || (!late->error () || late->error ()->kind () != framework_error_kind_t::unavailable)
             || source_handler_calls.load () != 0
@@ -6365,6 +6423,11 @@ int main (int argc, char **argv)
 {
     if (argc == 2) {
         const std::string test (argv[1]);
+        if (test == "--known-generation-source-leave") {
+            const auto result = known_generation_source_leave_claims_transfer ();
+            std::cerr << "Known generation source leave result=" << result << '\n';
+            return result;
+        }
         if (test == "--unbound-physical")
             return actor_unbound_follows_session_termination (true);
         if (test == "--unbound-logical")
