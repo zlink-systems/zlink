@@ -34,5 +34,7 @@ Framework 0.30.1은 C++ binding 1.19.0과 Core 1.19.0을 사용합니다.
 
 [`framework-cpp/v0.30.1` GitHub Release](https://github.com/zlink-systems/zlink/releases/tag/framework-cpp%2Fv0.30.1)에서 플랫폼별 Framework archive를 선택하거나 `bootstrap.cmake`로 내려받습니다. 서버 Framework에는 C++ binding 1.19.0과 Core 1.19.0이 필요합니다. Stream Connector만 사용하는 client에는 Core와 binding이 필요하지 않습니다.
 
+vcpkg overlay port로 이 버전을 고정하려면 태그가 아니라 이 릴리스의 레시피 갱신 커밋(#1945, main)을 사용합니다. 태그 커밋의 portfile 해시는 이전 버전 값입니다. 0.30.2에서 태그 커밋이 올바른 해시를 갖도록 고칩니다. (#1941)
+
 릴리스 태그는 [`framework-cpp/v0.30.1`](https://github.com/zlink-systems/zlink/releases/tag/framework-cpp%2Fv0.30.1)입니다.
 [한국어](./framework-cpp-0.30.1.ko.md) | [English](./framework-cpp-0.30.1.md)
