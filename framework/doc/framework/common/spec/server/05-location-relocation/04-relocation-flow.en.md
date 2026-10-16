@@ -220,6 +220,19 @@ and aren't mixed with source relay.
 
 The temporary queue and saved-work span form an ordered durable backlog before dispatch and own their payloads after finite handoff. Permit return and later acquisition for staging ingress and runnable callbacks follow [Application job queue §3](../01-execution/04-application-job-queue-and-backpressure.en.md#3-ordinary-ingress-permit-order).
 
+**Before reporting ready to receive relay, the target secures a ready route to the Session owner of
+each incoming binding.** If the relocation envelope's `sessionBindings` (§4.2) has entries, the target
+checks for each Session owner node whether a [ready](../00-foundation/02-glossary.en.md#ready) route
+exists. If not, it asks its auto-connect owner to reconcile that peer immediately
+([MeshNode §7.1](../03-spot-actor/03-mesh-node.en.md#71-peer-connection)) and doesn't send ready to
+receive relay until the route is ready. This wait happens only within the existing deadline of the
+operation that started the relocation and creates no new timer or retry. It waits in the target
+attempt's continuation without occupying an infrastructure receive loop or an application handler
+turn. If the deadline or target shutdown ends the wait, the target sends an explicit failure reply
+instead of ready to receive relay. The source is still owner, so it restores the source queue and the
+matching Session seal as for §9's explicit failure. Because the target finishes this preparation
+before commit, the first Actor→Session push after commit doesn't fail for a missing route.
+
 Once the temporary queue and Restore are ready, the target reports **ready to receive
 relay** to the source. This notification isn't relocation completion. The Location
 Store owner is still the source, and the target doesn't run an application handler. The

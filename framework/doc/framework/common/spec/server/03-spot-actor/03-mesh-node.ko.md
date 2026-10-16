@@ -301,6 +301,15 @@ Automatic RouteMesh에서는 RID가 더 작은 MeshNode만 connect를 시작한�
 하나씩 등록하는 [connection intent](../00-foundation/02-glossary.ko.md#connection-intent)로
 표현한다. Runtime은 intent가 있는 동안만 connect와 재연결을 시도한다.
 
+**Auto-connect owner는 특정 peer의 즉시 reconcile 요청을 받는다.** Relocation target과 Session owner가
+옮겨 오는 binding의 상대 node와 ready route가 없을 때 이 요청을 보낸다
+([relocation §4.3](../05-location-relocation/04-relocation-flow.ko.md#43-target은-실행하지-않은-상태로-복원한다),
+[Session·Actor binding §8.1](../04-session/02-session-actor-binding.ko.md#81-seal-held-message와-route-전환)).
+Auto-connect owner는 주기를 기다리지 않고 그 peer의 descriptor를 기존 Location resolver로 다시 읽어 평소
+reconcile과 같은 판정을 적용한다. Automatic에서는 RID가 더 작은 쪽만 connect를 시작하는 규칙을 그대로
+지키므로, 요청은 양쪽에서 보내고 RID가 작은 쪽의 요청이 connect를 시작한다. 이 요청은 새 종류의 intent나
+별도 상태를 만들지 않으며, 요청한 쪽은 결과로 그 peer의 ready route를 관찰한다.
+
 - **Outbound intent를 제거하면 같은 결정으로 그 endpoint의 binding 연결 등록도 제거한다.**
   Intent 소유자가 binding의 public disconnect를 호출한다. 같은 endpoint에 inbound peer가 있어도
   그 peer는 outbound 등록의 소유자가 아니므로 disconnect를 생략할 근거가 아니다 — 옛 등록이
