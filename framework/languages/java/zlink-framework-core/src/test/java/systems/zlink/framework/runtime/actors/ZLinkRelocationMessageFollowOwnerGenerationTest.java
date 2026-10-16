@@ -119,6 +119,54 @@ final class ZLinkRelocationMessageFollowOwnerGenerationTest {
         }
     }
 
+    @Test
+    void stagedTenureIsEligibleBeforeCommitAndAbsentTenureKeepsCallerOwnership() {
+        var source = route("node-a", 11, 3, 1);
+        var target = route("node-b", 12, 4, 2);
+        var forwarded = new ArrayList<ZLinkServiceM6BWireCodec.ActorRouteFence>();
+        var runtime = runtime(target, forwarded);
+        try {
+            var failures = new ArrayList<Throwable>();
+            var released = new java.util.concurrent.atomic.AtomicInteger();
+            var header =
+                    new ZLinkServiceM6BWireCodec.ActorMessage(
+                            false, 0, null, 1, 43, 0, null, source);
+            var ordinary = List.of(Message.from("header"), Message.from("payload"));
+            assertFalse(
+                    runtime.relayMessageFollow(
+                            RoutingId.from("client"),
+                            17,
+                            header,
+                            new byte[0],
+                            ordinary,
+                            null,
+                            null,
+                            failures::add,
+                            released::incrementAndGet));
+            assertEquals(0, released.get());
+            assertEquals(7, ordinary.get(1).size());
+            ordinary.forEach(Message::close);
+
+            runtime.stageRelocationMessageFollow(source, target);
+            assertTrue(
+                    runtime.relayMessageFollow(
+                            RoutingId.from("client"),
+                            17,
+                            header,
+                            new byte[0],
+                            List.of(Message.from("header"), Message.from("payload")),
+                            null,
+                            null,
+                            failures::add,
+                            released::incrementAndGet));
+            assertEquals(List.of(target), forwarded);
+            assertEquals(1, released.get());
+            assertTrue(failures.isEmpty(), failures.toString());
+        } finally {
+            runtime.close();
+        }
+    }
+
     private static void confirm(
             ZLinkActorRuntime runtime, ZLinkServiceM6BWireCodec.ActorRouteFence source)
             throws Exception {
