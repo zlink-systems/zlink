@@ -516,7 +516,7 @@ internal interface ICanonicalRelocationTarget
 
 internal interface ISessionRelocationBarrierTarget
 {
-    ValueTask<ZLinkServiceWireCodec.SessionRelocationSealedRecord> SealAsync(
+    ValueTask<ZLinkServiceWireCodec.SessionRelocationSealedRecord?> SealAsync(
         ZLinkServiceWireCodec.SessionRelocationSealRecord seal,
         RoutingId authenticatedSourceNodeRid,
         CancellationToken cancellationToken
