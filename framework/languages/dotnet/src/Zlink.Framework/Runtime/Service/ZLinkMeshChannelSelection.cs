@@ -11,17 +11,40 @@ namespace Zlink.Framework.Runtime.Service;
 /// <remarks>
 /// The node state lane prepares classifications and owns weighted plan updates
 /// and cursor advancement. Classification readers use the published immutable
-/// view without joining that lane. Peer admission remains with the node.
+/// view without joining that lane. Peer admission remains with the node; the
+/// node publishes each peer's direct-send facts here at the same change points,
+/// so a message path reads them without a lane turn (spec 08 §3 E2).
 /// </remarks>
 internal sealed class ZLinkMeshChannelSelection
 {
     private FrozenDictionary<RoutingId, ZLinkRouteMeshTargetClassification> _routerTargets =
         FrozenDictionary<RoutingId, ZLinkRouteMeshTargetClassification>.Empty;
 
+    private FrozenDictionary<RoutingId, ZLinkMeshDirectPeer> _directPeers = FrozenDictionary<
+        RoutingId,
+        ZLinkMeshDirectPeer
+    >.Empty;
+
     internal ZLinkRouteMeshTargetClassification ClassifyRouterTarget(RoutingId routingId) =>
         Volatile.Read(ref _routerTargets).GetValueOrDefault(routingId);
 
-    internal void PrepareRouterTargets(IReadOnlyDictionary<RoutingId, ZLinkMeshPeer> peers) =>
+    internal ZLinkMeshDirectPeer? DirectPeer(RoutingId routingId) =>
+        Volatile.Read(ref _directPeers).GetValueOrDefault(routingId);
+
+    internal void PrepareRouterTargets(IReadOnlyDictionary<RoutingId, ZLinkMeshPeer> peers)
+    {
+        Volatile.Write(
+            ref _directPeers,
+            peers.ToFrozenDictionary(
+                static entry => entry.Key,
+                static entry => new ZLinkMeshDirectPeer(
+                    entry.Value.Admitted,
+                    entry.Value.PhysicalRoutingId,
+                    entry.Value.LifecycleGeneration,
+                    entry.Value.Liveness
+                )
+            )
+        );
         Volatile.Write(
             ref _routerTargets,
             peers.ToFrozenDictionary(
@@ -34,6 +57,7 @@ internal sealed class ZLinkMeshChannelSelection
                     : ZLinkRouteMeshTargetClassification.Unknown
             )
         );
+    }
 
     private readonly Dictionary<
         ZLinkChannelName,
@@ -101,6 +125,15 @@ internal sealed class ZLinkMeshChannelSelection
     private static ZLinkChannelName Channel(string channelName) =>
         ZLinkChannelName.FromBoundary(channelName, nameof(channelName));
 }
+
+// The facts a direct send or request reads about one peer, as of the node's last
+// peer change.
+internal sealed record ZLinkMeshDirectPeer(
+    bool Admitted,
+    RoutingId PhysicalRoutingId,
+    ulong LifecycleGeneration,
+    ZLinkServiceLiveness? Liveness
+);
 
 internal sealed class ZLinkMeshChannelTarget
 {

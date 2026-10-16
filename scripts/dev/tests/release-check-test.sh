@@ -141,6 +141,8 @@ make_fixture() {
         "$TEST_ROOT/repo/framework/languages/java/scripts"
     cp "$SOURCE_ROOT/scripts/dev/release-check.sh" "$RELEASE_CHECK"
     chmod +x "$RELEASE_CHECK"
+    # check_version_sync()는 이 스크립트로 fixture의 scripts/를 검사한다(#816).
+    cp "$SOURCE_ROOT/scripts/dev/version-literals.sh" "$TEST_ROOT/repo/scripts/dev/version-literals.sh"
     printf '# fixture\n' >"$TEST_ROOT/repo/scripts/local-package/sync-version.py"
     cat >"$TEST_ROOT/repo/VERSION" <<'EOF'
 LIBZLINK_VERSION_MAJOR=1
@@ -260,6 +262,18 @@ EOF
     write_cpp_metadata bindings zlink-cpp bindings/cpp/packaging/conan cpp/v1.2.3 zlink-cpp-1.2.3.tar.gz
     write_cpp_metadata framework zlink-framework framework/languages/cpp/packaging/conan \
         framework-cpp/v1.2.3 zlink-framework-cpp-1.2.3.tar.gz
+    # 실제 producer처럼 VERSION으로 이름을 정하고 고정 바이트를 쓴다(git·node 불필요).
+    mkdir -p "$TEST_ROOT/repo/framework/languages/cpp/scripts"
+    cat >"$TEST_ROOT/repo/framework/languages/cpp/scripts/package-source.py" <<'EOF'
+import pathlib, re, sys
+version_file = pathlib.Path("framework/languages/cpp/VERSION").read_text()
+version = re.search(r"ZLINK_FRAMEWORK_VERSION=(\S+)", version_file).group(1)
+output_dir = pathlib.Path(sys.argv[1])
+output_dir.mkdir(parents=True, exist_ok=True)
+archive = output_dir / f"zlink-framework-cpp-{version}.tar.gz"
+archive.write_bytes(b"framework-cpp fixture archive\n")
+print(archive)
+EOF
 }
 
 release_check() {
@@ -370,18 +384,42 @@ release_check_write() {
         "$RELEASE_CHECK" "$@"
 }
 
-# --- distfile 형태(vcpkg_download_distfile): framework cpp, 값이 이미 맞음 ---
-fw_asset_dir="$HTTP_ROOT/zlink-systems/zlink/releases/download/framework-cpp/v1.2.3"
-mkdir -p "$fw_asset_dir"
-printf 'framework-cpp fixture asset\n' >"$fw_asset_dir/zlink-framework-cpp-1.2.3.tar.gz"
-fw_sha256=$(sha256sum "$fw_asset_dir/zlink-framework-cpp-1.2.3.tar.gz" | awk '{print $1}')
-fw_sha512=$(sha512sum "$fw_asset_dir/zlink-framework-cpp-1.2.3.tar.gz" | awk '{print $1}')
+# --- framework cpp: 태그 전에 producer가 만든 아카이브의 해시를 쓴다(#1941) ---
+# 릴리스 브랜치에 이전 릴리스 항목이 남은 conandata.yml을 재현한다.
+cat >"$TEST_ROOT/repo/framework/languages/cpp/packaging/conan/conandata.yml" <<'EOF'
+# fixture comment
+sources:
+  "1.2.3":
+    url: "https://github.com/zlink-systems/zlink/releases/download/framework-cpp/v1.2.3/zlink-framework-cpp-1.2.3.tar.gz"
+    sha256: "2222222222222222222222222222222222222222222222222222222222222222"
+  "1.2.2":
+    url: "https://github.com/zlink-systems/zlink/releases/download/framework-cpp/v1.2.2/zlink-framework-cpp-1.2.2.tar.gz"
+    sha256: "3333333333333333333333333333333333333333333333333333333333333333"
+EOF
+fw_archive="$TEST_ROOT/repo/dist/package-source/zlink-framework-cpp-1.2.3.tar.gz"
 
 assert_success 'framework cpp 쓰기 실패' release_check_write --write framework cpp 1.2.3
+[[ -f "$fw_archive" ]] || fail 'producer 산출물이 dist/package-source에 없음'
+fw_sha256=$(sha256sum "$fw_archive" | awk '{print $1}')
+fw_sha512=$(sha512sum "$fw_archive" | awk '{print $1}')
 assert_file_contains "$TEST_ROOT/repo/vcpkg/ports/zlink-framework/portfile.cmake" "SHA512 ${fw_sha512}\$"
 assert_file_contains "$TEST_ROOT/repo/framework/languages/cpp/packaging/conan/conandata.yml" \
     "sha256: \"${fw_sha256}\""
-pass 'distfile 형태(vcpkg_download_distfile) 포트는 릴리스 자산 하나로 vcpkg SHA512와 Conan sha256을 함께 채운다'
+[[ $(grep -c '^  "' "$TEST_ROOT/repo/framework/languages/cpp/packaging/conan/conandata.yml") -eq 1 ]] \
+    || fail 'framework conandata.yml sources:에 항목이 하나가 아님'
+assert_file_contains "$TEST_ROOT/repo/framework/languages/cpp/packaging/conan/conandata.yml" '^# fixture comment$'
+[[ ! -e "$TEST_ROOT/network-calls.log" ]] || fail 'framework cpp 쓰기가 네트워크 명령을 호출함'
+assert_success '쓴 뒤 framework cpp 검사 실패' release_check framework cpp 1.2.3
+pass 'framework cpp 쓰기는 다운로드 없이 producer가 만든 아카이브로 vcpkg SHA512와 Conan sha256을 채우고 sources: 항목을 하나만 남긴다'
+
+printf 'ZLINK_FRAMEWORK_VERSION=1.2.4\n' >"$TEST_ROOT/repo/framework/languages/cpp/VERSION"
+before_hash=$(sha256sum "$TEST_ROOT/repo/vcpkg/ports/zlink-framework/portfile.cmake" | awk '{print $1}')
+assert_failure 'producer 버전 불일치 검출 실패' 1 release_check_write --write framework cpp 1.2.3
+assert_file_contains "$TEST_ROOT/last.err" '릴리스 자산 zlink-framework-cpp-1\.2\.3\.tar\.gz과 다름'
+after_hash=$(sha256sum "$TEST_ROOT/repo/vcpkg/ports/zlink-framework/portfile.cmake" | awk '{print $1}')
+[[ "$before_hash" == "$after_hash" ]] || fail '버전 불일치에도 portfile.cmake가 바뀜'
+printf 'ZLINK_FRAMEWORK_VERSION=1.2.3\n' >"$TEST_ROOT/repo/framework/languages/cpp/VERSION"
+pass 'producer가 만든 아카이브 이름이 요청 버전과 다르면 실패하고 아무 파일도 바꾸지 않는다'
 
 assert_success '재실행 무변경 확인 실패' release_check_write --write framework cpp 1.2.3
 assert_file_contains "$TEST_ROOT/last.out" '^변경 없음: vcpkg/ports/zlink-framework/portfile.cmake$'
@@ -474,10 +512,10 @@ assert_file_contains "$TEST_ROOT/last.err" '판정할 수 없음'
 pass 'vcpkg_from_github와 vcpkg_download_distfile이 함께 있으면 어느 해시를 계산할지 정하지 않고 실패한다'
 
 # --- 릴리스 자산이 없으면 실패하고 아무 파일도 바꾸지 않는다 ---
-before_hash=$(sha256sum "$TEST_ROOT/repo/vcpkg/ports/zlink-framework/portfile.cmake" | awk '{print $1}')
-assert_failure '존재하지 않는 릴리스 자산 다운로드 실패 검출 실패' 1 release_check_write --write framework cpp 9.9.9
+before_hash=$(sha256sum "$TEST_ROOT/repo/vcpkg/ports/zlink-cpp/portfile.cmake" | awk '{print $1}')
+assert_failure '존재하지 않는 릴리스 자산 다운로드 실패 검출 실패' 1 release_check_write --write bindings cpp 9.9.9
 assert_file_contains "$TEST_ROOT/last.err" '다운로드 실패'
-after_hash=$(sha256sum "$TEST_ROOT/repo/vcpkg/ports/zlink-framework/portfile.cmake" | awk '{print $1}')
+after_hash=$(sha256sum "$TEST_ROOT/repo/vcpkg/ports/zlink-cpp/portfile.cmake" | awk '{print $1}')
 [[ "$before_hash" == "$after_hash" ]] || fail '다운로드 실패에도 portfile.cmake가 바뀜(부분 쓰기 금지 위반)'
 pass '릴리스 자산이 없으면 값을 추측하지 않고 실패하며 아무 파일도 바꾸지 않는다'
 

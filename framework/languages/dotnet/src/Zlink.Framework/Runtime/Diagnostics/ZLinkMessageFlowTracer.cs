@@ -36,7 +36,16 @@ internal sealed class ZLinkMessageFlowTracer
         _logger = logger ?? NullLogger.Instance;
     }
 
-    public bool CaptureEnabled => _options.Diagnostics.EffectiveLevel != ZLinkDiagnosticsLevel.Off;
+    // Flow-correlation §4: message-flow tracing, and with it every flow ID
+    // creation, validation, capture and propagation, is on only at Normal and
+    // Detailed. This is the one place that decides it.
+    public bool CaptureEnabled =>
+        _options.Diagnostics.EffectiveLevel >= ZLinkDiagnosticsLevel.Normal;
+
+    // Dispatch error, backpressure and drop records are written at every level
+    // but Off (message-flow tracing §4 level table).
+    internal bool DispatchErrorsEnabled =>
+        _options.Diagnostics.EffectiveLevel != ZLinkDiagnosticsLevel.Off;
 
     internal bool DetailedEnabled =>
         _options.Diagnostics.EffectiveLevel >= ZLinkDiagnosticsLevel.Detailed;
@@ -104,7 +113,7 @@ internal sealed class ZLinkMessageFlowTracer
 
     public void TraceDispatchError(ZLinkDispatchFailure error)
     {
-        if (_options.Diagnostics.EffectiveLevel == ZLinkDiagnosticsLevel.Off)
+        if (!DispatchErrorsEnabled)
             return;
 
         var flowId = error.FlowId;

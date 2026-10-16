@@ -53,15 +53,16 @@ internal sealed class ZLinkSharedEnvelopeOwner : IDisposable
 /// </summary>
 internal sealed class ZLinkMeshNodeOwnedMailbox(
     Action<ulong> onRecordEnqueued,
-    Action<ulong> onRecordDequeued
+    Action<ulong> onRecordDequeued,
+    Action? onReady = null,
+    Action<bool>? onReleased = null
 )
 {
     private readonly Queue<ZLinkMeshQueuedRecord> _records = new();
     private readonly ZLinkStateLane _lane = new();
-    private ulong _pendingBytes;
 
-    // An active claim owns only the FIFO prefix present when it was granted.
-    // Zero still holds that claim until Release; -1 means no active claim.
+    // The ready registry reserves the owner. Its first receive captures the FIFO
+    // prefix and drains it in the same turn; later enqueues belong to the next claim.
     private int _claimedRecordCount = -1;
 
     internal bool HasRecords => AwaitStateLane(_lane.RunAsync(() => _records.Count != 0));
@@ -70,38 +71,35 @@ internal sealed class ZLinkMeshNodeOwnedMailbox(
 
     // The admission decision depends only on the record, so the producer does
     // not wait for the mailbox turn. The record joins the mailbox FIFO before
-    // this returns; `enqueued` runs in that turn after the record is visible,
+    // this returns; readiness is published in that turn after the record is visible,
     // so a readiness signal can never precede the record it announces.
-    internal bool TryEnqueue(ZLinkMeshQueuedRecord record, Action? enqueued = null)
+    internal bool TryEnqueue(ZLinkMeshQueuedRecord record)
     {
-        var pendingBytes = record.PendingBytes;
-        if (pendingBytes == ulong.MaxValue)
+        if (record.PendingBytes == ulong.MaxValue)
             return false;
-        return _lane.TryPost(() =>
-        {
-            _records.Enqueue(record);
-            _pendingBytes = checked(_pendingBytes + pendingBytes);
-
-            // Publish accounting before another mailbox turn can dequeue
-            // this record. Readiness reads this existing aggregate directly.
-            onRecordEnqueued(pendingBytes);
-            enqueued?.Invoke();
-        });
+        return _lane.TryPost(
+            static state => state.Mailbox.EnqueueOnLane(state.Record),
+            (Mailbox: this, Record: record)
+        );
     }
 
-    internal ValueTask<(bool Ready, int Count)> TryClaimAsync(bool claim) =>
-        _lane.RunAsync(() =>
-        {
-            if (_claimedRecordCount >= 0 || _records.Count == 0)
-                return (Ready: false, Count: 0);
-            if (claim)
-                _claimedRecordCount = _records.Count;
-            return (Ready: true, Count: _records.Count);
-        });
+    private void EnqueueOnLane(ZLinkMeshQueuedRecord record)
+    {
+        var pendingBytes = record.PendingBytes;
+        _records.Enqueue(record);
 
-    internal ValueTask<bool> DrainAsync(MeshReceiveBatch batch, int maximumRecords) =>
+        // Publish accounting before another mailbox turn can dequeue
+        // this record. Readiness reads this existing aggregate directly.
+        onRecordEnqueued(pendingBytes);
+        if (_records.Count == 1)
+            onReady?.Invoke();
+    }
+
+    internal ValueTask<bool> ClaimAndDrainAsync(MeshReceiveBatch batch, int maximumRecords) =>
         _lane.RunAsync(() =>
         {
+            if (_claimedRecordCount < 0)
+                _claimedRecordCount = _records.Count;
             var count = 0;
             var limit = Math.Min(maximumRecords, _claimedRecordCount);
             while (count < limit && _records.Count != 0)
@@ -111,7 +109,6 @@ internal sealed class ZLinkMeshNodeOwnedMailbox(
                     break;
                 var record = _records.Dequeue();
                 _claimedRecordCount--;
-                _pendingBytes -= record.PendingBytes;
                 onRecordDequeued(record.PendingBytes);
                 batch.Add(record.Record, record.TakeParts(), record.TakePayloadOwner());
                 count++;
@@ -121,12 +118,11 @@ internal sealed class ZLinkMeshNodeOwnedMailbox(
 
     // Releasing a claim decides nothing for the releasing worker. The release
     // joins the mailbox FIFO before this returns, so the next claim observes it.
-    internal void Release(Action recordsRemain) =>
+    internal void Release() =>
         _lane.TryPost(() =>
         {
             _claimedRecordCount = -1;
-            if (_records.Count != 0)
-                recordsRemain();
+            onReleased?.Invoke(_records.Count != 0);
         });
 
     internal void Dispose()
@@ -141,7 +137,6 @@ internal sealed class ZLinkMeshNodeOwnedMailbox(
                     removed.Add(record);
                     onRecordDequeued(record.PendingBytes);
                 }
-                _pendingBytes = 0;
                 _claimedRecordCount = -1;
             })
         );

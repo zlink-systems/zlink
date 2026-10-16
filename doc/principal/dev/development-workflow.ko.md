@@ -175,7 +175,7 @@ Kubernetes의 release branch와 같은 구조). main은 하나의 트렁크로 �
   릴리스 브랜치에는 그 커밋을 `git cherry-pick -x`로 옮긴다. 릴리스 브랜치에 main을 merge하지 않는다 —
   다음 버전의 변경이 섞인다. 릴리스 브랜치에만 있는 수정을 만들지 않는다.
 - **릴리스 브랜치에서 하는 일.** gate와 부분 재검증, 버전 갱신(`sync-version.py --write`), 릴리스 노트,
-  `release-check.sh`, 태그. 태그는 `CONTRIBUTING.ko.md` §8과 `doc/building/release-pipeline.ko.md`대로
+  Framework C++ 레시피(`release-check.sh --write framework cpp`), `release-check.sh`, 태그. 태그는 `CONTRIBUTING.ko.md` §8과 `doc/building/release-pipeline.ko.md`대로
   릴리스 브랜치의 커밋에 건다. 포함 확인은 `git cherry -v release/framework-<버전> origin/main`으로 milestone
   PR의 변경이 빠지지 않았는지 본다.
 - **태그 뒤.** 릴리스 브랜치의 버전 갱신·릴리스 노트 커밋은 PR로 main에 merge한다. 그 뒤 릴리스 브랜치는
