@@ -1203,9 +1203,8 @@ internal sealed partial class ZLinkFrameworkRuntime
             await actorState
                 .Handoff.WaitForTargetReplayCompletionAsync(cancellationToken)
                 .ConfigureAwait(false);
-            await FinishRelocationTargetAsync(
+            await FinishRelocationSessionRouteAsync(
                     actorState,
-                    targetMeshName,
                     request.HandoffId,
                     cancellationToken
                 )
@@ -1432,24 +1431,6 @@ internal sealed partial class ZLinkFrameworkRuntime
                     committedAuthority.OwnerLeaseGeneration
                 );
             }
-            //  Spec 28-relocation-flow: a cross-node Actor Join moves the
-            //  Actor owner to the target in the same CAS, and the staged
-            //  relocation skipped the target-side claim. Without adopting
-            //  the committed authority into this node's location owner,
-            //  a later Spot leave/join renews against an untracked entry
-            //  and fails with "not tracked by this location owner"
-            //  (mirrors FinishRelocationTargetAsync; adoption is a no-op
-            //  when the entry already exists).
-            if (actorState.ActorType is { } committedActorType)
-                await actorLocations
-                    .AdoptCommittedActorAuthorityAsync(
-                        request.ActorId,
-                        committedActorType,
-                        actorRef.ToNative(publishedActorAuthority.MeshName),
-                        _ => DeactivateActorOnOwnershipLossAsync(actorState.ActorId),
-                        cancellationToken
-                    )
-                    .ConfigureAwait(false);
             try
             {
                 var lifecycleReply = ZLinkRemoteActorJoinPackets.CreateJoinReply(true, actorRef);
@@ -2786,6 +2767,35 @@ internal sealed partial class ZLinkFrameworkRuntime
         CancellationToken cancellationToken
     )
     {
+        var transferredActor =
+            actorState.Actor
+            ?? throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.NotFound,
+                $"Actor '{actorState.ActorId}' has no transferred instance at commit."
+            );
+        var actorType =
+            actorState.ActorType
+            ?? throw new InvalidOperationException(
+                $"Actor '{actorState.ActorId}' has no registered type during handoff."
+            );
+        var actorRef =
+            actorState.NativeActorRef
+            ?? throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.NotFound,
+                $"Actor '{actorState.ActorId}' has no transferred reference at commit."
+            );
+        // Membership §4.2: the target owns the Actor before lifecycle callbacks
+        // and replay. Direct and recovered joins adopt the same committed row.
+        await RequireActorRelocationLocationLifecycle(LocationLifecycle, actorState.ActorId)
+            .ActorOwnership.AdoptCommittedActorAuthorityAsync(
+                actorState.RuntimeActorId,
+                actorType,
+                actorRef.ToNative(transferredActor.Context.MeshName),
+                _ => DeactivateActorOnOwnershipLossAsync(actorState.ActorId),
+                cancellationToken
+            )
+            .ConfigureAwait(false);
+
         if (target.UserSpot is { } userSpot)
         {
             await userSpot
@@ -2807,12 +2817,6 @@ internal sealed partial class ZLinkFrameworkRuntime
                     ZLinkFrameworkErrorKind.InvalidOperation,
                     "Framework runtime state is not available during Actor Join completion."
                 );
-            var actor =
-                actorState.Actor
-                ?? throw new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.NotFound,
-                    $"Actor '{actorState.ActorId}' has no transferred instance at commit."
-                );
             if (!actorState.Handoff.TryBeginJoinedNotification(handoffId))
             {
                 _ = await actorState
@@ -2831,7 +2835,7 @@ internal sealed partial class ZLinkFrameworkRuntime
                 await _spots
                     .EntrySpotActors.NotifyJoinedForRelocationAsync(
                         state,
-                        actor,
+                        transferredActor,
                         target.NodeRid,
                         cancellationToken
                     )
