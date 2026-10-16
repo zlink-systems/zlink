@@ -1002,10 +1002,8 @@ internal sealed class ZLinkActorRemoteJoiner(
                     authorityStore,
                     authorityKey,
                     sourceAuthoritySnapshot,
-                    prepared.Relocation,
                     relocationId,
                     targetDescriptor,
-                    prepare.TargetAttemptGeneration,
                     deadline.Monotonic,
                     () => runtime.LocationLifecycle?.IsOwnerLeaseValid(sourceOwner) == true,
                     token =>
@@ -1044,7 +1042,6 @@ internal sealed class ZLinkActorRemoteJoiner(
                     )
                 );
             }
-            var published = settlement.Snapshot!;
             var resultActorRef = targetActor;
             setTargetAccepted(resultActorRef, admissionReplyMessage);
             if (resultActorRef.Generation != actorRef.Generation)
@@ -1060,7 +1057,7 @@ internal sealed class ZLinkActorRemoteJoiner(
                 sourceAuthority.NodeGeneration,
                 admission.Snapshot.NodeGeneration,
                 actorAuthorityOwnerGeneration,
-                published.AuthorityOwnerGeneration,
+                settlement.Snapshot?.AuthorityOwnerGeneration,
                 checked((ulong)runtime.LocationLifecycle!.OwnerToken.LeaseGeneration),
                 admission.Snapshot.OwnerLeaseGeneration,
                 registration.Locations.Options.MessageFollowDuration,
