@@ -1914,14 +1914,12 @@ public sealed partial class StatefulServiceRuntimeTests
                 .SendToSpot(target.RoutingId, spotId, spot.LifecycleGeneration, [payload])
         );
 
+        using var finalReady = new MeshReadyBatch();
         await WaitUntilAsync(() =>
         {
-            using var ready = new MeshReadyBatch();
-            target.DrainReady(MeshReadyDomains.Application, ready, RecvFlags.DontWait);
-            return ready.Count == 2;
+            target.DrainReady(MeshReadyDomains.Application, finalReady, RecvFlags.DontWait);
+            return finalReady.Count == 2;
         });
-        using var finalReady = new MeshReadyBatch();
-        target.DrainReady(MeshReadyDomains.Application, finalReady, RecvFlags.DontWait);
         Assert.Contains(
             Enumerable.Range(0, finalReady.Count),
             index => finalReady[index].OwnerKind == MeshOwnerKind.Actor
@@ -1937,15 +1935,13 @@ public sealed partial class StatefulServiceRuntimeTests
             SubmitResult.Ok,
             source.RequestToActor(actor, [payload], out var operation, TimeSpan.FromSeconds(1))
         );
-        await WaitUntilAsync(() =>
-        {
-            using var ready = new MeshReadyBatch();
-            target.DrainReady(MeshReadyDomains.Application, ready, RecvFlags.DontWait);
-            return ready.Count == 1;
-        });
         using (var requestReady = new MeshReadyBatch())
         {
-            target.DrainReady(MeshReadyDomains.Application, requestReady, RecvFlags.DontWait);
+            await WaitUntilAsync(() =>
+            {
+                target.DrainReady(MeshReadyDomains.Application, requestReady, RecvFlags.DontWait);
+                return requestReady.Count == 1;
+            });
             using var requestClaim = requestReady.TakeClaim(0);
             using var requestBatch = new MeshReceiveBatch();
             Assert.True(requestClaim.Receive(requestBatch, RecvFlags.DontWait));
@@ -2014,15 +2010,13 @@ public sealed partial class StatefulServiceRuntimeTests
             SubmitResult.Ok,
             source.RequestToActor(actor, [payload], out var operation, TimeSpan.FromSeconds(3))
         );
-        await WaitUntilAsync(() =>
-        {
-            using var ready = new MeshReadyBatch();
-            target.DrainReady(MeshReadyDomains.Application, ready, RecvFlags.DontWait);
-            return ready.Count == 1;
-        });
         using (var requestReady = new MeshReadyBatch())
         {
-            target.DrainReady(MeshReadyDomains.Application, requestReady, RecvFlags.DontWait);
+            await WaitUntilAsync(() =>
+            {
+                target.DrainReady(MeshReadyDomains.Application, requestReady, RecvFlags.DontWait);
+                return requestReady.Count == 1;
+            });
             using var requestClaim = requestReady.TakeClaim(0);
             using var requestBatch = new MeshReceiveBatch();
             Assert.True(requestClaim.Receive(requestBatch, RecvFlags.DontWait));
@@ -2106,15 +2100,13 @@ public sealed partial class StatefulServiceRuntimeTests
             SubmitResult.Ok,
             source.RequestToActor(actor, [payload], out var operation, TimeSpan.FromSeconds(3))
         );
-        await WaitUntilAsync(() =>
-        {
-            using var ready = new MeshReadyBatch();
-            target.DrainReady(MeshReadyDomains.Application, ready, RecvFlags.DontWait);
-            return ready.Count == 1;
-        });
         using (var requestReady = new MeshReadyBatch())
         {
-            target.DrainReady(MeshReadyDomains.Application, requestReady, RecvFlags.DontWait);
+            await WaitUntilAsync(() =>
+            {
+                target.DrainReady(MeshReadyDomains.Application, requestReady, RecvFlags.DontWait);
+                return requestReady.Count == 1;
+            });
             using var requestClaim = requestReady.TakeClaim(0);
             using var requestBatch = new MeshReceiveBatch();
             Assert.True(requestClaim.Receive(requestBatch, RecvFlags.DontWait));

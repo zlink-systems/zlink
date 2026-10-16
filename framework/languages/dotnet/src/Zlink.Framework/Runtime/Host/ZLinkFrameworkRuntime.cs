@@ -918,11 +918,13 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
                 //  New host work: any drain-gate seal (relocation fence or
                 //  shutdown) refuses it.
                 if (_drainAdmission.IsSealed)
-                    throw NotAcceptingOperations("application admission is sealed");
+                    return null;
                 return AdmitOperationOnLane(countAsRequest);
             })
             .ConfigureAwait(false);
-        return new ZLinkRuntimeOperationAdmission(this, admitted, countAsRequest);
+        return admitted is null
+            ? ZLinkRuntimeOperationAdmission.Refused
+            : new ZLinkRuntimeOperationAdmission(this, admitted, countAsRequest);
     }
 
     internal readonly struct ZLinkRuntimeOperationAdmission(
@@ -945,8 +947,11 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
             if (refused)
                 throw new ZLinkFrameworkException(
                     ZLinkFrameworkErrorKind.ShuttingDown,
-                    "Application admission is sealed for drain."
-                );
+                    "ZLink framework runtime is not accepting operations (application admission is sealed)."
+                )
+                {
+                    Origin = ZLinkErrorOrigin.Framework,
+                };
             return runtime is null ? ZLinkRuntimeOperationLease.None
                 : state is null ? new ZLinkRuntimeOperationLease(runtime, countsRequest)
                 : runtime.AttachOperation(state, countsRequest);
