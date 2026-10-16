@@ -708,12 +708,9 @@ export class ZLinkFrameworkRuntimeHost
       primaryMeshNode: () => this.requirePrimaryMeshNode(),
       notifyEntrySpotActorLeft: (actor, signal) =>
         this.spotNodeRuntime?.notifyPrimaryEntrySpotActorLeft(actor, signal) ?? Promise.resolve(),
-      restoreEntrySpotActorJoined: (actor, signal) =>
-        this.spotNodeRuntime?.notifyPrimaryEntrySpotActorJoined(actor, signal) ?? Promise.resolve(),
       locationLifecycle: () => this.locationOwner.currentLifecycle,
       spotRouteResolver: () => this.createLocationSpotRouteResolver(),
       actorHandoff: this.actorHandoff,
-      actorTransferRegistry: this.actorTransferRegistry,
       authorityStore: () => this.locationOwner.currentStores?.locationStore,
       currentOwner: () => this.locationOwner.currentRuntime?.currentOwnerToken,
       liveDescriptors: (meshName, signal) => {
@@ -776,10 +773,7 @@ export class ZLinkFrameworkRuntimeHost
           'source actor departure',
           error
         ),
-      onSourceDepartureCompleted: (actorId) =>
-        this.publishActorHandoffEvent({ marker: 'source_cleanup', actorId }),
-      shutdownSignal: () => this.executionState?.abortController.signal,
-      metrics: this.metrics
+      shutdownSignal: () => this.executionState?.abortController.signal
     });
     this.serviceRelocation = new ZLinkHostServiceRelocationRuntime({
       registration: options.registration,

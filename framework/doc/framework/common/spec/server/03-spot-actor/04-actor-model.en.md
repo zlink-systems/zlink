@@ -473,7 +473,8 @@ On the node that creates a new Actor, the Entry Spot accepting that Actor stable
 Actor's initial Entry Spot membership with `OnCreateActor` ([Spot model §3.2](01-spot-model.en.md#32-lifecycle-callback-per-spot-kind)). So a
 node that registered an Actor factory but no Entry Spot type accepting that type doesn't create new
 Actors. Such a node can still be the join or relocation target of an existing Actor. If the selected
-target has no such Entry Spot type, it ends that creation as a Framework failure before the callback.
+target has no such Entry Spot type, it ends that creation as a Framework failure before the callback
+(`Unavailable`, sent as its representative wire code in [Error model §2.1](../00-foundation/07-framework-error-model.en.md#21-wire-failure-codes-and-errorkind)).
 This result isn't the application's `Rejected`, so the Framework excludes that host run generation and
 picks another candidate up to the deadline, as for a `Reserve` failure in
 [Location runtime §7](../05-location-relocation/01-location-runtime.en.md#7-creating-an-actor-or-user-spot).

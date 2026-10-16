@@ -3297,7 +3297,7 @@ internal sealed partial class ZLinkFrameworkRuntime
         if (local.RoutingId == nodeRid)
             return local.LifecycleGeneration == nodeGeneration;
         return peers.Any(peer =>
-            peer.State == MeshPeerState.Admitted
+            peer.IsAdmitted
             && peer.RoutingId == nodeRid
             && peer.LifecycleGeneration == nodeGeneration
         );
@@ -4129,18 +4129,11 @@ internal sealed partial class ZLinkFrameworkRuntime
             authenticatedRelayNodeRid.IsEmpty
             || relayNodeRid.IsEmpty
             || authenticatedRelayNodeRid != relayNodeRid
-            || relayNodeGeneration == 0
-            || !(
-                authenticatedRelayNodeRid == targetNode.RoutingId
-                && relayNodeGeneration == targetNode.MeshStatus().LifecycleGeneration
+            || !HasExactAdmittedNodeLifecycle(
+                targetNode,
+                authenticatedRelayNodeRid,
+                relayNodeGeneration
             )
-                && !targetNode
-                    .MeshPeers()
-                    .Any(peer =>
-                        peer.State == MeshPeerState.Admitted
-                        && peer.RoutingId == authenticatedRelayNodeRid
-                        && peer.LifecycleGeneration == relayNodeGeneration
-                    )
         )
         {
             throw new ZLinkFrameworkException(
