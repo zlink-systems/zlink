@@ -578,7 +578,7 @@ export class ZLinkSpotNodeRuntimeManager {
     if (owner === undefined) return;
     const current = (await location.runtime.listLiveMeshNodes(meshName, signal)).find(
       (descriptor) =>
-        String(descriptor.rid) === String(status.routingId) &&
+        routingIdsEqual(descriptor.rid, status.routingId) &&
         descriptor.lifecycleGeneration === status.lifecycleGeneration &&
         descriptor.ownerId === owner.ownerId &&
         descriptor.leaseGeneration === owner.leaseGeneration

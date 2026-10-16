@@ -1,4 +1,6 @@
+import { routingIdsEqual } from '../../routing-id';
 import { requestDurableService } from '../../foundation/durable-service-request';
+import { encodeRoutingIdStorageHex, toBackendRoutingId } from '../../routing-id';
 import {
   decodeStreamWireFrame,
   decodeStreamWireHeader,
@@ -371,7 +373,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   }
 
   setRoutingId(routingId: unknown): void {
-    if (String(routingId) !== this.routingId) {
+    if (!routingIdsEqual(toBackendRoutingId(routingId), this.routingId)) {
       throw new Error('MeshNode routing id is immutable after construction.');
     }
   }
@@ -1042,7 +1044,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
         generation: actor.generation
       },
       String(sessionNodeRid),
-      String(sessionRid),
+      toBackendRoutingId(sessionRid),
       bindingGeneration
     );
   }
@@ -1993,7 +1995,9 @@ class RawStreamSessionService implements StreamSessionService {
     return {
       state: this.state,
       lifecycleGeneration: 1n,
-      sessionCount: BigInt(new Set(bindings.map((value) => value.sessionRid)).size),
+      sessionCount: BigInt(
+        new Set(bindings.map((value) => encodeRoutingIdStorageHex(value.sessionRid))).size
+      ),
       bindingCount: BigInt(bindings.length),
       pendingMessageCount: 0n,
       pendingByteCount: 0n,
@@ -2030,11 +2034,10 @@ class RawStreamSessionService implements StreamSessionService {
     return this.observe(
       OperationKind.StreamBind,
       this.stateful.bindSession(
-        sessionKey,
+        sessionRid,
         actor,
         timeoutMs,
-        (targetSessionRid, payloadFrame) =>
-          this.deliver(targetSessionRid, actor.actorId, payloadFrame),
+        (_targetSessionRid, payloadFrame) => this.deliver(sessionKey, actor.actorId, payloadFrame),
         onBindingReplaced,
         actorAuthority
       )
@@ -2050,12 +2053,12 @@ class RawStreamSessionService implements StreamSessionService {
     this.requireStarted();
     return this.observe(
       OperationKind.StreamUnbind,
-      this.stateful.unbindSession(String(sessionRid), actor, expectedBindingGeneration, timeoutMs)
+      this.stateful.unbindSession(sessionRid, actor, expectedBindingGeneration, timeoutMs)
     );
   }
 
   bindings(sessionRid: RoutingId) {
-    return this.stateful.sessionBindings(String(sessionRid));
+    return this.stateful.sessionBindings(sessionRid);
   }
 
   async sendToActor(
@@ -2065,7 +2068,7 @@ class RawStreamSessionService implements StreamSessionService {
   ): Promise<SubmitResultValue> {
     this.requireStarted();
     return (await this.stateful.sendSessionToActor(
-      String(sessionRid),
+      sessionRid,
       actor,
       encodeMultipart(parts)
     )) as SubmitResultValue;
@@ -2086,7 +2089,7 @@ class RawStreamSessionService implements StreamSessionService {
     if (parts.length === 0) return false;
     const actorSlot = await serviceSessionBindingIngressPortIfRegistered(this)?.actorSlot(
       actorId,
-      sessionRid
+      target
     );
     if (actorSlot === undefined) return false;
     parts[0] = Buffer.from(streamFrameWithActorSlot(parts[0]!, actorSlot));
