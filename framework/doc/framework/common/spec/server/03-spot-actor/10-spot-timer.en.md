@@ -22,7 +22,7 @@ generation that's already on the queue does not run its callback — if a tick s
 before re-registration ran after re-registration, it would use a period and callback other
 than the new ones the caller expects.
 
-**Exception: a relocation target's initialization callback that registers a restored key does not create a new generation.** A relocation target recreates the Spot instance and runs `Configure` and `OnInitializeAsync` ([Spot model §5](01-spot-model.en.md)). If that callback registers the same key as a logical timer moved from the source, the registration only reattaches a handler to the restored registration (period, next fire time, pending tick, delivery and scheduled index). If the handler type in the registration differs from the restored registration, the registration fails and the relocation ends `RelocationFailed`. Treating it as a new generation would drop the pending tick and next fire time that [host relocation](../05-location-relocation/05-host-relocation-flow.en.md) requires to move, just because application code registers its timers during initialization. A registration of a key that wasn't restored, and any re-registration after Ready, follow the generation rule above.
+**Exception: when a relocation target's `Configure` or pre-Ready `OnInitializeAsync` registers a restored key, no new generation is created.** A relocation target recreates the Spot instance and runs these two callbacks ([Spot model §5.2](01-spot-model.en.md#52-user-spot-lifecycle)). A restored key is the key of a logical timer that was in the source relocation payload. When either callback registers that key, the registration only reattaches a handler to the restored registration, and the period, options, next fire time, pending tick, delivery and scheduled index, and the timer handle the registration returns keep their restored values. A different period or option in the registration arguments is not a failure; the restored values win. Invalid registration arguments still fail by the existing validation. If the handler type in the registration differs from the restored registration, the registration fails and the relocation ends `RelocationFailed`. Treating it as a new generation would drop the pending tick and next fire time that [host relocation §12](../05-location-relocation/05-host-relocation-flow.en.md#12-moving-pending-messages-timers-and-sessions) requires to move, just because application code registers its timers during initialization. Registering or re-registering a key that wasn't restored, a registration from any other callback (such as the relocation completion callback), and any re-registration after Ready follow the generation rule above.
 
 **`cancel` blocks new callbacks for that timer generation and completes with the generation's
 single result after any callback already running and all timer-owned resource cleanup have
@@ -41,7 +41,7 @@ same state at the same time.
 
 | Situation | Behavior |
 |---|---|
-| Re-registering the same key | Generation increases |
+| Re-registering the same key | Generation increases (a restored key during relocation target initialization follows the exception above) |
 | A queue record from an earlier generation | Does not run its callback |
 | Cancel | Blocks new callbacks for that generation and completes every cancel caller with the same success or failure after an already-running callback and timer-owned resource cleanup finish |
 | A repeating timer expires faster than the handler | The same key's callback is never run concurrently; duplicate expirations may merge into one pending record |
@@ -154,7 +154,7 @@ maps to one contract test.
 **Generation and cancel**
 
 - Re-registering the same key means an already-pending tick from an earlier generation does
-  not run its callback.
+  not run its callback. A restored key during relocation target initialization follows the §1 exception.
 - After cancel is called, a tick from that generation onward doesn't start its callback, but a callback
   already running at the moment of cancel runs to completion.
 - When `cancel` is called concurrently more than once for the same generation, every result

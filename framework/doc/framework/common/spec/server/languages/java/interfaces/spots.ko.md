@@ -260,7 +260,7 @@ Send는 상속한 `submit()`으로 `CompletionStage<Void>`를 반환하며, requ
 
 User·Instance Spot relocation에서는 Framework가 `addTimer(...)`로 만든 logical timer registration, 마지막 완료
 tick sequence, 다음 예정 시각과 아직 실행하지 않은 pending tick을 relocation payload에 포함한다. Target은
-logical timer registration을 복원하므로 application이 timer를 다시 등록하지 않는다. 현재 실행 중인 timer callback만 source에서
+logical timer registration을 복원하므로 application이 restore에서 timer를 다시 등록하지 않는다. Target의 `Configure`·Ready 전 `onInitialize`가 복원된 key를 등록하면 [Spot timer §1](../../../03-spot-actor/10-spot-timer.ko.md#1-timer-generation과-cancel) 예외대로 복원된 registration에 다시 연결된다. 현재 실행 중인 timer callback만 source에서
 완료하고, target Ready 전에는 복원한 tick을 application handler에 제출하지 않는다.
 
 User Spot의 `close()`는 active Actor membership이 있으면 `false`를 반환한다. Spot state, admission과 authority는
