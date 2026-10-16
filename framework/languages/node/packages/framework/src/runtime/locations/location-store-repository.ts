@@ -1359,12 +1359,11 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         error.kind !== ZLinkFrameworkErrorKind.DataLost
       )
         throw error;
-      const observed = await this.provider.read(rowKey, signal);
-      if (
-        observed.kind === 'missing' ||
-        observed.value.version.value !== current.value.version.value
-      )
-        return 'conflict';
+      for (const authority of [{ key: rowKey, version: current.value.version }, ...members]) {
+        const observed = await this.provider.read(authority.key, signal);
+        if (observed.kind === 'missing' || observed.value.version.value !== authority.version.value)
+          return 'conflict';
+      }
       throw error;
     }
     for (const [key, entry] of capacities) {

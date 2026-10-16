@@ -510,7 +510,8 @@ for (const backend of ['provider', 'memory'] as const) {
     'aggregate',
     'unactivated',
     'batchBound',
-    'batchFits'
+    'batchFits',
+    ...(backend === 'provider' ? (['memberReclaimed', 'memberCapacityCorrupt'] as const) : [])
   ] as const) {
     test(`ended User Spot member release: ${backend} ${scenario}`, async () => {
       let now = new Date(100);
@@ -648,7 +649,12 @@ for (const backend of ['provider', 'memory'] as const) {
         assert.equal(result.kind, 'created');
         return actorRequest.key;
       };
-      const members = scenario === 'staleRoute' ? [] : [await addMember('member-a', old)];
+      const memberDescriptor =
+        scenario === 'memberReclaimed' || scenario === 'memberCapacityCorrupt'
+          ? await configure(await writeTargetDescriptor(store, 'owner-d', 'node-d', 60_000))
+          : old;
+      const members =
+        scenario === 'staleRoute' ? [] : [await addMember('member-a', memberDescriptor)];
       // A route projection is not Actor authority and must not determine membership.
       const routeOwner = live;
       assert.equal(
@@ -742,6 +748,91 @@ for (const backend of ['provider', 'memory'] as const) {
         target: placement(live),
         actorRelocationPolicy: 'disabled' as const
       };
+      if (scenario === 'memberCapacityCorrupt') {
+        const capacityKey = storeKey('zlink:v11:capacity:mesh:node-d');
+        const capacity = await provider.read(capacityKey);
+        if (capacity.kind !== 'found') throw new Error('member capacity missing');
+        const corrupted = JSON.parse(Buffer.from(capacity.value.bytes).toString('utf8'));
+        corrupted.active.actors = 0;
+        assert.equal(
+          (
+            await provider.write({
+              conditions: [{ kind: 'version', key: capacityKey, expected: capacity.value.version }],
+              mutations: [
+                { kind: 'put', key: capacityKey, bytes: Buffer.from(JSON.stringify(corrupted)) }
+              ]
+            })
+          ).kind,
+          'applied'
+        );
+        const write = provider.write.bind(provider);
+        let writes = 0;
+        provider.write = async (...args: Parameters<typeof write>) => {
+          writes++;
+          return write(...args);
+        };
+        await assert.rejects(
+          store.reserve(next),
+          (error: unknown) =>
+            error instanceof ZLinkFrameworkException &&
+            error.kind === ZLinkFrameworkErrorKind.DataLost
+        );
+        assert.equal(writes, 0);
+        assert.deepEqual(await versions(), before);
+        return;
+      }
+      if (scenario === 'memberReclaimed') {
+        const read = provider.read.bind(provider);
+        let replacementGeneration: bigint | undefined;
+        let replacementVersion: string | undefined;
+        provider.read = async (...args: Parameters<typeof read>) => {
+          if (args[0].value === 'zlink:v11:capacity:mesh:node-d') {
+            provider.read = read;
+            const replacement = await store.reserve({
+              key: { kind: 'actor', globalId: 'member-a' },
+              intent: {
+                stableType: 'player',
+                requestContentReference: 'request:member-a-reclaimed',
+                requestSha256: Buffer.alloc(32, 3),
+                requestEncodedSize: 10n
+              },
+              target: placement(live),
+              creatingPayload: Buffer.from('creating'),
+              capacity: { actors: 1, spots: 0 },
+              actorRelocationPolicy: 'disabled'
+            });
+            assert.equal(replacement.kind, 'reserved');
+            if (replacement.kind !== 'reserved') throw new Error('member replacement missing');
+            replacementGeneration = replacement.creating.objectGeneration;
+            replacementVersion = replacement.creating.storeVersion.value;
+            const unchangedSpot = await store.readAuthority(
+              encodeAuthorityKey(request.key.kind, spotId)
+            );
+            assert.equal(unchangedSpot.kind, 'snapshot');
+            if (unchangedSpot.kind === 'snapshot')
+              assert.equal(unchangedSpot.storeVersion.value, before[0]);
+          }
+          return read(...args);
+        };
+        const recreated = await store.reserve(next);
+        assert.equal(recreated.kind, 'reserved');
+        if (recreated.kind !== 'reserved') throw new Error('Spot replacement missing');
+        assert.ok(recreated.creating.objectGeneration > committed.ready.objectGeneration);
+        assert.notEqual(replacementGeneration, undefined);
+        const retained = await store.readAuthority(encodeAuthorityKey('actor', 'member-a'));
+        assert.equal(retained.kind, 'snapshot');
+        if (retained.kind !== 'snapshot') throw new Error('member replacement lost');
+        assert.equal(retained.objectGeneration, replacementGeneration);
+        assert.equal(retained.storeVersion.value, replacementVersion);
+        assert.equal(retained.allocation.state, 'reserved');
+        const releasedCapacity = await provider.read(storeKey('zlink:v11:capacity:mesh:node-d'));
+        if (releasedCapacity.kind !== 'found') throw new Error('member capacity missing');
+        assert.equal(
+          JSON.parse(Buffer.from(releasedCapacity.value.bytes).toString('utf8')).active.actors,
+          0
+        );
+        return;
+      }
       if (scenario === 'dead' || scenario === 'staleRoute' || scenario === 'batchFits') {
         const recreated = await store.reserve(next);
         assert.equal(recreated.kind, 'reserved');

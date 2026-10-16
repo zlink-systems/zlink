@@ -433,11 +433,6 @@ export class ZLinkInMemoryAuthorityStore {
       `descriptor:${descriptorKey(spot.allocation.descriptor)}`,
       `capacity:${descriptorKey(spot.allocation.descriptor)}`
     ]);
-    const liveMember = () =>
-      new ZLinkFrameworkException(
-        ZLinkFrameworkErrorKind.Unavailable,
-        'User Spot still has a member with a live owner lease.'
-      );
     const members: string[] = [];
     for (const [memberKey, row] of this.rows) {
       if (row.snapshot.allocation.objectKind !== 'actor') continue;
@@ -472,7 +467,10 @@ export class ZLinkInMemoryAuthorityStore {
           leaseGeneration: row.snapshot.ownerLeaseGeneration
         })
       )
-        throw liveMember();
+        throw new ZLinkFrameworkException(
+          ZLinkFrameworkErrorKind.Unavailable,
+          'User Spot still has a member with a live owner lease.'
+        );
       members.push(memberKey);
       batchKeys.add(`authority:${memberKey}`);
       batchKeys.add(`owner:${row.snapshot.ownerId}`);
