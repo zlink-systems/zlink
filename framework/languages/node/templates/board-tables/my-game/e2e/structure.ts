@@ -100,8 +100,8 @@ export function checkStructure(path = 'zlink.structure.json'): void {
   unique(logical, 'logical Spot ID');
   for (const node of nodes.filter((node) => node.role === 'table')) {
     assert(
-      spots.some((spot) => spot.kind === 'entry' && spot.owner === node.id),
-      `Table node lacks Entry Spot: ${node.id}`
+      spots.filter((spot) => spot.kind === 'entry' && spot.owner === node.id).length === 1,
+      `Table node must declare exactly one application Entry Spot: ${node.id}`
     );
   }
   assert(

@@ -6,6 +6,7 @@ export interface NodeConfig {
   keyPrefix: string;
   meshEndpoint: string;
   streamEndpoint: string | null;
+  tableCapacity?: number;
 }
 export function readConfig(path: string): NodeConfig {
   const value = JSON.parse(readFileSync(path, 'utf8')) as NodeConfig;
@@ -17,5 +18,10 @@ export function readConfig(path: string): NodeConfig {
     (typeof value.streamEndpoint !== 'string' || !value.streamEndpoint)
   )
     throw new Error('Invalid streamEndpoint');
+  if (
+    value.tableCapacity !== undefined &&
+    (!Number.isInteger(value.tableCapacity) || value.tableCapacity < 0)
+  )
+    throw new Error('Table capacity must be a nonnegative integer');
   return value;
 }

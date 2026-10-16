@@ -60,7 +60,7 @@ Windows Node 25.6.0 and WSL Node 22.23.2 passed `table` and `reconnect` on publi
 
 In the selected `table,reconnect` run, all game assertions also passed, but Table shutdown returned `ForceStopped/TeardownFailed` after the physical close. This corresponds to #1690, which is fixed in public `0.30.1`; this template uses `0.30.0` as specified. The runner therefore still returns exit code 1 in this case. Distinguish the passing scenario lines from overall run success.
 
-Message Follow is explicitly configured for 30 seconds. The `SAFE_TO_SHUTDOWN` observation budget is that period plus the existing relocation budget. Update waits for replacement `READY`, then completes a hand at a new table; normal placement may select either live Table node.
+Message Follow is explicitly configured for 30 seconds. The `SAFE_TO_SHUTDOWN` observation budget is that period plus the existing relocation budget. Update waits for replacement `READY`, then asserts that the replacement hosts the new table and completes a hand.
 
 ## Deployment sequence
 
@@ -87,6 +87,8 @@ When extending, follow the public API boundaries and state ownership rules in [A
 ## Windows
 
 The runner starts child processes with `windowsHide: true`. Run it in PowerShell 7; no Unix shell is required. The project includes a native addon, so check the Node support range and the CPU architecture. The project does not use an npm install at the repository root or a local package feed.
+
+The e2e runner sets each node's optional `tableCapacity` to the number of selected scenarios through the public Table stable-type limit. Each scenario retains one table. After update drains the source, the surviving node is at capacity, so only the replacement can host the new table. Both new players must observe the replacement node ID. Omitted or zero capacity leaves deployment capacity unlimited. Entry declarations describe the application Entry on Table nodes only; there are no fixed User Spots in this template.
 
 ## 한국어 실행 안내
 

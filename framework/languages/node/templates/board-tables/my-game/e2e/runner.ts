@@ -177,6 +177,7 @@ async function main(): Promise<void> {
       if (node.role !== 'session' && node.role !== 'table') continue;
       assert(node.config);
       const cfg = JSON.parse(readFileSync(node.config, 'utf8')) as NodeConfig;
+      cfg.tableCapacity = selected.length;
       cfg.redisEndpoint = redis;
       cfg.keyPrefix = `my-game:${runId}:`;
       cfg.meshEndpoint = 'tcp://127.0.0.1:0';

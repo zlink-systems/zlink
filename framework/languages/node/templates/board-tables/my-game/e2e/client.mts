@@ -197,7 +197,8 @@ export async function scenario(
   endpoint: string,
   runId: string,
   logDir: string,
-  control: NodeControl
+  control: NodeControl,
+  expectedNode?: string
 ): Promise<void> {
   const tableId = `table-${name}-${runId}`,
     ids = [`p1-${name}-${runId}`, `p2-${name}-${runId}`];
@@ -212,6 +213,10 @@ export async function scenario(
   try {
     const first = await p1.join(ids[0], tableId),
       second = await p2.join(ids[1], tableId);
+    if (expectedNode !== undefined) {
+      assert.equal(first.nodeId, expectedNode, 'Replacement node did not host new work');
+      assert.equal(second.nodeId, expectedNode, 'Replacement node did not host new work');
+    }
     assert.equal(first.yourSeat, 0);
     assert.equal(second.yourSeat, 1);
     assert.deepEqual(
@@ -305,7 +310,7 @@ export async function scenario(
     assert.equal(p2.disconnects, 0);
     if (name === 'update') {
       await control.replace(b1.nodeId);
-      await scenario('table', endpoint, `${runId}-replacement`, logDir, control);
+      await scenario('table', endpoint, `${runId}-replacement`, logDir, control, b1.nodeId);
     }
   } finally {
     const closed = await Promise.allSettled(clients.map((c) => c.close()));
