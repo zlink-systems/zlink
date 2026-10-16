@@ -267,7 +267,6 @@ test('pre-cutover rollback restores the source queue and state before one-way Se
       status: () => ({ routingId: 'source-node', lifecycleGeneration: 2n })
     }),
     async notifyEntrySpotActorLeft() {},
-    async restoreEntrySpotActorJoined() {},
     locationLifecycle: () => undefined,
     actorHandoff: {
       begin() {},
@@ -288,7 +287,6 @@ test('pre-cutover rollback restores the source queue and state before one-way Se
         return { terminal: start.then(() => undefined) };
       }
     },
-    actorTransferRegistry: {},
     authorityStore: () => ({ readAuthority: async () => authority }),
     relocationStore: () => undefined,
     liveDescriptors: async () => [
@@ -336,9 +334,10 @@ test('pre-cutover rollback restores the source queue and state before one-way Se
   await prepared.rollback();
   await Promise.resolve();
 
+  // Relocation 04 §4.1: the Session seal precedes the source dispatch stop.
   assert.deepEqual(events, [
-    'move-begun',
     'session-sealed',
+    'move-begun',
     'queue-restored',
     'state-restored',
     'session-abort'

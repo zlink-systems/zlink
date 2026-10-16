@@ -404,14 +404,6 @@ export class ZLinkActorHandoffCoordinator {
     return this.active.get(actorId)?.phase === 'provisional';
   }
 
-  promoteProvisional(actorId: string): void {
-    const handoff = this.active.get(actorId);
-    if (handoff?.phase !== 'provisional') {
-      throw new Error(`Actor '${actorId}' does not have a provisional packet handoff.`);
-    }
-    handoff.phase = 'relocating';
-  }
-
   sealConnectionBoundIngress(actorId: string): void {
     const handoff = this.active.get(actorId);
     if (handoff !== undefined) handoff.connectionBoundSealed = true;
@@ -1008,19 +1000,6 @@ export class ZLinkActorHandoffCoordinator {
     const handoff = this.requireActive(actorId);
     handoff.snapshotIndex = handoff.pending.length - 1;
     return handoff.pending.map((entry) => entry.packet);
-  }
-
-  snapshotCoreBacklog(actorId: string): readonly ZLinkActorHandoffPacket[] {
-    const handoff = this.requireActive(actorId);
-    let snapshotIndex = -1;
-    while (
-      snapshotIndex + 1 < handoff.pending.length &&
-      handoff.pending[snapshotIndex + 1].packet.returnResponse === false
-    ) {
-      snapshotIndex++;
-    }
-    handoff.snapshotIndex = snapshotIndex;
-    return handoff.pending.slice(0, snapshotIndex + 1).map((entry) => entry.packet);
   }
 
   /**

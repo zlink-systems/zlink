@@ -1519,14 +1519,6 @@ export class DefaultZLinkSpotManager {
     await this.actorMembership.commitActorLeaveAfterTransfer(spotId, actorId);
   }
 
-  async restoreActorAfterFailedTransfer(
-    spotId: RoutingId,
-    actor: ZLinkActor,
-    signal?: AbortSignal
-  ): Promise<void> {
-    await this.actorMembership.restoreActorAfterFailedTransfer(spotId, actor, signal);
-  }
-
   async beginActorTransfer(spotId: RoutingId, actorId: string): Promise<void> {
     await this.actorMembership.beginActorTransfer(spotId, actorId);
   }
