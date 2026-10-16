@@ -190,6 +190,17 @@ internal sealed class ZLinkMeshCompletionTable
         ZLinkCompletionDispatcher.Post(pending);
     }
 
+    // The submitter has not yet returned the completion, so no continuation is
+    // registered: the terminal is set in this call and the caller continues after
+    // the submit call returns, on the same resource (spec 01 §11, 08 §4.4).
+    private void CompleteSendBeforeReturn(MeshOperationId operationId, Exception? failure)
+    {
+        if (!TryTake(operationId, out var pending))
+            return;
+        ((PendingSend)pending).PrepareSend(failure);
+        pending.Run();
+    }
+
     public void FailAll(RequestResult result)
     {
         PendingCompletion[] entries;
@@ -283,33 +294,45 @@ internal sealed class ZLinkMeshCompletionTable
 
         internal ValueTask Completion => new(this, _source.Version);
 
+        // Called by the submitter before it returns Completion. An admission the
+        // binding already decided completes in this call; a later admission
+        // completes in a dispatcher turn.
         internal void Observe(Task admission)
         {
-            _admission = admission;
             if (admission.IsCompleted)
-                CompleteAdmission();
-            else
-                admission.ConfigureAwait(false).GetAwaiter().UnsafeOnCompleted(CompleteAdmission);
+            {
+                Owner.CompleteSendBeforeReturn(CorrelationId, AdmissionFailure(admission));
+                return;
+            }
+            _admission = admission;
+            admission.ConfigureAwait(false).GetAwaiter().UnsafeOnCompleted(CompleteAdmission);
         }
 
         private void CompleteAdmission()
         {
-            Exception? failure = null;
+            var admission = _admission!;
+            _admission = null;
+            Owner.CompleteSend(CorrelationId, AdmissionFailure(admission));
+        }
+
+        private static Exception? AdmissionFailure(Task admission)
+        {
             try
             {
-                _admission!.GetAwaiter().GetResult();
+                admission.GetAwaiter().GetResult();
+                return null;
             }
             catch (Exception error)
             {
-                failure = error;
+                return error;
             }
-            _admission = null;
-            Owner.CompleteSend(CorrelationId, failure);
         }
 
         internal void PrepareSend(Exception? failure) => _failure = failure;
 
-        internal void Reject(Exception failure) => Owner.CompleteSend(CorrelationId, failure);
+        // A submit failure is known before the submitter returns Completion.
+        internal void Reject(Exception failure) =>
+            Owner.CompleteSendBeforeReturn(CorrelationId, failure);
 
         internal override void PrepareFailure(RequestResult result) =>
             _failure = ZLinkRequestFailureMapper.CreateCompletionException(result, "MeshNode send");

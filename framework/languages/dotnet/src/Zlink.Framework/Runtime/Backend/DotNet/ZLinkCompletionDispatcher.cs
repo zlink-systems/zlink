@@ -27,28 +27,36 @@ internal static class ZLinkCompletionDispatcher
             _isCurrentExecution = true;
             try
             {
-                Exception? failure = null;
-                try
-                {
-                    Execute();
-                }
-                catch (Exception exception)
-                {
-                    failure = exception;
-                }
-
-                try
-                {
-                    Completed(failure);
-                }
-                catch (Exception exception)
-                {
-                    TryLogFailure("mesh-completion-accounting", exception);
-                }
+                Run();
             }
             finally
             {
                 _isCurrentExecution = false;
+            }
+        }
+
+        // Runs the terminal and its accounting. The pool turn above calls it; a
+        // terminal that is known before its caller holds the completion calls it
+        // in that call, because no continuation can be waiting yet.
+        internal void Run()
+        {
+            Exception? failure = null;
+            try
+            {
+                Execute();
+            }
+            catch (Exception exception)
+            {
+                failure = exception;
+            }
+
+            try
+            {
+                Completed(failure);
+            }
+            catch (Exception exception)
+            {
+                TryLogFailure("mesh-completion-accounting", exception);
             }
         }
     }
