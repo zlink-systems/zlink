@@ -72,16 +72,7 @@ internal sealed class ManagedProcess : IAsyncDisposable
             {
                 await log.WriteLineAsync(line);
                 await log.FlushAsync();
-                if (
-                    publish
-                    && (
-                        line.StartsWith(NodeProtocol.ReadyPrefix, StringComparison.Ordinal)
-                        || line == NodeProtocol.RelocationRequested
-                        || line == NodeProtocol.Relocated
-                        || line == NodeProtocol.SafeToShutdown
-                        || line == NodeProtocol.Stopped
-                    )
-                )
+                if (publish && NodeProtocol.IsMarker(line))
                     await lines.Writer.WriteAsync(line);
             }
         }
