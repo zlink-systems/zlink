@@ -184,18 +184,16 @@ final class ZLinkJavaRawMeshNodeM6ATest {
         try (var context = Zlink.createContext();
                 var node = meshNode(context)) {
             var topology = new ZLinkServiceTopologyRegistry(descriptor(RoutingId.from("local")));
-            topology.admit(descriptor(peerRid), "pair");
+            topology.admit(descriptor(peerRid), "pair", ServiceWireConstants.COMMAND_HELLO);
             var topologyField = ZLinkJavaRawMeshNode.class.getDeclaredField("topology");
             topologyField.setAccessible(true);
             topologyField.set(node, topology);
             var readyField =
                     ZLinkJavaRawMeshNode.class.getDeclaredField("admissionControlReadyConnections");
             readyField.setAccessible(true);
+            assertEquals(MeshPeerState.CONNECTING, node.peers().getFirst().state());
             ((java.util.Map<RoutingId, String>) readyField.get(node)).put(peerRid, "pair");
-            Method isReady =
-                    ZLinkJavaRawMeshNode.class.getDeclaredMethod("isReadyPeer", RoutingId.class);
-            isReady.setAccessible(true);
-            assertEquals(true, isReady.invoke(node, peerRid));
+            assertEquals(MeshPeerState.ADMITTED, node.peers().getFirst().state());
         }
     }
 

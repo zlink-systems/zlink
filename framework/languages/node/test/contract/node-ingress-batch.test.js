@@ -74,7 +74,7 @@ test('mesh owner drains 64 pre-admitted records in one receive batch without los
     assert.equal(firstHandlerAfterIo, false, 'ready work begins in a microtask');
   } finally {
     await pump?.dispose();
-    node.close();
+    await node.close();
     await context.dispose();
   }
 });

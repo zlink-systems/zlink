@@ -98,9 +98,9 @@ export interface ZLinkBackendMeshNode {
       'kind'
     >
   ): Promise<boolean>;
-  shutdown(timeoutMs: number): RequestResult;
+  shutdown(timeoutMs: number): Promise<RequestResult>;
   publishDraining?(): Promise<void>;
-  close(): void;
+  close(): Promise<void>;
   addChannelName(name: string): void;
   setChannelWeight(name: string, weight: number): Promise<void>;
   setPlacementWeight(weight: number): Promise<void>;

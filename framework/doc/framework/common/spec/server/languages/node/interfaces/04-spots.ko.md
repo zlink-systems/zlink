@@ -317,7 +317,7 @@ const reply = await spotClient
 
 User·Instance Spot relocation에서는 Framework가 `addTimer(...)`로 만든 logical timer registration, 마지막 완료
 tick sequence, 다음 예정 시각과 아직 실행하지 않은 pending tick을 relocation payload에 포함한다. Target은
-logical timer registration을 복원하므로 application이 timer를 다시 등록하지 않는다. 현재 실행 중인 timer handler만 source에서
+logical timer registration을 복원하므로 application이 restore에서 timer를 다시 등록하지 않는다. Target의 `configure`·Ready 전 `onInitialize`가 복원된 key를 등록하면 [Spot timer §1](../../../03-spot-actor/10-spot-timer.ko.md#1-timer-generation과-cancel) 예외대로 복원된 registration에 다시 연결된다. 현재 실행 중인 timer handler만 source에서
 완료하고 target Ready 전에는 복원한 tick을 실행하지 않는다.
 
 Public trace category는 `spot-instance`, `actor-relocation`다. 의미와 검증 기준은

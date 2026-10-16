@@ -1998,6 +1998,22 @@ internal static partial class ZLinkServiceWireCodec
 
     internal static byte[] EncodeRouteAdmission(
         ServiceWireConstants.Command command,
+        AdmissionRecord descriptor
+    ) =>
+        EncodeRouteAdmission(
+            command,
+            descriptor.MeshName,
+            descriptor.AdvertisedEndpoint,
+            descriptor.LifecycleGeneration,
+            descriptor.DescriptorRevision,
+            descriptor.Channels,
+            descriptor.ObjectRole,
+            descriptor.RuntimeState,
+            descriptor.SecurityIdentity
+        );
+
+    internal static byte[] EncodeRouteAdmission(
+        ServiceWireConstants.Command command,
         string meshName,
         string advertisedEndpoint,
         ulong lifecycleGeneration,
