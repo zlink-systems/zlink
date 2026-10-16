@@ -4774,8 +4774,8 @@ test('M2 actorJoin A-to-B-to-A successor seal waits until predecessor exact term
       }
     }),
     boundSessionRelocation: {
-      receiveSeal: ( value ) =>
-        host.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationSeal(value),
+      receiveSeal: (value, signal, onInstalled) =>
+        host.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationSeal(value, signal, onInstalled),
       receiveRoute: ( value ) =>
         host.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationRoute(value),
       clear: () =>
@@ -8817,6 +8817,8 @@ function testServiceNodeDescriptor(nodeRoutingId, lifecycleGeneration) {
 function serviceSessionRelocationSeal(actorId, options = {}) {
   const sourceNodeRid = options.sourceNodeRid ?? 'source';
   return {
+    targetNodeRid: 'target',
+    targetNodeGeneration: 4n,
     relocation: options.relocation ?? { high: 7n, low: 9n },
     coordinator: {
       ownerId: options.coordinatorOwnerId ?? 'coordinator',

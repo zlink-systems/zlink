@@ -3108,12 +3108,15 @@ test('source command 42 seal captures the exact fence and rollback submits one-w
     state,
     undefined,
     true,
-    relocation
+    relocation,
+    { rid: 'target', lifecycleGeneration: 4n }
   );
   assert.equal(seals.length, 1);
   assert.equal(seals[0].meshName, 'session.route');
   assert.equal(String(seals[0].targetNodeRid), 'session-node');
   assert.deepEqual(seals[0].request, {
+    targetNodeRid: 'target',
+    targetNodeGeneration: 4n,
     relocation,
     coordinator: {
       ownerId: 'source-owner',
@@ -3348,7 +3351,8 @@ test('precommit abort reopens source admission and replays backlog before one-wa
             state,
             undefined,
             true,
-            relocation
+            relocation,
+    { rid: 'target', lifecycleGeneration: 4n }
           );
           for (const value of ['P1', 'P2']) {
             const parts = [zlink.Message.from(`header:${value}`), zlink.Message.from(value)];

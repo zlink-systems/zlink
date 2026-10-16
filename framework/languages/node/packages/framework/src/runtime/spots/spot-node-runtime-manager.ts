@@ -205,6 +205,12 @@ export class ZLinkSpotNodeRuntimeManager {
     );
   }
 
+  async requestPeerReconcile(meshName: string, peerRid: string): Promise<void> {
+    await Promise.all(
+      this.autoConnectLoops.map((loop) => loop.requestPeerReconcile(meshName, peerRid))
+    );
+  }
+
   async startLocationAutoConnect(signal?: AbortSignal): Promise<void> {
     const location = this.locationAutoConnect;
     if (location === undefined || this.autoConnectLoops.length > 0) {

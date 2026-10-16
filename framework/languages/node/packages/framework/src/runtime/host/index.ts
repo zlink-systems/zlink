@@ -779,6 +779,8 @@ export class ZLinkFrameworkRuntimeHost
     this.serviceRelocation = new ZLinkHostServiceRelocationRuntime({
       registration: options.registration,
       targetAdmissionSealed: () => this.shutdownOperationStartedAt !== undefined,
+      requestPeerReconcile: (meshName, peerRid) =>
+        this.spotNodeRuntime?.requestPeerReconcile(meshName, peerRid) ?? Promise.resolve(),
       sourceQuiescenceChanged: () => this.publishCurrentRuntimeStatus(),
       providerResolver: options.providerResolver,
       locationStore: () => this.locationOwner.currentStores?.locationStore,
@@ -794,10 +796,11 @@ export class ZLinkFrameworkRuntimeHost
       actorManager: () => this.actorManager,
       actorTransfer: this.actorTransferRuntime,
       boundSessionRelocation: {
-        receiveSeal: (value, signal) =>
+        receiveSeal: (value, signal, onInstalled) =>
           this.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationSeal(
             value,
-            signal
+            signal,
+            onInstalled
           ),
         receiveRoute: (value) =>
           this.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationRoute(value),

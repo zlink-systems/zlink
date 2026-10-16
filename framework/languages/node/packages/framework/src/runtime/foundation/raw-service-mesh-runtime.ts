@@ -17,6 +17,7 @@ import { enumWireRejectReason } from '../protocol/service_wire_codec.generated';
 import { SERVICE_WIRE_PREFIX_SIZE } from './service-wire-binary-primitives';
 import {
   OperationRegistry,
+  OperationTimeoutError,
   type OperationObserver,
   type PendingOperation
 } from './operation-registry';
@@ -414,6 +415,35 @@ export class RawServiceMeshRuntime {
       generation: selected ?? (typeof admitted === 'bigint' ? admitted : undefined),
       ready: admitted !== undefined && (selected === undefined || admitted === selected)
     };
+  }
+
+  async waitForPeerRoute(
+    nodeRoutingId: string,
+    lifecycleGeneration: bigint,
+    deadlineUnixMs: bigint,
+    signal?: AbortSignal
+  ): Promise<void> {
+    const remaining = deadlineUnixMs - BigInt(Date.now());
+    if (remaining <= 0n) throw new OperationTimeoutError(0n);
+    const pending = this.operations.register(Number(remaining));
+    const check = () => {
+      if (this.isPeerRouteReady(nodeRoutingId, lifecycleGeneration)) {
+        this.operations.complete(pending.id, { terminalResult: RequestResult.Ok, failureCode: 0 });
+      }
+    };
+    const unsubscribe = this.observePeerRouteChanged((rid) => {
+      if (rid === nodeRoutingId) check();
+    });
+    const abort = () => this.operations.fail(pending.id, signal?.reason);
+    signal?.addEventListener('abort', abort, { once: true });
+    try {
+      if (signal?.aborted === true) abort();
+      else check();
+      await pending.promise;
+    } finally {
+      unsubscribe();
+      signal?.removeEventListener('abort', abort);
+    }
   }
 
   get requestStopSignal(): AbortSignal {

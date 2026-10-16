@@ -1,3 +1,4 @@
+import { OperationTimeoutError } from '../foundation/operation-registry';
 import { durableRequestCanReplay } from '../foundation/durable-service-request';
 import { UINT64_MAX, ZlinkStreamContentType } from '@zlink-systems/stream-wire';
 import { randomBytes } from 'node:crypto';
@@ -225,6 +226,7 @@ interface ZLinkHostRelocationOptions {
   readonly locationStore: () => ZLinkLocationStore | undefined;
   readonly currentOwner: () => ZLinkLocationOwnerToken | undefined;
   readonly targetAdmissionSealed?: () => boolean;
+  readonly requestPeerReconcile?: (meshName: string, peerRid: string) => Promise<void>;
   readonly sourceQuiescenceChanged?: () => void;
   readonly liveDescriptors: (
     meshName: string,
@@ -240,7 +242,8 @@ interface ZLinkHostRelocationOptions {
   readonly boundSessionRelocation?: {
     receiveSeal(
       value: ServiceSessionRelocationSeal,
-      signal?: AbortSignal
+      signal?: AbortSignal,
+      onInstalled?: () => void
     ): Promise<ServiceSessionRelocationSealed | undefined>;
     receiveRoute(value: ServiceSessionRelocationRoute): Promise<void>;
     clear?(): void | Promise<void>;
@@ -437,6 +440,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
    * checksum integrity failure — it must not be reported as DataLost(35).
    */
   private disposed = false;
+  private readonly targetPreparationStop = new AbortController();
 
   constructor(private readonly options: ZLinkHostRelocationOptions) {}
 
@@ -581,6 +585,18 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
 
   /** Host shutdown waits for the existing attempt terminal before releasing its lease. */
   async drainTargetAttempts(): Promise<void> {
+    this.targetPreparationStop.abort(
+      new ZLinkFrameworkException(
+        ZLinkFrameworkErrorKind.ShuttingDown,
+        'Relocation target is shutting down.'
+      )
+    );
+    for (const pending of this.targetAssemblies.values()) {
+      pending.assembly.fail('Relocation target is shutting down.');
+    }
+    await Promise.allSettled(
+      [...this.targetPrepareOperations.values()].map((value) => value.promise)
+    );
     const results = await Promise.allSettled(
       [...this.targetStages.entries()].map(([stagingId, stage]) => {
         if (stage.fallback !== undefined) clearTimeout(stage.fallback);
@@ -1454,7 +1470,19 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     if (handler === undefined) {
       throw new Error('Session relocation seal ingress is not configured.');
     }
-    return await handler(request, signal);
+    return await handler(request, signal, () => {
+      const node = this.requireMeshNode(meshName);
+      if (
+        routingIdsEqual(node.status().routingId, request.targetNodeRid) ||
+        node.isPeerRouteReady?.(request.targetNodeRid, request.targetNodeGeneration) === true
+      )
+        return;
+      void this.options
+        .requestPeerReconcile?.(meshName, request.targetNodeRid)
+        .catch((error) =>
+          console.error('[zlink.runtime.relocation.session_route_reconcile_failed]', error)
+        );
+    });
   }
 
   private async handleSessionRelocationRoute(
@@ -1617,7 +1645,8 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
               state,
               captureSignal,
               false,
-              relocationWireId(aggregateId)
+              relocationWireId(aggregateId),
+              target
             )
           }))
         );
@@ -2171,7 +2200,8 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
               state,
               signal,
               true,
-              sessionRelocation
+              sessionRelocation,
+              target
             )
           };
           sessions.push(ownSession);
@@ -2394,7 +2424,10 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         payloadTotalLength: BigInt(plan.totalLength),
         payloadChunkCount: plan.chunkCount,
         payloadChecksumCrc32c: plan.checksumCrc32c,
-        applicationVersion: target.applicationVersion
+        applicationVersion: target.applicationVersion,
+        deadlineUnixMs: BigInt(
+          Date.now() + Math.max(0, Math.ceil(controlDeadlineAtMs - performance.now()))
+        )
       } satisfies ServiceMaintenanceRelocationPrepare;
       // Start the Restore request first (it also registers the temporary
       // queue and the assembly on the target), then stream the payload chunks
@@ -2909,6 +2942,11 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         'Relocation target admission is sealed for shutdown.'
       );
     }
+    signal =
+      signal === undefined
+        ? this.targetPreparationStop.signal
+        : AbortSignal.any([signal, this.targetPreparationStop.signal]);
+    signal.throwIfAborted();
     const targetStatus = this.requireMeshNode(meshName).status();
     const targetOwner = this.options.currentOwner();
     const targetDescriptor = this.options.localDescriptor?.(meshName);
@@ -2944,11 +2982,9 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     try {
       payload = await pendingAssembly.assembly.payload();
     } catch (error) {
-      // A rejection observed after dispose() started is the runtime shutting
-      // down, not a chunk-assembly or checksum integrity failure — it must
-      // not be reported as DataLost(35). There is no dedicated ShuttingDown
-      // wire code in the vocabulary yet, so it falls through unwrapped to
-      // the generic InternalFailure code (spec 15 §4).
+      // Target shutdown preserves its lifecycle failure instead of reporting payload corruption.
+      this.targetAssemblies.delete(stagingId);
+      if (this.targetPreparationStop.signal.aborted) throw this.targetPreparationStop.signal.reason;
       if (this.disposed) throw error;
       const message =
         error !== null && typeof error === 'object' && 'message' in error
@@ -2981,6 +3017,51 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       // rejects unrelated authority CAS until commit/abort.
       materialized = await this.materializeTargetEnvelope(meshName, inventoryEnvelope, signal);
       await materialized.owner.restoreSavedWork(materialized.staging, signal);
+      for (const participant of inventoryEnvelope.participants) {
+        const binding = participant.sessionBinding;
+        if (binding === undefined) continue;
+        const peerRid = decodeRoutingId(
+          '',
+          Buffer.from(binding.sessionOwnerNodeRid).toString('hex')
+        );
+        const node = this.requireMeshNode(meshName);
+        if (routingIdsEqual(node.status().routingId, peerRid)) continue;
+        if (node.isPeerRouteReady?.(peerRid, binding.sessionOwnerNodeGeneration) !== true) {
+          // Subscribe before requesting reconciliation so a synchronous admission cannot be lost.
+          const wait = node.waitForPeerRoute;
+          if (wait === undefined) throw new Error('Mesh peer route observation is unavailable.');
+          const ready = wait.call(
+            node,
+            peerRid,
+            binding.sessionOwnerNodeGeneration,
+            request.deadlineUnixMs,
+            signal
+          );
+          void this.options
+            .requestPeerReconcile?.(meshName, String(peerRid))
+            .catch((error) =>
+              console.error('[zlink.runtime.relocation.session_route_reconcile_failed]', error)
+            );
+          try {
+            await ready;
+          } catch (error) {
+            if (error instanceof OperationTimeoutError) {
+              throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.DeadlineExceeded,
+                'Relocation source operation deadline exceeded waiting for Session owner route.'
+              );
+            }
+            throw error;
+          }
+        }
+      }
+      if (request.deadlineUnixMs <= BigInt(Date.now())) {
+        throw new ZLinkFrameworkException(
+          ZLinkFrameworkErrorKind.DeadlineExceeded,
+          'Relocation source operation deadline exceeded before relay-ready.'
+        );
+      }
+      signal.throwIfAborted();
       reservation = await this.reserveTargetForPrepare(
         meshName,
         request,
@@ -3006,6 +3087,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       };
       this.targetStages.set(stagingId, stage);
     } catch (error) {
+      this.targetAssemblies.delete(stagingId);
       releaseJoinAdmission();
       releaseActivation();
       if (reservation !== undefined) {

@@ -291,6 +291,7 @@ for (const responseKind of ['pending', 'committed', 'unknown']) {
 function newPrepare() {
   return {
     kind: 'prepare',
+    deadlineUnixMs: BigInt(Date.now() + 10000),
     relocation: { high: 0n, low: 99n },
     targetAttemptGeneration: 1n,
     sourceNodeRid: 'source',
