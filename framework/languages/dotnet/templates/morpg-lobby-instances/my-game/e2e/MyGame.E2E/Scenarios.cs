@@ -158,100 +158,147 @@ internal static class Scenarios
         {
             current = selected[0];
             await using var p1 = await GameClient.ConnectAsync(endpoint, "p1", ct);
-            await p1.JoinAsync(ct);
-            var p2 = await GameClient.ConnectAsync(endpoint, "p2", ct);
             try
             {
-                await p2.JoinAsync(ct);
-                var before1 = await p1.SessionAsync(ct);
-                var before2 = await p2.SessionAsync(ct);
-                var dungeon = await EnterAsync(p1, p2, "party-1", ct);
-                var secondStage = p2.ReceiveAsync<DungeonView>(view => view.Stage == 1, ct);
-                var advanced = await p1.SendAsync<DungeonView, AdvanceRequest>(
-                    new(),
-                    view => view.Stage == 1,
-                    ct
-                );
-                SameDungeon(advanced, await secondStage);
-                Require(advanced.NodeId == dungeon.NodeId, "Advance changed the dungeon host.");
-                Require(
-                    before1 == await p1.SessionAsync(ct) && before2 == await p2.SessionAsync(ct),
-                    "Session identity changed while entering dungeon."
-                );
-                if (selected.Contains(Party))
+                await p1.JoinAsync(ct);
+                var p2 = await GameClient.ConnectAsync(endpoint, "p2", ct);
+                try
                 {
-                    Console.WriteLine("✓ party");
-                    passed++;
+                    try
+                    {
+                        await p2.JoinAsync(ct);
+                        var before1 = await p1.SessionAsync(ct);
+                        var before2 = await p2.SessionAsync(ct);
+                        var dungeon = await EnterAsync(p1, p2, "party-1", ct);
+                        var secondStage = p2.ReceiveAsync<DungeonView>(view => view.Stage == 1, ct);
+                        var advanced = await p1.SendAsync<DungeonView, AdvanceRequest>(
+                            new(),
+                            view => view.Stage == 1,
+                            ct
+                        );
+                        SameDungeon(advanced, await secondStage);
+                        Require(
+                            advanced.NodeId == dungeon.NodeId,
+                            "Advance changed the dungeon host."
+                        );
+                        Require(
+                            before1 == await p1.SessionAsync(ct)
+                                && before2 == await p2.SessionAsync(ct),
+                            "Session identity changed while entering dungeon."
+                        );
+                        if (selected.Contains(Party))
+                        {
+                            Console.WriteLine("✓ party");
+                            passed++;
+                        }
+                        if (selected.Contains(Reconnect))
+                        {
+                            current = Reconnect;
+                            await p2.DisposeAsync();
+                            p2 = await GameClient.ConnectAsync(endpoint, "p2", ct);
+                            var restored = await p2.SendAsync<DungeonView, JoinLobbyRequest>(
+                                new("p2"),
+                                _ => true,
+                                ct
+                            );
+                            SameDungeon(advanced, restored);
+                            Require(
+                                restored.NodeId == advanced.NodeId,
+                                "Reconnect changed the dungeon host."
+                            );
+                            SameActor(before2, await p2.SessionAsync(ct));
+                            Console.WriteLine("✓ reconnect");
+                            passed++;
+                        }
+                        if (selected.Contains(Update))
+                        {
+                            current = Update;
+                            var session1 = await p1.SessionAsync(ct);
+                            var session2 = await p2.SessionAsync(ct);
+                            var source = run.Instances[advanced.NodeId];
+                            await source.CommandAsync(NodeProtocol.Drain);
+                            await source.WaitLineAsync(NodeProtocol.RelocationRequested, ct);
+                            await source.WaitLineAsync(NodeProtocol.Relocated, ct);
+                            await source.WaitLineAsync(NodeProtocol.SafeToShutdown, ct);
+                            var relocated = await p1.DungeonAsync(
+                                view =>
+                                    view.Stage == advanced.Stage && view.NodeId != advanced.NodeId,
+                                ct
+                            );
+                            SameDungeon(advanced, relocated);
+                            var relocatedMember = await p2.DungeonAsync(
+                                view =>
+                                    view.Stage == relocated.Stage
+                                    && view.NodeId == relocated.NodeId,
+                                ct
+                            );
+                            SameDungeon(relocated, relocatedMember);
+                            Require(
+                                relocatedMember.NodeId == relocated.NodeId
+                                    && relocated.NodeId != advanced.NodeId
+                                    && run.Instances.ContainsKey(relocated.NodeId),
+                                "Dungeon did not move to the other instance."
+                            );
+                            Require(
+                                session1 == await p1.SessionAsync(ct)
+                                    && session2 == await p2.SessionAsync(ct)
+                                    && !p1.Disconnected
+                                    && !p2.Disconnected,
+                                "Session continuity failed during host relocation."
+                            );
+                            await run.ReplaceInstanceAsync(advanced.NodeId, ct);
+                            await using var p3 = await GameClient.ConnectAsync(endpoint, "p3", ct);
+                            try
+                            {
+                                await p3.JoinAsync(ct);
+                                await using var p4 = await GameClient.ConnectAsync(
+                                    endpoint,
+                                    "p4",
+                                    ct
+                                );
+                                try
+                                {
+                                    await p4.JoinAsync(ct);
+                                    var fresh = await EnterAsync(p3, p4, "party-2", ct);
+                                    Require(
+                                        fresh.NodeId == advanced.NodeId,
+                                        "Replacement instance did not accept new work."
+                                    );
+                                    Console.WriteLine("✓ update");
+                                    passed++;
+                                }
+                                catch (Exception failureBeforeCleanup)
+                                {
+                                    Console.Error.WriteLine(
+                                        "Failure before cleanup: " + failureBeforeCleanup
+                                    );
+                                    throw;
+                                }
+                            }
+                            catch (Exception failureBeforeCleanup)
+                            {
+                                Console.Error.WriteLine(
+                                    "Failure before cleanup: " + failureBeforeCleanup
+                                );
+                                throw;
+                            }
+                        }
+                    }
+                    catch (Exception failureBeforeCleanup)
+                    {
+                        Console.Error.WriteLine("Failure before cleanup: " + failureBeforeCleanup);
+                        throw;
+                    }
                 }
-                if (selected.Contains(Reconnect))
+                finally
                 {
-                    current = Reconnect;
                     await p2.DisposeAsync();
-                    p2 = await GameClient.ConnectAsync(endpoint, "p2", ct);
-                    var restored = await p2.SendAsync<DungeonView, JoinLobbyRequest>(
-                        new("p2"),
-                        _ => true,
-                        ct
-                    );
-                    SameDungeon(advanced, restored);
-                    Require(
-                        restored.NodeId == advanced.NodeId,
-                        "Reconnect changed the dungeon host."
-                    );
-                    SameActor(before2, await p2.SessionAsync(ct));
-                    Console.WriteLine("✓ reconnect");
-                    passed++;
-                }
-                if (selected.Contains(Update))
-                {
-                    current = Update;
-                    var session1 = await p1.SessionAsync(ct);
-                    var session2 = await p2.SessionAsync(ct);
-                    var source = run.Instances[advanced.NodeId];
-                    await source.CommandAsync(NodeProtocol.Drain);
-                    await source.WaitLineAsync(NodeProtocol.RelocationRequested, ct);
-                    await source.WaitLineAsync(NodeProtocol.Relocated, ct);
-                    await source.WaitLineAsync(NodeProtocol.SafeToShutdown, ct);
-                    var relocated = await p1.DungeonAsync(
-                        view => view.Stage == advanced.Stage && view.NodeId != advanced.NodeId,
-                        ct
-                    );
-                    SameDungeon(advanced, relocated);
-                    var relocatedMember = await p2.DungeonAsync(
-                        view => view.Stage == relocated.Stage && view.NodeId == relocated.NodeId,
-                        ct
-                    );
-                    SameDungeon(relocated, relocatedMember);
-                    Require(
-                        relocatedMember.NodeId == relocated.NodeId
-                            && relocated.NodeId != advanced.NodeId
-                            && run.Instances.ContainsKey(relocated.NodeId),
-                        "Dungeon did not move to the other instance."
-                    );
-                    Require(
-                        session1 == await p1.SessionAsync(ct)
-                            && session2 == await p2.SessionAsync(ct)
-                            && !p1.Disconnected
-                            && !p2.Disconnected,
-                        "Session continuity failed during host relocation."
-                    );
-                    await run.ReplaceInstanceAsync(advanced.NodeId, ct);
-                    await using var p3 = await GameClient.ConnectAsync(endpoint, "p3", ct);
-                    await p3.JoinAsync(ct);
-                    await using var p4 = await GameClient.ConnectAsync(endpoint, "p4", ct);
-                    await p4.JoinAsync(ct);
-                    var fresh = await EnterAsync(p3, p4, "party-2", ct);
-                    Require(
-                        fresh.NodeId == advanced.NodeId,
-                        "Replacement instance did not accept new work."
-                    );
-                    Console.WriteLine("✓ update");
-                    passed++;
                 }
             }
-            finally
+            catch (Exception failureBeforeCleanup)
             {
-                await p2.DisposeAsync();
+                Console.Error.WriteLine("Failure before cleanup: " + failureBeforeCleanup);
+                throw;
             }
         }
         catch

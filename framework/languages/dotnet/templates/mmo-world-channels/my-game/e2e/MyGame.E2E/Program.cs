@@ -40,9 +40,17 @@ try
     await using var run = new WorldRun(root);
     using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellation.Token);
     deadline.CancelAfter(TimeSpan.FromMinutes(3));
-    StructureCheck.Run(root, null);
-    await run.StartAsync(deadline.Token);
-    await Scenarios.RunAsync(run, selected, deadline.Token);
+    try
+    {
+        StructureCheck.Run(root, null);
+        await run.StartAsync(deadline.Token);
+        await Scenarios.RunAsync(run, selected, deadline.Token);
+    }
+    catch (Exception failure)
+    {
+        Console.Error.WriteLine("Startup or scenario failure: " + failure);
+        throw;
+    }
     Console.WriteLine("mmo-world-channels=completed");
     return 0;
 }

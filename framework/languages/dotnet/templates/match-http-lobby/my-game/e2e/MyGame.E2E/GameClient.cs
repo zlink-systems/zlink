@@ -53,8 +53,9 @@ internal sealed class GameClient(IZlinkStreamConnector connector, string playerI
             await connector.Connect.Async(ct);
             return client;
         }
-        catch
+        catch (Exception failure)
         {
+            Console.Error.WriteLine("Connection failure before cleanup: " + failure);
             await connector.DisposeAsync();
             throw;
         }
