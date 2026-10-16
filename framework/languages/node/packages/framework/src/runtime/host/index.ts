@@ -113,6 +113,7 @@ import {
   currentOrCreateFlow,
   DefaultZLinkRuntimeEventPublisher,
   flowIfEnabled,
+  messageFlowTracingEnabled,
   runWithFlow,
   ZLinkRuntimeMetrics,
   type ZLinkDiagnosticsContext,
@@ -3194,7 +3195,7 @@ export class ZLinkFrameworkRuntimeHost
       this.executionState === undefined
         ? (this.options.registration.dispatch?.diagnostics.messageFlow ?? 'errors')
         : this.messageFlowModeCell.mode;
-    return mode !== 'off';
+    return messageFlowTracingEnabled(mode);
   }
 
   private runLifecycle<T>(operation: () => T): T {

@@ -396,13 +396,14 @@ final class DefaultEntrySpotContext implements ZLinkEntrySpotContext, SpotDispat
 
     void closeRegistration() {
         handlerCatalog.closeRegistration(
-                handlerTypes ->
-                        handlerLoader.load(entrySpot.getClass(), handlerTypes, this::addTimer));
+                (handlerTypes, subscriptions) ->
+                        handlerLoader.load(
+                                entrySpot.getClass(), handlerTypes, subscriptions, this::addTimer));
     }
 
     void bindSubscriptions(ZLinkBackendSpot spot) {
-        for (String topic : handlerCatalog.subscriptionTopics()) {
-            spot.setSubscription(topic);
+        for (var subscription : handlerCatalog.subscriptions()) {
+            spot.setSubscription(subscription.channelName(), subscription.topic());
         }
     }
 
@@ -1158,12 +1159,14 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
 
     void closeRegistration() {
         handlerCatalog.closeRegistration(
-                handlerTypes -> handlerLoader.load(spot.getClass(), handlerTypes, this::addTimer));
+                (handlerTypes, subscriptions) ->
+                        handlerLoader.load(
+                                spot.getClass(), handlerTypes, subscriptions, this::addTimer));
     }
 
     void bindSubscriptions(ZLinkBackendSpot spot) {
-        for (String topic : handlerCatalog.subscriptionTopics()) {
-            spot.setSubscription(topic);
+        for (var subscription : handlerCatalog.subscriptions()) {
+            spot.setSubscription(subscription.channelName(), subscription.topic());
         }
     }
 

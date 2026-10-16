@@ -4,7 +4,6 @@ import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.actors.ZLinkRelocationCancellation;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
-import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
 import systems.zlink.framework.runtime.actors.ZLinkSessionRelocationPeerClient;
@@ -20,6 +19,7 @@ import systems.zlink.framework.runtime.internal.relocation.ZLinkActorJoinRelocat
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceRelocationWireCodec;
 import systems.zlink.framework.runtime.locations.ZLinkActorAuthorityPayloadCodec;
+import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorOrigin;
 import systems.zlink.framework.spots.ZLinkSpot;
 import systems.zlink.framework.streams.ZLinkStreamCodec;
 
@@ -184,6 +184,21 @@ final class ZLinkUserSpotRetireTargetEndpoint
         } catch (RuntimeException failure) {
             return CompletableFuture.failedFuture(failure);
         }
+    }
+
+    @Override
+    public CompletionStage<Void> beginPrepare(
+            UUID relocationId, CompletionStage<Void> terminal, Runnable superseded) {
+        return actorJoin == null
+                ? CompletableFuture.completedFuture(null)
+                : actorJoin.beginTarget(relocationId, terminal, superseded);
+    }
+
+    @Override
+    public CompletionStage<Void> endPrepare(UUID relocationId) {
+        return actorJoin == null
+                ? CompletableFuture.completedFuture(null)
+                : actorJoin.endTarget(relocationId);
     }
 
     @Override
@@ -851,9 +866,6 @@ final class ZLinkUserSpotRetireTargetEndpoint
                     new IllegalStateException("standalone Actor relocation target is unavailable"));
         }
         var participant = request.participants().getFirst();
-        if (actorJoin != null) {
-            actorJoin.claimRecovery(request);
-        }
         var targetRequest =
                 new ZLinkStandaloneActorRelocationStagingOwner.Request(
                         request.fence().aggregateId(),
@@ -865,26 +877,6 @@ final class ZLinkUserSpotRetireTargetEndpoint
                         request.spotId());
         ZLinkActorJoinRelocationPort.Admission directAdmission =
                 actorJoin == null ? null : actorJoin.findAdmission(request).orElse(null);
-        if (directAdmission != null) {
-            //  Verify the object identity against the attempt registered
-            //  at admission time. The atomic install-and-migrate happens
-            //  below in stageStandaloneActor once the real Staged
-            //  temporary queue exists (spec 15 §4.2) — the placeholder is
-            //  not released here, so ingress keeps a place to park or
-            //  deliver arrivals for the entire span of this async stage.
-            actorJoin
-                    .findPrewarm(request.fence().aggregateId())
-                    .ifPresent(
-                            attempt -> {
-                                if (!attempt.objectKey().actorId().equals(participant.objectId())
-                                        || attempt.objectKey().objectGeneration()
-                                                != participant.objectGeneration()) {
-                                    throw new IllegalStateException(
-                                            "canonical Actor Join prewarm object identity "
-                                                    + "conflicts");
-                                }
-                            });
-        }
         CompletionStage<ZLinkActorJoinCanonicalAdapter.PreviousMembership> previous =
                 directAdmission == null
                         ? CompletableFuture.completedFuture(null)
@@ -1025,7 +1017,6 @@ final class ZLinkUserSpotRetireTargetEndpoint
                 .thenRun(
                         () -> {
                             releasePublishedActor(request, target);
-                            actorJoin.completeTarget(target.directAdmission());
                         });
     }
 
@@ -1334,18 +1325,15 @@ final class ZLinkUserSpotRetireTargetEndpoint
                                         .thenCompose(
                                                 ignored ->
                                                         CompletableFuture.<Void>failedFuture(
-                                                                new ZLinkFrameworkException(
+                                                                ZLinkFrameworkErrorOrigin.framework(
                                                                         ZLinkFrameworkErrorKind
-                                                                                .INVALID_OPERATION,
+                                                                                .UNAVAILABLE,
                                                                         "canonical Actor Join"
                                                                                 + " PREPARE was"
                                                                                 + " superseded by a"
                                                                                 + " newer relocation"
                                                                                 + " identity",
-                                                                        superseded,
-                                                                        Map.of(
-                                                                                "zlink.origin",
-                                                                                "framework"))));
+                                                                        superseded)));
                             } catch (RuntimeException failure) {
                                 target.publishRequested().completeExceptionally(failure);
                                 throw failure;

@@ -33,56 +33,56 @@ class BorderSubscriptionHandlers {
         }
     }
 
-    @ZLinkSpotSubscription(topic = ZoneWorldNames.NW_NE)
+    @ZLinkSpotSubscription(channelName = ZoneWorldNames.ZONE_CHANNEL, topic = ZoneWorldNames.NW_NE)
     class NorthWestToNorthEast :
         ZLinkSuspendingSpotSubscriptionHandler<ZoneSpot, Messages.ZoneBorderEvent> {
         override suspend fun handle(spot: ZoneSpot, event: Messages.ZoneBorderEvent) =
             apply(spot, event)
     }
 
-    @ZLinkSpotSubscription(topic = ZoneWorldNames.NW_SW)
+    @ZLinkSpotSubscription(channelName = ZoneWorldNames.ZONE_CHANNEL, topic = ZoneWorldNames.NW_SW)
     class NorthWestToSouthWest :
         ZLinkSuspendingSpotSubscriptionHandler<ZoneSpot, Messages.ZoneBorderEvent> {
         override suspend fun handle(spot: ZoneSpot, event: Messages.ZoneBorderEvent) =
             apply(spot, event)
     }
 
-    @ZLinkSpotSubscription(topic = ZoneWorldNames.NE_NW)
+    @ZLinkSpotSubscription(channelName = ZoneWorldNames.ZONE_CHANNEL, topic = ZoneWorldNames.NE_NW)
     class NorthEastToNorthWest :
         ZLinkSuspendingSpotSubscriptionHandler<ZoneSpot, Messages.ZoneBorderEvent> {
         override suspend fun handle(spot: ZoneSpot, event: Messages.ZoneBorderEvent) =
             apply(spot, event)
     }
 
-    @ZLinkSpotSubscription(topic = ZoneWorldNames.NE_SE)
+    @ZLinkSpotSubscription(channelName = ZoneWorldNames.ZONE_CHANNEL, topic = ZoneWorldNames.NE_SE)
     class NorthEastToSouthEast :
         ZLinkSuspendingSpotSubscriptionHandler<ZoneSpot, Messages.ZoneBorderEvent> {
         override suspend fun handle(spot: ZoneSpot, event: Messages.ZoneBorderEvent) =
             apply(spot, event)
     }
 
-    @ZLinkSpotSubscription(topic = ZoneWorldNames.SW_NW)
+    @ZLinkSpotSubscription(channelName = ZoneWorldNames.ZONE_CHANNEL, topic = ZoneWorldNames.SW_NW)
     class SouthWestToNorthWest :
         ZLinkSuspendingSpotSubscriptionHandler<ZoneSpot, Messages.ZoneBorderEvent> {
         override suspend fun handle(spot: ZoneSpot, event: Messages.ZoneBorderEvent) =
             apply(spot, event)
     }
 
-    @ZLinkSpotSubscription(topic = ZoneWorldNames.SW_SE)
+    @ZLinkSpotSubscription(channelName = ZoneWorldNames.ZONE_CHANNEL, topic = ZoneWorldNames.SW_SE)
     class SouthWestToSouthEast :
         ZLinkSuspendingSpotSubscriptionHandler<ZoneSpot, Messages.ZoneBorderEvent> {
         override suspend fun handle(spot: ZoneSpot, event: Messages.ZoneBorderEvent) =
             apply(spot, event)
     }
 
-    @ZLinkSpotSubscription(topic = ZoneWorldNames.SE_NE)
+    @ZLinkSpotSubscription(channelName = ZoneWorldNames.ZONE_CHANNEL, topic = ZoneWorldNames.SE_NE)
     class SouthEastToNorthEast :
         ZLinkSuspendingSpotSubscriptionHandler<ZoneSpot, Messages.ZoneBorderEvent> {
         override suspend fun handle(spot: ZoneSpot, event: Messages.ZoneBorderEvent) =
             apply(spot, event)
     }
 
-    @ZLinkSpotSubscription(topic = ZoneWorldNames.SE_SW)
+    @ZLinkSpotSubscription(channelName = ZoneWorldNames.ZONE_CHANNEL, topic = ZoneWorldNames.SE_SW)
     class SouthEastToSouthWest :
         ZLinkSuspendingSpotSubscriptionHandler<ZoneSpot, Messages.ZoneBorderEvent> {
         override suspend fun handle(spot: ZoneSpot, event: Messages.ZoneBorderEvent) =

@@ -243,7 +243,8 @@ final class ZLinkPayloadOwnershipConformanceTest {
 
     private static SpotSubscriptionHandlerRegistration registration(Class<?> handlerType) {
         return new SpotSubscriptionHandlerRegistration(
-                "topic",
+                new systems.zlink.framework.runtime.internal.backend.ZLinkBackendSubscription(
+                        "channel", "topic"),
                 handlerType,
                 null,
                 Object.class,
@@ -272,7 +273,7 @@ final class ZLinkPayloadOwnershipConformanceTest {
 
     private record OtherProbe(String value) {}
 
-    @ZLinkSpotSubscription(topic = "topic")
+    @ZLinkSpotSubscription(channelName = "channel", topic = "topic")
     private static final class FirstHandler implements ZLinkSpotSubscriptionHandler<Object, Probe> {
         private Probe received;
 
@@ -283,7 +284,7 @@ final class ZLinkPayloadOwnershipConformanceTest {
         }
     }
 
-    @ZLinkSpotSubscription(topic = "topic")
+    @ZLinkSpotSubscription(channelName = "channel", topic = "topic")
     private static final class SecondHandler
             implements ZLinkSpotSubscriptionHandler<Object, Probe> {
         private Probe received;

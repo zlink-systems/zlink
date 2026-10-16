@@ -7,7 +7,36 @@ export const SERVICE_WIRE_PREFIX_SIZE = SERVICE_WIRE_FLAGS_OFFSET + 1;
 
 export const SERVICE_WIRE_TEXT8_MAX_BYTES = 255;
 
+// Fatal decoding accepts exactly the canonical UTF-8 encodings; a leading
+// U+FEFF stays part of the value.
+const CANONICAL_UTF8 = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
+
 export type ServiceWireInvalid = (message: string) => never;
+
+/** String.prototype.isWellFormed (ES2024) exists on every supported Node (20 and later). */
+type ServiceWireText = string & { isWellFormed(): boolean };
+
+/**
+ * Validates text for the service wire and returns its UTF-8 byte length. An
+ * unpaired UTF-16 surrogate is rejected instead of being replaced.
+ */
+export function canonicalServiceWireTextLength(
+  value: string,
+  field: string,
+  maximumBytes: number,
+  invalid: ServiceWireInvalid
+): number {
+  const length = Buffer.byteLength(value, 'utf8');
+  if (
+    length < 1 ||
+    length > maximumBytes ||
+    value.includes('\0') ||
+    !(value as ServiceWireText).isWellFormed()
+  ) {
+    invalid(`${field} must be 1..${maximumBytes} canonical UTF-8 bytes without NUL.`);
+  }
+  return length;
+}
 
 /** Encodes text without silently replacing an unpaired UTF-16 surrogate. */
 export function encodeCanonicalServiceWireText(
@@ -16,29 +45,23 @@ export function encodeCanonicalServiceWireText(
   maximumBytes: number,
   invalid: ServiceWireInvalid
 ): Buffer {
-  const bytes = Buffer.from(value, 'utf8');
-  if (
-    bytes.byteLength < 1 ||
-    bytes.byteLength > maximumBytes ||
-    value.includes('\0') ||
-    bytes.toString('utf8') !== value
-  ) {
-    invalid(`${field} must be 1..${maximumBytes} canonical UTF-8 bytes without NUL.`);
-  }
-  return bytes;
+  canonicalServiceWireTextLength(value, field, maximumBytes, invalid);
+  return Buffer.from(value, 'utf8');
 }
 
-/** Decodes schema text and rejects Node's replacement-character fallback. */
+/** Decodes schema text in place and rejects non-canonical UTF-8 and NUL. */
 export function decodeCanonicalServiceWireText(
   bytes: Uint8Array,
   field: string,
   invalid: ServiceWireInvalid
 ): string {
-  const encoded = Buffer.from(bytes);
-  const value = encoded.toString('utf8');
-  if (value.includes('\0') || !Buffer.from(value, 'utf8').equals(encoded)) {
+  let value: string;
+  try {
+    value = CANONICAL_UTF8.decode(bytes);
+  } catch {
     invalid(`${field} is not canonical UTF-8 without NUL.`);
   }
+  if (value.includes('\0')) invalid(`${field} is not canonical UTF-8 without NUL.`);
   return value;
 }
 
