@@ -166,8 +166,8 @@ inline void check_structure (const std::filesystem::path &root)
         const std::set<std::string> configured (ids.begin (), ids.end ());
         require (configured.size () == ids.size () && configured == towns[id],
                  "Configured TownIds do not match fixed Towns");
-        require (config.at ("TownCapacity").get<int> () >= static_cast<int> (ids.size ()),
-                 "Town capacity smaller than initial placement");
+        require (config.at ("TownCapacity").get<int> () == static_cast<int> (ids.size ()),
+                 "Town capacity must equal its fixed Town count for owner placement");
     }
     for (const auto &edge : j.at ("edges")) {
         require (nodes.contains (nonempty (edge, "from")) && nodes.contains (nonempty (edge, "to")),

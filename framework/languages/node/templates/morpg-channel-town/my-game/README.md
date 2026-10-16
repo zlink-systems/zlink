@@ -45,13 +45,13 @@ The build generates JSON schemas from the typed contracts for the Framework defa
 
 The runner checks `zlink.structure.json`, starts Redis with a unique Compose project and an ephemeral loopback port, then starts townA, townB, instanceA, instanceB and session. Mesh and STREAM listeners bind port 0; READY reports Framework-published endpoints. Every run uses a unique Redis prefix and `.logs/run-<id>/`. Diagnostics write message flow to each node's stderr log. Cleanup failures return exit code 1.
 
-Town providers bootstrap sequentially with capacity 1 to place each fixed town on its declared initial host. Instance capacity 1 makes replacement acceptance observable after the occupied Dungeon relocates to its peer. Increase capacity for production after adapting the deployment validation.
-
 ## Known issues
 
 Public 0.30.0 validation can stop at host relocation inventory (#1725, fixed in 0.30.1). Keep the pinned target version. Node typed pushes are restored through one packet-name-to-class table for #1731; no custom message codec is used.
 
 ## Deployment sequence
+
+Bootstrap Town providers sequentially and wait for each READY before starting the next. Each provider's public Town stable-type capacity must equal its configured fixed Town count; the structure checker enforces this. Earlier providers are full and later providers are absent, making each fixed Town's declared initial owner deterministic. Entry declarations describe the application Entry registered by Town and Instance, excluding Framework default Entries.
 
 Start Redis, then townA and townB in order so each creates its configured fixed Town before the next provider starts. Start both instance processes, then session. Use the separate `dist/server/town/main.js`, `dist/server/instance/main.js` and `dist/server/session/main.js` entrypoints with a configuration file argument.
 

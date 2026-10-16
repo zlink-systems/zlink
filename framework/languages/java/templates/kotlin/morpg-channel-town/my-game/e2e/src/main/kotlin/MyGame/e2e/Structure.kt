@@ -133,7 +133,7 @@ fun checkStructure(root: Path) {
 
         when (roles[id]) {
             "town" -> {
-                check(config.townCapacity > 0 && config.townIds.isNotEmpty())
+                check(config.townCapacity == config.townIds.size && config.townIds.isNotEmpty())
                 check(
                     config.townIds.all { townId ->
                         (1..Names.CHANNEL_COUNT).any { Names.townId(it) == townId }

@@ -212,8 +212,9 @@ internal static class StructureCheck
             );
             var declared = towns.TryGetValue(id, out var hosted) ? hosted : new HashSet<string>();
             Require(
-                declared.SetEquals(expected),
-                "Town logical IDs differ from owning configuration."
+                declared.SetEquals(expected)
+                    && (roles[id] != "town" || configured.TownCapacity == expected.Length),
+                "Town logical IDs and exact capacity must match the owning configuration."
             );
         }
         foreach (var edge in Array(document, "edges"))

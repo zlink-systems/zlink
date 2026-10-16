@@ -166,8 +166,9 @@ public final class Structure {
                             .map(spot -> text(spot, "logicalId"))
                             .toList();
             require(
-                    new HashSet<>(configured).equals(new HashSet<>(declared)),
-                    "Fixed Town set differs from configuration");
+                    new HashSet<>(configured).equals(new HashSet<>(declared))
+                            && config.path("townCapacity").asInt() == configured.size(),
+                    "Fixed Town set and exact capacity differ from configuration");
         }
         require(dynamic.equals(Set.of(Names.DUNGEON)), "Missing dynamic Spot family");
         for (var node : nodes)

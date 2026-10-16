@@ -131,8 +131,8 @@ export function checkStructure(path = 'zlink.structure.json'): void {
       .map((s) => text(s.logicalId));
     assert.deepEqual(declared, [text(cfg.townId)], 'Town identity mismatch');
     assert(
-      Number.isInteger(cfg.townCapacity) && Number(cfg.townCapacity) >= declared.length,
-      'Invalid Town capacity'
+      Number.isInteger(cfg.townCapacity) && Number(cfg.townCapacity) === declared.length,
+      'Town capacity must equal its fixed Town count for owner placement'
     );
   }
   for (const node of nodes.filter((n) => n.role === 'instance')) {
