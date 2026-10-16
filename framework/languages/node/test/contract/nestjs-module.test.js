@@ -98,11 +98,11 @@ function exposeLegacyTestSpotAsMeshNode(spotNode) {
     configureObjectPlacement() {},
     selectObjectPlacement() { return undefined; },
     start() {},
-    shutdown() {
+    async shutdown() {
       return 0;
     },
-    close() {
-      void dispose?.();
+    async close() {
+      await dispose?.();
     },
     connectPeer(options) {
       if (options.expectedRid !== undefined) {

@@ -485,7 +485,7 @@ for (const partsPerRecord of [1, 2]) {
     } finally {
       receiveBatch.close();
       readyBatch.close();
-      node.close();
+      await node.close();
       await context.dispose();
     }
   });
@@ -538,7 +538,7 @@ test('a reused receive batch applies the current admission limit without changin
   } finally {
     receiveBatch.close();
     readyBatch.close();
-    node.close();
+    await node.close();
     await context.dispose();
   }
 });

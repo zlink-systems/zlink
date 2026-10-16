@@ -46,7 +46,7 @@ function createFixture(limit) {
 
 async function closeFixture(fixture, pump) {
   await pump?.dispose();
-  fixture.node.close();
+  await fixture.node.close();
   await fixture.context.dispose();
 }
 
