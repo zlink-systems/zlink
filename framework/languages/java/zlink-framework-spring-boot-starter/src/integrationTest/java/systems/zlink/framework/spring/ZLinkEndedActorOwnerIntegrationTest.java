@@ -13,6 +13,7 @@ import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.actors.*;
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
 import systems.zlink.framework.locationprovider.ZLinkStoreKey;
+import systems.zlink.framework.locationprovider.ZLinkStoreReadFound;
 import systems.zlink.framework.locationprovider.ZLinkStoreReadMissing;
 import systems.zlink.framework.locationprovider.ZLinkStoreScanPageResult;
 import systems.zlink.framework.locationprovider.ZLinkStoreScanRequest;
@@ -26,6 +27,7 @@ import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -108,7 +110,7 @@ public class ZLinkEndedActorOwnerIntegrationTest {
     }
 
     @Test
-    void disabledFactoryRecreatesActorAfterOwnerProcessEnds() throws Exception {
+    void disabledFactoryRecreatesActorAfterOwnerProcessIsKilled() throws Exception {
         String redis = System.getenv("ZLINK_REDIS_LOCATION_ENDPOINT");
         Assumptions.assumeTrue(redis != null && !redis.isBlank());
         var logs = Files.createTempDirectory("zlink-1570-public-");
@@ -190,15 +192,50 @@ public class ZLinkEndedActorOwnerIntegrationTest {
                                                     .toCompletableFuture()
                                                     .get());
                             Assertions.assertEquals(1, page.value().items().size());
+                            Assertions.assertNull(page.value().nextCursor());
                             ZLinkStoreKey ownerKey = page.value().items().get(0).key();
-                            var retained = ZLinkRetainedAuthorityTestStore.snapshot(store);
-                            child.getOutputStream().close();
+                            var leaseExpiry = page.value().items().get(0).value().expiresAt();
+                            Assertions.assertNotNull(leaseExpiry);
+                            var durableRecords = ZLinkRetainedAuthorityTestStore.snapshot(store);
+                            child.destroyForcibly();
                             Assertions.assertTrue(child.waitFor(10, TimeUnit.SECONDS));
-                            Assertions.assertEquals(0, child.exitValue());
-                            Assertions.assertInstanceOf(
-                                    ZLinkStoreReadMissing.class,
-                                    store.read(ownerKey, () -> false).toCompletableFuture().get());
-                            ZLinkRetainedAuthorityTestStore.restore(store, retained);
+                            Assertions.assertNotEquals(
+                                    0, child.exitValue(), "Owner must end through process crash");
+                            var lease =
+                                    store.read(ownerKey, () -> false).toCompletableFuture().get();
+                            if (lease instanceof ZLinkStoreReadFound found) {
+                                leaseExpiry = found.value().expiresAt();
+                                Assertions.assertNotNull(leaseExpiry);
+                                var remaining =
+                                        Duration.between(found.value().storeNow(), leaseExpiry);
+                                Assertions.assertTrue(remaining.isPositive());
+                                CompletableFuture.runAsync(
+                                                () -> {},
+                                                CompletableFuture.delayedExecutor(
+                                                        remaining.toNanos(), TimeUnit.NANOSECONDS))
+                                        .get();
+                                lease =
+                                        store.read(ownerKey, () -> false)
+                                                .toCompletableFuture()
+                                                .get();
+                            }
+                            var expired =
+                                    Assertions.assertInstanceOf(ZLinkStoreReadMissing.class, lease);
+                            Assertions.assertFalse(leaseExpiry.isAfter(expired.storeNow()));
+                            for (var record : durableRecords) {
+                                Assertions.assertNull(record.value().expiresAt());
+                                var persisted =
+                                        Assertions.assertInstanceOf(
+                                                        ZLinkStoreReadFound.class,
+                                                        store.read(record.key(), () -> false)
+                                                                .toCompletableFuture()
+                                                                .get())
+                                                .value();
+                                Assertions.assertEquals(
+                                        record.value().version(), persisted.version());
+                                Assertions.assertArrayEquals(
+                                        record.value().bytes(), persisted.bytes());
+                            }
                             System.out.println("OWNER_LEASE_ENDED node=" + index);
                         } else {
                             Assertions.assertTrue(child.waitFor(30, TimeUnit.SECONDS));
