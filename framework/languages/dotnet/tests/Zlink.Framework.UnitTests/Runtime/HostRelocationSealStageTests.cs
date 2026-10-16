@@ -13,6 +13,166 @@ namespace Zlink.Framework.UnitTests.Runtime;
 
 public sealed class HostRelocationSealStageTests
 {
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task Relocated_timer_handler_mismatch_obeys_callback_commit_boundary(
+        bool configure,
+        bool catchMismatch
+    )
+    {
+        using var flow = Environment.GetEnvironmentVariable("ZLINK_RELOCATION_TEST_FLOW_PATH")
+            is { } path
+            ? new TestHostMessageFlowListener(path + ".mismatch")
+            : null;
+        var trace = new RelocationBehaviorTrace();
+        trace.ReleaseJoinHandler.TrySetResult();
+        trace.ReleaseTargetLifecycle.TrySetResult();
+        trace.ReleaseSourceLeave.TrySetResult();
+        var initialization = 0;
+        var targetFailure = new TaskCompletionSource<Exception?>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        async ValueTask RegisterAsync(
+            IZLinkSpotContext context,
+            CancellationToken cancellationToken
+        )
+        {
+            if (Interlocked.Increment(ref initialization) == 1)
+                await context.AddTimer<SourceTimerHandler>(
+                    "pulse",
+                    TimeSpan.FromHours(1),
+                    cancellationToken: cancellationToken
+                );
+            else
+            {
+                IZLinkTimer? restored = catchMismatch
+                    ? await context.AddTimer<SourceTimerHandler>(
+                        "pulse",
+                        TimeSpan.FromHours(2),
+                        cancellationToken: cancellationToken
+                    )
+                    : null;
+                var snapshot = restored is Zlink.Framework.Runtime.Timers.ZLinkTimer timer
+                    ? timer.Snapshot()
+                    : null;
+                try
+                {
+                    await context.AddTimer<TargetTimerHandler>(
+                        "pulse",
+                        TimeSpan.FromHours(1),
+                        cancellationToken: cancellationToken
+                    );
+                    targetFailure.TrySetResult(null);
+                }
+                catch (Exception exception)
+                {
+                    if (!catchMismatch)
+                    {
+                        targetFailure.TrySetResult(exception);
+                        throw;
+                    }
+                    var reattached = await context.AddTimer<SourceTimerHandler>(
+                        "pulse",
+                        TimeSpan.FromHours(3),
+                        cancellationToken: cancellationToken
+                    );
+                    Assert.Same(restored, reattached);
+                    Assert.Equal(
+                        snapshot,
+                        Assert
+                            .IsType<Zlink.Framework.Runtime.Timers.ZLinkTimer>(reattached)
+                            .Snapshot()
+                    );
+                    Assert.Equal(TimeSpan.FromHours(1), snapshot!.Period);
+                    targetFailure.TrySetResult(exception);
+                }
+            }
+        }
+        if (configure)
+            trace.ConfigureTarget = context =>
+                RegisterAsync(context, CancellationToken.None).GetAwaiter().GetResult();
+        else
+            trace.InitializeTarget = RegisterAsync;
+        var store = new ZLinkInMemoryProviderLocationStore();
+        var roots = new SynchronizedRelocationStore();
+        await using var source = await RelocationBehaviorHost.StartAsync(
+            "source",
+            trace,
+            store,
+            roots,
+            true,
+            relocateSpots: true
+        );
+        await source
+            .Services.GetRequiredService<IZLinkSpotManager>()
+            .GetOrCreate("mismatched-timer", RelocationBehaviorHost.SpotType)
+            .InMesh(RelocationBehaviorHost.MeshName)
+            .Async();
+        await using var target = await RelocationBehaviorHost.StartAsync(
+            "target",
+            trace,
+            store,
+            roots,
+            true,
+            relocateSpots: true
+        );
+        using var ready = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        await Task.WhenAll(
+            WaitForReadyPeersAsync(source.Services, 1, ready.Token),
+            WaitForReadyPeersAsync(target.Services, 1, ready.Token)
+        );
+        var relocation = source
+            .Services.GetRequiredService<IZLinkFrameworkRuntime>()
+            .RelocateAsync(
+                new ZLinkFrameworkRelocationOptions
+                {
+                    Mode = ZLinkFrameworkRelocationMode.PlannedMaintenance,
+                    Deadline = TimeSpan.FromSeconds(10),
+                }
+            )
+            .AsTask();
+        var failure = Assert.IsType<ZLinkFrameworkException>(
+            await targetFailure.Task.WaitAsync(TimeSpan.FromSeconds(5))
+        );
+        Assert.Equal(ZLinkFrameworkErrorKind.InvalidOperation, failure.Kind);
+        var result = await relocation;
+        if (configure && !catchMismatch)
+        {
+            Assert.Equal(ZLinkFrameworkRelocationOutcome.Blocked, result.Outcome);
+            Assert.Equal(ZLinkFrameworkRelocationReason.RelocationFailed, result.Reason);
+            Assert.Equal(
+                ZLinkFrameworkRuntimeState.Serving,
+                source.Services.GetRequiredService<IZLinkFrameworkRuntime>().Status.State
+            );
+        }
+        else
+        {
+            Assert.Equal(ZLinkFrameworkRelocationOutcome.Relocated, result.Outcome);
+            Assert.Equal(ZLinkFrameworkRelocationReason.None, result.Reason);
+        }
+    }
+
+    private sealed class SourceTimerHandler : IZLinkSpotTimerHandler<BehaviorTargetSpot>
+    {
+        public ValueTask HandleAsync(
+            BehaviorTargetSpot spot,
+            ZLinkTimerTick tick,
+            CancellationToken cancellationToken
+        ) => ValueTask.CompletedTask;
+    }
+
+    private sealed class TargetTimerHandler : IZLinkSpotTimerHandler<BehaviorTargetSpot>
+    {
+        public ValueTask HandleAsync(
+            BehaviorTargetSpot spot,
+            ZLinkTimerTick tick,
+            CancellationToken cancellationToken
+        ) => ValueTask.CompletedTask;
+    }
+
     [Fact]
     public void Canonical_binding_handle_survives_capture_without_private_token_bytes()
     {

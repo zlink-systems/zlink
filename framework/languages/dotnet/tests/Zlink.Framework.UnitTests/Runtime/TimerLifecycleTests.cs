@@ -592,8 +592,12 @@ public sealed class TimerLifecycleTests
         await target.DisposeAsync();
     }
 
-    [Fact]
-    public async Task Relocation_target_restores_configured_timer_in_place_and_keeps_it_frozen()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Relocation_target_configure_reattaches_restored_timer_and_keeps_it_frozen(
+        bool differentRegistrationSettings
+    )
     {
         var source = new ZLinkSpotTimerRegistry(static () => false);
         await AddTimerAsync(source, "configured");
@@ -602,22 +606,6 @@ public sealed class TimerLifecycleTests
 
         var deliveries = 0;
         var target = new ZLinkSpotTimerRegistry(static () => false, restorePending: true);
-        var configured = await target.AddAsync(
-            "configured",
-            TimeSpan.FromHours(1),
-            null,
-            typeof(TestTimerHandler),
-            typeof(TestTimerSpot),
-            CancellationToken.None,
-            (_, _, _) =>
-            {
-                Interlocked.Increment(ref deliveries);
-                return ValueTask.FromResult(true);
-            },
-            static (_, _, _, _, _) => ValueTask.CompletedTask,
-            CancellationToken.None
-        );
-
         target.RestoreRelocation(
             relocation,
             typeof(TestTimerSpot),
@@ -628,6 +616,25 @@ public sealed class TimerLifecycleTests
                 return ValueTask.FromResult(true);
             },
             static (_, _, _, _, _) => ValueTask.CompletedTask
+        );
+
+        target.BeginRelocatedInitialization();
+        var configured = await target.AddAsync(
+            "configured",
+            TimeSpan.FromHours(differentRegistrationSettings ? 2 : 1),
+            differentRegistrationSettings
+                ? new ZLinkTimerOptions { StopOnUnhandledException = true }
+                : null,
+            typeof(TestTimerHandler),
+            typeof(TestTimerSpot),
+            CancellationToken.None,
+            (_, _, _) =>
+            {
+                Interlocked.Increment(ref deliveries);
+                return ValueTask.FromResult(true);
+            },
+            static (_, _, _, _, _) => ValueTask.CompletedTask,
+            CancellationToken.None
         );
 
         Assert.False(configured.IsDisposed);
@@ -643,6 +650,7 @@ public sealed class TimerLifecycleTests
         Assert.Equal(expected["configured"].Timer, restored["configured"].Timer);
         Assert.Equal(expected["dynamic-source-only"].Timer, restored["dynamic-source-only"].Timer);
 
+        target.EndRelocatedInitialization();
         source.Resume();
         target.Resume();
         await source.DisposeAsync();
@@ -680,6 +688,21 @@ public sealed class TimerLifecycleTests
                 Assert.True(timer.IsDisposed);
             await registry.DisposeAsync();
         }
+    }
+
+    [Fact]
+    public async Task Relocation_shell_without_a_timer_payload_does_not_reattach_keys()
+    {
+        await using var registry = new ZLinkSpotTimerRegistry(
+            static () => false,
+            restorePending: true
+        );
+        var first = await AddTimerAsync(registry, "local");
+        registry.BeginRelocatedInitialization();
+        var second = await AddTimerAsync(registry, "local");
+        registry.EndRelocatedInitialization();
+        Assert.NotSame(first, second);
+        Assert.Equal(2, registry.FreezeRelocation().Count);
     }
 
     private static ValueTask<IZLinkTimer> AddTimerAsync(

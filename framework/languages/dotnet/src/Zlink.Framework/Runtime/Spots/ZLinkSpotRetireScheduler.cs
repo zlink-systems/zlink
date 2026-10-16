@@ -644,7 +644,13 @@ internal sealed class ZLinkSpotRetireScheduler(
         }
         catch (Exception exception)
         {
-            if (stageStarted && !committed)
+            // A correlated failure reply before relay-ready is an explicit target
+            // rejection (relocation §4.2), rather than an unobserved commit.
+            if (
+                stageStarted
+                && !committed
+                && exception is not ZLinkFrameworkException { FrameworkFailureCode: > 0 }
+            )
             {
                 return await ReconcileUncertainCommitAsync().ConfigureAwait(false);
             }

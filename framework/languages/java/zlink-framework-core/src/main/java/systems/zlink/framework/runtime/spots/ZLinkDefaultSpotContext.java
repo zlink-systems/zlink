@@ -710,6 +710,11 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
                         envelope, name -> loadTimerHandler(loader, name)));
     }
 
+    <T> CompletionStage<T> runTimerRelocationInitialization(
+            Supplier<CompletionStage<T>> operation) {
+        return timers.runRelocationInitialization(operation);
+    }
+
     void publishStagedTimerRelocation() {
         timers.publishStagedRestore();
     }
