@@ -104,6 +104,9 @@ fun checkStructure(root: Path) {
             else -> error("Unregistered Spot kind")
         }
     }
+    check(spots.any { it["type"]?.asText() == Names.ROOM && it["dynamic"]?.asBoolean() == true }) {
+        "Missing dynamic Room family"
+    }
     unique(logicalIds)
     val bootstraps = configs.filterValues { it.bootstrap }.keys
     val matchmakingOwners =
@@ -117,10 +120,12 @@ fun checkStructure(root: Path) {
                 owner(it)
             }
             .toSet()
-    check(bootstraps == matchmakingOwners) { "Bootstrap differs from fixed Matchmaking owner" }
+    check(matchmakingOwners.isNotEmpty() && bootstraps == matchmakingOwners) {
+        "Bootstrap differs from fixed Matchmaking owner"
+    }
     for ((id, config) in configs.filterKeys { roles[it] == "match" }) {
         check(config.roomCapacity > 0)
-        check(spots.any { it["owner"].asText() == id && it["kind"].asText() == "entry" })
+        check(spots.count { it["owner"].asText() == id && it["kind"].asText() == "entry" } == 1)
     }
     for (edge in array("edges")) {
         check(text(edge, "from") in ids && text(edge, "to") in ids)

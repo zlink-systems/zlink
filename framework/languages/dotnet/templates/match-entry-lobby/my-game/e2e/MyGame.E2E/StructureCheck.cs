@@ -94,7 +94,6 @@ internal static class StructureCheck
             "Structure language differs from this server."
         );
         ValidateRun(document);
-        var ids = new HashSet<string>(StringComparer.Ordinal);
         var roles = new Dictionary<string, string>(StringComparer.Ordinal);
         var settings = new Dictionary<string, NodeSettings>(StringComparer.Ordinal);
         var prefix =
@@ -107,9 +106,8 @@ internal static class StructureCheck
         foreach (var node in Array(document, "nodes"))
         {
             var id = Text(node, "id");
-            Require(ids.Add(id), "Duplicate node ID.");
             var role = Text(node, "role");
-            roles.Add(id, role);
+            Require(roles.TryAdd(id, role), "Duplicate node ID.");
             Text(node, "title");
             if (role == "external")
             {
@@ -138,6 +136,9 @@ internal static class StructureCheck
         var spotIds = new HashSet<string>(StringComparer.Ordinal);
         var logicalIds = new HashSet<string>(StringComparer.Ordinal);
 
+        var entryOwners = new HashSet<string>(StringComparer.Ordinal);
+        var matchmakingOwners = new HashSet<string>(StringComparer.Ordinal);
+        var hasRoom = false;
         foreach (var spot in Array(document, "spots"))
         {
             Require(spotIds.Add(Text(spot, "id")), "Duplicate Spot ID.");
@@ -149,6 +150,7 @@ internal static class StructureCheck
             var kind = Text(spot, "kind");
             if (kind == "entry")
             {
+                Require(entryOwners.Add(owner), "Duplicate Entry owner.");
                 Require(
                     spot!["type"] is null && spot["logicalId"] is null && spot["dynamic"] is null,
                     "Entry must not claim a stable type, logical ID or dynamic family."
@@ -160,13 +162,21 @@ internal static class StructureCheck
                 kind == "user" && (type == GameNames.RoomType || type == GameNames.MatchmakingType),
                 "Spot kind or type differs from server registration."
             );
+            if (type == GameNames.RoomType)
+            {
+                Require(spot!["dynamic"]?.GetValue<bool>() == true, "Room must be dynamic.");
+                hasRoom = true;
+            }
             if (type == GameNames.MatchmakingType)
+            {
+                matchmakingOwners.Add(owner);
                 Require(
                     spot!["dynamic"] is null
                         && Text(spot, "logicalId") == GameNames.MatchmakingId
                         && settings[owner].BootstrapMatchmaking,
                     "Matchmaking must declare its bootstrap owner and fixed logical ID."
                 );
+            }
             var dynamic = false;
             if (spot!["dynamic"] is JsonNode dynamicNode)
             {
@@ -180,10 +190,30 @@ internal static class StructureCheck
             else
                 Require(logicalIds.Add(Text(spot, "logicalId")), "Duplicate logical Spot ID.");
         }
+        var matchOwners = roles
+            .Where(pair => pair.Value == "match")
+            .Select(pair => pair.Key)
+            .ToHashSet(StringComparer.Ordinal);
+        Require(
+            matchOwners.Count > 0 && entryOwners.SetEquals(matchOwners),
+            "Match nodes must each declare one Entry."
+        );
+        Require(hasRoom, "Missing dynamic Room family.");
+        Require(
+            matchmakingOwners.Count > 0
+                && matchmakingOwners.SetEquals(
+                    settings
+                        .Where(pair =>
+                            roles[pair.Key] == "match" && pair.Value.BootstrapMatchmaking
+                        )
+                        .Select(pair => pair.Key)
+                ),
+            "Bootstrap differs from fixed Matchmaking owner."
+        );
         foreach (var edge in Array(document, "edges"))
         {
             Require(
-                ids.Contains(Text(edge, "from")) && ids.Contains(Text(edge, "to")),
+                roles.ContainsKey(Text(edge, "from")) && roles.ContainsKey(Text(edge, "to")),
                 "Unknown edge node."
             );
             Text(edge, "label");

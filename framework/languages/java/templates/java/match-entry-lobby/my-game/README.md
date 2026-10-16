@@ -46,6 +46,8 @@ The runner validates `zlink.structure.json`, creates Redis with a unique Compose
 
 The e2e configuration limits each match host to one Room so the replacement has capacity for the new room. Deployment configuration uses `roomCapacity` independently of this test setting. Ports bind to zero and READY reports published listener endpoints. No client timer or retry compensates for a runtime failure.
 
+Message Follow is configured explicitly to 30 seconds. After `RELOCATED`, the safe shutdown observation budget is the follow duration plus the existing relocation observation budget; the relocation operation deadline is unchanged.
+
 ## Known issues
 
 Public 0.30.0 validation reaches READY but cross-node deferred Actor join to Matchmaking fails with DATA_LOST ([#1729](https://github.com/zlink-systems/zlink/issues/1729)). On Linux, one update run reached RELOCATED but did not observe SafeToShutdown within the host deadline ([#1740](https://github.com/zlink-systems/zlink/issues/1740)). The template keeps the public 0.30.1 version; its candidate feed is required to finish `hit,reconnect,update` verification. The template does not compensate for these Framework failures.

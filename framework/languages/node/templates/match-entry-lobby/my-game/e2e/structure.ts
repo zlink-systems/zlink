@@ -102,16 +102,17 @@ export function checkStructure(path = 'zlink.structure.json'): void {
   }
   unique(logical, 'logical Spot ID');
   assert(
-    spots.some((s) => s.kind === 'entry'),
-    'Missing Entry Spot'
-  );
-  assert(
     spots.some((s) => s.type === Names.room),
     'Missing Room type'
   );
   const matchmaking = spots.filter((s) => s.type === Names.matchmaking);
   assert.equal(matchmaking.length, 1, 'One fixed Matchmaking Spot required');
   for (const node of nodes.filter((n) => n.role === 'match')) {
+    assert.equal(
+      spots.filter((s) => s.kind === 'entry' && s.owner === node.id).length,
+      1,
+      'Match node must declare one Entry'
+    );
     const cfg = object(JSON.parse(readFileSync(text(node.config), 'utf8')));
     assert(
       Number.isSafeInteger(cfg.roomCapacity) && Number(cfg.roomCapacity) > 0,

@@ -117,7 +117,7 @@ inline void scenario (Scenario name, const std::string &endpoint, World &world)
                 node.command (Control::drain);
                 node.wait_line (Control::requested, Limits::relocation);
                 node.wait_line (Control::relocated, Limits::relocation);
-                node.wait_line (Control::safe, Limits::relocation);
+                node.wait_line (Control::safe, Limits::safe_observation);
                 require (sa == a.info () && sb == b.info (), "Drain changed Session identity");
                 const auto after = a.view (), other = b.view ();
                 same_state (before, after);

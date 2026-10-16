@@ -62,6 +62,10 @@ The runner checks `zlink.structure.json`, starts a uniquely named Redis Compose 
 
 The wire contracts are in `server/shared/contracts.hpp`. `SessionInfo` is a push in C++ (see #1785 below). `RoomViewRequest` asks the authoritative Room for its current view. Requests and pushes use the Framework default typed JSON serializer. The runner never retries a failed scenario.
 
+Each scenario uses isolated Redis and node processes, with Room capacity set to one per match host. After relocation fills the surviving host, only the replacement has capacity for a new Room. Deployment capacity is configured independently.
+
+Message Follow is configured explicitly to 30 seconds. After `RELOCATED`, the safe shutdown observation budget is the follow duration plus the existing relocation observation budget; the relocation operation deadline is unchanged.
+
 ## Known issues
 
 Public 0.30.0 validation does not pass; the 0.30.1 candidate must be verified on Windows and Linux. The template does not compensate for these Framework defects.

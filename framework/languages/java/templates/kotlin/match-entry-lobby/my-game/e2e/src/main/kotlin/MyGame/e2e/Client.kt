@@ -72,6 +72,12 @@ class Client(endpoint: String, val playerId: String) {
     suspend fun queue() = send(QueueRequest(playerId))
 
     suspend fun view(predicate: (RoomView) -> Boolean = { true }): RoomView {
+        pending.removeAll { it is RoomView }
+        while (true) {
+            val event = queue.poll() ?: break
+            if (event is Throwable) throw event
+            if (event !is RoomView) pending.add(event)
+        }
         send(RoomViewRequest())
         return next(predicate)
     }

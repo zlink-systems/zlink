@@ -43,6 +43,8 @@ The runner checks the structure, starts its own Redis Compose project and node p
 
 `QueueRequest` is the first client packet. The example accepts a claimed player ID; replace this boundary with authenticated identity before deployment. Requests use typed messages and the default Framework serializer. The Room's shared action sequence must increase across Move and Shoot requests. The closed vertical wall at x=50, y=0..100 blocks touching shots; movement is unconstrained except for finite coordinates.
 
+Message Follow is configured explicitly to 30 seconds. After `RELOCATED`, the safe shutdown observation budget is the follow duration plus the existing relocation observation budget; the relocation operation deadline is unchanged.
+
 ## Known issues
 
 Public 0.30.0 validation is blocked by the cross-node Actor join/relay failure tracked as #1723: MatchFound is not delivered after RoomAssignment and node message-flow logs report a stale relay peer identity. This template pins 0.30.1, which contains the scheduled fix; its candidate feed is required to complete e2e validation. No workaround is applied.

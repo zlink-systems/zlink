@@ -101,6 +101,7 @@ internal sealed class GameClient(IZlinkStreamConnector connector, string playerI
 
     public async Task<RoomView> ViewAsync(Func<RoomView, bool> predicate, CancellationToken ct)
     {
+        while (inboxes[typeof(RoomView)].Reader.TryRead(out _)) { }
         var response = WaitAsync<RoomView>(predicate, ct);
         await SendAsync(new RoomViewRequest(), ct);
         return await response;

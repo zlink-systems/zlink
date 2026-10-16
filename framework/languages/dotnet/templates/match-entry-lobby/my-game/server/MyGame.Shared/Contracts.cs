@@ -60,6 +60,13 @@ public sealed record MatchEnded(string Winner);
 
 public sealed record NodeReady(string Id, string MeshEndpoint, string? StreamEndpoint);
 
+public static class LifecycleTiming
+{
+    public static readonly TimeSpan MessageFollow = TimeSpan.FromSeconds(30);
+    public static readonly TimeSpan ProcessObservation = TimeSpan.FromSeconds(30);
+    public static readonly TimeSpan SafeObservation = MessageFollow + ProcessObservation;
+}
+
 public static class NodeProtocol
 {
     public const string ReadyPrefix = "READY ";

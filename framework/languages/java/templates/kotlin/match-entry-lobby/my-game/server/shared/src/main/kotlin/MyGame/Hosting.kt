@@ -62,7 +62,7 @@ fun configure(
 ) {
     options.useCoroutineHandlers(Dispatchers.Default)
     options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL)
-    options.configureLocations()
+    options.configureLocations().setMessageFollowDuration(Control.MESSAGE_FOLLOW)
     options.addLocationStore(locations)
     options.addRelocationStore(relocations)
 }
@@ -175,7 +175,7 @@ fun runNode(application: Class<*>, args: Array<String>) = runBlocking {
                         }
                         println(Control.RELOCATED)
                         safe.get(
-                            Control.HOST_DEADLINE.toSeconds(),
+                            Control.SAFE_DEADLINE.toSeconds(),
                             java.util.concurrent.TimeUnit.SECONDS,
                         )
                         println(Control.SAFE_TO_SHUTDOWN)

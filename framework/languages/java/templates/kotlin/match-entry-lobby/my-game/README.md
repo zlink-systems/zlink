@@ -48,6 +48,8 @@ pwsh -NoProfile -File ./run-e2e.ps1 -Scenario hit,reconnect,update
 
 Each scenario owns its Redis Compose project, ephemeral loopback ports, key prefix, and node processes. Configuration and stdout/stderr logs remain in `.logs/run-<id>/`. Framework message-flow diagnostics run at Normal and write to stderr. Cleanup failures fail the run. Use `pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure` or `./run-e2e.sh --check-structure` for structure validation.
 
+Message Follow is configured explicitly to 30 seconds. After `RELOCATED`, the safe shutdown observation budget is the follow duration plus the existing relocation observation budget; the relocation operation deadline is unchanged.
+
 ## Known issues
 
 Public 0.30.0 validation is blocked by #1729: cross-node deferred Actor Join reports `DATA_LOST` during initial matchmaking. A `RoomAssignment` can then reach the old Entry Spot and be dropped with `no_handler`. This template does not compensate for that Framework failure. Validation with the 0.30.1 candidate feed remains pending.

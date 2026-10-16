@@ -52,11 +52,13 @@ int main (int argc, char **argv)
                 if (requested.contains (scenario.name))
                     selected.push_back (scenario);
         }
-        world = std::make_unique<MyGame::E2E::World> (root, bin);
-        const auto endpoint = world->start ();
         for (const auto &scenario : selected) {
             current = scenario.name;
+            world = std::make_unique<MyGame::E2E::World> (root, bin);
+            const auto endpoint = world->start ();
             MyGame::E2E::scenario (scenario.id, endpoint, *world);
+            world->close ();
+            world.reset ();
             ++passed;
             std::cout << "✓ " << scenario.name << std::endl;
         }

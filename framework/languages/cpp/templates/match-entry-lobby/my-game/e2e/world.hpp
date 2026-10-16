@@ -14,6 +14,7 @@ inline std::string unique_id ()
 }
 class World
 {
+    static constexpr int run_room_capacity = 1;
     struct Node
     {
         std::unique_ptr<Process> process;
@@ -49,6 +50,8 @@ class World
         config["RedisEndpoint"] = redis_;
         config["KeyPrefix"] = project_ + ":";
         config["MeshEndpoint"] = "tcp://127.0.0.1:0";
+        if (role == "match")
+            config["RoomCapacity"] = run_room_capacity;
         if (role == "session")
             config["StreamEndpoint"] = "tcp://127.0.0.1:0";
         if (replacement && config.contains ("BootstrapMatchmaking"))

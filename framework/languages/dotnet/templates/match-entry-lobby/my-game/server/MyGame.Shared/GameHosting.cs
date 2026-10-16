@@ -36,6 +36,7 @@ public static class GameHosting
                     redis.KeyPrefix = settings.KeyPrefix + "relocation:";
                 })
             );
+            options.ConfigureLocations().MessageFollowDuration = LifecycleTiming.MessageFollow;
             options.ConfigureDispatch().Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
             configure(options);
         });
