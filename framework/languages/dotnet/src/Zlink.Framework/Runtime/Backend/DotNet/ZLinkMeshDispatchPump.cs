@@ -784,6 +784,7 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
         var stopped = await _lane.RunAsync(StopOnLane).ConfigureAwait(false);
         if (stopped is null)
             return;
+        _node.CloseSubmissions();
         var (stop, loop) = stopped.Value;
         stop?.Cancel();
 

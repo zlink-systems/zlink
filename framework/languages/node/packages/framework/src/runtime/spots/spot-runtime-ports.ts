@@ -92,7 +92,6 @@ export interface ZLinkSpotActorTransferRuntime {
   commitRoutedActor(actor: ZLinkActor, spotId: RoutingId, spot: ZLinkSpot): void;
   clearRoutedActor(actor: ZLinkActor): void;
   rollbackRoutedActor(actor: ZLinkActor, signal?: AbortSignal): Promise<void>;
-  notifyCoreSourceLeave(actor: ZLinkActor, callback: () => Promise<void>): Promise<void>;
   actorEntryNodeRid(actor: ZLinkActor): RoutingId | undefined;
 }
 

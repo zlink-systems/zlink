@@ -423,6 +423,9 @@ final class ZLinkChannelBlockingSubmissionTest {
                                     getClass().getClassLoader(),
                                     new Class<?>[] {ZLinkInternalSpotNode.class},
                                     (proxy, method, args) -> {
+                                        if (method.getName().equals("sourceTransportLane")) {
+                                            return null;
+                                        }
                                         if (method.getName().equals("name")) {
                                             return "orders";
                                         }

@@ -15,7 +15,7 @@ internal sealed class ZLinkDispatchErrorReporter(
     public ZLinkMessageFlowTracer Flow { get; } =
         new(options, logger, runtime, runtime is null ? null : runtime.ErrorSink);
 
-    public bool Enabled => Flow.CaptureEnabled;
+    public bool Enabled => Flow.DispatchErrorsEnabled;
 
     private static readonly object BoundaryKey = new();
 

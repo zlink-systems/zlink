@@ -61,8 +61,8 @@ Object Server MeshNode의 Entry Spot ID 발급·형식·충돌 규칙은
 
 Object Server MeshNode는 application이 Entry Spot type을 등록했는지와 무관하게 Entry Spot
 ID를 발급하고 descriptor에 싣는다. Entry Spot type 등록은 이 Spot이 실행할 application
-handler를 정할 뿐이며, descriptor의 `entrySpotId` 유무를 바꾸지 않는다. 원격 생성 요청을
-받을 수 있는지도 이 등록으로 갈리지 않는다.
+handler를 정할 뿐이며, descriptor의 `entrySpotId` 유무를 바꾸지 않는다. 새 Actor 생성
+후보가 되는지는 이 등록이 정한다([Actor model §6.3](04-actor-model.ko.md#63-mesh와-placement-target-선택)).
 
 MeshNode descriptor의 Entry Spot ID mapping과 공개 규칙은
 [Transport RID와 Spot ID 정책 §6.3](../02-channel-transport/04-network-listener-identity.ko.md#63-entry-spot-id)이 정한다.
@@ -300,6 +300,13 @@ Automatic RouteMesh에서는 RID가 더 작은 MeshNode만 connect를 시작한�
 특정 peer와 연결을 유지하려는 의도는 application 구성이나 auto-connect 소유자가 peer마다
 하나씩 등록하는 [connection intent](../00-foundation/02-glossary.ko.md#connection-intent)로
 표현한다. Runtime은 intent가 있는 동안만 connect와 재연결을 시도한다.
+
+**Auto-connect owner는 특정 peer의 즉시 reconcile 요청을 받으면 주기를 기다리지 않고 그 peer에 평소
+reconcile 판정을 적용한다.** 그 peer의 descriptor를 기존 Location resolver로 다시 읽으며, automatic에서
+RID가 더 작은 쪽만 connect를 시작하는 규칙도 그대로다. 이 요청은 새 종류의 intent나 별도 상태를 만들지
+않고, 요청한 쪽은 결과로 그 peer의 ready route를 관찰한다. 누가 언제 요청하는지는
+[relocation §4.3](../05-location-relocation/04-relocation-flow.ko.md#43-target은-실행하지-않은-상태로-복원한다)과
+[Session·Actor binding §8.1](../04-session/02-session-actor-binding.ko.md#81-seal-held-message와-route-전환)이 정한다.
 
 - **Outbound intent를 제거하면 같은 결정으로 그 endpoint의 binding 연결 등록도 제거한다.**
   Intent 소유자가 binding의 public disconnect를 호출한다. 같은 endpoint에 inbound peer가 있어도
