@@ -1561,7 +1561,7 @@ route depends on the reread owner.
   no-route result (`Unavailable`). The source neither creates a route straight to the reread current
   owner nor guesses the first target's generation. Bound Session routes are moved by each target's command 44
   and the seal and route switch of later moves
-  ([Session and Actor Binding §8](../04-session/02-session-actor-binding.en.md#8-session-responsibilities-during-actor-relocation)),
+  ([Session and Actor Binding §8](../04-session/02-session-actor-binding.en.md#8-the-sessions-responsibility-during-actor-relocation)),
   and don't depend on the source's Message Follow route.
 If `ObjectGeneration` differs, or `AuthorityOwnerGeneration` did not increase and the owner is neither the
 source nor the first target, the source still fails with `DataLost`. An indeterminate `Preserve` result repeats under this section's Store-failure policy without a new timer while the source lease is valid. Source lease expiry, or an authority that the source rereads as absent (`Missing`), ends source work under the expired-owner terminal in [common relocation §4.4](04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover). On `Missing` the source fence no longer holds, so the source does not attempt `Preserve`. The source may resume dispatch only
