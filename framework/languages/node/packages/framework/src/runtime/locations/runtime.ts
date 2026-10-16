@@ -704,7 +704,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
           await withTimeout(
             (releaseSignal) =>
               this.stores.ownerLeaseStore.releaseOwnerLease(confirmed.token, releaseSignal),
-            remainingTimeoutMs(timeoutDeadline)
+            remainingTimeoutMs(timeoutStartedAtMs, this.options.ownerLeaseRenewTimeoutMs)
           );
         else
           await awaitWithAbort(
