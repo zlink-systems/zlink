@@ -23,6 +23,91 @@ final class ZLinkJavaStreamRelocationTest {
     private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(1);
 
     @Test
+    void sameGenerationPublicationRejectsADifferentSession() {
+        try (var fixture = new Fixture()) {
+            var spots = (ZLinkJavaRawSpotNode) fixture.node.spotNode();
+            assertThrows(
+                    IllegalStateException.class,
+                    () ->
+                            spots.publishStreamSession(
+                                    RoutingId.from("another-session"),
+                                    fixture.source,
+                                    fixture.generation(),
+                                    1,
+                                    fixture.stream));
+        }
+    }
+
+    @Test
+    void sameGenerationPublicationRejectsADifferentSlot() {
+        try (var fixture = new Fixture()) {
+            var spots = (ZLinkJavaRawSpotNode) fixture.node.spotNode();
+            assertThrows(
+                    IllegalStateException.class,
+                    () ->
+                            spots.publishStreamSession(
+                                    fixture.session,
+                                    fixture.source,
+                                    fixture.generation(),
+                                    2,
+                                    fixture.stream));
+        }
+    }
+
+    @Test
+    void sameGenerationPublicationRejectsADifferentPhysicalStream() {
+        try (var fixture = new Fixture();
+                var other =
+                        new ZLinkJavaStreamSocket(
+                                fixture.context.createStreamSocket(), fixture.node)) {
+            var spots = (ZLinkJavaRawSpotNode) fixture.node.spotNode();
+            assertThrows(
+                    IllegalStateException.class,
+                    () ->
+                            spots.publishStreamSession(
+                                    fixture.session,
+                                    fixture.source,
+                                    fixture.generation(),
+                                    1,
+                                    other));
+        }
+    }
+
+    @Test
+    void sameGenerationPublicationRejectsADifferentActorIncarnation() {
+        try (var fixture = new Fixture()) {
+            var spots = (ZLinkJavaRawSpotNode) fixture.node.spotNode();
+            var other =
+                    new ZLinkBackendActorRef(
+                            fixture.source.nodeRid(), "player", fixture.source.generation() + 1);
+            assertThrows(
+                    IllegalStateException.class,
+                    () ->
+                            spots.publishStreamSession(
+                                    fixture.session,
+                                    other,
+                                    fixture.generation(),
+                                    1,
+                                    fixture.stream));
+        }
+    }
+
+    @Test
+    void sameGenerationPublicationAcceptsARouteChange() {
+        try (var fixture = new Fixture()) {
+            var spots = (ZLinkJavaRawSpotNode) fixture.node.spotNode();
+            assertDoesNotThrow(
+                    () ->
+                            spots.publishStreamSession(
+                                    fixture.session,
+                                    fixture.target,
+                                    fixture.generation(),
+                                    1,
+                                    fixture.stream));
+        }
+    }
+
+    @Test
     void relayAfterRelocationReachesTheTargetWithoutContactingTheRetiredSource() throws Exception {
         try (var fixture = new Fixture()) {
             fixture.nativeTarget = true;
