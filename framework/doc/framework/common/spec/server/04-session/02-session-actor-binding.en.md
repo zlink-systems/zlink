@@ -505,7 +505,8 @@ another node by Message Follow, so the Actor owner reads the identity from the b
 transport source. In the Actor's turn, the Actor owner compares this identity with the current
 binding: it drops the notification when a different current binding exists, and runs the callback
 when there is no current binding or the binding is the same one. A body in any other form drops the
-notification with a `ProtocolError` Warning.
+notification with a `ProtocolError` Warning. The success reply to the notification has a
+zero-byte body, and the Session owner does not interpret it.
 
 Even if one Actor's submission or callback fails, the framework uses an
 all-settled rule that continues notifying the remaining Actors and session
