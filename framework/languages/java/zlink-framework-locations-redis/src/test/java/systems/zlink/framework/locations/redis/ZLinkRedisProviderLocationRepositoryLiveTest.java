@@ -464,6 +464,216 @@ final class ZLinkRedisProviderLocationRepositoryLiveTest {
         }
     }
 
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+    void endedUserSpotReleasesEndedOwnerMembers(boolean liveMember) throws Exception {
+        try (var handle = liveRepository("ended-spot-members-" + liveMember)) {
+            ZLinkLocationRepository store = handle.repository();
+            var oldOwner = claim(store, "ended-spot-old");
+            var newOwner = claim(store, "ended-spot-new");
+            var oldNode = spotDescriptor(RoutingId.from(new byte[] {0x0a}), oldOwner);
+            var newNode = spotDescriptor(RoutingId.from(new byte[] {0x0b}), newOwner);
+            for (var node : List.of(oldNode, newNode))
+                assertEquals(
+                        ZLinkLocationWriteStatus.STORED,
+                        store.updateMeshNode(node, ZLinkLocationWriteIntent.NEW_CLAIM)
+                                .toCompletableFuture()
+                                .get()
+                                .status());
+            String spotKey = ZLinkAuthorityKeyCodec.spot("ended-spot");
+            var spot =
+                    assertInstanceOf(
+                                    ZLinkObjectReserved.class,
+                                    store.reserve(
+                                                    spotRequest(spotKey, oldNode, oldOwner),
+                                                    () -> false)
+                                            .toCompletableFuture()
+                                            .get())
+                            .reservation();
+            assertEquals(
+                    ZLinkObjectCommitResult.COMMITTED,
+                    store.commit(
+                                    spot,
+                                    new systems.zlink.framework.runtime.locations
+                                                    .ZLinkServiceAuthorityPayloadCodec()
+                                            .encodeUser(
+                                                    systems.zlink.framework.runtime.locations
+                                                            .ZLinkServiceAuthorityPayloadCodec.State
+                                                            .READY,
+                                                    "room",
+                                                    "ended-spot",
+                                                    oldOwner.ownerId(),
+                                                    oldOwner.leaseGeneration(),
+                                                    "game",
+                                                    oldNode.rid(),
+                                                    1),
+                                    () -> false)
+                            .toCompletableFuture()
+                            .get());
+            var memberNode = liveMember ? newNode : oldNode;
+            var memberOwner = liveMember ? newOwner : oldOwner;
+            String memberKey = ZLinkAuthorityKeyCodec.actor("ended-spot-member");
+            var member =
+                    assertInstanceOf(
+                                    ZLinkObjectReserved.class,
+                                    store.reserve(
+                                                    actorRequest(
+                                                            memberKey, memberNode, memberOwner),
+                                                    () -> false)
+                                            .toCompletableFuture()
+                                            .get())
+                            .reservation();
+            assertEquals(
+                    ZLinkObjectCommitResult.COMMITTED,
+                    store.commit(
+                                    member,
+                                    new systems.zlink.framework.runtime.locations
+                                                    .ZLinkActorAuthorityPayloadCodec()
+                                            .encode(
+                                                    systems.zlink.framework.runtime.locations
+                                                            .ZLinkActorAuthorityPayloadCodec.State
+                                                            .READY,
+                                                    "player",
+                                                    "ended-spot-member",
+                                                    "ended-spot",
+                                                    spot.objectGeneration(),
+                                                    2,
+                                                    memberOwner.ownerId(),
+                                                    memberOwner.leaseGeneration(),
+                                                    "game",
+                                                    memberNode.rid(),
+                                                    1),
+                                    () -> false)
+                            .toCompletableFuture()
+                            .get());
+            store.releaseOwnerLease(oldOwner).toCompletableFuture().get();
+            var next = store.reserve(spotRequest(spotKey, newNode, newOwner), () -> false);
+            if (liveMember) {
+                var failure =
+                        org.junit.jupiter.api.Assertions.assertThrows(
+                                java.util.concurrent.ExecutionException.class,
+                                () -> next.toCompletableFuture().get());
+                assertEquals(
+                        systems.zlink.framework.errors.ZLinkFrameworkErrorKind.UNAVAILABLE,
+                        assertInstanceOf(
+                                        systems.zlink.framework.errors.ZLinkFrameworkException
+                                                .class,
+                                        failure.getCause())
+                                .kind());
+                assertEquals(
+                        spot.objectGeneration(),
+                        assertInstanceOf(
+                                        ZLinkAuthoritySnapshot.class,
+                                        store.read(spotKey, () -> false)
+                                                .toCompletableFuture()
+                                                .get())
+                                .objectGeneration());
+                assertInstanceOf(
+                        ZLinkAuthoritySnapshot.class,
+                        store.read(memberKey, () -> false).toCompletableFuture().get());
+                return;
+            }
+            var recreated =
+                    assertInstanceOf(ZLinkObjectReserved.class, next.toCompletableFuture().get())
+                            .reservation();
+            org.junit.jupiter.api.Assertions.assertTrue(
+                    recreated.objectGeneration() > spot.objectGeneration());
+            assertInstanceOf(
+                    systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityMissing.class,
+                    store.read(memberKey, () -> false).toCompletableFuture().get());
+            assertInstanceOf(
+                    ZLinkObjectReserved.class,
+                    store.reserve(actorRequest(memberKey, newNode, newOwner), () -> false)
+                            .toCompletableFuture()
+                            .get());
+        }
+    }
+
+    private static ZLinkLocationOwnerToken claim(ZLinkLocationRepository store, String ownerId)
+            throws Exception {
+        return assertInstanceOf(
+                        ZLinkOwnerLeaseClaimed.class,
+                        store.claimOwnerLease(ownerId, Duration.ofSeconds(30))
+                                .toCompletableFuture()
+                                .get())
+                .token();
+    }
+
+    private static ZLinkMeshNodeDescriptor spotDescriptor(
+            RoutingId rid, ZLinkLocationOwnerToken owner) {
+        return new ZLinkMeshNodeDescriptor(
+                "game",
+                rid,
+                1,
+                1,
+                "tcp://127.0.0.1:7000",
+                Map.of("game", 100),
+                1,
+                List.of(
+                        new ZLinkObjectCapability(
+                                ZLinkPlacementObjectKind.USER_SPOT,
+                                "room",
+                                ZLinkObjectMaintenancePolicyKind.DISABLED,
+                                false,
+                                1),
+                        new ZLinkObjectCapability(
+                                ZLinkPlacementObjectKind.ACTOR,
+                                "player",
+                                ZLinkObjectMaintenancePolicyKind.DISABLED,
+                                false,
+                                0)),
+                ZLinkMeshNodeObjectRole.SERVER,
+                Optional.of("entry-" + rid),
+                100,
+                new ZLinkPlacementCapacity(
+                        new ZLinkCapacityUsage(0, 0, 1),
+                        new ZLinkCapacityUsage(0, 0, 1),
+                        List.of()),
+                new ZLinkActivationConcurrency(0, 128),
+                Optional.empty(),
+                systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState.SERVING,
+                "security",
+                owner.ownerId(),
+                owner.leaseGeneration(),
+                UPDATED_AT);
+    }
+
+    private static ZLinkObjectReservationRequest spotRequest(
+            String key, ZLinkMeshNodeDescriptor descriptor, ZLinkLocationOwnerToken owner) {
+        return new ZLinkObjectReservationRequest(
+                ZLinkPlacementObjectKind.USER_SPOT,
+                key,
+                "room",
+                "creation-root",
+                new byte[32],
+                32,
+                new ZLinkMeshNodeDescriptorKey(descriptor.meshName(), descriptor.rid()),
+                descriptor.lifecycleGeneration(),
+                owner,
+                new byte[] {1},
+                ZLinkPlacementCapacityBundle.spot(ZLinkPlacementObjectKind.USER_SPOT, "room", 1),
+                new systems.zlink.framework.runtime.internal.configuration
+                        .ZLinkObjectFactoryRegistration.RelocationPolicy.Disabled());
+    }
+
+    private static ZLinkObjectReservationRequest actorRequest(
+            String key, ZLinkMeshNodeDescriptor descriptor, ZLinkLocationOwnerToken owner) {
+        return new ZLinkObjectReservationRequest(
+                ZLinkPlacementObjectKind.ACTOR,
+                key,
+                "player",
+                "creation-root",
+                new byte[32],
+                32,
+                new ZLinkMeshNodeDescriptorKey(descriptor.meshName(), descriptor.rid()),
+                descriptor.lifecycleGeneration(),
+                owner,
+                new byte[] {1},
+                ZLinkPlacementCapacityBundle.actor(1),
+                new systems.zlink.framework.runtime.internal.configuration
+                        .ZLinkObjectFactoryRegistration.RelocationPolicy.Disabled());
+    }
+
     private static LiveRepository liveRepository(String label) {
         String endpoint = System.getenv("ZLINK_REDIS_LOCATION_ENDPOINT");
         assumeTrue(

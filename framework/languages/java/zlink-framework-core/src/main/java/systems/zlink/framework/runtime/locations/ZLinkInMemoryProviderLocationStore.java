@@ -27,7 +27,7 @@ public final class ZLinkInMemoryProviderLocationStore implements ZLinkLocationSt
     private static final int MAXIMUM_SCAN_ITEMS = 1000;
     private static final int MAXIMUM_KEY_BYTES = 1024;
     private static final int MAXIMUM_VALUE_BYTES = 1024 * 1024;
-    private static final int MAXIMUM_BATCH_KEYS = 2048;
+    static final int MAXIMUM_BATCH_KEYS = 2048;
     private static final long MAXIMUM_ENCODED_BATCH_BYTES = 4L * 1024 * 1024;
     private static final int MAXIMUM_ACTIVE_SCANS = 4096;
     private static final long MAXIMUM_ENCODED_PAGE_BYTES = 4L * 1024 * 1024;

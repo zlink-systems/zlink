@@ -68,13 +68,21 @@ final class ZLinkStaleSpotOwnerIntegrationTest {
             fixture.restore(retained);
             fixture.assertEnded(USER_SPOT_ID);
             try (var restarted = start(fixture)) {
-                var before = fixture.authority(ZLinkAuthorityKeyCodec.spot(USER_SPOT_ID));
                 if (spotFirst) {
-                    unavailable(() -> getUserSpot(restarted));
-                    assertEquals(
-                            before.storeVersion(),
+                    // Location runtime §6.1: the Spot's only member also lost its owner, so the
+                    // Spot is re-created and the member is released with it (Missing).
+                    getUserSpot(restarted);
+                    assertTrue(
                             fixture.authority(ZLinkAuthorityKeyCodec.spot(USER_SPOT_ID))
-                                    .storeVersion());
+                                            .objectGeneration()
+                                    > spotGeneration);
+                    assertInstanceOf(
+                            systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityMissing
+                                    .class,
+                            fixture.repository
+                                    .read(ZLinkAuthorityKeyCodec.actor(ACTOR_ID), () -> false)
+                                    .toCompletableFuture()
+                                    .get());
                 }
                 getActor(restarted);
                 assertTrue(

@@ -225,6 +225,11 @@ final class ZLinkEndedSpotRecreationTest {
     }
 
     private static long oldSpotSlots(Fixture fixture) throws ReflectiveOperationException {
+        return oldSlots(fixture, false);
+    }
+
+    private static long oldSlots(Fixture fixture, boolean actors)
+            throws ReflectiveOperationException {
         if (fixture.store instanceof ZLinkInMemoryLocationStore) {
             var field = ZLinkInMemoryLocationStore.class.getDeclaredField("authority");
             field.setAccessible(true);
@@ -232,7 +237,7 @@ final class ZLinkEndedSpotRecreationTest {
                     .kindCapacity(
                             new ZLinkMeshNodeDescriptorKey("mesh", fixture.oldDescriptor.rid()),
                             1,
-                            false)[0];
+                            actors)[0];
         }
         var field = ZLinkProviderLocationRepository.class.getDeclaredField("provider");
         field.setAccessible(true);
@@ -246,7 +251,7 @@ final class ZLinkEndedSpotRecreationTest {
             return new com.fasterxml.jackson.databind.ObjectMapper()
                     .readTree(read.value().bytes())
                     .path("active")
-                    .path("spots")
+                    .path(actors ? "actors" : "spots")
                     .asLong();
         } catch (java.io.IOException failure) {
             throw new AssertionError(failure);
@@ -707,6 +712,305 @@ final class ZLinkEndedSpotRecreationTest {
         }
     }
 
+    @ParameterizedTest
+    @CsvSource({"provider", "memory"})
+    void endedOwnerMembersAreReleasedWithTheSpot(String backend)
+            throws ReflectiveOperationException {
+        var fixture =
+                fixture(
+                        backend,
+                        ZLinkPlacementObjectKind.USER_SPOT,
+                        ZLinkServiceAuthorityPayloadCodec.State.READY);
+        var dead = endedMember(fixture, "dead-member", true);
+        assertEquals(1, oldSlots(fixture, true));
+        fixture.store.releaseOwnerLease(fixture.oldOwner).toCompletableFuture().join();
+        var next = reserveNewSpot(fixture);
+        assertTrue(next.objectGeneration() > fixture.reservation.objectGeneration());
+        assertInstanceOf(
+                ZLinkAuthorityMissing.class,
+                fixture.store.read(dead.authorityKey(), () -> false).toCompletableFuture().join());
+        assertEquals(0, oldSlots(fixture, true));
+        var recreated =
+                assertInstanceOf(
+                                ZLinkObjectReserved.class,
+                                fixture.store
+                                        .reserve(
+                                                actorRequest(
+                                                        "dead-member",
+                                                        fixture.newDescriptor,
+                                                        fixture.newOwner,
+                                                        new byte[] {1}),
+                                                () -> false)
+                                        .toCompletableFuture()
+                                        .join())
+                        .reservation();
+        assertTrue(recreated.objectGeneration() > dead.objectGeneration());
+    }
+
+    @ParameterizedTest
+    @CsvSource({"false", "true"})
+    void endedOwnerMemberAfterFirstPageOrExpiredSnapshotIsReleased(boolean expire) {
+        var provider = new ScanBoundaryProvider(expire, false);
+        var fixture =
+                fixture(
+                        new ZLinkProviderLocationRepository(provider),
+                        ZLinkPlacementObjectKind.USER_SPOT,
+                        ZLinkServiceAuthorityPayloadCodec.State.READY,
+                        1);
+        var dead = endedMember(fixture, "dead-member", true);
+        fixture.store.releaseOwnerLease(fixture.oldOwner).toCompletableFuture().join();
+        provider.enabled = true;
+        reserveNewSpot(fixture);
+        assertEquals(expire ? 3 : 2, provider.scans);
+        assertInstanceOf(
+                ZLinkAuthorityMissing.class,
+                fixture.store.read(dead.authorityKey(), () -> false).toCompletableFuture().join());
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+        "provider, moving",
+        "memory, moving",
+        "provider, aggregate",
+        "memory, aggregate",
+        "provider, unactivated",
+        "memory, unactivated"
+    })
+    void movingOrUnactivatedMemberKeepsEndedSpot(String backend, String scenario) throws Exception {
+        var fixture =
+                fixture(
+                        backend,
+                        ZLinkPlacementObjectKind.USER_SPOT,
+                        ZLinkServiceAuthorityPayloadCodec.State.READY,
+                        2);
+        var settled = endedMember(fixture, "settled-member", true);
+        String memberKey;
+        switch (scenario) {
+            case "moving" -> {
+                var moving = endedMember(fixture, "moving-member", true);
+                memberKey = moving.authorityKey();
+                var before = read(fixture, memberKey);
+                var relocation =
+                        new ZLinkAggregateRelocationCoordinator.Request(
+                                new java.util.UUID(0, 9),
+                                1,
+                                2,
+                                List.of(
+                                        new ZLinkAggregateRelocationCoordinator.Participant(
+                                                memberKey,
+                                                ZLinkPlacementObjectKind.ACTOR,
+                                                before.objectGeneration(),
+                                                before.authorityOwnerGeneration(),
+                                                before.storeVersion(),
+                                                ZLinkAuthorityGenerationTransition.PRESERVE,
+                                                before.payload(),
+                                                new byte[0])),
+                                relocationRoot(),
+                                new ZLinkMeshNodeDescriptorKey("mesh", fixture.oldDescriptor.rid()),
+                                1,
+                                ZLinkPlacementCapacityBundle.actor(0),
+                                fixture.oldOwner,
+                                "1");
+                var publish =
+                        ZLinkCanonicalRelocationAuthorityStateCodec.class.getDeclaredMethod(
+                                "publish",
+                                byte[].class,
+                                ZLinkAggregateRelocationCoordinator.Request.class,
+                                ZLinkAuthorityGenerationTransition.class);
+                publish.setAccessible(true);
+                assertInstanceOf(
+                        ZLinkAuthorityStored.class,
+                        fixture.store
+                                .compareExchange(
+                                        memberKey,
+                                        new ZLinkAuthorityExpectFound(before.storeVersion()),
+                                        new ZLinkAuthorityPut(
+                                                (byte[])
+                                                        publish.invoke(
+                                                                null,
+                                                                before.payload(),
+                                                                relocation,
+                                                                ZLinkAuthorityGenerationTransition
+                                                                        .PRESERVE)),
+                                        () -> false)
+                                .toCompletableFuture()
+                                .join());
+            }
+            case "aggregate" -> {
+                memberKey = settled.authorityKey();
+                var before = read(fixture, memberKey);
+                assertInstanceOf(
+                        ZLinkAggregatePrepared.class,
+                        fixture.store
+                                .prepareAggregate(
+                                        new ZLinkAggregatePrepareRequest(
+                                                new java.util.UUID(0, 22),
+                                                1,
+                                                List.of(
+                                                        new ZLinkAggregateParticipant(
+                                                                memberKey,
+                                                                before.objectGeneration(),
+                                                                before.authorityOwnerGeneration(),
+                                                                before.storeVersion(),
+                                                                ZLinkAuthorityGenerationTransition
+                                                                        .PRESERVE,
+                                                                before.payload(),
+                                                                new byte[0])),
+                                                new byte[32],
+                                                new ZLinkMeshNodeDescriptorKey(
+                                                        "mesh", fixture.newDescriptor.rid()),
+                                                1,
+                                                ZLinkPlacementCapacityBundle.actor(0),
+                                                fixture.newOwner),
+                                        () -> false)
+                                .toCompletableFuture()
+                                .join());
+            }
+            default -> memberKey = endedMember(fixture, "unactivated-member", false).authorityKey();
+        }
+        var memberBefore = read(fixture, memberKey).storeVersion();
+        var settledBefore = read(fixture, settled.authorityKey()).storeVersion();
+        fixture.store.releaseOwnerLease(fixture.oldOwner).toCompletableFuture().join();
+        assertUnavailableAndUnchanged(fixture, new RelocationPolicy.Disabled());
+        assertEquals(memberBefore, read(fixture, memberKey).storeVersion());
+        assertEquals(settledBefore, read(fixture, settled.authorityKey()).storeVersion());
+    }
+
+    @ParameterizedTest
+    @CsvSource({"provider, 2044", "memory, 2044", "provider, 2045", "memory, 2045"})
+    void endedMemberReleaseIsBoundedByOneProviderBatch(String backend, int members) {
+        // Batch keys: Spot authority, owner lease, descriptor and capacity plus one authority
+        // per member (all members share the Spot's owner and node). 2,044 members fill the
+        // 2,048-key bound exactly.
+        var fixture =
+                fixture(
+                        backend,
+                        ZLinkPlacementObjectKind.USER_SPOT,
+                        ZLinkServiceAuthorityPayloadCodec.State.READY,
+                        members);
+        List<String> keys = new java.util.ArrayList<>();
+        for (int index = 0; index < members; index++)
+            keys.add(endedMember(fixture, "bulk-" + index, true).authorityKey());
+        fixture.store.releaseOwnerLease(fixture.oldOwner).toCompletableFuture().join();
+        if (members <= 2044) {
+            reserveNewSpot(fixture);
+            for (String key : keys)
+                assertInstanceOf(
+                        ZLinkAuthorityMissing.class,
+                        fixture.store.read(key, () -> false).toCompletableFuture().join());
+            return;
+        }
+        var first = read(fixture, keys.get(0)).storeVersion();
+        assertUnavailableAndUnchanged(fixture, new RelocationPolicy.Disabled());
+        assertEquals(first, read(fixture, keys.get(0)).storeVersion());
+    }
+
+    private static ZLinkAuthoritySnapshot read(Fixture fixture, String key) {
+        return (ZLinkAuthoritySnapshot)
+                fixture.store.read(key, () -> false).toCompletableFuture().join();
+    }
+
+    private static byte[] relocationRoot() throws java.io.IOException {
+        var fixtureJson =
+                new com.fasterxml.jackson.databind.ObjectMapper()
+                        .readTree(
+                                java.nio.file.Files.readString(
+                                        java.nio.file.Path.of(
+                                                "../../../runtime/protocol/golden/relocation-envelope-v1.json")));
+        return java.util.HexFormat.of().parseHex(fixtureJson.findValue("logicalHex").asText());
+    }
+
+    private static ZLinkObjectReservation reserveNewSpot(Fixture fixture) {
+        return assertInstanceOf(
+                        ZLinkObjectReserved.class,
+                        fixture.store
+                                .reserve(
+                                        request(
+                                                fixture,
+                                                fixture.newOwner,
+                                                fixture.newDescriptor,
+                                                new RelocationPolicy.Disabled()),
+                                        () -> false)
+                                .toCompletableFuture()
+                                .join())
+                .reservation();
+    }
+
+    private static ZLinkObjectReservationRequest actorRequest(
+            String id,
+            ZLinkMeshNodeDescriptor descriptor,
+            ZLinkLocationOwnerToken owner,
+            byte[] creatingPayload) {
+        return new ZLinkObjectReservationRequest(
+                ZLinkPlacementObjectKind.ACTOR,
+                ZLinkAuthorityKeyCodec.actor(id),
+                "player",
+                "intent",
+                new byte[32],
+                1,
+                new ZLinkMeshNodeDescriptorKey("mesh", descriptor.rid()),
+                1,
+                owner,
+                creatingPayload,
+                ZLinkPlacementCapacityBundle.actor(1),
+                new RelocationPolicy.Disabled());
+    }
+
+    /** A member of the ended Spot owned by the Spot's (later ended) owner on the old node. */
+    private static ZLinkObjectReservation endedMember(
+            Fixture fixture, String id, boolean activated) {
+        var actor =
+                ((ZLinkObjectReserved)
+                                fixture.store
+                                        .reserve(
+                                                actorRequest(
+                                                        id,
+                                                        fixture.oldDescriptor,
+                                                        fixture.oldOwner,
+                                                        activated
+                                                                ? new byte[] {1}
+                                                                : endedMemberPayload(
+                                                                        fixture,
+                                                                        id,
+                                                                        ZLinkActorAuthorityPayloadCodec
+                                                                                .State.CREATING)),
+                                                () -> false)
+                                        .toCompletableFuture()
+                                        .join())
+                        .reservation();
+        if (activated)
+            assertEquals(
+                    ZLinkObjectCommitResult.COMMITTED,
+                    fixture.store
+                            .commit(
+                                    actor,
+                                    endedMemberPayload(
+                                            fixture,
+                                            id,
+                                            ZLinkActorAuthorityPayloadCodec.State.READY),
+                                    () -> false)
+                            .toCompletableFuture()
+                            .join());
+        return actor;
+    }
+
+    private static byte[] endedMemberPayload(
+            Fixture fixture, String id, ZLinkActorAuthorityPayloadCodec.State state) {
+        return new ZLinkActorAuthorityPayloadCodec()
+                .encode(
+                        state,
+                        "player",
+                        id,
+                        "ended-spot",
+                        fixture.reservation.objectGeneration(),
+                        2,
+                        fixture.oldOwner.ownerId(),
+                        fixture.oldOwner.leaseGeneration(),
+                        "mesh",
+                        fixture.oldDescriptor.rid(),
+                        1);
+    }
+
     private static ZLinkObjectReservation member(Fixture fixture, String id, boolean joined) {
         var actor =
                 ((ZLinkObjectReserved)
@@ -1035,18 +1339,34 @@ final class ZLinkEndedSpotRecreationTest {
             String backend,
             ZLinkPlacementObjectKind kind,
             ZLinkServiceAuthorityPayloadCodec.State state) {
+        return fixture(backend, kind, state, 1);
+    }
+
+    private static Fixture fixture(
+            String backend,
+            ZLinkPlacementObjectKind kind,
+            ZLinkServiceAuthorityPayloadCodec.State state,
+            int actorLimit) {
         ZLinkLocationRepository store =
                 backend.equals("provider")
                         ? new ZLinkProviderLocationRepository(
                                 new ZLinkInMemoryProviderLocationStore())
                         : new ZLinkInMemoryLocationStore();
-        return fixture(store, kind, state);
+        return fixture(store, kind, state, actorLimit);
     }
 
     private static Fixture fixture(
             ZLinkLocationRepository store,
             ZLinkPlacementObjectKind kind,
             ZLinkServiceAuthorityPayloadCodec.State state) {
+        return fixture(store, kind, state, 1);
+    }
+
+    private static Fixture fixture(
+            ZLinkLocationRepository store,
+            ZLinkPlacementObjectKind kind,
+            ZLinkServiceAuthorityPayloadCodec.State state,
+            int actorLimit) {
         var oldOwner =
                 ((ZLinkOwnerLeaseClaimed)
                                 store.claimOwnerLease("old", Duration.ofMinutes(5))
@@ -1059,8 +1379,8 @@ final class ZLinkEndedSpotRecreationTest {
                                         .toCompletableFuture()
                                         .join())
                         .token();
-        var oldDescriptor = descriptor(oldOwner, kind);
-        var newDescriptor = descriptor(newOwner, kind);
+        var oldDescriptor = descriptor(oldOwner, kind, actorLimit);
+        var newDescriptor = descriptor(newOwner, kind, 1);
         store.updateMeshNode(oldDescriptor, ZLinkLocationWriteIntent.NEW_CLAIM)
                 .toCompletableFuture()
                 .join();
@@ -1132,7 +1452,7 @@ final class ZLinkEndedSpotRecreationTest {
     }
 
     private static ZLinkMeshNodeDescriptor descriptor(
-            ZLinkLocationOwnerToken owner, ZLinkPlacementObjectKind kind) {
+            ZLinkLocationOwnerToken owner, ZLinkPlacementObjectKind kind, int actorLimit) {
         return new ZLinkMeshNodeDescriptor(
                 "mesh",
                 RoutingId.from(owner.ownerId()),
@@ -1154,7 +1474,7 @@ final class ZLinkEndedSpotRecreationTest {
                 Optional.of(owner.ownerId() + "-entry-00000000-0000-4000-8000-000000000001"),
                 100,
                 new ZLinkPlacementCapacity(
-                        new ZLinkCapacityUsage(0, 0, 1),
+                        new ZLinkCapacityUsage(0, 0, actorLimit),
                         new ZLinkCapacityUsage(0, 0, 1),
                         List.of()),
                 new ZLinkActivationConcurrency(0, 64),
