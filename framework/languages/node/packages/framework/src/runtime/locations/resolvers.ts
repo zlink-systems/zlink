@@ -17,7 +17,7 @@ import {
   createInternalFrameworkException,
   internalFrameworkErrorKind
 } from '../framework-errors-internal';
-import { routingIdsEqual } from '../routing-id';
+import { encodeRoutingIdStorageHex, routingIdsEqual } from '../routing-id';
 import {
   type SpotHandle,
   type ZLinkActorSpotHandleResolver,
@@ -282,7 +282,7 @@ export class ZLinkStoreLocationResolvers
         descriptor.objectRole === ZLinkObjectRole.Server &&
         descriptor.placementWeight > 0 &&
         !routingIdsEqual(descriptor.rid, excludedNodeRid) &&
-        !excludedCandidateRids.has(String(descriptor.rid)) &&
+        !excludedCandidateRids.has(encodeRoutingIdStorageHex(descriptor.rid)) &&
         capacity.active + capacity.reserved < capacity.limit &&
         descriptor.objectCapabilities.some(
           (candidate) => candidate.objectKind === 'actor' && candidate.stableType === actorType
