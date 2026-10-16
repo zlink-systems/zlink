@@ -490,7 +490,7 @@ internal sealed class ZLinkSessionActorCoordinator(
         if (ZLinkFrameworkDebugLog.SpotDiscoveryEnabled)
         {
             var observedRoute = await runtime
-                .GetSessionActorRouteAsync(actorRef.ActorId, actorRef.BindingToken, actorRef)
+                .GetSessionActorRouteAsync(actorRef)
                 .ConfigureAwait(false);
             var relayRoute = observedRoute.GetValueOrDefault();
             ZLinkFrameworkDebugLog.SpotDiscovery(
