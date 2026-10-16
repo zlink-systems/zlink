@@ -1042,8 +1042,13 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
     /// Instance message and timer starts, factory and restore commits, and
     /// relocation state, because "만료된 owner 자격으로 새 Store 변경을 만들지
     /// 않는다". Handler invocation makes no Store change, so a Location Store
-    /// outage must not turn it away. The drain seal still applies to every
-    /// caller.
+    /// outage must not turn it away.
+    /// <paramref name="opensOwner"/>: true when the inbound makes this host a
+    /// new owner (relocation target staging). Host relocation §15 closes new
+    /// owner admission from `Relocating` on, but keeps payload and timers of
+    /// the owners this host already holds running until their unit seal; the
+    /// unit seal then holds them (§12). So a relocation fence refuses only an
+    /// owner-opening inbound, and the shutdown seal refuses every inbound.
     /// </summary>
     internal ZLinkInboundOperationAdmission TryEnterInboundOperation(
         bool countAsRequest,
@@ -1058,7 +1063,8 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
     /// </summary>
     internal ValueTask<ZLinkRuntimeOperationAdmission> TryAdmitInboundOperationAsync(
         bool countAsRequest,
-        bool ownsObjectWork = true
+        bool ownsObjectWork = true,
+        bool opensOwner = false
     )
     {
         if (
@@ -1073,18 +1079,22 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
                 : ValueTask.FromResult(default(ZLinkRuntimeOperationAdmission));
         }
 
-        return AdmitUnnestedInboundOperationAsync(countAsRequest, ownsObjectWork);
+        return AdmitUnnestedInboundOperationAsync(countAsRequest, ownsObjectWork, opensOwner);
     }
 
     private async ValueTask<ZLinkRuntimeOperationAdmission> AdmitUnnestedInboundOperationAsync(
         bool countAsRequest,
-        bool ownsObjectWork
+        bool ownsObjectWork,
+        bool opensOwner
     )
     {
         var admission = await _stateLane
             .RunAsync(() =>
             {
-                if (_drainAdmission.IsSealed || (ownsObjectWork && !IsOwnerAdmissionOpen))
+                var sealedForInbound = opensOwner
+                    ? _drainAdmission.IsSealed
+                    : _drainAdmission.IsSealedForShutdown;
+                if (sealedForInbound || (ownsObjectWork && !IsOwnerAdmissionOpen))
                 {
                     return (
                         Admitted: (ZLinkFrameworkComponentState?)null,
@@ -1104,7 +1114,10 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
                     );
                 }
                 return (
-                    Admitted: (ZLinkFrameworkComponentState?)AdmitOperationOnLane(countAsRequest),
+                    Admitted: (ZLinkFrameworkComponentState?)AdmitOperationOnLane(
+                        countAsRequest,
+                        sealDecided: true
+                    ),
                     Accepted: true,
                     Neutral: false
                 );
@@ -1599,13 +1612,21 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
             .ConfigureAwait(false);
     }
 
-    private ZLinkFrameworkComponentState AdmitOperationOnLane(bool countAsRequest)
+    /// <summary>
+    /// <paramref name="sealDecided"/>: the inbound caller already applied the
+    /// drain gate for its kind, so the relocation fence must not refuse it
+    /// again through <c>_acceptingOperations</c>.
+    /// </summary>
+    private ZLinkFrameworkComponentState AdmitOperationOnLane(
+        bool countAsRequest,
+        bool sealDecided = false
+    )
     {
         //  네 조건을 한 문장으로 뭉치면 호출자는 admission seal인지, 아직 기동
         //  중인지, owner lease가 닫힌 것인지 구분할 수 없다. 조사할 때마다 여기에
         //  계측을 다시 심게 되므로 어느 조건인지 메시지에 남긴다.
         var refusal =
-            !_acceptingOperations ? "application admission is sealed"
+            !sealDecided && !_acceptingOperations ? "application admission is sealed"
             : Volatile.Read(ref _lifecyclePhase) != (int)ZLinkRuntimeLifecyclePhase.Running
                 ? $"lifecycle phase is {(ZLinkRuntimeLifecyclePhase)Volatile.Read(ref _lifecyclePhase)}"
             : _state is null ? "runtime state is not created"

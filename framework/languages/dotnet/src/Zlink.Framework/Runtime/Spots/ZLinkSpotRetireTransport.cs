@@ -896,7 +896,9 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
     )
     {
         var admission = (
-            await runtime.TryAdmitInboundOperationAsync(countAsRequest: false).ConfigureAwait(false)
+            await runtime
+                .TryAdmitInboundOperationAsync(countAsRequest: false, opensOwner: true)
+                .ConfigureAwait(false)
         ).EnterInbound();
         if (!admission.Accepted)
             throw new ZLinkFrameworkException(
