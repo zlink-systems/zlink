@@ -32,15 +32,22 @@ namespace Zlink.Framework.UnitTests.Runtime;
 public sealed partial class EntrySpotActorDispatchTests
 {
     [Theory]
-    [InlineData("same", 1)]
-    [InlineData("other-rid", 0)]
-    [InlineData("other-owner-generation", 0)]
-    [InlineData("other-binding-generation", 0)]
-    [InlineData("absent", 1)]
-    [InlineData("malformed", 0)]
+    [InlineData("same", 1, false)]
+    [InlineData("other-rid", 0, false)]
+    [InlineData("other-owner-generation", 0, false)]
+    [InlineData("other-binding-generation", 0, false)]
+    [InlineData("absent", 1, false)]
+    [InlineData("malformed", 0, false)]
+    [InlineData("same", 1, true)]
+    [InlineData("other-rid", 0, true)]
+    [InlineData("other-owner-generation", 0, true)]
+    [InlineData("other-binding-generation", 0, true)]
+    [InlineData("absent", 1, true)]
+    [InlineData("malformed", 0, true)]
     public async Task Disconnect_pipeline_uses_body_identity_after_message_follow(
         string scenario,
-        int callbacks
+        int callbacks,
+        bool request
     )
     {
         var logs = new DisconnectLogProvider();
@@ -65,16 +72,26 @@ public sealed partial class EntrySpotActorDispatchTests
                     sessionOwnerNodeGeneration: scenario == "other-owner-generation" ? 3UL : 2UL
                 );
             var endpoint = new DisconnectEndpoint(new ProbeActor(actorRef.ActorId));
+            var replies = new List<byte[]>();
             var frame = new ZLinkSpotActorFrame(
                 ZLinkApplicationJobOrigin.Remote,
                 actorRef,
                 actorRef,
                 RoutingId.From("message-follow-hop"),
                 RoutingId.From("hop-session"),
-                0,
-                0,
+                request ? 7UL : 0UL,
+                request ? ZLinkActorBoundSessionRelay.ActorRecvInfoNoBind : 0,
                 new ZLinkBackendActorRouteContext(default, 1, 0, 0, 0),
-                CreateHeader(ZLinkRemoteActorJoinPackets.SessionDisconnectedPacketName),
+                request
+                    ? new ZlinkStreamHeader(
+                        ZlinkStreamMessageKind.Request,
+                        ZlinkStreamCodec.Raw,
+                        ZlinkStreamHeaderFlags.HasRequestSeq,
+                        new ZlinkStreamRequestSeq(7),
+                        ZLinkRemoteActorJoinPackets.SessionDisconnectedPacketName,
+                        ZlinkStreamMetadata.Empty
+                    )
+                    : CreateHeader(ZLinkRemoteActorJoinPackets.SessionDisconnectedPacketName),
                 Message.From(
                     scenario == "malformed"
                         ? []
@@ -83,7 +100,12 @@ public sealed partial class EntrySpotActorDispatchTests
                             2,
                             7
                         )
-                )
+                ),
+                directReply: parts =>
+                {
+                    replies.Add(parts.Single().AsReadOnlySpan().ToArray());
+                    return SubmitResult.Ok;
+                }
             );
             await state.ExecuteDispatchAsync(
                 ct =>
@@ -94,6 +116,25 @@ public sealed partial class EntrySpotActorDispatchTests
                 CancellationToken.None
             );
             Assert.Equal(callbacks, endpoint.Calls);
+            if (request)
+            {
+                Assert.Collection(
+                    replies,
+                    reply =>
+                    {
+                        Assert.True(
+                            ZLinkStreamFrameCodec.TryDecode(reply, out var header, out var body)
+                        );
+                        Assert.Equal(
+                            ZlinkStreamMessageKind.Response,
+                            ZLinkStreamProtocolDefaults.DecodeHeader(header.ToArray()).Kind
+                        );
+                        Assert.Empty(body.ToArray());
+                    }
+                );
+            }
+            else
+                Assert.Empty(replies);
             if (scenario == "malformed")
                 Assert.Contains(
                     logs.Events,
@@ -4289,8 +4330,10 @@ public sealed partial class EntrySpotActorDispatchTests
         }
     }
 
-    [Fact]
-    public async Task Remote_Disconnect_Relay_Allocates_An_Operation_Fence()
+    [Theory]
+    [InlineData("")]
+    [InlineData("not-json")]
+    public async Task Remote_Disconnect_Relay_Allocates_An_Operation_Fence(string terminalPayload)
     {
         var node = new CapturingSpotNode();
         var (runtime, actor) = await CreateStartedRuntimeAsync(node, includeActorFactory: false);
@@ -4355,8 +4398,8 @@ public sealed partial class EntrySpotActorDispatchTests
                 using var terminal = Message.From(
                     new ZLinkActorReply(
                         ZlinkStreamMessageKind.Response,
-                        ZlinkStreamCodec.Json,
-                        ZLinkFrameworkJsonPayloadCodec.Serialize(true),
+                        ZlinkStreamCodec.Raw,
+                        Encoding.UTF8.GetBytes(terminalPayload),
                         ZlinkStreamHeaderFlags.None,
                         ZlinkStreamMetadata.Empty
                     ).ToFrame(header)
@@ -13831,9 +13874,10 @@ public sealed partial class EntrySpotActorDispatchTests
         public ZLinkServiceWireCodec.RequestSourceFence? ResolveRequestSourceFence(
             RoutingId sourceNodeRid,
             ulong sourceNodeGeneration
-        ) => _requestSources.TryGetValue((sourceNodeRid, sourceNodeGeneration), out var source)
-            ? source
-            : null;
+        ) =>
+            _requestSources.TryGetValue((sourceNodeRid, sourceNodeGeneration), out var source)
+                ? source
+                : null;
 
         public void ObserveActorAuthority(
             ZLinkBackendActorRef actor,

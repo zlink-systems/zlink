@@ -8,6 +8,54 @@ namespace Zlink.Framework.UnitTests;
 
 public sealed class ActorClientTests
 {
+    [Theory]
+    [InlineData("")]
+    [InlineData("not-json")]
+    public void ActorReplyDecoder_TerminalIgnoresSuccessfulBody(string payload)
+    {
+        var parts = ActorReplyParts(ZlinkStreamMessageKind.Response, payload);
+        try
+        {
+            ZLinkActorReplyDecoder.DecodeTerminal(parts);
+        }
+        finally
+        {
+            ZLinkMessageParts.DisposeAll(parts);
+        }
+    }
+
+    [Theory]
+    [InlineData(
+        ZlinkStreamMessageKind.Error,
+        "{\"code\":\"not_found\",\"message\":\"gone\"}",
+        ZLinkFrameworkErrorKind.NotFound
+    )]
+    [InlineData(ZlinkStreamMessageKind.Send, "", ZLinkFrameworkErrorKind.ProtocolError)]
+    [InlineData(ZlinkStreamMessageKind.Error, "not-json", ZLinkFrameworkErrorKind.ProtocolError)]
+    public void ActorReplyDecoder_TerminalPreservesFailure(
+        ZlinkStreamMessageKind kind,
+        string payload,
+        ZLinkFrameworkErrorKind expected
+    )
+    {
+        var parts = ActorReplyParts(kind, payload);
+        try
+        {
+            Assert.Equal(
+                expected,
+                Assert
+                    .Throws<ZLinkFrameworkException>(() =>
+                        ZLinkActorReplyDecoder.DecodeTerminal(parts)
+                    )
+                    .Kind
+            );
+        }
+        finally
+        {
+            ZLinkMessageParts.DisposeAll(parts);
+        }
+    }
+
     [Fact]
     public void ActorReplyDecoder_MapsEmptyReplyToProtocolError()
     {

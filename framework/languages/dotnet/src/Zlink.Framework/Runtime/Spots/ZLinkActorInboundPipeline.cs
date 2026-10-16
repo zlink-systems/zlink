@@ -742,8 +742,8 @@ internal sealed class ZLinkActorInboundPipeline(
             ? ZLinkActorReply.FromError(failure)
             : new ZLinkActorReply(
                 ZlinkStreamMessageKind.Response,
-                ZlinkStreamCodec.Json,
-                ZLinkFrameworkJsonPayloadCodec.Serialize(true),
+                ZlinkStreamCodec.Raw,
+                [],
                 ZlinkStreamHeaderFlags.None,
                 ZlinkStreamMetadata.Empty
             );
