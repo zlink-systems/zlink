@@ -51,7 +51,7 @@
     {
       "id": "instance",
       "role": "instance",
-      "title": "Instance nodes \ud69eN",
+      "title": "Instance nodes ×N",
       "config": "server/config/instance.json"
     },
     {
