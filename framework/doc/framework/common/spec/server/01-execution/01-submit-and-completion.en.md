@@ -455,6 +455,11 @@ in which the other resource's whole upper call stack has returned is not require
 [Messaging Hot Path "4.4"](08-messaging-hot-path.en.md#44-placing-the-execution-resource--handing-off-the-receive-role)
 decides which execution resource runs that turn.
 
+**Where a wait started doesn't change this condition.** A wait that started outside a runtime execution
+context, such as on an application thread, and so has no lane to return to, also doesn't resume on the
+call stack that decided the completion (a binding completion thread or an offload worker); it resumes in
+a new turn of the completion dispatcher.
+
 **Putting a completion callback on the dispatcher cannot fail.** The dispatcher has no limit.
 Nothing rejects a request for lack of a slot, and nothing throws away the completion of a
 call already accepted.

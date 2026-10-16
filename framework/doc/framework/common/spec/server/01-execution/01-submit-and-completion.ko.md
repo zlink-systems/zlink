@@ -419,6 +419,10 @@ dispatcher에 넣고, 아래에서 정한 새 execution turn 조건에 따라 �
 실행하는지는 [Messaging hot path 「4.4」](08-messaging-hot-path.ko.md#44-실행-자원-배치--수신-역할-인계)가
 정한다.
 
+**대기를 어디서 시작했는지는 이 조건을 바꾸지 않는다.** Application thread처럼 runtime 실행 문맥 밖에서
+시작해 돌아갈 lane이 없는 대기도, 완료를 확정한 호출 stack(binding 완료 thread나 offload worker)에서
+재개하지 않고 completion dispatcher의 새 turn에서 재개한다.
+
 **완료 callback을 dispatcher에 넣는 일은 실패하지 않는다.** Dispatcher에 상한이 없기
 때문이다. 자리가 없다는 이유로 request를 거부하거나, 이미 수락한 호출의 완료를 버리는
 길은 없다.
