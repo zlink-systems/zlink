@@ -607,9 +607,12 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
 
   /** Spec 28 §4.4: the target owner alone orders shutdown seal and verified cutover. */
   private targetStageSealed(stage: LocalStage): boolean {
-    return (
-      !stage.cutoverReceived && (this.disposed || this.options.targetAdmissionSealed?.() === true)
-    );
+    return !stage.cutoverReceived && this.targetAdmissionSealed();
+  }
+
+  /** The Shutdown admission seal: closed once the target owner starts shutdown. */
+  private targetAdmissionSealed(): boolean {
+    return this.disposed || this.options.targetAdmissionSealed?.() === true;
   }
 
   completeActorJoinSourceCleanup(actorId: string): void {
@@ -2876,6 +2879,14 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     sourceNodeRid: RoutingId,
     signal?: AbortSignal
   ): Promise<ServiceMaintenanceRelocationReady> {
+    // Host relocation flow 05: a sealed target refuses a new PREPARE before any
+    // staging. The typed ShuttingDown reaches the source as relocationFailed.
+    if (this.targetAdmissionSealed()) {
+      throw new ZLinkFrameworkException(
+        ZLinkFrameworkErrorKind.ShuttingDown,
+        'Relocation target admission is sealed for shutdown.'
+      );
+    }
     const targetStatus = this.requireMeshNode(meshName).status();
     const targetOwner = this.options.currentOwner();
     const targetDescriptor = this.options.localDescriptor?.(meshName);
