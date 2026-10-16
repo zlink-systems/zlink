@@ -201,17 +201,26 @@ internal sealed class ZLinkClientServerDiscovery : IAsyncDisposable
             owner.LeaseGeneration,
             default
         );
-        var result = await _store
-            .UpdateClientServerAsync(descriptor, intent, cancellationToken)
+        var result = await ZLinkDescriptorPublicationUnconfirmedException
+            .WriteAsync(
+                token => _store.UpdateClientServerAsync(descriptor, intent, token),
+                _options.OwnerLeaseRenewTimeout,
+                cancellationToken
+            )
             .ConfigureAwait(false);
         if (
             result.Status == ZLinkLocationWriteStatus.RejectedConflict
             && intent == ZLinkLocationWriteIntent.NewClaim
         )
-            result = await _store
-                .UpdateClientServerAsync(
-                    descriptor,
-                    ZLinkLocationWriteIntent.Takeover,
+            result = await ZLinkDescriptorPublicationUnconfirmedException
+                .WriteAsync(
+                    token =>
+                        _store.UpdateClientServerAsync(
+                            descriptor,
+                            ZLinkLocationWriteIntent.Takeover,
+                            token
+                        ),
+                    _options.OwnerLeaseRenewTimeout,
                     cancellationToken
                 )
                 .ConfigureAwait(false);
