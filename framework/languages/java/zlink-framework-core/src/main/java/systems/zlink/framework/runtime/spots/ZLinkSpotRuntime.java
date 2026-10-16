@@ -2035,6 +2035,11 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         return spotLifecycle.userSpotCount();
     }
 
+    /** Instance Spots activated in this process. */
+    public int activeInstanceSpotCount() {
+        return instanceSpotActivations.size();
+    }
+
     /** User and Instance Spots activated on the named MeshNode in this process. */
     public int activeSpotCount(String meshName) {
         int userSpots = spotLifecycle.userSpotCount(meshName);
