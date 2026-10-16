@@ -52,7 +52,8 @@ int main (int argc, char **argv)
                 if (requested.contains (scenario.name))
                     selected.push_back (scenario);
         }
-        world = std::make_unique<MyGame::E2E::World> (root, bin);
+        world =
+          std::make_unique<MyGame::E2E::World> (root, bin, static_cast<int> (selected.size ()));
         const auto endpoint = world->start ();
         for (const auto &scenario : selected) {
             current = scenario.name;

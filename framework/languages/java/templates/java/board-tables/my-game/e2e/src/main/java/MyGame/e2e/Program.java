@@ -15,15 +15,16 @@ public final class Program {
         Structure.require(
                 args.length == 0 || (args.length == 2 && args[0].equals("--scenario")),
                 "Use --scenario a,b");
-        var selected =
+        var requested =
                 (args.length == 0 ? Names.SCENARIOS : List.of(args[1].split(",", -1)))
                         .stream().map(Scenario::parse).toList();
         Structure.require(
-                !selected.isEmpty() && new HashSet<>(selected).size() == selected.size(),
+                !requested.isEmpty() && new HashSet<>(requested).size() == requested.size(),
                 "Invalid scenarios");
+        var selected = Arrays.stream(Scenario.values()).filter(requested::contains).toList();
         int passed = 0;
         boolean cleanupFailed = false;
-        var nodes = new Nodes(root);
+        var nodes = new Nodes(root, selected.size());
         try {
             System.out.println("Logs: " + nodes.logs);
             nodes.start();

@@ -63,7 +63,7 @@ Use `./run-e2e.sh --check-structure` or `pwsh -NoProfile -File ./run-e2e.ps1 -Ch
 
 Public Framework 0.30.0 can fail cross-node deferred Actor join with `DATA_LOST` (`target rejected canonical relocation: 35`, #1729). Host relocation has also returned `BLOCKED/RELOCATION_FAILED` during the `update` scenario; WSL has also observed `RELOCATED` with `safeToShutdown=false` until the control wait expired. The underlying relocation causes remain unconfirmed. These failures prevent full e2e acceptance on 0.30.0. The template pins 0.30.1; validate all scenarios with that package before deployment.
 
-Message Follow is explicitly configured for 30 seconds. The `SAFE_TO_SHUTDOWN` observation budget is that period plus the existing relocation budget. Update waits for replacement `READY`, then completes a hand at a new table; normal placement may select either live Table node.
+Message Follow is explicitly configured for 30 seconds. The `SAFE_TO_SHUTDOWN` observation budget is that period plus the existing relocation budget. Update waits for replacement `READY`, then asserts that the replacement hosts the new table and completes a hand.
 
 ## Deployment sequence
 
@@ -74,6 +74,8 @@ Message Follow is explicitly configured for 30 seconds. The `SAFE_TO_SHUTDOWN` o
 5. Start the replacement Table process with the same configuration. Wait for `READY` before submitting new work.
 
 Production launchers use the configuration files directly. The e2e runner derives its node IDs and configuration paths from the structure and replaces Redis, key-prefix and listener endpoint values only in its run-specific copies. Application transfer contains no Framework routing, membership or lease state.
+
+The e2e runner sets each node's optional `tableCapacity` to the number of selected scenarios through the public Table stable-type limit. Each scenario retains one table. After update drains the source, the surviving node is at capacity, so only the replacement can host the new table. Both new players must observe the replacement node ID. Omitted or zero capacity leaves deployment capacity unlimited. Entry declarations describe the application Entry on Table nodes only; there are no fixed User Spots in this template.
 
 ## 한국어 실행 안내
 

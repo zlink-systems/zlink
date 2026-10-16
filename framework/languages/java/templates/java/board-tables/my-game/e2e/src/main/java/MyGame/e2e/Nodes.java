@@ -24,7 +24,10 @@ public final class Nodes implements AutoCloseable {
         return System.getProperty("os.name").startsWith("Windows");
     }
 
-    Nodes(Path root) throws Exception {
+    private final int tableCapacity;
+
+    Nodes(Path root, int tableCapacity) throws Exception {
+        this.tableCapacity = tableCapacity;
         this.root = root;
         logs = Files.createDirectories(root.resolve(".logs/run-" + runId));
     }
@@ -79,7 +82,8 @@ public final class Nodes implements AutoCloseable {
                             redis,
                             "my-game:" + runId + ":",
                             "tcp://127.0.0.1:0",
-                            role.equals("session") ? "tcp://127.0.0.1:0" : null);
+                            role.equals("session") ? "tcp://127.0.0.1:0" : null,
+                            tableCapacity);
             var path = logs.resolve(id + ".json");
             Json.MAPPER.writeValue(path.toFile(), config);
             configs.put(id, path);

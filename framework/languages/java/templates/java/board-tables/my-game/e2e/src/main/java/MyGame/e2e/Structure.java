@@ -133,11 +133,17 @@ public final class Structure {
             if (roles.get(text(node, "id")).equals("table"))
                 require(
                         spots.stream()
-                                .anyMatch(
-                                        p ->
-                                                p.path("owner").asText().equals(text(node, "id"))
-                                                        && p.path("kind").asText().equals("entry")),
-                        "Table node lacks Entry Spot");
+                                        .filter(
+                                                p ->
+                                                        p.path("owner")
+                                                                        .asText()
+                                                                        .equals(text(node, "id"))
+                                                                && p.path("kind")
+                                                                        .asText()
+                                                                        .equals("entry"))
+                                        .count()
+                                == 1,
+                        "Table node must declare exactly one application Entry Spot");
         for (var edge : array(s, "edges")) {
             require(
                     ids.contains(text(edge, "from")) && ids.contains(text(edge, "to")),

@@ -26,6 +26,7 @@ class World
     std::map<std::string, Node *> tables_;
     bool compose_started_ = false;
     int command_index_ = 0;
+    int table_capacity_;
     std::vector<std::string> compose (std::initializer_list<std::string> arguments) const
     {
         std::vector<std::string> result{"docker",         "compose",
@@ -46,6 +47,7 @@ class World
     start_node (const std::string &name, const std::string &role, bool replacement = false)
     {
         auto config = read_json (root_ / "server/config" / (name + ".json"));
+        config["TableCapacity"] = table_capacity_;
         config["RedisEndpoint"] = redis_;
         config["KeyPrefix"] = project_ + ":";
         config["MeshEndpoint"] = "tcp://127.0.0.1:0";
@@ -89,10 +91,11 @@ class World
     }
 
   public:
-    World (std::filesystem::path root, std::filesystem::path bin) :
+    World (std::filesystem::path root, std::filesystem::path bin, int table_capacity) :
         root_ (std::filesystem::canonical (root)),
         bin_ (std::filesystem::canonical (bin)),
-        project_ ("my-game-" + unique_id ())
+        project_ ("my-game-" + unique_id ()),
+        table_capacity_ (table_capacity)
     {
         logs_ = root_ / ".logs" / ("run-" + project_);
         std::filesystem::create_directories (logs_);

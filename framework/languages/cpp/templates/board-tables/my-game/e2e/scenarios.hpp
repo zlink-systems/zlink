@@ -74,19 +74,22 @@ settle (Client &a, Client &b, const HandDealt &ah, const HandDealt &bh, int firs
     a.healthy ();
     b.healthy ();
 }
-inline void initial (Client &a, Client &b)
+inline void initial (Client &a, Client &b, const std::string &expected_node = {})
 {
     const auto av = a.join (), bv = b.join ();
+    if (!expected_node.empty ())
+        require (av.nodeId == expected_node && bv.nodeId == expected_node,
+                 "Replacement node did not host new work");
     require (av.yourSeat == 0 && bv.yourSeat == 1, "Lowest empty seat was not allocated");
     require (bv.seats.size () == Rules::minimum_players, "Missing seated players");
     for (const auto &s : bv.seats)
         require (s.chips == Rules::initial_chips, "Invalid initial chips");
 }
-inline void table (const std::string &endpoint)
+inline void table (const std::string &endpoint, const std::string &expected_node = {})
 {
     const auto id = unique_id ();
     Client a (endpoint, "p1-" + id, "table-" + id), b (endpoint, "p2-" + id, "table-" + id);
-    initial (a, b);
+    initial (a, b, expected_node);
     const auto [ah, bh] = start (a, b);
     b.send (BetRequest{bh.handNumber, Bets::table_second});
     require (b.next<ActionRejected> ().reason == Rules::not_your_turn,
@@ -170,6 +173,6 @@ inline void update (const std::string &endpoint, World &world)
     world.replace_table (state.before.nodeId);
     a.close ();
     b.close ();
-    table (endpoint);
+    table (endpoint, state.before.nodeId);
 }
 }

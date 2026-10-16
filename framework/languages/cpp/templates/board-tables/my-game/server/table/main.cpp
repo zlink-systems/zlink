@@ -16,10 +16,12 @@ int main (int argc, char **argv)
           MyGame::Names::player, std::make_shared<MyGame::PlayerFactory> (), [] (auto &factory) {
               factory.template preserve_state_with<MyGame::PlayerRelocation> ();
           });
-        objects
-          .add_spot_factory<MyGame::Table, MyGame::fx::actor_client_t, MyGame::NodeConfig> (
-            MyGame::Names::table)
-          .set_execution_mode (MyGame::fx::user_spot_execution_mode_t::spot_wide)
+        auto table_factory =
+          objects.add_spot_factory<MyGame::Table, MyGame::fx::actor_client_t, MyGame::NodeConfig> (
+            MyGame::Names::table);
+        if (config.TableCapacity > 0)
+            table_factory.set_stable_type_limit (config.TableCapacity);
+        table_factory.set_execution_mode (MyGame::fx::user_spot_execution_mode_t::spot_wide)
           .preserve_state_with<MyGame::TableRelocation> ();
         return MyGame::run_host (app, config, true, argc, argv);
     }

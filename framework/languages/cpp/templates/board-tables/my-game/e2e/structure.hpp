@@ -131,11 +131,13 @@ inline void check_structure (const std::filesystem::path &root)
              "Missing dynamic Table family");
     for (const auto &[id, role] : roles)
         if (role == "table")
-            require (std::any_of (spots.begin (), spots.end (),
-                                  [&id] (const auto &spot) {
-                                      return spot.at ("kind") == "entry" && spot.at ("owner") == id;
-                                  }),
-                     "Table node lacks Entry Spot: " + id);
+            require (std::count_if (spots.begin (), spots.end (),
+                                    [&id] (const auto &spot) {
+                                        return spot.at ("kind") == "entry"
+                                               && spot.at ("owner") == id;
+                                    })
+                       == 1,
+                     "Table node must declare exactly one application Entry Spot: " + id);
     for (const auto &edge : j.at ("edges")) {
         require (nodes.contains (nonempty (edge, "from")) && nodes.contains (nonempty (edge, "to")),
                  "Unknown edge endpoint");

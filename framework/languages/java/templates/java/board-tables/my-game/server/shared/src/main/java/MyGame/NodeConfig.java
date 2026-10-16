@@ -5,4 +5,10 @@ public record NodeConfig(
         String redisEndpoint,
         String keyPrefix,
         String meshEndpoint,
-        String streamEndpoint) {}
+        String streamEndpoint,
+        int tableCapacity) {
+    public NodeConfig {
+        if (tableCapacity < 0)
+            throw new IllegalArgumentException("Table capacity must be nonnegative");
+    }
+}

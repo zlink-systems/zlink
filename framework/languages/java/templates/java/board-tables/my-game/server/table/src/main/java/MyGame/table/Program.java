@@ -26,7 +26,13 @@ public class Program {
                     .server()
                     .addEntrySpot(Entry.class)
                     .addSpotFactory(
-                            Names.TABLE, Table.class, b -> b.preserveStateWith(TableTransfer.class))
+                            Names.TABLE,
+                            Table.class,
+                            b -> {
+                                if (config.tableCapacity() > 0)
+                                    b.stableTypeLimit(config.tableCapacity());
+                                b.preserveStateWith(TableTransfer.class);
+                            })
                     .addActorFactory(
                             Names.PLAYER,
                             Player.class,
