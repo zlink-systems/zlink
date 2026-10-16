@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 
 import org.junit.jupiter.api.RepeatedTest;
 
+import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode.PeerRouteObservation;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 
 import java.time.Duration;
@@ -31,8 +32,9 @@ final class ZLinkJavaDurableRequestOwnerTest {
         var checked =
                 ZLinkJavaDurableRequest.request(
                                 () -> reply,
-                                (frames, timeout) -> pending,
+                                (frames, timeout, admission) -> pending,
                                 () -> false,
+                                () -> new PeerRouteObservation(1, true),
                                 listener -> {
                                     listener.run();
                                     return () -> {};

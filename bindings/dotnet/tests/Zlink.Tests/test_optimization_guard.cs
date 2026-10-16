@@ -280,7 +280,7 @@ public sealed class test_optimization_guard
     {
         string source = File.ReadAllText(Path.Combine(BindingRoot(), "src",
             "Zlink", "Runtime", "Messaging", "Message.NativeVector.cs"));
-        int move = source.IndexOf("var rc = NativeMethods.zlink_msg_move(ref msg._msg",
+        int move = source.IndexOf("var rc = NativeMethods.zlink_msg_move(ref msg.",
             StringComparison.Ordinal);
         Assert.True(move >= 0);
         int capture = source.IndexOf("var errno = NativeMethods.GetLastPInvokeError();",

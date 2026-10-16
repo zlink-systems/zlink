@@ -269,7 +269,6 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
                 && !host.isRelocating()
                 && !closeStarted()
                 && System.nanoTime() - lastActivityNanos >= timeout
-                && !hasActiveRouteReceives()
                 && !context.hasActiveTimers();
     }
 
@@ -334,7 +333,12 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
             if (admission != null) admission.completeExceptionally(hostRejection);
             return CompletableFuture.failedFuture(hostRejection);
         }
-        trackRouteReceived(received);
+        CompletableFuture<Void> accepted =
+                admission == null ? new CompletableFuture<>() : admission;
+        accepted.whenComplete(
+                (ignored, failure) -> {
+                    if (failure != null) received.close();
+                });
         CompletionStage<Void> admitted;
         try {
             ParsedPacket observed = null;
@@ -348,7 +352,8 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
                                     : ZLinkSpotFlowFrame.fromEnvelopeHeader(observed.header());
                 } catch (systems.zlink.framework.errors.ZLinkFrameworkException invalidEnvelope) {
                     failRouteInvalidFlow(received, invalidEnvelope);
-                    if (admission != null) admission.complete(null);
+                    accepted.complete(null);
+                    received.close();
                     return CompletableFuture.completedFuture(null);
                 }
             }
@@ -356,6 +361,9 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
                     context.enqueueMessage(
                             received,
                             () -> {
+                                // Pending frames belong to the accepted queue record. Only the
+                                // executing handler is registered for terminal dispatch cleanup.
+                                trackRouteReceived(received);
                                 ParsedPacket packet;
                                 try {
                                     packet = ZLinkSpotRuntime.parsePacket(received.parts());
@@ -370,7 +378,7 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
                                 }
                                 return dispatchSpotRouteHandler(received, packet);
                             },
-                            admission);
+                            accepted);
             if (observed != null) {
                 try (var ignored =
                         systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext
@@ -392,13 +400,14 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
                 }
             }
         } catch (RuntimeException | Error failure) {
-            if (admission != null) admission.completeExceptionally(failure);
+            accepted.completeExceptionally(failure);
             closeRouteReceived(received);
             throw failure;
         }
         return admitted.whenComplete(
                 (done, failure) -> {
                     if (failure != null) {
+                        accepted.completeExceptionally(failure);
                         closeRouteReceived(received);
                     }
                 });
@@ -470,9 +479,7 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
                         () -> {
                             boolean retryIdle =
                                     reason == ZLinkSpotCloseReason.IDLE_EVICTED
-                                            && (!isIdleCandidateOnLane()
-                                                    || context.hasActiveTimers()
-                                                    || hasActiveRouteReceives());
+                                            && !isIdleCandidateOnLane();
                             if (retryIdle) {
                                 return new CloseStart(true, null);
                             }
@@ -526,20 +533,6 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
                                                             backendSpot.closeInstanceSpot();
                                                             return CompletableFuture
                                                                     .completedFuture(null);
-                                                        }),
-                                                ZLinkSpotCloseCoordinator.Step.operation(
-                                                        () -> {
-                                                            return context.ownerQueue()
-                                                                    .pendingMessages()
-                                                                    .thenAccept(
-                                                                            messages -> {
-                                                                                messages.forEach(
-                                                                                        message ->
-                                                                                                transferRouteReceived(
-                                                                                                        (ZLinkBackendReceived)
-                                                                                                                message));
-                                                                                closeActiveRouteReceives();
-                                                                            });
                                                         }),
                                                 ZLinkSpotCloseCoordinator.Step.operation(
                                                         context::closeTimersAsync),

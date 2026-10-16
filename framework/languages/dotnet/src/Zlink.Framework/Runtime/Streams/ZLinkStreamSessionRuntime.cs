@@ -10,6 +10,10 @@ namespace Zlink.Framework.Runtime.Streams;
 
 internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
 {
+    private static readonly TimeSpan ActorBindingReplacementCloseDelay = TimeSpan.FromMilliseconds(
+        100
+    );
+
     private readonly ZLinkSessionContext _context;
     private readonly ZLinkMessageFlowTracer _flow;
     private readonly ZLinkStreamSessionLiveness _liveness;
@@ -321,8 +325,7 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
         string sessionOwnerId,
         ulong sessionOwnerLeaseGeneration,
         RoutingId sessionRid,
-        ulong retiredBindingGeneration,
-        string bindingToken
+        ulong retiredBindingGeneration
     )
     {
         var identity = new ActorBindingReplacementIdentity(
@@ -332,8 +335,7 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
             sessionOwnerId,
             sessionOwnerLeaseGeneration,
             sessionRid,
-            retiredBindingGeneration,
-            bindingToken
+            retiredBindingGeneration
         );
         if (
             !AwaitStateLane(
@@ -937,7 +939,7 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
                         closure.Owner.OnReplacementCloseTimer(closure.Identity);
                     },
                     new ReplacementCloseTimerState(this, identity),
-                    TimeSpan.FromMilliseconds(100),
+                    ActorBindingReplacementCloseDelay,
                     Timeout.InfiniteTimeSpan
                 );
                 _replacementCloseTimers.Add(identity, timer);
@@ -961,24 +963,16 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
 
     private ValueTask CloseRetiredSessionIfExactAsync(ActorBindingReplacementIdentity identity)
     {
-        if (
-            !_context.Runtime.TryGetSessionActorBinding(
-                identity.ActorId,
-                identity.BindingToken,
-                out var current
-            )
-            || !ReferenceEquals(current.Context, _context)
-            || current.ActorRef.SessionRid != identity.SessionRid
-            || current.BindingGeneration != identity.RetiredBindingGeneration
-            || current.SessionOwnerNodeRid != identity.SessionOwnerNodeRid
-            || current.SessionOwnerNodeGeneration != identity.SessionOwnerNodeGeneration
-            || !string.Equals(
-                current.SessionOwnerId,
-                identity.SessionOwnerId,
-                StringComparison.Ordinal
-            )
-            || current.SessionOwnerLeaseGeneration != identity.SessionOwnerLeaseGeneration
-        )
+        var binding = _context.Runtime.GetExactRetiredSessionBinding(
+            ZLinkActorId.FromBoundary(identity.ActorId, nameof(identity.ActorId)),
+            identity.SessionOwnerNodeRid,
+            identity.SessionRid,
+            identity.SessionOwnerNodeGeneration,
+            identity.SessionOwnerId,
+            identity.SessionOwnerLeaseGeneration,
+            identity.RetiredBindingGeneration
+        );
+        if (binding is null || !ReferenceEquals(binding.Context, _context))
             return ValueTask.CompletedTask;
 
         if (
@@ -1338,8 +1332,7 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
         string SessionOwnerId,
         ulong SessionOwnerLeaseGeneration,
         RoutingId SessionRid,
-        ulong RetiredBindingGeneration,
-        string BindingToken
+        ulong RetiredBindingGeneration
     );
 
     private sealed record ReplacementCloseTimerState(

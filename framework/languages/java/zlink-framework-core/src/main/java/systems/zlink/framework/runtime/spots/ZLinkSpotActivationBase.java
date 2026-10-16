@@ -158,10 +158,6 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> {
         closeRouteReceived(received);
     }
 
-    final boolean hasActiveRouteReceives() {
-        return !activeRouteReceives.isEmpty();
-    }
-
     CompletionStage<Void> dispatchResolvedActorPacket(
             ZLinkActor actor,
             ActorPacketFrames.Header packetHeader,

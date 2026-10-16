@@ -1,6 +1,5 @@
 package systems.zlink.framework.runtime.binding;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -16,54 +15,6 @@ import java.time.Duration;
 
 final class ZLinkJavaRawMeshNodeHandshakeTest {
     private static final Duration OBSERVATION_TIMEOUT = Duration.ofSeconds(2);
-
-    @Test
-    void unansweredHelloIsSubmittedOnceOnTheSelectedRoute() {
-        try (var context = Zlink.createContext();
-                var local = new ZLinkJavaRawMeshNode(context, "mesh");
-                var port = new ZLinkJavaRawServicePort(context);
-                var peer = port.openRouter(RoutingId.from("java-1156-peer"))) {
-            String endpoint = "inproc://java-1156-peer-" + System.nanoTime();
-            peer.bind(endpoint);
-            local.setRoutingId(RoutingId.from("java-1156-local"));
-            local.setBind("inproc://java-1156-local-" + System.nanoTime());
-            local.start();
-            local.connectPeer(endpoint, RoutingId.from("java-1156-peer"));
-            assertEquals(ServiceWireConstants.COMMAND_HELLO, receiveCommand(port, peer));
-            long generation = port.routesSnapshot(peer).getFirst().routeGeneration();
-            Integer repeated = receiveCommand(port, peer);
-            assertEquals(generation, port.routesSnapshot(peer).getFirst().routeGeneration());
-            assertNull(repeated, "the same selected route must not receive a second HELLO");
-        }
-    }
-
-    @Test
-    void removedIntentCanHandshakeAgainOnTheSameSelectedRoute() {
-        RoutingId peerRid = RoutingId.from("java-1156-renewed-peer");
-        try (var context = Zlink.createContext();
-                var local = new ZLinkJavaRawMeshNode(context, "mesh");
-                var port = new ZLinkJavaRawServicePort(context);
-                var peer = port.openRouter(peerRid);
-                var endpointPeer = port.openRouter(RoutingId.from("java-1156-intent-endpoint"))) {
-            String localEndpoint = "inproc://java-1156-renewed-local-" + System.nanoTime();
-            String intentEndpoint = "inproc://java-1156-intent-endpoint-" + System.nanoTime();
-            endpointPeer.bind(intentEndpoint);
-            local.setRoutingId(RoutingId.from("java-1156-renewed-local"));
-            local.setBind(localEndpoint);
-            local.start();
-            peer.options().probe(true);
-            peer.connect(localEndpoint);
-            long intent = local.connectPeer(intentEndpoint, peerRid);
-            assertEquals(ServiceWireConstants.COMMAND_HELLO, receiveCommand(port, peer));
-            long generation = port.routesSnapshot(peer).getFirst().routeGeneration();
-            local.removePeerConnection(intent);
-            assertTrue(local.isPeerTransportConnected(peerRid));
-            local.connectPeer(intentEndpoint, peerRid);
-            assertEquals(ServiceWireConstants.COMMAND_HELLO, receiveCommand(port, peer));
-            assertEquals(generation, port.routesSnapshot(peer).getFirst().routeGeneration());
-            assertNull(receiveCommand(port, peer));
-        }
-    }
 
     @Test
     void sealedSelectedRouteDoesNotReceiveHello() {

@@ -10,6 +10,7 @@ import systems.zlink.contracts.sockets.ReceiveFlowState;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceLivenessRegistry;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceNodeDescriptor;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceTopologyRegistry;
+import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
@@ -64,7 +65,8 @@ final class ZLinkJavaRawMeshNodeLivenessCloseTest {
             set(node, "topology", topology);
             assertEquals(
                     ZLinkServiceTopologyRegistry.AdmissionResult.ADMITTED,
-                    topology.admit(descriptor(peer), "route:11"));
+                    topology.admit(
+                            descriptor(peer), "route:11", ServiceWireConstants.COMMAND_HELLO));
             var liveness = (ZLinkServiceLivenessRegistry) field(node, "liveness");
             var retired = liveness.admit(peer, "route:11", 0);
             topology.bindLiveness(peer, retired);
@@ -82,7 +84,7 @@ final class ZLinkJavaRawMeshNodeLivenessCloseTest {
             var observed = pending.whenComplete((ignored, failure) -> terminals.incrementAndGet());
             if (receive) retired.recordReceived(Duration.ofSeconds(14).toNanos());
             if (replacement) {
-                topology.admit(descriptor(peer), "route:12");
+                topology.admit(descriptor(peer), "route:12", ServiceWireConstants.COMMAND_HELLO);
                 topology.bindLiveness(
                         peer, liveness.admit(peer, "route:12", Duration.ofSeconds(14).toNanos()));
             }

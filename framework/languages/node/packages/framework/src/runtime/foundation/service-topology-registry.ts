@@ -8,7 +8,10 @@ import {
 } from '../../contracts/Configuration/RegistrationBuilderPolicy';
 import { descriptorConnectionNotRequired } from './route-mesh-connection-policy';
 import { SmoothWeightedSelection } from './service-weighted-selection';
-import { SERVICE_WIRE_REQUIRED_CAPABILITY } from './service-wire-constants.generated';
+import {
+  SERVICE_WIRE_REQUIRED_CAPABILITY,
+  ServiceWireCommand
+} from './service-wire-constants.generated';
 
 export type ServiceNodeState =
   'preparing' | 'serving' | 'retiring' | 'draining' | 'stopped' | 'error';
@@ -40,8 +43,14 @@ export interface ServiceNodeDescriptor {
   readonly pendingCapacityUsed: number;
 }
 
-export interface AdmittedServicePeer {
+interface ServiceRouteAdmission {
   readonly descriptor: ServiceNodeDescriptor;
+  readonly descriptorBytes?: Uint8Array;
+  readonly connectionId?: string | bigint;
+  readonly remoteAdmitReceived?: boolean;
+}
+
+export interface AdmittedServicePeer extends ServiceRouteAdmission {
   // The Core selected-route generation this admission belongs to (Core ROUTER
   // §10.1), as an opaque token compared only for equality.
   readonly connectionId: string | bigint;
@@ -69,7 +78,7 @@ interface ServiceSelectionCacheEntry {
 export class ServiceTopologyRegistry {
   private local: ServiceNodeDescriptor;
   private readonly peersByRid = new Map<string, AdmittedServicePeer>();
-  private readonly notRequiredByRid = new Map<string, ServiceNodeDescriptor>();
+  private readonly notRequiredByRid = new Map<string, ServiceRouteAdmission>();
   private readonly knownByRid = new Map<string, ServiceNodeDescriptor>();
   private readonly selections = new Map<string, ServiceSelectionCacheEntry>();
 
@@ -96,7 +105,7 @@ export class ServiceTopologyRegistry {
     }
     this.local = cloneDescriptor(descriptor);
     for (const [nodeRoutingId, remote] of this.notRequiredByRid) {
-      if (!descriptorConnectionNotRequired(this.local, remote)) {
+      if (!descriptorConnectionNotRequired(this.local, remote.descriptor)) {
         this.notRequiredByRid.delete(nodeRoutingId);
       }
     }
@@ -107,7 +116,9 @@ export class ServiceTopologyRegistry {
     descriptor: ServiceNodeDescriptor,
     connectionId: string | bigint,
     expected?: ServicePeerAdmissionExpectation,
-    admitLiveness?: () => ServiceLivenessConnection
+    admitLiveness?: () => ServiceLivenessConnection,
+    command: number = ServiceWireCommand.hello,
+    descriptorBytes?: Uint8Array
   ): PeerAdmissionResult {
     try {
       validateDescriptor(descriptor);
@@ -127,37 +138,53 @@ export class ServiceTopologyRegistry {
     ) {
       return 'invalidDescriptor';
     }
+    const current = this.peersByRid.get(descriptor.nodeRoutingId);
+    const previous = current ?? this.notRequiredByRid.get(descriptor.nodeRoutingId);
+    const receivedAdmit =
+      command === ServiceWireCommand.admit ||
+      (previous?.connectionId === connectionId && previous.remoteAdmitReceived === true);
+    if (
+      previous !== undefined &&
+      previous.descriptor.lifecycleGeneration === descriptor.lifecycleGeneration
+    ) {
+      const existing = previous.descriptor;
+      if (
+        descriptor.descriptorRevision < existing.descriptorRevision ||
+        (descriptor.descriptorRevision === existing.descriptorRevision &&
+          !(previous.descriptorBytes !== undefined && descriptorBytes !== undefined
+            ? Buffer.compare(previous.descriptorBytes, descriptorBytes) === 0
+            : sameServiceNodeDescriptor(existing, descriptor))) ||
+        (descriptor.descriptorRevision > existing.descriptorRevision &&
+          command !== ServiceWireCommand.update)
+      )
+        return 'staleDescriptor';
+      if (
+        descriptor.descriptorRevision > existing.descriptorRevision &&
+        !sameImmutableDescriptor(existing, descriptor)
+      )
+        return 'invalidDescriptor';
+    } else if (command === ServiceWireCommand.update) {
+      return 'staleDescriptor';
+    }
+    const admission: ServiceRouteAdmission = {
+      descriptor: cloneDescriptor(descriptor),
+      ...(descriptorBytes === undefined ? {} : { descriptorBytes: Buffer.from(descriptorBytes) }),
+      connectionId,
+      remoteAdmitReceived: receivedAdmit
+    };
     if (descriptorConnectionNotRequired(this.local, descriptor)) {
       this.peersByRid.delete(descriptor.nodeRoutingId);
       this.remember(descriptor);
-      this.notRequiredByRid.set(descriptor.nodeRoutingId, cloneDescriptor(descriptor));
+      this.notRequiredByRid.set(descriptor.nodeRoutingId, admission);
       this.rebuildSelections();
       return 'notRequired';
     }
     this.notRequiredByRid.delete(descriptor.nodeRoutingId);
 
-    const current = this.peersByRid.get(descriptor.nodeRoutingId);
-    if (
-      current !== undefined &&
-      current.descriptor.lifecycleGeneration === descriptor.lifecycleGeneration &&
-      descriptor.descriptorRevision > current.descriptor.descriptorRevision &&
-      !sameImmutableDescriptor(current.descriptor, descriptor)
-    ) {
-      return 'invalidDescriptor';
-    }
-    if (
-      current !== undefined &&
-      current.descriptor.lifecycleGeneration === descriptor.lifecycleGeneration &&
-      (current.descriptor.descriptorRevision > descriptor.descriptorRevision ||
-        (current.descriptor.descriptorRevision === descriptor.descriptorRevision &&
-          !sameServiceNodeDescriptor(current.descriptor, descriptor)))
-    ) {
-      return 'staleDescriptor';
-    }
     // Core selects the one route per RID (Core ROUTER §10.1); an admission on
     // that route replaces the admission of a route it replaced.
     this.peersByRid.set(descriptor.nodeRoutingId, {
-      descriptor: cloneDescriptor(descriptor),
+      ...admission,
       connectionId,
       liveness: admitLiveness?.() ?? current?.liveness
     });
@@ -179,6 +206,10 @@ export class ServiceTopologyRegistry {
     return peer === undefined ? undefined : clonePeer(peer);
   }
 
+  routeAdmission(nodeRoutingId: string): ServiceRouteAdmission | undefined {
+    return this.peersByRid.get(nodeRoutingId) ?? this.notRequiredByRid.get(nodeRoutingId);
+  }
+
   admittedPeer(nodeRoutingId: string): AdmittedServicePeer | undefined {
     return this.peersByRid.get(nodeRoutingId);
   }
@@ -197,12 +228,14 @@ export class ServiceTopologyRegistry {
 
   notRequiredPeers(): readonly ServiceNodeDescriptor[] {
     return [...this.notRequiredByRid.values()]
-      .sort((left, right) => compareOrdinal(left.nodeRoutingId, right.nodeRoutingId))
-      .map(cloneDescriptor);
+      .sort((left, right) =>
+        compareOrdinal(left.descriptor.nodeRoutingId, right.descriptor.nodeRoutingId)
+      )
+      .map((peer) => cloneDescriptor(peer.descriptor));
   }
 
   replaceDiscoveredNotRequired(descriptors: readonly ServiceNodeDescriptor[]): void {
-    const next = new Map<string, ServiceNodeDescriptor>();
+    const next = new Map<string, ServiceRouteAdmission>();
     for (const descriptor of descriptors) {
       validateDescriptor(descriptor);
       if (
@@ -210,13 +243,16 @@ export class ServiceTopologyRegistry {
         descriptor.nodeRoutingId !== this.local.nodeRoutingId &&
         descriptorConnectionNotRequired(this.local, descriptor)
       ) {
-        next.set(descriptor.nodeRoutingId, cloneDescriptor(descriptor));
+        next.set(descriptor.nodeRoutingId, {
+          ...this.notRequiredByRid.get(descriptor.nodeRoutingId),
+          descriptor: cloneDescriptor(descriptor)
+        });
       }
     }
     this.notRequiredByRid.clear();
-    for (const [nodeRoutingId, descriptor] of next) {
-      this.notRequiredByRid.set(nodeRoutingId, descriptor);
-      this.remember(descriptor);
+    for (const [nodeRoutingId, admission] of next) {
+      this.notRequiredByRid.set(nodeRoutingId, admission);
+      this.remember(admission.descriptor);
     }
     this.rebuildSelections();
   }
@@ -241,7 +277,9 @@ export class ServiceTopologyRegistry {
   private knownPeerDescriptor(nodeRoutingId: string): ServiceNodeDescriptor | undefined {
     const admitted = this.peersByRid.get(nodeRoutingId)?.descriptor;
     return (
-      admitted ?? this.notRequiredByRid.get(nodeRoutingId) ?? this.knownByRid.get(nodeRoutingId)
+      admitted ??
+      this.notRequiredByRid.get(nodeRoutingId)?.descriptor ??
+      this.knownByRid.get(nodeRoutingId)
     );
   }
 

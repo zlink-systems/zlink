@@ -25,6 +25,8 @@ function sessionFixture(disconnectFailure, nativeSocket, routingId = zlink.Routi
   const fence = { actor, targetNodeGeneration: 3n, authorityOwnerGeneration: 9n, ownerLeaseGeneration: 10n };
   let ingress;
   const stateful = new ServiceStatefulRuntime({
+    observePeerRoute: () => ({ generation: 1n, ready: true }),
+    observePeerRouteChanged: () => () => {},
     observePeerConnectionIntentRemoved() { return () => {}; },
     setServiceIngress(handler) { ingress = handler; },
     async requestService(_target, parts) {

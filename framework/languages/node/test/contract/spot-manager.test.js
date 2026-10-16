@@ -1019,6 +1019,8 @@ test('Host Instance Close without Reincarnate releases the closed generation thr
   const { ServiceStatefulRuntime } = require('../../packages/framework/dist/runtime/foundation/service-stateful-runtime');
   const node = new ServiceStatefulRuntime({
     topology: { peer: () => undefined },
+    observePeerRoute: () => ({ generation: 1n, ready: true }),
+    observePeerRouteChanged: () => () => {},
     observePeerConnectionIntentRemoved: () => () => {},
     setServiceIngress() {},
     sendService: () => true
@@ -1095,7 +1097,7 @@ test('Host Instance Close without Reincarnate releases the closed generation thr
   node.registerInstanceIntent('closed', { ...route, objectGeneration: 8n, storeVersion: 'store-v8' });
   await runtimeOptions.releaseInstanceAuthority('test.mesh', spotId, 7n);
   assert.equal(node.instanceSpotApplicationTarget(String(spotId)).objectGeneration, 8n);
-  node.close();
+  await node.close();
 });
 
 test('Instance context close returns after activation completion', async () => {
