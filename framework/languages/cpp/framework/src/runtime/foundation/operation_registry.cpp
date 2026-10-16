@@ -4,12 +4,13 @@
 #include "runtime/diagnostics/mesh_request_metrics.hpp"
 #include "runtime/dispatch/dispatch_limits.hpp"
 
+#include <zlink/framework/contracts/dispatch/task.hpp>
+
 #include <algorithm>
 #include <condition_variable>
 #include <bit>
 #include <memory>
 #include <stdexcept>
-#include <thread>
 #include <utility>
 
 namespace zlink::framework::runtime::foundation
@@ -60,13 +61,6 @@ struct operation_completion_item_t
             drain_state->release ();
     }
 
-    void release_owner () noexcept
-    {
-        auto owner = std::move (drain_state);
-        if (owner)
-            owner->release ();
-    }
-
     void finish_metrics (operation_terminal_t terminal) noexcept
     {
         request_metric.complete (terminal);
@@ -104,135 +98,32 @@ struct operation_completion_chain_t
     std::size_t size = 0;
 };
 
-thread_local bool completion_dispatcher_current = false;
-
-bool is_on_completion_dispatcher () noexcept
-{
-    return completion_dispatcher_current;
-}
-
-class operation_completion_dispatcher_t
-{
-  public:
-    operation_completion_dispatcher_t () :
-        _state (std::make_shared<state_t> ()),
-        _worker ([state = _state] { run (std::move (state)); })
-    {
-    }
-
-    ~operation_completion_dispatcher_t () noexcept
-    {
-        {
-            std::lock_guard lock (_state->mutex);
-            _state->stopping = true;
-        }
-        _state->ready.notify_all ();
-        if (!_worker.joinable ())
-            return;
-        if (_worker.get_id () == std::this_thread::get_id ()) {
-            // A completion may release the final owner. The worker only uses
-            // the shared state, so it can finish the current turn and drain
-            // the remaining callbacks after this dispatcher object is gone.
-            _worker.detach ();
-            return;
-        }
-        _worker.join ();
-    }
-
-    std::unique_ptr<operation_completion_item_t>
-    create_completion_item (operation_registry_t::callback_t callback,
-                            const std::shared_ptr<operation_registry_drain_state_t> &drain_state)
-    {
-        return std::make_unique<operation_completion_item_t> (std::move (callback), drain_state);
-    }
-
-    void post (std::unique_ptr<operation_completion_item_t> completion,
-               operation_terminal_t terminal,
-               std::vector<std::uint8_t> payload,
-               std::optional<operation_terminal_t> request_terminal = {}) noexcept
-    {
-        operation_completion_chain_t completions;
-        completions.append (std::move (completion), terminal, std::move (payload),
-                            request_terminal);
-        post_chain (std::move (completions));
-    }
-
-    void post_chain (operation_completion_chain_t completions) noexcept
-    {
-        if (!completions.head)
-            return;
-        {
-            std::lock_guard lock (_state->mutex);
-            if (_state->tail)
-                _state->tail->next = std::move (completions.head);
-            else
-                _state->head = std::move (completions.head);
-            _state->tail = completions.tail;
-        }
-        _state->ready.notify_one ();
-    }
-
-    void discard (std::unique_ptr<operation_completion_item_t> completion) noexcept
-    {
-        if (!completion)
-            return;
-        completion->release_owner ();
-        completion.reset ();
-    }
-
-  private:
-    struct state_t
-    {
-        std::mutex mutex;
-        std::condition_variable ready;
-        std::unique_ptr<operation_completion_item_t> head;
-        operation_completion_item_t *tail = nullptr;
-        bool stopping = false;
-    };
-
-    static void run (std::shared_ptr<state_t> state) noexcept
-    {
-        completion_dispatcher_current = true;
-        for (;;) {
-            std::unique_ptr<operation_completion_item_t> completion;
-            {
-                std::unique_lock lock (state->mutex);
-                state->ready.wait (lock, [&] { return state->stopping || state->head; });
-                if (!state->head) {
-                    if (state->stopping)
-                        return;
-                    continue;
-                }
-                completion = std::move (state->head);
-                state->head = std::move (completion->next);
-                if (!state->head)
-                    state->tail = nullptr;
-            }
-            try {
-                completion->callback (completion->terminal, std::move (completion->payload));
-            }
-            catch (...) {
-                // One consumer must not prevent later terminal callbacks
-                // from running on the process-shared dispatcher lane.
-            }
-            completion->release_owner ();
-            completion.reset ();
-        }
-    }
-
-    std::shared_ptr<state_t> _state;
-    std::thread _worker;
-};
-
 namespace
 {
 
-std::shared_ptr<operation_completion_dispatcher_t> shared_completion_dispatcher ()
+void post_completions (operation_completion_chain_t completions) noexcept
 {
-    // One process-lifetime dispatcher prevents owners that are stopped and
-    // recreated from temporarily running separate completion lanes.
-    static auto dispatcher = std::make_shared<operation_completion_dispatcher_t> ();
-    return dispatcher;
+    while (completions.head) {
+        auto completion = std::move (completions.head);
+        completions.head = std::move (completion->next);
+        const auto *owner = completion->drain_state.get ();
+        // The existing reservation owns the callback and drain lifetime.
+        // Capture one raw pointer; the independent turn immediately reclaims it.
+        detail::dispatch_completion (
+          [item = completion.get ()] {
+              // Keep the TLS drain identity valid through callback-capture destruction.
+              const auto drain_lifetime = item->drain_state;
+              const std::unique_ptr<operation_completion_item_t> completion (item);
+              try {
+                  completion->callback (completion->terminal, std::move (completion->payload));
+              }
+              catch (...) {
+                  // A consumer failure must still release its drain reservation.
+              }
+          },
+          false, owner);
+        (void) completion.release ();
+    }
 }
 
 } // namespace
@@ -242,7 +133,6 @@ operation_registry_t::operation_registry_t () : operation_registry_t (&clock_t::
 }
 
 operation_registry_t::operation_registry_t (now_t now) :
-    _completion_dispatcher (shared_completion_dispatcher ()),
     _drain_state (std::make_shared<operation_registry_drain_state_t> ()),
     _now (now),
     _deadline_origin (now ())
@@ -256,13 +146,14 @@ operation_registry_t::~operation_registry_t () noexcept
 
 namespace
 {
-void notify (const std::shared_ptr<operation_completion_dispatcher_t> &dispatcher,
-             std::unique_ptr<operation_completion_item_t> completion,
+void notify (std::unique_ptr<operation_completion_item_t> completion,
              operation_terminal_t terminal,
              std::vector<std::uint8_t> payload,
              std::optional<operation_terminal_t> request_terminal = {}) noexcept
 {
-    dispatcher->post (std::move (completion), terminal, std::move (payload), request_terminal);
+    operation_completion_chain_t completions;
+    completions.append (std::move (completion), terminal, std::move (payload), request_terminal);
+    post_completions (std::move (completions));
 }
 }
 
@@ -288,7 +179,7 @@ bool operation_registry_t::register_operation (call_id_t id,
     try {
         index_deadline (id, deadline, inserted.first->second);
         auto completion =
-          _completion_dispatcher->create_completion_item (std::move (callback), _drain_state);
+          std::make_unique<operation_completion_item_t> (std::move (callback), _drain_state);
         completion->request_metric = std::move (request_metric);
         completion->request_metric.start ();
         inserted.first->second.completion = std::move (completion);
@@ -404,12 +295,11 @@ bool operation_registry_t::complete (const call_id_t &id,
     }
     catch (...) {
         payload.clear ();
-        notify (_completion_dispatcher, std::move (completion),
-                operation_terminal_t::transport_failed, {});
+        notify (std::move (completion), operation_terminal_t::transport_failed, {});
         return true;
     }
-    notify (_completion_dispatcher, std::move (completion), operation_terminal_t::completed,
-            std::move (payload), request_terminal);
+    notify (std::move (completion), operation_terminal_t::completed, std::move (payload),
+            request_terminal);
     return true;
 }
 
@@ -419,7 +309,7 @@ bool operation_registry_t::cancel (const call_id_t &id)
     if (!take (id, completion)) {
         return false;
     }
-    notify (_completion_dispatcher, std::move (completion), operation_terminal_t::cancelled, {});
+    notify (std::move (completion), operation_terminal_t::cancelled, {});
     return true;
 }
 
@@ -452,8 +342,7 @@ bool operation_registry_t::fail (const call_id_t &id,
         request_terminal.reset ();
         payload.clear ();
     }
-    notify (_completion_dispatcher, std::move (completion), terminal, std::move (payload),
-            request_terminal);
+    notify (std::move (completion), terminal, std::move (payload), request_terminal);
     return true;
 }
 
@@ -462,7 +351,7 @@ bool operation_registry_t::unregister (const call_id_t &id)
     std::unique_ptr<operation_completion_item_t> completion;
     if (!take (id, completion))
         return false;
-    _completion_dispatcher->discard (std::move (completion));
+    completion.reset ();
     return true;
 }
 
@@ -491,7 +380,7 @@ std::size_t operation_registry_t::fail_target (const std::vector<std::uint8_t> &
         }
     }
     const auto failed = completions.size;
-    _completion_dispatcher->post_chain (std::move (completions));
+    post_completions (std::move (completions));
     return failed;
 }
 
@@ -534,7 +423,7 @@ std::size_t operation_registry_t::expire (clock_t::time_point now)
         _pending.erase (entry);
     }
     const auto expired = completions.size;
-    _completion_dispatcher->post_chain (std::move (completions));
+    post_completions (std::move (completions));
     return expired;
 }
 
@@ -565,11 +454,10 @@ std::size_t operation_registry_t::shutdown ()
             stopped = completions.size;
         }
     }
-    _completion_dispatcher->post_chain (std::move (completions));
-    // A callback can release the final owner and re-enter shutdown on the
-    // dispatcher itself. Its item owns the drain state, so that path may
-    // return and let the worker release the final reservation naturally.
-    if (!completion_dispatcher_current)
+    post_completions (std::move (completions));
+    // Only this registry's callback may release its final owner without
+    // waiting for its own reservation. Other completion turns still drain.
+    if (detail::current_completion_owner () != _drain_state.get ())
         _drain_state->wait ();
     return stopped;
 }

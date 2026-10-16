@@ -3,7 +3,6 @@
 #include "runtime/dispatch/coroutine_executor.hpp"
 #include "runtime/diagnostics/flow_context.hpp"
 #include "runtime/execution/state_lane.hpp"
-#include "runtime/foundation/operation_registry.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -181,7 +180,10 @@ task_scheduler_t capture_host_continuation_scheduler (bool scope_exit_only)
         }
     }
     const auto *caller_job = application_job_context_t::current ();
-    return [scope_exit_only, caller_job] (std::function<void ()> work) {
+    // Classify the registered caller for the provider's reuse decision; this
+    // snapshot grants no execution authority on the completing thread.
+    const bool caller_owned_turn = caller_job != nullptr || current_held_serial_turn () != nullptr;
+    return [caller_job, scope_exit_only, caller_owned_turn] (std::function<void ()> work) {
         {
             std::lock_guard lock (runtime::executor_mutex ());
             if (runtime::executor_shutdown_requested () || runtime::executor_owner_count () == 0) {
@@ -190,12 +192,10 @@ task_scheduler_t capture_host_continuation_scheduler (bool scope_exit_only)
                   "handler coroutine executor is not accepting continuations");
             }
             auto &configured = runtime::executor_instance ();
-            const auto *current_job = application_job_context_t::current ();
-            const bool same_context = current_job == nullptr || current_job == caller_job;
-            const bool completion_turn = runtime::foundation::is_on_completion_dispatcher ()
-                                         || (configured && configured->is_current ());
+            const bool completion_turn = can_reuse_completion_turn (
+              configured && configured->is_current (), caller_job, caller_owned_turn);
             if (runtime::state_lane_t::current () != nullptr
-                || (!scope_exit_only && !(completion_turn && same_context))) {
+                || (!scope_exit_only && !completion_turn)) {
                 if (!configured) {
                     const auto workers = runtime::configured_worker_count () == 0
                                            ? runtime::default_worker_count ()

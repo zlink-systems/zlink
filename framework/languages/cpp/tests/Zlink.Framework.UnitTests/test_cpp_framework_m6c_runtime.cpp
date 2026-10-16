@@ -3904,8 +3904,15 @@ void test_source_relocation_failure_stops_state_chunks_and_unseals (test_context
       .send_state_chunk = [&] (const protocol::relocation_state_t &) -> framework::task_t<bool> {
           ++sent_chunks;
           if (sent_chunks == 1) {
-              target_terminal->complete (framework::result_t<relocation_reason_t>::success (
-                relocation_reason_t::checksum_mismatch));
+              // A wire reply completes in the registry's existing completion turn.
+              auto delivered = std::make_shared<framework::task_completion_source_t<void>> ();
+              auto delivery = delivered->task ();
+              framework::detail::dispatch_completion ([target_terminal, delivered] {
+                  target_terminal->complete (framework::result_t<relocation_reason_t>::success (
+                    relocation_reason_t::checksum_mismatch));
+                  delivered->complete (framework::result_t<void>::success ());
+              });
+              co_await delivery;
           }
           co_return true;
       },

@@ -20,11 +20,8 @@ namespace zlink::framework::runtime::foundation
 {
 
 using call_id_t = runtime::call_id_t;
-class operation_completion_dispatcher_t;
 struct operation_completion_item_t;
 struct operation_registry_drain_state_t;
-
-bool is_on_completion_dispatcher () noexcept;
 
 class operation_registry_t
 {
@@ -93,7 +90,6 @@ class operation_registry_t
     void index_deadline (const call_id_t &id, clock_t::time_point deadline, pending_t &pending);
     void unindex_deadline (pending_t &pending) noexcept;
 
-    std::shared_ptr<operation_completion_dispatcher_t> _completion_dispatcher;
     std::shared_ptr<operation_registry_drain_state_t> _drain_state;
     mutable std::mutex _mutex;
     std::unordered_map<call_id_t, pending_t, id_hash_t> _pending;

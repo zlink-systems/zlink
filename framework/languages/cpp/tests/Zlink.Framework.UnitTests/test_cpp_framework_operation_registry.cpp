@@ -349,20 +349,20 @@ int main ()
 
     foundation::operation_registry_t reentrant_registry;
     std::atomic_bool reentered{false};
-    std::atomic_bool outer_callback_active{false};
+    static thread_local bool outer_callback_active = false;
     assert (reentrant_registry.register_operation (
       foundation::call_id_t{9, 3}, now,
       [&] (foundation::operation_terminal_t, std::vector<std::uint8_t>) {
-          outer_callback_active.store (true, std::memory_order_release);
+          outer_callback_active = true;
           assert (reentrant_registry.register_operation (
             foundation::call_id_t{9, 4}, now,
             [&] (foundation::operation_terminal_t terminal, std::vector<std::uint8_t>) {
                 assert (terminal == foundation::operation_terminal_t::cancelled);
-                assert (!outer_callback_active.load (std::memory_order_acquire));
+                assert (!outer_callback_active);
                 reentered.store (true, std::memory_order_release);
             }));
           assert (reentrant_registry.cancel (foundation::call_id_t{9, 4}));
-          outer_callback_active.store (false, std::memory_order_release);
+          outer_callback_active = false;
       }));
     assert (reentrant_registry.complete (foundation::call_id_t{9, 3}, {}));
     assert (wait_until ([&] { return reentered.load (std::memory_order_acquire); }));
