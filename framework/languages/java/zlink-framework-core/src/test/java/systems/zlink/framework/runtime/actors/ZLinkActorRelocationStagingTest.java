@@ -3,6 +3,8 @@ package systems.zlink.framework.runtime.actors;
 import static org.junit.jupiter.api.Assertions.*;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
@@ -10,21 +12,37 @@ import systems.zlink.framework.actors.*;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
+import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
+import systems.zlink.framework.runtime.internal.handlers.ZLinkActorHandlerInstances;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
+import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
+import systems.zlink.framework.runtime.locations.ZLinkLocationLifecycle;
+import systems.zlink.framework.runtime.locations.ZLinkLocationRuntime;
+import systems.zlink.framework.runtime.locations.ZLinkRegisteredLocationStores;
 import systems.zlink.framework.runtime.messaging.ZLinkJsonMessageSerializer;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
 
+import java.lang.reflect.Field;
 import java.lang.reflect.Proxy;
 import java.time.Duration;
+import java.util.HashSet;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 final class ZLinkActorRelocationStagingTest {
+    private static final long BOUND_SECONDS = 3;
+
     @Test
     void preparedActorIsNotVisibleUntilAggregatePublication() {
         AtomicInteger destroys = new AtomicInteger();
@@ -91,13 +109,189 @@ final class ZLinkActorRelocationStagingTest {
                 () -> runtime.publishPreparedTransferredActor(prepared));
     }
 
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void hostCloseBeforeOwnedSettlementRunsOneRuntimeCleanup(boolean failClose) throws Exception {
+        AtomicInteger closes = new AtomicInteger();
+        ZLinkActorRuntime runtime = runtime(new AtomicInteger(), closes, failClose);
+        var prepared = publishedActor(runtime, "actor-teardown-once");
+        var context = (ZLinkActorRuntime.DefaultActorContext) prepared.actor().context();
+        var contextState = (ZLinkActorContextState) field(context, "state").get(context);
+        AtomicInteger storeCalls = new AtomicInteger();
+        var store =
+                (ZLinkLocationRepository)
+                        Proxy.newProxyInstance(
+                                getClass().getClassLoader(),
+                                new Class<?>[] {
+                                    systems.zlink.framework.runtime.internal.locations
+                                            .ZLinkLocationRepository.class
+                                },
+                                (proxy, method, args) -> {
+                                    storeCalls.incrementAndGet();
+                                    throw new AssertionError(
+                                            "expired-owner local cleanup must not access Store: "
+                                                    + method.getName());
+                                });
+        var stores = ZLinkRegisteredLocationStores.fromUnified(store);
+        var locationOptions = new systems.zlink.framework.locations.ZLinkLocationOptions();
+        try (var locationRuntime =
+                new ZLinkLocationRuntime(
+                        stores,
+                        locationOptions.ownerLeaseTtl(),
+                        locationOptions.ownerLeaseRenewInterval())) {
+            var lifecycle = new ZLinkLocationLifecycle(locationRuntime);
+            AtomicInteger releases = new AtomicInteger();
+            AtomicBoolean releasedLiveContext = new AtomicBoolean();
+            Map<String, ActorRef> actors =
+                    new ConcurrentHashMap<>() {
+                        @Override
+                        public ActorRef remove(Object key) {
+                            releases.incrementAndGet();
+                            releasedLiveContext.set(
+                                    context.actorRef() != null && context.hasBoundSession());
+                            return super.remove(key);
+                        }
+                    };
+            field(lifecycle, "actors").set(lifecycle, actors);
+            AtomicInteger routeRemovals = new AtomicInteger();
+            Set<RoutingId> routes =
+                    new HashSet<>() {
+                        @Override
+                        public boolean remove(Object key) {
+                            routeRemovals.incrementAndGet();
+                            return super.remove(key);
+                        }
+                    };
+            field(lifecycle, "sessionRoutes").set(lifecycle, routes);
+            runtime.setLocationLifecycle(lifecycle);
+            var node = (ZLinkInternalSpotNode) field(runtime, "spotNode").get(runtime);
+            runtime.bindNativeSession(
+                            prepared.actor(),
+                            node,
+                            prepared.actorRef(),
+                            RoutingId.from("node-a"),
+                            RoutingId.from("session-once"),
+                            1)
+                    .toCompletableFuture()
+                    .get(BOUND_SECONDS, TimeUnit.SECONDS);
+            ZLinkActorHandlerInstances.instance(prepared.actor(), CloseableProbeHandler.class);
+            long bindingToken = contextState.sessionBindingToken();
+            var dispatches = (ZLinkActorDispatchSerials) field(runtime, "dispatches").get(runtime);
+            var entered = new CompletableFuture<Void>();
+            var release = new CompletableFuture<Void>();
+            var handle = new AtomicReference<ZLinkSerialExecutionQueue.ActiveTurnSealHandle>();
+            var barrier =
+                    dispatches.enqueueBarrier(
+                            prepared.actorId(),
+                            () -> {
+                                handle.set(
+                                        ZLinkSerialExecutionQueue
+                                                .captureCurrentActiveTurnSealHandle()
+                                                .orElseThrow());
+                                entered.complete(null);
+                                return release;
+                            });
+            CompletionStage<Void> close = CompletableFuture.completedFuture(null);
+            int releasesInTurn;
+            var settlementFailure = new AtomicReference<Throwable>();
+            var closeFailure = new AtomicReference<Throwable>();
+            try {
+                entered.get(BOUND_SECONDS, TimeUnit.SECONDS);
+                Object registry = field(runtime, "actorRegistry").get(runtime);
+                var registryLane = (ZLinkStateLane) field(registry, "stateLane").get(registry);
+                @SuppressWarnings("unchecked")
+                Map<String, Object> entries =
+                        (Map<String, Object>) field(registry, "byId").get(registry);
+                Object entry =
+                        registryLane
+                                .runNowOrQueue(() -> entries.get(prepared.actorId()))
+                                .toCompletableFuture()
+                                .get(BOUND_SECONDS, TimeUnit.SECONDS);
+                var closeEntry =
+                        ZLinkActorRuntime.class.getDeclaredMethod(
+                                "closeActorEntry", entry.getClass());
+                closeEntry.setAccessible(true);
+                @SuppressWarnings("unchecked")
+                CompletionStage<Void> pendingClose =
+                        (CompletionStage<Void>) closeEntry.invoke(runtime, entry);
+                close = pendingClose;
+                assertFalse(close.toCompletableFuture().isDone());
+                CompletableFuture.supplyAsync(
+                                () ->
+                                        runtime.completeRelocationSource(
+                                                prepared.actorId(), handle.get()))
+                        .thenCompose(stage -> stage)
+                        .handle(
+                                (ignored, failure) -> {
+                                    settlementFailure.set(failure);
+                                    return null;
+                                })
+                        .get(BOUND_SECONDS, TimeUnit.SECONDS);
+                releasesInTurn = releases.get();
+                assertFalse(barrier.toCompletableFuture().isDone());
+                assertFalse(close.toCompletableFuture().isDone());
+            } finally {
+                release.complete(null);
+                barrier.toCompletableFuture().get(BOUND_SECONDS, TimeUnit.SECONDS);
+                close.handle(
+                                (ignored, failure) -> {
+                                    closeFailure.set(failure);
+                                    return null;
+                                })
+                        .toCompletableFuture()
+                        .get(BOUND_SECONDS, TimeUnit.SECONDS);
+                runtime.closeAsync().toCompletableFuture().get(BOUND_SECONDS, TimeUnit.SECONDS);
+            }
+            int releaseCountBeforeBarrierEnds = releasesInTurn;
+            assertAll(
+                    () ->
+                            assertEquals(
+                                    failClose,
+                                    settlementFailure.get() != null,
+                                    "settlement observes the shared cleanup result"),
+                    () ->
+                            assertEquals(
+                                    failClose,
+                                    closeFailure.get() != null,
+                                    "host close observes the same cleanup failure"),
+                    () ->
+                            assertEquals(
+                                    1,
+                                    releaseCountBeforeBarrierEnds,
+                                    "registered host cleanup executes inside the owned turn"),
+                    () -> assertEquals(1, releases.get(), "releaseActor is called once"),
+                    () ->
+                            assertTrue(
+                                    releasedLiveContext.get(),
+                                    "host cleanup receives the live context"),
+                    () -> assertEquals(1, routeRemovals.get(), "session route is removed once"),
+                    () -> assertEquals(1, closes.get(), "handler is closed once"),
+                    () ->
+                            assertEquals(
+                                    bindingToken + 1,
+                                    contextState.sessionBindingToken(),
+                                    "context is cleared once"),
+                    () ->
+                            assertEquals(
+                                    0,
+                                    storeCalls.get(),
+                                    "expired-owner cleanup changes no Store authority"),
+                    () -> assertTrue(runtime.localActor(prepared.actorId()).isEmpty()));
+        }
+    }
+
+    private static Field field(Object owner, String name) throws Exception {
+        var field = owner.getClass().getDeclaredField(name);
+        field.setAccessible(true);
+        return field;
+    }
+
     @Test
     void relocationSourceCleanupWaitsForActiveActorTurn() {
         AtomicInteger closes = new AtomicInteger();
         ZLinkActorRuntime runtime = runtime(new AtomicInteger(), closes);
         var prepared = publishedActor(runtime, "actor-relocation");
-        systems.zlink.framework.runtime.internal.handlers.ZLinkActorHandlerInstances.instance(
-                prepared.actor(), CloseableProbeHandler.class);
+        ZLinkActorHandlerInstances.instance(prepared.actor(), CloseableProbeHandler.class);
         CompletableFuture<Void> release = new CompletableFuture<>();
         CompletionStage<Void> active =
                 runtime.submitActorDispatch(prepared.actorId(), () -> release);
@@ -119,8 +313,7 @@ final class ZLinkActorRelocationStagingTest {
         var prepared = publishedActor(runtime, "actor-failed-retirement");
         runtime.markJoinedEntrySpot(
                 prepared.actor(), prepared.actorRef(), RoutingId.from("node-a"));
-        systems.zlink.framework.runtime.internal.handlers.ZLinkActorHandlerInstances.instance(
-                prepared.actor(), CloseableProbeHandler.class);
+        ZLinkActorHandlerInstances.instance(prepared.actor(), CloseableProbeHandler.class);
 
         assertThrows(
                 java.util.concurrent.CompletionException.class,
@@ -146,8 +339,7 @@ final class ZLinkActorRelocationStagingTest {
         AtomicInteger closes = new AtomicInteger();
         ZLinkActorRuntime runtime = runtime(new AtomicInteger(), closes);
         var prepared = publishedActor(runtime, "actor-shutdown");
-        systems.zlink.framework.runtime.internal.handlers.ZLinkActorHandlerInstances.instance(
-                prepared.actor(), CloseableProbeHandler.class);
+        ZLinkActorHandlerInstances.instance(prepared.actor(), CloseableProbeHandler.class);
 
         assertTrue(runtime.awaitDrainBarrier().toCompletableFuture().isDone());
         assertTrue(
@@ -167,8 +359,7 @@ final class ZLinkActorRelocationStagingTest {
         AtomicInteger destroys = new AtomicInteger();
         ZLinkActorRuntime runtime = runtime(destroys, closes);
         var prepared = publishedActor(runtime, "actor-destroy");
-        systems.zlink.framework.runtime.internal.handlers.ZLinkActorHandlerInstances.instance(
-                prepared.actor(), CloseableProbeHandler.class);
+        ZLinkActorHandlerInstances.instance(prepared.actor(), CloseableProbeHandler.class);
         CompletableFuture<Void> release = new CompletableFuture<>();
         CompletionStage<Void> active =
                 runtime.submitActorDispatch(prepared.actorId(), () -> release);
@@ -207,8 +398,7 @@ final class ZLinkActorRelocationStagingTest {
         AtomicInteger destroys = new AtomicInteger();
         ZLinkActorRuntime runtime = runtime(destroys, closes);
         var prepared = publishedActor(runtime, "actor-ownership");
-        systems.zlink.framework.runtime.internal.handlers.ZLinkActorHandlerInstances.instance(
-                prepared.actor(), CloseableProbeHandler.class);
+        ZLinkActorHandlerInstances.instance(prepared.actor(), CloseableProbeHandler.class);
         CompletableFuture<Void> release = new CompletableFuture<>();
         CompletionStage<Void> active =
                 runtime.submitActorDispatch(prepared.actorId(), () -> release);
