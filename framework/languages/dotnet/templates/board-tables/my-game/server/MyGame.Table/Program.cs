@@ -25,9 +25,13 @@ GameHosting.Configure(
             .AddSpotFactory<TableSpot>(
                 GameNames.TableType,
                 factory =>
+                {
+                    if (settings.TableCapacity > 0)
+                        factory.StableTypeLimit(settings.TableCapacity);
                     factory
                         .ExecutionMode(ZLinkUserSpotExecutionMode.SpotWide)
-                        .PreserveStateWith<TableRelocation>()
+                        .PreserveStateWith<TableRelocation>();
+                }
             );
     }
 );

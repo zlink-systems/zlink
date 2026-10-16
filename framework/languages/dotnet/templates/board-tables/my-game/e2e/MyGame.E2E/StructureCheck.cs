@@ -181,10 +181,10 @@ internal static class StructureCheck
         );
         foreach (var tableNode in tableNodes)
             Require(
-                spots.Any(spot =>
+                spots.Count(spot =>
                     Text(spot, "kind") == "entry" && Text(spot, "owner") == tableNode
-                ),
-                $"Table node lacks Entry Spot: {tableNode}."
+                ) == 1,
+                $"Table node must declare exactly one application Entry Spot: {tableNode}."
             );
         foreach (var edge in Array(document, "edges"))
         {

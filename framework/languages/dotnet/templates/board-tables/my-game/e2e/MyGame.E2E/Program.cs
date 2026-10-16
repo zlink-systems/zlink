@@ -37,7 +37,7 @@ try
         return 0;
     }
     var selected = Scenarios.Select(Option("--scenario"));
-    await using var run = new TableRun(root);
+    await using var run = new TableRun(root, selected.Length);
     using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellation.Token);
     deadline.CancelAfter(TimeSpan.FromMinutes(3));
     try

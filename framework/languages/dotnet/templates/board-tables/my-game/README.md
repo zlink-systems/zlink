@@ -74,7 +74,7 @@ There are four seats, and each player starts with 1000 chips. With two or more p
 
 Extend the protocol and constants in `MyGame.Shared/Contracts.cs`, and game state and decisions in `MyGame.Table/TableSpot.cs`. The Player Actor holds no copy of the game state. Add authentication before the Session binds the Actor.
 
-Message Follow is explicitly configured for 30 seconds. The `SAFE_TO_SHUTDOWN` observation budget is that period plus the existing relocation budget. Update waits for replacement `READY`, then completes a hand at a new table; normal placement may select either live Table node.
+Message Follow is explicitly configured for 30 seconds. The `SAFE_TO_SHUTDOWN` observation budget is that period plus the existing relocation budget. Update waits for replacement `READY`, then asserts that the replacement hosts the new table and completes a hand.
 
 ## Deployment sequence
 
@@ -103,6 +103,8 @@ Node stderr records the message flow from the dispatch diagnostics `Normal` logg
 ## Known issues in the public package
 
 The public `0.30.0` has [#1723](https://github.com/zlink-systems/zlink/issues/1723) registered: a push sent to an Actor from `OnJoinedActorAsync` in a cross-node join is not delivered. `table` and `reconnect` can fail on this path. The symptom of [#1712](https://github.com/zlink-systems/zlink/issues/1712), where `RELOCATED` does not arrive after drain, was also observed. The runner keeps the failure and excludes no scenario from the default run. Node replacement and the new-table check after replacement come after this boundary, so their verification remains open.
+
+The e2e runner sets each node's optional `TableCapacity` to the number of selected scenarios through the public Table stable-type limit. Each scenario retains one table. After update drains the source, the surviving node is at capacity, so only the replacement can host the new table. Both new players must observe the replacement node ID. Omitted or zero capacity leaves deployment capacity unlimited. Entry declarations describe the application Entry on Table nodes only; there are no fixed User Spots in this template.
 
 ## 한국어 실행 안내
 

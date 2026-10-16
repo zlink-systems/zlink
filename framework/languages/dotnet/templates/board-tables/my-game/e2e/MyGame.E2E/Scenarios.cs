@@ -67,7 +67,8 @@ internal static class Scenarios
         string endpoint,
         string scenario,
         TableRun? run,
-        CancellationToken ct
+        CancellationToken ct,
+        string? expectedNode = null
     )
     {
         var suffix = Guid.NewGuid().ToString("N");
@@ -76,6 +77,11 @@ internal static class Scenarios
         await using var p2 = await GameClient.ConnectAsync(endpoint, "p2-" + suffix, ct);
         var joined1 = await p1.JoinAsync(table, ct);
         var joined2 = await p2.JoinAsync(table, ct);
+        if (expectedNode is not null)
+            Require(
+                joined1.NodeId == expectedNode && joined2.NodeId == expectedNode,
+                "Replacement node did not host new work."
+            );
         Require(joined1.YourSeat == 0 && joined2.YourSeat == 1, "Initial seats differ.");
         Require(
             joined2.Seats.Length == GameNames.MinimumPlayers
@@ -176,7 +182,7 @@ internal static class Scenarios
             if (scenario == "update")
             {
                 await run!.ReplaceAsync(before1.NodeId, ct);
-                await PlayAsync(endpoint, "table", null, ct);
+                await PlayAsync(endpoint, "table", null, ct, before1.NodeId);
             }
         }
         Require(

@@ -7,7 +7,8 @@ public sealed record NodeSettings(
     string RedisEndpoint,
     string KeyPrefix,
     string MeshEndpoint,
-    string? StreamEndpoint = null
+    string? StreamEndpoint = null,
+    int TableCapacity = 0
 )
 {
     public static NodeSettings Load(string[] args)
@@ -29,6 +30,7 @@ public sealed record NodeSettings(
         ArgumentException.ThrowIfNullOrWhiteSpace(settings.RedisEndpoint);
         ArgumentException.ThrowIfNullOrWhiteSpace(settings.KeyPrefix);
         ArgumentException.ThrowIfNullOrWhiteSpace(settings.MeshEndpoint);
+        ArgumentOutOfRangeException.ThrowIfNegative(settings.TableCapacity);
         return settings;
     }
 }

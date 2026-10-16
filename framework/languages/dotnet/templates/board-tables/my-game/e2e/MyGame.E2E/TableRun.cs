@@ -3,7 +3,7 @@ using MyGame.Shared;
 
 namespace MyGame.E2E;
 
-internal sealed class TableRun(string root) : IAsyncDisposable
+internal sealed class TableRun(string root, int tableCapacity) : IAsyncDisposable
 {
     private readonly List<ManagedProcess> nodes = [];
     private readonly string project = "my-game-e2e-" + Guid.NewGuid().ToString("N");
@@ -64,6 +64,7 @@ internal sealed class TableRun(string root) : IAsyncDisposable
             ) ?? throw new InvalidOperationException($"Invalid {configName} configuration.");
         settings = settings with
         {
+            TableCapacity = tableCapacity,
             RedisEndpoint = redisEndpoint,
             KeyPrefix = project + ":",
             MeshEndpoint = "tcp://127.0.0.1:0",
