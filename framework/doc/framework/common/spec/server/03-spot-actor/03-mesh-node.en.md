@@ -67,7 +67,7 @@ An Object Server MeshNode issues the Entry Spot ID and publishes it on its descr
 whether or not the application registered an Entry Spot type. Registering an Entry Spot
 type only chooses the application handler this Spot runs; it doesn't change whether the
 descriptor carries `entrySpotId`, but it does decide whether the node is a candidate for
-creating new Actors ([Actor model §6.3](04-actor-model.en.md#63-mesh-and-placement-target-selection)).
+creating new Actors ([Actor model §6.3](04-actor-model.en.md#63-selecting-mesh-and-placement-target)).
 
 The MeshNode descriptor mapping and publication rule for the Entry Spot ID are defined by
 [Transport RID and Spot ID Policy §6.3](../02-channel-transport/04-network-listener-identity.en.md#63-entry-spot-id).

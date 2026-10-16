@@ -707,8 +707,8 @@ period, a descriptor whose expiration time from the last owner-lease read has pa
 isn't used for new target selection — this includes refreshing select-one candidates.
 
 An Object Server descriptor has the `Server` role, node-wide placement weight, per-node
-Actor/Spot count and limit, supported Spot stable types, Entry Spot ID, and whether an application
-Entry Spot is registered.
+Actor/Spot count and limit, supported Spot stable types, Entry Spot ID, and the Actor stable types its Entry Spot
+types accept.
 
 The relative share deciding how a new object is assigned among several target candidates
 is called [weight](../00-foundation/02-glossary.en.md#weight). A larger value means it's selected more
@@ -978,7 +978,7 @@ sequenceDiagram
 ```
 
 The target must be in `Serving` state, have registered the requested stable type, and
-have a valid owner lease and remaining capacity. [Actor model §6.3](../03-spot-actor/04-actor-model.en.md#63-mesh-and-placement-target-selection)
+have a valid owner lease and remaining capacity. [Actor model §6.3](../03-spot-actor/04-actor-model.en.md#63-selecting-mesh-and-placement-target)
 owns the Entry Spot condition for creating a new Actor. The Framework picks one candidate with
 weight greater than 0.
 

@@ -264,6 +264,8 @@ export interface ZLinkCodecRegistryBuilder {
 }
 ```
 
+Node.js의 Object Server는 `addEntrySpot`으로 Entry Spot type을 하나 등록한다. TypeScript의 Actor type 인자는 실행 중에 남지 않으므로, 이 Entry Spot type은 그 MeshNode에 등록한 모든 Actor stable type을 받는다([Actor model §6.3](../../../03-spot-actor/04-actor-model.ko.md#63-mesh와-placement-target-선택)).
+
 Codec registrar의 `contentType`에는 parameter가 없는 ASCII `type/subtype`을 전달한다. Registry는
 startup에 값 앞뒤의 SP와 TAB을 제거하고 ASCII 대문자를 소문자로 바꾼다. 이 결과가 registry에서
 사용하는 canonical content-type이다. Parameter, 값 내부의 공백 또는 non-ASCII token이 있으면

@@ -638,7 +638,7 @@ lease read에서 얻은 만료 시각이 지난 descriptor는 새 target 선택�
 select-one의 후보 갱신도 여기에 포함한다.
 
 Object Server descriptor에는 `Server` role, node-wide placement weight, node별 Actor·Spot
-count와 limit, 지원하는 Spot stable type, Entry Spot ID와 application Entry Spot 등록 여부가 있다.
+count와 limit, 지원하는 Spot stable type, Entry Spot ID와 Entry Spot type이 받는 Actor stable type이 있다.
 
 여러 target 후보에 새 object를 배정할 상대 비중을
 [weight](../00-foundation/02-glossary.ko.md#weight)라고 한다. 값이 클수록 다른 조건이 같은 후보보다 자주

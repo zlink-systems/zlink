@@ -267,6 +267,8 @@ export interface ZLinkCodecRegistryBuilder {
 }
 ```
 
+A Node.js Object Server registers one Entry Spot type with `addEntrySpot`. The TypeScript Actor type argument doesn't survive at run time, so this Entry Spot type accepts every Actor stable type registered on that MeshNode ([Actor model §6.3](../../../03-spot-actor/04-actor-model.en.md#63-selecting-mesh-and-placement-target)).
+
 The codec registrar's `contentType` takes a parameter-free ASCII `type/subtype`. At
 startup, the registry removes leading and trailing SP and TAB and converts ASCII uppercase
 letters to lowercase. The result is the canonical content type used as the registry key.

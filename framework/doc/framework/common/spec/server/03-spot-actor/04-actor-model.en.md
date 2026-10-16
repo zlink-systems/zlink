@@ -462,17 +462,21 @@ The framework checks target candidates in the following order.
 
 1. Checks object role.
 2. Checks whether the requested stable type is registered. A Create or GetOrCreate that makes a
-   new Actor keeps only the Object Servers among them that registered an application Entry Spot.
+   new Actor keeps only the Object Servers among them that registered an Entry Spot type accepting
+   that Actor stable type.
 3. Checks whether active/pending capacity remains.
 4. Applies node-wide placement weight to the remaining candidates.
 
 The caller doesn't select the target node or endpoint.
 
-The application Entry Spot of the node that creates a new Actor handles that Actor's first message and
-`OnCreateActor`, so a node that registered an Actor factory but no application Entry Spot doesn't create
-new Actors. Such a node can still be the join or relocation target of an existing Actor. If the selected
-target hasn't registered an application Entry Spot, it refuses without starting the factory, and the
-Framework excludes that target and picks another candidate up to the deadline.
+On the node that creates a new Actor, the Entry Spot accepting that Actor stable type approves the
+Actor's initial Entry Spot membership with `OnCreateActor` ([Spot model §3.2](01-spot-model.en.md#32-lifecycle-callback-per-spot-kind)). So a
+node that registered an Actor factory but no Entry Spot type accepting that type doesn't create new
+Actors. Such a node can still be the join or relocation target of an existing Actor. If the selected
+target has no such Entry Spot type, it ends that creation as a Framework failure before the callback.
+This result isn't the application's `Rejected`, so the Framework excludes that host run generation and
+picks another candidate up to the deadline, as for a `Reserve` failure in
+[Location runtime §7](../05-location-relocation/01-location-runtime.en.md#7-creating-an-actor-or-user-spot).
 
 ### 6.4 Creation Request and Factory Execution
 
