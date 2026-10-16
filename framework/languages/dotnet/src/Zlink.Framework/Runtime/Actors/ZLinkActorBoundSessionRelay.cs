@@ -77,27 +77,15 @@ internal static class ZLinkActorBoundSessionRelay
             )
         )
             return false;
-        // Final relocation replay runs before the session-owner route commit.
-        // The target therefore exposes the exact committed target projection
-        // through the inbound view even though _boundSession is not promoted
-        // until the route update is acknowledged.
-        if (
-            !state.TryGetBoundSessionForInbound(out var current)
-            || !string.Equals(current.BindingToken, decodedBindingToken, StringComparison.Ordinal)
-            || current.SessionNodeRid is not { } currentNodeRid
-            || currentNodeRid != sourceNodeRid
-            || current.SessionRid != sourceSessionRid
-            || current.BindingGeneration != bindingGeneration
-            || current.SessionOwnerNodeGeneration != sessionOwnerNodeGeneration
-        )
-        {
-            //  Dropping here leaves the Actor holding a binding whose session
-            //  is gone; the caller traces it (spec 26 §2.1).
-            return false;
-        }
-
-        bindingToken = current.BindingToken;
-        return true;
+        bindingToken = decodedBindingToken;
+        // A bindingAbsent participant has no target binding to compare. Only a
+        // different current binding fences its in-flight disconnect (§8.3).
+        return !state.TryGetBoundSessionForInbound(out var current)
+            || string.Equals(current.BindingToken, decodedBindingToken, StringComparison.Ordinal)
+                && (current.SessionNodeRid ?? state.NativeActorRef?.NodeRid) == sourceNodeRid
+                && current.SessionRid == sourceSessionRid
+                && current.BindingGeneration == bindingGeneration
+                && current.SessionOwnerNodeGeneration == sessionOwnerNodeGeneration;
     }
 
     private static bool TryDecodeSessionDisconnected(

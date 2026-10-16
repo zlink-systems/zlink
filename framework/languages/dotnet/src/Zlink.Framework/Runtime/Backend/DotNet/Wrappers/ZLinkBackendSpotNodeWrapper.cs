@@ -340,6 +340,9 @@ internal sealed class ZLinkBackendSpotNodeWrapper
         _node.SetSessionRelocationBarrierTarget(target);
     }
 
+    public void CompleteSessionRelocation(Guid relocationId) =>
+        _node.CompleteSessionRelocation(relocationId);
+
     public ValueTask<ZLinkServiceWireCodec.SessionRelocationSealedRecord> SealSessionRelocationAsync(
         RoutingId sessionOwnerNodeRid,
         ZLinkServiceWireCodec.SessionRelocationSealRecord seal,

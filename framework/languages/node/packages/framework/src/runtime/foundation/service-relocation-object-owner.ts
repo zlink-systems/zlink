@@ -30,7 +30,7 @@ export interface ServiceRelocationCaptureUnit {
   readonly authorityOwnerGeneration: bigint;
   seal(signal?: AbortSignal): Promise<ServiceRelocationSealedWork>;
   captureApplicationState(signal?: AbortSignal): Promise<Uint8Array>;
-  commitSeal(): Promise<void> | void;
+  commitSeal(followAuthorities: ReadonlyMap<string, ZLinkAuthoritySnapshot>): Promise<void> | void;
   abortSeal(): Promise<void> | void;
   /** Expired-owner terminal: pending requests fail once and dispatch stays closed. */
   discardSeal?(reason: unknown): Promise<void> | void;
@@ -44,12 +44,14 @@ export class ServiceCapturedObjectRelocation {
     private readonly units: readonly ServiceRelocationCaptureUnit[]
   ) {}
 
-  async commitSource(): Promise<void> {
+  async commitSource(
+    followAuthorities: ReadonlyMap<string, ZLinkAuthoritySnapshot>
+  ): Promise<void> {
     if (this.terminal === 'committed') return;
     if (this.terminal !== 'open') {
       throw new Error(`Relocation source capture was already ${this.terminal}.`);
     }
-    for (const unit of this.units) await unit.commitSeal();
+    for (const unit of this.units) await unit.commitSeal(followAuthorities);
     this.terminal = 'committed';
   }
 
@@ -253,7 +255,6 @@ export interface ServiceRelocationTargetObjectPort<THidden extends ServiceReloca
     message: ServiceRelocationQueuedMessage,
     signal?: AbortSignal
   ): Promise<void>;
-  restoreTimer(hidden: THidden, timer: ServiceRelocationTimer, signal?: AbortSignal): Promise<void>;
   normalize(
     hidden: THidden,
     authority: ZLinkAuthoritySnapshot,
@@ -351,9 +352,6 @@ export class ServiceRelocationObjectRestoreOwner<
       await this.target.restoreBoundSession(hidden, participant.boundSessionState, signal);
       for (const message of participant.queuedMessages) {
         await this.target.replayQueuedMessage(hidden, message, signal);
-      }
-      for (const timer of participant.timers) {
-        await this.target.restoreTimer(hidden, timer, signal);
       }
     }
   }

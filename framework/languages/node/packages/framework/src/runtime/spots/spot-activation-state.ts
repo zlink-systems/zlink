@@ -294,7 +294,7 @@ export class ZLinkSpotActivation {
 
   abortRelocation(capture: ZLinkSpotRelocationCapture): boolean {
     if (!this.executionBarrier.isCurrent(capture.seal)) return false;
-    this.timers.abortRelocation(capture.timers);
+    this.timers.abortRelocation();
     return this.abortExecutionSeal(capture.seal);
   }
 

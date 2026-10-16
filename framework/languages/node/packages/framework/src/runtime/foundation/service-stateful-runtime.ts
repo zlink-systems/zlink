@@ -1180,11 +1180,15 @@ export class ServiceStatefulRuntime {
 
   async commitSpotMessageFollowIngress(
     seal: ServiceSpotMessageFollowSeal,
-    target: ServiceDirectSpotRouteFence,
+    target: ServiceDirectSpotRouteFence | null,
     durationMs: number
   ): Promise<boolean> {
     const state = this.exactSpotMessageFollow(seal);
     if (state === undefined || state.target !== undefined) return false;
+    if (target === null) {
+      this.failExpiredSpotMessageFollow(state);
+      return true;
+    }
     if (!Number.isSafeInteger(durationMs) || durationMs < 0) {
       throw new RangeError('Message Follow duration must be a non-negative safe integer.');
     }
