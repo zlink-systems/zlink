@@ -1270,7 +1270,24 @@ internal sealed class ZLinkActorRuntimeState(
 
     public void PrepareForTransferredActivation() => RunState(PrepareForTransferredActivationCore);
 
-    internal void PrepareForTransferredActivationOnLane() => PrepareForTransferredActivationCore();
+    internal async ValueTask PrepareForTransferredActivationAsync(
+        CancellationToken cancellationToken
+    )
+    {
+        var terminal = await ExecuteLockedAsync(
+                () => _terminalLifecycleCompletion,
+                cancellationToken
+            )
+            .ConfigureAwait(false);
+        if (terminal is not null)
+            // Framework API §11: source retirement publishes its handoff result
+            // before async handler disposal finishes. Reentry needs that existing
+            // terminal fence; the source finalizer owns reporting disposal errors.
+            await Task.WhenAny(terminal).WaitAsync(cancellationToken).ConfigureAwait(false);
+
+        await ExecuteLockedAsync(PrepareForTransferredActivationCore, cancellationToken)
+            .ConfigureAwait(false);
+    }
 
     private void PrepareForTransferredActivationCore()
     {
