@@ -268,16 +268,6 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                             new ZLinkConfigurationException(
                                     "eligible Entry Spot selection is unavailable"));
     private ZLinkRelayMetadataPolicy metadataPolicy = ZLinkRelayMetadataPolicy.EMPTY;
-    //  Command 42 loss policy is `retransmit-until-sealedResult-or-deadline`
-    //  (service-wire-v1.schema.json, relocationStateMachine.commandRules).
-    //  The Actor lane is already sealedResult when this runs. If the Session owner
-    //  cannot return exact command-43 evidence before this deadline, the move
-    //  fails closed; it must never infer a high-water or continue unsealed.
-    private final Duration sessionRelocationSealTimeout;
-    private volatile ZLinkSessionRelocationPeerClient sessionRelocationSealer;
-    private final ConcurrentMap<
-                    ZLinkServiceM6BWireCodec.RelocationIdentity, DirectJoinSessionAbortFlight>
-            directJoinSessionAborts = new ConcurrentHashMap<>();
     private volatile ZLinkDirectJoinRelocation directJoinRelocation;
     private volatile ZLinkLocationRepository actorJoinAuthorityStore;
     private volatile ZLinkActorJoinRelocationPort actorJoinRelocationPort;
@@ -316,8 +306,6 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
 
     public void beginDrain() {
         draining = true;
-        stopDirectJoinSessionRecovery(
-                "Actor runtime began drain with a pending direct-Join Session abort");
     }
 
     boolean relocationRecoveryStopped() {
@@ -798,9 +786,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         this.defaultRequestTimeout = defaultRequestTimeout;
         this.messageFollowDuration =
                 messageFollowDuration == null ? Duration.ofSeconds(5) : messageFollowDuration;
-        this.sessionRelocationSealTimeout =
-                Objects.requireNonNull(locationOptions, "locationOptions")
-                        .sessionRelocationSealTimeout();
+        Objects.requireNonNull(locationOptions, "locationOptions");
         this.serializer = serializer;
         this.handlerFactory = handlerFactory;
         this.actorTransfers = new ZLinkActorTransferRegistry(transferAdapters, handlerFactory);
@@ -3047,231 +3033,6 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         return Optional.empty();
     }
 
-    /** Installs the command 42 sender for exact bound-Session relocation. */
-    public void setSessionRelocationSealer(ZLinkSessionRelocationPeerClient sealer) {
-        this.sessionRelocationSealer = sealer;
-    }
-
-    CompletionStage<SealedDirectJoinSessionRoute> directJoinSessionRouteCommand(
-            ZLinkActor actor,
-            ZLinkBackendActorRef actorRef,
-            RoutingId targetNodeRid,
-            UUID relocationId) {
-        BoundSessionRouteSnapshot session = boundSessionRoute(actor).orElse(null);
-        if (session == null) {
-            return CompletableFuture.completedFuture(SealedDirectJoinSessionRoute.empty());
-        }
-        return locations
-                .directJoinSessionFence(
-                        actor.context().actorId(), session.sessionOwnerNodeRid(), targetNodeRid)
-                .thenCompose(
-                        authority -> {
-                            DirectJoinSessionRoute route =
-                                    new DirectJoinSessionRoute(authority, session);
-                            return sealBoundSessionRoute(actorRef, relocationId, route);
-                        });
-    }
-
-    /**
-     * Runs the spec 20 §5 step 1 seal against the bound Session owner: command 42 carries the exact
-     * source fence and command 43 echoes it field-for-field. The Session owner keeps message
-     * ordering state locally; command 44 does not carry a duplicated high-water value.
-     */
-    private CompletionStage<SealedDirectJoinSessionRoute> sealBoundSessionRoute(
-            ZLinkBackendActorRef actorRef, UUID relocationId, DirectJoinSessionRoute route) {
-        var session = route.session();
-        ZLinkSessionRelocationPeerClient sealer = sessionRelocationSealer;
-        if (sealer == null) {
-            return CompletableFuture.failedFuture(
-                    new ZLinkConfigurationException(
-                            "StateIncompatible: bound-Session relocation peer does "
-                                    + "not support command 42/43 sealing"));
-        }
-        var authority = route.authority();
-        var source = authority.sourceActorOwner();
-        var sessionOwner = authority.sessionOwner();
-        var seal =
-                new systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
-                        .SessionRelocationSeal(
-                        new systems.zlink.framework.runtime.internal.service
-                                .ZLinkServiceM6BWireCodec.RelocationIdentity(
-                                relocationId.getMostSignificantBits(),
-                                relocationId.getLeastSignificantBits()),
-                        new systems.zlink.framework.runtime.internal.service
-                                .ZLinkServiceM6BWireCodec.RelocationCoordinatorFence(
-                                authority.sourceAuthorityOwnerId(),
-                                authority.sourceAuthorityOwnerLeaseGeneration(),
-                                source.rid(),
-                                source.lifecycleGeneration(),
-                                authority.sourceAuthorityStoreVersion()),
-                        systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
-                                .RelocationRole.SOURCE,
-                        new systems.zlink.framework.runtime.internal.service
-                                .ZLinkServiceM6BWireCodec.ActorRouteFence(
-                                new ZLinkBackendActorRef(
-                                        source.rid(), actorRef.actorId(), actorRef.generation()),
-                                source.lifecycleGeneration(),
-                                authority.sourceAuthorityOwnerGeneration(),
-                                authority.sourceAuthorityOwnerLeaseGeneration()),
-                        new systems.zlink.framework.runtime.internal.service
-                                .ZLinkServiceM6BWireCodec.SessionOwnerFence(
-                                session.sessionOwnerNodeRid(),
-                                sessionOwner.lifecycleGeneration(),
-                                sessionOwner.ownerId(),
-                                sessionOwner.leaseGeneration(),
-                                session.sessionRid(),
-                                session.bindingGeneration()));
-        //  The command 43 ACK completes on the mesh transport dispatch thread.
-        //  Everything the Join does after this point - begin remote move,
-        //  transfer out, manifest prepare - must not run there or it stalls
-        //  every other inbound record on this node, so the continuation is
-        //  handed to the default async pool before the caller chains on it.
-        return sealer.sealRouteUntilAck(seal, sessionRelocationSealTimeout)
-                .thenApplyAsync(sealedResult -> new SealedDirectJoinSessionRoute(seal, sealer))
-                .exceptionallyCompose(
-                        failure -> {
-                            //  Preserve the typed seal failure (deadline -> DeadlineExceeded,
-                            //  malformed ACK -> ProtocolError, route -> Unavailable, shutdown
-                            //  -> ShuttingDown) instead of collapsing every command 42/43
-                            //  seal failure to NotConfigured.
-                            Throwable cause =
-                                    failure instanceof CompletionException
-                                                    && failure.getCause() != null
-                                            ? failure.getCause()
-                                            : failure;
-                            ZLinkFrameworkException typed =
-                                    cause instanceof ZLinkFrameworkException framework
-                                            ? framework
-                                            : new ZLinkFrameworkException(
-                                                    ZLinkFrameworkErrorKind.INTERNAL_FAILURE,
-                                                    "RelocationFailed: command 42/43 did not seal"
-                                                            + " the bound Session for "
-                                                            + actorRef.actorId(),
-                                                    cause);
-                            return CompletableFuture.failedFuture(typed);
-                        });
-    }
-
-    CompletionStage<Void> abortDirectJoinSessionRoute(SealedDirectJoinSessionRoute context) {
-        Objects.requireNonNull(context, "context");
-        if (context.seal() == null) {
-            return CompletableFuture.completedFuture(null);
-        }
-        if (draining) {
-            return CompletableFuture.failedFuture(
-                    new ZLinkConfigurationException(
-                            "Actor runtime is draining before direct-Join Session abort"));
-        }
-        var key = context.seal().relocation();
-        DirectJoinSessionAbortFlight candidate =
-                new DirectJoinSessionAbortFlight(
-                        context, directJoinSessionAbortCommand(context), new CompletableFuture<>());
-        DirectJoinSessionAbortFlight existing = directJoinSessionAborts.putIfAbsent(key, candidate);
-        if (existing != null) {
-            if (!sameDirectJoinSessionRouteContext(existing.context(), context)) {
-                return CompletableFuture.failedFuture(
-                        new ZLinkFrameworkException(
-                                ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
-                                "direct-Join Session abort conflicts with the retained "
-                                        + "relocation context"));
-            }
-            return existing.completion();
-        }
-        if (draining && directJoinSessionAborts.remove(key, candidate)) {
-            candidate
-                    .completion()
-                    .completeExceptionally(
-                            new ZLinkConfigurationException(
-                                    "Actor runtime began drain before direct-Join Session abort"));
-            return candidate.completion();
-        }
-        attemptDirectJoinSessionAbort(candidate);
-        return candidate.completion();
-    }
-
-    private void attemptDirectJoinSessionAbort(DirectJoinSessionAbortFlight flight) {
-        if (draining
-                || flight.completion().isDone()
-                || directJoinSessionAborts.get(flight.context().seal().relocation()) != flight) {
-            return;
-        }
-        flight.context()
-                .peer()
-                .sendRoute(flight.abort())
-                .whenComplete(
-                        (ack, failure) -> {
-                            if (failure != null) {
-                                scheduleDirectJoinSessionAbortRetry(flight);
-                                return;
-                            }
-                            directJoinSessionAborts.remove(
-                                    flight.context().seal().relocation(), flight);
-                            flight.completion().complete(null);
-                        });
-    }
-
-    private void scheduleDirectJoinSessionAbortRetry(DirectJoinSessionAbortFlight flight) {
-        if (draining
-                || flight.completion().isDone()
-                || directJoinSessionAborts.get(flight.context().seal().relocation()) != flight) {
-            return;
-        }
-        ZLinkActorRetryScheduler.scheduleRouteAfter(
-                () -> attemptDirectJoinSessionAbort(flight), Duration.ofSeconds(5));
-    }
-
-    private static boolean sameDirectJoinSessionRouteContext(
-            SealedDirectJoinSessionRoute left, SealedDirectJoinSessionRoute right) {
-        return left.seal().equals(right.seal()) && left.peer() == right.peer();
-    }
-
-    private static ZLinkServiceM6BWireCodec.SessionRelocationRoute directJoinSessionAbortCommand(
-            SealedDirectJoinSessionRoute context) {
-        if (context.seal() == null) {
-            throw new ZLinkConfigurationException(
-                    "direct-Join Session abort has no command 42 context");
-        }
-        ZLinkServiceM6BWireCodec.SessionRelocationSeal command42 = context.seal();
-        return new ZLinkServiceM6BWireCodec.SessionRelocationRoute(
-                command42.relocation(),
-                command42.coordinator(),
-                ZLinkServiceM6BWireCodec.RelocationRole.SOURCE,
-                new ZLinkServiceM6BWireCodec.ActorIdentity(
-                        command42.actor().actor().actorId(),
-                        command42.actor().actor().generation()),
-                command42.session(),
-                ZLinkServiceM6BWireCodec.SessionRelocationRouteAction.ABORT,
-                0,
-                command42.actor().authorityOwnerGeneration(),
-                null,
-                0,
-                0);
-    }
-
-    record DirectJoinSessionRoute(
-            ZLinkStoreLocationResolvers.DirectJoinSessionFence authority,
-            BoundSessionRouteSnapshot session) {}
-
-    record SealedDirectJoinSessionRoute(
-            ZLinkServiceM6BWireCodec.SessionRelocationSeal seal,
-            ZLinkSessionRelocationPeerClient peer) {
-        SealedDirectJoinSessionRoute {
-            if ((seal == null) != (peer == null)) {
-                throw new IllegalArgumentException(
-                        "direct-Join Session relocation context is invalid");
-            }
-        }
-
-        static SealedDirectJoinSessionRoute empty() {
-            return new SealedDirectJoinSessionRoute(null, null);
-        }
-    }
-
-    private record DirectJoinSessionAbortFlight(
-            SealedDirectJoinSessionRoute context,
-            ZLinkServiceM6BWireCodec.SessionRelocationRoute abort,
-            CompletableFuture<Void> completion) {}
-
     public record BoundSessionRouteSnapshot(
             RoutingId sessionOwnerNodeRid, RoutingId sessionRid, long bindingGeneration) {
         public BoundSessionRouteSnapshot {
@@ -4418,6 +4179,31 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                 actor.context().actorId(), () -> disconnectedNotifier.apply(actor));
     }
 
+    /**
+     * Runs the disconnect callback for a notification from the named Session binding. In the
+     * Actor's turn, a current binding to a different Session drops the notification; no current
+     * binding or the same binding runs the callback (Session-Actor binding §8.3).
+     */
+    public CompletionStage<Void> notifyDisconnected(
+            ZLinkActor actor, RoutingId sessionOwnerNodeRid, RoutingId sessionRid) {
+        if (actor == null) {
+            return CompletableFuture.failedFuture(
+                    new ZLinkConfigurationException("actor is required"));
+        }
+        return submitActorDispatch(
+                actor.context().actorId(),
+                () -> {
+                    DefaultActorContext context = actorRegistry.context(actor);
+                    if (context != null
+                            && sessionRid != null
+                            && context.hasBoundSession()
+                            && !context.hasBoundSession(sessionOwnerNodeRid, sessionRid)) {
+                        return CompletableFuture.completedFuture(null);
+                    }
+                    return disconnectedNotifier.apply(actor);
+                });
+    }
+
     private void markJoinedState(
             ZLinkActor actor, ZLinkBackendActorRef actorRef, String spotId, ZLinkSpot<?> spot) {
         DefaultActorContext context = actorRegistry.context(actor);
@@ -4622,8 +4408,6 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         }
         try {
             draining = true;
-            stopDirectJoinSessionRecovery(
-                    "Actor runtime closed with a pending direct-Join Session abort");
             ZLinkHandlerStages.completeAll(
                             List.of(
                                     () -> ZLinkHandlerStages.fromRunnable(handoff::close),
@@ -4656,19 +4440,6 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             result.completeExceptionally(failure);
         }
         return result;
-    }
-
-    private void stopDirectJoinSessionRecovery(String message) {
-        //  Spec 32-framework-error-model:39, 15-spot-actor:375 — a pending
-        //  operation aborted by runtime shutdown/drain is ShuttingDown.
-        ZLinkFrameworkException pendingAbortClosed =
-                new ZLinkFrameworkException(ZLinkFrameworkErrorKind.SHUTTING_DOWN, message);
-        directJoinSessionAborts.forEach(
-                (key, flight) -> {
-                    if (directJoinSessionAborts.remove(key, flight)) {
-                        flight.completion().completeExceptionally(pendingAbortClosed);
-                    }
-                });
     }
 
     /**

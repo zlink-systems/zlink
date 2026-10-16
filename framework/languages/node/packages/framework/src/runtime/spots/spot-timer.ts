@@ -55,7 +55,7 @@ interface ZLinkTimerFinalization {
 
 interface ZLinkTimerFinalizationStart {
   readonly timeout: unknown;
-  readonly running: Promise<void>;
+  readonly running: Promise<void> | undefined;
 }
 
 type ZLinkTimerFailureReporter = (
@@ -511,10 +511,18 @@ export class ZLinkManagedTimer implements ZLinkTimer {
   private pausedForRelocation = false;
   private startedAtMs: number;
   private startedAtUnixMs: number;
+  /** DeliveryIndex and ScheduledIndex of the last completed tick. */
   private deliveryIndex = 0n;
   private lastScheduledIndex = 0n;
+  /**
+   * The selected tick whose callback has not completed (Spot timer §1). It is
+   * the only pending tick a relocation captures, and a restored timer delivers
+   * it before it selects another tick.
+   */
+  private pendingScheduledIndex: bigint | undefined;
   private timeout: unknown;
-  private running: Promise<void> = Promise.resolve();
+  /** The dispatch in flight, from its timer callback until `completeFireCore`. */
+  private running: Promise<void> | undefined;
   private dispatchFailure: { readonly cause: unknown } | undefined;
   private finalization: ZLinkTimerFinalization | undefined;
 
@@ -538,6 +546,7 @@ export class ZLinkManagedTimer implements ZLinkTimer {
       this.startedAtMs = clock.now() - Math.max(0, clock.utcNow() - cursor.startedAtUnixMs);
       this.deliveryIndex = cursor.deliveryIndex;
       this.lastScheduledIndex = cursor.lastScheduledIndex;
+      this.pendingScheduledIndex = cursor.pendingTicks[0]?.scheduledIndex;
     }
     this.pausedForRelocation = start.paused === true;
     this.scheduleNext();
@@ -588,7 +597,10 @@ export class ZLinkManagedTimer implements ZLinkTimer {
       deliveryIndex: this.deliveryIndex,
       lastScheduledIndex: this.lastScheduledIndex,
       nextDueAtUnixMs: this.startedAtUnixMs + Number(this.lastScheduledIndex + 1n) * this.periodMs,
-      pendingTicks: []
+      pendingTicks:
+        this.pendingScheduledIndex === undefined
+          ? []
+          : [this.pendingTick(this.pendingScheduledIndex)]
     }));
   }
 
@@ -600,14 +612,17 @@ export class ZLinkManagedTimer implements ZLinkTimer {
   }
 
   private scheduleNext(): void {
-    if (this.disposed || this.pausedForRelocation) {
+    // The dispatch in flight schedules the next tick when it completes.
+    if (this.disposed || this.pausedForRelocation || this.running !== undefined) {
       return;
     }
 
     const delayMs =
-      this.options.overrunPolicy === ZLinkTimerOverrunPolicy.DelayNextTick
-        ? this.periodMs
-        : Math.max(0, Number(this.lastScheduledIndex + 1n) * this.periodMs - this.elapsedMs());
+      this.pendingScheduledIndex !== undefined
+        ? 0
+        : this.options.overrunPolicy === ZLinkTimerOverrunPolicy.DelayNextTick
+          ? this.periodMs
+          : Math.max(0, Number(this.lastScheduledIndex + 1n) * this.periodMs - this.elapsedMs());
     this.timeout = startOutsideStateLane(() =>
       this.clock.setTimeout(() => {
         this.timeout = undefined;
@@ -630,6 +645,11 @@ export class ZLinkManagedTimer implements ZLinkTimer {
     try {
       await this.onTick(prepared.tick);
     } catch (cause) {
+      // A tick whose callback had not started when a relocation captured it
+      // belongs to the capture: the target delivers it, so the source neither
+      // reports nor completes it.
+      const started = this.shouldWaitForRunningOnCancel();
+      if (!started && (await this.lane.run(() => this.pausedForRelocation))) return;
       shouldContinue = !this.options.stopOnUnhandledException;
       await this.onFailure?.(
         prepared.tick,
@@ -640,7 +660,7 @@ export class ZLinkManagedTimer implements ZLinkTimer {
       );
     }
 
-    await this.lane.run(() => this.completeFireCore(prepared.scheduledIndex, shouldContinue));
+    await this.lane.run(() => this.completeFireCore(shouldContinue));
   }
 
   private cancelCore(): ZLinkTimerFinalizationStart {
@@ -649,7 +669,7 @@ export class ZLinkManagedTimer implements ZLinkTimer {
     this.timeout = undefined;
     return {
       timeout,
-      running: this.shouldWaitForRunningOnCancel() ? this.running : Promise.resolve()
+      running: this.shouldWaitForRunningOnCancel() ? this.running : undefined
     };
   }
 
@@ -682,43 +702,54 @@ export class ZLinkManagedTimer implements ZLinkTimer {
     }
   }
 
-  private prepareCaptureCore(): { readonly running: Promise<void> } {
+  private prepareCaptureCore(): { readonly running: Promise<void> | undefined } {
     if (this.disposed) throw new Error(`Timer '${this.name}' is disposed.`);
     this.pausedForRelocation = true;
     if (this.timeout !== undefined) {
       this.clock.clearTimeout(this.timeout);
       this.timeout = undefined;
     }
-    return { running: this.shouldWaitForRunningOnCancel() ? this.running : Promise.resolve() };
+    return { running: this.shouldWaitForRunningOnCancel() ? this.running : undefined };
   }
 
-  private prepareFireCore():
-    { readonly tick: ZLinkTimerTick; readonly scheduledIndex: bigint } | undefined {
+  private prepareFireCore(): { readonly tick: ZLinkTimerTick } | undefined {
     if (this.disposed) return undefined;
-    const scheduledIndex = this.selectScheduledIndex();
-    const skippedTicks = scheduledIndex - this.lastScheduledIndex - 1n;
+    this.pendingScheduledIndex ??= this.selectScheduledIndex();
+    const pending = this.pendingTick(this.pendingScheduledIndex);
     const startedElapsedMs = this.elapsedMs();
-    const scheduledElapsedMs = Number(scheduledIndex) * this.periodMs;
-    this.deliveryIndex += 1n;
+    const scheduledElapsedMs = Number(pending.scheduledIndex) * this.periodMs;
     return {
-      scheduledIndex,
       tick: {
         name: this.name,
-        deliveryIndex: this.deliveryIndex,
-        scheduledIndex,
+        deliveryIndex: pending.deliveryIndex,
+        scheduledIndex: pending.scheduledIndex,
         periodMs: this.periodMs,
-        scheduledAt: new Date(this.startedAtUnixMs + scheduledElapsedMs),
+        scheduledAt: new Date(pending.scheduledAtUnixMs),
         startedAt: new Date(this.clock.utcNow()),
         scheduledElapsedMs,
         startedElapsedMs,
         delayMs: startedElapsedMs - scheduledElapsedMs,
-        skippedTicks
+        skippedTicks: pending.skippedTicks
       }
     };
   }
 
-  private completeFireCore(scheduledIndex: bigint, shouldContinue: boolean): void {
-    this.lastScheduledIndex = scheduledIndex;
+  /** The tick info of the pending tick at `scheduledIndex` after the completed cursor. */
+  private pendingTick(scheduledIndex: bigint): ZLinkTimerRelocationPendingTick {
+    return relocationPendingTick(
+      this.startedAtUnixMs,
+      this.periodMs,
+      this.deliveryIndex,
+      this.lastScheduledIndex,
+      scheduledIndex
+    );
+  }
+
+  private completeFireCore(shouldContinue: boolean): void {
+    this.deliveryIndex += 1n;
+    this.lastScheduledIndex = this.pendingScheduledIndex!;
+    this.pendingScheduledIndex = undefined;
+    this.running = undefined;
     if (!shouldContinue) {
       this.disposed = true;
       return;
@@ -769,10 +800,44 @@ function validateRelocationCursor(
     !Number.isSafeInteger(state.nextDueAtUnixMs) ||
     state.nextDueAtUnixMs !==
       state.startedAtUnixMs + Number(state.lastScheduledIndex + 1n) * state.periodMs ||
-    state.pendingTicks.length !== 0
+    state.pendingTicks.length > 1 ||
+    state.pendingTicks.some((pending) => {
+      const expected = relocationPendingTick(
+        state.startedAtUnixMs,
+        state.periodMs,
+        state.deliveryIndex,
+        state.lastScheduledIndex,
+        pending.scheduledIndex
+      );
+      return (
+        pending.scheduledIndex <= state.lastScheduledIndex ||
+        pending.deliveryIndex !== expected.deliveryIndex ||
+        pending.scheduledAtUnixMs !== expected.scheduledAtUnixMs ||
+        pending.skippedTicks !== expected.skippedTicks
+      );
+    })
   ) {
     throw new Error(`Timer '${name}' relocation state is invalid.`);
   }
+}
+
+/**
+ * Spot timer §1: the tick info that follows the completed cursor. A timer holds
+ * at most one pending tick, so its DeliveryIndex is the next one.
+ */
+function relocationPendingTick(
+  startedAtUnixMs: number,
+  periodMs: number,
+  deliveryIndex: bigint,
+  lastScheduledIndex: bigint,
+  scheduledIndex: bigint
+): ZLinkTimerRelocationPendingTick {
+  return {
+    deliveryIndex: deliveryIndex + 1n,
+    scheduledIndex,
+    scheduledAtUnixMs: startedAtUnixMs + Number(scheduledIndex) * periodMs,
+    skippedTicks: scheduledIndex - lastScheduledIndex - 1n
+  };
 }
 
 export function createTimerDiagnostics(
