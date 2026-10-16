@@ -2,7 +2,7 @@
 
 ## Project overview
 
-This Kotlin project (Kotlin 2.3.10 on a Java 25 toolchain, built with Gradle) is an MMO megaserver example in which a Region adds instances when it reaches its capacity. It runs a Session gateway for connections, two Region hosts (`regionA` and `regionB`), an Instance host for Dungeons, and Redis for location and relocation state. `build.gradle.kts` pins the ZLink Framework packages to `0.30.1` (`frameworkVersion`) and the ZLink binding to `1.19.0` (`bindingVersion`).
+This Kotlin project (Kotlin 2.3.21 on a Java 25 toolchain, built with Gradle) is an MMO megaserver example in which a Region adds instances when it reaches its capacity. It runs a Session gateway for connections, two Region hosts (`regionA` and `regionB`), an Instance host for Dungeons, and Redis for location and relocation state. `build.gradle.kts` pins the ZLink Framework packages to `0.30.1` (`frameworkVersion`) and the ZLink binding to `1.19.1` (`bindingVersion`).
 
 The project layout and feature procedure below describe where to add gameplay. The [README](README.md) covers prerequisites, deployment, and known issues in the public packages. [zlink.structure.json](zlink.structure.json) describes the initial node composition and scenarios; Framework and Redis manage object placement at runtime.
 

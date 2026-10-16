@@ -2,7 +2,7 @@
 
 ## 프로젝트 개요
 
-이 Kotlin 프로젝트(Java 25 toolchain 위의 Kotlin 2.3.10, Gradle 빌드)는 플레이어가 여러 node의 공용 필드를 오가며 필드 경계에서 서로를 보고 파티 던전에 입장하는 MORPG 예제다. 연결을 처리하는 Session gateway, 고정 필드 넷을 나누어 갖는 Field host 둘(`fieldA`·`fieldB`), Instance host 둘(`instanceA`·`instanceB`)과 위치·이전 상태를 저장하는 Redis를 실행한다. `build.gradle.kts`는 ZLink Framework package를 `0.30.1`(`frameworkVersion`)로, ZLink binding을 `1.19.0`(`bindingVersion`)으로 고정한다.
+이 Kotlin 프로젝트(Java 25 toolchain 위의 Kotlin 2.3.21, Gradle 빌드)는 플레이어가 여러 node의 공용 필드를 오가며 필드 경계에서 서로를 보고 파티 던전에 입장하는 MORPG 예제다. 연결을 처리하는 Session gateway, 고정 필드 넷을 나누어 갖는 Field host 둘(`fieldA`·`fieldB`), Instance host 둘(`instanceA`·`instanceB`)과 위치·이전 상태를 저장하는 Redis를 실행한다. `build.gradle.kts`는 ZLink Framework package를 `0.30.1`(`frameworkVersion`)로, ZLink binding을 `1.19.1`(`bindingVersion`)으로 고정한다.
 
 게임 기능은 아래의 프로젝트 구성과 확장 절차에 따라 추가한다. 실행 환경·배포·공개 package의 알려진 문제는 [README](README.md)가 설명한다. 초기 node 구성과 scenario 목록은 [zlink.structure.json](zlink.structure.json)에 있으며, 실행 중 객체의 위치는 Framework와 Redis가 관리한다.
 

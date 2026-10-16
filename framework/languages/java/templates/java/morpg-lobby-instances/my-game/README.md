@@ -15,7 +15,7 @@ The Lobby and Instance roles (`lobby`, `instanceA`, and `instanceB`) explicitly 
 
 ## Prerequisites
 
-Docker with Compose v2, and PowerShell 7 on Windows. Gradle Wrapper is included. Public Framework packages are pinned to 0.30.1 and the binding to 1.19.0 in `build.gradle.kts`. Framework 0.30.1 must be available in Maven Central before these commands can resolve it.
+Docker with Compose v2, and PowerShell 7 on Windows. Gradle Wrapper is included. Public Framework packages are pinned to 0.30.1 and the binding to 1.19.1 in `build.gradle.kts`. Framework 0.30.1 must be available in Maven Central before these commands can resolve it.
 
 ## Build
 
@@ -33,7 +33,7 @@ Docker runs the Java e2e runner and every node role in containers. Nodes share t
 
 For local process debugging, install JDK 25 and use `./run-e2e.sh --local` or `pwsh -NoProfile -File ./run-e2e.ps1 -Local`. Add `--no-build` or `-NoBuild` to reuse a local build. Docker uses its image layer cache.
 
-> **Base images.** Dockerfile ARG defaults pin Eclipse Temurin JDK/JRE 25.0.1+8 and Docker CLI 28.5.1. Replace these defaults when adopting a deployment base image.
+> **Base images.** Dockerfile ARG defaults pin Eclipse Temurin JDK/JRE 25.0.2+10 and Docker CLI 28.5.1. Replace these defaults when adopting a deployment base image.
 
 
 ```sh

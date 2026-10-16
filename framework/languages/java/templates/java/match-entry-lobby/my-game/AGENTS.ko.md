@@ -2,7 +2,7 @@
 
 ## 프로젝트 개요
 
-이 Java 25 프로젝트는 두 플레이어가 mode별로 대기열에 들어가 동적으로 생성된 Room에서 대전하는 match server 예제다. 연결을 처리하는 Session gateway, Match host A·B(Entry Spot, 고정 Matchmaking Spot, 동적 Room Spot)와 위치·이동 상태를 저장하는 Redis를 실행한다. `build.gradle.kts`는 ZLink Framework를 `0.30.1`, binding을 `1.19.0`으로 고정한다.
+이 Java 25 프로젝트는 두 플레이어가 mode별로 대기열에 들어가 동적으로 생성된 Room에서 대전하는 match server 예제다. 연결을 처리하는 Session gateway, Match host A·B(Entry Spot, 고정 Matchmaking Spot, 동적 Room Spot)와 위치·이동 상태를 저장하는 Redis를 실행한다. `build.gradle.kts`는 ZLink Framework를 `0.30.1`, binding을 `1.19.1`으로 고정한다.
 
 게임 기능을 추가할 위치는 아래의 프로젝트 구성에, 이 샘플의 기능을 자기 프로젝트로 옮기는 절차는 "이 샘플을 보며 개발하기"에 있다. 실행 환경·배포·공개 package의 알려진 문제는 [README](README.md)가 설명한다. 초기 node 구성과 scenario 목록은 [zlink.structure.json](zlink.structure.json)에 있으며, 실행 중 객체의 위치는 Framework와 Redis가 관리한다.
 
