@@ -1,7 +1,24 @@
+using Zlink.Framework.Runtime.Locations;
+
 namespace Zlink.Framework.Runtime.Spots;
 
 internal abstract partial class ZLinkSpotActivation
 {
+    internal async ValueTask ConfigureAsync(
+        IReadOnlyList<ZLinkScannedSpotHandler> handlers,
+        Action configure,
+        IReadOnlyList<ZLinkRelocationLogicalTimer>? logicalTimers,
+        CancellationToken cancellationToken
+    )
+    {
+        if (logicalTimers is not null)
+            await RestoreLogicalTimersAsync(logicalTimers).ConfigureAwait(false);
+        using var timers = _timers.EnterRelocatedInitialization();
+        foreach (var handler in handlers)
+            await ApplyScannedHandlerAsync(handler, cancellationToken).ConfigureAwait(false);
+        configure();
+    }
+
     protected void AddPacketCore<THandler>()
         where THandler : class
     {
@@ -133,7 +150,7 @@ internal abstract partial class ZLinkSpotActivation
         _actorHandlers?.Bind();
     }
 
-    internal async ValueTask ApplyScannedHandlerAsync(
+    private async ValueTask ApplyScannedHandlerAsync(
         ZLinkScannedSpotHandler handler,
         CancellationToken cancellationToken
     )
