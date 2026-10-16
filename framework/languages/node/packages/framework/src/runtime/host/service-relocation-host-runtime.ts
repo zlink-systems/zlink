@@ -2811,11 +2811,18 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       if (
         current.objectGeneration === participant.objectGeneration &&
         current.authorityOwnerGeneration > participant.authorityOwnerGeneration &&
-        current.ownerId !== primary.ownerId
+        // Location runtime §6: an owner is the (OwnerId, OwnerLeaseGeneration) pair;
+        // a restarted node keeps its OwnerId under a new lease generation.
+        (current.ownerId !== primary.ownerId ||
+          current.ownerLeaseGeneration !== primary.ownerLeaseGeneration)
       ) {
         committed += 1;
         // Location runtime §10: only the observed first target can receive Follow.
-        if (current.ownerId === target.ownerId) followAuthorities.set(participant.key, current);
+        if (
+          current.ownerId === target.ownerId &&
+          current.ownerLeaseGeneration === target.ownerLeaseGeneration
+        )
+          followAuthorities.set(participant.key, current);
       }
       if (participant.key === primaryAuthorityKey) primaryCurrent = current;
     }

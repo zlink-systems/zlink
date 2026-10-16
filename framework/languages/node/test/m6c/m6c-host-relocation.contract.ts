@@ -2076,6 +2076,8 @@ for (const observed of [
   'normalized-target',
   'second-commit',
   'steady',
+  'restarted-target',
+  'restarted-source',
   'different-object',
   'same-generation',
   'older-generation'
@@ -2117,23 +2119,31 @@ for (const observed of [
       );
       const codec = new ServiceRelocationAuthorityPayloadCodec();
       assert.equal(codec.read(first.payload), undefined, 'B is normalized before the source read');
+      // A restarted node keeps its OwnerId and takes a new OwnerLeaseGeneration;
+      // only the (OwnerId, OwnerLeaseGeneration) pair names the same owner.
+      const second =
+        observed === 'restarted-target'
+          ? { ownerId: 'target-owner', leaseGeneration: 15n, rid: 'target', generation: 23n }
+          : observed === 'restarted-source'
+            ? { ownerId: 'source-owner', leaseGeneration: 4n, rid: 'source', generation: 24n }
+            : { ownerId: 'third-owner', leaseGeneration: 21n, rid: 'third', generation: 22n };
       const secondPublication = codec.publish(first.payload, {
         reference: 'second-relocation-root',
         checksumCrc32c: 0,
         aggregateId: '00000000-0000-0000-0000-000000000092',
         aggregateGeneration: 1n,
         inventoryDigest: '0'.repeat(64),
-        targetOwnerId: 'third-owner',
-        targetOwnerLeaseGeneration: 21n
+        targetOwnerId: second.ownerId,
+        targetOwnerLeaseGeneration: second.leaseGeneration
       });
       if (observed !== 'normalized-target')
         await harness.location.prepareAggregate({
           participants: [
             { expectedStoreVersion: first.storeVersion, authorityPayload: secondPublication }
           ],
-          targetOwner: { ownerId: 'third-owner', leaseGeneration: 21n },
-          targetDescriptor: { meshName: 'mesh-a', rid: 'third' },
-          targetDescriptorLifecycleGeneration: 22n
+          targetOwner: { ownerId: second.ownerId, leaseGeneration: second.leaseGeneration },
+          targetDescriptor: { meshName: 'mesh-a', rid: second.rid },
+          targetDescriptorLifecycleGeneration: second.generation
         });
       if (observed !== 'normalized-target')
         assert.deepEqual(await harness.location.commitAggregate(), { kind: 'committed' });
@@ -2153,10 +2163,9 @@ for (const observed of [
       }
       const third = await harness.location.readAuthority();
       assert.equal(third.kind, 'snapshot');
-      assert.equal(
-        third.ownerId,
-        observed === 'normalized-target' ? 'target-owner' : 'third-owner'
-      );
+      assert.equal(third.ownerId, observed === 'normalized-target' ? 'target-owner' : second.ownerId);
+      if (observed !== 'normalized-target')
+        assert.equal(third.ownerLeaseGeneration, second.leaseGeneration);
       assert.equal(
         harness.location.commits,
         observed === 'normalized-target' ? 1 : 2,
@@ -2186,7 +2195,9 @@ for (const observed of [
       if (
         observed === 'normalized-target' ||
         observed === 'second-commit' ||
-        observed === 'steady'
+        observed === 'steady' ||
+        observed === 'restarted-target' ||
+        observed === 'restarted-source'
       ) {
         assert.equal(outcome.error, undefined, 'A→B must settle as committed after B→C');
         assert.equal(harness.sourceCommits.length, 1);
