@@ -390,6 +390,7 @@ class serial_turn_handle_impl_t final
                                bool after_active_phase,
                                std::shared_ptr<serial_turn_chain_t> chain) :
         _queue (queue),
+        _queue_owner (queue.weak_from_this ().lock ()),
         _name (std::move (name)),
         _lane (lane),
         _after_active_phase (after_active_phase),
@@ -651,6 +652,8 @@ class serial_turn_handle_impl_t final
     }
 
     serial_execution_queue_t &_queue;
+    // Completion can outlive removal from the Actor executor snapshot.
+    std::shared_ptr<serial_execution_queue_t> _queue_owner;
     std::string _name;
     serial_work_lane_t _lane = serial_work_lane_t::application;
     mutable std::stop_source _wait_stop{std::nostopstate};

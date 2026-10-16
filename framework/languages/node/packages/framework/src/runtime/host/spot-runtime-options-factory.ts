@@ -1,3 +1,4 @@
+import { routingIdsEqual } from '../routing-id';
 import type { ZLinkRuntimeEventPublisher } from '../diagnostics';
 import { ZLinkSpotRelocationCoordinationMode, ZLinkUserSpotExecutionMode } from '../../contracts';
 import {
@@ -304,7 +305,7 @@ export class ZLinkSpotRuntimeOptionsFactory {
           state.remoteActorPacketTarget !== undefined ||
           actorRef === undefined ||
           localNodeRid === undefined ||
-          String(actorRef.nodeRid) !== localNodeRid
+          !routingIdsEqual(actorRef.nodeRid, localNodeRid)
         ) {
           return {};
         }
@@ -351,11 +352,11 @@ export class ZLinkSpotRuntimeOptionsFactory {
 
   private primaryNodeRoutingId(): string | undefined {
     const node = this.primaryNode();
-    return node === undefined ? undefined : String(node.status().routingId);
+    return node === undefined ? undefined : node.status().routingId;
   }
 
   private meshNodeRoutingId(meshName: string): string | undefined {
     const node = this.options.spotNodeRuntime()?.meshNode(meshName);
-    return node === undefined ? undefined : String(node.status().routingId);
+    return node === undefined ? undefined : node.status().routingId;
   }
 }

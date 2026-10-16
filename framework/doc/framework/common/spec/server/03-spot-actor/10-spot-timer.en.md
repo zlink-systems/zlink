@@ -22,6 +22,8 @@ generation that's already on the queue does not run its callback — if a tick s
 before re-registration ran after re-registration, it would use a period and callback other
 than the new ones the caller expects.
 
+**Exception: when a relocation target's `Configure` or pre-Ready `OnInitializeAsync` registers a restored key, no new generation is created.** A relocation target recreates the Spot instance and runs these two callbacks ([Spot model §5.2](01-spot-model.en.md#52-user-spot-lifecycle)). A restored key is the key of a logical timer that was in the source relocation payload. When either callback registers that key, the registration only reattaches a handler to the restored registration, and the period, options, next fire time, pending tick, delivery and scheduled index, and the timer handle the registration returns keep their restored values. A different period or option in the registration arguments is not a failure; the restored values win. Invalid registration arguments still fail by the existing validation. If the handler type in the registration differs from the restored registration, only that registration call fails with `InvalidOperation`, and the restored registration and handler remain. What follows depends on when the registering callback runs. `Configure` runs in the target restore step before the authority commit ([relocation §4.3](../05-location-relocation/04-relocation-flow.en.md#43-restore-the-target-without-running-it)), so if the exception propagates out of `Configure`, the target restore fails and the relocation-failure result of [host relocation §13](../05-location-relocation/05-host-relocation-flow.en.md#13-relocate-completion-and-failure) applies. `OnInitializeAsync` runs in the lifecycle step after the CAS succeeds ([relocation §4.6](../05-location-relocation/04-relocation-flow.en.md#46-target-opens-the-queue-progressively-starting-with-existing-work)), so a registration failure there doesn't change the settled relocation result or return to the source. This restored-key exception applies only to relocations that move logical timers. A `PerActor` relocation, which doesn't move Spot-level timers ([host relocation §12](../05-location-relocation/05-host-relocation-flow.en.md#12-moving-pending-messages-timers-and-sessions)), has no restored key. Treating it as a new generation would drop the pending tick and next fire time that [host relocation §12](../05-location-relocation/05-host-relocation-flow.en.md#12-moving-pending-messages-timers-and-sessions) requires to move, just because application code registers its timers during initialization. Registering or re-registering a key that wasn't restored, a registration from any other callback (such as the relocation completion callback), and any re-registration after Ready follow the generation rule above.
+
 **`cancel` blocks new callbacks for that timer generation and completes with the generation's
 single result after any callback already running and all timer-owned resource cleanup have
 finished.** A callback already started is not forcibly interrupted — forcibly terminating a
@@ -39,7 +41,7 @@ same state at the same time.
 
 | Situation | Behavior |
 |---|---|
-| Re-registering the same key | Generation increases |
+| Re-registering the same key | Generation increases (a restored key during relocation target initialization follows the exception above) |
 | A queue record from an earlier generation | Does not run its callback |
 | Cancel | Blocks new callbacks for that generation and completes every cancel caller with the same success or failure after an already-running callback and timer-owned resource cleanup finish |
 | A repeating timer expires faster than the handler | The same key's callback is never run concurrently; duplicate expirations may merge into one pending record |
@@ -152,7 +154,7 @@ maps to one contract test.
 **Generation and cancel**
 
 - Re-registering the same key means an already-pending tick from an earlier generation does
-  not run its callback.
+  not run its callback. A restored key during relocation target initialization follows the §1 exception.
 - After cancel is called, a tick from that generation onward doesn't start its callback, but a callback
   already running at the moment of cancel runs to completion.
 - When `cancel` is called concurrently more than once for the same generation, every result

@@ -380,6 +380,16 @@ in-progress call together. It therefore needs neither a separate completion mark
 second slot reservation. Every completion path uses the same approach so that adding a path
 cannot introduce a different contention rule.
 
+This contention exists only for an operation whose completion arrives later. The admission
+result of a binding send is decided as in [§15](#15-consuming-binding-send-terminals-implementation).
+A send admitted immediately completes with that result and creates no entry in the in-progress
+call table. No other completion path can contend for it — a one-way send has no timeout or
+cancellation input (§7), and shutdown does not change a result already decided. A send that
+waits for a later admission with `BACKPRESSURED`, and every request, registers an entry and
+decides completion authority with the take-out above. Either way the caller continuation
+follows the new-execution-turn condition of
+[§11](#11-the-execution-turn-of-the-completion-callback-implementation).
+
 A service-wire request preserves two different values. Both are Framework-internal values
 and are not exposed to the application.
 

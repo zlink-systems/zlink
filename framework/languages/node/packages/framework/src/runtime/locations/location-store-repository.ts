@@ -1,3 +1,4 @@
+import { routingIdsEqual, toBackendRoutingId } from '../routing-id';
 import {
   ServiceRelocationAuthorityPayloadCodec,
   serviceRelocationAuthorityApplicationPayload
@@ -4202,7 +4203,7 @@ function liveTargetDescriptor(
   );
   const lease = decodeOwnerRecord(leaseRead.value.bytes);
   return descriptor.meshName === target.meshName &&
-    String(descriptor.rid) === String(target.nodeRid) &&
+    routingIdsEqual(descriptor.rid, toBackendRoutingId(target.nodeRid)) &&
     descriptor.lifecycleGeneration === target.nodeLifecycleGeneration &&
     descriptor.ownerId === target.owner.ownerId &&
     descriptor.leaseGeneration === target.owner.leaseGeneration &&
@@ -4337,7 +4338,7 @@ function sameCreationTarget(
 ): boolean {
   return (
     snapshot.allocation.descriptor.meshName === target.meshName &&
-    String(snapshot.allocation.descriptor.rid) === String(target.nodeRid) &&
+    routingIdsEqual(snapshot.allocation.descriptor.rid, target.nodeRid) &&
     snapshot.allocation.descriptorLifecycleGeneration === target.nodeLifecycleGeneration &&
     snapshot.ownerId === target.owner.ownerId &&
     snapshot.ownerLeaseGeneration === target.owner.leaseGeneration
@@ -4550,7 +4551,7 @@ function matchesSpot(value: ZLinkSpotLocation, filter: ZLinkSpotLocationFilter):
   return (
     (filter.meshName === undefined || value.meshName === filter.meshName) &&
     (filter.spotType === undefined || value.spotType === filter.spotType) &&
-    (filter.nodeRid === undefined || String(value.ownerNodeRid) === String(filter.nodeRid)) &&
+    (filter.nodeRid === undefined || routingIdsEqual(value.ownerNodeRid, filter.nodeRid)) &&
     (filter.spotKind === undefined || value.spotKind === filter.spotKind)
   );
 }
@@ -4558,7 +4559,7 @@ function matchesSpot(value: ZLinkSpotLocation, filter: ZLinkSpotLocationFilter):
 function matchesActor(value: ZLinkActorLocation, filter: ZLinkActorLocationFilter): boolean {
   return (
     (filter.actorType === undefined || value.actorType === filter.actorType) &&
-    (filter.nodeRid === undefined || String(value.ownerNodeRid) === String(filter.nodeRid)) &&
+    (filter.nodeRid === undefined || routingIdsEqual(value.ownerNodeRid, filter.nodeRid)) &&
     (filter.spotId === undefined || String(value.spotId) === String(filter.spotId)) &&
     (filter.locationKind === undefined || value.spotKind === filter.locationKind)
   );
@@ -4568,7 +4569,7 @@ function matchesRoute(value: ZLinkRouteLocation, filter: ZLinkRouteLocationFilte
   return (
     (filter.routeKind === undefined || value.routeKind === filter.routeKind) &&
     (filter.ownerNodeRid === undefined ||
-      String(value.ownerNodeRid) === String(filter.ownerNodeRid)) &&
+      routingIdsEqual(value.ownerNodeRid, filter.ownerNodeRid)) &&
     (filter.ownerId === undefined || value.ownerId === filter.ownerId)
   );
 }

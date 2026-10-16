@@ -364,6 +364,17 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
             ZLinkSpotRetireControl.TargetEndpoint observedEndpoint =
                     new ZLinkSpotRetireControl.TargetEndpoint() {
                         @Override
+                        public CompletionStage<Void> beginPrepare(
+                                UUID id, CompletionStage<Void> terminal, Runnable superseded) {
+                            return endpoint.beginPrepare(id, terminal, superseded);
+                        }
+
+                        @Override
+                        public CompletionStage<Void> endPrepare(UUID id) {
+                            return endpoint.endPrepare(id);
+                        }
+
+                        @Override
                         public ZLinkSpotRetireControl.TargetProfile applyTargetProfile(
                                 ZLinkSpotRetireControl.StageRequest request,
                                 long defaultActorSpotGeneration) {

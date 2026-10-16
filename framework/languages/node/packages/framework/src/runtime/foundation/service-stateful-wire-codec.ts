@@ -1,3 +1,4 @@
+import { encodeRoutingIdStorageHex } from '../routing-id';
 import { UINT64_MAX, ZlinkStreamContentType } from '@zlink-systems/stream-wire';
 import { RELOCATION_STATE_CHUNK_DATA_MAX_BYTES } from '../../contracts/Configuration/InternalDefaults';
 import { isCanonicalWireReplyTerminal } from '../framework-errors-internal';
@@ -379,7 +380,7 @@ export function serviceSessionRelocationIdentityKey(
     value.relocation.low.toString(),
     actor.actorId,
     actor.generation.toString(),
-    value.session.sessionRid,
+    encodeRoutingIdStorageHex(value.session.sessionRid),
     value.session.bindingGeneration.toString()
   ].join(':');
 }
@@ -690,13 +691,17 @@ function toGeneratedSessionRelocationSealed(
     relocation: value.relocation,
     coordinator: toGeneratedCoordinatorFence(value.coordinator),
     actor: toGeneratedRouteFence(value.actor),
-    ...toGeneratedSessionOwnerFence(value.session)
+    ...toGeneratedSessionOwnerFence(value.session),
+    sealResult: 'sealed'
   };
 }
 
 function fromGeneratedSessionRelocationSealed(
   value: GeneratedSessionRelocationSealed43
 ): ServiceSessionRelocationSealed {
+  if (value.sealResult !== 'sealed') {
+    throw new RangeError('sessionRelocationSealed bindingAbsent is not supported by this runtime');
+  }
   return {
     relocation: value.relocation,
     coordinator: fromGeneratedCoordinatorFence(value.coordinator),

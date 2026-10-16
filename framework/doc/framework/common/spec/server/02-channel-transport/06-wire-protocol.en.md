@@ -631,7 +631,7 @@ receiver MUST NOT require a bound Session to admit a canonical `actorJoin`(28).
 ### Session Seal and Source Relay
 
 - Before stopping source application dispatch, the relocation coordinator seals a bound
-  Session binding with command 42. Command 43 reports the seal result.
+  Session binding with command 42. Command 43 reports the seal result (`sealResult`: `sealed` or `bindingAbsent`).
 - The Session owner validates only current Session identity, binding generation,
   ActorId/ObjectGeneration, and relocation identity. It doesn't create a numeric
   high-water or re-read Actor authority.
@@ -784,6 +784,10 @@ owns the relay-completeness condition before target queue opening.
   binding.
 - Command 42 seals the current binding; command 43 returns only the seal-install
   result. Command 43 carries no Session-message sequence or high-water.
+- The last body field of command 43, `sealResult` (u8), is `sealed` (1) or `bindingAbsent` (2). If the exact
+  binding is already cleaned up, the Session owner returns `bindingAbsent` without a seal, and the coordinator
+  leaves that Session out of the envelope and command 44
+  ([Session and Actor Binding §8.3](../04-session/02-session-actor-binding.en.md#83-sealing-an-already-cleaned-binding)).
 - Command 44 is sent by the target runtime for the session-route update and by the source coordinator for an abort
   before relay-ready is accepted. The route update carries relocation identity, current binding generation,
   ActorId/ObjectGeneration, and target route. The Session owner doesn't re-read the

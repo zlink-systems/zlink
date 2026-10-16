@@ -198,7 +198,7 @@ Application은 diagnostics level을 다음 네 값 중 하나로 설정한다.
 | Level | Framework가 기록하는 범위 |
 |---|---|
 | `Off` | Message flow와 dispatch error를 기록하지 않는다. |
-| `Errors` | Dispatch error, backpressure와 drop만 기록한다. |
+| `Errors` | Dispatch error, backpressure와 drop만 기록한다. Message-flow tracing은 꺼져 있어 `flow_id`를 만들거나 전파하지 않는다([04 「4」](04-flow-correlation.ko.md#4-flow를-만드는-시점)). |
 | `Normal` | Error와 §2.1의 주요 단계를 기록한다. |
 | `Detailed` | `Normal` 기록에 message byte 크기와 terminal 경과 시간을 추가할 수 있다. |
 
@@ -275,8 +275,8 @@ lazy 형태라도 `if`로 한 번 더 감싸 lambda 생성까지 막는다. 문�
 
 **언어별 재량** — gate를 표현하는 방법은 언어마다 다르다. C++는 template lambda,
 .NET은 보간 문자열 handler와 `Func<>`, Java는 `Supplier<>`, Node는 thunk를 사용한다.
-관찰되는 결과 — tracing이 꺼졌을 때 문자열·event·lambda 중 어느 것도 만들지 않아
-비용이 0인 것 — 이 같으면 방법은 재량이다. 새 trace를 추가한 뒤 tracing을 끈
+관찰되는 결과 — diagnostics level이 `Off`일 때 문자열·event·lambda 중 어느 것도 만들지 않아
+비용이 0인 것 — 이 같으면 방법은 재량이다. 새 trace를 추가한 뒤 level이 `Off`인
 상태에서 그 경로가 문자열·event·lambda 중 어느 것도 만들지 않는지를 호출부 코드로
 확인하는 것이 이 재량의 확인 기준이다.
 

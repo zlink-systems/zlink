@@ -295,7 +295,10 @@ internal sealed class ZLinkActorOwnershipCoordinator(
         if (
             snapshot.Allocation.ObjectKind != ZLinkPlacementObjectKind.Actor
             || snapshot.ObjectGeneration != actorRef.ObjectGeneration
-            || !ZLinkActorAuthorityPayloadCodec.TryDecode(snapshot.Payload.Span, out var authority)
+            || !ZLinkActorAuthorityPayloadCodec.TryDecodeRelocating(
+                snapshot.Payload.Span,
+                out var authority
+            )
             || authority.State != ZLinkActorAuthorityState.Ready
             || !string.Equals(authority.ActorId, actorId.Value, StringComparison.Ordinal)
             || !string.Equals(authority.StableType, actorType, StringComparison.Ordinal)

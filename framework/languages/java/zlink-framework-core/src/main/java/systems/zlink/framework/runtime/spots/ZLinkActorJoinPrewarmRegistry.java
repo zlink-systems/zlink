@@ -12,6 +12,7 @@ import java.util.Optional;
 import java.util.Queue;
 import java.util.UUID;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.CompletionStage;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 
@@ -53,19 +54,20 @@ final class ZLinkActorJoinPrewarmRegistry {
     static final class Attempt {
         private final UUID relocationId;
         private final ObjectKey objectKey;
-        private final String actorType;
-        private final Class<?> factoryType;
         private final Queue<ParkedMessage> parked = new ArrayDeque<>();
         private Consumer<ParkedMessage> installedSink;
         private Runnable liveAbort;
         private boolean migrationInProgress;
+        // The accepted canonical target attempt owns this completion.
+        private CompletionStage<Void> terminal;
 
-        private Attempt(
-                UUID relocationId, ObjectKey objectKey, String actorType, Class<?> factoryType) {
+        private Attempt(UUID relocationId, ObjectKey objectKey) {
             this.relocationId = relocationId;
             this.objectKey = objectKey;
-            this.actorType = actorType;
-            this.factoryType = factoryType;
+        }
+
+        private boolean hasTargetOwner() {
+            return terminal != null;
         }
 
         UUID relocationId() {
@@ -75,14 +77,16 @@ final class ZLinkActorJoinPrewarmRegistry {
         ObjectKey objectKey() {
             return objectKey;
         }
+    }
 
-        String actorType() {
-            return actorType;
-        }
+    private final Consumer<UUID> released;
 
-        Class<?> factoryType() {
-            return factoryType;
-        }
+    ZLinkActorJoinPrewarmRegistry() {
+        this(ignored -> {});
+    }
+
+    ZLinkActorJoinPrewarmRegistry(Consumer<UUID> released) {
+        this.released = Objects.requireNonNull(released, "released");
     }
 
     private final ZLinkStateLane stateLane = new ZLinkStateLane();
@@ -101,31 +105,19 @@ final class ZLinkActorJoinPrewarmRegistry {
     }
 
     Attempt register(
-            UUID relocationId,
-            String actorId,
-            long objectGeneration,
-            String actorType,
-            Class<?> factoryType,
-            Consumer<Attempt> evicted) {
+            UUID relocationId, String actorId, long objectGeneration, Consumer<Attempt> evicted) {
         RegistrationState registration =
-                inStateLane(
-                        () ->
-                                registerOnLane(
-                                        relocationId,
-                                        actorId,
-                                        objectGeneration,
-                                        actorType,
-                                        factoryType));
+                inStateLane(() -> registerOnLane(relocationId, actorId, objectGeneration));
+        if (registration.displaced() != null
+                && !registration.displaced().attempt().hasTargetOwner()) {
+            released.accept(registration.displaced().attempt().relocationId());
+        }
         evictOutsideLane(registration.displaced(), evicted);
         return registration.attempt();
     }
 
     private RegistrationState registerOnLane(
-            UUID relocationId,
-            String actorId,
-            long objectGeneration,
-            String actorType,
-            Class<?> factoryType) {
+            UUID relocationId, String actorId, long objectGeneration) {
         Objects.requireNonNull(relocationId, "relocationId");
         ObjectKey key = new ObjectKey(actorId, objectGeneration);
         Attempt existing = byRelocation.get(relocationId);
@@ -136,7 +128,7 @@ final class ZLinkActorJoinPrewarmRegistry {
             displaced = byRelocation.remove(displacedId);
             byObject.remove(key, displacedId);
         }
-        Attempt attempt = new Attempt(relocationId, key, actorType, factoryType);
+        Attempt attempt = new Attempt(relocationId, key);
         byRelocation.put(relocationId, attempt);
         byObject.put(key, relocationId);
         return new RegistrationState(attempt, detachEvictionOnLane(displaced));
@@ -191,7 +183,7 @@ final class ZLinkActorJoinPrewarmRegistry {
         Objects.requireNonNull(liveAbort, "liveAbort");
         Attempt attempt = byRelocation.get(relocationId);
         if (attempt == null) throw new SupersededAttemptException(relocationId);
-        attempt.liveAbort = liveAbort;
+        if (attempt.liveAbort == null) attempt.liveAbort = liveAbort;
         attempt.migrationInProgress = true;
         return new MigrationState(attempt, drainParkedOnLane(attempt));
     }
@@ -204,13 +196,62 @@ final class ZLinkActorJoinPrewarmRegistry {
         return drainParkedOnLane(expected);
     }
 
-    void release(UUID relocationId) {
-        failParkedOutsideLane(inStateLane(() -> releaseOnLane(relocationId)));
+    CompletionStage<Void> begin(
+            UUID relocationId, CompletionStage<Void> terminal, Runnable superseded) {
+        return stateLane.runAsync(
+                () -> {
+                    Attempt current = byRelocation.get(relocationId);
+                    if (current != null) {
+                        current.terminal = terminal;
+                        current.liveAbort = superseded;
+                    }
+                    return (Void) null;
+                });
+    }
+
+    CompletionStage<Void> expire(UUID relocationId) {
+        return stateLane
+                .runAsync(
+                        () -> {
+                            Attempt attempt = byRelocation.get(relocationId);
+                            return attempt == null || attempt.hasTargetOwner()
+                                    ? null
+                                    : releaseOnLane(relocationId);
+                        })
+                .thenAccept(
+                        parked -> {
+                            if (parked != null) finishRelease(relocationId, parked);
+                        });
+    }
+
+    void detachIngress(UUID relocationId) {
+        List<ParkedMessage> parked =
+                inStateLane(
+                        () -> {
+                            Attempt attempt = byRelocation.get(relocationId);
+                            if (attempt == null) return List.of();
+                            byObject.remove(attempt.objectKey(), relocationId);
+                            attempt.installedSink = null;
+                            attempt.liveAbort = null;
+                            return drainParkedOnLane(attempt);
+                        });
+        failParkedOutsideLane(parked);
+    }
+
+    CompletionStage<Void> releaseAsync(UUID relocationId) {
+        return stateLane
+                .runAsync(() -> releaseOnLane(relocationId))
+                .thenAccept(parked -> finishRelease(relocationId, parked));
+    }
+
+    private void finishRelease(UUID relocationId, List<ParkedMessage> parked) {
+        released.accept(relocationId);
+        if (parked != null) failParkedOutsideLane(parked);
     }
 
     private List<ParkedMessage> releaseOnLane(UUID relocationId) {
         Attempt attempt = byRelocation.remove(relocationId);
-        if (attempt == null) return List.of();
+        if (attempt == null) return null;
         byObject.remove(attempt.objectKey(), relocationId);
         return drainParkedOnLane(attempt);
     }
