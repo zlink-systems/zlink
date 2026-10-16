@@ -196,7 +196,7 @@ public class ZLinkEndedActorOwnerIntegrationTest {
                             ZLinkStoreKey ownerKey = page.value().items().get(0).key();
                             var leaseExpiry = page.value().items().get(0).value().expiresAt();
                             Assertions.assertNotNull(leaseExpiry);
-                            var durableRecords = ZLinkRetainedAuthorityTestStore.snapshot(store);
+                            var durableRecords = ZLinkEndedOwnerStoreFixture.snapshot(store);
                             child.destroyForcibly();
                             Assertions.assertTrue(child.waitFor(10, TimeUnit.SECONDS));
                             Assertions.assertNotEquals(

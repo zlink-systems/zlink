@@ -3,8 +3,6 @@ package systems.zlink.framework.spring;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
-import static systems.zlink.framework.spring.ZLinkRetainedAuthorityTestStore.AUTHORITY_PREFIX;
-
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.springframework.boot.WebApplicationType;
@@ -62,18 +60,26 @@ final class ZLinkStaleSpotOwnerIntegrationTest {
                         fixture.authority(ZLinkAuthorityKeyCodec.spot(USER_SPOT_ID))
                                 .objectGeneration();
                 fixture.assertMembership(spotGeneration);
-                retained = ZLinkRetainedAuthorityTestStore.snapshot(fixture.store);
+                retained = ZLinkEndedOwnerStoreFixture.snapshot(fixture.store);
             }
-            ZLinkRetainedAuthorityTestStore.restore(fixture.store, retained);
+            ZLinkEndedOwnerStoreFixture.restore(fixture.store, retained);
             fixture.assertEnded(USER_SPOT_ID);
             try (var restarted = start(fixture)) {
-                var before = fixture.authority(ZLinkAuthorityKeyCodec.spot(USER_SPOT_ID));
                 if (spotFirst) {
-                    unavailable(() -> getUserSpot(restarted));
-                    assertEquals(
-                            before.storeVersion(),
+                    // Location runtime §6.1: the Spot's only member also lost its owner, so the
+                    // Spot is re-created and the member is released with it (Missing).
+                    getUserSpot(restarted);
+                    assertTrue(
                             fixture.authority(ZLinkAuthorityKeyCodec.spot(USER_SPOT_ID))
-                                    .storeVersion());
+                                            .objectGeneration()
+                                    > spotGeneration);
+                    assertInstanceOf(
+                            systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityMissing
+                                    .class,
+                            fixture.repository
+                                    .read(ZLinkAuthorityKeyCodec.actor(ACTOR_ID), () -> false)
+                                    .toCompletableFuture()
+                                    .get());
                 }
                 getActor(restarted);
                 assertTrue(
@@ -102,9 +108,9 @@ final class ZLinkStaleSpotOwnerIntegrationTest {
             try (var original = start(fixture)) {
                 generation = instance(original);
                 fixture.steadyInstance.get(WAIT_SECONDS, TimeUnit.SECONDS);
-                retained = ZLinkRetainedAuthorityTestStore.snapshot(fixture.store);
+                retained = ZLinkEndedOwnerStoreFixture.snapshot(fixture.store);
             }
-            ZLinkRetainedAuthorityTestStore.restore(fixture.store, retained);
+            ZLinkEndedOwnerStoreFixture.restore(fixture.store, retained);
             fixture.assertEnded(INSTANCE_ID);
             try (var restarted = start(fixture)) {
                 var key = ZLinkAuthorityKeyCodec.spot(INSTANCE_ID);
@@ -288,7 +294,8 @@ final class ZLinkStaleSpotOwnerIntegrationTest {
                                                                         && put.key()
                                                                                 .value()
                                                                                 .startsWith(
-                                                                                        AUTHORITY_PREFIX)))
+                                                                                        ZLinkEndedOwnerStoreFixture
+                                                                                                .AUTHORITY_PREFIX)))
                                     return CompletableFuture.completedFuture(result);
                                 return repository
                                         .read(

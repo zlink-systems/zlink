@@ -276,6 +276,14 @@ internal static class ZLinkActorAuthorityPayloadCodec
         return encoded;
     }
 
+    // Steady Ready: no relocation in progress (no relocation payload and no
+    // canonical relocation slot) and a Ready Actor payload.
+    internal static bool IsSteadyReady(ReadOnlySpan<byte> encoded) =>
+        !ZLinkRelocationAuthorityPayloadCodec.TryDecode(encoded, out _)
+        && !ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(encoded, out _)
+        && TryDecode(encoded, out var value)
+        && value.State == ZLinkActorAuthorityState.Ready;
+
     internal static bool TryDecode(ReadOnlySpan<byte> encoded, out ZLinkActorAuthorityPayload value)
     {
         if (ZLinkRelocationAuthorityPayloadCodec.TryDecode(encoded, out var relocation))

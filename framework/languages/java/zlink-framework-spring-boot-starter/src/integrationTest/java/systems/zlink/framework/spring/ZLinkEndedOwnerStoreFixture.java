@@ -7,13 +7,13 @@ import systems.zlink.framework.locationprovider.*;
 import java.util.ArrayList;
 import java.util.List;
 
-/** Retains durable object records while allowing the runtime to release its owner lease. */
-final class ZLinkRetainedAuthorityTestStore {
+/** Retains authority and capacity records while an owner closes without retaining its lease. */
+final class ZLinkEndedOwnerStoreFixture {
     static final String AUTHORITY_PREFIX = "authority\0";
     private static final String CAPACITY_PREFIX = "zlink:v11:capacity:";
     private static final int SCAN_PAGE_SIZE = 100;
 
-    private ZLinkRetainedAuthorityTestStore() {}
+    private ZLinkEndedOwnerStoreFixture() {}
 
     static List<ZLinkStoreScanItem> snapshot(ZLinkLocationStore store) throws Exception {
         var items = new ArrayList<ZLinkStoreScanItem>();
@@ -42,7 +42,7 @@ final class ZLinkRetainedAuthorityTestStore {
     }
 
     static void restore(ZLinkLocationStore store, List<ZLinkStoreScanItem> items) throws Exception {
-        for (var item : items)
+        for (var item : items) {
             assertInstanceOf(
                     ZLinkStoreWriteApplied.class,
                     store.write(
@@ -56,5 +56,11 @@ final class ZLinkRetainedAuthorityTestStore {
                                     () -> false)
                             .toCompletableFuture()
                             .get());
+            var restored =
+                    assertInstanceOf(
+                            ZLinkStoreReadFound.class,
+                            store.read(item.key(), () -> false).toCompletableFuture().get());
+            assertArrayEquals(item.value().bytes(), restored.value().bytes());
+        }
     }
 }
