@@ -14,6 +14,7 @@ import systems.zlink.framework.locationprovider.ZLinkStoreCancellation;
 import systems.zlink.framework.locations.*;
 import systems.zlink.framework.runtime.internal.configuration.ZLinkObjectFactoryRegistration.RelocationPolicy;
 import systems.zlink.framework.runtime.internal.locations.*;
+import systems.zlink.framework.spots.ZLinkSpotKind;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -672,6 +673,7 @@ final class ZLinkEndedSpotRecreationTest {
                 new IllegalStateException("injected Store scan failure");
         private boolean enabled;
         private int scans;
+        private Runnable afterSnapshot;
 
         private ScanBoundaryProvider(boolean expire, boolean fail) {
             this.expire = expire;
@@ -693,7 +695,17 @@ final class ZLinkEndedSpotRecreationTest {
         public java.util.concurrent.CompletionStage<ZLinkStoreScanResult> scan(
                 ZLinkStoreScanRequest request,
                 systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
-            if (!enabled) return delegate.scan(request, cancellation);
+            if (!enabled)
+                return delegate.scan(request, cancellation)
+                        .thenApply(
+                                result -> {
+                                    if (afterSnapshot != null) {
+                                        var action = afterSnapshot;
+                                        afterSnapshot = null;
+                                        action.run();
+                                    }
+                                    return result;
+                                });
             scans++;
             if (fail) return java.util.concurrent.CompletableFuture.failedFuture(failure);
             if (scans == 1)
@@ -745,6 +757,130 @@ final class ZLinkEndedSpotRecreationTest {
                                         .join())
                         .reservation();
         assertTrue(recreated.objectGeneration() > dead.objectGeneration());
+    }
+
+    @Test
+    void independentMemberRecreationDuringSpotReleasePreservesNewMember() throws Exception {
+        var provider = new ScanBoundaryProvider(false, false);
+        var fixture =
+                fixture(
+                        new ZLinkProviderLocationRepository(provider),
+                        ZLinkPlacementObjectKind.USER_SPOT,
+                        ZLinkServiceAuthorityPayloadCodec.State.READY);
+        var oldMember = endedMember(fixture, "independent-member", true);
+        fixture.store.releaseOwnerLease(fixture.oldOwner).toCompletableFuture().join();
+        var recreated = new java.util.concurrent.atomic.AtomicReference<ZLinkObjectReservation>();
+        provider.afterSnapshot =
+                () ->
+                        recreated.set(
+                                assertInstanceOf(
+                                                ZLinkObjectReserved.class,
+                                                fixture.store
+                                                        .reserve(
+                                                                actorRequest(
+                                                                        "independent-member",
+                                                                        fixture.newDescriptor,
+                                                                        fixture.newOwner,
+                                                                        new byte[] {1}),
+                                                                () -> false)
+                                                        .toCompletableFuture()
+                                                        .join())
+                                        .reservation());
+
+        var spot = reserveNewSpot(fixture);
+
+        assertNotNull(recreated.get());
+        assertTrue(spot.objectGeneration() > fixture.reservation.objectGeneration());
+        var member = read(fixture, oldMember.authorityKey());
+        assertTrue(member.objectGeneration() > oldMember.objectGeneration());
+        assertEquals(recreated.get().objectGeneration(), member.objectGeneration());
+        assertEquals(recreated.get().storeVersion(), member.storeVersion());
+        assertEquals(fixture.newOwner.ownerId(), member.ownerId());
+        assertEquals(fixture.newOwner.leaseGeneration(), member.ownerLeaseGeneration());
+        assertEquals(0, oldSlots(fixture, true));
+        assertEquals(0, oldSpotSlots(fixture));
+    }
+
+    @Test
+    void unchangedMemberWithInconsistentCapacityKeepsAccountingError() throws Exception {
+        var provider = new ScanBoundaryProvider(false, false);
+        var fixture =
+                fixture(
+                        new ZLinkProviderLocationRepository(provider),
+                        ZLinkPlacementObjectKind.USER_SPOT,
+                        ZLinkServiceAuthorityPayloadCodec.State.READY);
+        var memberOwner =
+                assertInstanceOf(
+                                ZLinkOwnerLeaseClaimed.class,
+                                fixture.store
+                                        .claimOwnerLease("member", Duration.ofMinutes(5))
+                                        .toCompletableFuture()
+                                        .join())
+                        .token();
+        var memberDescriptor = descriptor(memberOwner, fixture.kind, 1);
+        fixture.store
+                .updateMeshNode(memberDescriptor, ZLinkLocationWriteIntent.NEW_CLAIM)
+                .toCompletableFuture()
+                .join();
+        var memberFixture =
+                new Fixture(
+                        fixture.store,
+                        fixture.kind,
+                        fixture.key,
+                        memberOwner,
+                        fixture.newOwner,
+                        memberDescriptor,
+                        fixture.newDescriptor,
+                        fixture.reservation);
+        var member = endedMember(memberFixture, "inconsistent-member", true);
+        var spotVersion = read(fixture, fixture.key).storeVersion();
+        var memberVersion = read(fixture, member.authorityKey()).storeVersion();
+        var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+        var page =
+                assertInstanceOf(
+                                ZLinkStoreScanPageResult.class,
+                                provider.delegate
+                                        .scan(
+                                                new ZLinkStoreScanRequest("", null, 1000),
+                                                () -> false)
+                                        .toCompletableFuture()
+                                        .join())
+                        .value();
+        boolean changed = false;
+        for (var item : page.items()) {
+            var record = mapper.readTree(item.value().bytes());
+            if (record.path("active").path("actors").asLong() != 1
+                    || record.path("active").path("spots").asLong() != 0) continue;
+            ((com.fasterxml.jackson.databind.node.ObjectNode) record.path("active"))
+                    .put("actors", 0);
+            assertInstanceOf(
+                    ZLinkStoreWriteApplied.class,
+                    provider.delegate
+                            .write(
+                                    new ZLinkStoreWriteRequest(
+                                            List.of(
+                                                    new ZLinkStoreVersionCondition(
+                                                            item.key(), item.value().version())),
+                                            List.of(
+                                                    new ZLinkStorePut(
+                                                            item.key(),
+                                                            mapper.writeValueAsBytes(record),
+                                                            null))),
+                                    () -> false)
+                            .toCompletableFuture()
+                            .join());
+            changed = true;
+        }
+        assertTrue(changed);
+        fixture.store.releaseOwnerLease(fixture.oldOwner).toCompletableFuture().join();
+        fixture.store.releaseOwnerLease(memberOwner).toCompletableFuture().join();
+
+        var failure = assertThrows(CompletionException.class, () -> reserveNewSpot(fixture));
+
+        var accounting = assertInstanceOf(IllegalStateException.class, failure.getCause());
+        assertEquals("Location Store capacity record is inconsistent", accounting.getMessage());
+        assertEquals(spotVersion, read(fixture, fixture.key).storeVersion());
+        assertEquals(memberVersion, read(fixture, member.authorityKey()).storeVersion());
     }
 
     @ParameterizedTest
@@ -1003,7 +1139,7 @@ final class ZLinkEndedSpotRecreationTest {
                         id,
                         "ended-spot",
                         fixture.reservation.objectGeneration(),
-                        2,
+                        ZLinkSpotKind.USER.value(),
                         fixture.oldOwner.ownerId(),
                         fixture.oldOwner.leaseGeneration(),
                         "mesh",

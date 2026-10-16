@@ -45,8 +45,6 @@ import java.util.concurrent.TimeUnit;
 /** Implements Framework-owned authority records over the opaque provider SPI. */
 final class ZLinkProviderAuthorityRepository {
     private static final int AUTHORITY_RECORD_VERSION = 1;
-    // Location Store provider contract: one conditional batch references at most 2,048 keys.
-    private static final int MAXIMUM_BATCH_KEYS = 2048;
     private static final String FIELD_RECORD_VERSION = "recordVersion";
     private static final String OWNER_TRANSITION_PRESERVE = "preserve";
     private static final String OWNER_TRANSITION_NEW_OWNER = "newOwner";
@@ -1126,20 +1124,50 @@ final class ZLinkProviderAuthorityRepository {
                                     next, current.allocation(), active ? 0 : -1, active ? -1 : 0);
                     for (var member : members)
                         consistent &= adjustCapacity(next, member.record().allocation(), 0, -1);
-                    if (!consistent)
-                        return provider.read(authorityKey, cancellation)
-                                .thenCompose(
-                                        observed -> {
-                                            if (!(observed instanceof ZLinkStoreReadFound unchanged)
-                                                    || !unchanged
-                                                            .value()
-                                                            .version()
-                                                            .equals(authority.value().version()))
-                                                return completed(StaleAuthorityReclaim.CONFLICT);
-                                            return CompletableFuture.failedFuture(
-                                                    new IllegalStateException(
-                                                            "Location Store capacity record is inconsistent"));
-                                        });
+                    if (!consistent) {
+                        CompletionStage<Boolean> authoritiesUnchanged =
+                                provider.read(authorityKey, cancellation)
+                                        .thenApply(
+                                                observed ->
+                                                        observed
+                                                                        instanceof
+                                                                        ZLinkStoreReadFound
+                                                                                unchanged
+                                                                && unchanged
+                                                                        .value()
+                                                                        .version()
+                                                                        .equals(
+                                                                                authority
+                                                                                        .value()
+                                                                                        .version()));
+                        for (var member : members)
+                            authoritiesUnchanged =
+                                    authoritiesUnchanged.thenCompose(
+                                            unchanged ->
+                                                    !unchanged
+                                                            ? completed(false)
+                                                            : provider.read(
+                                                                            member.key(),
+                                                                            cancellation)
+                                                                    .thenApply(
+                                                                            observed ->
+                                                                                    observed
+                                                                                                    instanceof
+                                                                                                    ZLinkStoreReadFound
+                                                                                                            found
+                                                                                            && found.value()
+                                                                                                    .version()
+                                                                                                    .equals(
+                                                                                                            member
+                                                                                                                    .version())));
+                        return authoritiesUnchanged.thenCompose(
+                                unchanged ->
+                                        !unchanged
+                                                ? completed(StaleAuthorityReclaim.CONFLICT)
+                                                : CompletableFuture.failedFuture(
+                                                        new IllegalStateException(
+                                                                "Location Store capacity record is inconsistent")));
+                    }
                     next.forEach(
                             (descriptor, record) ->
                                     mutations.add(
@@ -1150,7 +1178,7 @@ final class ZLinkProviderAuthorityRepository {
                     // Every mutated key is also a condition key, so the condition count is the
                     // batch's unique key count. The Spot and its members are released in one
                     // batch or not at all.
-                    if (conditions.size() > MAXIMUM_BATCH_KEYS)
+                    if (conditions.size() > ZLinkLocationStoreLimits.MAXIMUM_BATCH_KEYS)
                         throw new ZLinkFrameworkException(
                                 ZLinkFrameworkErrorKind.UNAVAILABLE,
                                 "User Spot member release exceeds one Location Store batch");

@@ -40,6 +40,7 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkPlacementCapacity
 import systems.zlink.framework.runtime.internal.locations.ZLinkPlacementCapacityExhausted;
 import systems.zlink.framework.runtime.internal.locations.ZLinkProviderLocationRepository;
 import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
+import systems.zlink.framework.spots.ZLinkSpotKind;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -537,7 +538,7 @@ final class ZLinkRedisProviderLocationRepositoryLiveTest {
                                                     "ended-spot-member",
                                                     "ended-spot",
                                                     spot.objectGeneration(),
-                                                    2,
+                                                    ZLinkSpotKind.USER.value(),
                                                     memberOwner.ownerId(),
                                                     memberOwner.leaseGeneration(),
                                                     "game",

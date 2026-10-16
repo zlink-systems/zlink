@@ -3,6 +3,7 @@ package systems.zlink.framework.runtime.locations;
 import systems.zlink.framework.locationprovider.*;
 import systems.zlink.framework.locationprovider.ZLinkLocationStore;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
+import systems.zlink.framework.runtime.internal.locations.ZLinkLocationStoreLimits;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Clock;
@@ -27,7 +28,6 @@ public final class ZLinkInMemoryProviderLocationStore implements ZLinkLocationSt
     private static final int MAXIMUM_SCAN_ITEMS = 1000;
     private static final int MAXIMUM_KEY_BYTES = 1024;
     private static final int MAXIMUM_VALUE_BYTES = 1024 * 1024;
-    static final int MAXIMUM_BATCH_KEYS = 2048;
     private static final long MAXIMUM_ENCODED_BATCH_BYTES = 4L * 1024 * 1024;
     private static final int MAXIMUM_ACTIVE_SCANS = 4096;
     private static final long MAXIMUM_ENCODED_PAGE_BYTES = 4L * 1024 * 1024;
@@ -280,8 +280,9 @@ public final class ZLinkInMemoryProviderLocationStore implements ZLinkLocationSt
         }
         var all = new HashSet<>(conditionKeys);
         all.addAll(mutationKeys);
-        if (all.size() > MAXIMUM_BATCH_KEYS) {
-            throw new IllegalArgumentException("write exceeds " + MAXIMUM_BATCH_KEYS + " keys");
+        if (all.size() > ZLinkLocationStoreLimits.MAXIMUM_BATCH_KEYS) {
+            throw new IllegalArgumentException(
+                    "write exceeds " + ZLinkLocationStoreLimits.MAXIMUM_BATCH_KEYS + " keys");
         }
         if (encodedBytes > MAXIMUM_ENCODED_BATCH_BYTES) {
             throw new IllegalArgumentException(

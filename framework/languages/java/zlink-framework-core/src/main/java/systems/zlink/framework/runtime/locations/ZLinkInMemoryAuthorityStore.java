@@ -379,7 +379,7 @@ final class ZLinkInMemoryAuthorityStore {
             batchKeys.add("owner:" + row.owner.ownerId());
             batchKeys.add("capacity:" + row.allocation.descriptor());
         }
-        if (batchKeys.size() > ZLinkInMemoryProviderLocationStore.MAXIMUM_BATCH_KEYS)
+        if (batchKeys.size() > ZLinkLocationStoreLimits.MAXIMUM_BATCH_KEYS)
             throw new ZLinkFrameworkException(
                     ZLinkFrameworkErrorKind.UNAVAILABLE,
                     "User Spot member release exceeds one Location Store batch");
