@@ -29,6 +29,7 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <semaphore>
 #include <utility>
 #include <vector>
 
@@ -238,6 +239,10 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
         if (!_loops.empty ())
             detail::channel_runtime_t::from (_bus).mark_auto_connect_active ();
         for (auto &loop : _loops) {
+            for (const auto &mesh_node : _mesh_nodes)
+                if (mesh_node && mesh_node->mesh_name () == loop.mesh_name)
+                    mesh_node->configure_peer_reconcile (
+                      [wake = loop.wake] (const std::vector<std::uint8_t> &) { wake->release (); });
             loop.recovering_from_store_failure = !_runtime->owner_lease_usable ();
             loop.thread = std::thread ([this, &loop] { run_loop (loop); });
         }
@@ -247,6 +252,8 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
     void stop () noexcept override
     {
         _stop.store (true, std::memory_order_release);
+        for (auto &loop : _loops)
+            loop.wake->release ();
         if (_client_server && _runtime_failures->capture ([&] { _client_server->stop (); })) {
             _client_server_started = false;
             _client_server.reset ();
@@ -296,6 +303,8 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
         bool recovering_from_store_failure = false;
         std::optional<std::chrono::steady_clock::time_point> failure_started_at;
         std::optional<std::chrono::steady_clock::time_point> recovery_started_at;
+        std::shared_ptr<std::counting_semaphore<>> wake =
+          std::make_shared<std::counting_semaphore<>> (0);
         std::thread thread;
     };
 
@@ -349,7 +358,9 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
             catch (...) {
                 handle_loop_failure (loop, "tick", "unknown exception");
             }
-            std::this_thread::sleep_for (_runtime->options ().polling_interval);
+            (void) loop.wake->try_acquire_for (_runtime->options ().polling_interval);
+            while (loop.wake->try_acquire ()) {
+            }
         }
     }
 
