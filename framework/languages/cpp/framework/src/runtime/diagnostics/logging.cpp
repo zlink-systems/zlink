@@ -191,7 +191,9 @@ void emit_log (const std::shared_ptr<logging_state_t> &state,
             rotate_if_needed (files[i], rotations[i]);
         }
         std::ofstream output (files[i], std::ios::app);
+        output.exceptions (std::ios::failbit | std::ios::badbit);
         output << line << '\n';
+        output.close ();
     }
     for (const auto &callback : callbacks) {
         try {
