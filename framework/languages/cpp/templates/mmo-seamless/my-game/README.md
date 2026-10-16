@@ -70,6 +70,8 @@ The C++ lifecycle status has no `SafeToShutdown` field, so drain completion cann
 
 The update fixture follows the Node reference's fresh-player check. It does not prove that the replacement physical node receives the new Actor: Actor placement is a Framework decision. A deterministic replacement-node work probe remains an acceptance gap.
 
+Message Follow is explicitly configured to 30 seconds in shared hosting. The wait for `SAFE_TO_SHUTDOWN` is derived from that period plus the existing host relocation budget. Packet deadlines and the relocation operation budget remain unchanged.
+
 ## Deployment sequence
 
 Start Redis, Zone A, Zone B, Instance nodes, and then the Session node. Zone A bootstraps zone-1 through zone-3; Zone B bootstraps zone-4 through zone-6 and has capacity for all six Zones. Initial actor placement and Dungeon placement remain Framework decisions.

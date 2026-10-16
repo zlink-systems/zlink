@@ -109,7 +109,6 @@ fun checkStructure(root: Path) {
     unique(logicalIds)
     for (node in nodes.filter { roles[it["id"].asText()] == "zone" }) {
         val id = text(node, "id")
-        check(spots.any { it["owner"].asText() == id && it["kind"].asText() == "entry" })
         val configured = requireNotNull(configs[id]).zoneIds
         val declared =
             spots
@@ -124,6 +123,22 @@ fun checkStructure(root: Path) {
             "Configured ZoneIds differ from fixed Spots: $id"
         }
         check(channels.any { it["owner"].asText() == id }) { "Missing border channel: $id" }
+    }
+    for (node in nodes.filter { roles[it["id"].asText()] in listOf("zone", "instance") }) {
+        val id = text(node, "id")
+        check(spots.count { it["owner"].asText() == id && it["kind"].asText() == "entry" } == 1) {
+            "Object Server must declare exactly one Entry: $id"
+        }
+        if (roles[id] == "instance")
+            check(
+                spots.count {
+                    it["owner"].asText() == id &&
+                        it["type"]?.asText() == Names.DUNGEON &&
+                        it["dynamic"]?.asBoolean() == true
+                } == 1
+            ) {
+                "Instance must declare its dynamic Dungeon family: $id"
+            }
     }
     for (edge in array("edges")) {
         check(text(edge, "from") in ids && text(edge, "to") in ids)

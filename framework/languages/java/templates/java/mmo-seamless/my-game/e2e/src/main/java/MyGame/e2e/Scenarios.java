@@ -105,7 +105,7 @@ public final class Scenarios {
                                         });
                         int sequence = 1;
                         WorldState state;
-                        long expires = System.nanoTime() + Control.HOST_DEADLINE.toNanos();
+                        long expires = System.nanoTime() + Control.SAFE_DEADLINE.toNanos();
                         do {
                             require(System.nanoTime() < expires, "Update deadline exceeded");
                             if (drain.isDone()) drain.get();

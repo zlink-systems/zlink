@@ -55,6 +55,8 @@ Each run validates `zlink.structure.json`, creates a unique Redis Compose projec
 
 Public 0.30.0 cannot complete host update when a relocated Zone restores its timer inventory ([#1767](https://github.com/zlink-systems/zlink/issues/1767)). Shutdown after a closed client connection returned `ForceStopped/TeardownFailed` on 0.30.0 ([#1690](https://github.com/zlink-systems/zlink/issues/1690), fixed in 0.30.1). The 0.30.1 candidate has not yet been validated. Node typed handlers receive fields without the declared DTO class (#1731, scheduled for 0.32.0); the template reconstructs declared packet classes before forwarding through typed APIs.
 
+Message Follow is explicitly configured to 30 seconds in shared hosting. The wait for `SAFE_TO_SHUTDOWN` is derived from that period plus the existing host relocation budget. Packet deadlines and the relocation operation budget remain unchanged.
+
 ## Deployment sequence
 
 1. Start Redis and configure a deployment-specific key prefix.

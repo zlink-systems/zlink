@@ -72,7 +72,7 @@ suspend fun scenario(name: String, nodes: Nodes) = coroutineScope {
                 check(reconnect.disconnects == 0)
             }
             Names.UPDATE ->
-                withTimeout(Control.HOST_DEADLINE.toMillis()) {
+                withTimeout(Control.SAFE_DEADLINE.toMillis()) {
                     val before = client.join(299)
                     val session = client.sessionInfo()
                     check(before.nodeId == "zoneA")

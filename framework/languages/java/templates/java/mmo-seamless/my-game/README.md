@@ -55,6 +55,8 @@ Structure-only validation: `./run-e2e.sh --check-structure` or `pwsh -NoProfile 
 
 Public Framework 0.30.0 can reject a cross-node deferred Actor join with `DATA_LOST` (issue #1729). The template targets 0.30.1, which includes the correction. Preserve the first node stderr and message-flow records when a scenario fails; do not alter join timing or assertions.
 
+Message Follow is explicitly configured to 30 seconds in shared hosting. The wait for `SAFE_TO_SHUTDOWN` is derived from that period plus the existing host relocation budget. Packet deadlines and the relocation operation budget remain unchanged.
+
 ## Deployment sequence
 
 Configure Redis and a unique prefix in `server/config`. Start Zone A and bootstrap zone-1..3 before Zone B bootstraps zone-4..6; start Instance, then Session. Every role has its own `MyGame.<role>.Program` entrypoint, executed from its installed distribution with its configuration path. READY reports the actual Framework listener endpoints.

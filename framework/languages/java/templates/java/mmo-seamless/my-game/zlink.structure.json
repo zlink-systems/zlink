@@ -134,6 +134,12 @@
       "type": "Dungeon",
       "owner": "instance",
       "dynamic": true
+    },
+    {
+      "id": "instance-entry",
+      "kind": "entry",
+      "owner": "instance",
+      "type": null
     }
   ],
   "edges": [

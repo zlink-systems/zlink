@@ -60,6 +60,7 @@ export async function runHost(
   builder.addLocationStore(location);
   builder.addRelocationStore(relocation);
   builder.configureDispatch().messageFlow('normal');
+  builder.configureLocations().messageFollowDurationMs(Limits.messageFollowMs);
   const mesh = builder
     .addRouteMesh(Names.mesh)
     .setRoutingIdPrefix(config.id)
@@ -90,7 +91,7 @@ export async function runHost(
     throw new Error('Readiness observation deadline expired');
   }
   async function waitSafe(): Promise<void> {
-    for await (const observed of runtime.observe(AbortSignal.timeout(Limits.relocationMs))) {
+    for await (const observed of runtime.observe(AbortSignal.timeout(Limits.safeMs))) {
       if (observed.loss.discardedTerminalCount !== 0n)
         throw new Error('Lifecycle observation lost');
       if (observed.status.safeToShutdown) return;

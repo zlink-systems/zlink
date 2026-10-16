@@ -1,5 +1,6 @@
 #pragma once
 #include "world.hpp"
+#include <functional>
 #include <zlink/stream_connector.hpp>
 
 namespace MyGame::E2E
@@ -45,23 +46,33 @@ class Client
         std::lock_guard lock (error_mutex_);
         require (error_.empty (), "Connector error: " + error_);
     }
-    template <class Request, class Reply> Reply exchange (const Request &request)
+    template <class Request, class Reply>
+    Reply exchange (
+      const Request &request,
+      std::function<bool (const Reply &)> matches = [] (const Reply &) { return true; })
     {
         healthy ();
         connector_.send (request).submit ();
-        const auto reply = checked (connector_.wait_for<Reply> ().submit ()).payload;
+        const auto reply =
+          checked (connector_.wait_for<Reply> ()
+                     .where ([matches] (const auto &message) { return matches (message.payload); })
+                     .submit ())
+            .payload;
         healthy ();
         return reply;
     }
     WorldState join (int x) { return exchange<JoinWorldRequest, WorldState> ({player_id, x}); }
     WorldState move (int x, int sequence)
     {
-        return exchange<MoveRequest, WorldState> ({x, sequence});
+        return exchange<MoveRequest, WorldState> ({x, sequence}, [x, sequence] (const auto &state) {
+            return state.x == x && state.sequence == sequence;
+        });
     }
     SessionInfo info () { return exchange<SessionInfoRequest, SessionInfo> ({}); }
     DungeonOpened dungeon (const std::string &id)
     {
-        return exchange<OpenDungeonRequest, DungeonOpened> ({id});
+        return exchange<OpenDungeonRequest, DungeonOpened> (
+          {id}, [&id] (const auto &opened) { return opened.dungeonId == id; });
     }
     auto border (const std::string &source)
     {

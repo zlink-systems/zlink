@@ -118,8 +118,7 @@ public final class Structure {
             switch (text(spot, "kind")) {
                 case "entry" ->
                         require(
-                                roles.get(owner(spot, roles)).equals(Roles.ZONE)
-                                        && spot.path("type").isNull()
+                                spot.path("type").isNull()
                                         && !spot.has("logicalId")
                                         && !spot.has("dynamic"),
                                 "Invalid Entry Spot declaration");
@@ -168,14 +167,36 @@ public final class Structure {
                 require(
                         channels.stream().anyMatch(c -> c.path("owner").asText().equals(id)),
                         "Missing border channel: " + id);
+            }
+        for (var node : nodes) {
+            var id = text(node, "id");
+            var role = roles.get(id);
+            if (!Set.of(Roles.ZONE, Roles.INSTANCE).contains(role)) continue;
+            require(
+                    spots.stream()
+                                    .filter(
+                                            p ->
+                                                    p.path("owner").asText().equals(id)
+                                                            && p.path("kind")
+                                                                    .asText()
+                                                                    .equals("entry"))
+                                    .count()
+                            == 1,
+                    "Object Server must declare exactly one Entry: " + id);
+            if (role.equals(Roles.INSTANCE))
                 require(
                         spots.stream()
-                                .anyMatch(
-                                        p ->
-                                                p.path("owner").asText().equals(text(node, "id"))
-                                                        && p.path("kind").asText().equals("entry")),
-                        "Zone node lacks Entry Spot");
-            }
+                                        .filter(
+                                                p ->
+                                                        p.path("owner").asText().equals(id)
+                                                                && p.path("type")
+                                                                        .asText()
+                                                                        .equals(Names.DUNGEON)
+                                                                && p.path("dynamic").asBoolean())
+                                        .count()
+                                == 1,
+                        "Instance must declare its dynamic Dungeon family: " + id);
+        }
         for (var edge : array(s, "edges")) {
             require(
                     ids.contains(text(edge, "from")) && ids.contains(text(edge, "to")),

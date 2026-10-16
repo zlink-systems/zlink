@@ -118,7 +118,11 @@ class PlayerClient {
   async move(x: number, sequence: number): Promise<WorldState> {
     const index = this.messages.length;
     await this.connector.send(new MoveRequest(x, sequence)).submit();
-    const state = await this.wait<WorldState>(PacketNames.worldState, index);
+    const state = await this.wait<WorldState>(
+      PacketNames.worldState,
+      index,
+      (state) => state.sequence === sequence
+    );
     assert.equal(state.x, x);
     assert.equal(state.sequence, sequence);
     return state;
@@ -128,7 +132,8 @@ class PlayerClient {
     await this.connector.send(new OpenDungeonRequest(id)).submit();
     const opened = await this.wait<{ dungeonId: string; nodeId: string }>(
       PacketNames.dungeonOpened,
-      index
+      index,
+      (opened) => opened.dungeonId === id
     );
     assert.equal(opened.dungeonId, id);
     return opened;

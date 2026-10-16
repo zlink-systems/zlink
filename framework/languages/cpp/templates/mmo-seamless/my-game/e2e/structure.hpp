@@ -78,12 +78,15 @@ inline void check_structure (const std::filesystem::path &root)
     }
     std::set<std::string> nodes, spot_ids, logical_ids;
     std::map<std::string, nlohmann::json> configurations;
+    std::map<std::string, std::string> roles;
+    std::map<std::string, int> entries, dungeons;
     require (j.at ("nodes").is_array () && j.at ("spots").is_array ()
                && j.at ("channels").is_array () && j.at ("edges").is_array (),
              "Structure collections must be arrays");
     for (const auto &node : j.at ("nodes")) {
         const auto id = nonempty (node, "id"), role = nonempty (node, "role");
         (void) nonempty (node, "title");
+        roles[id] = role;
         require (nodes.insert (id).second, "Duplicate node ID");
         if (role == "external")
             require (node.at ("config").is_null (), "External config must be null");
@@ -116,6 +119,7 @@ inline void check_structure (const std::filesystem::path &root)
                      "Entry Spot cannot declare type or logical ID");
             require (configurations.at (owner).contains ("ZoneIds"),
                      "Entry owner must register WorldEntry");
+            ++entries[owner];
             continue;
         }
         require (kind == "user", "Unknown application Spot kind");
@@ -135,10 +139,16 @@ inline void check_structure (const std::filesystem::path &root)
             require (configurations.at (owner).contains ("ZoneIds")
                        && channels.contains ({Names::border, owner}),
                      "Zone owner must register Zone and border");
-        else
-            require (!configurations.at (owner).contains ("ZoneIds")
-                       && !configurations.at (owner).contains ("StreamEndpoint"),
-                     "Dungeon owner must register Dungeon");
+        else {
+            require (roles.at (owner) == "instance" && spot.value ("dynamic", false),
+                     "Dungeon owner must register a dynamic Dungeon family");
+            ++dungeons[owner];
+        }
+    }
+    for (const auto &[id, role] : roles) {
+        require (entries[id] == (role == "zone" ? 1 : 0), "Entry registrations differ from server");
+        require (dungeons[id] == (role == "instance" ? 1 : 0),
+                 "Dungeon registrations differ from server");
     }
     for (const auto &[id, config] : configurations) {
         if (!config.contains ("ZoneIds"))

@@ -92,7 +92,7 @@ inline void update (const std::string &endpoint, World &world)
     auto safe = std::async (std::launch::async, [&] {
         world.zone_a ().wait_line (Control::requested, Limits::relocation);
         world.zone_a ().wait_line (Control::relocated, Limits::relocation);
-        world.zone_a ().wait_line (Control::safe, Limits::relocation);
+        world.zone_a ().wait_line (Control::safe, Limits::safe);
     });
     world.zone_a ().command (Control::drain);
     int sequence = 1;

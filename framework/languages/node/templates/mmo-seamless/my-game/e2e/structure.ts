@@ -130,6 +130,25 @@ export function checkStructure(path = 'zlink.structure.json'): void {
     spots.some((s) => s.type === Names.dungeon),
     'Missing Dungeon type'
   );
+  for (const node of nodes.filter((n) => n.role === 'zone' || n.role === 'instance')) {
+    assert.equal(
+      spots.filter((s) => s.owner === node.id && s.kind === 'entry').length,
+      node.role === 'zone' ? 1 : 0,
+      'Entry registrations differ from server'
+    );
+    if (node.role === 'instance')
+      assert.equal(
+        spots.filter(
+          (s) =>
+            s.owner === node.id &&
+            s.kind === 'user' &&
+            s.type === Names.dungeon &&
+            s.dynamic === true
+        ).length,
+        1,
+        'Missing dynamic Dungeon registration'
+      );
+  }
   for (const edge of array(s.edges).map(object)) {
     owner(edge.from);
     owner(edge.to);
