@@ -531,8 +531,8 @@ for (const variant of [
               );
             }
             if (variant === 'safe status') {
-              const observationDeadline = Date.now() + PUBLIC_OPERATION_TIMEOUT_MS;
-              while (!runtime.status.safeToShutdown && Date.now() < observationDeadline) {
+              const observationDeadline = performance.now() + PUBLIC_OPERATION_TIMEOUT_MS;
+              while (!runtime.status.safeToShutdown && performance.now() < observationDeadline) {
                 await new Promise((resolve) => setTimeout(resolve, OBSERVATION_INTERVAL_MS));
               }
               assert.equal(runtime.status.safeToShutdown, true, 'source quiescence is queryable');

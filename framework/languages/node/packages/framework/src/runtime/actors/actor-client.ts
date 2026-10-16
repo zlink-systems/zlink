@@ -1,3 +1,4 @@
+import { routingIdsEqual } from '../routing-id';
 import { ZlinkStreamContentType } from '@zlink-systems/stream-wire';
 import { createZLinkRequest } from '../messaging/request-result';
 import type { ZLinkRequest } from '../../contracts/Handlers/Attributes';
@@ -186,7 +187,7 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
       const node = this.requireNode(meshName);
       if (
         this.options.routeTransport !== undefined &&
-        String(node.status().routingId) !== String(actor.nodeRid)
+        !routingIdsEqual(node.status().routingId, actor.nodeRid)
       ) {
         await this.options.routeTransport.sendToSpot(
           remoteActorRouteTarget(route),
@@ -445,7 +446,7 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
     const node = this.requireNode(meshName);
     if (
       this.options.routeTransport !== undefined &&
-      String(node.status().routingId) !== String(actor.nodeRid) &&
+      !routingIdsEqual(node.status().routingId, actor.nodeRid) &&
       route !== undefined
     ) {
       const relay = encodeRemoteActorPacketRelayPayload({

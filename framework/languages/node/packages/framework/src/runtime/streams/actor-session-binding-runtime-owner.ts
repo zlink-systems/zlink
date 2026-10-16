@@ -1,3 +1,4 @@
+import type { RoutingId } from '../../contracts';
 import type { ActorRef } from '../../contracts';
 import type {
   ZLinkActorSessionAuthorityFence,
@@ -7,7 +8,7 @@ import type {
 } from './actor-session-binding-registry';
 
 export interface ZLinkActorSessionBindingRuntimeOwner {
-  actorSlot(actorId: string, sessionRid: string): Promise<number | undefined>;
+  actorSlot(actorId: string, sessionRid: RoutingId): Promise<number | undefined>;
   sealRelocation(
     claim: ZLinkActorSessionRelocationClaim,
     expected: ZLinkActorSessionRouteFence,
