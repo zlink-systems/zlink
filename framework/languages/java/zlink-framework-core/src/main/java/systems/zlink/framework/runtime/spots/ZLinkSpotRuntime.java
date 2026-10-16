@@ -4427,7 +4427,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                 "Spot activation context is unavailable: "
                                         + spot.getClass().getName()));
             }
-            return context.runLifecycleExecution(
+            Supplier<CompletionStage<Void>> callback =
                     () ->
                             withCurrentOutbound(
                                     context.dispatchOutbound(),
@@ -4436,7 +4436,10 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                     ? ZLinkHandlerStages.fromStageSupplier(
                                                             () -> spot.onJoinedActor(actor))
                                                     : ZLinkHandlerStages.fromStageSupplier(
-                                                            () -> spot.onLeaveActor(actor))));
+                                                            () -> spot.onLeaveActor(actor)));
+            return context.isCurrentSpotTurn()
+                    ? context.runLifecycleExecution(callback)
+                    : context.enqueueLifecycle(callback);
         }
         if (spotSurface instanceof ZLinkEntrySpot entrySpot) {
             // Entry OnJoinedActor runs as the Actor's own lifecycle turn, so an Entry Spot that
@@ -4595,63 +4598,71 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                 CompletableFuture.completedFuture(
                                         ZLinkSpotActorJoinResult.accept());
                     }
-                    return admission.thenCompose(
-                            response -> {
-                                ZLinkSpotActorJoinResult result =
-                                        response == null
-                                                ? ZLinkSpotActorJoinResult.reject()
-                                                : response;
-                                if (!result.accepted()) {
-                                    return CompletableFuture.completedFuture(result);
-                                }
-                                runtime.beginLocalMove(actor);
-                                ZLinkBackendActorRef actorRef = runtime.currentRef(actor);
-                                CompletionStage<Void> commit;
-                                if (targetSurface instanceof ZLinkSpot<?> target) {
-                                    commit =
-                                            runtime.commitJoinedLocation(
-                                                            actor, actorRef, targetSpotId)
-                                                    .thenRun(
-                                                            () ->
-                                                                    runtime
-                                                                            .markRelocatedActorJoined(
-                                                                                    actor,
-                                                                                    actorRef,
-                                                                                    targetSpotId,
-                                                                                    target));
-                                } else {
-                                    var entry = ((ZLinkEntrySpot<?>) targetSurface).context();
-                                    commit =
-                                            runtime.commitEntryLocation(
-                                                    actor,
-                                                    entry.nodeRid(),
-                                                    entry.spotId(),
-                                                    routeMeshNodesByName
-                                                            .get(actor.context().meshName())
-                                                            .lifecycleGeneration());
-                                }
-                                return commit.thenRun(
-                                                () -> {
-                                                    ZLinkInternalSpotNode node =
+                    return ZLinkSerialExecutionQueue.manageCurrent(admission)
+                            .thenCompose(
+                                    response -> {
+                                        ZLinkSpotActorJoinResult result =
+                                                response == null
+                                                        ? ZLinkSpotActorJoinResult.reject()
+                                                        : response;
+                                        if (!result.accepted()) {
+                                            return CompletableFuture.completedFuture(result);
+                                        }
+                                        runtime.beginLocalMove(actor);
+                                        ZLinkBackendActorRef actorRef = runtime.currentRef(actor);
+                                        CompletionStage<Void> commit;
+                                        if (targetSurface instanceof ZLinkSpot<?> target) {
+                                            commit =
+                                                    runtime.commitJoinedLocation(
+                                                                    actor, actorRef, targetSpotId)
+                                                            .thenRun(
+                                                                    () ->
+                                                                            runtime
+                                                                                    .markRelocatedActorJoined(
+                                                                                            actor,
+                                                                                            actorRef,
+                                                                                            targetSpotId,
+                                                                                            target));
+                                        } else {
+                                            var entry =
+                                                    ((ZLinkEntrySpot<?>) targetSurface).context();
+                                            commit =
+                                                    runtime.commitEntryLocation(
+                                                            actor,
+                                                            entry.nodeRid(),
+                                                            entry.spotId(),
                                                             routeMeshNodesByName
                                                                     .get(actor.context().meshName())
-                                                                    .spotNode();
-                                                    long epoch =
-                                                            node.actorMembershipEpoch(
-                                                                    actor.context().actorId());
-                                                    node.registerTransferredActor(
-                                                            actorRef,
-                                                            targetSpotId,
-                                                            epoch == Long.MAX_VALUE
-                                                                    ? Long.MAX_VALUE
-                                                                    : Math.max(1L, epoch + 1L));
-                                                })
-                                        .thenCompose(
-                                                ignored ->
-                                                        notifySpotActorLifecycle(
-                                                                targetSurface, actor, true))
-                                        .thenApply(ignored -> result);
-                            });
+                                                                    .lifecycleGeneration());
+                                        }
+                                        return ZLinkSerialExecutionQueue.yieldCurrent(commit)
+                                                .thenRun(
+                                                        () -> {
+                                                            ZLinkInternalSpotNode node =
+                                                                    routeMeshNodesByName
+                                                                            .get(
+                                                                                    actor.context()
+                                                                                            .meshName())
+                                                                            .spotNode();
+                                                            long epoch =
+                                                                    node.actorMembershipEpoch(
+                                                                            actor.context()
+                                                                                    .actorId());
+                                                            node.registerTransferredActor(
+                                                                    actorRef,
+                                                                    targetSpotId,
+                                                                    epoch == Long.MAX_VALUE
+                                                                            ? Long.MAX_VALUE
+                                                                            : Math.max(
+                                                                                    1L,
+                                                                                    epoch + 1L));
+                                                        })
+                                                .thenCompose(
+                                                        ignored ->
+                                                                notifySpotActorLifecycle(
+                                                                        targetSurface, actor, true))
+                                                .thenApply(ignored -> result);
+                                    });
                 };
         CompletionStage<ZLinkSpotActorJoinResult> targetStage;
         if (targetSurface instanceof ZLinkSpot<?>) {

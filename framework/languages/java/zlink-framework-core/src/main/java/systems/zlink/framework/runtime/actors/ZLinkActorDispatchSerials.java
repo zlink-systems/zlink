@@ -201,7 +201,13 @@ final class ZLinkActorDispatchSerials {
             // Both a restored activation and a retargeted activation accept payloads behind
             // their existing lifecycle completion. Admission belongs to the queue commit.
             CompletionStage<Void> lifecycle = barrier;
-            turn.activation().executeLifecycleNext(() -> lifecycle, null);
+            turn.activation()
+                    .executeLifecycleNext(
+                            () ->
+                                    turn.activation().relocationLane().sharedSpotGate() == null
+                                            ? lifecycle
+                                            : ZLinkSerialExecutionQueue.yieldCurrent(lifecycle),
+                            null);
         }
         return turn;
     }
@@ -468,13 +474,14 @@ final class ZLinkActorDispatchSerials {
             Teardown teardown,
             ZLinkSerialExecutionQueue lane,
             ZLinkSerialExecutionQueue.ActiveTurnSealHandle activeTurn) {
-        return onRegistry(
-                        () -> {
-                            // A callback has one execution claim and one shared result.
-                            Supplier<CompletionStage<Void>> claimed = teardown.cleanup;
-                            teardown.cleanup = null;
-                            return teardown.cleanupResult.isDone() ? null : claimed;
-                        })
+        return ZLinkSerialExecutionQueue.yieldCurrent(
+                        onRegistry(
+                                () -> {
+                                    // A callback has one execution claim and one shared result.
+                                    Supplier<CompletionStage<Void>> claimed = teardown.cleanup;
+                                    teardown.cleanup = null;
+                                    return teardown.cleanupResult.isDone() ? null : claimed;
+                                }))
                 .thenCompose(
                         claimed -> {
                             if (claimed != null) {

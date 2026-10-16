@@ -59,7 +59,7 @@ final class ZLinkActorLifecycleTeardownTest {
                                     ZLinkSerialExecutionQueue.captureCurrentActiveTurnSealHandle()
                                             .orElseThrow());
                             entered.complete(null);
-                            return settled;
+                            return ZLinkSerialExecutionQueue.yieldCurrent(settled);
                         });
         CompletionStage<Void> close = CompletableFuture.completedFuture(null);
         try {
