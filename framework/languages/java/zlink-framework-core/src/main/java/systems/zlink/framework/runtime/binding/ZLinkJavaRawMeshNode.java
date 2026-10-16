@@ -4675,10 +4675,8 @@ final class ZLinkJavaRawMeshNode
         }
         rotationReceivePeer = peer;
         rotationReceiveGeneration = generation;
-        if (peer.liveness() != null
-                && Long.parseUnsignedLong(peer.connectionId(), 16) == generation) {
-            peer.liveness().recordReceived(System.nanoTime());
-        }
+        // Dispatch already checked this admitted route and its liveness handle.
+        peer.liveness().recordReceived(System.nanoTime());
     }
 
     private static long retainedBytes(List<Message> frames) {
