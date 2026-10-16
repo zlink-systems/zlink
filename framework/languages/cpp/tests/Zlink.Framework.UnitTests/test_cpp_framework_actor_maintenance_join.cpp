@@ -575,7 +575,9 @@ void joined_actor_chain (bool send_after_close)
     evidence.release_replay_post = true;
     evidence.changed.notify_all ();
     ASSERT_TRUE (attempted);
-    EXPECT_TRUE (evidence.next_join_error.empty ()) << evidence.next_join_error;
+    ASSERT_TRUE (evidence.next_join_error.empty ())
+      << evidence.next_join_error << " completions=" << evidence.completions.size ()
+      << " pushes=" << evidence.session_pushes;
     ASSERT_TRUE (evidence.changed.wait_for (
       lock, wait_budget,
       [&] { return evidence.completions.size () >= 2 && evidence.session_pushes == 1; }))
