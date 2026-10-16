@@ -270,8 +270,7 @@ test('ordinary ingress transfers its existing permit and payload without operati
     pendingCapacityUsed: 0
   };
   const runtime = new RawServiceMeshRuntime({ applicationJobQueue: queue, descriptor });
-  const peer = { descriptor: { ...descriptor, nodeRoutingId: 'peer' } };
-  runtime.topology.admittedPeer = () => peer;
+  runtime.admitPeer({ ...descriptor, nodeRoutingId: 'peer' }, 1n, 0);
   const record = {
     sourceRid: 'peer',
     sourceRoute: Buffer.from('peer'),

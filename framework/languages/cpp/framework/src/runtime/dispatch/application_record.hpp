@@ -107,13 +107,15 @@ struct send_ready_data_t
 };
 
 class public_host_runtime_t;
+struct actor_join_operation_result_t;
 
 struct reply_token_t
 {
     std::weak_ptr<public_host_runtime_t> host;
     std::shared_ptr<mesh::service_mailbox_record_t> request;
     std::function<bool (const std::vector<zlink::message_t> &)> local_reply;
-    std::function<bool (actor_join_result_t, const std::vector<zlink::message_t> &)>
+    std::function<bool (const actor_join_operation_result_t &,
+                        const std::vector<zlink::message_t> &)>
       local_actor_join;
 };
 

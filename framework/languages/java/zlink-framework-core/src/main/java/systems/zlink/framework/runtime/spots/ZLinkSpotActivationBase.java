@@ -158,10 +158,6 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> {
         closeRouteReceived(received);
     }
 
-    final boolean hasActiveRouteReceives() {
-        return !activeRouteReceives.isEmpty();
-    }
-
     CompletionStage<Void> dispatchResolvedActorPacket(
             ZLinkActor actor,
             ActorPacketFrames.Header packetHeader,
@@ -257,8 +253,11 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> {
                         continue;
                     }
                     ZLinkActor actor = localActor.get();
-                    if (host.dispatchActorControlPacket(
-                            packetHeader, headerPart, actor, pendingHeader)) {
+                    var control =
+                            host.dispatchActorControlPacket(
+                                    packetHeader, headerPart, actor, pendingHeader);
+                    if (control != null) {
+                        dispatches.add(control);
                         continue;
                     }
                     // Admit every Actor packet to its own Actor queue before waiting

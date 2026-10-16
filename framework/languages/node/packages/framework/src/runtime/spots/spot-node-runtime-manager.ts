@@ -412,7 +412,7 @@ export class ZLinkSpotNodeRuntimeManager {
         this.meshNodes.delete(spotNodeName);
         completions.dispose(error);
         await pump?.dispose();
-        node.close();
+        await node.close();
         throw error;
       }
     }
@@ -852,8 +852,8 @@ export class ZLinkSpotNodeRuntimeManager {
     await settle(meshPumps.reverse().map((pump) => pump.dispose()));
     await settle(
       meshNodes.reverse().map(async (node) => {
-        node.shutdown(DEFAULT_SPOT_NODE_SHUTDOWN_TIMEOUT_MS);
-        node.close();
+        await node.shutdown(DEFAULT_SPOT_NODE_SHUTDOWN_TIMEOUT_MS);
+        await node.close();
       })
     );
     for (const completions of meshCompletions) {

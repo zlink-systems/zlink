@@ -228,6 +228,19 @@ async function waitUntilImmediate(predicate) {
 // next liveness deadline.
 test('an idle connected node waits for its next management deadline', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
+  // Requests and teardown may wait for the pump's timer yield. Advance the
+  // same virtual clock while those operations join; the idle observation below
+  // advances exactly its own 200 ticks.
+  const withClock = async (operation) => {
+    let settled = false;
+    const completion = operation.finally(() => { settled = true; });
+    void completion.catch(() => undefined);
+    await waitUntilImmediate(() => {
+      if (!settled) t.mock.timers.tick(1);
+      return settled;
+    });
+    return completion;
+  };
   const armed = [];
   const { setTimeout: mockedSetTimeout } = globalThis;
   t.mock.method(globalThis, 'setTimeout', function (callback, delay, ...args) {
@@ -240,7 +253,7 @@ test('an idle connected node waits for its next management deadline', async (t) 
     t.mock.timers.tick(1)
   );
   try {
-    assert.deepEqual(await pair.request({ value: 'ready' }), { value: 'ready' });
+    assert.deepEqual(await withClock(pair.request({ value: 'ready' })), { value: 'ready' });
     for (let turn = 0; turn < 10; turn++) await new Promise((resolve) => setImmediate(resolve));
     armed.length = 0;
     for (let elapsed = 0; elapsed < 200; elapsed++) {
@@ -252,9 +265,9 @@ test('an idle connected node waits for its next management deadline', async (t) 
     // deadline seconds away, not the 1 ms maintenance cadence.
     assert.ok(armed.length <= 2, `maintenance timers armed: ${armed.length}`);
     for (const delay of armed) assert.ok(delay >= 1_000, `maintenance timer delay ${delay} ms`);
-    assert.deepEqual(await pair.request({ value: 'after-idle' }), { value: 'after-idle' });
+    assert.deepEqual(await withClock(pair.request({ value: 'after-idle' })), { value: 'after-idle' });
   } finally {
-    await pair.stop();
+    await withClock(pair.stop());
     t.mock.timers.reset();
   }
 });

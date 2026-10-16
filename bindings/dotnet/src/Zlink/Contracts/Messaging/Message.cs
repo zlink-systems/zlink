@@ -106,9 +106,7 @@ public sealed partial class Message : IDisposable, IAsyncDisposable
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Message Allocate(int size)
     {
-        if (size < 0)
-            throw new ArgumentOutOfRangeException(nameof(size));
-        return AllocateCoreValidated(size);
+        return new Message(size);
     }
 
     /// <summary>

@@ -89,8 +89,7 @@ final class ZLinkStandaloneActorRelocationScheduler {
                                             CompletableFuture.failedFuture(
                                                     new ZLinkUserSpotRetireRuntime
                                                             .RelocationAuthorityErrorException(
-                                                            "Relocation source owner lease expired"
-                                                                    + " before the Preserve fence: "
+                                                            "Relocation source owner lease expired or authority is Missing: "
                                                                     + request.spotId())));
         };
     }

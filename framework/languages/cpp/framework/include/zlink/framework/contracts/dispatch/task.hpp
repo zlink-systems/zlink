@@ -79,6 +79,8 @@ class deferred_barrier_t
     // The barrier owns the serial turn until `complete` is invoked.  This is
     // used by deferred Actor operations whose transport tail is asynchronous.
     virtual result_t<void> activate_async (async_work_t work) = 0;
+    // Run a phase of the reserved lifecycle operation without releasing its turn.
+    virtual task_t<void> run (std::function<task_t<void> ()> work) = 0;
     virtual void cancel () noexcept = 0;
 };
 

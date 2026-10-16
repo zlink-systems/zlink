@@ -3000,6 +3000,7 @@ bool actor_gateway_runtime_t::commit_session_relocation_route (
   const runtime::stateful::stream_binding_t &previous,
   const runtime::stateful::stream_binding_t &target)
 {
+    // Project the Session owner's accepted binding; target CAS owns Actor authority (§8).
     if (route.route.action != runtime::protocol::session_relocation_route_action_t::commit
         || previous.connection != target.connection
         || previous.binding_generation != target.binding_generation
@@ -3008,13 +3009,7 @@ bool actor_gateway_runtime_t::commit_session_relocation_route (
         || target.actor.kind != runtime::stateful::object_kind_t::actor
         || previous.actor.key != route.actor.actor_id || target.actor.key != route.actor.actor_id
         || previous.actor.object_generation != route.actor.object_generation
-        || target.actor.object_generation != route.actor.object_generation
-        || previous.actor.authority_owner_generation
-             != route.route.previous_authority_owner_generation
-        || target.actor.authority_owner_generation != route.route.target_authority_owner_generation
-        || target.actor.node_id
-             != zlink::routing_id_t::from (route.route.target_node_routing_id).to_string ()
-        || target.target_node_generation != route.route.target_node_generation)
+        || target.actor.object_generation != route.actor.object_generation)
         return false;
 
     const auto actor_id = route.actor.actor_id;
@@ -3023,7 +3018,6 @@ bool actor_gateway_runtime_t::commit_session_relocation_route (
         if (found == _state->actors_by_id.end () || !found->second.bound
             || found->second.disconnected
             || found->second.ref.object_generation () != route.actor.object_generation
-            || found->second.ref.node_rid ().value () != previous.actor.node_id
             || !found->second.bound_session_route)
             return false;
         auto &gateway_route = *found->second.bound_session_route;
@@ -3033,9 +3027,6 @@ bool actor_gateway_runtime_t::commit_session_relocation_route (
             || gateway_route.node_rid.to_bytes () != route.session_owner_node_routing_id
             || gateway_route.node_generation != route.session_owner_node_generation
             || gateway_route.object_generation != route.actor.object_generation
-            || gateway_route.authority_owner_generation
-                 != route.route.previous_authority_owner_generation
-            || gateway_route.owner_lease_generation != previous.owner_lease_generation
             || gateway_route.binding_generation != route.binding_generation)
             return false;
 

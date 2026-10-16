@@ -20,6 +20,7 @@ function fixture() {
   const received = [];
   const sent = [];
   let failure;
+  const routes = [];
   const router = {
     setRoutingId() {}, bind() {}, close() {}, setReceiveFlowState() {}, localEndpoint() { return descriptor("local").advertisedEndpoint; },
     submitSend(target, parts) {
@@ -38,7 +39,7 @@ function fixture() {
       sent.push({ target, command: wire.decodeHeader(parts[0]).command });
       if (failure !== undefined) { const error = failure; failure = undefined; throw error; }
     },
-    receive() { return received.shift(); }, routesSnapshot() { return []; }
+    receive() { return received.shift(); }, routesSnapshot() { return routes; }
   };
   const runtime = new RawServiceMeshRuntime({
     descriptor: descriptor('local'),
@@ -48,6 +49,7 @@ function fixture() {
   runtime.start();
   return {
     runtime, sent,
+    selectPeer() { routes.push({ routingId: "peer", routeGeneration: 1n }); },
     fail(error) { failure = error; },
     enqueue(rid, parts) { received.push({ sourceRid: rid, sourceRoute: Buffer.from(rid), routeGeneration: 1n, parts, close() {} }); },
     async admit(rid) {
@@ -62,12 +64,26 @@ function fixture() {
 for (const result of [SubmitResult.NotConnected, SubmitResult.NotFound]) {
   for (const phase of ['submit', 'completion']) {
     const routeError = () => new ZLinkBackendResultError('submit', result, undefined, { phase });
-    for (const response of ['hello', 'reject', 'admit', 'livenessAck']) {
+    test(`route absence ${result}/${phase} leaves selected-route HELLO pending remote ADMIT`, async () => {
+      const f = fixture();
+      try {
+        f.selectPeer();
+        f.fail(routeError());
+        assert.equal(await f.runtime.observeSelectedRoutes(), 1);
+        assert.equal(f.runtime.topology.peer('peer'), undefined);
+        f.fail(routeError());
+        assert.equal(await f.runtime.announcePeer('peer'), phase !== 'submit');
+        await turn();
+        assert.equal(f.sent.length, 2);
+        assert.ok(f.sent.every(record => record.command === wire.M6aServiceWireCommand.hello));
+      } finally { f.runtime.close(); }
+    });
+    for (const response of ['reject', 'admit', 'livenessAck']) {
       test(`route absence ${result}/${phase} completes received ${response} without exception`, async () => {
         const f = fixture();
         try {
           if (response === 'livenessAck') await f.admit('peer');
-          const parts = response === 'hello' ? [] : response === 'livenessAck'
+          const parts = response === 'livenessAck'
             ? [codec.encodeLivenessRecord({ command: wire.M6aServiceWireCommand.livenessProbe, probeId: 1n })]
             : [wire.encodeRouteMeshAdmission(wire.M6aServiceWireCommand.hello, {
                 ...f.descriptor('peer'), ...(response === 'reject' ? { meshName: 'wrong-mesh' } : {})
@@ -75,7 +91,7 @@ for (const result of [SubmitResult.NotConnected, SubmitResult.NotFound]) {
           f.enqueue('peer', parts);
           f.fail(routeError());
           // Backpressured is submitted; only immediate route rejection drops a response.
-          assert.equal(await f.runtime.pumpOne(0), phase === 'submit' && ['hello', 'livenessAck'].includes(response) ? 'dropped' : 'infrastructure');
+          assert.equal(await f.runtime.pumpOne(0), phase === 'submit' && response === 'livenessAck' ? 'dropped' : 'infrastructure');
         } finally { f.runtime.close(); }
       });
     }
@@ -104,7 +120,7 @@ test('non-route submission failures propagate from receive and update paths', as
   for (const cause of [new Error('adapter failure'), new ZLinkBackendResultError('submit', SubmitResult.Terminated, undefined, { phase: 'completion' })]) {
     const f = fixture();
     try {
-      f.enqueue('peer', []); f.fail(cause);
+      f.enqueue('peer', [wire.encodeRouteMeshAdmission(wire.M6aServiceWireCommand.hello, f.descriptor('peer'))]); f.fail(cause);
       if (cause.phase === 'completion') {
         assert.equal(await f.runtime.pumpOne(0), 'infrastructure');
         await turn();

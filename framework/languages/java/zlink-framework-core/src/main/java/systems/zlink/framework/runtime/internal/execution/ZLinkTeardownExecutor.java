@@ -1,16 +1,16 @@
-package systems.zlink.framework.runtime.host;
+package systems.zlink.framework.runtime.internal.execution;
 
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 
-final class ZLinkTeardownExecutor {
+public final class ZLinkTeardownExecutor {
     private ZLinkTeardownExecutor() {}
 
-    static void execute(Runnable teardown) {
+    public static void execute(Runnable teardown) {
         Thread.ofVirtual().name("zlink-framework-teardown").start(teardown);
     }
 
-    static CompletionStage<Void> submit(Runnable teardown) {
+    public static CompletionStage<Void> submit(Runnable teardown) {
         CompletableFuture<Void> completion = new CompletableFuture<>();
         execute(
                 () -> {

@@ -964,7 +964,7 @@ void public_host_runtime_t::configure_message_follow_handler (
 void public_host_runtime_t::configure_actor_join_relocation (
   actor_join_relocation_prepare_validator_t prepare_validator,
   actor_join_recovery_consumer_t recovery_consumer,
-  actor_join_authority_spot_resolver_t authority_spot_resolver,
+  actor_relocation_authority_resolver_t authority_spot_resolver,
   actor_join_recovery_rollback_t recovery_rollback,
   actor_join_committed_authority_adopter_t authority_adopter)
 {
@@ -976,7 +976,7 @@ void public_host_runtime_t::configure_actor_join_relocation (
               throw std::logic_error ("Actor Join relocation must be configured before start");
           _actor_join_relocation_prepare_validator = std::move (prepare_validator);
           _actor_join_recovery_consumer = std::move (recovery_consumer);
-          _actor_join_authority_spot_resolver = std::move (authority_spot_resolver);
+          _actor_relocation_authority_resolver = std::move (authority_spot_resolver);
           _actor_join_recovery_rollback = std::move (recovery_rollback);
           _actor_join_committed_authority_adopter = std::move (authority_adopter);
       })
@@ -1075,28 +1075,35 @@ void public_host_runtime_t::close () noexcept
 bool public_host_runtime_t::connect_peer (const std::string &endpoint,
                                           std::optional<zlink::routing_id_t> expected,
                                           std::uint64_t expected_lifecycle_generation,
-                                          std::string security_identity)
+                                          std::string security_identity,
+                                          bool automatic)
 {
-    bool connected = false;
-    if (expected) {
-        auto descriptor = _options.mesh.descriptor;
-        descriptor.node_routing_id = expected->to_bytes ();
-        descriptor.advertised_endpoint = endpoint;
-        descriptor.lifecycle_generation = expected_lifecycle_generation;
-        descriptor.security_identity = std::move (security_identity);
-        connected = _transport->connect_peer (endpoint, std::move (descriptor));
-    } else {
-        connected = _transport->connect_peer (endpoint);
-    }
-    if (connected) {
-        _peer_endpoint_lane
-          .run ([&] {
-              _peer_endpoints.insert_or_assign (endpoint,
-                                                expected ? expected->to_string () : std::string{});
-          })
-          .get ();
-    }
-    return connected;
+    return _peer_endpoint_lane
+      .run ([&] {
+          auto expected_key = expected ? expected->to_string () : std::string{};
+          if (automatic && expected
+              && (_transport->peer_route (expected->to_bytes ()).first != 0
+                  || std::any_of (
+                    _peer_endpoints.begin (), _peer_endpoints.end (), [&] (const auto &intent) {
+                        return intent.first == endpoint || intent.second == expected_key;
+                    })))
+              return false;
+          bool connected = false;
+          if (expected) {
+              auto descriptor = _options.mesh.descriptor;
+              descriptor.node_routing_id = expected->to_bytes ();
+              descriptor.advertised_endpoint = endpoint;
+              descriptor.lifecycle_generation = expected_lifecycle_generation;
+              descriptor.security_identity = std::move (security_identity);
+              connected = _transport->connect_peer (endpoint, std::move (descriptor));
+          } else {
+              connected = _transport->connect_peer (endpoint);
+          }
+          if (connected)
+              _peer_endpoints.insert_or_assign (endpoint, std::move (expected_key));
+          return connected;
+      })
+      .get ();
 }
 
 void public_host_runtime_t::expect_peer (const std::string &endpoint,
@@ -2985,6 +2992,17 @@ void public_host_runtime_t::discard_relocation_target_attempts (
   std::vector<relocation_target_attempt_t> attempts) noexcept
 {
     for (auto &attempt : attempts) {
+        _spot_actor_index_lane
+          .run ([&] {
+              for (const auto &target : attempt.targets) {
+                  if (target.kind != stateful::object_kind_t::actor)
+                      continue;
+                  const auto current = _actors.find (target.key);
+                  if (current != _actors.end () && current->second.second == target)
+                      _actors.erase (current);
+              }
+          })
+          .get ();
         if (attempt.authority_fence && _aggregate_relocation_authority) {
             try {
                 _aggregate_relocation_authority->abort (*attempt.authority_fence);
@@ -3390,23 +3408,15 @@ bool public_host_runtime_t::submit_relocation_target_authority (
               attempt.prepare.target.target_node_generation, target_owner};
             std::vector<std::byte> target_application_payload;
             if (attempt.targets.front ().kind == stateful::object_kind_t::actor
-                && _actor_join_authority_spot_resolver) {
-                const auto spot = _actor_join_authority_spot_resolver (attempt.targets.front ());
+                && _actor_relocation_authority_resolver) {
+                const auto spot = _actor_relocation_authority_resolver (attempt.targets.front ());
                 if (spot) {
-                    target_application_payload =
-                      runtime::encode_actor_authority_payload (runtime::actor_authority_payload_t{
-                        .state = runtime::actor_authority_state_t::ready,
-                        .stable_type = std::get<0> (*spot),
-                        .actor_id = attempt.targets.front ().key,
-                        .current_spot_id = std::get<1> (*spot),
-                        .current_spot_generation = std::get<2> (*spot),
-                        .current_spot_kind = runtime::actor_authority_spot_kind_t::user,
-                        .owner_id = target_owner.owner_id,
-                        .owner_lease_generation =
-                          static_cast<std::uint64_t> (target_owner.lease_generation),
-                        .mesh_name = attempt.targets.front ().mesh_name,
-                        .node_rid = node_rid_t::from_string (attempt.targets.front ().node_id),
-                        .node_generation = attempt.prepare.target.target_node_generation});
+                    auto payload = *spot;
+                    payload.owner_id = target_owner.owner_id;
+                    payload.owner_lease_generation =
+                      static_cast<std::uint64_t> (target_owner.lease_generation);
+                    payload.node_generation = attempt.prepare.target.target_node_generation;
+                    target_application_payload = runtime::encode_actor_authority_payload (payload);
                 }
             }
             const auto published = _relocation_authority->publish (
@@ -3562,8 +3572,7 @@ bool public_host_runtime_t::try_finalize_relocation_target (const relocation_att
         return true;
     }
 
-    const auto settlement = commit_relocation_target_authority (attempt);
-    if (settlement == relocation_target_settlement_t::discard) {
+    const auto discard_attempt = [&] {
         std::vector<relocation_target_attempt_t> discarded;
         _relocation_session_terminal_lane
           .run ([&] {
@@ -3576,6 +3585,10 @@ bool public_host_runtime_t::try_finalize_relocation_target (const relocation_att
           })
           .get ();
         discard_relocation_target_attempts (std::move (discarded));
+    };
+    const auto settlement = commit_relocation_target_authority (attempt);
+    if (settlement == relocation_target_settlement_t::discard) {
+        discard_attempt ();
         return false;
     }
     if (settlement != relocation_target_settlement_t::committed)
@@ -3639,41 +3652,53 @@ bool public_host_runtime_t::try_finalize_relocation_target (const relocation_att
         }
     }
 
-    /* The target Actor route is now installed and S2 authority is durable.
-     * Submit command 44 before opening the restored Actor lifecycle: an
-     * OnJoined callback may immediately push to its bound Session, and that
-     * push must be ordered behind the Session owner's route commit. */
-    start_relocation_session_route_submission (key);
+    try {
+        const auto actor_indexes_current =
+          _spot_actor_index_lane
+            .run ([&] {
+                // Publish only this restore's exact identity. Check the whole
+                // aggregate before inserting so no prior incarnation is replaced.
+                for (const auto &target : attempt.targets) {
+                    if (target.kind != stateful::object_kind_t::actor)
+                        continue;
+                    const auto current = _actors.find (target.key);
+                    if (current != _actors.end () && current->second.second != target)
+                        return false;
+                }
+                for (std::size_t index = 0; index != attempt.targets.size (); ++index) {
+                    const auto &target = attempt.targets[index];
+                    if (target.kind == stateful::object_kind_t::actor)
+                        _actors.try_emplace (target.key, attempt.wire_objects[index].stable_type,
+                                             target);
+                }
+                return true;
+            })
+            .get ();
+        if (!actor_indexes_current) {
+            discard_attempt ();
+            return false;
+        }
 
-    const auto committed =
-      attempt.targets.size () == 1
-        ? _objects.commit_relocation_restore (attempt.targets.front (), attempt.restore_identity)
-        : _objects.commit_relocation_restore_aggregate (attempt.targets, attempt.restore_identity);
-    if (committed != stateful::stateful_error_t::none
-        && committed != stateful::stateful_error_t::already_exists)
-        return false;
-
-    const auto actor_indexes_current =
-      _spot_actor_index_lane
-        .run ([&] {
-            for (std::size_t index = 0; index != attempt.targets.size (); ++index) {
-                const auto &target = attempt.targets[index];
-                if (target.kind != stateful::object_kind_t::actor)
-                    continue;
-                const auto &wire = attempt.wire_objects[index];
-                const auto current = _actors.find (target.key);
-                if (current != _actors.end ()
-                    && (current->second.second.object_generation > target.object_generation
-                        || current->second.second.authority_owner_generation
-                             > target.authority_owner_generation))
-                    return false;
-                _actors.insert_or_assign (target.key, std::make_pair (wire.stable_type, target));
-            }
-            return true;
-        })
-        .get ();
-    if (!actor_indexes_current)
-        return false;
+        /* Identity and S2 authority are visible before lifecycle opens. The
+         * existing execution gate holds ingress until restore becomes Ready.
+         * Submit command 44 first so a joined callback's Session push remains
+         * ordered behind the Session owner's route commit. */
+        start_relocation_session_route_submission (key);
+        const auto committed = attempt.targets.size () == 1
+                                 ? _objects.commit_relocation_restore (attempt.targets.front (),
+                                                                       attempt.restore_identity)
+                                 : _objects.commit_relocation_restore_aggregate (
+                                     attempt.targets, attempt.restore_identity);
+        if (committed != stateful::stateful_error_t::none
+            && committed != stateful::stateful_error_t::already_exists) {
+            discard_attempt ();
+            return false;
+        }
+    }
+    catch (...) {
+        discard_attempt ();
+        throw;
+    }
 
     for (const auto &object : attempt.wire_objects)
         (void) _relocation_wire->unregister_target (
@@ -3761,27 +3786,50 @@ task_t<bool> public_host_runtime_t::restore_relocation_assembly (
     stateful::stateful_error_t restored = stateful::stateful_error_t::conflict;
     std::optional<framework_exception_t> failure;
     try {
-        std::optional<stateful::object_ref_t> actor_join_target_spot;
+        const auto previous_actor_identities = co_await _spot_actor_index_lane.run_task ([&] {
+            std::vector<stateful::object_ref_t> previous;
+            for (const auto &target : staging->targets) {
+                if (target.kind != stateful::object_kind_t::actor)
+                    continue;
+                const auto current = _actors.find (target.key);
+                if (current != _actors.end () && current->second.second != target)
+                    previous.push_back (current->second.second);
+            }
+            return previous;
+        });
+        std::optional<stateful::object_ref_t> actor_target_spot;
         if (staging->targets.size () == 1
             && staging->targets.front ().kind == stateful::object_kind_t::actor
-            && _actor_join_authority_spot_resolver) {
-            const auto spot = _actor_join_authority_spot_resolver (staging->targets.front ());
+            && _actor_relocation_authority_resolver) {
+            const auto spot = _actor_relocation_authority_resolver (staging->targets.front ());
             if (spot) {
-                actor_join_target_spot = stateful::object_ref_t{stateful::object_kind_t::user_spot,
-                                                                std::get<1> (*spot),
-                                                                std::get<2> (*spot),
-                                                                0,
-                                                                staging->targets.front ().mesh_name,
-                                                                staging->targets.front ().node_id};
+                actor_target_spot = stateful::object_ref_t{
+                  stateful::object_kind_t::user_spot,  spot->current_spot_id,
+                  spot->current_spot_generation,       0,
+                  staging->targets.front ().mesh_name, staging->targets.front ().node_id};
             }
         }
         restored =
           co_await (staging->targets.size () == 1
                       ? _objects.restore_relocation (
                           staging->frozen.front (), staging->targets.front (),
-                          staging->restore_identity, {}, std::move (actor_join_target_spot))
+                          staging->restore_identity, {}, std::move (actor_target_spot))
                       : _objects.restore_relocation_aggregate (staging->frozen, staging->targets,
                                                                staging->restore_identity, {}));
+        if (restored == stateful::stateful_error_t::none
+            || restored == stateful::stateful_error_t::already_exists) {
+            // Restore owns the retirement of a previous moving source record.
+            // Reflect that accepted retirement in the same identity registry;
+            // a different identity installed during restore remains untouched.
+            co_await _spot_actor_index_lane.run_task ([&] {
+                for (const auto &previous : previous_actor_identities) {
+                    const auto current = _actors.find (previous.key);
+                    if (current != _actors.end () && current->second.second == previous)
+                        _actors.erase (current);
+                }
+            });
+            co_return true;
+        }
     }
     catch (const framework_exception_t &error) {
         failure = error;
@@ -3792,10 +3840,6 @@ task_t<bool> public_host_runtime_t::restore_relocation_assembly (
     catch (...) {
         failure.emplace (framework_error_kind_t::internal_failure, "Relocation restore failed");
     }
-    if (!failure
-        && (restored == stateful::stateful_error_t::none
-            || restored == stateful::stateful_error_t::already_exists))
-        co_return true;
     discard_relocation_assembly_staging (*pending, *staging);
     const messaging::request_failure_mapper_t mapper;
     if (!failure) {
@@ -5374,7 +5418,6 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                     }
 
                     const auto relocation_key = session_relocation_key (route);
-                    std::uint64_t sealed_authority = 0;
                     bool late_session_route_update = false;
                     const auto route_matches_seal =
                       _relocation_session_terminal_lane
@@ -5387,7 +5430,6 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                             }
                             if (!sealed->second.ready
                                 || sealed->second.seal.relocation != route.relocation
-                                || sealed->second.seal.coordinator != route.coordinator
                                 || sealed->second.seal.actor.actor_id != route.actor.actor_id
                                 || sealed->second.seal.actor.object_generation
                                      != route.actor.object_generation
@@ -5403,15 +5445,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                                 || sealed->second.seal.binding_generation
                                      != route.binding_generation)
                                 return false;
-                            sealed_authority = sealed->second.seal.actor.authority_owner_generation;
-                            return !((route.route.action
-                                        == protocol::session_relocation_route_action_t::commit
-                                      && route.route.previous_authority_owner_generation
-                                           != sealed_authority)
-                                     || (route.route.action
-                                           == protocol::session_relocation_route_action_t::abort
-                                         && route.route.current_authority_owner_generation
-                                              != sealed_authority));
+                            return true;
                         })
                         .get ();
                     if (!route_matches_seal)
@@ -5454,15 +5488,13 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                         }
                         admission = _sessions.commit_remote_route (
                           session_id, route.binding_generation, route.actor.actor_id,
-                          route.actor.object_generation,
-                          route.route.previous_authority_owner_generation, std::move (target),
+                          route.actor.object_generation, std::move (target),
                           route.route.target_node_generation,
                           route.route.target_owner_lease_generation, std::move (commit_projection));
                     } else {
                         admission = _sessions.acknowledge_remote_abort (
                           session_id, route.binding_generation, route.actor.actor_id,
-                          route.actor.object_generation,
-                          route.route.current_authority_owner_generation);
+                          route.actor.object_generation);
                     }
                     if (admission.error != stateful::stateful_error_t::none || !admission.binding) {
                         continue;
@@ -6824,7 +6856,7 @@ public_host_runtime_t::begin_local_actor_join (const actor_ref_t &actor,
           record.source_node_rid = status ().routing_id ();
           record.actor_control = actor_control_t{lifecycle_kind_t::joined, actor};
           record.reply_token.local_actor_join =
-            [weak, operation, actor_type, membership] (actor_join_result_t result,
+            [weak, operation, actor_type, membership] (const actor_join_operation_result_t &result,
                                                        const std::vector<zlink::message_t> &reply) {
                 const auto host = weak.lock ();
                 return host
@@ -6854,7 +6886,7 @@ public_host_runtime_t::begin_local_actor_join (const actor_ref_t &actor,
 bool public_host_runtime_t::complete_local_actor_join (pending_operation_t operation,
                                                        std::string actor_type,
                                                        stateful::membership_token_t membership,
-                                                       actor_join_result_t result,
+                                                       const actor_join_operation_result_t &result,
                                                        const std::vector<zlink::message_t> &parts)
 {
     return _transport->complete_local_operation (
@@ -6868,15 +6900,21 @@ bool public_host_runtime_t::complete_local_actor_join (pending_operation_t opera
           completion.source_node_rid =
             zlink::routing_id_t::from (_options.mesh.descriptor.node_routing_id);
 
-          if (result == actor_join_result_t::accepted) {
+          if (result.terminal_result != 0) {
+              (void) _objects.abort_membership_move (membership);
+              completion.terminal_result = result.terminal_result;
+              completion.failure_errno = result.failure_code;
+          } else if (result.join_result == protocol::actor_join_result_t::accepted) {
               auto [error, current] = _objects.commit_membership_move (membership);
               if (error != stateful::stateful_error_t::none) {
                   //  Spec 32-framework-error-model:119-120 — a Framework execution
                   //  failure after the application ACCEPTED the join is not an
                   //  application rejection; carry a classified terminal
                   //  (internalError) instead of synthesizing typed Rejected.
-                  completion.terminal_result = 105;
-                  completion.failure_errno = 0;
+                  const auto failure = messaging::request_failure_mapper_t{}.target_failure_reply (
+                    framework_error_kind_t::internal_failure);
+                  completion.terminal_result = failure->terminal_result;
+                  completion.failure_errno = failure->failure_code;
               } else {
                   const auto actor = framework_actor_ref (current, actor_type);
                   _spot_actor_index_lane
@@ -7289,27 +7327,42 @@ zlink::submit_result_t reply (const reply_token_t &token,
 }
 
 bool actor_join_reply (const reply_token_t &token,
-                       actor_join_result_t result,
+                       result_t<actor_join_result_t> result,
                        const std::vector<zlink::message_t> &parts)
 {
-    if (token.local_actor_join) {
-        return token.local_actor_join (result, parts);
+    actor_join_operation_result_t completion;
+    if (result) {
+        completion.join_result = result.value () == actor_join_result_t::accepted
+                                   ? protocol::actor_join_result_t::accepted
+                                   : protocol::actor_join_result_t::rejected;
+    } else {
+        const messaging::request_failure_mapper_t mapper;
+        const auto failure =
+          result.error () ? mapper.target_failure_reply (*result.error ())
+                          : mapper.target_failure_reply (framework_error_kind_t::internal_failure);
+        completion.terminal_result = failure->terminal_result;
+        completion.failure_code = failure->failure_code;
     }
-    if (result != actor_join_result_t::accepted) {
-        const auto host = token.host.lock ();
-        if (!host || !token.request) {
-            return false;
-        }
-        try {
-            return host->transport ().reply_failure (
-              *token.request, 106,
-              static_cast<std::uint32_t> (protocol::framework_error_code::requestRejected));
-        }
-        catch (const zlink::submit_error_t &) {
-            return false;
-        }
+    if (token.local_actor_join)
+        return token.local_actor_join (completion, parts);
+    const auto host = token.host.lock ();
+    if (!host || !token.request)
+        return false;
+    try {
+        if (completion.terminal_result != 0)
+            return host->transport ().reply_failure (*token.request, completion.terminal_result,
+                                                     completion.failure_code);
+        if (completion.join_result == protocol::actor_join_result_t::rejected)
+            return host->transport ().reply_actor_join (
+              *token.request, completion.join_result, std::nullopt, 0, 0, 0, 0,
+              parts.empty ()
+                ? std::nullopt
+                : std::make_optional (protocol::application_payload_t::from_parts (parts)));
+        return reply (token, parts) == zlink::submit_result_t::ok;
     }
-    return reply (token, parts) == zlink::submit_result_t::ok;
+    catch (const zlink::submit_error_t &) {
+        return false;
+    }
 }
 
 } // namespace zlink::framework::runtime::host

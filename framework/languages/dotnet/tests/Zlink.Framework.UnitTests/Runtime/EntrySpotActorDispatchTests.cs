@@ -3953,7 +3953,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 sessionOwnerNodeGeneration: 19
             );
 
-            Assert.True(runtime.TryGetSessionActorBinding(actor.ActorId, out var binding));
+            Assert.True(runtime.TryGetSessionActorBinding(actor.ActorId, context, out var binding));
             await runtime.NotifyActorDisconnectedAsync(binding, CancellationToken.None);
 
             var relay = ZLinkFrameworkJsonPayloadCodec.Deserialize<ZLinkRemoteActorFrameRelay>(

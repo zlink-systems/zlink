@@ -674,6 +674,80 @@ test('direct actor resolver maps a missing authority snapshot to NotFound', asyn
   );
 });
 
+test('actor client deadline ends its pending request while a Message Follow relay remains live', async t => {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 0 });
+  t.mock.method(performance, 'now', () => Date.now());
+  const route = actorLocation();
+  let completeRelay;
+  let entered;
+  const admitted = new Promise(resolve => { entered = resolve; });
+  const coordinator = new framework.ZLinkActorHandoffCoordinator({
+    routedTransport: {
+      async sendToSpot() {},
+      async requestToSpot() {
+        const reply = new Promise(resolve => { completeRelay = resolve; });
+        entered();
+        return await reply;
+      }
+    },
+    requestSource: () => ({
+      meshName: route.meshName, objectGeneration: route.actorRef.objectGeneration,
+      ownerId: route.ownerId, ownerLeaseGeneration: route.ownerLeaseGeneration,
+      nodeRid: route.ownerNodeRid, nodeGeneration: route.ownerNodeGeneration,
+      authorityOwnerGeneration: route.authorityOwnerGeneration
+    }),
+    validateReplySource: () => true
+  });
+  coordinator.begin('actor-1', route.actorRef.objectGeneration);
+  coordinator.snapshot('actor-1');
+  const target = {
+    routerChannelId: route.meshName, targetNodeRid: 'target-node', spotId: 'target-spot',
+    spotKind: route.spotKind, targetNodeGeneration: 1n,
+    authorityOwnerGeneration: route.authorityOwnerGeneration + 1n,
+    targetOwnerId: 'target-owner', ownerLeaseGeneration: 1n
+  };
+  const { ownerFence } = require('../../packages/framework/dist/runtime/actors/actor-message-follow-context');
+  coordinator.complete('actor-1', target, { ...route.actorRef, nodeRid: target.targetNodeRid }, [],
+    ownerFence({ ownerId: target.targetOwnerId, ownerLeaseGeneration: target.ownerLeaseGeneration,
+      nodeRid: target.targetNodeRid, nodeGeneration: target.targetNodeGeneration,
+      authorityOwnerGeneration: target.authorityOwnerGeneration }));
+  let relayTerminal;
+  let relayObserved;
+  const client = createActorClient({
+    locationResolver: () => createResolver(() => route),
+    handoffCapture(_mesh, actorId, parts, request, actor, deadline, onAdmitted) {
+      const relay = coordinator.capture('remote', actorId, parts, request, undefined, actor,
+        deadline, undefined, undefined, onAdmitted);
+      relayObserved = relay.then(value => { relayTerminal = { value }; },
+        error => { relayTerminal = { error }; });
+      return relay;
+    }
+  });
+  const clientTimeoutMs = 20;
+  let terminal;
+  const pending = client.requestToActor('actor-1', new ActorAsk('ping')).timeout(clientTimeoutMs).submit();
+  const observed = pending.then(value => { terminal = { value }; }, error => { terminal = { error }; });
+  try {
+    await admitted;
+    t.mock.timers.tick(clientTimeoutMs - 1);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(terminal, undefined);
+    t.mock.timers.tick(1);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(terminal?.error?.kind, framework.ZLinkFrameworkErrorKind.DeadlineExceeded);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(relayTerminal, undefined, 'the client timeout does not expire the relay hop');
+    completeRelay({ ok: true, response: 'late' });
+    await relayObserved;
+    assert.deepEqual(relayTerminal, { value: 'late' });
+    assert.equal(terminal.error.kind, framework.ZLinkFrameworkErrorKind.DeadlineExceeded);
+  } finally {
+    completeRelay?.({ ok: true, response: 'late' });
+    await relayObserved;
+    await observed;
+  }
+});
+
 test('actor request deadline ends the caller wait before a slow route returns', async t => {
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 0 });
   t.mock.method(performance, 'now', () => Date.now());

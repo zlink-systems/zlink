@@ -103,7 +103,7 @@ test('unused rotation reservations return capacity to FIFO waiters and preserve 
 
 // Spec 08 I1 and Application job queue §3: the rotation budget is a count.
 // A rotation that receives one record prepares one permit, not the budget.
-test('a single-record receive rotation touches one permit storage', () => {
+test('a single-record receive rotation touches one permit storage', (t) => {
   const {
     ApplicationJobQueuePermit
   } = require('../../packages/framework/dist/runtime/host/application-job-queue');
@@ -130,6 +130,7 @@ test('a single-record receive rotation touches one permit storage', () => {
       rotation.releaseUnused();
     }
     const perRecord = transitions / rounds;
+    t.diagnostic(`permit storage transitions per record: ${perRecord}`);
     // reserve storage, take the release state, return the storage.
     assert.ok(perRecord <= 3, `permit storage transitions per record: ${perRecord} > 3`);
     assert.equal(queue.snapshot().permitsInUse, 0n);
