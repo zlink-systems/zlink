@@ -35,7 +35,11 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
     private IRelocationReplyRelayTarget? _relocationReplyRelayTarget;
     private ZLinkCanonicalRelocationTargetOwner? _canonicalRelocationTargetOwner;
     private ZLinkSessionRelocationBarrierOwner? _sessionRelocationBarrierOwner;
-    private readonly ZLinkServiceWireCodec.RequestSourceFence? _localRequestSource;
+    private readonly ZLinkOwnerLeaseTracker? _leaseTracker;
+
+    // Installed by StartOwnerBoundAsync once the owner lease is held. Its
+    // presence is the one fact that the owner-bound startup step completed.
+    private System.Runtime.CompilerServices.StrongBox<ZLinkServiceWireCodec.RequestSourceFence>? _localRequestSource;
     private IZLinkBackendSpot? _entrySpot;
     private ZLinkEntrySpotDispatchPump? _entryDispatchPump;
     private ZLinkSpotOutboundTransport? _entryOutbound;
@@ -53,7 +57,8 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
         string spotChannelName,
         ZLinkLocationLifecycle? locationLifecycle,
         ZLinkMeshNodeStartupState? startupState = null,
-        string? entrySpotId = null
+        string? entrySpotId = null,
+        ZLinkOwnerLeaseTracker? leaseTracker = null
     )
     {
         _services = services;
@@ -105,27 +110,16 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
         }
         if (locationLifecycle is not null)
         {
-            if (node is not IZLinkBackendAuthorityObserver authorityObserver)
+            if (node is not IZLinkBackendAuthorityObserver)
                 throw new InvalidOperationException(
                     "The MeshNode backend does not support authority fencing."
                 );
-            authorityObserver.SetLocalOwnerLeaseGeneration(
-                checked((ulong)locationLifecycle.OwnerToken.LeaseGeneration)
-            );
-            if (node is not IZLinkBackendRequestSourceFenceObserver sourceObserver)
+            if (node is not IZLinkBackendRequestSourceFenceObserver)
                 throw new InvalidOperationException(
                     "The MeshNode backend does not preserve request-source fences."
                 );
-            var localRequestSource = new ZLinkServiceWireCodec.RequestSourceFence(
-                locationLifecycle.OwnerToken.OwnerId,
-                checked((ulong)locationLifecycle.OwnerToken.LeaseGeneration),
-                node.RoutingId,
-                node.MeshStatus().LifecycleGeneration
-            );
-            sourceObserver.SetLocalRequestSourceFence(localRequestSource);
-            sourceObserver.ObserveRequestSourceFence(localRequestSource);
-            _localRequestSource = localRequestSource;
         }
+        _leaseTracker = leaseTracker;
         StartupState = startupState;
         EntrySpotId = entrySpotId ?? startupState?.EntrySpotId ?? registration.EntrySpotId;
         _taskRunner = new ZLinkRuntimeTaskRunner(
@@ -253,7 +247,7 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
     }
 
     internal ZLinkServiceWireCodec.RequestSourceFence LocalRequestSource =>
-        _localRequestSource
+        Volatile.Read(ref _localRequestSource)?.Value
         ?? throw new InvalidOperationException(
             "The MeshNode does not have a Location Store owner fence."
         );
@@ -941,6 +935,73 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
             return;
         _stopSource.Dispose();
         _stopSourceDisposed = true;
+    }
+
+    /// <summary>
+    /// Runs the MeshNode startup steps that act for this host's owner lease:
+    /// the owner fence on the backend, the descriptor claim, the Entry Spot
+    /// location and recovery, manual peer resolution and ingress activation.
+    /// Location runtime §5: a host that finished startup without a lease runs
+    /// these steps only after its heartbeat claims the lease. Publishing
+    /// <see cref="LocalRequestSource"/> marks the step complete; a failed
+    /// attempt is retried by the next one, and a claimed descriptor is not
+    /// claimed again.
+    /// </summary>
+    internal async ValueTask StartOwnerBoundAsync()
+    {
+        if (Volatile.Read(ref _localRequestSource) is not null)
+            return;
+        var lifecycle = _locationLifecycle;
+        ZLinkServiceWireCodec.RequestSourceFence? localRequestSource = null;
+        if (lifecycle is not null)
+        {
+            var owner = lifecycle.OwnerToken;
+            ((IZLinkBackendAuthorityObserver)Node).SetLocalOwnerLeaseGeneration(
+                checked((ulong)owner.LeaseGeneration)
+            );
+            var fence = new ZLinkServiceWireCodec.RequestSourceFence(
+                owner.OwnerId,
+                checked((ulong)owner.LeaseGeneration),
+                Node.RoutingId,
+                Node.MeshStatus().LifecycleGeneration
+            );
+            var sourceObserver = (IZLinkBackendRequestSourceFenceObserver)Node;
+            sourceObserver.SetLocalRequestSourceFence(fence);
+            sourceObserver.ObserveRequestSourceFence(fence);
+            localRequestSource = fence;
+
+            if (StartupState is { StoreGeneration: 0 } unclaimed)
+            {
+                var claim = await lifecycle
+                    .WriteMeshNodeDescriptorAsync(
+                        unclaimed.Descriptor,
+                        ZLinkLocationWriteIntent.NewClaim
+                    )
+                    .ConfigureAwait(false);
+                if (claim.Status != ZLinkLocationWriteStatus.Stored)
+                    throw new ZLinkConfigurationException(
+                        $"MeshNode '{Registration.SpotNodeName}' could not "
+                            + $"claim its descriptor: {claim.Status}."
+                    );
+                UpdateStartupState(unclaimed with { StoreGeneration = claim.Generation });
+            }
+        }
+
+        await InitializeEntrySpotAsync().ConfigureAwait(false);
+        await ZLinkSpotNodeInitializer
+            .ResolveManualPeerRoutingIdsAsync(
+                Registration,
+                Registration.SpotMeshChannelName ?? Registration.SpotNodeName,
+                Node.RoutingId,
+                _frameworkRegistration,
+                lifecycle,
+                _leaseTracker
+            )
+            .ConfigureAwait(false);
+        ZLinkSpotNodeInitializer.ConnectManualPeers(Registration, this);
+        if (localRequestSource is { } installed)
+            Volatile.Write(ref _localRequestSource, new(installed));
+        Node.ActivateIngress();
     }
 
     public async ValueTask InitializeEntrySpotAsync()

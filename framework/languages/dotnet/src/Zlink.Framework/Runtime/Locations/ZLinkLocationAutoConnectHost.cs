@@ -98,6 +98,11 @@ internal sealed class ZLinkLocationAutoConnectHost
                 return;
             }
             Interlocked.Exchange(ref _deferredStartState, null);
+            // Location runtime §5: MeshNodes of a host that started without
+            // an owner lease run their owner-bound startup step here, once the
+            // lease is held, before their descriptors are published.
+            foreach (var node in state.SpotNodes.Values)
+                await node.StartOwnerBoundAsync().ConfigureAwait(false);
             var registration = state.Registration;
             if (
                 registration.Channels.Values.Any(static channel =>
