@@ -284,7 +284,9 @@ export class ZLinkFrameworkRuntimeHost
   private spotManager?: DefaultZLinkSpotManager;
   private userSpotCoordinator?: ZLinkUserSpotCreationCoordinator;
   private ownerLeaseRecoveryRuntime?: ZLinkLocationRuntime;
-  private ownerLeaseRecoveryHandler?: () => void;
+  private ownerLeaseRecoveryHandler?: Parameters<
+    ZLinkLocationRuntime['addOwnerLeaseRenewedHandler']
+  >[0];
   private registerUserSpotHandlers?: (runtime: ZLinkSpotNodeRuntimeManager) => void;
   private readonly destroyedActorRefs = new Map<string, ActorRef>();
   private readonly runtimeEventPublisher: ZLinkRuntimeEventPublisher;
@@ -1463,9 +1465,6 @@ export class ZLinkFrameworkRuntimeHost
         () => this.shutdownDeadline!.signal
       );
       startedLocationRuntime = locationRuntime;
-      if (locationRuntime !== undefined) {
-        this.installOwnerLeaseRecoveryPublication(locationRuntime, spotNodeRuntime, channelRuntime);
-      }
       const locationStore = this.locationOwner.currentStores?.locationStore;
       if (locationStore !== undefined && locationRuntime?.ownerLeaseUsable !== false) {
         const published = await this.publishOrStayPreparing(
@@ -1513,6 +1512,9 @@ export class ZLinkFrameworkRuntimeHost
         await this.publishOrStayPreparing(locationRuntime, (publishSignal) =>
           this.enterServing(spotNodeRuntime!, publishSignal)
         );
+      }
+      if (locationRuntime !== undefined) {
+        this.installOwnerLeaseRecoveryPublication(locationRuntime, spotNodeRuntime, channelRuntime);
       }
       this.lifecycleSink?.push('framework:started');
     } catch (error) {
@@ -1645,14 +1647,22 @@ export class ZLinkFrameworkRuntimeHost
     spotNodeRuntime: ZLinkSpotNodeRuntimeManager,
     channelRuntime: ZLinkChannelRuntimeManager
   ): void {
-    const handler = () => {
+    let recoveryOperation: Promise<void> | undefined;
+    const handler: Parameters<ZLinkLocationRuntime['addOwnerLeaseRenewedHandler']>[0] = (
+      _renewal,
+      wasOwnerLeaseUsable
+    ) => {
       if (!this.ownerAdmissionOpen()) return;
-      void this.resumeOwnerLeaseOwnedWork(runtime, spotNodeRuntime, channelRuntime).catch(
-        (error) => {
+      if (wasOwnerLeaseUsable && this.runtimeState !== ZLinkFrameworkRuntimeState.Preparing) return;
+      if (recoveryOperation !== undefined) return;
+      recoveryOperation = this.resumeOwnerLeaseOwnedWork(runtime, spotNodeRuntime, channelRuntime)
+        .catch((error) => {
           runtime.closeOwnerLeaseAdmission(error);
           this.runtimeOrPreStartErrorSink.reportRuntimeTaskException('owner lease recovery', error);
-        }
-      );
+        })
+        .finally(() => {
+          recoveryOperation = undefined;
+        });
     };
     this.ownerLeaseRecoveryRuntime = runtime;
     this.ownerLeaseRecoveryHandler = handler;
@@ -1665,23 +1675,24 @@ export class ZLinkFrameworkRuntimeHost
     channelRuntime: ZLinkChannelRuntimeManager
   ): Promise<void> {
     if (!this.ownerAdmissionOpen()) return;
-    const signal = this.executionState?.abortController.signal;
-    await spotNodeRuntime.publishMeshNodeState(ZLinkFrameworkRuntimeState.Preparing, signal);
-    const store = this.locationOwner.currentStores?.locationStore;
-    if (store !== undefined && this.executionState !== undefined) {
-      await this.startStatefulAuthority(store, spotNodeRuntime, signal);
-    }
-    if (runtime.ownerLeaseUsable === false) return;
-    if (this.runtimeState !== ZLinkFrameworkRuntimeState.Preparing) {
-      await spotNodeRuntime.publishMeshNodeState(this.runtimeState, signal);
-    }
-    await spotNodeRuntime.startLocationAutoConnect(signal);
-    await channelRuntime.startLocationAutoConnect(signal);
-    await channelRuntime.reclaimLocationOwnerRows(signal);
-    await this.locationOwner.currentLifecycle?.reclaimOwnerRows();
-    if (this.runtimeState === ZLinkFrameworkRuntimeState.Preparing) {
-      await this.enterServing(spotNodeRuntime, signal);
-    }
+    await this.publishOrStayPreparing(runtime, async (signal) => {
+      await spotNodeRuntime.publishMeshNodeState(ZLinkFrameworkRuntimeState.Preparing, signal);
+      const store = this.locationOwner.currentStores?.locationStore;
+      if (store !== undefined && this.executionState !== undefined) {
+        await this.startStatefulAuthority(store, spotNodeRuntime, signal);
+      }
+      if (runtime.ownerLeaseUsable === false) return;
+      if (this.runtimeState !== ZLinkFrameworkRuntimeState.Preparing) {
+        await spotNodeRuntime.publishMeshNodeState(this.runtimeState, signal);
+      }
+      await spotNodeRuntime.startLocationAutoConnect(signal);
+      await channelRuntime.startLocationAutoConnect(signal);
+      await channelRuntime.reclaimLocationOwnerRows(signal);
+      await this.locationOwner.currentLifecycle?.reclaimOwnerRows();
+      if (this.runtimeState === ZLinkFrameworkRuntimeState.Preparing) {
+        await this.enterServing(spotNodeRuntime, signal);
+      }
+    });
   }
 
   // The one transition from Preparing to Serving: the host publishes its
@@ -1697,9 +1708,8 @@ export class ZLinkFrameworkRuntimeHost
 
   // Location runtime §5: a startup publication the Store does not confirm (a
   // provider error, or no answer within the renew timeout) leaves the host in
-  // Preparing. Closing owner admission makes the next renew run the same owner
-  // lease recovery as for a host without a lease; only a settled rejection
-  // fails startup.
+  // Preparing. The owner lease renewal handler retries publication while the
+  // host stays Preparing; only a settled rejection fails startup.
   private async publishOrStayPreparing(
     runtime: ZLinkLocationRuntime | undefined,
     publish: (signal: AbortSignal | undefined) => Promise<void>
@@ -1711,7 +1721,6 @@ export class ZLinkFrameworkRuntimeHost
     } catch (error) {
       if (runtime === undefined || !(error instanceof ZLinkDescriptorPublicationUnconfirmedError))
         throw error;
-      runtime.closeOwnerLeaseAdmission(error);
       this.runtimeOrPreStartErrorSink.reportRuntimeTaskException(
         'startup descriptor publication',
         error
