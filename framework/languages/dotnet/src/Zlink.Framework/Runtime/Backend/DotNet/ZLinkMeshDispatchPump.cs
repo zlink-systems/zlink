@@ -541,9 +541,9 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
                 or MeshRecordKind.SpotRequest
             ? new Func<IReadOnlyList<Message>, SubmitResult>(parts => replyRecord.Reply(parts))
             : null;
-        _requestSources.TryGetValue(
-            (record.SourceNodeRid, record.SourceBindingGeneration),
-            out var requestSource
+        var requestSource = ResolveRequestSourceFence(
+            record.SourceNodeRid,
+            record.SourceBindingGeneration
         );
         var parts = RetainParts(batch, index);
         var payloadOwner = batch.TakePayloadOwner(index);
@@ -560,7 +560,7 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
             ownerLeaseGeneration: record.OwnerLeaseGeneration,
             messageFollowHopCount: record.MessageFollowHopCount,
             sourceNodeGeneration: record.SourceBindingGeneration,
-            requestSource: requestSource == default ? null : requestSource,
+            requestSource: requestSource,
             deadlineUnixMs: ZLinkMeshRecordAdapters.NormalizeDeadline(record.DeadlineUnixMs),
             payloadOwner: payloadOwner,
             instanceIntent: record.InstanceIntent
@@ -743,9 +743,9 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
         var state = ResolveSpotState(
             string.IsNullOrEmpty(ownerSpotId) ? record.SourceSpotId : ownerSpotId
         );
-        _requestSources.TryGetValue(
-            (record.SourceNodeRid, record.SourceBindingGeneration),
-            out var requestSource
+        var requestSource = ResolveRequestSourceFence(
+            record.SourceNodeRid,
+            record.SourceBindingGeneration
         );
         var directReply = requestId == 0 ? null : record.CaptureReplyRoute();
         var parts = ZLinkMeshRecordAdapters.ToActorParts(
@@ -754,7 +754,7 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
             record,
             ownerActor,
             requestId,
-            requestSource == default ? null : requestSource,
+            requestSource,
             directReply
         );
         if (parts.Count == 0)

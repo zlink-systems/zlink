@@ -43,6 +43,9 @@ using tcp = asio::ip::tcp;
 namespace
 {
 constexpr auto active_request_poll_interval = std::chrono::milliseconds (5);
+constexpr auto worker_idle_timeout = std::chrono::seconds (30);
+constexpr auto accept_error_retry_interval = std::chrono::milliseconds (100);
+constexpr std::size_t minimum_connection_worker_count = 2;
 
 result_t<void> listener_failure (std::exception_ptr failure)
 {
@@ -99,11 +102,12 @@ class http_host_service_t::listener_t
                                                   handler_worker_count == 0
                                                     ? std::thread::hardware_concurrency ()
                                                     : handler_worker_count),
-                           std::chrono::seconds (30),
+                           worker_idle_timeout,
                            "zlink-http-hdl"),
         _connection_workers (0,
-                             std::max<std::size_t> (2, std::thread::hardware_concurrency ()),
-                             std::chrono::seconds (30),
+                             std::max<std::size_t> (minimum_connection_worker_count,
+                                                    std::thread::hardware_concurrency ()),
+                             worker_idle_timeout,
                              "zlink-http-conn"),
         _acceptor (_io),
         _accept_retry_timer (_io)
@@ -196,7 +200,10 @@ class http_host_service_t::listener_t
         for (const auto &candidate : endpoints) {
             _acceptor.open (candidate.endpoint ().protocol (), error);
             if (!error) {
+#ifndef _WIN32
+                // Windows SO_REUSEADDR permits binding another listener's port.
                 _acceptor.set_option (tcp::acceptor::reuse_address (true), error);
+#endif
             }
             if (!error) {
                 _acceptor.bind (candidate.endpoint (), error);
@@ -259,7 +266,7 @@ class http_host_service_t::listener_t
             if (!_stop->load (std::memory_order_acquire)
                 && error != asio::error::operation_aborted) {
                 if (error) {
-                    _accept_retry_timer.expires_after (std::chrono::milliseconds (100));
+                    _accept_retry_timer.expires_after (accept_error_retry_interval);
                     _accept_retry_timer.async_wait ([this] (beast::error_code retry_error) {
                         if (!retry_error) {
                             start_accept ();

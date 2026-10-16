@@ -13547,6 +13547,10 @@ public sealed partial class EntrySpotActorDispatchTests
             IZLinkBackendLocalActorAuthorityReader
     {
         private readonly CapturingSpot _entrySpot = new();
+        private readonly ConcurrentDictionary<
+            (RoutingId, ulong),
+            ZLinkServiceWireCodec.RequestSourceFence
+        > _requestSources = new();
         private long _nextOperationId;
 
         private static readonly Task NoRouteChange = new TaskCompletionSource().Task;
@@ -13666,7 +13670,15 @@ public sealed partial class EntrySpotActorDispatchTests
 
         public void SetLocalRequestSourceFence(ZLinkServiceWireCodec.RequestSourceFence source) { }
 
-        public void ObserveRequestSourceFence(ZLinkServiceWireCodec.RequestSourceFence source) { }
+        public void ObserveRequestSourceFence(ZLinkServiceWireCodec.RequestSourceFence source) =>
+            _requestSources[(source.NodeRid, source.NodeGeneration)] = source;
+
+        public ZLinkServiceWireCodec.RequestSourceFence? ResolveRequestSourceFence(
+            RoutingId sourceNodeRid,
+            ulong sourceNodeGeneration
+        ) => _requestSources.TryGetValue((sourceNodeRid, sourceNodeGeneration), out var source)
+            ? source
+            : null;
 
         public void ObserveActorAuthority(
             ZLinkBackendActorRef actor,
