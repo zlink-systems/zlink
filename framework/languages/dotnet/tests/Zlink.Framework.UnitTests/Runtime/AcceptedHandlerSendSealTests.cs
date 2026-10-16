@@ -441,14 +441,25 @@ public sealed partial class EntrySpotActorDispatchTests
     // bound-session frame to the still-current owner. Host relocation §15
     // (`Relocating`): "Spot·Actor direct: Unit seal 전까지 payload와 timer를
     // 계속 처리한다" - the frame must reach the Actor, not be dropped. The
-    // shutdown seal (`Draining`) still refuses the same frame.
+    // shutdown seal (`Draining`) still refuses the same frame. A blocked
+    // relocation rolls back (§13) while that frame's turn is still running:
+    // rollback must not wait for or fail on existing-owner traffic.
+    public enum UnsealedRelaySeal
+    {
+        RelocationFence,
+        Shutdown,
+        RelocationRollback,
+    }
+
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
+    [InlineData(UnsealedRelaySeal.RelocationFence)]
+    [InlineData(UnsealedRelaySeal.Shutdown)]
+    [InlineData(UnsealedRelaySeal.RelocationRollback)]
     public async Task Relayed_bound_session_frame_reaches_unsealed_actor_only_during_relocation_fence(
-        bool shutdown
+        UnsealedRelaySeal seal
     )
     {
+        var shutdown = seal == UnsealedRelaySeal.Shutdown;
         var node = new CapturingSpotNode();
         var probe = new AcceptedSendProbe();
         var (runtime, actorRef) = await CreateStartedRuntimeAsync(node, acceptedSendProbe: probe);
@@ -490,19 +501,21 @@ public sealed partial class EntrySpotActorDispatchTests
         );
         activation.AttachNativeDispatch();
         Task? relayed = null;
+        ZLinkRelocationAdmissionFence? fence = null;
         try
         {
             if (shutdown)
                 runtime.SealApplicationAdmissionsForDrain(CancellationToken.None);
             else
-                Assert.NotNull(
-                    await runtime.TryBeginRelocationAdmissionFenceAsync(
-                        runtime.SnapshotOperationAdmissions(),
-                        runtime.DrainAdmission.SnapshotActorAdmissions(),
-                        new ZLinkActorHandoffDrainSnapshot(0, true),
-                        CancellationToken.None
-                    )
+            {
+                fence = await runtime.TryBeginRelocationAdmissionFenceAsync(
+                    runtime.SnapshotOperationAdmissions(),
+                    runtime.DrainAdmission.SnapshotActorAdmissions(),
+                    new ZLinkActorHandoffDrainSnapshot(0, true),
+                    CancellationToken.None
                 );
+                Assert.NotNull(fence);
+            }
             Assert.True(runtime.DrainAdmission.IsSealed);
             Assert.False(state.Handoff.BlocksLocalDispatch);
             var metadata = ZLinkActorBoundSessionHandoffMetadata.Encode(
@@ -539,12 +552,87 @@ public sealed partial class EntrySpotActorDispatchTests
                     await relayed;
                 Assert.True(probe.Started.Task.IsCompletedSuccessfully);
             }
+            if (seal == UnsealedRelaySeal.RelocationRollback)
+            {
+                // The handler is parked on probe.Release, so its operation is
+                // still active while the drain executor acquires rollback.
+                Assert.False(relayed.IsCompleted);
+                using var rollback = runtime.TryAcquireRelocationRollbackLease(fence!.Value);
+                Assert.NotNull(rollback);
+                Assert.True(runtime.TryReopenRetireAdmissionsAfterRollback(fence.Value, rollback));
+                Assert.False(runtime.DrainAdmission.IsSealed);
+                probe.Release.TrySetResult();
+                await relayed.WaitAsync(AcceptedSendWait);
+            }
         }
         finally
         {
             probe.Release.TrySetResult();
             if (relayed is not null)
                 await Task.WhenAny(relayed);
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    // #1877: rollback still races with owner-opening inbound (relocation target
+    // staging). Such an inbound admitted before the fence keeps rollback
+    // refused until it leaves, exactly as before.
+    [Fact]
+    public async Task Relocation_rollback_is_refused_while_owner_opening_inbound_is_in_flight()
+    {
+        var (runtime, _) = await CreateStartedRuntimeAsync(new CapturingSpotNode());
+        var admitted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task? staging = null;
+        try
+        {
+            staging = Task.Run(async () =>
+            {
+                var admission = (
+                    await runtime.TryAdmitInboundOperationAsync(
+                        countAsRequest: false,
+                        opensOwner: true
+                    )
+                ).EnterInbound();
+                Assert.True(admission.Accepted);
+                using (admission.Lease)
+                {
+                    admitted.TrySetResult();
+                    await release.Task;
+                }
+            });
+            await admitted.Task.WaitAsync(AcceptedSendWait);
+            var fence = await runtime.TryBeginRelocationAdmissionFenceAsync(
+                runtime.SnapshotOperationAdmissions(),
+                runtime.DrainAdmission.SnapshotActorAdmissions(),
+                new ZLinkActorHandoffDrainSnapshot(0, true),
+                CancellationToken.None
+            );
+            Assert.NotNull(fence);
+            Assert.False(
+                (
+                    await runtime.TryAdmitInboundOperationAsync(
+                        countAsRequest: false,
+                        opensOwner: true
+                    )
+                )
+                    .EnterInbound()
+                    .Accepted
+            );
+
+            Assert.Null(runtime.TryAcquireRelocationRollbackLease(fence.Value));
+
+            release.TrySetResult();
+            await staging.WaitAsync(AcceptedSendWait);
+            using var rollback = runtime.TryAcquireRelocationRollbackLease(fence.Value);
+            Assert.NotNull(rollback);
+            Assert.True(runtime.TryReopenRetireAdmissionsAfterRollback(fence.Value, rollback));
+        }
+        finally
+        {
+            release.TrySetResult();
+            if (staging is not null)
+                await Task.WhenAny(staging);
             await runtime.StopAsync(CancellationToken.None);
         }
     }

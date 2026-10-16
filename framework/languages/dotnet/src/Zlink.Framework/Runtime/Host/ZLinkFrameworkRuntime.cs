@@ -103,6 +103,11 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
     private int _activeOperations;
     private long _operationEpoch;
     private int _activeRequests;
+
+    // Inbound that makes this host a new owner (relocation target staging).
+    // Relocation rollback races only with these, never with existing-owner
+    // message and timer traffic that host relocation §15 keeps running.
+    private int _activeOwnerOpenings;
     private bool _acceptingOperations;
     private ZLinkDrainOwner _admissionOwner;
     private long _nextRelocationFenceGeneration;
@@ -643,7 +648,7 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
                         var acquired =
                             _admissionOwner == ZLinkDrainOwner.Relocation
                             && _relocationFenceGeneration == expectedFence.Generation
-                            && _activeOperations == 0
+                            && _activeOwnerOpenings == 0
                             && AwaitStateLane(_actorHandoffAdmissions.SnapshotDrainAsync()).IsSafe;
                         if (acquired)
                             _admissionOwner = ZLinkDrainOwner.RelocationRollback;
@@ -942,7 +947,8 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
         ZLinkFrameworkRuntime? runtime,
         ZLinkFrameworkComponentState? state,
         bool countsRequest,
-        bool refused = false
+        bool refused = false,
+        bool countsOwnerOpening = false
     )
     {
         internal static readonly ZLinkRuntimeOperationAdmission Refused = new(
@@ -962,7 +968,7 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
                 );
             return runtime is null ? ZLinkRuntimeOperationLease.None
                 : state is null ? new ZLinkRuntimeOperationLease(runtime, countsRequest)
-                : runtime.AttachOperation(state, countsRequest);
+                : runtime.AttachOperation(state, countsRequest, countsOwnerOpening);
         }
 
         internal ZLinkInboundOperationAdmission EnterInbound() =>
@@ -1113,11 +1119,11 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
                         Neutral: true
                     );
                 }
+                var admitted = AdmitOperationOnLane(countAsRequest, sealDecided: true);
+                if (opensOwner)
+                    _activeOwnerOpenings++;
                 return (
-                    Admitted: (ZLinkFrameworkComponentState?)AdmitOperationOnLane(
-                        countAsRequest,
-                        sealDecided: true
-                    ),
+                    Admitted: (ZLinkFrameworkComponentState?)admitted,
                     Accepted: true,
                     Neutral: false
                 );
@@ -1128,7 +1134,12 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
             return ZLinkRuntimeOperationAdmission.Refused;
         if (admission.Neutral)
             return default;
-        return new ZLinkRuntimeOperationAdmission(this, admission.Admitted, countAsRequest);
+        return new ZLinkRuntimeOperationAdmission(
+            this,
+            admission.Admitted,
+            countAsRequest,
+            countsOwnerOpening: opensOwner
+        );
     }
 
     internal async ValueTask ExecuteOperationAsync(Func<ValueTask> operation)
@@ -1653,11 +1664,18 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
     // completing before the lease is attached.
     private ZLinkRuntimeOperationLease AttachOperation(
         ZLinkFrameworkComponentState state,
-        bool countAsRequest
+        bool countAsRequest,
+        bool countsOwnerOpening = false
     )
     {
         var previous = AmbientOperation.Value;
-        var lease = new ZLinkRuntimeOperationLease(this, state, previous, countAsRequest);
+        var lease = new ZLinkRuntimeOperationLease(
+            this,
+            state,
+            previous,
+            countAsRequest,
+            countsOwnerOpening
+        );
         AmbientOperation.Value = lease;
         return lease;
     }
@@ -1678,11 +1696,25 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
     // Leaving an operation releases a count; no caller depends on its completion.
     // The release joins the lane FIFO before Dispose returns, so every later
     // admission, snapshot and drain turn observes it.
-    private void ExitOperation(bool countsOperation, bool countsRequest) =>
-        _stateLane.TryPost(() => ExitOperationOnLane(countsOperation, countsRequest));
+    private void ExitOperation(bool countsOperation, bool countsRequest, bool countsOwnerOpening) =>
+        _stateLane.TryPost(() =>
+            ExitOperationOnLane(countsOperation, countsRequest, countsOwnerOpening)
+        );
 
-    private void ExitOperationOnLane(bool countsOperation, bool countsRequest)
+    private void ExitOperationOnLane(
+        bool countsOperation,
+        bool countsRequest,
+        bool countsOwnerOpening
+    )
     {
+        if (countsOwnerOpening && --_activeOwnerOpenings < 0)
+        {
+            ErrorSink.ReportRuntimeTaskException(
+                "runtime-operation-lease",
+                new InvalidOperationException("Runtime owner-opening lease count became negative.")
+            );
+            return;
+        }
         if (countsRequest && --_activeRequests < 0)
         {
             ErrorSink.ReportRuntimeTaskException(
@@ -1720,6 +1752,7 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
         private readonly ZLinkRuntimeOperationLease? _previous;
         private readonly bool _countsOperation;
         private readonly bool _countsRequest;
+        private readonly bool _countsOwnerOpening;
         private int _active;
         private int _disposed;
 
@@ -1743,7 +1776,8 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
             ZLinkFrameworkRuntime runtime,
             ZLinkFrameworkComponentState state,
             ZLinkRuntimeOperationLease? previous,
-            bool countsRequest
+            bool countsRequest,
+            bool countsOwnerOpening = false
         )
         {
             _runtime = runtime;
@@ -1751,6 +1785,7 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
             _previous = previous;
             _countsOperation = true;
             _countsRequest = countsRequest;
+            _countsOwnerOpening = countsOwnerOpening;
             _active = 1;
         }
 
@@ -1770,7 +1805,7 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
             Deactivate();
             if (ReferenceEquals(AmbientOperation.Value, this))
                 AmbientOperation.Value = _previous;
-            _runtime?.ExitOperation(_countsOperation, _countsRequest);
+            _runtime?.ExitOperation(_countsOperation, _countsRequest, _countsOwnerOpening);
         }
     }
 }
