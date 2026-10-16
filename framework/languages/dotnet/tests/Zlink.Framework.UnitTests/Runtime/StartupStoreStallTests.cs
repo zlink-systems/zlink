@@ -19,6 +19,13 @@ namespace Zlink.Framework.UnitTests.Runtime;
 /// </summary>
 public sealed class StartupStoreStallTests
 {
+    public enum DescriptorFault
+    {
+        None,
+        Error,
+        NoAnswer,
+    }
+
     private const string MeshName = "stall-mesh";
 
     // Safety bound for a hung await only; no assertion depends on elapsed time.
@@ -173,9 +180,87 @@ public sealed class StartupStoreStallTests
         );
     }
 
+    // Location runtime §5: the lease is held but the Store does not confirm the
+    // descriptor write (provider error, or no answer within the renew timeout).
+    // §10 reconfirmation also fails, so startup ends in Preparing and the next
+    // renew publishes the descriptor.
+    [Theory]
+    [InlineData(DescriptorFault.Error)]
+    [InlineData(DescriptorFault.NoAnswer)]
+    public async Task MeshNodeHost_DescriptorUnconfirmedAfterLease_StartsPreparingThenServes(
+        DescriptorFault fault
+    )
+    {
+        var store = new GatedLocationStore(new ZLinkInMemoryProviderLocationStore())
+        {
+            DescriptorFault = fault,
+        };
+        await using var provider = BuildProvider(store);
+        var hosted = HostedService(provider);
+        var locations = provider.GetRequiredService<ZLinkLocationRuntime>();
+        var host = provider.GetRequiredService<IZLinkFrameworkRuntime>();
+
+        try
+        {
+            await hosted.StartAsync(CancellationToken.None).WaitAsync(Hang);
+            Assert.True(locations.IsOwnerAdmissionOpen);
+            Assert.True(store.FaultedDescriptorWrites > 0);
+            Assert.Equal(ZLinkFrameworkRuntimeState.Preparing, host.Status.State);
+            var repository = new ZLinkProviderLocationRepository(store.Inner);
+            Assert.Empty((await repository.ListMeshNodesAsync(MeshName, default)).Items);
+
+            store.DescriptorFault = DescriptorFault.None;
+
+            using var hang = new CancellationTokenSource(Hang);
+            await foreach (var observed in host.ObserveAsync(hang.Token))
+                if (observed.Status.State == ZLinkFrameworkRuntimeState.Serving)
+                    break;
+            var descriptor = Assert.Single(
+                (await repository.ListMeshNodesAsync(MeshName, default)).Items
+            );
+            Assert.Equal(ZLinkFrameworkRuntimeState.Serving, descriptor.State);
+            Assert.Equal(locations.OwnerId, descriptor.OwnerId);
+        }
+        finally
+        {
+            store.DescriptorFault = DescriptorFault.None;
+            await hosted.StopAsync(CancellationToken.None);
+        }
+    }
+
+    // A definitive rejection by another live owner of the same RID is a
+    // startup error, not an unconfirmed publication.
+    [Fact]
+    public async Task MeshNodeHost_DescriptorClaimedByOtherOwner_FailsStartup()
+    {
+        var shared = new ZLinkInMemoryProviderLocationStore();
+        await using var first = BuildProvider(
+            new GatedLocationStore(shared),
+            fixedRid: "stall-fixed"
+        );
+        var firstHosted = HostedService(first);
+        await firstHosted.StartAsync(CancellationToken.None).WaitAsync(Hang);
+        try
+        {
+            await using var second = BuildProvider(
+                new GatedLocationStore(shared),
+                fixedRid: "stall-fixed"
+            );
+            var failure = await Assert.ThrowsAsync<ZLinkConfigurationException>(() =>
+                HostedService(second).StartAsync(CancellationToken.None).WaitAsync(Hang)
+            );
+            Assert.Contains("RejectedConflict", failure.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            await firstHosted.StopAsync(CancellationToken.None);
+        }
+    }
+
     private static ServiceProvider BuildProvider(
         GatedLocationStore store,
-        bool instanceSpots = false
+        bool instanceSpots = false,
+        string? fixedRid = null
     )
     {
         var services = new ServiceCollection();
@@ -190,12 +275,11 @@ public sealed class StartupStoreStallTests
             locations.OwnerLeaseRenewTimeout = TimeSpan.FromSeconds(1);
             locations.OwnerLeaseTtl = TimeSpan.FromSeconds(30);
             locations.OwnerLeaseFencingMargin = TimeSpan.FromSeconds(5);
-            var server = options
-                .AddRouteMesh(MeshName)
-                .Listen("tcp://127.0.0.1:0")
-                .SetRoutingIdPrefix("stall")
-                .Objects()
-                .Server();
+            var mesh = options.AddRouteMesh(MeshName).Listen("tcp://127.0.0.1:0");
+            mesh = fixedRid is null
+                ? mesh.SetRoutingIdPrefix("stall")
+                : mesh.SetRoutingId(RoutingId.From(fixedRid));
+            var server = mesh.Objects().Server();
             if (instanceSpots)
                 server.AddInstanceSpotFactory<StallInstanceSpot>(
                     "stall.instance",
@@ -220,6 +304,8 @@ public sealed class StartupStoreStallTests
         private int _heldCalls;
         private int _ownerLeaseReads;
         private bool _unavailable;
+        private int _descriptorFault;
+        private int _faultedDescriptorWrites;
 
         internal IZLinkLocationStore Inner => inner;
 
@@ -230,6 +316,14 @@ public sealed class StartupStoreStallTests
         internal bool RejectDescriptorRenew { get; init; }
 
         internal Channel<int> CompletedWrites { get; } = Channel.CreateUnbounded<int>();
+
+        internal DescriptorFault DescriptorFault
+        {
+            get => (DescriptorFault)Volatile.Read(ref _descriptorFault);
+            set => Volatile.Write(ref _descriptorFault, (int)value);
+        }
+
+        internal int FaultedDescriptorWrites => Volatile.Read(ref _faultedDescriptorWrites);
 
         internal bool IsHolding => !Volatile.Read(ref _gate).Task.IsCompleted;
 
@@ -274,6 +368,20 @@ public sealed class StartupStoreStallTests
         )
         {
             await PassGateAsync();
+            if (
+                DescriptorFault != DescriptorFault.None
+                && request.Mutations.Any(static mutation =>
+                    mutation is ZLinkStoreMutation.Put put
+                    && put.Key.Value.Contains("mesh-node", StringComparison.Ordinal)
+                )
+            )
+            {
+                Interlocked.Increment(ref _faultedDescriptorWrites);
+                if (DescriptorFault == DescriptorFault.Error)
+                    throw new InvalidOperationException("Location Store descriptor write failed");
+                // No answer: pending until the caller's deadline cancels it.
+                await Task.Delay(Timeout.Infinite, cancellationToken);
+            }
             if (
                 RejectDescriptorRenew
                 && request.Conditions.Any(condition =>
