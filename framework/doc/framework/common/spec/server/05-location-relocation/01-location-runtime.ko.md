@@ -1511,6 +1511,8 @@ provider conformance test가 store record golden fixture로 관찰하는 key·va
   네 대상이 막힌다.
 - Lease 없이 startup을 마친 host는 renew interval마다 claim하며, 확보한 뒤에야 descriptor를
   게시한다.
+- Lease를 확보한 뒤 descriptor 게시 결과를 확인하지 못한 host는 startup에 성공하고 `Preparing`으로
+  남으며 renew interval마다 게시를 다시 시도한다. 다른 owner의 점유로 인한 확정 거절은 startup error다.
 - Claim 결과 `Conflict`·`GenerationExhausted`는 startup error다.
 - Startup을 cancellation하면 결과는 취소이며, 이미 commit된 claim은 해제되고 heartbeat가
   시작되지 않는다.
