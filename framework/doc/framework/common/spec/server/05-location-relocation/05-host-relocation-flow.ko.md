@@ -768,7 +768,7 @@ queue를 파괴하기 전에 소유한 transport 실행 문맥에서 cancellatio
 호출하면 object를 이전하지 않는다.
 
 `Relocated` 상태의 source는 이전 주소로 도착하는 send와 request를 target으로 전달하기 위해
-Message Follow route와 필요한 descriptor, peer connection과 listener를 유지하고, 각 unit의
+Message Follow route(연속 이동 예외로 설치하지 않은 unit은 제외, [Location runtime §10](01-location-runtime.ko.md#10-store-응답을-받지-못했을-때))와 필요한 descriptor, peer connection과 listener를 유지하고, 각 unit의
 cutover 재전송 사본도 authority 판정과 재전송 사본 정리가 끝날 때까지 유지한다(공통 relocation §4.4). Deployment가 설정한
 `MessageFollowDuration` 전체를 사용하려면 그 기간이 끝난 뒤 `Shutdown`을 호출한다. 먼저
 `Shutdown`을 호출하면 남은 Message Follow route와 재전송 사본도 source transport와 함께

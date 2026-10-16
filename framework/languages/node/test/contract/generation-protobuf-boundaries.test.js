@@ -152,3 +152,14 @@ test('Protobuf serializer preserves non-enumerable own string keys as object dat
   assert.equal(Object.getPrototypeOf(decoded), Object.prototype);
   assert.equal(Object.getOwnPropertySymbols(decoded).length, 0);
 });
+
+test('Protobuf serializer returns bytes that do not share the encoded payload backing store', () => {
+  const serializer = protobuf.createProtobufMessageSerializer();
+  const payload = serializer.serialize({ bin: Uint8Array.from([1, 2, 3]) });
+  const decoded = serializer.deserialize(payload);
+  assert.deepEqual([...decoded.bin], [1, 2, 3]);
+  assert.notEqual(decoded.bin.buffer, payload.view().buffer);
+  const before = [...payload.view()];
+  new Uint8Array(decoded.bin.buffer).fill(0xff);
+  assert.deepEqual([...payload.view()], before);
+});

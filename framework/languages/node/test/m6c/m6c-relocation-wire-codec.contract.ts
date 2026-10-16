@@ -359,6 +359,7 @@ test('commands 42, 43, and 44 match the shared Session golden vectors', () => {
     session
   };
   const sealed: ServiceSessionRelocationSealed = {
+    sealResult: 'sealed',
     ...sessionBase,
     actor: seal.actor,
     session
@@ -402,9 +403,11 @@ test('commands 42, 43, and 44 match the shared Session golden vectors', () => {
     encodeSessionRelocationSealed,
     decodeSessionRelocationSealed
   );
-  assert.throws(
-    () => decodeSessionRelocationSealed(Buffer.from(entries[2]!.hex, 'hex')),
-    /bindingAbsent/
+  assertGoldenRoundTrip(
+    entries[2]!,
+    { ...sealed, sealResult: 'bindingAbsent' },
+    encodeSessionRelocationSealed,
+    decodeSessionRelocationSealed
   );
   assertGoldenRoundTrip(
     entries[3]!,
@@ -435,11 +438,8 @@ test('commands 42, 43, and 44 match the shared Session golden vectors', () => {
 test('batch-3 Session barrier hand/generated codecs are byte-equal and reject the same malformed bytes', () => {
   for (const entry of sessionGolden()) {
     const encoded = Buffer.from(entry.hex, 'hex');
-    const absent = entry.name === 'sessionRelocationBindingAbsent';
-    if (absent) assert.throws(() => decodeSessionRelocationSealed(encoded), /bindingAbsent/);
-    const hand = absent
-      ? undefined
-      : entry.command === 42
+    const hand =
+      entry.command === 42
         ? encodeSessionRelocationSeal(decodeSessionRelocationSeal(encoded))
         : entry.command === 43
           ? encodeSessionRelocationSealed(decodeSessionRelocationSealed(encoded))
@@ -450,7 +450,7 @@ test('batch-3 Session barrier hand/generated codecs are byte-equal and reject th
         : entry.command === 43
           ? encodeSessionRelocationSealed43(decodeSessionRelocationSealed43(encoded))
           : encodeSessionRelocationRoute44(decodeSessionRelocationRoute44(encoded));
-    if (!absent) assert.equal(hand!.toString('hex'), entry.hex, `hand:${entry.name}`);
+    assert.equal(hand.toString('hex'), entry.hex, `hand:${entry.name}`);
     assert.equal(Buffer.from(generated).toString('hex'), entry.hex, `generated:${entry.name}`);
 
     const truncated = encoded.subarray(0, -1);
@@ -477,7 +477,7 @@ test('batch-3 Session barrier hand/generated codecs are byte-equal and reject th
   }
 });
 
-test('Session relocation retain identity excludes coordinator fence fields', () => {
+test('Session relocation result key contains only relocation identity and ActorId', () => {
   const base: ServiceSessionRelocationSeal = {
     relocation: { high: 7n, low: 9n },
     coordinator: {
@@ -507,7 +507,9 @@ test('Session relocation retain identity excludes coordinator fence fields', () 
   const changedIdentity = [
     { ...base, relocation: { ...base.relocation, high: 8n } },
     { ...base, relocation: { ...base.relocation, low: 10n } },
-    { ...base, actor: { ...base.actor, actor: { ...base.actor.actor, actorId: 'actor-2' } } },
+    { ...base, actor: { ...base.actor, actor: { ...base.actor.actor, actorId: 'actor-2' } } }
+  ];
+  const changedRequestFields = [
     { ...base, actor: { ...base.actor, actor: { ...base.actor.actor, generation: 6n } } },
     { ...base, session: { ...base.session, sessionRid: 'other-session' } },
     { ...base, session: { ...base.session, bindingGeneration: 7n } }
@@ -523,12 +525,14 @@ test('Session relocation retain identity excludes coordinator fence fields', () 
   for (const identity of changedIdentity) {
     assert.notEqual(serviceSessionRelocationIdentityKey(identity), key);
   }
-  for (const coordinatorFence of changedCoordinator) {
-    // Session owner validation is limited to the binding and relocation identity (spec 20 §8.1).
-    assert.equal(
-      serviceSessionRelocationIdentityKey({ ...base, coordinator: coordinatorFence }),
-      key
-    );
+  // §8.3: field changes select the same result record. The Session owner
+  // compares the original bytes and rejects these changes as protocol errors.
+  for (const request of [
+    ...changedRequestFields,
+    ...changedCoordinator.map((coordinator) => ({ ...base, coordinator }))
+  ]) {
+    assert.equal(serviceSessionRelocationIdentityKey(request), key);
+    assert.notDeepEqual(encodeSessionRelocationSeal(request), encodeSessionRelocationSeal(base));
   }
 });
 
