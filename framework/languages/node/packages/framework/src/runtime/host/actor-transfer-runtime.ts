@@ -657,10 +657,6 @@ export class ZLinkActorTransferRuntime {
     }
   }
 
-  async notifyCoreSourceLeave(_actor: ZLinkActor, callback: () => Promise<void>): Promise<void> {
-    await callback();
-  }
-
   async completeRelocationSourceLeave(
     actor: ZLinkActor,
     sourceSpotId: RoutingId | undefined,

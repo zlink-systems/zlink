@@ -7906,6 +7906,14 @@
         {
           "name": "bindingGeneration",
           "$ref": "nonzero-u64"
+        },
+        {
+          "name": "targetNodeRid",
+          "$ref": "rid"
+        },
+        {
+          "name": "targetNodeGeneration",
+          "$ref": "nonzero-u64"
         }
       ],
       "payload": "forbidden"

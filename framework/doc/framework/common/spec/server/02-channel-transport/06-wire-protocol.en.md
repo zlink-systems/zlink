@@ -631,7 +631,10 @@ receiver MUST NOT require a bound Session to admit a canonical `actorJoin`(28).
 ### Session Seal and Source Relay
 
 - Before stopping source application dispatch, the relocation coordinator seals a bound
-  Session binding with command 42. Command 43 reports the seal result (`sealResult`: `sealed` or `bindingAbsent`).
+  Session binding with command 42. Command 42 also carries the relocation target node
+  (`targetNodeRid`, `targetNodeGeneration`); the Session owner requests route preparation to the target
+  only from these values ([Session and Actor Binding §8.1](../04-session/02-session-actor-binding.en.md#81-seal-held-messages-and-route-switchover)).
+  Command 43 reports the seal result (`sealResult`: `sealed` or `bindingAbsent`).
 - The Session owner validates only current Session identity, binding generation,
   ActorId/ObjectGeneration, and relocation identity. It doesn't create a numeric
   high-water or re-read Actor authority.
