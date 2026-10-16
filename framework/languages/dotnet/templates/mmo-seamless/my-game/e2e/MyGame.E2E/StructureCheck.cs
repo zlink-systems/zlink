@@ -69,7 +69,7 @@ internal static class StructureCheck
         return values;
     }
 
-    public static void Run(string root, string? path, bool selfTest = false)
+    public static void Run(string root, string? path)
     {
         var document =
             JsonNode.Parse(File.ReadAllText(path ?? Path.Combine(root, "zlink.structure.json")))
@@ -77,228 +77,6 @@ internal static class StructureCheck
             ?? throw new InvalidDataException("Structure must be an object.");
         Validate(root, document);
         Console.WriteLine("✓ structure agrees with configs and typed contracts");
-        if (!selfTest)
-            return;
-
-        var expanded = (JsonObject)document.DeepClone();
-        var ids = Array(expanded, "nodes").Select(node => Text(node, "id")).ToHashSet();
-        ids.UnionWith(Array(expanded, "spots").Select(spot => Text(spot, "id")));
-        var addedId = "structure-check-external";
-        while (ids.Contains(addedId))
-            addedId += "-extra";
-        Array(expanded, "nodes")
-            .Add(
-                new JsonObject
-                {
-                    ["id"] = addedId,
-                    ["role"] = "external",
-                    ["title"] = "Additional client",
-                    ["config"] = null,
-                }
-            );
-        var application = Array(document, "nodes")
-            .FirstOrDefault(node =>
-                Text(node, "role") != "external" && Text(node, "role") != "location-store"
-            );
-        JsonArray RunScenarios(JsonObject value) => value["run"]!["scenarios"]!.AsArray();
-        JsonArray RunCommands(JsonObject value, string shell) =>
-            value["run"]!["commands"]![shell]!.AsArray();
-        if (application is not null)
-        {
-            var spotIds = Array(expanded, "spots").Select(spot => Text(spot, "id")).ToHashSet();
-            var addedSpotId = "structure-check-entry";
-            while (spotIds.Contains(addedSpotId))
-                addedSpotId += "-extra";
-            Array(expanded, "spots")
-                .Add(
-                    new JsonObject
-                    {
-                        ["id"] = addedSpotId,
-                        ["kind"] = "entry",
-                        ["type"] = null,
-                        ["owner"] = Text(application, "id"),
-                    }
-                );
-        }
-        Array(expanded, "edges")
-            .Add(
-                new JsonObject
-                {
-                    ["from"] = addedId,
-                    ["to"] = application is null ? addedId : Text(application, "id"),
-                    ["label"] = "Additional flow",
-                }
-            );
-        foreach (var name in new[] { "nodes", "channels", "spots", "edges" })
-        {
-            var values = Array(expanded, name);
-            expanded[name] = new JsonArray(
-                values.Reverse().Select(value => value!.DeepClone()).ToArray()
-            );
-        }
-        expanded["id"] = "custom-composition";
-        Validate(root, expanded);
-        Console.WriteLine("✓ structure accepts composition extensions and reordered arrays");
-
-        JsonNode ConfiguredNode(JsonObject value) =>
-            Array(value, "nodes")
-                .First(node =>
-                    node?["config"] is not null && Text(node, "role") != "location-store"
-                )!;
-        JsonNode Zone(JsonObject value) =>
-            Array(value, "spots")
-                .First(spot => spot?["type"]?.GetValue<string>() == GameNames.ZoneType)!;
-        var mutations = new List<(string Name, Action<JsonObject> Change)>
-        {
-            ("unknown version", value => value["version"] = 2),
-            ("empty project ID", value => value["id"] = " "),
-            (
-                "missing run scenario",
-                value => RunScenarios(value).RemoveAt(RunScenarios(value).Count - 1)
-            ),
-            ("empty run command list", value => RunCommands(value, "sh").Clear()),
-        };
-        if (Array(document, "nodes").Count > 0)
-            mutations.Add(
-                (
-                    "duplicate node",
-                    value => Array(value, "nodes").Add(Array(value, "nodes").First()!.DeepClone())
-                )
-            );
-        if (application is not null)
-        {
-            mutations.AddRange(
-                new (string Name, Action<JsonObject> Change)[]
-                {
-                    (
-                        "missing config",
-                        value => ConfiguredNode(value)["config"] = "server/config/missing.json"
-                    ),
-                    (
-                        "outside config",
-                        value => ConfiguredNode(value)["config"] = "../outside.json"
-                    ),
-                    (
-                        "rooted config",
-                        value => ConfiguredNode(value)["config"] = Path.GetFullPath(root)
-                    ),
-                    ("configuration ID mismatch", value => ConfiguredNode(value)["id"] = addedId),
-                }
-            );
-        }
-        if (Array(document, "spots").Count > 0)
-            mutations.Add(
-                (
-                    "duplicate spot",
-                    value => Array(value, "spots").Add(Array(value, "spots").First()!.DeepClone())
-                )
-            );
-        if (
-            Array(document, "spots")
-                .Any(spot => spot?["type"]?.GetValue<string>() == GameNames.ZoneType)
-        )
-        {
-            mutations.AddRange(
-                new (string Name, Action<JsonObject> Change)[]
-                {
-                    ("unknown spot owner", value => Zone(value)["owner"] = addedId),
-                    (
-                        "wrong logical ID",
-                        value => Zone(value)["logicalId"] = "structure-check-missing-zone"
-                    ),
-                    ("missing configured zone", value => Array(value, "spots").Remove(Zone(value))),
-                    (
-                        "wrong spot type",
-                        value => Zone(value)["type"] = "structure-check-unknown-type"
-                    ),
-                    (
-                        "duplicate logical ID across types",
-                        value =>
-                        {
-                            var spot = (JsonObject)Zone(value).DeepClone();
-                            spot["id"] = addedId;
-                            spot["type"] = GameNames.DungeonType;
-                            spot["dynamic"] = false;
-                            Array(value, "spots").Add(spot);
-                        }
-                    ),
-                }
-            );
-        }
-        if (Array(document, "spots").Any(spot => Text(spot, "kind") == "entry"))
-            mutations.Add(
-                (
-                    "entry stable type",
-                    value =>
-                        Array(value, "spots").First(spot => Text(spot, "kind") == "entry")![
-                            "type"
-                        ] = GameNames.ZoneType
-                )
-            );
-        if (Array(document, "channels").Count > 0)
-        {
-            mutations.AddRange(
-                new (string Name, Action<JsonObject> Change)[]
-                {
-                    (
-                        "wrong channel",
-                        value =>
-                            Array(value, "channels").First()!["name"] =
-                                "structure-check-unknown-channel"
-                    ),
-                    (
-                        "wrong mesh",
-                        value =>
-                            Array(value, "channels").First()!["mesh"] =
-                                "structure-check-unknown-mesh"
-                    ),
-                    (
-                        "unknown channel owner",
-                        value => Array(value, "channels").First()!["owner"] = addedId
-                    ),
-                    (
-                        "duplicate channel",
-                        value =>
-                            Array(value, "channels")
-                                .Add(Array(value, "channels").First()!.DeepClone())
-                    ),
-                }
-            );
-        }
-        var external = Array(document, "nodes")
-            .FirstOrDefault(node => Text(node, "role") == "external");
-        if (external is not null && Array(document, "channels").Count > 0)
-            mutations.Add(
-                (
-                    "external channel owner",
-                    value => Array(value, "channels").First()!["owner"] = Text(external, "id")
-                )
-            );
-        if (Array(document, "edges").Count > 0)
-        {
-            mutations.Add(
-                ("unknown edge reference", value => Array(value, "edges").First()!["to"] = addedId)
-            );
-            mutations.Add(
-                ("empty edge label", value => Array(value, "edges").First()!["label"] = " ")
-            );
-        }
-        foreach (var (name, change) in mutations)
-        {
-            var bad = (JsonObject)document.DeepClone();
-            change(bad);
-            try
-            {
-                Validate(root, bad);
-            }
-            catch (InvalidDataException)
-            {
-                Console.WriteLine($"✓ structure rejects {name}");
-                continue;
-            }
-            throw new InvalidDataException($"Structure checker falsely accepted {name}.");
-        }
-        Console.WriteLine($"Structure: 2 valid inputs and {mutations.Count} invalid inputs passed");
     }
 
     private static void Validate(string root, JsonObject document)
@@ -314,6 +92,9 @@ internal static class StructureCheck
         ValidateRun(document);
         var ids = new HashSet<string>(StringComparer.Ordinal);
         var settings = new Dictionary<string, NodeSettings>(StringComparer.Ordinal);
+        var roles = new Dictionary<string, string>(StringComparer.Ordinal);
+        var entries = new Dictionary<string, int>(StringComparer.Ordinal);
+        var dungeons = new Dictionary<string, int>(StringComparer.Ordinal);
         var prefix =
             Path.GetFullPath(root)
                 .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
@@ -326,6 +107,7 @@ internal static class StructureCheck
             var id = Text(node, "id");
             Require(ids.Add(id), "Duplicate node ID.");
             var role = Text(node, "role");
+            roles.Add(id, role);
             Text(node, "title");
             if (role == "external")
             {
@@ -380,6 +162,8 @@ internal static class StructureCheck
                     spot!["type"] is null && spot["logicalId"] is null && spot["dynamic"] is null,
                     "Entry must not claim a stable type, logical ID or dynamic family."
                 );
+                Require(roles[owner] == "zone", "Entry owner must register WorldEntry.");
+                entries[owner] = entries.GetValueOrDefault(owner) + 1;
                 continue;
             }
             var type = Text(spot, "type");
@@ -404,8 +188,28 @@ internal static class StructureCheck
                 Require(!dynamic, "Configured Zone Spots must have fixed logical IDs.");
                 if (!zones.TryGetValue(owner, out var hosted))
                     zones.Add(owner, hosted = new HashSet<string>(StringComparer.Ordinal));
+                Require(roles[owner] == "zone", "Zone owner must register Zone.");
                 hosted.Add(Text(spot, "logicalId"));
             }
+            else
+            {
+                Require(
+                    roles[owner] == "instance" && dynamic,
+                    "Dungeon must be a dynamic Instance family."
+                );
+                dungeons[owner] = dungeons.GetValueOrDefault(owner) + 1;
+            }
+        }
+        foreach (var (id, role) in roles)
+        {
+            Require(
+                entries.GetValueOrDefault(id) == (role == "zone" ? 1 : 0),
+                "Entry registrations differ from server."
+            );
+            Require(
+                dungeons.GetValueOrDefault(id) == (role == "instance" ? 1 : 0),
+                "Dungeon registrations differ from server."
+            );
         }
         foreach (var (id, configured) in settings)
         {

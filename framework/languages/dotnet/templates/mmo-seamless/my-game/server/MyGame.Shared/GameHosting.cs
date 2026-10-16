@@ -10,6 +10,10 @@ namespace MyGame.Shared;
 
 public static class GameHosting
 {
+    public static readonly TimeSpan MessageFollow = TimeSpan.FromSeconds(30);
+    public static readonly TimeSpan RelocationDeadline = TimeSpan.FromSeconds(30);
+    public static readonly TimeSpan SafeDeadline = MessageFollow + RelocationDeadline;
+
     public static void Configure(
         HostApplicationBuilder builder,
         NodeSettings settings,
@@ -37,6 +41,7 @@ public static class GameHosting
                 })
             );
             options.ConfigureDispatch().Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
+            options.ConfigureLocations().MessageFollowDuration = MessageFollow;
             configure(options);
         });
     }

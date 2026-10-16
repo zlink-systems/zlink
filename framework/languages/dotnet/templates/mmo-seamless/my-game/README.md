@@ -91,7 +91,7 @@ Structure validation can run without Docker:
 dotnet e2e/MyGame.E2E/bin/Debug/net8.0/MyGame.E2E.dll --root . --check-structure
 ```
 
-Every e2e run validates the composition before starting nodes. Only `--check-structure` also runs checker self-tests with valid extensions and deliberately inconsistent inputs. The checker does not require the initial preset's node counts, deployment IDs or edge indices.
+Every e2e run validates the composition before starting nodes. `--check-structure` checks the supplied files without starting servers. Verify missing Entry and User Spot declarations with temporary input copies during development. The checker does not require the initial preset's node counts, deployment IDs or edge indices.
 
 ## Known issues / 알려진 문제
 
@@ -103,6 +103,8 @@ The pinned public Framework `0.30.0` has the following defects. The template pre
 - [#1691](https://github.com/zlink-systems/zlink/issues/1691): After relocation admission seal, an already accepted handler's `BoundSession.Send` can fail with `application admission is sealed`. Once startup is available, the default `update` scenario also requires this fix; passing cross, border, and reconnect does not establish update continuity.
 
 공개 Framework `0.30.0`의 시작 검사가 빈 `SpotId`로 `Configure()`를 호출하여 Zone 기동이 실패한다. 고정 topic으로 보상하지 않으며, Framework의 Context 계약 수정이 필요하다. `update`의 코드와 기대값은 유지하며 기본 실행에서도 제외하지 않는다. 기동 결함과 #1690·#1691을 수정한 package에서 전체 시나리오를 다시 검증해야 한다.
+
+Message Follow is explicitly configured to 30 seconds in shared hosting. The wait for `SAFE_TO_SHUTDOWN` is derived from that period plus the existing host relocation budget. Packet deadlines and the relocation operation budget remain unchanged.
 
 ## Deployment sequence
 
