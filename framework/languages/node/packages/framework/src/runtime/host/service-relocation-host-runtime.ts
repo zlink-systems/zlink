@@ -1605,19 +1605,10 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       objectGeneration: spotAuthority.objectGeneration,
       authorityOwnerGeneration: spotAuthority.authorityOwnerGeneration,
       seal: async (captureSignal) => {
-        const { spotCaptureOperation } = await this.afterSpotCloseDecision(
-          meshName,
-          activation.spotId,
-          () => {
-            interruptionStartedAt = performance.now();
-            spotMessageFollowSeal = this.sealSpotMessageFollow(meshName, spotAuthority, activation);
-            // Both seals run in the same event-loop turn after the Close decision.
-            return { spotCaptureOperation: activation.captureRelocation(captureSignal) };
-          }
-        );
-        const [capture, ...preparations] = await Promise.allSettled([
-          spotCaptureOperation,
-          ...actorStates.map(async (state) => ({
+        // Relocation 04 §4.1: every bound member's Session is sealed before
+        // the Spot capture stops member dispatch.
+        const preparations = await Promise.allSettled(
+          actorStates.map(async (state) => ({
             state,
             actor: state.actor!,
             prepared: await this.options.actorTransfer.prepareMaintenanceSession(
@@ -1628,10 +1619,8 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
               relocationWireId(aggregateId)
             )
           }))
-        ] as const);
+        );
         const failures: unknown[] = [];
-        if (capture.status === 'fulfilled') spotCapture = capture.value;
-        else failures.push(capture.reason);
         for (const preparation of preparations) {
           if (preparation.status === 'fulfilled') sessions.push(preparation.value);
           else failures.push(preparation.reason);
@@ -1640,6 +1629,17 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         if (failures.length > 1) {
           throw new AggregateError(failures, 'Spot relocation source preparation failed.');
         }
+        const { spotCaptureOperation } = await this.afterSpotCloseDecision(
+          meshName,
+          activation.spotId,
+          () => {
+            interruptionStartedAt = performance.now();
+            spotMessageFollowSeal = this.sealSpotMessageFollow(meshName, spotAuthority, activation);
+            // Both Spot seals run in the same event-loop turn after the Close decision.
+            return { spotCaptureOperation: activation.captureRelocation(captureSignal) };
+          }
+        );
+        spotCapture = await spotCaptureOperation;
         return {
           boundSessionState: Buffer.alloc(0),
           queuedMessages: [],
