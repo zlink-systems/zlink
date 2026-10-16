@@ -76,7 +76,7 @@ Add `--no-build` or `-NoBuild` only after a local build. Local build-only uses `
 
 ## Known issues
 
-On Framework 0.30.0, `drain` on this Session-only host ends in `Blocked/TargetUnavailable` after the relocation deadline, so the `connect` scenario fails at `RELOCATED`. The relocation spec ends a host that owns no Actor or Spot with `Relocated/None` without searching for a target, but the C++ relocation preflight searches for a replacement peer first (`framework/languages/cpp/framework/src/runtime/host/app.cpp:3354`). The .NET starter completes the same sequence. This starter does not compensate for the failure; the tracking issue number is recorded here when it exists.
+On Framework 0.30.x for C++, `drain` on this Session-only host ends in `Blocked/TargetUnavailable` after the relocation deadline, so the `connect` scenario fails at `RELOCATED` and the runner exits with code 1 (#1947, https://github.com/zlink-systems/zlink/issues/1947). The relocation specification ends a host that owns no Actor or Spot with `Relocated/None` without searching for a target; the .NET starter completes the same sequence. The setup does not work around the failure; validate the scenario with a Framework release that fixes #1947 before deployment.
 
 ## Deployment sequence
 
