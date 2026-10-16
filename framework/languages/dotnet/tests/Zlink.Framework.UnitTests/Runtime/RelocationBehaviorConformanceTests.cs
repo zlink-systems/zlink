@@ -2191,6 +2191,12 @@ internal sealed class RelocationBehaviorTrace
     internal int OrdinarySendCount;
     internal int OrdinarySendBatchSize { get; init; }
     internal Func<BehaviorActor, ValueTask>? OnTargetJoined { get; set; }
+
+    // The source Actor state capture and the target Actor restore wait for
+    // these tasks. The source unit is sealed and holds member ingress while
+    // either waits.
+    internal Task SourceActorCaptureGate { get; set; } = Task.CompletedTask;
+    internal Task TargetActorRestoreGate { get; set; } = Task.CompletedTask;
     internal string? PublicJoinCompletionNode { get; private set; }
     internal bool HasTargetAuthorityMutation =>
         Volatile.Read(ref TargetAuthorityMutationCount) != 0;
@@ -2685,23 +2691,29 @@ internal sealed class BehaviorActorRelocationAdapter(
     BehaviorNode node
 ) : IZLinkActorRelocationAdapter<BehaviorActor>
 {
-    public ValueTask<byte[]> CaptureAsync(BehaviorActor actor, CancellationToken cancellationToken)
+    public async ValueTask<byte[]> CaptureAsync(
+        BehaviorActor actor,
+        CancellationToken cancellationToken
+    )
     {
         Assert.Equal("source", node.Name);
+        trace.Record("sourceStateCapturing");
+        await trace.SourceActorCaptureGate.WaitAsync(cancellationToken);
         trace.Record("sourceStateCaptured");
-        return ValueTask.FromResult(BitConverter.GetBytes(actor.State));
+        return BitConverter.GetBytes(actor.State);
     }
 
-    public ValueTask RestoreAsync(
+    public async ValueTask RestoreAsync(
         BehaviorActor actor,
         ReadOnlyMemory<byte> payload,
         CancellationToken cancellationToken
     )
     {
         Assert.Equal("target", node.Name);
+        trace.Record("targetStateRestoring");
+        await trace.TargetActorRestoreGate.WaitAsync(cancellationToken);
         actor.State = BitConverter.ToInt32(payload.Span);
         trace.Record("targetStateRestored");
-        return ValueTask.CompletedTask;
     }
 }
 

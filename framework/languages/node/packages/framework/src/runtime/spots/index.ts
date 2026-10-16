@@ -1520,14 +1520,6 @@ export class DefaultZLinkSpotManager {
     await this.actorMembership.commitActorLeaveAfterTransfer(spotId, actorId);
   }
 
-  async restoreActorAfterFailedTransfer(
-    spotId: RoutingId,
-    actor: ZLinkActor,
-    signal?: AbortSignal
-  ): Promise<void> {
-    await this.actorMembership.restoreActorAfterFailedTransfer(spotId, actor, signal);
-  }
-
   async beginActorTransfer(spotId: RoutingId, actorId: string): Promise<void> {
     await this.actorMembership.beginActorTransfer(spotId, actorId);
   }
@@ -2878,11 +2870,7 @@ export class DefaultZLinkSpotManager {
           control.previousMembershipEpoch
         );
       };
-      if (this.options.actorTransferRuntime === undefined) {
-        await callback();
-      } else {
-        await this.options.actorTransferRuntime.notifyCoreSourceLeave(actor, callback);
-      }
+      await callback();
       return;
     }
     if (spotId === null) {
@@ -3046,9 +3034,7 @@ export class DefaultZLinkSpotManager {
           if (sourceJoinedActor === undefined && pendingTransfer === undefined) {
             return;
           }
-          await this.options.actorTransferRuntime.notifyCoreSourceLeave(actor, () =>
-            activation.spot.onLeaveActor(actor)
-          );
+          await activation.spot.onLeaveActor(actor);
         }
         activation.commitActorDeparture(actor.context.actorId);
         return;
