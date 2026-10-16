@@ -8,7 +8,7 @@ import systems.zlink.samples.kotlin.tictactoe.shared.contracts.PlayerWinMileston
 
 // --8<-- [start:doc-multicast-subscribe]
 // --8<-- [start:doc-ttt-milestone-handler]
-@ZLinkSpotSubscription(topic = SampleNames.PlayerMilestoneTopic)
+@ZLinkSpotSubscription(channelName = SampleNames.PlayNode, topic = SampleNames.PlayerMilestoneTopic)
 class PlayerWinMilestoneEventHandler :
     ZLinkSuspendingSpotSubscriptionHandler<PlayEntrySpot, PlayerWinMilestoneEvent> {
     override suspend fun handle(spot: PlayEntrySpot, event: PlayerWinMilestoneEvent) {
