@@ -884,92 +884,119 @@ test('Message Follow rejects repeated stale packets that do not carry the origin
   assert.equal(markers.filter((entry) => entry.marker === 'message_follow_rejected').length, 2);
 });
 
-test('Message Follow request preserves its absolute deadline and drops a late relay reply', async () => {
-  const requests = [];
-  let completeRelay;
-  const coordinator = new framework.ZLinkActorHandoffCoordinator({
-    routedTransport: {
-      async sendToSpot() {},
-      async requestToSpot(_target, payload, options) {
-        requests.push({ payload, options });
-        return await new Promise((resolve) => {
-          completeRelay = resolve;
-        });
-      }
-    },
-    messageFollowDurationMs: 1_000,
-    requestTimeoutMs: 30_000,
-    requestSource: () => ({
-      meshName: 'mesh',
-      objectGeneration: 1n,
-      ownerId: 'source-owner',
-      ownerLeaseGeneration: 1n,
-      nodeRid: 'source-node',
-      nodeGeneration: 1n,
-      authorityOwnerGeneration: 1n
-    }),
-    validateReplySource: () => true
-  });
-  coordinator.begin('actor-1', 1n);
-  coordinator.snapshot('actor-1');
-  coordinator.complete('actor-1', target(), targetActorRef(), [], ownerFence('target', 2n));
+for (const raw of [false, true]) {
+  test(`Message Follow uses a local relay window (raw=${raw})`, async (t) => {
+    t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 0 });
+    t.mock.method(performance, 'now', () => Date.now());
+    const { DEFAULT_REQUEST_TIMEOUT_MS } = require('../../packages/framework/dist/contracts/Configuration/Registration');
+    const requestTimeoutMs = raw ? DEFAULT_REQUEST_TIMEOUT_MS / 2 : undefined;
+    const relayWindowMs = requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+    const clientTimeoutMs = 80;
+    let entered;
+    const admitted = new Promise(resolve => { entered = resolve; });
+    const requests = [];
+    let completeRelay;
+    const coordinator = new framework.ZLinkActorHandoffCoordinator({
+      routedTransport: {
+        async sendToSpot() {},
+        async [raw ? 'requestRawToSpot' : 'requestToSpot'](_target, payload, options) {
+          requests.push({ payload: raw ? JSON.parse(payload.getString('utf8')) : payload, options });
+          return await new Promise((resolve) => {
+            completeRelay = resolve;
+            entered();
+          });
+        }
+      },
+      messageFollowDurationMs: 1_000,
+      requestTimeoutMs,
+      requestSource: () => ({
+        meshName: 'mesh',
+        objectGeneration: 1n,
+        ownerId: 'source-owner',
+        ownerLeaseGeneration: 1n,
+        nodeRid: 'source-node',
+        nodeGeneration: 1n,
+        authorityOwnerGeneration: 1n
+      }),
+      validateReplySource: () => true
+    });
+    coordinator.begin('actor-1', 1n);
+    coordinator.snapshot('actor-1');
+    coordinator.complete('actor-1', target(), targetActorRef(), [], ownerFence('target', 2n));
 
-  const deadlineUnixMs = Date.now() + 80;
-  const correlationId = 'dddddddddddddddddddddddddddddddd';
-  const requestHeader = streamProtocol.encodeStreamHeader({
-    kind: streamProtocol.ZLinkStreamMessageKind.Request,
-    codec: streamProtocol.ZLinkStreamCodec.Json,
-    flags:
-      streamProtocol.ZLinkStreamHeaderFlags.HasRequestSeq |
-      streamProtocol.ZLinkStreamHeaderFlags.HasMetadata |
-      streamProtocol.ZLinkStreamHeaderFlags.HasCorrelationId,
-    requestSeq: 19n,
-    name: 'DeadlineRequest',
-    metadata: streamProtocol.actorRequestDeadlineMetadata(deadlineUnixMs),
-    correlationId
-  });
-  const parts = [
-    zlink.Message.from(Buffer.from(requestHeader)),
-    zlink.Message.from(Buffer.from(JSON.stringify({ marker: 'deadline' })))
-  ];
-  const reply = coordinator.capture(
-    'remote', 'actor-1',
-    parts,
-    true,
-    undefined,
-    contextRef(parts, {
-      request: true,
-      deadlineUnixMs,
+    const deadlineUnixMs = Date.now() + clientTimeoutMs;
+    const correlationId = 'dddddddddddddddddddddddddddddddd';
+    const requestHeader = streamProtocol.encodeStreamHeader({
+      kind: streamProtocol.ZLinkStreamMessageKind.Request,
+      codec: streamProtocol.ZLinkStreamCodec.Json,
+      flags:
+        streamProtocol.ZLinkStreamHeaderFlags.HasRequestSeq |
+        streamProtocol.ZLinkStreamHeaderFlags.HasMetadata |
+        streamProtocol.ZLinkStreamHeaderFlags.HasCorrelationId,
+      requestSeq: 19n,
+      name: 'DeadlineRequest',
+      metadata: streamProtocol.actorRequestDeadlineMetadata(deadlineUnixMs),
       correlationId
-    })
-  );
-  parts.forEach((part) => part.close());
+    });
+    const parts = [
+      zlink.Message.from(Buffer.from(requestHeader)),
+      zlink.Message.from(Buffer.from(JSON.stringify({ marker: 'deadline' })))
+    ];
+    const reply = coordinator.capture(
+      'remote', 'actor-1',
+      parts,
+      true,
+      undefined,
+      contextRef(parts, {
+        request: true,
+        deadlineUnixMs,
+        correlationId
+      })
+    );
+    parts.forEach((part) => part.close());
 
-  await assert.rejects(
-    reply,
-    (error) => error.kind === framework.ZLinkFrameworkErrorKind.DeadlineExceeded
-  );
-  assert.equal(requests.length, 1);
-  assert.equal(requests[0].payload.messageFollowContext.deadlineUnixMs, deadlineUnixMs);
-  const relayedHeader = streamProtocol.decodeStreamHeader(
-    Buffer.from(requests[0].payload.header, 'base64')
-  );
-  assert.equal(relayedHeader.correlationId, correlationId);
-  assert.ok(requests[0].options.timeoutMs > 0);
-  assert.ok(requests[0].options.timeoutMs <= 80);
+    let terminal;
+    const observed = reply.then(value => { terminal = { value }; }, error => { terminal = { error }; });
+    try {
+      await admitted;
+      assert.equal(requests.length, 1);
+      assert.equal(requests[0].options.timeoutMs, relayWindowMs);
+      assert.equal(requests[0].payload.messageFollowContext.deadlineUnixMs, deadlineUnixMs);
+      const relayedHeader = streamProtocol.decodeStreamHeader(
+        Buffer.from(requests[0].payload.header, 'base64')
+      );
+      assert.equal(relayedHeader.correlationId, correlationId);
+      t.mock.timers.tick(clientTimeoutMs);
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(terminal, undefined, 'the original client deadline does not expire a relay hop');
+      t.mock.timers.tick(relayWindowMs - clientTimeoutMs - 1);
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(terminal, undefined, 'the relay remains pending before its local window');
+      t.mock.timers.tick(1);
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(terminal?.error?.kind, framework.ZLinkFrameworkErrorKind.DeadlineExceeded);
+    } finally {
+      const late = raw ? zlink.Message.from(JSON.stringify({ ok: true, response: 'late' })) : undefined;
+      const closed = raw ? t.mock.method(late, 'close') : undefined;
+      completeRelay(raw ? [late] : { ok: true, response: 'late' });
+      await observed;
+      await new Promise(resolve => setImmediate(resolve));
+      if (raw) assert.equal(closed.mock.callCount(), 1);
+    }
+    assert.equal(terminal.error.kind, framework.ZLinkFrameworkErrorKind.DeadlineExceeded);
+  });
+}
 
-  completeRelay({ ok: true, response: 'late' });
-  await new Promise((resolve) => setImmediate(resolve));
-});
-
-test('Message Follow rejects an expired request before target transport admission', async () => {
+test('Message Follow admits a request whose client deadline has already expired', async (t) => {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 1_000 });
+  t.mock.method(performance, 'now', () => Date.now());
   let requests = 0;
   const coordinator = new framework.ZLinkActorHandoffCoordinator({
     routedTransport: {
       async sendToSpot() {},
       async requestToSpot() {
         requests += 1;
-        return { ok: true };
+        return { ok: true, response: 'reply' };
       }
     },
     messageFollowDurationMs: 1_000,
@@ -990,19 +1017,22 @@ test('Message Follow rejects an expired request before target transport admissio
 
   const parts = frame('expired');
   const deadlineUnixMs = Date.now() - 1;
-  await assert.rejects(
-    coordinator.capture(
-      'remote', 'actor-1',
-      parts,
-      true,
-      undefined,
-      contextRef(parts, { request: true, deadlineUnixMs }),
-      deadlineUnixMs
-    ),
-    (error) => error.kind === framework.ZLinkFrameworkErrorKind.DeadlineExceeded
-  );
-  parts.forEach((part) => part.close());
-  assert.equal(requests, 0);
+  try {
+    assert.equal(
+      await coordinator.capture(
+        'remote', 'actor-1',
+        parts,
+        true,
+        undefined,
+        contextRef(parts, { request: true, deadlineUnixMs }),
+        deadlineUnixMs
+      ),
+      'reply'
+    );
+    assert.equal(requests, 1);
+  } finally {
+    parts.forEach((part) => part.close());
+  }
 });
 
 test('accepted handoff rejects an expired request before replay queue admission', async () => {

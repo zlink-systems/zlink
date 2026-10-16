@@ -1097,7 +1097,7 @@ test('Host Instance Close without Reincarnate releases the closed generation thr
   node.registerInstanceIntent('closed', { ...route, objectGeneration: 8n, storeVersion: 'store-v8' });
   await runtimeOptions.releaseInstanceAuthority('test.mesh', spotId, 7n);
   assert.equal(node.instanceSpotApplicationTarget(String(spotId)).objectGeneration, 8n);
-  node.close();
+  await node.close();
 });
 
 test('Instance context close returns after activation completion', async () => {

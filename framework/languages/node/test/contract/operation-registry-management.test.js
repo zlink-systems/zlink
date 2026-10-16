@@ -60,7 +60,7 @@ for (const pending of [false, true, 'native']) {
           console.log('replied');
           table.dispose();
           return pump.dispose();
-        }).then(() => { node.close(); return context.dispose(); });
+        }).then(async () => { await node.close(); return context.dispose(); });
       `
           : ''
       }
@@ -189,7 +189,7 @@ test('shared deadline maintenance completes a native request while its handler i
     release();
     table.dispose();
     await pump.dispose();
-    node.close();
+    await node.close();
     await context.dispose();
   }
 });
@@ -254,6 +254,9 @@ test('backend shared maintenance gives raw and stateful registries one divided b
   node.setBind(`inproc://${suffix}`);
   try {
     node.start();
+    // Maintenance runs at the nearest management deadline (spec 08 §4.2); a
+    // pending request gives this idle node one.
+    node.requestToNode('budget-missing-peer', [Buffer.from('budget')], { timeoutMs: 5 });
     await observed;
     await new Promise(setImmediate);
     assert.equal(observations[0].now, observations[1].now);
@@ -263,7 +266,7 @@ test('backend shared maintenance gives raw and stateful registries one divided b
     );
     assert.equal(observations[1].deadline, observations[1].now + RAW_MESH_RECEIVE_TIME_BUDGET_MS);
   } finally {
-    node.close();
+    await node.close();
     await context.dispose();
   }
 });

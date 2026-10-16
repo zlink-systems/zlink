@@ -32,6 +32,7 @@
 #include "runtime/stateful/public_store_adapters.hpp"
 #include "runtime/streams/session_serial_executor.hpp"
 #include "runtime/timers/core_timer_drain_loop.hpp"
+#include "runtime/timers/async_delay.hpp"
 #include "runtime/timers/timer_runtime.hpp"
 
 #include <zlink/framework/contracts/spots/spot.hpp>
@@ -929,9 +930,12 @@ bool verify_timer_terminal_precedes_lifecycle_close_turn ()
         return task_t<void> (result_t<void>::success ());
     };
     timer_state->handler_invoker =
-      [state, &close_requested] (void *, void *, serializer_registry_t &,
-                                 const timer_tick_t &) -> task_t<zlink::message_t> {
-        auto context = spot_context_access_t::create (state);
+      [weak_state = std::weak_ptr<spot_context_state_t> (state), &close_requested] (
+        void *, void *, serializer_registry_t &, const timer_tick_t &) -> task_t<zlink::message_t> {
+        const auto owner = weak_state.lock ();
+        if (!owner)
+            throw std::logic_error ("timer fixture lost its Spot context");
+        auto context = spot_context_access_t::create (owner);
         context.close ();
         close_requested.store (true, std::memory_order_release);
         co_return zlink::message_t{};
@@ -978,9 +982,13 @@ bool verify_timer_self_cancel_completes_after_callback ()
     std::atomic_bool callback_completed{false};
     std::atomic_bool cancel_was_pending_in_callback{false};
     timer_state->handler_invoker =
-      [timer_state, &callback_completed, &cancel_was_pending_in_callback] (
-        void *, void *, serializer_registry_t &, const timer_tick_t &) -> task_t<zlink::message_t> {
-        auto cancellation = timer_test_access_t::create (timer_state).cancel ();
+      [weak_timer = std::weak_ptr<timer_state_t> (timer_state), &callback_completed,
+       &cancel_was_pending_in_callback] (void *, void *, serializer_registry_t &,
+                                         const timer_tick_t &) -> task_t<zlink::message_t> {
+        const auto owner = weak_timer.lock ();
+        if (!owner)
+            throw std::logic_error ("timer fixture lost its timer state");
+        auto cancellation = timer_test_access_t::create (owner).cancel ();
         cancel_was_pending_in_callback.store (!cancellation.await_ready (),
                                               std::memory_order_release);
         callback_completed.store (true, std::memory_order_release);
@@ -6969,8 +6977,12 @@ bool verify_remote_actor_cutover_completion_is_target_owned ()
       std::make_shared<stateful::public_relocation_store_adapter_t> (relocation_repository);
     auto source_state = make_state ("actor-cutover-source", false);
     auto target_state = make_state ("actor-cutover-target", true);
+    std::mutex delay_mutex;
+    delay_owner_t delays (delay_mutex);
     mesh_node_runtime_t source (source_state);
     mesh_node_runtime_t target (target_state);
+    source.bind_delay_owner (delays);
+    target.bind_delay_owner (delays);
     struct spot_route_fixture_t
     {
         zlink::routing_id_t node = zlink::routing_id_t::from (std::uint32_t{0});

@@ -364,6 +364,52 @@ function admission(transferId: string, objectGeneration = OBJECT_GENERATION) {
   };
 }
 
+test('a newer Join identity replaces restoring prewarm and the old terminal preserves its successor', () => {
+  const registry = new ZLinkFormalRemoteActorAdmissionRegistry();
+  registry.begin(admission('old-restore'));
+  registry.complete('old-restore', { accepted: true, actorRef: fallbackRef() });
+  registry.beginRestore('old-restore');
+  let rejected = 0;
+  assert.equal(
+    registry.routeIngress(ACTOR_ID, OBJECT_GENERATION, {
+      origin: 'remote',
+      header: Buffer.alloc(0),
+      payload: Buffer.alloc(0),
+      returnResponse: false,
+      resolve() {},
+      reject() {
+        rejected++;
+      }
+    }),
+    'parked'
+  );
+  registry.delete('old-restore');
+  assert.equal(registry.get('old-restore')?.state, 'restoring');
+  assert.equal(rejected, 0);
+  registry.begin(admission('new-restore'));
+  assert.equal(registry.get('old-restore'), undefined);
+  assert.equal(rejected, 1);
+  registry.finishRestore('old-restore');
+  assert.equal(registry.get('new-restore')?.state, 'admitting');
+  registry.delete('new-restore');
+});
+
+test('committed Join replay retention starts at the attempt terminal', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const registry = new ZLinkFormalRemoteActorAdmissionRegistry();
+  registry.begin(admission('commit-retention'));
+  registry.complete('commit-retention', { accepted: true, actorRef: fallbackRef() });
+  registry.beginRestore('commit-retention');
+  t.mock.timers.tick(30_001);
+  registry.markCommitted('commit-retention', { context: { actorId: ACTOR_ID } } as never);
+  registry.finishRestore('commit-retention');
+  assert.equal(registry.get('commit-retention')?.state, 'committed');
+  t.mock.timers.tick(29_999);
+  assert.equal(registry.get('commit-retention')?.state, 'committed');
+  t.mock.timers.tick(1);
+  assert.equal(registry.get('commit-retention'), undefined);
+});
+
 /**
  * `dispatch()` yields at least one microtask tick before reaching the
  * missing-actor/park branch (its production code awaits an optional
