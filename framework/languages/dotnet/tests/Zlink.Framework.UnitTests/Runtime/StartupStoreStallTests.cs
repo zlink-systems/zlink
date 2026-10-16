@@ -24,20 +24,26 @@ public sealed class StartupStoreStallTests
     // Safety bound for a hung await only; no assertion depends on elapsed time.
     private static readonly TimeSpan Hang = TimeSpan.FromSeconds(30);
 
-    [Fact]
-    public async Task MeshNodeHost_StoreHeldPastRenewTimeout_StartsThenPublishesServingDescriptor()
+    // An Instance Spot factory adds the activation target, which also acts
+    // for the owner lease.
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task MeshNodeHost_StoreHeldPastRenewTimeout_StartsThenPublishesServingDescriptor(
+        bool instanceSpots
+    )
     {
         var store = new GatedLocationStore(new ZLinkInMemoryProviderLocationStore());
         store.Hold();
-        await using var provider = BuildProvider(store);
+        await using var provider = BuildProvider(store, instanceSpots);
         var hosted = HostedService(provider);
         var locations = provider.GetRequiredService<ZLinkLocationRuntime>();
 
         // Every Store response is still held: startup must not wait for it
         // and must not fail because the lease is not confirmed yet.
-        await hosted.StartAsync(CancellationToken.None).WaitAsync(Hang);
         try
         {
+            await hosted.StartAsync(CancellationToken.None).WaitAsync(Hang);
             Assert.True(store.IsHolding);
             Assert.True(store.HeldCalls > 0);
             Assert.False(locations.IsOwnerAdmissionOpen);
@@ -83,14 +89,20 @@ public sealed class StartupStoreStallTests
         }
     }
 
-    [Fact]
-    public async Task MeshNodeHost_StoreUnavailableAtStartup_StartsAndStopsWithoutLease()
+    // An Instance Spot factory adds the activation target, which also acts
+    // for the owner lease.
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task MeshNodeHost_StoreUnavailableAtStartup_StartsAndStopsWithoutLease(
+        bool instanceSpots
+    )
     {
         var store = new GatedLocationStore(new ZLinkInMemoryProviderLocationStore())
         {
             Unavailable = true,
         };
-        await using var provider = BuildProvider(store);
+        await using var provider = BuildProvider(store, instanceSpots);
         var hosted = HostedService(provider);
         var locations = provider.GetRequiredService<ZLinkLocationRuntime>();
 
@@ -161,7 +173,10 @@ public sealed class StartupStoreStallTests
         );
     }
 
-    private static ServiceProvider BuildProvider(GatedLocationStore store)
+    private static ServiceProvider BuildProvider(
+        GatedLocationStore store,
+        bool instanceSpots = false
+    )
     {
         var services = new ServiceCollection();
         services.AddZLinkFramework(options =>
@@ -170,15 +185,22 @@ public sealed class StartupStoreStallTests
             options.AddRelocationStore(new InMemoryRelocationStore());
             var locations = options.ConfigureLocations();
             locations.OwnerLeaseRenewInterval = TimeSpan.FromMilliseconds(20);
-            locations.OwnerLeaseRenewTimeout = TimeSpan.FromMilliseconds(20);
+            // Long enough that a loaded machine cannot turn a prompt Store
+            // answer into a timeout; a held Store still outlasts it.
+            locations.OwnerLeaseRenewTimeout = TimeSpan.FromSeconds(1);
             locations.OwnerLeaseTtl = TimeSpan.FromSeconds(30);
             locations.OwnerLeaseFencingMargin = TimeSpan.FromSeconds(5);
-            options
+            var server = options
                 .AddRouteMesh(MeshName)
                 .Listen("tcp://127.0.0.1:0")
                 .SetRoutingIdPrefix("stall")
                 .Objects()
                 .Server();
+            if (instanceSpots)
+                server.AddInstanceSpotFactory<StallInstanceSpot>(
+                    "stall.instance",
+                    static factory => factory.DisableRelocation()
+                );
         });
         return services.BuildServiceProvider();
     }
@@ -304,4 +326,9 @@ public sealed class StartupStoreStallTests
             return gate;
         }
     }
+}
+
+internal sealed class StallInstanceSpot(IZLinkInstanceSpotContext context) : IZLinkInstanceSpot
+{
+    public IZLinkInstanceSpotContext Context { get; } = context;
 }
