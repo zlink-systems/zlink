@@ -1158,6 +1158,255 @@ INSTANTIATE_TEST_SUITE_P (
       return inputs;
   }()));
 
+class EndedSpotMemberReleaseTest : public ::testing::TestWithParam<std::tuple<bool, std::string>>
+{
+};
+
+// Location runtime §6.1: an ended User Spot whose remaining members all have ended owners is
+// released together with those members; any other member keeps everything unchanged.
+TEST_P (EndedSpotMemberReleaseTest, ReleasesOnlyEndedOwnerMembers)
+{
+    reclaim_scan_store_t opaque;
+    provider_location_repository_t provider (opaque);
+    in_memory_location_repository_t memory;
+    location_repository_t &repository = std::get<0> (GetParam ())
+                                          ? static_cast<location_repository_t &> (provider)
+                                          : static_cast<location_repository_t &> (memory);
+    const auto scenario = std::get<1> (GetParam ());
+    // Batch keys: Spot authority, owner lease, descriptor and capacity plus one authority per
+    // member (all members share the Spot's owner and node). 2,044 members fill 2,048 keys.
+    const std::size_t members_wanted = scenario == "batchFits"    ? 2044u
+                                       : scenario == "batchBound" ? 2045u
+                                                                  : 1u;
+    const auto claim = [&] (const std::string &owner_id) {
+        return std::get<owner_lease_claimed_t> (
+                 repository.claim_owner_lease (owner_id, 60s).result ().value ())
+          .token;
+    };
+    const auto old_owner = claim ("member-spot-old");
+    const auto new_owner = claim ("member-spot-new");
+    const auto publish = [&] (const std::string &rid, const location_owner_token_t &owner) {
+        mesh_node_descriptor_t descriptor;
+        descriptor.mesh_name = "member-spot-mesh";
+        descriptor.rid = zlink::routing_id_t::from (rid);
+        descriptor.lifecycle_generation = 1;
+        descriptor.descriptor_revision = 1;
+        descriptor.endpoint = "tcp://127.0.0.1:7001";
+        descriptor.owner_id = owner.owner_id;
+        descriptor.lease_generation = owner.lease_generation;
+        descriptor.object_role = object_role_t::server;
+        descriptor.state = framework_runtime_state_t::serving;
+        descriptor.application_version = 1;
+        descriptor.security_identity = rid;
+        descriptor.activation_concurrency.limit = 1;
+        descriptor.entry_spot_id = "entry-" + rid;
+        descriptor.object_capabilities.push_back ({placement_object_kind_t::actor, "player",
+                                                   maintenance_policy_kind_t::disabled, false, 0});
+        descriptor.object_capabilities.push_back ({placement_object_kind_t::user_spot, "room",
+                                                   maintenance_policy_kind_t::disabled, false, 0});
+        descriptor.capacity.actors.limit = static_cast<std::int32_t> (members_wanted + 2);
+        descriptor.capacity.spots.limit = scenario == "aggregate" ? 2 : 1;
+        descriptor.capacity.spot_types.push_back (
+          {placement_object_kind_t::user_spot, "room", {scenario == "aggregate" ? 2 : 1, 0, 0}});
+        ASSERT_EQ (repository.update_mesh_node (descriptor, location_write_intent_t::new_claim)
+                     .result ()
+                     .value ()
+                     .status,
+                   location_write_status_t::stored);
+    };
+    publish ("member-spot-source", old_owner);
+    publish ("member-spot-target", new_owner);
+    const object_creation_target_t source{
+      "member-spot-mesh", node_rid_t::from_string ("member-spot-source"), 1, old_owner};
+    const object_creation_target_t target{
+      "member-spot-mesh", node_rid_t::from_string ("member-spot-target"), 1, new_owner};
+    object_reserve_request_t request;
+    request.key = {placement_object_kind_t::user_spot, "member-spot"};
+    request.intent.stable_type = "room";
+    request.target = source;
+    request.creating_payload = bytes ("creating");
+    request.capacity_bundle = {
+      0, 1, spot_type_capacity_delta_t{placement_object_kind_t::user_spot, "room", 1}};
+    request.relocation_policy = detail::factory_relocation_kind_t::disabled;
+    const auto first =
+      std::get<object_reserved_t> (repository.reserve (request).result ().value ());
+    ASSERT_TRUE (std::holds_alternative<object_committed_t> (
+      repository
+        .commit (
+          {request.key, first.fence,
+           encode_user_spot_authority_payload (user_spot_authority_payload_t{
+             .state = user_spot_authority_state_t::ready,
+             .stable_type = "room",
+             .spot_id = "member-spot",
+             .owner_id = old_owner.owner_id,
+             .owner_lease_generation = static_cast<std::uint64_t> (old_owner.lease_generation),
+             .mesh_name = source.mesh_name,
+             .node_rid = source.node_rid,
+             .node_generation = 1})})
+        .result ()
+        .value ()));
+    const auto spot = std::get<authority_snapshot_t> (
+      repository.read_authority (spot_authority_key ("member-spot")).result ().value ());
+    const auto member_payload = [&] (const std::string &actor_id,
+                                     const object_creation_target_t &placement,
+                                     actor_authority_state_t state) {
+        return encode_actor_authority_payload (actor_authority_payload_t{
+          .state = state,
+          .stable_type = "player",
+          .actor_id = actor_id,
+          .current_spot_id = "member-spot",
+          .current_spot_generation = spot.object_generation,
+          .current_spot_kind = actor_authority_spot_kind_t::user,
+          .owner_id = placement.owner.owner_id,
+          .owner_lease_generation = static_cast<std::uint64_t> (placement.owner.lease_generation),
+          .mesh_name = placement.mesh_name,
+          .node_rid = placement.node_rid,
+          .node_generation = 1});
+    };
+    std::vector<std::string> member_ids;
+    const auto add_member = [&] (const std::string &actor_id,
+                                 const object_creation_target_t &placement, bool activated,
+                                 bool relocating = false) {
+        object_reserve_request_t member;
+        member.key = {placement_object_kind_t::actor, actor_id};
+        member.intent.stable_type = "player";
+        member.target = placement;
+        member.capacity_bundle.actor_slots = 1;
+        member.creating_payload =
+          activated ? bytes ("creating")
+                    : member_payload (actor_id, placement, actor_authority_state_t::creating);
+        const auto reserved =
+          std::get<object_reserved_t> (repository.reserve (member).result ().value ());
+        member_ids.push_back (actor_id);
+        if (!activated)
+            return;
+        auto ready = member_payload (actor_id, placement, actor_authority_state_t::ready);
+        if (relocating) {
+            std::ifstream fixture (ZLINK_AUTHORITY_RELOCATION_STATE_GOLDEN_PATH);
+            const auto golden = nlohmann::json::parse (fixture);
+            const auto slot =
+              tests::from_hex (golden.at ("valid").at (0).at ("hex").get<std::string> ());
+            ready = tests::with_relocation_slot (ready, {slot.begin () + 5, slot.end ()});
+        }
+        ASSERT_TRUE (std::holds_alternative<object_committed_t> (
+          repository.commit ({member.key, reserved.fence, ready}).result ().value ()));
+    };
+    add_member ("member-a", source, true);
+    if (scenario == "live")
+        add_member ("member-live", target, true);
+    if (scenario == "moving")
+        add_member ("member-moving", source, true, true);
+    if (scenario == "unactivated")
+        add_member ("member-unactivated", source, false);
+    if (scenario == "aggregate") {
+        // A member can be locked by an aggregate other than this Spot's aggregate.
+        // Include a separate Spot so the member lock is the rejection being tested.
+        auto aggregate_spot_request = request;
+        aggregate_spot_request.key.global_id = "aggregate-spot";
+        const auto reserved = std::get<object_reserved_t> (
+          repository.reserve (aggregate_spot_request).result ().value ());
+        auto aggregate_spot_payload = *decode_ready_user_spot_authority_payload (spot.payload);
+        aggregate_spot_payload.spot_id = aggregate_spot_request.key.global_id;
+        const auto committed = std::get<object_committed_t> (
+          repository
+            .commit ({aggregate_spot_request.key, reserved.fence,
+                      encode_user_spot_authority_payload (aggregate_spot_payload)})
+            .result ()
+            .value ());
+        const auto member = std::get<authority_snapshot_t> (
+          repository.read_authority (actor_authority_key ("member-a")).result ().value ());
+        aggregate_prepare_request_t aggregate;
+        aggregate.aggregate_id.value[0] = std::byte{2};
+        aggregate.aggregate_generation = 1;
+        aggregate.participants = {{actor_authority_key ("member-a"),
+                                   member.store_version,
+                                   authority_generation_transition_t::new_owner,
+                                   member.payload,
+                                   {}},
+                                  {spot_authority_key (aggregate_spot_request.key.global_id),
+                                   committed.ready.store_version,
+                                   authority_generation_transition_t::new_owner,
+                                   committed.ready.payload,
+                                   {}}};
+        aggregate.target_descriptor = {"member-spot-mesh",
+                                       zlink::routing_id_t::from ("member-spot-target")};
+        aggregate.target_descriptor_lifecycle_generation = 1;
+        aggregate.target_owner = new_owner;
+        aggregate.capacity_bundle.actor_slots = 1;
+        aggregate.capacity_bundle.spot_slots = 1;
+        aggregate.capacity_bundle.spot_type = request.capacity_bundle.spot_type;
+        ASSERT_TRUE (std::holds_alternative<aggregate_prepared_t> (
+          repository.prepare_aggregate (aggregate).result ().value ()));
+    }
+    for (std::size_t index = 0; member_ids.size () < members_wanted; ++index)
+        add_member ("member-bulk-" + std::to_string (index), source, true);
+    const auto versions = [&] {
+        std::vector<std::string> values;
+        for (const auto &id : member_ids) {
+            const auto read =
+              repository.read_authority (actor_authority_key (id)).result ().value ();
+            const auto *found = std::get_if<authority_snapshot_t> (&read);
+            values.push_back (found ? found->store_version : std::string ("missing"));
+        }
+        return values;
+    };
+    const auto before = versions ();
+    repository.release_owner_lease (old_owner).result ().value ();
+    opaque.armed = scenario == "deadPage" || scenario == "deadExpired";
+    opaque.expire_next_page = scenario == "deadExpired";
+    request.target = target;
+    const auto result = repository.reserve (request).result ();
+    if (scenario == "dead" || scenario == "deadPage" || scenario == "deadExpired"
+        || scenario == "batchFits") {
+        ASSERT_TRUE (result);
+        const auto *winner = std::get_if<object_reserved_t> (&result.value ());
+        ASSERT_NE (winner, nullptr);
+        EXPECT_GT (winner->creating.object_generation, spot.object_generation);
+        for (const auto &version : versions ())
+            EXPECT_EQ (version, "missing");
+        const auto nodes = repository.list_mesh_nodes ("member-spot-mesh").result ().value ().items;
+        const auto old_node = std::find_if (nodes.begin (), nodes.end (), [] (const auto &node) {
+            return node.rid.to_string () == "member-spot-source";
+        });
+        ASSERT_NE (old_node, nodes.end ());
+        EXPECT_EQ (old_node->capacity.actors.active, 0u);
+        if (scenario == "deadExpired")
+            EXPECT_EQ (opaque.expired, 1u);
+        // A released member is Missing: its next creation starts a new incarnation.
+        opaque.armed = false;
+        object_reserve_request_t again;
+        again.key = {placement_object_kind_t::actor, "member-a"};
+        again.intent.stable_type = "player";
+        again.target = target;
+        again.capacity_bundle.actor_slots = 1;
+        again.creating_payload = bytes ("creating");
+        const auto recreated = repository.reserve (again).result ();
+        ASSERT_TRUE (recreated);
+        const auto *member = std::get_if<object_reserved_t> (&recreated.value ());
+        ASSERT_NE (member, nullptr);
+        EXPECT_GT (member->creating.object_generation, spot.object_generation);
+        return;
+    }
+    ASSERT_FALSE (result);
+    EXPECT_EQ (result.error_kind (), framework_error_kind_t::unavailable);
+    const auto after = std::get<authority_snapshot_t> (
+      repository.read_authority (spot_authority_key ("member-spot")).result ().value ());
+    EXPECT_EQ (after.store_version, spot.store_version);
+    EXPECT_EQ (versions (), before);
+}
+
+INSTANTIATE_TEST_SUITE_P (ProviderAndInMemory, EndedSpotMemberReleaseTest, ::testing::ValuesIn ([] {
+                              std::vector<std::tuple<bool, std::string>> inputs;
+                              for (const bool provider : {false, true})
+                                  for (const auto scenario :
+                                       {"dead", "live", "moving", "aggregate", "unactivated",
+                                        "batchBound", "batchFits"})
+                                      inputs.emplace_back (provider, scenario);
+                              inputs.emplace_back (true, "deadPage");
+                              inputs.emplace_back (true, "deadExpired");
+                              return inputs;
+                          }()));
+
 class CreationTerminalTest : public ::testing::TestWithParam<completion_kind_t>
 {
   protected:

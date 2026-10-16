@@ -9,6 +9,7 @@
 #include "runtime/locations/location_key_codec.hpp"
 #include "runtime/locations/aggregate_inventory.hpp"
 #include "runtime/locations/authority_key_codec.hpp"
+#include "runtime/locations/in_memory_store_providers.hpp"
 #include <runtime/locations/location_repository.hpp>
 #include "runtime/locations/pending_creation_projection.hpp"
 #include "runtime/execution/state_lane.hpp"
@@ -1358,6 +1359,7 @@ class in_memory_location_repository_t : public location_repository_t
         const bool owner_live = owner_token_is_live (snapshot.owner, now);
         if (active && owner_live)
             return false;
+        std::vector<std::string> members;
         for (const auto &[id, aggregate] : _aggregates)
             if (aggregate.status == aggregate_status_t::prepared)
                 for (const auto &participant : aggregate.request.participants)
@@ -1388,14 +1390,7 @@ class in_memory_location_repository_t : public location_repository_t
                     || spot->stable_type != request->intent.stable_type)
                     throw framework_exception_t (framework_error_kind_t::unavailable,
                                                  "User Spot is not steady Ready");
-                for (const auto &[member_key, authority] : _authorities) {
-                    const auto member = decode_direct_actor_authority_payload (authority.payload);
-                    if (member && member->current_spot_kind == actor_authority_spot_kind_t::user
-                        && member->current_spot_id == spot->spot_id
-                        && member->current_spot_generation == snapshot.object_generation)
-                        throw framework_exception_t (framework_error_kind_t::unavailable,
-                                                     "User Spot still has membership");
-                }
+                members = ended_spot_members_on_lane (key, snapshot, spot->spot_id, now);
             } else if (snapshot.allocation.object_kind == placement_object_kind_t::instance_spot) {
                 const auto spot = decode_instance_spot_authority_payload (snapshot.payload);
                 if (!spot || spot->state != instance_spot_authority_state_t::ready
@@ -1422,7 +1417,63 @@ class in_memory_location_repository_t : public location_repository_t
         }
         _authorities.erase (key);
         _object_types.erase (key);
+        for (const auto &member_key : members) {
+            const auto member = _authorities.find (member_key);
+            apply_capacity_bundle (_active_by_placement, member->second.allocation.target,
+                                   member->second.allocation.capacity_bundle, false);
+            _authorities.erase (member);
+            _object_types.erase (member_key);
+        }
         return true;
+    }
+
+    // Location runtime §6.1: every Actor membership of the old User Spot incarnation must
+    // belong to an ended-owner member (steady Ready, activated, outside any aggregate, owner
+    // lease invalid). The release must fit one provider batch; the key set mirrors the
+    // provider repository batch (authority, owner lease, descriptor and capacity records).
+    std::vector<std::string> ended_spot_members_on_lane (const std::string &spot_key,
+                                                         const authority_snapshot_t &spot,
+                                                         const std::string &spot_id,
+                                                         clock_t::time_point now) const
+    {
+        const auto node = [] (const object_creation_target_t &target) {
+            return mesh_node_key (target.mesh_name, std::string (target.node_rid.value ()));
+        };
+        std::set<std::string> batch_keys{"authority:" + spot_key, "owner:" + spot.owner.owner_id,
+                                         "descriptor:" + node (spot.allocation.target),
+                                         "capacity:" + node (spot.allocation.target)};
+        std::vector<std::string> members;
+        for (const auto &[member_key, authority] : _authorities) {
+            const auto member = decode_direct_actor_authority_payload (authority.payload);
+            if (!member || member->current_spot_kind != actor_authority_spot_kind_t::user
+                || member->current_spot_id != spot_id
+                || member->current_spot_generation != spot.object_generation)
+                continue;
+            bool aggregate_locked = false;
+            for (const auto &[id, aggregate] : _aggregates)
+                if (aggregate.status == aggregate_status_t::prepared)
+                    for (const auto &participant : aggregate.request.participants)
+                        aggregate_locked = aggregate_locked || participant.key.value == member_key;
+            if (authority.allocation.state != placement_allocation_state_t::active
+                || member->state != actor_authority_state_t::ready || member->has_relocation_state
+                || aggregate_locked)
+                throw framework_exception_t (
+                  framework_error_kind_t::unavailable,
+                  "User Spot still has a relocating or unactivated member");
+            if (owner_token_is_live (authority.owner, now))
+                throw framework_exception_t (
+                  framework_error_kind_t::unavailable,
+                  "User Spot still has a member with a live owner lease");
+            members.push_back (member_key);
+            batch_keys.insert ("authority:" + member_key);
+            batch_keys.insert ("owner:" + authority.owner.owner_id);
+            batch_keys.insert ("capacity:" + node (authority.allocation.target));
+        }
+        if (batch_keys.size () > location_store_limits::write_keys)
+            throw framework_exception_t (
+              framework_error_kind_t::unavailable,
+              "User Spot member release exceeds one Location Store batch");
+        return members;
     }
 
     bool owner_token_is_live (const location_owner_token_t &token, clock_t::time_point now) const
