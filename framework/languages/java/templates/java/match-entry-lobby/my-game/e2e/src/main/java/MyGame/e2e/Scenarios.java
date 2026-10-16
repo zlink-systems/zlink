@@ -90,7 +90,7 @@ public final class Scenarios {
         try (var a = new Client(nodes.endpoint, "p1-" + suffix)) {
             var b = new Client(nodes.endpoint, "p2-" + suffix);
             boolean bClosed = false;
-            Exception primary = null;
+            Throwable primary = null;
             try {
                 a.connect();
                 b.connect();
@@ -170,7 +170,7 @@ public final class Scenarios {
                     check(
                             b.disconnects.get() == 0 && b.connector.isConnected(),
                             "Second player disconnected");
-            } catch (Exception error) {
+            } catch (Exception | Error error) {
                 primary = error;
                 throw error;
             } finally {
