@@ -7,10 +7,7 @@ namespace MyGame.Shared;
 
 public static class NodeControl
 {
-    public static async Task RunAsync(
-        IHost host,
-        NodeSettings settings
-    )
+    public static async Task RunAsync(IHost host, NodeSettings settings)
     {
         using var lifetime = new CancellationTokenSource();
         await host.StartAsync(lifetime.Token);
@@ -29,14 +26,13 @@ public static class NodeControl
             {
                 case NodeProtocol.Drain:
                     Console.WriteLine(NodeProtocol.RelocationRequested);
-                    var result = await runtime
-                        .RelocateAsync(
-                            new ZLinkFrameworkRelocationOptions
-                            {
-                                Mode = ZLinkFrameworkRelocationMode.PlannedMaintenance,
-                            },
-                            lifetime.Token
-                        );
+                    var result = await runtime.RelocateAsync(
+                        new ZLinkFrameworkRelocationOptions
+                        {
+                            Mode = ZLinkFrameworkRelocationMode.PlannedMaintenance,
+                        },
+                        lifetime.Token
+                    );
                     if (result.Outcome != ZLinkFrameworkRelocationOutcome.Relocated)
                         throw new InvalidOperationException(
                             $"Host relocation blocked: {result.Reason}."

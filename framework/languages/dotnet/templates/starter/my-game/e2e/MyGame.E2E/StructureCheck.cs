@@ -134,7 +134,10 @@ internal static class StructureCheck
         foreach (var (id, configured) in settings)
         {
             Require(roles[id] == "session", "No entry point is registered for this node role.");
-            Require(!string.IsNullOrWhiteSpace(configured.StreamEndpoint), "Session requires StreamEndpoint.");
+            Require(
+                !string.IsNullOrWhiteSpace(configured.StreamEndpoint),
+                "Session requires StreamEndpoint."
+            );
         }
         Require(Array(document, "channels").Count == 0, "No application channels are registered.");
         Require(Array(document, "spots").Count == 0, "No application Spots are registered.");

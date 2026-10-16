@@ -11,6 +11,7 @@ This .NET 8 starter provides one Session node, Redis hosting, diagnostics, stdin
 | `server/MyGame.Shared/` | Settings, hosting, and the single `NodeProtocol` marker definition |
 | `e2e/MyGame.E2E/Scenarios.cs` | Observable scenarios; add new scenario IDs to `All` and the descriptor together |
 | `e2e/MyGame.E2E/WorldRun.cs` | Start nodes, capture logs, and clean up owned resources |
+| `e2e/MyGame.E2E/RunOutcome.cs` | Collect cleanup failures for Program to report after the scenario failure |
 | `e2e/MyGame.E2E/StructureCheck.cs` | Check actual configuration and registration declarations before startup |
 
 `zlink.structure.json` describes initial composition, not runtime placement. This starter declares no application channels or Spots. When adding them, extend the checker to compare their names and types with registration constants.
@@ -19,21 +20,38 @@ This .NET 8 starter provides one Session node, Redis hosting, diagnostics, stdin
 
 Download and run a structure from [ZLink Start](https://zlink.systems/start) before introducing its features here. The sample collection contains nine structures in five server languages. Keep the sample separate and transfer only the registrations, application state, and tests required by your feature.
 
-The paths below are relative to the ZLink repository's `framework/languages/dotnet/templates/`. In a downloaded `mmo-seamless/my-game` sample, use the portion after that directory.
+Choose the sample according to the composition your game needs.
+
+| Structure | Selection criterion |
+| --- | --- |
+| `board-tables` | Table-based board games with player Actors and a shared table Spot |
+| `match-entry-lobby` | STREAM entry, matchmaking, and dynamically allocated match rooms |
+| `match-http-lobby` | HTTP matchmaking followed by STREAM room entry |
+| `morpg-lobby-instances` | Party formation in a lobby followed by a private dungeon |
+| `morpg-channel-town` | Town channels, parties, and private dungeon instances |
+| `morpg-fields-instances` | Shared fields across nodes, border visibility, and party dungeons |
+| `mmo-world-channels` | Separate worlds with their own storage and switchable field channels |
+| `mmo-megaserver` | Additional region instances when one region reaches capacity |
+| `mmo-seamless` | Continuous movement across zone boundaries and border subscriptions |
+
+The feature paths below are relative to the ZLink repository's `framework/languages/dotnet/templates/`. In a downloaded sample, use the portion after `<structure>/my-game/`. Short companion paths refer to the main file's directory or the explicitly named project root.
 
 | Feature | Sample file and work to transfer |
 | --- | --- |
-| Spot | `mmo-seamless/my-game/server/MyGame.Zone/ZoneSpot.cs` and `Program.cs`: shared game state, type registration, and creation |
-| Actor | `mmo-seamless/my-game/server/MyGame.Zone/PlayerActor.cs`: per-player state and membership callbacks |
-| Entry | `mmo-seamless/my-game/server/MyGame.Zone/WorldEntry.cs` and `Handlers.cs`: first packet handling and admission |
-| Session binding | `mmo-seamless/my-game/server/MyGame.Session/PlayerSession.cs`: create/find an Actor, bind it, relay the original typed packet |
-| Relocation | `mmo-seamless/my-game/server/MyGame.Zone/PlayerActor.cs` and `ZoneSpot.cs`: capture/restore adapters; `e2e/MyGame.E2E/Scenarios.cs`: stateful update checks |
-| Subscriptions | `mmo-seamless/my-game/server/MyGame.Zone/Program.cs`, `ZoneSpot.cs`, and `Handlers.cs`: border channel registration, publication, and delivery |
-| Dynamic instances | `mmo-seamless/my-game/server/MyGame.Instance/DungeonSpot.cs` and `Program.cs`: dynamic User Spot creation |
-| Typed messages | `mmo-seamless/my-game/server/MyGame.Shared/Contracts.cs`: shared packet records |
+| Spot | `board-tables/my-game/server/MyGame.Table/TableSpot.cs`: table-owned state and admission; register it in `Program.cs` |
+| Actor | `board-tables/my-game/server/MyGame.Table/PlayerActor.cs`: minimal player Actor, join completion, and factory |
+| Entry and first admission | `morpg-channel-town/my-game/server/MyGame.Shared/TownEntry.cs`: first-packet handler and deferred Town join |
+| Session binding | `board-tables/my-game/server/MyGame.Session/PlayerSession.cs`: find/create, bind, and relay the original typed packet |
+| Host relocation | `board-tables/my-game/server/MyGame.Table/TableSpot.cs`: TableRelocation capture/restore; pair with `e2e/MyGame.E2E/Scenarios.cs` update checks |
+| Dynamic dungeon | `morpg-lobby-instances/my-game/server/MyGame.Lobby/PartySpot.cs`: GetOrCreate and preparation; pair with `server/MyGame.Instance/DungeonSpot.cs` and `server/MyGame.Instance/Program.cs` |
+| World/channel selection | `mmo-world-channels/my-game/server/MyGame.Channel/Infrastructure/ZLink/Handlers.cs`: ChangeChannel uses deferred membership changes; inspect `server/MyGame.Accounts/Program.cs` for world listing |
+| Channel pub/sub and seamless movement | `mmo-seamless/my-game/server/MyGame.Zone/ZoneSpot.cs`: border subscription/publication; pair with `Handlers.cs` for delivery and `PlayerActor.cs` for movement |
+| HTTP lobby | `match-http-lobby/my-game/server/MyGame.Lobby/Program.cs`: HTTP endpoint; pair with `Application/Matchmaker.cs` and `Infrastructure/ZLink/RoomProvisioner.cs` |
+| Typed messages | `board-tables/my-game/server/MyGame.Shared/Contracts.cs`: shared packet records |
+
+The channels in `mmo-world-channels` are player-selected game spaces within a world. They differ from messaging subscription channels, and that sample registers no pub/sub subscriptions. Use the actual registrations and handlers in `mmo-seamless` for border messaging subscriptions.
 
 After each addition, extend settings and registrations, `zlink.structure.json`, its checker, and e2e together. Keep game rules in Domain/Application modules when they appear; put Framework callbacks and transport adapters under Infrastructure/ZLink. Do not create empty layers in this starter.
-
 ## Public API boundaries
 
 Use the [documentation](https://docs.zlink.systems/), [.NET server guide](https://docs.zlink.systems/dotnet/guide/server/), [API reference](https://docs.zlink.systems/dotnet/reference/), and [agent index](https://docs.zlink.systems/llms.txt). Check API availability against `Directory.Packages.props` because online guides may describe a newer release.
@@ -47,6 +65,8 @@ Each fact has one state owner. When gameplay is added, replies inside an Actor h
 Run the README commands from this directory. For debugger attachment, use `--local` or `-Local` and inspect the PID files in the run log directory. The `connect` scenario owns the current smoke check; add gameplay scenarios without replacing it. Preserve received-result assertions and check failure exit codes as well as success.
 
 Use OS-assigned ports, unique Redis key prefixes, and unique Compose projects. Clean up only resources created by the run. A cleanup error or an intermittent failure is a failure; preserve the first logs before another run.
+
+Each run owns a RunOutcome instance. Record process and connector cleanup failures there; Program reports the scenario exception first and cleanup errors afterward, and returns exit 1 for either kind of failure.
 
 ## Debugging settings
 

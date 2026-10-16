@@ -7,9 +7,11 @@ public sealed class PlayerSession(IZLinkSessionContext context) : IZLinkSession
 {
     public IZLinkSessionContext Context { get; } = context;
 
-    public ValueTask OnConnectedAsync(CancellationToken cancellationToken) => ValueTask.CompletedTask;
+    public ValueTask OnConnectedAsync(CancellationToken cancellationToken) =>
+        ValueTask.CompletedTask;
 
-    public ValueTask OnDisconnectedAsync(CancellationToken cancellationToken) => ValueTask.CompletedTask;
+    public ValueTask OnDisconnectedAsync(CancellationToken cancellationToken) =>
+        ValueTask.CompletedTask;
 
     public ValueTask OnErrorAsync(ZLinkStreamError error, CancellationToken cancellationToken)
     {

@@ -6,13 +6,21 @@ namespace MyGame.E2E;
 
 internal static class Scenarios
 {
-    public static readonly string[] All = ["connect"];
+    private const string Connect = "connect";
+    private static readonly TimeSpan ClientTimeout = TimeSpan.FromSeconds(10);
+    public static readonly string[] All = [Connect];
 
     public static string[] Select(string? option)
     {
         var selected = option?.Split(',', StringSplitOptions.RemoveEmptyEntries) ?? All;
-        if (selected.Length == 0 || selected.Distinct().Count() != selected.Length || selected.Any(id => !All.Contains(id)))
-            throw new ArgumentException("Unknown or duplicate scenario. Available: " + string.Join(',', All));
+        if (
+            selected.Length == 0
+            || selected.Distinct().Count() != selected.Length
+            || selected.Any(id => !All.Contains(id))
+        )
+            throw new ArgumentException(
+                "Unknown or duplicate scenario. Available: " + string.Join(',', All)
+            );
         return All.Where(selected.Contains).ToArray();
     }
 
@@ -27,7 +35,7 @@ internal static class Scenarios
                 {
                     switch (id)
                     {
-                        case "connect":
+                        case Connect:
                             await ConnectAsync(run, ct);
                             break;
                     }
@@ -50,15 +58,22 @@ internal static class Scenarios
     // Add application scenarios here and extend All and zlink.structure.json together.
     private static async Task ConnectAsync(WorldRun run, CancellationToken ct)
     {
-        await using (var client = ZlinkStreamConnectorFactory.Create(new ZlinkStreamConnectorOptions
-        {
-            Endpoint = new Uri(run.Endpoint),
-            ConnectTimeout = TimeSpan.FromSeconds(10),
-            RequestTimeout = TimeSpan.FromSeconds(10),
-            DispatchMode = ZlinkStreamDispatchMode.Immediate,
-        }))
+        var client = ZlinkStreamConnectorFactory.Create(
+            new ZlinkStreamConnectorOptions
+            {
+                Endpoint = new Uri(run.Endpoint),
+                ConnectTimeout = ClientTimeout,
+                RequestTimeout = ClientTimeout,
+                DispatchMode = ZlinkStreamDispatchMode.Immediate,
+            }
+        );
+        try
         {
             await client.Connect.Async(ct);
+        }
+        finally
+        {
+            await run.Outcome.CleanupAsync(client.DisposeAsync);
         }
         await run.Session.CommandAsync(NodeProtocol.Drain);
         await run.Session.WaitLineAsync(NodeProtocol.RelocationRequested, ct);

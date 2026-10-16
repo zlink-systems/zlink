@@ -9,11 +9,14 @@ Console.CancelKeyPress += (_, signal) =>
 };
 using var termination = OperatingSystem.IsWindows()
     ? null
-    : PosixSignalRegistration.Create(PosixSignal.SIGTERM, signal =>
-    {
-        signal.Cancel = true;
-        cancellation.Cancel();
-    });
+    : PosixSignalRegistration.Create(
+        PosixSignal.SIGTERM,
+        signal =>
+        {
+            signal.Cancel = true;
+            cancellation.Cancel();
+        }
+    );
 
 string? Option(string name)
 {
@@ -25,22 +28,41 @@ string? Option(string name)
     return args[index + 1];
 }
 
+WorldRun? run = null;
+Exception? scenarioFailure = null;
+var result = 0;
 try
+{
+    result = await RunAsync();
+}
+catch (Exception error)
+{
+    scenarioFailure = error;
+}
+var failures = run?.Outcome.Failures ?? [];
+if (scenarioFailure is not null)
+    failures.Insert(0, scenarioFailure);
+if (failures.Count > 0)
+{
+    Console.Error.WriteLine(
+        new AggregateException("Run failed (scenario first, then cleanup).", failures)
+    );
+    return 1;
+}
+return result;
+
+async Task<int> RunAsync()
 {
     var root = Path.GetFullPath(Option("--root") ?? Directory.GetCurrentDirectory());
     StructureCheck.Run(root, Option("--structure"));
     if (args.Contains("--check-structure"))
         return 0;
     var selected = Scenarios.Select(Option("--scenario"));
-    await using var run = new WorldRun(root);
+    run = new WorldRun(root);
+    await using var ownedRun = run;
     using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellation.Token);
-    deadline.CancelAfter(TimeSpan.FromMinutes(3));
+    deadline.CancelAfter(WorldRun.RunDeadline);
     await run.StartAsync(deadline.Token);
     await Scenarios.RunAsync(run, selected, deadline.Token);
     return 0;
-}
-catch (Exception error)
-{
-    Console.Error.WriteLine(error);
-    return 1;
 }

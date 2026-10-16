@@ -11,6 +11,7 @@
 | `server/MyGame.Shared/` | 설정, hosting, 단일 `NodeProtocol` 마커 정의 |
 | `e2e/MyGame.E2E/Scenarios.cs` | 관찰 가능한 시나리오, `All`과 구조 선언에 시나리오 ID 함께 추가 |
 | `e2e/MyGame.E2E/WorldRun.cs` | node 기동, 로그 보존과 소유 자원 정리 |
+| `e2e/MyGame.E2E/RunOutcome.cs` | cleanup 실패 수집, Program에서 시나리오 실패 다음에 함께 보고 |
 | `e2e/MyGame.E2E/StructureCheck.cs` | 기동 전 실제 설정과 등록 선언 검사 |
 
 `zlink.structure.json`은 초기 구성을 기술하며 runtime 배치를 정하지 않는다. 이 셋업은 application channel과 Spot을 선언하지 않는다. 이를 추가할 때 검사기도 등록 상수의 이름·타입과 대조하도록 확장한다.
@@ -19,21 +20,38 @@
 
 [ZLink Start](https://zlink.systems/start)에서 필요한 구조를 받아 실행한 뒤 그 기능을 추가한다. 샘플은 구조 9종을 서버 언어 5개로 제공한다. 샘플은 별도로 유지하고 필요한 등록·application 상태·검증만 가져온다.
 
-다음 경로의 기준은 ZLink 저장소의 `framework/languages/dotnet/templates/`다. 내려받은 `mmo-seamless/my-game`에서는 해당 디렉터리 뒤의 경로를 사용한다.
+다음 표에서 게임에 필요한 구성을 고른다.
+
+| 구조 | 선택 기준 |
+| --- | --- |
+| `board-tables` | 플레이어 Actor가 같은 테이블 Spot에 입장하는 보드게임 |
+| `match-entry-lobby` | STREAM 첫 입장, 매칭 대기열과 동적 대전 방 |
+| `match-http-lobby` | HTTP 매칭 뒤 STREAM으로 대전 방에 입장 |
+| `morpg-lobby-instances` | 로비에서 파티를 구성한 뒤 전용 던전에 입장 |
+| `morpg-channel-town` | 마을 채널에서 파티를 구성한 뒤 전용 던전에 입장 |
+| `morpg-fields-instances` | 여러 node의 공용 필드, 경계 표시와 파티 던전 |
+| `mmo-world-channels` | 월드별 데이터 격리와 월드 안의 필드 채널 변경 |
+| `mmo-megaserver` | 같은 지역의 정원이 차면 지역 instance를 추가 생성 |
+| `mmo-seamless` | Zone 경계를 넘는 연속 이동과 경계 구독 |
+
+다음 기능 표의 경로는 ZLink 저장소의 `framework/languages/dotnet/templates/`를 기준으로 한다. 내려받은 샘플에서는 `<structure>/my-game/` 뒤의 경로를 사용한다. 같은 행의 짧은 파일 경로는 주 파일의 디렉터리 또는 명시된 프로젝트 루트를 기준으로 한다.
 
 | 기능 | 참고 파일과 가져올 내용 |
 | --- | --- |
-| Spot | `mmo-seamless/my-game/server/MyGame.Zone/ZoneSpot.cs`와 `Program.cs`: 공유 게임 상태, 타입 등록과 생성 |
-| Actor | `mmo-seamless/my-game/server/MyGame.Zone/PlayerActor.cs`: 플레이어 상태와 membership callback |
-| Entry | `mmo-seamless/my-game/server/MyGame.Zone/WorldEntry.cs`와 `Handlers.cs`: 첫 패킷 처리와 admission |
-| Session binding | `mmo-seamless/my-game/server/MyGame.Session/PlayerSession.cs`: Actor 생성·조회, binding과 원래 typed 패킷 relay |
-| Relocation | `mmo-seamless/my-game/server/MyGame.Zone/PlayerActor.cs`와 `ZoneSpot.cs`: capture/restore adapter, `e2e/MyGame.E2E/Scenarios.cs`: 상태가 있는 update 검증 |
-| 구독 | `mmo-seamless/my-game/server/MyGame.Zone/Program.cs`·`ZoneSpot.cs`·`Handlers.cs`: border channel 등록·발행·전달 |
-| 동적 instance | `mmo-seamless/my-game/server/MyGame.Instance/DungeonSpot.cs`와 `Program.cs`: 동적 User Spot 생성 |
-| Typed 메시지 | `mmo-seamless/my-game/server/MyGame.Shared/Contracts.cs`: 공유 패킷 record |
+| 공유 Spot | `board-tables/my-game/server/MyGame.Table/TableSpot.cs`: 테이블 상태와 admission, `Program.cs`의 등록 |
+| 테이블 Actor | `board-tables/my-game/server/MyGame.Table/PlayerActor.cs`: 최소 플레이어 Actor, join 완료와 factory |
+| Entry·첫 입장 | `morpg-channel-town/my-game/server/MyGame.Shared/TownEntry.cs`: 첫 패킷 handler와 Town으로의 deferred join |
+| Session binding | `board-tables/my-game/server/MyGame.Session/PlayerSession.cs`: Actor 생성·조회, binding과 원래 typed 패킷 relay |
+| Host relocation | `board-tables/my-game/server/MyGame.Table/TableSpot.cs`: TableRelocation의 capture/restore, `e2e/MyGame.E2E/Scenarios.cs`의 update 검증 |
+| 동적 던전 | `morpg-lobby-instances/my-game/server/MyGame.Lobby/PartySpot.cs`: GetOrCreate와 준비, `server/MyGame.Instance/DungeonSpot.cs`와 `server/MyGame.Instance/Program.cs`의 구현·등록 |
+| 월드·채널 선택 | `mmo-world-channels/my-game/server/MyGame.Channel/Infrastructure/ZLink/Handlers.cs`: ChangeChannel의 deferred membership 변경, `server/MyGame.Accounts/Program.cs`의 월드 목록 |
+| Channel pub/sub·심리스 이동 | `mmo-seamless/my-game/server/MyGame.Zone/ZoneSpot.cs`: 경계 구독·발행, `Handlers.cs`의 전달과 `PlayerActor.cs`의 이동 |
+| HTTP 로비 | `match-http-lobby/my-game/server/MyGame.Lobby/Program.cs`: HTTP endpoint, `Application/Matchmaker.cs`와 `Infrastructure/ZLink/RoomProvisioner.cs`의 매칭·방 생성 |
+| Typed 메시지 | `board-tables/my-game/server/MyGame.Shared/Contracts.cs`: 공유 패킷 record |
+
+`mmo-world-channels`의 채널은 플레이어가 선택하는 월드 안의 게임 공간이다. 메시지 구독 channel과는 구분하며, 이 샘플에는 pub/sub 구독이 없다. 경계 메시지 구독은 `mmo-seamless`의 실제 등록·handler를 참고한다.
 
 기능마다 설정·등록, `zlink.structure.json`, 검사기와 e2e를 함께 확장한다. 게임 규칙이 생기면 Domain/Application에 두고 Framework callback과 transport adapter는 Infrastructure/ZLink에 둔다. 현재 셋업에는 빈 계층을 만들지 않는다.
-
 ## 공개 API 경계
 
 [공개 문서](https://docs.zlink.systems/), [.NET 서버 가이드](https://docs.zlink.systems/dotnet/guide/server/), [API reference](https://docs.zlink.systems/dotnet/reference/), [agent index](https://docs.zlink.systems/llms.txt)를 참고한다. 온라인 문서는 더 최신 릴리스를 설명할 수 있으므로 `Directory.Packages.props`의 버전에서 지원하는 API인지 확인한다.
@@ -47,6 +65,8 @@
 현재 디렉터리에서 README의 명령을 실행한다. debugger를 연결할 때는 `--local` 또는 `-Local`과 실행 로그 디렉터리의 PID 파일을 사용한다. 현재 smoke 검사는 `connect` 시나리오가 담당하며 게임 시나리오는 이를 유지하면서 추가한다. 실제 수신 결과 assertion을 유지하고 성공뿐 아니라 실패 종료 코드도 확인한다.
 
 OS가 배정한 포트, 고유 Redis key prefix와 Compose project를 사용한다. 실행기가 만든 자원만 정리한다. 정리 오류와 간헐 실패도 실패이며 다음 실행 전에 첫 로그를 보존한다.
+
+각 run은 RunOutcome 인스턴스를 소유한다. process와 connector의 cleanup 실패는 여기에 기록한다. Program이 시나리오 예외를 먼저, cleanup 오류를 다음에 함께 보고하며 어느 쪽이든 실패하면 exit 1을 반환한다.
 
 ## 디버깅 설정
 
