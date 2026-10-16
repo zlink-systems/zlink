@@ -109,6 +109,11 @@ completion continuation on the same Spot queue as one resume record to resume in
 gate and claim lifetime; [§16](#yield-call-eligibility) owns availability by call.
 Create/get-or-create is an object-execution exception that does not widen terminator naming scope.
 
+**One call per turn uses `Yield`.** Calling `Yield` on a second call in the same turn ends in
+`InvalidOperation` before submission or queue change, whether or not the first `Yield` has already released the
+gate. When the gate is released may differ by language (at the call or when the wait starts), but a turn must
+have exactly one resume record for the turn in which the continuation resumes to be determined.
+
 **When a member Actor of a `SpotWide` User Spot calls `Yield`, only the
 shared Spot gate is returned — the Actor queue claim is held.**
 
@@ -643,6 +648,9 @@ confirmation condition" and are not listed here.
   ordinary async terminal.
 - Actor join, send, publish, timer registration, close, and destroy do not offer `Yield`.
 - A `Yield` call outside an owner turn ends in `InvalidOperation` before submission or queue change.
+- Calling `Yield` on a second call in the same turn (for example, waiting on two `Yield` results together)
+  ends in `InvalidOperation` before submission or queue change whether or not the first `Yield` released the
+  gate, and the first `Yield` still resumes ([§3](#yield-gate-and-claim)).
 - After a `SpotWide` member Actor calls `Yield`, the same Actor's next
   record does not run first, while other Actor/Spot handlers/timers do
   run.
