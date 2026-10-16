@@ -12,6 +12,9 @@ const { SubmitResult } = require('../../packages/framework/dist/runtime/backend/
 const { encodeRoutingIdStorageHex } = require('../../packages/framework/dist/runtime/routing-id');
 const wire = require('../../packages/framework/dist/runtime/foundation/service-stateful-wire-codec');
 const {
+  ServiceWireProtocolError
+} = require('../../packages/framework/dist/runtime/foundation/service-wire-m6a-codec');
+const {
   ZLinkNodeRawMeshBackend
 } = require('../../packages/framework/dist/runtime/backend/node/node-raw-mesh-backend');
 const {
@@ -29,6 +32,10 @@ async function relocationHarness(ids, nativeBinding = false, hooks = {}) {
   const host = new framework.ZLinkFrameworkRuntimeHost({
     registration: framework.createFrameworkRegistration()
   });
+  if (hooks.notifyDisconnected)
+    host.streamBindingRuntime = new framework.ZLinkStreamBindingRuntime({
+      notifyDisconnected: hooks.notifyDisconnected
+    });
   let backend;
   let sessionService;
   let stateful;
@@ -104,7 +111,10 @@ async function relocationHarness(ids, nativeBinding = false, hooks = {}) {
     objectGeneration: 5n,
     meshName: 'mesh',
     nodeRid: ids.source,
-    bindingGeneration: 6n
+    bindingGeneration: 6n,
+    ownershipGeneration: 11n,
+    ownerLeaseGeneration: 13n,
+    ownerNodeGeneration: 2n
   });
   const authority = (rid, ownerGeneration, leaseGeneration, nodeGeneration) => ({
     kind: 'snapshot',
@@ -118,6 +128,7 @@ async function relocationHarness(ids, nativeBinding = false, hooks = {}) {
   let currentAuthority = authority(ids.source, 11n, 13n, 2n);
   const abort = new AbortController();
   const controls = [];
+  const responses = [];
   const tasks = [];
   let sourceRuntime;
   let sessionRuntime;
@@ -132,6 +143,8 @@ async function relocationHarness(ids, nativeBinding = false, hooks = {}) {
     );
   const submit = (runtime, sourceNodeRid, bytes) => {
     controls.push(bytes[3]);
+    if (bytes[3] === wire.M6bServiceWireCommand.sessionRelocationSealed)
+      responses.push(wire.decodeSessionRelocationSealed(bytes));
     const task = Promise.resolve(dispatch(runtime, sourceNodeRid, bytes));
     tasks.push(task);
     task.catch((error) => {
@@ -216,6 +229,10 @@ async function relocationHarness(ids, nativeBinding = false, hooks = {}) {
     transfer,
     sent,
     controls,
+    responses,
+    sourceRuntime,
+    sessionRuntime,
+    dispatch,
     seal: () => transfer.sealBoundSessionRoute(actor, state, abort.signal, { high: 7n, low: 9n }),
     receiveSeal: (request) =>
       dispatch(sessionRuntime, ids.source, wire.encodeSessionRelocationSeal(request)),
@@ -237,6 +254,28 @@ async function relocationHarness(ids, nativeBinding = false, hooks = {}) {
       await backend?.close();
     }
   };
+}
+
+async function rebind(h, bindingGeneration = 7n) {
+  await h.stream.close();
+  await h.host.streamBindingRuntime.cleanup(h.context);
+  const context = h.host.streamBindingRuntime.createSessionContext(
+    new framework.ZLinkManagedStream(
+      { async bindActor() {}, async unbindActor() {}, disconnectPeer() {} },
+      'successor-session'
+    )
+  );
+  await context.actors.bindOrGet({
+    actorId: h.actor.context.actorId,
+    objectGeneration: 5n,
+    meshName: 'mesh',
+    nodeRid: 'source',
+    bindingGeneration,
+    ownershipGeneration: 11n,
+    ownerLeaseGeneration: 13n,
+    ownerNodeGeneration: 2n
+  });
+  return context;
 }
 
 const binaryIds = {
@@ -380,12 +419,73 @@ function barrier() {
   return { joined, release };
 }
 
+// #1883: port of closed-session-seal-repro.cjs, with owner ingress held at
+// a deterministic barrier and cooperative release/join on every exit.
+test('closed Session seal returns bindingAbsent and relocation reaches target preparation', async () => {
+  const entered = barrier();
+  const allowSeal = barrier();
+  const dropped = barrier();
+  const h = await relocationHarness(
+    { source: 'source', owner: 'session-owner', session: 'session', target: 'target' },
+    false,
+    {
+      beforeSeal: async () => {
+        entered.release();
+        await allowSeal.joined;
+      },
+      onDrop: (error) => dropped.release(error)
+    }
+  );
+  const source = h.seal();
+  const joined = source.then(
+    (value) => ({ value }),
+    (error) => ({ error })
+  );
+  try {
+    await Promise.race([
+      entered.joined,
+      joined.then((result) => {
+        throw result.error ?? new Error('seal completed before the owner barrier');
+      })
+    ]);
+    await h.stream.close();
+    await h.host.streamBindingRuntime.cleanup(h.context);
+    assert.equal(
+      await h.host.streamBindingRuntime.sessionRouteFence(h.actor.context.actorId),
+      undefined
+    );
+    allowSeal.release();
+    const result = await Promise.race([joined, dropped.joined.then((error) => ({ error }))]);
+    assert.equal(result.error, undefined, result.error?.stack);
+    assert.equal(
+      result.value,
+      undefined,
+      'absent participant has no sessionBindings entry or command 44 target'
+    );
+    assert.deepEqual(h.controls, [
+      wire.M6bServiceWireCommand.sessionRelocationSeal,
+      wire.M6bServiceWireCommand.sessionRelocationSealed
+    ]);
+    await h.receiveSeal(h.sent[0]);
+    assert.equal(
+      h.controls.filter((command) => command === wire.M6bServiceWireCommand.sessionRelocationSealed)
+        .length,
+      2
+    );
+  } finally {
+    allowSeal.release();
+    h.abort.abort(new Error('cooperative test release'));
+    await joined;
+    await h.close();
+  }
+});
+
 const {
   ZLinkSpotSerialTurnExecutor
 } = require('../../packages/framework/dist/runtime/spots/spot-serial-turn-executor');
 
 for (const peerOrder of ['none', 'before failure', 'after failure']) {
-  test(`aggregate capture restores the Spot and every prepared Session (${peerOrder})`, async () => {
+  test(`binding mismatch restores the Spot and every prepared Session (${peerOrder})`, async () => {
     const entered = barrier();
     const allowSeal = barrier();
     const dropped = barrier();
@@ -465,7 +565,7 @@ for (const peerOrder of ['none', 'before failure', 'after failure']) {
             } finally {
               closedTerminal.release();
             }
-            throw new Error('the closed Session seal unexpectedly succeeded');
+            throw new Error('the mismatched Session seal unexpectedly succeeded');
           }
           peerSeal = await peer.seal();
           events.push('peer:prepared');
@@ -514,9 +614,11 @@ for (const peerOrder of ['none', 'before failure', 'after failure']) {
       ]);
       await closed.stream.close();
       await closed.host.streamBindingRuntime.cleanup(closed.context);
+      await rebind(closed);
       assert.equal(
-        await closed.host.streamBindingRuntime.sessionRouteFence(closed.actor.context.actorId),
-        undefined
+        (await closed.host.streamBindingRuntime.sessionRouteFence(closed.actor.context.actorId))
+          .bindingGeneration,
+        7n
       );
       if (peerOrder === 'before failure') {
         allowPeer.release();
@@ -568,3 +670,531 @@ for (const peerOrder of ['none', 'before failure', 'after failure']) {
     }
   });
 }
+
+test('Session owner records each participant and rejects any changed command 42 field', async () => {
+  const h = await relocationHarness({
+    source: 'source',
+    owner: 'session-owner',
+    session: 'session',
+    target: 'target'
+  });
+  const relay = h.host.boundSessionRelay.boundSessions;
+  try {
+    await h.seal();
+    const request = h.sent[0];
+    const participant = {
+      ...request,
+      actor: { ...request.actor, actor: { ...request.actor.actor, actorId: 'other-participant' } }
+    };
+    const absent = await relay.receiveServiceWireSessionRelocationSeal(participant);
+    assert.equal(absent.sealResult, 'bindingAbsent');
+    assert.equal(
+      (await relay.receiveServiceWireSessionRelocationSeal(request)).sealResult,
+      'sealed'
+    );
+    assert.deepEqual(await relay.receiveServiceWireSessionRelocationSeal(participant), absent);
+    const mutations = [
+      { ...request, coordinator: { ...request.coordinator, ownerId: 'other-owner' } },
+      { ...request, session: { ...request.session, sessionRid: 'other-session' } },
+      { ...request, session: { ...request.session, bindingGeneration: 7n } },
+      {
+        ...request,
+        actor: { ...request.actor, actor: { ...request.actor.actor, generation: 6n } }
+      },
+      { ...participant, actor: { ...participant.actor, ownerLeaseGeneration: 14n } }
+    ];
+    for (const mutation of mutations) {
+      await assert.rejects(
+        relay.receiveServiceWireSessionRelocationSeal(mutation),
+        (error) =>
+          error instanceof ServiceWireProtocolError && /different bytes/.test(error.message)
+      );
+    }
+  } finally {
+    await h.close();
+  }
+});
+
+test('closed seal ignores duplicate 42 without a reply and disappears with its binding', async () => {
+  const h = await relocationHarness({
+    source: 'source',
+    owner: 'session-owner',
+    session: 'session',
+    target: 'target'
+  });
+  const warnings = [];
+  const originalWarn = console.warn;
+  console.warn = (value) => warnings.push(value);
+  try {
+    const sealed = await h.seal();
+    await h.transfer.abortBoundSessionRouteSeal(h.actor, h.state, sealed);
+    const count = h.responses.length;
+    await h.receiveSeal(h.sent[0]);
+    assert.equal(h.responses.length, count, 'closed seal sends no second command 43');
+    assert.ok(warnings.some((value) => value.startsWith('late_session_relocation_seal ')));
+    await assert.rejects(
+      h.receiveSeal({ ...h.sent[0], session: { ...h.sent[0].session, bindingGeneration: 7n } }),
+      (error) => error instanceof ServiceWireProtocolError && /different bytes/.test(error.message)
+    );
+    const successor = await rebind(h);
+    await assert.rejects(h.receiveSeal(h.sent[0]), framework.ZLinkRemoteBoundSessionFenceError);
+    await successor.stream.close();
+    await h.host.streamBindingRuntime.cleanup(successor);
+    await h.receiveSeal(h.sent[0]);
+    assert.equal(h.responses.at(-1).sealResult, 'bindingAbsent');
+  } finally {
+    console.warn = originalWarn;
+    await h.close();
+  }
+});
+
+test('bindingAbsent expires at the configured boundary and late 44 cannot touch a rebind', async (t) => {
+  const {
+    zlinkDefaultLocationOptions
+  } = require('../../packages/framework/dist/contracts/Locations/Options');
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const h = await relocationHarness({
+    source: 'source',
+    owner: 'session-owner',
+    session: 'session',
+    target: 'target'
+  });
+  const relay = h.host.boundSessionRelay.boundSessions;
+  try {
+    const sealed = await h.seal();
+    const request = h.sent[0];
+    await h.transfer.abortBoundSessionRouteSeal(h.actor, h.state, sealed);
+    await h.stream.close();
+    await h.host.streamBindingRuntime.cleanup(h.context);
+    assert.equal(
+      (await relay.receiveServiceWireSessionRelocationSeal(request)).sealResult,
+      'bindingAbsent'
+    );
+    await rebind(h);
+    assert.equal(
+      (await relay.receiveServiceWireSessionRelocationSeal(request)).sealResult,
+      'bindingAbsent',
+      'record is used before inspecting the successor'
+    );
+    const successor = {
+      ...request,
+      relocation: { high: 7n, low: 10n },
+      session: { ...request.session, sessionRid: 'successor-session', bindingGeneration: 7n }
+    };
+    await relay.receiveServiceWireSessionRelocationSeal(successor);
+    const late = {
+      relocation: request.relocation,
+      coordinator: request.coordinator,
+      senderRole: 'source',
+      actor: request.actor.actor,
+      session: request.session,
+      route: { action: 'abort', currentAuthorityOwnerGeneration: 11n }
+    };
+    await relay.receiveServiceWireSessionRelocationRoute(late);
+    assert.equal(
+      await h.host.streamBindingRuntime.validateActorRouteSeal(
+        h.actor.context.actorId,
+        wire.serviceSessionRelocationIdentityKey(successor)
+      ),
+      true
+    );
+    await relay.receiveServiceWireSessionRelocationRoute({
+      ...late,
+      relocation: successor.relocation,
+      session: successor.session
+    });
+    t.mock.timers.tick(zlinkDefaultLocationOptions.sessionRelocationSealTimeoutMs);
+    await assert.rejects(
+      relay.receiveServiceWireSessionRelocationSeal(request),
+      framework.ZLinkRemoteBoundSessionFenceError
+    );
+    assert.equal(
+      (await h.host.streamBindingRuntime.sessionRouteFence(h.actor.context.actorId))
+        .bindingGeneration,
+      7n
+    );
+  } finally {
+    await h.close();
+    t.mock.timers.reset();
+  }
+});
+
+test('command 42 with a stale owner lease is rejected after the previous closed record is replaced', async () => {
+  const h = await relocationHarness({
+    source: 'source',
+    owner: 'session-owner',
+    session: 'session',
+    target: 'target'
+  });
+  try {
+    const sealed = await h.seal();
+    await h.commit(sealed);
+    const stale = { ...h.sent[0], relocation: { high: 8n, low: 9n } };
+    await assert.rejects(
+      h.host.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationSeal(stale),
+      framework.ZLinkRemoteBoundSessionFenceError
+    );
+    const current = {
+      ...stale,
+      actor: {
+        ...stale.actor,
+        actor: { ...stale.actor.actor, nodeRid: 'target' },
+        targetNodeGeneration: 3n,
+        authorityOwnerGeneration: 12n,
+        ownerLeaseGeneration: 14n
+      }
+    };
+    assert.equal(
+      (
+        await h.host.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationSeal(
+          current
+        )
+      ).sealResult,
+      'sealed'
+    );
+  } finally {
+    await h.close();
+  }
+});
+
+test('coordinator uses the first 43 per participant and never resends a terminal 42', async () => {
+  const h = await relocationHarness({
+    source: 'source',
+    owner: 'session-owner',
+    session: 'session',
+    target: 'target'
+  });
+  try {
+    await h.seal();
+    const first = h.responses[0];
+    await h.dispatch(
+      h.sourceRuntime,
+      'session-owner',
+      wire.encodeSessionRelocationSealed({ ...first, sealResult: 'bindingAbsent' })
+    );
+    const count = h.controls.length;
+    assert.deepEqual(
+      await h.sourceRuntime.requestSessionRelocationSeal('mesh', 'session-owner', h.sent[0]),
+      first
+    );
+    assert.equal(h.controls.length, count);
+    const peer = {
+      ...h.sent[0],
+      actor: { ...h.sent[0].actor, actor: { ...h.sent[0].actor.actor, actorId: 'absent-peer' } }
+    };
+    const absent = await h.sourceRuntime.requestSessionRelocationSeal(
+      'mesh',
+      'session-owner',
+      peer
+    );
+    assert.equal(absent.sealResult, 'bindingAbsent');
+    await h.dispatch(
+      h.sourceRuntime,
+      'session-owner',
+      wire.encodeSessionRelocationSealed({ ...absent, sealResult: 'sealed' })
+    );
+    assert.deepEqual(
+      await h.sourceRuntime.requestSessionRelocationSeal('mesh', 'session-owner', peer),
+      absent
+    );
+  } finally {
+    await h.close();
+  }
+});
+
+for (const binding of ['absent', 'same', 'successor']) {
+  test(`in-flight disconnect runs once with ${binding} Actor binding`, async () => {
+    const {
+      ZLinkActorPacketRelay
+    } = require('../../packages/framework/dist/runtime/host/actor-packet-relay');
+    const packets = require('../../packages/framework/dist/runtime/actors/actor-packet-relay-wire');
+    const protocol = require('../../packages/framework/dist/runtime/streams/protocol');
+    const entered = barrier();
+    const allowNotification = barrier();
+    let currentBinding = { sessionNodeRid: 'session-owner', bindingGeneration: 6n };
+    let callbacks = 0;
+    let submissions = 0;
+    const actorRelay = new ZLinkActorPacketRelay({
+      meshRouters: {},
+      streamBindingRuntime: () => ({}),
+      actorManager: () => ({
+        getState: () => ({ boundSession: currentBinding, spotId: 'spot', actor: {} })
+      }),
+      spotManager: () => ({
+        async notifyJoinedSpotActorDisconnected() {
+          callbacks++;
+          return true;
+        }
+      })
+    });
+    const h = await relocationHarness(
+      { source: 'source', owner: 'session-owner', session: 'session', target: 'target' },
+      false,
+      {
+        async notifyDisconnected(actor) {
+          submissions++;
+          const payload = packets.encodeRemoteActorPacketRelayPayload({
+            actorId: actor.actorId,
+            bindingActorRef: actor.ref,
+            header: protocol.encodeStreamHeader({
+              kind: protocol.ZLinkStreamMessageKind.Send,
+              codec: protocol.ZLinkStreamCodec.Raw,
+              flags: protocol.ZLinkStreamHeaderFlags.None,
+              name: packets.ZLINK_REMOTE_ACTOR_SESSION_DISCONNECTED_PACKET,
+              metadata: new Map()
+            }),
+            payload: Buffer.alloc(0)
+          });
+          entered.release();
+          await allowNotification.joined;
+          const result = await actorRelay.receiveRemoteActorPacketRelay(payload, {
+            sourceNodeRid: 'session-owner'
+          });
+          assert.equal(result.ok, true);
+        }
+      }
+    );
+    let cleanup;
+    try {
+      // Capture the original request while the Session still exists, then
+      // abort that seal so physical cleanup can race the next relocation.
+      const sealed = await h.seal();
+      await h.transfer.abortBoundSessionRouteSeal(h.actor, h.state, sealed);
+      await h.stream.close();
+      cleanup = h.host.streamBindingRuntime.cleanup(h.context);
+      await Promise.race([
+        entered.joined,
+        cleanup.then(() => {
+          throw new Error('cleanup completed before notification admission');
+        })
+      ]);
+      currentBinding =
+        binding === 'absent'
+          ? undefined
+          : binding === 'same'
+            ? currentBinding
+            : { sessionNodeRid: 'session-owner', bindingGeneration: 7n };
+      const absent =
+        await h.host.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationSeal(
+          h.sent[0]
+        );
+      assert.equal(absent.sealResult, 'bindingAbsent');
+      await h.host.streamBindingRuntime.cleanup(h.context);
+      assert.equal(callbacks, 0, 'notification is still held after absence was acknowledged');
+      allowNotification.release();
+      await cleanup;
+      await h.host.streamBindingRuntime.cleanup(h.context);
+      assert.equal(submissions, 1, 'Session owner submits at most once per retired binding');
+      assert.equal(callbacks, binding === 'successor' ? 0 : 1);
+    } finally {
+      allowNotification.release();
+      await cleanup;
+      await h.close();
+    }
+  });
+}
+
+test('aggregate reaches coordinator with both Actors and membership but only the live Session binding', async () => {
+  const entered = barrier();
+  const allowSeal = barrier();
+  const dropped = barrier();
+  const closed = await relocationHarness(
+    { source: 'source', owner: 'session-owner', session: 'closed-session', target: 'target' },
+    false,
+    {
+      beforeSeal: async () => {
+        entered.release();
+        await allowSeal.joined;
+      },
+      onDrop: (error) => dropped.release(error)
+    }
+  );
+  const live = await relocationHarness(
+    { source: 'source', owner: 'session-owner', session: 'live-session', target: 'target' },
+    false,
+    { actorId: 'live-participant' }
+  );
+  let envelope;
+  const runtime = new ZLinkHostServiceRelocationRuntime({
+    locationStore: () => ({
+      readAuthority: async () => ({
+        kind: 'snapshot',
+        storeVersion: { value: 'v1' },
+        payload: Buffer.alloc(0),
+        objectGeneration: 5n,
+        authorityOwnerGeneration: 11n,
+        ownerId: 'owner',
+        ownerLeaseGeneration: 13n,
+        allocation: { state: 'active', objectKind: 'user_spot', stableType: 'Unit' },
+        storeNow: new Date()
+      })
+    }),
+    spotManager: () => ({ pendingSpotCloseDecision: () => undefined, isSpotClosing: () => false }),
+    meshNode: () => ({
+      status: () => ({ routingId: 'source', lifecycleGeneration: 2n }),
+      sealSpotMessageFollowIngress: () => ({ spotId: 'spot' }),
+      abortSpotMessageFollowIngress: () => true,
+      commitSpotMessageFollowIngress() {}
+    }),
+    actorTransfer: {
+      async prepareMaintenanceSession(actor) {
+        const h = actor === closed.actor ? closed : live;
+        const target = await h.seal();
+        return {
+          target: target && { ...target, sessionNodeRid: 'session-owner' },
+          handoffBacklog: [],
+          async rollback() {
+            if (target) await h.transfer.abortBoundSessionRouteSeal(h.actor, h.state, target);
+          }
+        };
+      }
+    }
+  });
+  runtime.spotRegistration = runtime.actorRegistration = () => ({
+    relocation: { kind: 'allowed' }
+  });
+  runtime.waitForRelocationBudgetHeadroom = async () => {};
+  runtime.captureApplication = async () => Buffer.alloc(0);
+  runtime.runCoordinator = async (_mesh, _target, _authority, captured) => {
+    envelope = captured.envelope;
+    // The target-preparation boundary has been reached. Release captures
+    // cooperatively rather than creating a fake committed authority.
+    await captured.abortSource();
+  };
+  const activation = {
+    spotId: 'spot',
+    serial: new ZLinkSpotSerialTurnExecutor(),
+    captureRelocation: async () => ({ timers: [] }),
+    abortRelocation() {}
+  };
+  const states = [closed, live].map((h) => ({
+    actorId: h.actor.context.actorId,
+    actor: h.actor,
+    actorType: 'Actor',
+    spotMembershipEpoch: 1n
+  }));
+  const operation = runtime.relocateSpotAggregate(
+    'mesh',
+    activation,
+    'user_spot',
+    states,
+    { rid: 'target' },
+    undefined,
+    closed.abort.signal
+  );
+  const joined = operation.then(
+    () => ({ ok: true }),
+    (error) => ({ error })
+  );
+  try {
+    await Promise.race([
+      entered.joined,
+      joined.then((result) => {
+        throw result.error ?? new Error('aggregate ended before seal');
+      })
+    ]);
+    await closed.stream.close();
+    await closed.host.streamBindingRuntime.cleanup(closed.context);
+    allowSeal.release();
+    const outcome = await Promise.race([joined, dropped.joined.then((error) => ({ error }))]);
+    assert.equal(outcome.error, undefined, outcome.error?.stack);
+    assert.equal(outcome.ok, true);
+    assert.equal(envelope.participants.filter((p) => p.objectKind === 'actor').length, 2);
+    assert.equal(envelope.memberships.length, 2);
+    const bindings = envelope.participants.filter((p) => p.sessionBinding !== undefined);
+    assert.equal(bindings.length, 1);
+    assert.equal(Buffer.from(bindings[0].sessionBinding.sessionRid).toString(), 'live-session');
+    assert.equal(closed.responses[0].sealResult, 'bindingAbsent');
+    assert.equal(closed.sent.length, 1, 'absent participant never receives command 44');
+    assert.equal(live.sent.at(-1).route.action, 'abort', 'only confirmed seal is restored');
+  } finally {
+    allowSeal.release();
+    closed.abort.abort(new Error('cooperative aggregate release'));
+    await joined;
+    await runtime.dispose();
+    await closed.close();
+    await live.close();
+  }
+});
+
+test('retired active seal late 44 and expiry preserve a successor relocation', async (t) => {
+  const {
+    zlinkDefaultLocationOptions
+  } = require('../../packages/framework/dist/contracts/Locations/Options');
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const h = await relocationHarness({
+    source: 'source',
+    owner: 'session-owner',
+    session: 'session',
+    target: 'target'
+  });
+  const relay = h.host.boundSessionRelay.boundSessions;
+  let successor;
+  try {
+    await h.seal();
+    const request = h.sent[0];
+    await h.stream.close();
+    await h.host.streamBindingRuntime.cleanup(h.context);
+    assert.equal(
+      (await relay.receiveServiceWireSessionRelocationSeal(request)).sealResult,
+      'bindingAbsent'
+    );
+    await rebind(h);
+    t.mock.timers.tick(1);
+    successor = {
+      ...request,
+      relocation: { high: 8n, low: 9n },
+      session: { ...request.session, sessionRid: 'successor-session', bindingGeneration: 7n }
+    };
+    assert.equal(
+      (await relay.receiveServiceWireSessionRelocationSeal(successor)).sealResult,
+      'sealed'
+    );
+    await relay.receiveServiceWireSessionRelocationRoute({
+      relocation: request.relocation,
+      coordinator: request.coordinator,
+      senderRole: 'source',
+      actor: request.actor.actor,
+      session: request.session,
+      route: { action: 'abort', currentAuthorityOwnerGeneration: 11n }
+    });
+    const successorKey = wire.serviceSessionRelocationIdentityKey(successor);
+    assert.equal(
+      await h.host.streamBindingRuntime.validateActorRouteSeal(
+        h.actor.context.actorId,
+        successorKey
+      ),
+      true
+    );
+    t.mock.timers.tick(zlinkDefaultLocationOptions.sessionRelocationSealTimeoutMs - 1);
+    // Join owner work from the retired timer, without advancing the new seal's deadline.
+    assert.equal(
+      (await h.host.streamBindingRuntime.sessionRouteFence(h.actor.context.actorId))
+        .bindingGeneration,
+      7n
+    );
+    assert.equal(
+      await h.host.streamBindingRuntime.validateActorRouteSeal(
+        h.actor.context.actorId,
+        successorKey
+      ),
+      true
+    );
+    assert.equal(
+      (await relay.receiveServiceWireSessionRelocationSeal(successor)).sealResult,
+      'sealed'
+    );
+  } finally {
+    if (successor)
+      await relay.receiveServiceWireSessionRelocationRoute({
+        relocation: successor.relocation,
+        coordinator: successor.coordinator,
+        senderRole: 'source',
+        actor: successor.actor.actor,
+        session: successor.session,
+        route: { action: 'abort', currentAuthorityOwnerGeneration: 11n }
+      });
+    await h.close();
+    t.mock.timers.reset();
+  }
+});

@@ -289,9 +289,19 @@ test('pre-cutover rollback restores the source queue and state before one-way Se
       }
     ],
     sessionRelocationWire: () => ({
-      async requestSessionRelocationSeal() {
+      async requestSessionRelocationSeal(
+        _meshName: string,
+        _targetNodeRid: unknown,
+        seal: ServiceSessionRelocationSeal
+      ) {
         events.push('session-sealed');
-        return undefined as never;
+        return {
+          relocation: seal.relocation,
+          coordinator: seal.coordinator,
+          actor: seal.actor,
+          session: seal.session,
+          sealResult: 'sealed'
+        } satisfies ServiceSessionRelocationSealed;
       },
       async sendSessionRelocationRoute(
         _meshName: string,
@@ -345,6 +355,7 @@ test('Session relocation is exact 42-to-43 and command 44 is one-way', async () 
     }
   };
   const sealed: ServiceSessionRelocationSealed = {
+    sealResult: 'sealed',
     relocation: seal.relocation,
     coordinator: seal.coordinator,
     actor: seal.actor,
@@ -379,6 +390,7 @@ test('Session relocation is exact 42-to-43 and command 44 is one-way', async () 
     }
   };
   const selfSealed: ServiceSessionRelocationSealed = {
+    sealResult: 'sealed',
     relocation: selfSeal.relocation,
     coordinator: selfSeal.coordinator,
     actor: selfSeal.actor,

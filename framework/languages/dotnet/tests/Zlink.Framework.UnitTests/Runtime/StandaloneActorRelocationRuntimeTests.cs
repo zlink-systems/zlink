@@ -1524,29 +1524,31 @@ public sealed class StandaloneActorRelocationRuntimeTests
             participant.AuthorityKey,
             PublishedSnapshot(canonicalPayload, targetAuthority, 12)
         );
-        var committed = await authorityStore.ReadAuthorityAsync(participant.AuthorityKey);
-        Assert.True(
-            ZLinkStandaloneActorRelocationRuntime.IsExactCommittedTargetAuthority(
-                committed,
+        ValueTask<ZLinkSourceSettlementResult> SettleSourceAsync() =>
+            ZLinkStandaloneActorRelocationRuntime.SettleSourceAsync(
+                authorityStore,
+                participant.AuthorityKey,
                 SourceAuthority(),
-                stored.Root,
                 relocationId,
                 target,
-                1,
-                requireActivated: false
-            )
+                TimeSpan.MaxValue,
+                static () => true,
+                static _ =>
+                    throw new InvalidOperationException("The target CAS is already committed."),
+                TimeSpan.Zero,
+                CancellationToken.None,
+                static () =>
+                    throw new InvalidOperationException(
+                        "A committed authority needs no route observation."
+                    )
+            );
+        // Location runtime §10 confirms the target CAS independently of activation progress.
+        var committed = Assert.IsType<ZLinkAuthorityReadResult.Found>(
+            await authorityStore.ReadAuthorityAsync(participant.AuthorityKey)
         );
-        Assert.False(
-            ZLinkStandaloneActorRelocationRuntime.IsExactCommittedTargetAuthority(
-                committed,
-                SourceAuthority(),
-                stored.Root,
-                relocationId,
-                target,
-                1,
-                requireActivated: true
-            )
-        );
+        var beforeActivation = await SettleSourceAsync();
+        Assert.Equal(ZLinkSourceSettlement.TargetCommitted, beforeActivation.Outcome);
+        Assert.Equal(committed.Snapshot.StoreVersion, beforeActivation.Snapshot!.StoreVersion);
         var owner = new ZLinkLocationOwnerToken(target.OwnerId, target.LeaseGeneration);
         var coordinator = new ZLinkStandaloneActorRelocationProgressCoordinator(
             authorityStore,
@@ -1592,26 +1594,15 @@ public sealed class StandaloneActorRelocationRuntimeTests
             (byte)ZLinkStandaloneActorCanonicalPhase.Activated,
             activated.Canonical!.Phase
         );
-        var activatedRoot = new ZLinkRelocationStored(
-            activated.Canonical.State.RelocationReference,
-            activated.Canonical.State.RelocationChecksumCrc32c,
-            stored.Root.ExpiresAt,
-            stored.Root.StoreNow
-        );
         var activatedAuthority = Assert.IsType<ZLinkAuthorityReadResult.Found>(
             await authorityStore.ReadAuthorityAsync(participant.AuthorityKey)
         );
         var observedVersion = activatedAuthority.Snapshot.StoreVersion;
-        Assert.True(
-            ZLinkStandaloneActorRelocationRuntime.IsExactCommittedTargetAuthority(
-                activatedAuthority,
-                SourceAuthority(),
-                activatedRoot,
-                relocationId,
-                target,
-                1,
-                requireActivated: true
-            )
+        var afterActivation = await SettleSourceAsync();
+        Assert.Equal(ZLinkSourceSettlement.TargetCommitted, afterActivation.Outcome);
+        Assert.Equal(
+            activatedAuthority.Snapshot.StoreVersion,
+            afterActivation.Snapshot!.StoreVersion
         );
         Assert.Equal(
             observedVersion,
