@@ -120,10 +120,25 @@ fun checkStructure(root: Path) {
     check(entryOwners == roles.filterValues { it in applicationEntryRoles }.keys) {
         "Entry owners differ from application Entry registrations"
     }
-    for (edge in array("edges")) {
-        check(text(edge, "from") in ids && text(edge, "to") in ids)
-        text(edge, "label")
-        if (edge.has("semantic")) text(edge, "semantic")
+    val requiredEdges =
+        setOf(
+            listOf("players", "session", "STREAM", ""),
+            listOf("session", "lobby", "relay", ""),
+            listOf("lobby", "instanceA", "GetOrCreate", ""),
+            listOf("lobby", "location", "Location / lease", "location-authority"),
+        )
+    val declaredEdges =
+        array("edges")
+            .map { edge ->
+                val from = text(edge, "from")
+                val to = text(edge, "to")
+                check(from in ids && to in ids) { "Unknown edge endpoint" }
+                val semantic = if (edge.has("semantic")) text(edge, "semantic") else ""
+                listOf(from, to, text(edge, "label"), semantic)
+            }
+            .toSet()
+    check(declaredEdges.containsAll(requiredEdges)) {
+        "Missing required edges: ${requiredEdges - declaredEdges}"
     }
     println("Structure: valid")
 }
