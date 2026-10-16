@@ -62,16 +62,10 @@ private suspend fun newMatch(endpoint: String, replacement: String) {
     val suffix = UUID.randomUUID().toString()
     val a = Client(endpoint, "new-a-$suffix")
     val b = Client(endpoint, "new-b-$suffix")
-    try {
+    withCleanup(cleanup = { withCleanup(cleanup = { a.close() }) { b.close() } }) {
         a.connect()
         b.connect()
         check(match(a, b).nodeId == replacement) { "Replacement did not accept the new room" }
-    } finally {
-        try {
-            b.close()
-        } finally {
-            a.close()
-        }
     }
 }
 
@@ -80,7 +74,7 @@ suspend fun scenario(id: String, nodes: Nodes) {
     val a = Client(nodes.endpoint, "p1-$suffix")
     val b = Client(nodes.endpoint, "p2-$suffix")
     var bClosed = false
-    try {
+    withCleanup(cleanup = { withCleanup(cleanup = { a.close() }) { if (!bClosed) b.close() } }) {
         a.connect()
         b.connect()
         match(a, b)
@@ -112,7 +106,7 @@ suspend fun scenario(id: String, nodes: Nodes) {
                 bClosed = true
                 b.close()
                 val again = Client(nodes.endpoint, b.playerId)
-                try {
+                withCleanup(cleanup = { again.close() }) {
                     again.connect()
                     again.queue()
                     val restored = again.next<RoomView>()
@@ -126,8 +120,6 @@ suspend fun scenario(id: String, nodes: Nodes) {
                     }
                     sameState(before, restored)
                     hit(a, again, 3, Game.INITIAL_HP - Game.SHOT_DAMAGE * 2)
-                } finally {
-                    again.close()
                 }
             }
             "update" -> {
@@ -149,11 +141,5 @@ suspend fun scenario(id: String, nodes: Nodes) {
         check(a.disconnects == 0 && a.connector.isConnected) { "First player disconnected" }
         if (!bClosed)
             check(b.disconnects == 0 && b.connector.isConnected) { "Second player disconnected" }
-    } finally {
-        try {
-            if (!bClosed) b.close()
-        } finally {
-            a.close()
-        }
     }
 }

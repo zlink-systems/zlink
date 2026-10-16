@@ -39,7 +39,7 @@ private suspend fun newDungeon(endpoint: String, replacement: String) {
     val suffix = UUID.randomUUID().toString()
     val a = Client(endpoint, "new-a-$suffix")
     val b = Client(endpoint, "new-b-$suffix")
-    try {
+    withCleanup(cleanup = { withCleanup(cleanup = { a.close() }) { b.close() } }) {
         a.connect()
         b.connect()
         a.join()
@@ -49,12 +49,6 @@ private suspend fun newDungeon(endpoint: String, replacement: String) {
         check(enter(a, b, "new-party-$suffix").nodeId == replacement) {
             "Replacement did not accept new work"
         }
-    } finally {
-        try {
-            b.close()
-        } finally {
-            a.close()
-        }
     }
 }
 
@@ -63,7 +57,7 @@ suspend fun scenario(id: String, nodes: Nodes) {
     val a = Client(nodes.endpoint, "p1-$suffix")
     val b = if (id == "channel") null else Client(nodes.endpoint, "p2-$suffix")
     var bClosed = false
-    try {
+    withCleanup(cleanup = { withCleanup(cleanup = { a.close() }) { if (!bClosed) b?.close() } }) {
         a.connect()
         if (id == "channel") {
             a.join(1)
@@ -95,7 +89,7 @@ suspend fun scenario(id: String, nodes: Nodes) {
                     bClosed = true
                     b.close()
                     val again = Client(nodes.endpoint, b.playerId)
-                    try {
+                    withCleanup(cleanup = { again.close() }) {
                         again.connect()
                         again.join()
                         val restored = again.next<DungeonView>()
@@ -106,8 +100,6 @@ suspend fun scenario(id: String, nodes: Nodes) {
                                 identity.actorId == session2.actorId &&
                                 identity.objectGeneration == session2.objectGeneration
                         )
-                    } finally {
-                        again.close()
                     }
                 }
                 "update" -> {
@@ -132,11 +124,5 @@ suspend fun scenario(id: String, nodes: Nodes) {
             if (!bClosed) check(b.disconnects == 0 && b.connector.isConnected)
         }
         check(a.disconnects == 0 && a.connector.isConnected)
-    } finally {
-        try {
-            if (!bClosed) b?.close()
-        } finally {
-            a.close()
-        }
     }
 }

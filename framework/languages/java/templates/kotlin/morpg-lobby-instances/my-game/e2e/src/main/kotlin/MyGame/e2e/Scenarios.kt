@@ -70,7 +70,19 @@ suspend fun scenario(scenario: Scenario, nodes: Nodes) {
     val id = UUID.randomUUID().toString()
     val clients = mutableListOf<Client>()
     fun client(player: String) = Client(nodes.endpoint, player).also { clients.add(it) }
-    try {
+    withCleanup(
+        cleanup = {
+            var failure: Exception? = null
+            for (client in clients.asReversed()) {
+                try {
+                    client.close()
+                } catch (error: Exception) {
+                    if (failure == null) failure = error else failure.addSuppressed(error)
+                }
+            }
+            failure?.let { throw it }
+        }
+    ) {
         val a = client("$id-p1")
         val b = client("$id-p2")
         val initial = enter(a, b, id)
@@ -117,15 +129,5 @@ suspend fun scenario(scenario: Scenario, nodes: Nodes) {
         }
         equal(0, a.disconnects)
         if (scenario != Scenario.RECONNECT) equal(0, b.disconnects)
-    } finally {
-        var failure: Exception? = null
-        for (client in clients.asReversed()) {
-            try {
-                client.close()
-            } catch (error: Exception) {
-                if (failure == null) failure = error else failure.addSuppressed(error)
-            }
-        }
-        failure?.let { throw it }
     }
 }

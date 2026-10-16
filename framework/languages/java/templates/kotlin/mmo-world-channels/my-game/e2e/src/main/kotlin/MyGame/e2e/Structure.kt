@@ -141,10 +141,29 @@ object Structure {
                     "Configured Zone set differs from structure"
                 }
             }
-        array(s, "edges").forEach { edge ->
-            check(text(edge, "from") in ids && text(edge, "to") in ids) { "Unknown edge endpoint" }
-            text(edge, "label")
-            if (edge.has("semantic")) text(edge, "semantic")
+        val requiredEdges =
+            setOf(
+                listOf("players", "accounts", "HTTP", ""),
+                listOf("players", "sessionA", "STREAM", ""),
+                listOf("players", "sessionB", "STREAM", ""),
+                listOf("sessionA", "channelA1", "relay", ""),
+                listOf("sessionB", "channelB", "relay", ""),
+                listOf("channelA1", "channelA2", "relocation", ""),
+                listOf("channelA2", "dbA", "game data", ""),
+                listOf("channelB", "dbB", "game data", ""),
+            )
+        val declaredEdges =
+            array(s, "edges")
+                .map { edge ->
+                    val from = text(edge, "from")
+                    val to = text(edge, "to")
+                    check(from in ids && to in ids) { "Unknown edge endpoint" }
+                    val semantic = if (edge.has("semantic")) text(edge, "semantic") else ""
+                    listOf(from, to, text(edge, "label"), semantic)
+                }
+                .toSet()
+        check(declaredEdges.containsAll(requiredEdges)) {
+            "Missing required edges: ${requiredEdges - declaredEdges}"
         }
         println("Structure: valid")
     }

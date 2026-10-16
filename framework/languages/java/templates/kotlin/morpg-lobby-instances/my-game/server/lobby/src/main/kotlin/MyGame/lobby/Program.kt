@@ -1,6 +1,7 @@
 package MyGame.lobby
 
 import MyGame.*
+import MyGame.admission.*
 import MyGame.lobby.infrastructure.zlink.*
 import org.springframework.boot.autoconfigure.SpringBootApplication
 import org.springframework.context.annotation.Bean

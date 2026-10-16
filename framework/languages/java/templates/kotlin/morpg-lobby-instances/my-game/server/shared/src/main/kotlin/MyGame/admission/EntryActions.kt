@@ -1,5 +1,6 @@
-package MyGame
+package MyGame.admission
 
+import MyGame.*
 import systems.zlink.framework.ZLinkMessageContext
 import systems.zlink.framework.handlers.*
 import systems.zlink.framework.kotlin.*

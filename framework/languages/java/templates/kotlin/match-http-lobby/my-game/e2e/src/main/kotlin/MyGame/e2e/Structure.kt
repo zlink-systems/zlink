@@ -140,10 +140,26 @@ fun checkStructure(root: Path) {
             "Match node must declare exactly one application Entry Spot"
         }
     }
-    for (edge in array(s, "edges")) {
-        check(text(edge, "from") in ids && text(edge, "to") in ids) { "Unknown edge endpoint" }
-        text(edge, "label")
-        if (edge.has("semantic")) text(edge, "semantic")
+    val requiredEdges =
+        setOf(
+            listOf("players", "lobby", "HTTP", ""),
+            listOf("players", "session", "STREAM", ""),
+            listOf("session", "matchA", "relay", ""),
+            listOf("lobby", "location", "Find room", ""),
+            listOf("matchA", "location", "Location / lease", "location-authority"),
+        )
+    val declaredEdges =
+        array(s, "edges")
+            .map { edge ->
+                val from = text(edge, "from")
+                val to = text(edge, "to")
+                check(from in ids && to in ids) { "Unknown edge endpoint" }
+                val semantic = if (edge.has("semantic")) text(edge, "semantic") else ""
+                listOf(from, to, text(edge, "label"), semantic)
+            }
+            .toSet()
+    check(declaredEdges.containsAll(requiredEdges)) {
+        "Missing required edges: ${requiredEdges - declaredEdges}"
     }
     println("Structure: valid")
 }

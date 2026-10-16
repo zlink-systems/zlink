@@ -1,6 +1,7 @@
 package MyGame.instance
 
 import MyGame.*
+import MyGame.admission.*
 import org.springframework.boot.autoconfigure.SpringBootApplication
 import org.springframework.context.annotation.Bean
 import systems.zlink.framework.configuration.ZLinkUserSpotExecutionMode

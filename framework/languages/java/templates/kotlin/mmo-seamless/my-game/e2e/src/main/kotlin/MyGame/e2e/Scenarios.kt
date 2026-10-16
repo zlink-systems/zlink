@@ -20,7 +20,19 @@ suspend fun scenario(name: String, nodes: Nodes) = coroutineScope {
         client.connect()
         return client
     }
-    try {
+    withCleanup(
+        cleanup = {
+            var failure: Exception? = null
+            for (client in clients.asReversed()) {
+                try {
+                    client.close()
+                } catch (error: Exception) {
+                    if (failure == null) failure = error else failure.addSuppressed(error)
+                }
+            }
+            failure?.let { throw it }
+        }
+    ) {
         val client = create()
         when (name) {
             Names.CROSS -> {
@@ -108,15 +120,5 @@ suspend fun scenario(name: String, nodes: Nodes) = coroutineScope {
             else -> error("Unknown scenario: $name")
         }
         if (name != Names.RECONNECT) check(client.disconnects == 0)
-    } finally {
-        var failure: Exception? = null
-        for (client in clients.asReversed()) {
-            try {
-                client.close()
-            } catch (error: Exception) {
-                if (failure == null) failure = error else failure.addSuppressed(error)
-            }
-        }
-        failure?.let { throw it }
     }
 }
