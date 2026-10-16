@@ -226,8 +226,8 @@ public sealed class MeshPermitHandoffTests
         );
         Assert.IsAssignableFrom<Exception>(failure.InnerException);
 
-        // The held lease returned and admitted the older waiter; the counted
-        // reservation was empty because that waiter was queued first.
+        // The independently acquired lease still owns one permit. Both the
+        // handed-over lease and the unused counted reservation have returned.
         using var admitted = await waiting.WaitAsync(TimeSpan.FromSeconds(5));
         var status = fixture.Queue.GetStatus();
         Assert.Equal(1UL, status.PermitsInUse);

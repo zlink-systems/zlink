@@ -169,6 +169,37 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
         Assert.Equal(TimeSpan.FromMilliseconds(100), deadline.Expire());
     }
 
+    [Fact]
+    public async Task OperationDeadline_CompletionDeliveryConsumesTheNextWaitBound()
+    {
+        var clock = new OperationDeadlineClock();
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = new ZLinkManagedMeshNode(
+            context,
+            MeshName,
+            deadlineTimeProvider: clock
+        );
+        var deadline = OperationDeadlineAccess.For(node);
+        var first = deadline.Begin(TimeSpan.FromMilliseconds(1));
+        deadline.Begin(TimeSpan.FromMilliseconds(2));
+        using var terminal = deadline
+            .Token(first)
+            .Register(() =>
+                clock.Timestamp +=
+                    Zlink.Framework.Runtime.Dispatch.ZLinkReceiveBatchBudget.MaximumMilliseconds
+                    * TimeSpan.TicksPerMillisecond
+            );
+        clock.Timestamp = TimeSpan.TicksPerMillisecond;
+
+        // Completion delivery exhausts the rotation's budget and reaches the
+        // next occupied tick. The next rotation must not wait the duration
+        // that remained before that completion was delivered.
+        Assert.Equal(TimeSpan.Zero, deadline.Expire());
+        Assert.Equal(1, deadline.Count);
+        Assert.Equal(TimeSpan.FromMilliseconds(100), deadline.Expire());
+        Assert.Equal(0, deadline.Count);
+    }
+
     private sealed class OperationDeadlineAccess
     {
         private const System.Reflection.BindingFlags Flags =

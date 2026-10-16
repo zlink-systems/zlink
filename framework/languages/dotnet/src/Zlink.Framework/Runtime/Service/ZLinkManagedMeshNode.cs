@@ -95,7 +95,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     private readonly long _deadlineOriginTicks;
     private long _deadlineTick;
     private PendingOperation? _deadlineCursor;
-    private readonly Func<(PendingOperation? Expired, TimeSpan WaitBound)> _takeExpiredOperation;
+    private readonly Func<(PendingOperation? Expired, TimeSpan WaitUntil)> _takeExpiredOperation;
 
     // Start of the receive owner's current deadline management turn.
     private TimeSpan _deadlineVisitStartedAt;
@@ -11560,28 +11560,25 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         operation.DeadlineNext = null;
     }
 
-    private TimeSpan ReadOperationWaitBound()
+    private TimeSpan ReadOperationWaitDeadline()
     {
+        var pollDeadline = _deadlineClock.Elapsed + PollInterval;
         var tick = NextOccupiedDeadlineTick();
         if (tick < 0)
-            return PollInterval;
-        var remaining =
-            TimeSpan.FromTicks(_deadlineOriginTicks + tick * DeadlineTickTicks)
-            - _deadlineClock.Elapsed;
-        return remaining <= TimeSpan.Zero ? TimeSpan.Zero
-            : remaining < PollInterval ? remaining
-            : PollInterval;
+            return pollDeadline;
+        var deadline = TimeSpan.FromTicks(_deadlineOriginTicks + tick * DeadlineTickTicks);
+        return deadline < pollDeadline ? deadline : pollDeadline;
     }
 
     // One operation-lane turn: rounds-only visits continue inside the turn
     // while the management budget, counted from _deadlineVisitStartedAt,
     // remains; the turn returns at the first expired operation. The same turn
-    // reads the receive owner's next wait bound from the deadline index, so a
+    // reads the receive owner's next wait deadline from the deadline index, so a
     // rotation enters the operation lane once when nothing expires.
-    private (PendingOperation? Expired, TimeSpan WaitBound) TakeExpiredOperation()
+    private (PendingOperation? Expired, TimeSpan WaitUntil) TakeExpiredOperation()
     {
         var expired = TakeNextExpiredOperation();
-        return (expired, ReadOperationWaitBound());
+        return (expired, ReadOperationWaitDeadline());
     }
 
     private PendingOperation? TakeNextExpiredOperation()
@@ -11627,18 +11624,19 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         (_deadlineClock.Elapsed - _deadlineVisitStartedAt).TotalMilliseconds
         >= ZLinkReceiveBatchBudget.MaximumMilliseconds;
 
-    // Returns the wait bound read by the rotation's last deadline turn.
+    // Completion delivery consumes time from the same absolute wait deadline.
     private TimeSpan ExpireOperations()
     {
         // §4.2: the budget counts from entry and covers every slot visit, a
         // rounds-only visit included, and each expiry's completion delivery;
         // the cursor keeps the rest of the slot for the next receive-owner turn.
         _deadlineVisitStartedAt = _deadlineClock.Elapsed;
-        while (true)
+        TimeSpan waitUntil;
+        do
         {
-            var (expired, waitBound) = RunOperation(_takeExpiredOperation);
+            (var expired, waitUntil) = RunOperation(_takeExpiredOperation);
             if (expired is not { } pending)
-                return waitBound;
+                break;
             pending.Complete();
             var result = RequestResult.TimedOut;
             if (pending.AwaitedCompletion is { } awaitedCompletion)
@@ -11653,9 +11651,9 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     0,
                     Array.Empty<Message>()
                 );
-            if (DeadlineBudgetSpent())
-                return waitBound;
-        }
+        } while (!DeadlineBudgetSpent());
+        var remaining = waitUntil - _deadlineClock.Elapsed;
+        return remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero;
     }
 
     private void EnqueueCompletion(
