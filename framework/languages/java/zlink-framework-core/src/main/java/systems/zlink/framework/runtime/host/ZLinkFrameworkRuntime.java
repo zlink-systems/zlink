@@ -511,48 +511,27 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                         applicationJobQueue::pressureMetrics);
         this.meshTopologyMetricRegistration =
                 ZLinkRuntimeMetrics.registerMeshTopology(this::meshTopologyMetrics);
-        if (this.locationRuntime != null && this.objectDescriptors != null) {
+        if (publishesDescriptors()) {
             this.locationRuntime.setOwnerLeaseRecoveryListener(
-                    () -> {
-                        if (runtimeState.get() != ZLinkFrameworkRuntimeState.PREPARING) {
-                            return this.objectDescriptors
-                                    .recoverAfterOwnerLease(
-                                            this.runtimeState.get(),
-                                            this.locationRuntime.recoveryPreviousOwnerToken())
-                                    .thenCompose(
-                                            ignored ->
-                                                    this.locationAutoConnectHost == null
-                                                            ? CompletableFuture.completedFuture(
-                                                                    null)
-                                                            : this.locationAutoConnectHost
-                                                                    .recoverOwnerLease());
-                        }
-                        return startOwnerBoundRuntime(spotSubsystem)
-                                .thenRun(this::completeOwnerBoundStartup);
-                    });
+                    ownerLeaseWork(() -> startOwnerBoundRuntime(spotSubsystem)));
         }
         locationSubsystem
                 .startup()
-                .thenCompose(
-                        ignored -> {
-                            if (this.locationRuntime != null
-                                    && !this.locationRuntime.isOwnerAdmissionOpen()) {
-                                startupReady.complete(null);
-                                return CompletableFuture.completedFuture(null);
-                            }
-                            return startOwnerBoundRuntime(spotSubsystem)
-                                    .thenRun(this::completeOwnerBoundStartup);
-                        })
                 .whenComplete(
                         (ignored, failure) -> {
                             if (failure != null) {
-                                publishRuntimeState(ZLinkFrameworkRuntimeState.ERROR);
-                                Logger.getLogger(ZLinkFrameworkRuntime.class.getName())
-                                        .warning(
-                                                "Framework startup failed: "
-                                                        + failure.getMessage());
-                                startupReady.completeExceptionally(
-                                        unwrapCompletionFailure(failure));
+                                failStartup(failure);
+                            } else if (this.locationRuntime != null
+                                    && !this.locationRuntime.isOwnerAdmissionOpen()) {
+                                startupReady.complete(null);
+                            } else if (publishesDescriptors()) {
+                                this.locationRuntime
+                                        .publishWithStartupOwnerLease()
+                                        .whenComplete(
+                                                (published, publicationFailure) ->
+                                                        startupReady.complete(null));
+                            } else {
+                                startOwnerBoundRuntime(spotSubsystem);
                             }
                         });
     }
@@ -570,6 +549,105 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
         channels.recordListener(ZLinkListenerKind.ROUTE_MESH, meshName, node.advertisedEndpoint());
     }
 
+    private boolean publishesDescriptors() {
+        return this.locationRuntime != null && this.objectDescriptors != null;
+    }
+
+    /**
+     * The owner lease work the location runtime runs after it holds the lease: a host that left
+     * Preparing republishes its descriptors; a Preparing host runs the given startup step.
+     */
+    private Supplier<CompletionStage<Void>> ownerLeaseWork(
+            Supplier<CompletionStage<Void>> preparing) {
+        return () -> {
+            ZLinkFrameworkRuntimeState state = runtimeState.get();
+            return state == ZLinkFrameworkRuntimeState.PREPARING
+                    ? preparing.get()
+                    : recoverOwnerLeaseDescriptors(state);
+        };
+    }
+
+    private CompletionStage<Void> recoverOwnerLeaseDescriptors(ZLinkFrameworkRuntimeState state) {
+        return this.objectDescriptors
+                .recoverAfterOwnerLease(state, this.locationRuntime.recoveryPreviousOwnerToken())
+                .thenCompose(
+                        ignored ->
+                                this.locationAutoConnectHost == null
+                                        ? CompletableFuture.completedFuture(null)
+                                        : this.locationAutoConnectHost.recoverOwnerLease());
+    }
+
+    /**
+     * Owner-bound startup: claims the descriptors, starts the owner-bound components once, then
+     * publishes Serving. Once the components run, a retry publishes Serving only.
+     */
+    private CompletionStage<Void> startOwnerBoundRuntime(
+            ZLinkFrameworkSpotSubsystem spotSubsystem) {
+        return endOwnerBoundStartup(
+                (publishesDescriptors()
+                                ? this.objectDescriptors.recoverAfterOwnerLease(
+                                        ZLinkFrameworkRuntimeState.PREPARING,
+                                        this.locationRuntime.recoveryPreviousOwnerToken())
+                                : CompletableFuture.<Void>completedFuture(null))
+                        .thenCompose(ignored -> startOwnerBoundComponents(spotSubsystem))
+                        .thenRun(
+                                () -> {
+                                    if (publishesDescriptors()) {
+                                        this.locationRuntime.setOwnerLeaseRecoveryListener(
+                                                ownerLeaseWork(this::enterServing));
+                                    }
+                                })
+                        .thenCompose(ignored -> publishServing()));
+    }
+
+    private CompletionStage<Void> enterServing() {
+        return endOwnerBoundStartup(publishServing());
+    }
+
+    private CompletionStage<Void> publishServing() {
+        return (publishesDescriptors()
+                        ? recoverOwnerLeaseDescriptors(ZLinkFrameworkRuntimeState.SERVING)
+                        : CompletableFuture.<Void>completedFuture(null))
+                .thenRun(
+                        () ->
+                                this.meshNodes
+                                        .nodesByName()
+                                        .values()
+                                        .forEach(ZLinkInternalMeshNode::markServiceReady));
+    }
+
+    /**
+     * Location runtime §5: the one place that decides how owner-bound startup ends. A confirmed
+     * publication enters Serving. An unconfirmed one fails the stage, so the location runtime
+     * closes admission before startup finishes as Preparing and runs it at the next renewal. Any
+     * other failure, including another owner's definite rejection, is a startup error.
+     */
+    private CompletionStage<Void> endOwnerBoundStartup(CompletionStage<Void> ownerBoundStartup) {
+        return ownerBoundStartup
+                .thenRun(this::completeOwnerBoundStartup)
+                .exceptionallyCompose(
+                        failure -> {
+                            Throwable cause = unwrapCompletionFailure(failure);
+                            if (cause
+                                    instanceof
+                                    systems.zlink.framework.runtime.internal.locations
+                                            .ZLinkObjectServerDescriptorPublisher
+                                            .UnconfirmedPublicationException) {
+                                return CompletableFuture.failedFuture(cause);
+                            }
+                            failStartup(cause);
+                            return CompletableFuture.failedFuture(cause);
+                        });
+    }
+
+    private void failStartup(Throwable failure) {
+        Throwable cause = unwrapCompletionFailure(failure);
+        publishRuntimeState(ZLinkFrameworkRuntimeState.ERROR);
+        Logger.getLogger(ZLinkFrameworkRuntime.class.getName())
+                .warning("Framework startup failed: " + cause.getMessage());
+        startupReady.completeExceptionally(cause);
+    }
+
     private void completeOwnerBoundStartup() {
         if (drainStarted.get()) {
             throw new IllegalStateException("Framework startup was interrupted by shutdown");
@@ -580,23 +658,17 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
         Logger.getLogger(ZLinkFrameworkRuntime.class.getName()).info("ZLINK_FRAMEWORK_READY");
     }
 
-    private CompletionStage<Void> startOwnerBoundRuntime(
+    private CompletionStage<Void> startOwnerBoundComponents(
             ZLinkFrameworkSpotSubsystem spotSubsystem) {
-        return (this.objectDescriptors == null
-                        ? CompletableFuture.completedFuture(null)
-                        : this.objectDescriptors.publish(ZLinkFrameworkRuntimeState.PREPARING))
-                .thenCompose(
-                        ignored ->
-                                this.locationStores == null
-                                                || this.locationStores.unifiedStore() == null
-                                        ? CompletableFuture.completedFuture(null)
-                                        : CompletableFuture.allOf(
-                                                this.meshNodes.nodesByName().values().stream()
-                                                        .map(
-                                                                node ->
-                                                                        node.refreshLocalAuthorityFence()
-                                                                                .toCompletableFuture())
-                                                        .toArray(CompletableFuture[]::new)))
+        return (this.locationStores == null || this.locationStores.unifiedStore() == null
+                        ? CompletableFuture.<Void>completedFuture(null)
+                        : CompletableFuture.allOf(
+                                this.meshNodes.nodesByName().values().stream()
+                                        .map(
+                                                node ->
+                                                        node.refreshLocalAuthorityFence()
+                                                                .toCompletableFuture())
+                                        .toArray(CompletableFuture[]::new)))
                 .thenCompose(ignored -> spotSubsystem.startup())
                 .thenCompose(
                         ignored ->
@@ -615,19 +687,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                                         this.registration,
                                         this.channels,
                                         this.meshNodes,
-                                        this.spots))
-                .thenCompose(
-                        ignored ->
-                                this.objectDescriptors == null
-                                        ? CompletableFuture.completedFuture(null)
-                                        : this.objectDescriptors.publish(
-                                                ZLinkFrameworkRuntimeState.SERVING))
-                .thenRun(
-                        () ->
-                                this.meshNodes
-                                        .nodesByName()
-                                        .values()
-                                        .forEach(ZLinkInternalMeshNode::markServiceReady));
+                                        this.spots));
     }
 
     static ZLinkFrameworkRuntime start(
@@ -2261,6 +2321,10 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
 
     boolean ownerAdmissionOpen() {
         return locationRuntime == null || locationRuntime.isOwnerAdmissionOpen();
+    }
+
+    CompletionStage<Boolean> renewOwnerLeaseOnce() {
+        return locationRuntime.renewOwnerLeaseOnce();
     }
 
     private void runDrain(CompletionStage<Void> acceptedTargetRelocations) {

@@ -315,14 +315,33 @@ final class ZLinkProviderDescriptorRepository {
                                                                             if (previousOwner
                                                                                     instanceof
                                                                                     ZLinkStoreReadFound) {
+                                                                                if (intent
+                                                                                        != ZLinkLocationWriteIntent
+                                                                                                .NEW_CLAIM) {
+                                                                                    return completed(
+                                                                                            ZLinkLocationWriteResult
+                                                                                                    .ignoredStale());
+                                                                                }
+                                                                                byte[] candidate =
+                                                                                        encode
+                                                                                                .apply(
+                                                                                                        new StoredDescriptor<>(
+                                                                                                                record
+                                                                                                                        .generation(),
+                                                                                                                descriptor));
                                                                                 return completed(
-                                                                                        intent
-                                                                                                        == ZLinkLocationWriteIntent
-                                                                                                                .NEW_CLAIM
+                                                                                        sameExceptWriteTime(
+                                                                                                        found.value()
+                                                                                                                .bytes(),
+                                                                                                        candidate)
                                                                                                 ? ZLinkLocationWriteResult
-                                                                                                        .rejectedConflict()
+                                                                                                        .stored(
+                                                                                                                record
+                                                                                                                        .generation(),
+                                                                                                                found.value()
+                                                                                                                        .storeNow())
                                                                                                 : ZLinkLocationWriteResult
-                                                                                                        .ignoredStale());
+                                                                                                        .rejectedConflict());
                                                                             }
                                                                             return writeDescriptor(
                                                                                     rowKey,
@@ -930,6 +949,25 @@ final class ZLinkProviderDescriptorRepository {
                 value.leaseGeneration(),
                 value.lifecycleGeneration(),
                 value.descriptorRevision());
+    }
+
+    /**
+     * Location runtime §10: a NewClaim whose result was lost is sent again with a new write time. A
+     * stored row that differs from it only in that time is the same claim, not a conflict.
+     */
+    private static boolean sameExceptWriteTime(byte[] stored, byte[] next) {
+        try {
+            JsonNode storedRecord = CANONICAL_JSON.readTree(stored);
+            JsonNode nextRecord = CANONICAL_JSON.readTree(next);
+            for (JsonNode record : List.of(storedRecord, nextRecord)) {
+                if (record.path(FIELD_DESCRIPTOR) instanceof ObjectNode descriptor) {
+                    descriptor.remove(FIELD_UPDATED_AT_EPOCH_MS);
+                }
+            }
+            return storedRecord.equals(nextRecord);
+        } catch (IOException error) {
+            throw new IllegalStateException("Location descriptor record is invalid", error);
+        }
     }
 
     private static boolean sameImmutableMesh(

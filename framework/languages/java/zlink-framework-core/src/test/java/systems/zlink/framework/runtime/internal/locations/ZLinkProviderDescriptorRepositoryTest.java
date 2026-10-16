@@ -175,6 +175,69 @@ class ZLinkProviderDescriptorRepositoryTest {
                         .status());
     }
 
+    // Location runtime §10: a MeshNode NewClaim whose result was lost is sent again with a new
+    // write time; reading the key confirms the first claim instead of rejecting the own row.
+    @Test
+    void repeatedMeshNodeNewClaimAfterLostResponseIsConfirmed() throws Exception {
+        var provider = new ZLinkInMemoryProviderLocationStore();
+        var owners = new ZLinkProviderOwnerLeaseRepository(provider);
+        var descriptors = new ZLinkProviderDescriptorRepository(provider);
+        var owner =
+                assertInstanceOf(
+                                ZLinkOwnerLeaseClaimed.class,
+                                owners.claim("claim-retry-owner", Duration.ofMinutes(1))
+                                        .toCompletableFuture()
+                                        .get())
+                        .token();
+        var other =
+                assertInstanceOf(
+                                ZLinkOwnerLeaseClaimed.class,
+                                owners.claim("claim-retry-other", Duration.ofMinutes(1))
+                                        .toCompletableFuture()
+                                        .get())
+                        .token();
+        var first = descriptor(owner, 1);
+        assertEquals(
+                ZLinkLocationWriteStatus.STORED,
+                descriptors
+                        .updateMeshNode(first, ZLinkLocationWriteIntent.NEW_CLAIM)
+                        .toCompletableFuture()
+                        .get()
+                        .status());
+
+        var retry =
+                descriptors
+                        .updateMeshNode(
+                                writtenAt(first, Instant.parse("2026-07-29T00:00:05Z")),
+                                ZLinkLocationWriteIntent.NEW_CLAIM)
+                        .toCompletableFuture()
+                        .get();
+        assertEquals(ZLinkLocationWriteStatus.STORED, retry.status());
+
+        assertEquals(
+                ZLinkLocationWriteStatus.REJECTED_CONFLICT,
+                descriptors
+                        .updateMeshNode(descriptor(other, 1), ZLinkLocationWriteIntent.NEW_CLAIM)
+                        .toCompletableFuture()
+                        .get()
+                        .status());
+        assertEquals(
+                ZLinkLocationWriteStatus.REJECTED_CONFLICT,
+                descriptors
+                        .updateMeshNode(
+                                descriptor(
+                                        owner,
+                                        1,
+                                        "tcp://127.0.0.1:7999",
+                                        Map.of(),
+                                        ZLinkMeshNodeObjectRole.SERVER,
+                                        "security-a"),
+                                ZLinkLocationWriteIntent.NEW_CLAIM)
+                        .toCompletableFuture()
+                        .get()
+                        .status());
+    }
+
     @Test
     void meshDescriptorUsesOwnerValueFenceAndOpaqueSnapshot() throws Exception {
         var provider = new ZLinkInMemoryProviderLocationStore();
@@ -408,6 +471,29 @@ class ZLinkProviderDescriptorRepositoryTest {
                 owner.ownerId(),
                 owner.leaseGeneration(),
                 Instant.parse("2026-07-29T00:00:00Z"));
+    }
+
+    private static ZLinkMeshNodeDescriptor writtenAt(ZLinkMeshNodeDescriptor d, Instant at) {
+        return new ZLinkMeshNodeDescriptor(
+                d.meshName(),
+                d.rid(),
+                d.lifecycleGeneration(),
+                d.descriptorRevision(),
+                d.endpoint(),
+                d.channelWeights(),
+                d.applicationVersion(),
+                d.objectCapabilities(),
+                d.objectRole(),
+                d.entrySpotId(),
+                d.placementWeight(),
+                d.capacity(),
+                d.activationConcurrency(),
+                d.maintenanceWave(),
+                d.state(),
+                d.securityIdentity(),
+                d.ownerId(),
+                d.leaseGeneration(),
+                at);
     }
 
     private static final class MutableClock extends Clock {

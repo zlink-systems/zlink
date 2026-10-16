@@ -688,6 +688,16 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
         return withinDeadline(operation.get(), deadlineNanos);
     }
 
+    /**
+     * Location runtime §5: runs the owner lease work once startup holds the lease, as after a first
+     * renewal. If it fails, admission closes and the next renewal runs it again.
+     */
+    public CompletionStage<Void> publishWithStartupOwnerLease() {
+        return stateLane
+                .runAsync(() -> startupCompletion())
+                .thenCompose(this::republishAfterOwnerLeaseRecovery);
+    }
+
     private CompletionStage<Void> republishAfterOwnerLeaseRecovery(
             CompletableFuture<Void> lifecycle) {
         return stateLane
