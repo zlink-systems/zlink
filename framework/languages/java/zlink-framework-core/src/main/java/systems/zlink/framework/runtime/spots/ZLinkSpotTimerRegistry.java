@@ -493,6 +493,7 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
                                     return null;
                                 activeDispatch =
                                         new ActiveDispatch(selected, new CompletableFuture<>());
+                                schedule.markDelivered(selected);
                                 return new HandlerInvocation(
                                         spot, handlerType, activeDispatch.completion());
                             });
@@ -543,9 +544,6 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
                                     }
                                     boolean stopped =
                                             error != null && options.stopOnUnhandledException();
-                                    if (error == null) {
-                                        schedule.markDelivered(selected);
-                                    }
                                     SchedulePlan next = null;
                                     FinalizationPlan stopFinalization = null;
                                     if (stopped) {

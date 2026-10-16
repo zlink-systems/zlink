@@ -1023,8 +1023,6 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     task_t<void> submit_relocation_session_routes (relocation_attempt_key_t key);
     void start_relocation_session_route_submission (relocation_attempt_key_t key);
     void flush_pending_session_relocation_seals ();
-    bool relocation_target_authority_committed_strict (
-      const relocation_target_attempt_t &attempt) const noexcept;
     /* Target authority settlement (01 §10): the original NewOwner CAS commits,
      * is resubmitted (retry) while the Store names the source at the expected
      * StoreVersion and the target lease is live, or ends the staging

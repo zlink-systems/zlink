@@ -76,7 +76,7 @@ class ZlinkFrameworkConan(ConanFile):
             if not os.path.isfile(os.path.join(self.source_folder, relative_path)):
                 raise ConanInvalidConfiguration(
                     "Incomplete framework C++ archive: missing " + relative_path
-                    + ". Publish the output of cmake/prepare-source-archive.cmake "
+                    + ". Publish the output of scripts/package-source.py "
                     "and update conandata.yml."
                 )
 

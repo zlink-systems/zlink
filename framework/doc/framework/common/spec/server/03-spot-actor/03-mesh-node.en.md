@@ -66,8 +66,8 @@ Entry Spot ID issuance, format, and conflict rules for an Object Server MeshNode
 An Object Server MeshNode issues the Entry Spot ID and publishes it on its descriptor
 whether or not the application registered an Entry Spot type. Registering an Entry Spot
 type only chooses the application handler this Spot runs; it doesn't change whether the
-descriptor carries `entrySpotId`, and it doesn't decide whether the node can serve a
-remote creation request.
+descriptor carries `entrySpotId`, but it does decide whether the node is a candidate for
+creating new Actors ([Actor model §6.3](04-actor-model.en.md#63-selecting-mesh-and-placement-target)).
 
 The MeshNode descriptor mapping and publication rule for the Entry Spot ID are defined by
 [Transport RID and Spot ID Policy §6.3](../02-channel-transport/04-network-listener-identity.en.md#63-entry-spot-id).
@@ -326,6 +326,14 @@ The intention to keep a connection to a specific peer is expressed as a
 [connection intent](../00-foundation/02-glossary.en.md#connection-intent) that the
 application configuration or the auto-connect owner registers once per peer. The runtime
 attempts connect and reconnect only while the intent exists.
+
+**When the auto-connect owner receives an immediate-reconcile request for a specific peer, it applies
+the ordinary reconcile decision to that peer without waiting for its period.** It rereads that peer's
+descriptor through the existing Location resolver, and in automatic mode the rule that only the
+smaller RID starts connect still holds. The request creates no new kind of intent or separate state;
+the requester observes the peer's ready route as the result. Who sends the request and when is
+defined by [relocation §4.3](../05-location-relocation/04-relocation-flow.en.md#43-restore-the-target-without-running-it)
+and [Session and Actor Binding §8.1](../04-session/02-session-actor-binding.en.md#81-seal-held-messages-and-route-switchover).
 
 - **Removing an outbound intent also removes the binding's connection registration for
   that endpoint, as one decision.** The intent owner calls the binding's public disconnect.

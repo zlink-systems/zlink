@@ -2,6 +2,7 @@ package systems.zlink.framework.runtime.internal.service;
 
 import systems.zlink.framework.runtime.internal.calls.ZLinkBlockingCalls;
 
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.LockSupport;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -15,10 +16,10 @@ final class ZLinkServiceCompletionDispatcher {
             Logger.getLogger(ZLinkServiceCompletionDispatcher.class.getName());
     static final ZLinkServiceCompletionDispatcher INSTANCE = new ZLinkServiceCompletionDispatcher();
 
-    private final Object gate = new Object();
     private final Thread worker;
-    private WorkItem head;
-    private WorkItem tail;
+    // Producers publish pre-registered nodes; the worker detaches a complete rotation.
+    // Reversing that rotation restores publication order without allocating queue nodes.
+    private final AtomicReference<WorkItem> pending = new AtomicReference<>();
 
     private ZLinkServiceCompletionDispatcher() {
         worker =
@@ -30,99 +31,87 @@ final class ZLinkServiceCompletionDispatcher {
     }
 
     void register(WorkItem item) {
-        synchronized (gate) {
-            if (item.registered) {
-                throw new IllegalStateException("completion work item is already registered");
-            }
-            item.registered = true;
+        if (item.registered) {
+            throw new IllegalStateException("completion work item is already registered");
         }
+        item.registered = true;
     }
 
     void releaseWithoutDispatch(WorkItem item) {
-        synchronized (gate) {
-            releaseRegistration(item);
-        }
+        releaseRegistration(item);
     }
 
     void post(WorkItem item) {
-        item.dispatchNext = null;
-        synchronized (gate) {
-            requireRegistered(item);
-            if (tail == null) {
-                head = item;
-            } else {
-                tail.dispatchNext = item;
-            }
-            tail = item;
-        }
-        LockSupport.unpark(worker);
+        requireRegistered(item);
+        publish(item, item);
     }
 
     void postChain(WorkItem first, WorkItem last) {
         if (first == null) {
             return;
         }
-        synchronized (gate) {
-            WorkItem current = first;
-            while (true) {
-                requireRegistered(current);
-                if (current == last) {
-                    break;
-                }
-                current = current.dispatchNext;
-                if (current == null) {
-                    throw new IllegalStateException(
-                            "completion work chain does not reach its tail");
-                }
+        WorkItem current = first;
+        while (true) {
+            requireRegistered(current);
+            if (current == last) break;
+            current = current.dispatchNext;
+            if (current == null) {
+                throw new IllegalStateException("completion work chain does not reach its tail");
             }
-            if (tail == null) {
-                head = first;
-            } else {
-                tail.dispatchNext = first;
-            }
-            tail = last;
         }
-        LockSupport.unpark(worker);
+        last.dispatchNext = null;
+        publish(reverse(first), first);
+    }
+
+    private void publish(WorkItem first, WorkItem last) {
+        WorkItem observed;
+        do {
+            observed = pending.get();
+            last.dispatchNext = observed;
+        } while (!pending.compareAndSet(observed, first));
+        // One wake per empty-to-nonempty transition. A producer racing with park
+        // leaves its permit with the worker, so detaching a rotation needs no flag.
+        if (observed == null) LockSupport.unpark(worker);
     }
 
     private void run() {
         ZLinkBlockingCalls.markInfrastructureThread();
         while (true) {
-            WorkItem item = take();
+            WorkItem item = reverse(pending.getAndSet(null));
             if (item == null) {
                 LockSupport.park(this);
                 continue;
             }
-            try {
-                item.dispatch();
-            } catch (Throwable failure) {
-                LOGGER.log(Level.SEVERE, "service completion dispatch failed", failure);
-            } finally {
-                synchronized (gate) {
+            while (item != null) {
+                WorkItem next = item.dispatchNext;
+                item.dispatchNext = null;
+                try {
+                    item.dispatch();
+                } catch (RuntimeException | Error failure) {
+                    LOGGER.log(Level.SEVERE, "service completion dispatch failed", failure);
+                } finally {
                     releaseRegistration(item);
                 }
+                item = next;
             }
         }
     }
 
-    private WorkItem take() {
-        synchronized (gate) {
-            WorkItem item = head;
-            if (item == null) {
-                return null;
-            }
-            head = item.dispatchNext;
-            item.dispatchNext = null;
-            if (head == null) {
-                tail = null;
-            }
-            return item;
+    private static WorkItem reverse(WorkItem first) {
+        WorkItem reversed = null;
+        while (first != null) {
+            WorkItem next = first.dispatchNext;
+            first.dispatchNext = reversed;
+            reversed = first;
+            first = next;
         }
+        return reversed;
     }
 
     private void releaseRegistration(WorkItem item) {
         requireRegistered(item);
         item.registered = false;
+        item.released();
     }
 
     private static void requireRegistered(WorkItem item) {
@@ -133,16 +122,14 @@ final class ZLinkServiceCompletionDispatcher {
 
     abstract static class WorkItem {
         private WorkItem dispatchNext;
-        private boolean registered;
+        private volatile boolean registered;
 
         final void setDispatchNext(WorkItem value) {
             dispatchNext = value;
         }
 
-        final WorkItem getDispatchNext() {
-            return dispatchNext;
-        }
-
         abstract void dispatch();
+
+        void released() {}
     }
 }

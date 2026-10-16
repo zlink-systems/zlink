@@ -72,6 +72,11 @@ internal sealed record MeshNodePeer(
 )
 {
     internal ZLinkMeshNodeObjectRole ObjectRole { get; init; }
+
+    // A draining peer stays admitted: drain removes it from new route
+    // selection but keeps its admitted identity and connection (host
+    // relocation §14 step 1, glossary "Drain").
+    internal bool IsAdmitted => State is MeshPeerState.Admitted or MeshPeerState.Draining;
 }
 
 internal sealed record MeshPeerChannel(string Name, uint Weight);
@@ -911,6 +916,7 @@ internal struct MeshReceiveRecord
 
 internal interface IMeshNode : IDisposable, IAsyncDisposable
 {
+    void CloseSubmissions();
     ValueTask ForceStopAsync(CancellationToken cancellationToken);
     RoutingId RoutingId { get; }
     MeshOperationId AllocateOperationId();

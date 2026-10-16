@@ -485,7 +485,7 @@ const {
 } = require('../../packages/framework/dist/runtime/spots/spot-serial-turn-executor');
 
 for (const peerOrder of ['none', 'before failure', 'after failure']) {
-  test(`binding mismatch restores the Spot and every prepared Session (${peerOrder})`, async () => {
+  test(`binding mismatch keeps the Spot dispatching and restores every prepared Session (${peerOrder})`, async () => {
     const entered = barrier();
     const allowSeal = barrier();
     const dropped = barrier();
@@ -633,15 +633,12 @@ for (const peerOrder of ['none', 'before failure', 'after failure']) {
         await peerPrepared.joined;
       }
       assert.equal(await outcome, failure);
-      assert.equal(
-        events.filter((event) => event === 'spot:abort').length,
-        1,
-        'partially captured Spot must be restored'
-      );
-      assert.equal(
-        events.filter((event) => event === 'spot:follow-abort').length,
-        1,
-        'Message Follow ingress must be restored'
+      // Relocation 04 §4.1: member Sessions are sealed before the Spot stops
+      // dispatch, so a failed member seal leaves the Spot dispatching.
+      assert.deepEqual(
+        events.filter((event) => event.startsWith('spot:')),
+        [],
+        'a failed member seal must not stop Spot dispatch or Message Follow ingress'
       );
       assert.equal(events.includes('target:prepare'), false);
       if (peer) {

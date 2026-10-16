@@ -456,24 +456,6 @@ internal sealed partial class ZLinkFrameworkRuntime
         };
     }
 
-    internal async ValueTask PublishInboundSpotAggregateAsync(
-        TargetStage stage,
-        Func<CancellationToken, ValueTask>? normalizeAuthority,
-        CancellationToken cancellationToken
-    )
-    {
-        await stage.PublishGate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
-        {
-            await PublishInboundSpotAggregateCoreAsync(stage, normalizeAuthority, cancellationToken)
-                .ConfigureAwait(false);
-        }
-        finally
-        {
-            stage.PublishGate.Release();
-        }
-    }
-
     // The caller owns the stage publish gate through CAS settlement and publication.
     internal async ValueTask PublishInboundSpotAggregateCoreAsync(
         TargetStage stage,
@@ -484,8 +466,10 @@ internal sealed partial class ZLinkFrameworkRuntime
         var spotParticipant = stage.SpotParticipant;
         if (Volatile.Read(ref stage.Published) == 0)
         {
-            await PrepareInboundSpotAggregateCoreAsync(stage, spotParticipant, cancellationToken)
-                .ConfigureAwait(false);
+            // The target commit is confirmed before this point. Each member
+            // Actor's bound Session projection follows that commit before the
+            // ordered backlog runs (relocation 04 §4.6, §7), so a backlog
+            // handler pushes with the committed target binding.
             var handoffId = stage.Envelope.AggregateId.ToString("N");
             foreach (var actorState in stage.ActorStates)
             {
@@ -504,6 +488,8 @@ internal sealed partial class ZLinkFrameworkRuntime
                     stage.TargetOwnerLeaseGeneration
                 );
             }
+            await PrepareInboundSpotAggregateCoreAsync(stage, spotParticipant, cancellationToken)
+                .ConfigureAwait(false);
 
             if (Volatile.Read(ref stage.RelocationReadyDelivered) == 0)
             {
@@ -665,26 +651,6 @@ internal sealed partial class ZLinkFrameworkRuntime
         }
         if (normalizeAuthority is not null)
             await normalizeAuthority().ConfigureAwait(false);
-    }
-
-    internal async ValueTask PrepareInboundSpotAggregateAsync(
-        TargetStage stage,
-        CancellationToken cancellationToken
-    )
-    {
-        await stage.PublishGate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
-        {
-            if (Volatile.Read(ref stage.Published) != 0)
-                return;
-            var spotParticipant = stage.SpotParticipant;
-            await PrepareInboundSpotAggregateCoreAsync(stage, spotParticipant, cancellationToken)
-                .ConfigureAwait(false);
-        }
-        finally
-        {
-            stage.PublishGate.Release();
-        }
     }
 
     private async ValueTask PrepareInboundSpotAggregateCoreAsync(

@@ -2,6 +2,8 @@ namespace Zlink.Framework.Runtime.Handlers;
 
 internal static class ZLinkHandlerInvocationEngine
 {
+    private static readonly object UncancelableToken = CancellationToken.None;
+
     public static ValueTask<object?> InvokeAsync(
         object handler,
         ZLinkHandlerMethodInvoker invoker,
@@ -27,7 +29,9 @@ internal static class ZLinkHandlerInvocationEngine
             {
                 ZLinkHandlerArgumentKind.Message => message,
                 ZLinkHandlerArgumentKind.Context => context,
-                ZLinkHandlerArgumentKind.CancellationToken => cancellationToken,
+                ZLinkHandlerArgumentKind.CancellationToken => cancellationToken.CanBeCanceled
+                    ? cancellationToken
+                    : UncancelableToken,
                 _ => null,
             };
 

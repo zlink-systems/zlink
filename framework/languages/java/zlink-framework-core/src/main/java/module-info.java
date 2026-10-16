@@ -39,6 +39,8 @@ module systems.zlink.framework {
             zlink.framework.spring.boot.starter;
     exports systems.zlink.framework.runtime.internal.metrics to
             zlink.framework.spring.boot.starter;
+    exports systems.zlink.framework.runtime.internal.messaging to
+            zlink.framework.codec.protobuf;
     exports systems.zlink.framework.runtime.internal.monitoring to
             zlink.framework.spring.boot.starter;
     exports systems.zlink.framework.runtime.binding to

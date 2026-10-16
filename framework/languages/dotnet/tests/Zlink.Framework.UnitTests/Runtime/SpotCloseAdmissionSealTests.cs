@@ -233,17 +233,21 @@ public sealed class SpotCloseAdmissionSealTests
                 .AsTask()
         );
         Assert.Equal(ZLinkFrameworkErrorKind.Rejected, spot.Kind);
-        var timer = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
-            executor
-                .ExecuteTimerAsync(
-                    "timer",
-                    static (_, _, _) => ValueTask.CompletedTask,
-                    0,
-                    CancellationToken.None
-                )
-                .AsTask()
+        // Spot messaging §7 step 1: a timer tick that has not run when Close
+        // starts is cleaned with the old incarnation. The sealed tick is not
+        // delivered and is not an application handler failure (#1877).
+        var timerCalls = 0;
+        await executor.ExecuteTimerAsync(
+            "timer",
+            (_, _, _) =>
+            {
+                Interlocked.Increment(ref timerCalls);
+                return ValueTask.CompletedTask;
+            },
+            0,
+            CancellationToken.None
         );
-        Assert.Equal(ZLinkFrameworkErrorKind.Rejected, timer.Kind);
+        Assert.Equal(0, timerCalls);
         var actor = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
             executor
                 .ExecuteActorAsync(

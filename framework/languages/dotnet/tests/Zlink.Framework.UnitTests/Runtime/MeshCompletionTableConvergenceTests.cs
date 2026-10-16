@@ -7,11 +7,15 @@ namespace Zlink.Framework.UnitTests;
 public sealed class MeshCompletionTableConvergenceTests
 {
     [Fact]
-    public async Task ImmediateSendUsesTheRegisteredDispatcherNode()
+    public async Task LateSendAdmissionUsesTheRegisteredDispatcherNode()
     {
         var table = new ZLinkMeshCompletionTable();
         var operation = new MeshOperationId(92, 1);
         var pending = table.RegisterSend(operation);
+        var admission = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        pending.Observe(admission.Task);
         var turn = new TaskCompletionSource<bool>(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
@@ -21,7 +25,7 @@ public sealed class MeshCompletionTableConvergenceTests
             awaiter.GetResult();
             turn.SetResult(ZLinkCompletionDispatcher.IsCurrentExecution);
         });
-        pending.Observe(Task.CompletedTask);
+        admission.SetResult();
         Assert.True(await turn.Task.WaitAsync(TimeSpan.FromSeconds(5)));
         Assert.False(table.TryCancel(operation));
         await table.CompletionDrained;
