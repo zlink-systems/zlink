@@ -71,6 +71,7 @@ internal sealed class ManagedProcess : IAsyncDisposable
                         || line == NodeProtocol.RelocationRequested
                         || line == NodeProtocol.Relocated
                         || line == NodeProtocol.SafeToShutdown
+                        || line == NodeProtocol.ZoneVacated
                     )
                 )
                     await lines.Writer.WriteAsync(line);
