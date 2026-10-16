@@ -7852,10 +7852,6 @@
         {
           "name": "applicationVersion",
           "$ref": "application-version"
-        },
-        {
-          "name": "deadlineUnixMs",
-          "$ref": "nonzero-u64"
         }
       ],
       "payload": "forbidden"

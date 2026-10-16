@@ -155,9 +155,13 @@ export class ZLinkFanoutLocationRuntime {
         ownerId: owner.ownerId,
         leaseGeneration: owner.leaseGeneration
       };
-      const result = await this.store.updateFanoutPublisher(
-        candidate,
-        ZLinkLocationWriteIntent.Takeover,
+      const result = await this.locationRuntime.writeDescriptor(
+        (writeSignal) =>
+          this.store.updateFanoutPublisher(
+            candidate,
+            ZLinkLocationWriteIntent.Takeover,
+            writeSignal
+          ),
         signal
       );
       if (result.status !== ZLinkLocationWriteStatus.Stored) {
@@ -188,9 +192,9 @@ export class ZLinkFanoutLocationRuntime {
       }
       const current = await this.lane.run(() => this.localDescriptors.get(channelName));
       if (current !== undefined) {
-        const result = await this.store.updateFanoutPublisher(
-          current,
-          ZLinkLocationWriteIntent.Renew,
+        const result = await this.locationRuntime.writeDescriptor(
+          (writeSignal) =>
+            this.store.updateFanoutPublisher(current, ZLinkLocationWriteIntent.Renew, writeSignal),
           signal
         );
         if (result.status !== ZLinkLocationWriteStatus.Stored) {
@@ -231,9 +235,13 @@ export class ZLinkFanoutLocationRuntime {
         leaseGeneration: owner.leaseGeneration,
         updatedAt: new Date(0)
       };
-      const result = await this.store.updateFanoutPublisher(
-        descriptor,
-        ZLinkLocationWriteIntent.NewClaim,
+      const result = await this.locationRuntime.writeDescriptor(
+        (writeSignal) =>
+          this.store.updateFanoutPublisher(
+            descriptor,
+            ZLinkLocationWriteIntent.NewClaim,
+            writeSignal
+          ),
         signal
       );
       if (result.status !== ZLinkLocationWriteStatus.Stored) {

@@ -506,7 +506,7 @@ seal timeout으로 정리하면, 이미 끝난 호출자 결과는 바꾸지 않
 
 Restore·relay·cutover·CAS와 queue 병합의 순서는 [공통 relocation §4](../05-location-relocation/04-relocation-flow.ko.md#4-정상-처리-순서)를 따른다. 이 절의 Session seal·route 전환은 위 검증 값과 아래 timeout 규칙을 따른다.
 
-Command 42로 seal을 설치할 때 command 42가 실은 target node(`targetNodeRid`·node generation)가 Session
+Command 42로 seal을 설치할 때 command 42가 실은 target node(`targetNodeRid`·`targetNodeGeneration`)가 Session
 owner 자신이 아니면, Session owner는 그 node와 [ready](../00-foundation/02-glossary.ko.md#ready) route가
 있는지 확인하고, 없으면 자신의
 auto-connect owner에 그 peer의 즉시 reconcile을 요청한다([MeshNode §7.1](../03-spot-actor/03-mesh-node.ko.md#71-peer-연결)).
