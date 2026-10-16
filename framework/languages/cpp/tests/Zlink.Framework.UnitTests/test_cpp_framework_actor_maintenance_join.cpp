@@ -593,8 +593,29 @@ TEST_P (ActorHostRelocation, AfterRemoteActorJoin)
     const auto result = relocation.result_for (wait_budget);
     ASSERT_TRUE (result.has_value ());
     ASSERT_TRUE (*result);
-    EXPECT_EQ (result->value ().outcome, fw::relocation_outcome_t::relocated)
+    ASSERT_EQ (result->value ().outcome, fw::relocation_outcome_t::relocated)
       << "reason=" << static_cast<int> (result->value ().reason);
+    // Relocation flow §4.6: once the aggregate relocation commits, a request to the
+    // relocated Actor reaches the target activation and replies.
+    const auto reply = entry_services.get_required<fw::actor_client_t> ()
+                         .request (fw::actor_id_t (actor_id), probe_t{instance_probe})
+                         .timeout (wait_budget)
+                         .async<probe_t> ()
+                         .result ();
+    ASSERT_TRUE (reply) << "kind=" << static_cast<int> (reply.error_kind ())
+                        << " error=" << (reply.error () ? reply.error ()->what () : "none");
+    {
+        std::lock_guard lock (evidence.mutex);
+        EXPECT_EQ (reply.value ().value, evidence.instances);
+    }
+    // The relocated User Spot stays addressable by its public Id.
+    const auto spot = entry_services.get_required<fw::spot_manager_t> ()
+                        .get_or_create (fw::spot_id_t (local_spot), room_type)
+                        .timeout (wait_budget)
+                        .async ()
+                        .result ();
+    ASSERT_TRUE (spot) << "kind=" << static_cast<int> (spot.error_kind ());
+    EXPECT_EQ (spot.value ().state, fw::spot_create_state_t::existing);
 }
 
 INSTANTIATE_TEST_SUITE_P (FreshAndPreviousOwner, ActorHostRelocation, testing::Bool ());
