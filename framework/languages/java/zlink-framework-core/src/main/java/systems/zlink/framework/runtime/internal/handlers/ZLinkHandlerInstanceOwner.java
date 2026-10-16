@@ -7,13 +7,12 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.concurrent.CompletionException;
 import java.util.function.Supplier;
 
 /** Owns handler instances for one Framework lifecycle boundary. */
 public final class ZLinkHandlerInstanceOwner implements AutoCloseable {
     private final ZLinkHandlerActivator activator;
-    private final ZLinkHandlerActivator.Activation activation;
+    private ZLinkHandlerActivator.Activation activation;
     private final Map<Class<?>, Object> instances = new LinkedHashMap<>();
     // Keep synchronous activation on the caller's execution resource; the lane
     // still owns FIFO and non-reentrant access to the scope's state.
@@ -23,7 +22,6 @@ public final class ZLinkHandlerInstanceOwner implements AutoCloseable {
 
     public ZLinkHandlerInstanceOwner(ZLinkHandlerActivator activator) {
         this.activator = Objects.requireNonNull(activator, "activator");
-        this.activation = this.activator.openActivation();
     }
 
     public void prepare(Class<?> handlerType) {
@@ -37,6 +35,7 @@ public final class ZLinkHandlerInstanceOwner implements AutoCloseable {
                     if (closed) {
                         throw new IllegalStateException("handler instance owner is closed");
                     }
+                    if (activation == null) activation = activator.openActivation();
                     return instances.computeIfAbsent(handlerType, activation::create);
                 });
     }
@@ -47,43 +46,32 @@ public final class ZLinkHandlerInstanceOwner implements AutoCloseable {
      */
     @Override
     public void close() {
-        Map<Class<?>, Object> owned =
-                inStateLane(
-                        () -> {
-                            closed = true;
-                            Map<Class<?>, Object> current = new LinkedHashMap<>(instances);
-                            instances.clear();
-                            return current;
-                        });
-        List<Map.Entry<Class<?>, Object>> releases = new ArrayList<>(owned.entrySet());
-        Map<Class<?>, Object> failed = new LinkedHashMap<>();
-        RuntimeException firstFailure = null;
-        for (int index = releases.size() - 1; index >= 0; index--) {
-            Map.Entry<Class<?>, Object> release = releases.get(index);
-            try {
-                activation.destroy(release.getValue());
-            } catch (RuntimeException failure) {
-                failed.put(release.getKey(), release.getValue());
-                firstFailure = addFailure(firstFailure, failure);
-            }
-        }
-        boolean closeActivation = inStateLane(() -> !activationClosed);
-        if (closeActivation) {
-            try {
-                activation.close();
-                inStateLane(() -> activationClosed = true);
-            } catch (RuntimeException failure) {
-                firstFailure = addFailure(firstFailure, failure);
-            }
-        }
-        if (firstFailure != null) {
-            inStateLane(
-                    () -> {
-                        instances.putAll(failed);
-                        return null;
-                    });
-            throw firstFailure;
-        }
+        inStateLane(
+                () -> {
+                    closed = true;
+                    List<Map.Entry<Class<?>, Object>> releases =
+                            instances.isEmpty() ? List.of() : new ArrayList<>(instances.entrySet());
+                    RuntimeException firstFailure = null;
+                    for (int index = releases.size() - 1; index >= 0; index--) {
+                        Map.Entry<Class<?>, Object> release = releases.get(index);
+                        try {
+                            activation.destroy(release.getValue());
+                            instances.remove(release.getKey());
+                        } catch (RuntimeException failure) {
+                            firstFailure = addFailure(firstFailure, failure);
+                        }
+                    }
+                    if (activation != null && !activationClosed) {
+                        try {
+                            activation.close();
+                            activationClosed = true;
+                        } catch (RuntimeException failure) {
+                            firstFailure = addFailure(firstFailure, failure);
+                        }
+                    }
+                    if (firstFailure != null) throw firstFailure;
+                    return null;
+                });
     }
 
     private static RuntimeException addFailure(RuntimeException first, RuntimeException failure) {
@@ -95,17 +83,6 @@ public final class ZLinkHandlerInstanceOwner implements AutoCloseable {
     }
 
     private <T> T inStateLane(Supplier<T> work) {
-        try {
-            return stateLane.runAsync(work).toCompletableFuture().join();
-        } catch (CompletionException failure) {
-            Throwable cause = failure.getCause();
-            if (cause instanceof RuntimeException runtimeFailure) {
-                throw runtimeFailure;
-            }
-            if (cause instanceof Error error) {
-                throw error;
-            }
-            throw failure;
-        }
+        return stateLane.awaitTurn(work);
     }
 }

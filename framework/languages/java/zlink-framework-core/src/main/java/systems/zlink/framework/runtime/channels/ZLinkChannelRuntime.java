@@ -1729,20 +1729,9 @@ public final class ZLinkChannelRuntime
         return Arrays.equals(expected.get(0), actual.get(0).toByteArray());
     }
 
-    static boolean isFrameworkErrorReply(List<Message> parts) {
-        return ZLinkFrameworkErrorReply.isReply(parts);
-    }
-
-    static String frameworkErrorReplyMessage(List<Message> parts) {
-        return ZLinkFrameworkErrorReply.message(parts);
-    }
-
-    static ZLinkFrameworkErrorKind frameworkErrorReplyKind(List<Message> parts) {
-        return ZLinkFrameworkErrorReply.kind(parts);
-    }
-
-    static java.util.Map<String, String> frameworkErrorReplyMetadata(List<Message> parts) {
-        return ZLinkFrameworkErrorReply.metadata(parts);
+    /** The failure a framework error reply carries, or {@code null} for any other reply. */
+    static ZLinkFrameworkException frameworkErrorReplyFailure(List<Message> parts) {
+        return ZLinkFrameworkErrorReply.failure(parts);
     }
 
     private void startRouteLoop(String channelName, ZLinkBackendRouterSocket router) {

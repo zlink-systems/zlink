@@ -106,12 +106,6 @@ final class ZLinkJavaRawServicePortContractTest {
                     ZLinkJavaRawMeshNode.backendResult(
                                     ZLinkJavaRawMeshNode.requestTerminal(sourceError))
                             .toFrameworkErrorKind());
-            var mapper =
-                    ZLinkJavaRawMeshNode.class.getDeclaredMethod(
-                            "mapRequestFailure",
-                            java.util.concurrent.CompletionStage.class,
-                            java.util.function.Function.class);
-            mapper.setAccessible(true);
             java.util.function.Function<
                             Throwable,
                             systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived>
@@ -125,9 +119,26 @@ final class ZLinkJavaRawServicePortContractTest {
                                             Optional.empty(),
                                             Optional.empty(),
                                             List.of());
+            // The mesh completion path reports the terminal with the same failure projection.
             var mapped =
-                    (java.util.concurrent.CompletionStage<?>)
-                            mapper.invoke(null, submitted, decodeFailure);
+                    new java.util.concurrent.CompletableFuture<
+                            systems.zlink.framework.runtime.internal.backend
+                                    .ZLinkBackendReceived>();
+            port.requestMessagesTo(
+                    caller,
+                    target,
+                    List.of(Message.from(new byte[] {1})),
+                    Duration.ofSeconds(1),
+                    ignored -> {
+                        throw new AssertionError("capacity refusal has no reply");
+                    },
+                    decodeFailure,
+                    (value, failure) -> {
+                        if (failure != null) mapped.completeExceptionally(failure);
+                        else mapped.complete(value);
+                    },
+                    null,
+                    null);
             var error =
                     assertThrows(
                                     ExecutionException.class,

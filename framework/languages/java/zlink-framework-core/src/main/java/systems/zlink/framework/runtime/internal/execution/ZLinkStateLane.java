@@ -1,6 +1,7 @@
 package systems.zlink.framework.runtime.internal.execution;
 
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
+import systems.zlink.framework.runtime.internal.ZLinkCompletionBridge;
 import systems.zlink.framework.runtime.internal.calls.ZLinkBlockingCalls;
 
 import java.util.Objects;
@@ -12,6 +13,7 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.BiConsumer;
 import java.util.function.Supplier;
 
 /**
@@ -31,6 +33,9 @@ import java.util.function.Supplier;
 public final class ZLinkStateLane {
     private static final int DRAIN_BATCH_LIMIT = 100;
     private static final int CLOSED = Integer.MIN_VALUE;
+    // A private mailbox signal, never returned as an operation's completion result.
+    private static final CompletableFuture<Void> TURN_FINISHED =
+            CompletableFuture.completedFuture(null);
     private static final ThreadLocal<ZLinkStateLane> CURRENT = new ThreadLocal<>();
     // Lane identity and FIFO belong to the mailbox, not to an executor.
     // In particular, a request-scoped handler owner needs no private executor.
@@ -67,14 +72,40 @@ public final class ZLinkStateLane {
     }
 
     public <T> CompletionStage<T> runAsync(Supplier<T> work) {
-        return submit(work, false);
+        return publishOutsideLane(submit(work, false));
     }
 
     public <T> CompletionStage<T> runNowOrQueue(Supplier<T> work) {
-        return submit(work, true);
+        return publishOutsideLane(submit(work, true));
     }
 
-    private <T> CompletionStage<T> submit(Supplier<T> work, boolean runIdleTurnNow) {
+    /** Synchronous registration boundary; its private result cannot acquire dependents. */
+    public <T> T awaitTurn(Supplier<T> work) {
+        Objects.requireNonNull(work, "work");
+        throwIfReentrant();
+        if (!tryAdmit()) throw new IllegalStateException("state lane is closed");
+        CompletableFuture<T> result;
+        try {
+            if (tryClaimInlineTurn()) {
+                try {
+                    return callWithCurrent(this, work);
+                } catch (CompletionException failure) {
+                    // Preserve the synchronous boundary's existing failure unwrapping.
+                    return ZLinkCompletionBridge.await(CompletableFuture.failedFuture(failure));
+                } finally {
+                    releaseInlineTurn();
+                }
+            }
+            result = new CompletableFuture<>();
+            mailbox.add(completeWork(work, result));
+            scheduleDrain();
+        } finally {
+            releaseAdmission();
+        }
+        return ZLinkCompletionBridge.await(result);
+    }
+
+    private <T> CompletableFuture<T> submit(Supplier<T> work, boolean runIdleTurnNow) {
         Objects.requireNonNull(work, "work");
         throwIfReentrant();
         if (!tryAdmit()) throw new IllegalStateException("state lane is closed");
@@ -90,6 +121,10 @@ public final class ZLinkStateLane {
         } finally {
             releaseAdmission();
         }
+        return result;
+    }
+
+    private static <T> CompletionStage<T> publishOutsideLane(CompletableFuture<T> result) {
         // No caller can observe the private result before submission returns.
         // A completed turn needs no completion task; a pending turn must still
         // publish outside the lane so a dependent can reenter it and wait.
@@ -99,6 +134,13 @@ public final class ZLinkStateLane {
         // Observers may hold a source gate while waiting for this completion. Keep its
         // publication on infrastructure execution, independent of the observation dispatcher.
         return result.handleAsync((value, error) -> result.join(), DEFAULT_EXECUTOR);
+    }
+
+    /** Registers the publication itself so a raced terminal cannot inline it in an owner turn. */
+    public static <T> void publishOutsideLane(
+            CompletableFuture<T> result, BiConsumer<? super T, ? super Throwable> publication) {
+        if (result.isDone() && CURRENT.get() == null) result.whenComplete(publication);
+        else result.whenCompleteAsync(publication, DEFAULT_EXECUTOR);
     }
 
     /** Returns null when the owner is busy; a returned stage has already run its turn. */
@@ -124,19 +166,27 @@ public final class ZLinkStateLane {
                                 ? error
                                 : new CompletionException(error));
             }
-            return CompletableFuture.completedFuture(null);
+            return TURN_FINISHED;
         };
     }
 
     private boolean tryRunInline(WorkItem turn) {
-        if (!scheduled.compareAndSet(0, 1)) return false;
+        if (!tryClaimInlineTurn()) return false;
         try {
-            if (!mailbox.isEmpty()) return false;
             turn.run();
             return true;
         } finally {
             releaseInlineTurn();
         }
+    }
+
+    private boolean tryClaimInlineTurn() {
+        if (!scheduled.compareAndSet(0, 1)) return false;
+        if (!mailbox.isEmpty()) {
+            releaseInlineTurn();
+            return false;
+        }
+        return true;
     }
 
     public CompletionStage<Void> runAsync(Runnable work) {
@@ -235,33 +285,34 @@ public final class ZLinkStateLane {
     }
 
     private void runNext(int processed) {
-        WorkItem work = processed == DRAIN_BATCH_LIMIT ? null : mailbox.poll();
-        if (work == null) {
-            scheduled.set(0);
-            if (!mailbox.isEmpty()) {
-                scheduleDrain();
+        while (processed < DRAIN_BATCH_LIMIT) {
+            WorkItem work = mailbox.poll();
+            if (work == null) break;
+            CompletionStage<Void> execution;
+            try {
+                execution = work.run();
+            } catch (RuntimeException | Error error) {
+                execution = CompletableFuture.failedFuture(error);
             }
-            completeCloseIfDrained();
-            return;
+            processed++;
+            if (!execution.toCompletableFuture().isDone()) {
+                int next = processed;
+                execution.whenComplete((ignored, error) -> resumeDrain(next));
+                return;
+            }
         }
+        scheduled.set(0);
+        if (!mailbox.isEmpty()) scheduleDrain();
+        completeCloseIfDrained();
+    }
 
-        CompletionStage<Void> execution;
+    private void resumeDrain(int processed) {
         try {
-            execution = work.run();
-        } catch (RuntimeException | Error error) {
-            execution = CompletableFuture.failedFuture(error);
+            executor.execute(() -> runNext(processed));
+        } catch (RuntimeException rejected) {
+            scheduled.set(0);
+            if (admission.get() < 0) completed.completeExceptionally(rejected);
         }
-        execution.whenComplete(
-                (ignored, error) -> {
-                    try {
-                        executor.execute(() -> runNext(processed + 1));
-                    } catch (RuntimeException rejected) {
-                        scheduled.set(0);
-                        if (admission.get() < 0) {
-                            completed.completeExceptionally(rejected);
-                        }
-                    }
-                });
     }
 
     private static void runWithCurrent(ZLinkStateLane lane, Runnable command) {
@@ -275,19 +326,12 @@ public final class ZLinkStateLane {
 
     private static <T> T callWithCurrent(ZLinkStateLane lane, Supplier<T> command) {
         ZLinkStateLane previous = CURRENT.get();
-        if (lane == null) {
-            CURRENT.remove();
-        } else {
-            CURRENT.set(lane);
-        }
+        CURRENT.set(lane);
         try {
             return command.get();
         } finally {
-            if (previous == null) {
-                CURRENT.remove();
-            } else {
-                CURRENT.set(previous);
-            }
+            // Keep the thread's diagnostic slot, without retaining an inactive owner.
+            CURRENT.set(previous);
         }
     }
 
