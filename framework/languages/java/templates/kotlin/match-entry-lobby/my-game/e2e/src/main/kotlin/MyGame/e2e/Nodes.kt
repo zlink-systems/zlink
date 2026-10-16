@@ -130,19 +130,21 @@ class Nodes(private val root: Path) : AutoCloseable {
         compose("up", "-d", "--wait")
         val redis = compose("port", "redis", "6379")
         val structure = Json.mapper.readTree(root.resolve("zlink.structure.json").toFile())
-        val startupOrder = listOf("match", "session")
+        val applicationRoles = setOf("match", "session")
         val applicationNodes =
             structure["nodes"]
-                .filter { it["role"].asText() in startupOrder }
-                .sortedBy { startupOrder.indexOf(it["role"].asText()) }
-        for (node in applicationNodes) {
-            val id = node["id"].asText()
-            val role = node["role"].asText()
-            val source =
-                Json.mapper.readValue(
-                    root.resolve(node["config"].asText()).toFile(),
-                    NodeConfig::class.java,
-                )
+                .filter { it["role"].asText() in applicationRoles }
+                .map { node ->
+                    node["role"].asText() to
+                        Json.mapper.readValue(
+                            root.resolve(node["config"].asText()).toFile(),
+                            NodeConfig::class.java,
+                        )
+                }
+                // Bootstrap completes before another placement candidate starts.
+                .sortedWith(compareBy({ it.first == "session" }, { !it.second.bootstrap }))
+        for ((role, source) in applicationNodes) {
+            val id = source.id
             val config =
                 source.copy(
                     redisEndpoint = redis,

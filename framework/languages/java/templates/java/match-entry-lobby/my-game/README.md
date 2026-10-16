@@ -54,6 +54,8 @@ Public 0.30.0 validation reaches READY but cross-node deferred Actor join to Mat
 
 ## Deployment sequence
 
+Wait for the bootstrap owner to report `READY` before starting another match host. Its public GetOrCreate completes while it is the only placement candidate, so the fixed Matchmaking Spot starts on its declared owner.
+
 1. Provision Redis; assign a shared `keyPrefix` and reachable `redisEndpoint` to all node configurations.
 2. Start matchA with `server/config/match-a.json`. Its `bootstrap` setting creates the fixed `matchmaking` User Spot before READY. Start matchB with `server/config/match-b.json`.
 3. Start Session with `server/config/session.json`; connect clients to its READY `streamEndpoint`. The installed launchers are `server/match/build/install/match/bin/match` and `server/session/build/install/session/bin/session` (append `.bat` on Windows). Pass the configuration path as their sole argument.

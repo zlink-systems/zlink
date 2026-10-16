@@ -63,16 +63,25 @@ public final class Nodes implements AutoCloseable {
         compose("up", "-d", "--wait");
         String redis = compose("port", "redis", "6379");
         var structure = Json.MAPPER.readTree(root.resolve("zlink.structure.json").toFile());
-        var declarations = new ArrayList<JsonNode>();
-        structure.path("nodes").forEach(declarations::add);
-        declarations.sort(Comparator.comparing(n -> n.path("role").asText().equals("session")));
-        for (var declaration : declarations) {
-            String role = declaration.path("role").asText();
+        record Declaration(String role, NodeConfig config) {}
+        var declarations = new ArrayList<Declaration>();
+        for (var node : structure.path("nodes")) {
+            String role = node.path("role").asText();
             if (!Set.of("session", "match").contains(role)) continue;
-            var declared =
-                    Json.MAPPER.readValue(
-                            root.resolve(declaration.path("config").asText()).toFile(),
-                            NodeConfig.class);
+            declarations.add(
+                    new Declaration(
+                            role,
+                            Json.MAPPER.readValue(
+                                    root.resolve(node.path("config").asText()).toFile(),
+                                    NodeConfig.class)));
+        }
+        // Bootstrap completes before another placement candidate starts.
+        declarations.sort(
+                Comparator.comparing((Declaration d) -> d.role().equals("session"))
+                        .thenComparing(d -> !d.config().bootstrap()));
+        for (var declaration : declarations) {
+            String role = declaration.role();
+            var declared = declaration.config();
             String id = declared.id();
             modules.put(id, role);
             var config =

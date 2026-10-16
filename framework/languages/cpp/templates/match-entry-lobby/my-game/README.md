@@ -77,6 +77,8 @@ Public 0.30.0 validation does not pass; the 0.30.1 candidate must be verified on
 
 ## Deployment sequence
 
+Wait for the bootstrap owner to report `READY` before starting another match host. Its public GetOrCreate completes while it is the only placement candidate, so the fixed Matchmaking Spot starts on its declared owner.
+
 1. Start Redis and give all node configurations the same deployment-specific `RedisEndpoint` and `KeyPrefix`.
 2. Start the Matchmaking bootstrap owner (`my-game-match server/config/match-a.json`), then other Match hosts (`my-game-match server/config/match-b.json`), then Session (`my-game-session server/config/session.json`). Every role has its own executable; configuration does not select the role.
 3. Keep Room capacity available on surviving hosts. Write `drain` to the selected Match host's stdin. Wait for all three relocation markers, then write `shutdown` and require `STOPPED` and exit code zero.
