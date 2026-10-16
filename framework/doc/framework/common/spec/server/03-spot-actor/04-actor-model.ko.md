@@ -411,7 +411,8 @@ Framework는 다음 순서로 target 후보를 검사한다.
 
 1. Object role을 확인한다.
 2. 요청한 stable type이 등록되어 있는지 확인한다. 새 Actor를 만드는 Create·GetOrCreate는 이 가운데
-   그 Actor stable type을 받는 Entry Spot type을 등록한 Object Server만 남긴다.
+   그 Actor stable type을 받는 Entry Spot type을 등록한 Object Server(descriptor capability의 `entryAccepted`가
+   `true`인 node)만 남긴다.
 3. Active·pending capacity가 남아 있는지 확인한다.
 4. 남은 후보에 node-wide placement weight를 적용한다.
 

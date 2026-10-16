@@ -433,7 +433,7 @@ record의 cmsgpack `version` member([02 §8](02-location-store-redis.ko.md#8-공
 | `entrySpotId` | Object Server lifecycle의 Entry Spot ID다. `Server` role이 아니면 `null`이다. |
 | `channelWeights` | ClientServer ChannelName마다의 선택 비중이다. Key는 ChannelName, value는 `0..10000` 정수다. |
 | `applicationVersion` | Application 배포 순번이다. |
-| `objectCapabilities` | 등록한 object 종류별 배치 능력 목록이다. 각 원소는 `objectKind`(`actor \| userSpot \| instanceSpot`), `stableType`, `policy`(`unspecified \| disabled \| recreate \| snapshot`), `hasSnapshotAdapter`(boolean)와 `limit`(정수, `0`은 무제한)을 포함한다. 최대 1,024개다. |
+| `objectCapabilities` | 등록한 object 종류별 배치 능력 목록이다. 각 원소는 `objectKind`(`actor \| userSpot \| instanceSpot`), `stableType`, `policy`(`unspecified \| disabled \| recreate \| snapshot`), `hasSnapshotAdapter`(boolean), `limit`(정수, `0`은 무제한)와 `entryAccepted`(boolean)를 포함한다. `entryAccepted`는 `objectKind`가 `actor`이고 그 node에 등록한 Entry Spot type이 그 Actor stable type을 받을 때만 `true`이며, 새 Actor 생성 후보 판정([Actor model §6.3](../03-spot-actor/04-actor-model.ko.md#63-mesh와-placement-target-선택))에 쓴다. 최대 1,024개다. |
 | `objectRole` | `none \| client \| server` 중 하나다. |
 | `placementWeight` | `0..10000`, 기본값 100이다(§4). |
 | `capacity` | §4의 "Descriptor의 count는 운영자가 상태를 확인하기 위한 복사본" 투영이다. `actors`와 `spots`는 각각 `{active, reserved, limit}`이다. `spotTypes`는 `{objectKind, stableType, active, reserved, limit}` 배열이다. Entry Spot은 포함하지 않는다(§4). |
@@ -638,7 +638,7 @@ lease read에서 얻은 만료 시각이 지난 descriptor는 새 target 선택�
 select-one의 후보 갱신도 여기에 포함한다.
 
 Object Server descriptor에는 `Server` role, node-wide placement weight, node별 Actor·Spot
-count와 limit, 지원하는 Spot stable type, Entry Spot ID와 Entry Spot type이 받는 Actor stable type이 있다.
+count와 limit, 지원하는 Spot stable type, Entry Spot ID가 있다.
 
 여러 target 후보에 새 object를 배정할 상대 비중을
 [weight](../00-foundation/02-glossary.ko.md#weight)라고 한다. 값이 클수록 다른 조건이 같은 후보보다 자주

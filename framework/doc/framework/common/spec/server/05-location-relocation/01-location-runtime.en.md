@@ -475,7 +475,7 @@ which one is authoritative.
 | `entrySpotId` | The Entry Spot ID for an Object Server lifecycle. `null` unless the role is `Server`. |
 | `channelWeights` | Selection weight per ClientServer ChannelName. Key is the ChannelName; value is a `0..10000` integer. |
 | `applicationVersion` | The application deployment sequence number. |
-| `objectCapabilities` | The list of registered object-kind placement capabilities. Each entry has `objectKind` (`actor \| userSpot \| instanceSpot`), `stableType`, `policy` (`unspecified \| disabled \| recreate \| snapshot`), `hasSnapshotAdapter` (boolean), and `limit` (integer, `0` means unlimited). At most 1,024 entries. |
+| `objectCapabilities` | The list of registered object-kind placement capabilities. Each entry has `objectKind` (`actor \| userSpot \| instanceSpot`), `stableType`, `policy` (`unspecified \| disabled \| recreate \| snapshot`), `hasSnapshotAdapter` (boolean), `limit` (integer, `0` means unlimited), and `entryAccepted` (boolean). `entryAccepted` is `true` only when `objectKind` is `actor` and an Entry Spot type registered on that node accepts that Actor stable type; new-Actor candidate selection ([Actor model §6.3](../03-spot-actor/04-actor-model.en.md#63-selecting-mesh-and-placement-target)) uses it. At most 1,024 entries. |
 | `objectRole` | One of `none \| client \| server`. |
 | `placementWeight` | `0..10000`, default 100 (§4). |
 | `capacity` | The "descriptor's count is a copy for operators to check status" projection from §4. `actors` and `spots` are each `{active, reserved, limit}`. `spotTypes` is an array of `{objectKind, stableType, active, reserved, limit}`. Entry Spot isn't included (§4). |
@@ -707,8 +707,7 @@ period, a descriptor whose expiration time from the last owner-lease read has pa
 isn't used for new target selection — this includes refreshing select-one candidates.
 
 An Object Server descriptor has the `Server` role, node-wide placement weight, per-node
-Actor/Spot count and limit, supported Spot stable types, Entry Spot ID, and the Actor stable types its Entry Spot
-types accept.
+Actor/Spot count and limit, supported Spot stable types, and Entry Spot ID.
 
 The relative share deciding how a new object is assigned among several target candidates
 is called [weight](../00-foundation/02-glossary.en.md#weight). A larger value means it's selected more

@@ -463,7 +463,7 @@ The framework checks target candidates in the following order.
 1. Checks object role.
 2. Checks whether the requested stable type is registered. A Create or GetOrCreate that makes a
    new Actor keeps only the Object Servers among them that registered an Entry Spot type accepting
-   that Actor stable type.
+   that Actor stable type (nodes whose descriptor capability has `entryAccepted` set to `true`).
 3. Checks whether active/pending capacity remains.
 4. Applies node-wide placement weight to the remaining candidates.
 
