@@ -3147,6 +3147,18 @@ bool has_relocation_units (const detail::mesh_node_runtime_t &node)
     return node.active_spot_count () != 0 || node.active_actor_count () != 0;
 }
 
+std::int64_t relocation_target_application_version (const relocation_options_t &options,
+                                                    std::int64_t source_version)
+{
+    if (options.mode == relocation_mode_t::planned_maintenance)
+        return source_version;
+    if (*options.target_application_version <= source_version) {
+        throw std::invalid_argument (
+          "rolling update target application version must be greater than the source version");
+    }
+    return *options.target_application_version;
+}
+
 task_t<relocation_preflight_t>
 relocation_topology_preflight_once (detail::app_state_t &state, const relocation_options_t &options)
 {
@@ -3207,16 +3219,8 @@ relocation_topology_preflight_once (detail::app_state_t &state, const relocation
                 co_return relocation_preflight_t{relocation_reason_t::state_incompatible, 0};
             }
             source_application_version = source->application_version;
-            if (options.mode == relocation_mode_t::rolling_update
-                && *options.target_application_version <= source->application_version) {
-                throw std::invalid_argument (
-                  "rolling update target application version must be greater "
-                  "than the source version");
-            }
             const auto target_application_version =
-              options.mode == relocation_mode_t::planned_maintenance
-                ? source->application_version
-                : *options.target_application_version;
+              relocation_target_application_version (options, source->application_version);
             if (!requires_target)
                 continue;
 
@@ -3243,9 +3247,7 @@ relocation_topology_preflight_once (detail::app_state_t &state, const relocation
         // descriptor's default application version.
         const auto source_version =
           source_application_version.value_or (mesh_node_descriptor_t{}.application_version);
-        const auto effective = options.mode == relocation_mode_t::planned_maintenance
-                                 ? source_version
-                                 : *options.target_application_version;
+        const auto effective = relocation_target_application_version (options, source_version);
         co_return relocation_preflight_t{std::nullopt, effective, source_version};
     }
     catch (const std::invalid_argument &) {
@@ -3483,10 +3485,8 @@ task_t<relocation_result_t> app_t::relocate_async (relocation_options_t options,
                 // requested, not the running operation's target: rolling_update
                 // requests its explicit target version, planned_maintenance
                 // requests the source application version.
-                const auto rejected_effective_target =
-                  options.mode == relocation_mode_t::rolling_update
-                    ? *options.target_application_version
-                    : operation.source_application_version;
+                const auto rejected_effective_target = relocation_target_application_version (
+                  options, operation.source_application_version);
                 co_return result_t<relocation_result_t>::success (
                   {options.mode, rejected_effective_target, relocation_outcome_t::blocked,
                    relocation_reason_t::operation_in_progress});
