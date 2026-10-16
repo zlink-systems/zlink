@@ -514,6 +514,12 @@ command 44 처리는 같은 직렬 실행 구간에서 먼저 처리된 하나�
 44나 다른 relocation의 update는 `late_session_route_update` Warning만 기록하고
 무시한다. 같은 update를 다시 받으면 state를 바꾸지 않는 no-op이다.
 
+Seal timeout은 matching command 44 commit을 수락하는 순간 끝난다. 그 뒤의 route 적용(언어별 native
+route 준비와 공개 포함)은 seal timeout의 대상이 아니다. 수락한 commit의 route 적용이 실패하면 Session
+owner는 seal timeout과 같은 terminal로 physical Session을 한 번 닫고 binding, held message와 seal
+state를 정리한다. Target authority는 이미 commit됐으므로 source route로 되돌리거나 source 쪽 route를
+다시 준비하지 않는다.
+
 Cutover와 command 44는 one-way라 response 유실 상태를 만들지 않는다. 짧은 handoff
 동안의 server 간 전송은 TCP의 순서와 재전송에 의존한다. `send`는 별도 application
 ACK를 추가하지 않으며, `request`는 기존 correlation, deadline과 caller retry 계약을

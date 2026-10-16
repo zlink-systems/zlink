@@ -623,6 +623,13 @@ for a different relocation, only records a `late_session_route_update`
 Warning and is ignored. Receiving the same update again is a no-op that
 doesn't change state.
 
+The seal timeout ends at the moment a matching command 44 commit is accepted. Route application
+after that (including per-language native route preparation and publication) is not subject to the
+seal timeout. If applying the accepted commit's route fails, the Session owner closes the physical
+Session once with the same terminal as the seal timeout and cleans up the binding, held messages,
+and seal state. The target authority is already committed, so it doesn't revert to the source route
+or prepare the source-side route again.
+
 Cutover and command 44 are one-way, so they don't create a response-loss
 state. Server-to-server delivery during the short handoff relies on TCP
 ordering and retransmission. `send` adds no separate application ACK, and
