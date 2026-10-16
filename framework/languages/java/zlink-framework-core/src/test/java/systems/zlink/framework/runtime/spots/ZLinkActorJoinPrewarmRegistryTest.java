@@ -25,7 +25,104 @@ import java.util.concurrent.atomic.AtomicReference;
 final class ZLinkActorJoinPrewarmRegistryTest {
     private static final String ACTOR_ID = "actor-a";
     private static final long OBJECT_GENERATION = 7L;
-    private static final String ACTOR_TYPE = "TestActorType";
+
+    @Test
+    void supersessionUsesTheAcceptedTargetOwnerAfterStageInstallation() {
+        var registry = new ZLinkActorJoinPrewarmRegistry();
+        UUID old = UUID.randomUUID();
+        var ownerAbort = new java.util.concurrent.atomic.AtomicInteger();
+        var stageAbort = new java.util.concurrent.atomic.AtomicInteger();
+        registry.register(old, ACTOR_ID, OBJECT_GENERATION, ignored -> {});
+        var terminal = new java.util.concurrent.CompletableFuture<Void>();
+        registry.begin(old, terminal, ownerAbort::incrementAndGet).toCompletableFuture().join();
+        registry.completeMigration(old, ignored -> {}, () -> {}, stageAbort::incrementAndGet);
+        registry.register(UUID.randomUUID(), ACTOR_ID, OBJECT_GENERATION, ignored -> {});
+        assertEquals(1, ownerAbort.get());
+        assertEquals(0, stageAbort.get());
+        assertFalse(terminal.isDone(), "the accepted restore still owns terminal completion");
+        registry.releaseAsync(old).toCompletableFuture().join();
+        terminal.complete(null);
+    }
+
+    @Test
+    void supersededRestoreKeepsItsClaimedAdmissionUntilTheTargetTerminal() {
+        var resources = new java.util.concurrent.ConcurrentHashMap<UUID, UUID>();
+        var registry = new ZLinkActorJoinPrewarmRegistry(resources::remove);
+        UUID old = UUID.randomUUID();
+        UUID replacement = UUID.randomUUID();
+        registry.register(old, ACTOR_ID, OBJECT_GENERATION, ignored -> {});
+        var terminal = new java.util.concurrent.CompletableFuture<Void>();
+        registry.begin(old, terminal, () -> {}).toCompletableFuture().join();
+        resources.put(old, old);
+        registry.register(replacement, ACTOR_ID, OBJECT_GENERATION, ignored -> {});
+        assertTrue(resources.containsKey(old), "the accepted target owns its bound admission");
+        // Recovery may finish its claim after the old queue was evicted.
+        resources.put(old, old);
+        registry.releaseAsync(old).toCompletableFuture().join();
+        terminal.complete(null);
+        assertFalse(resources.containsKey(old), "terminal cleanup includes the late claim");
+        assertTrue(registry.find(replacement).isPresent());
+    }
+
+    @Test
+    void preparationExpiryReleasesUnstartedResources() {
+        List<UUID> released = new ArrayList<>();
+        var registry = new ZLinkActorJoinPrewarmRegistry(released::add);
+        UUID id = UUID.randomUUID();
+        registry.register(id, ACTOR_ID, OBJECT_GENERATION, ignored -> {});
+        registry.expire(id).toCompletableFuture().join();
+        assertTrue(registry.isEmpty());
+        assertEquals(List.of(id), released);
+    }
+
+    @Test
+    void acceptedPrepareOwnsResourcesUntilItsTerminalEvenBeforeRestore() {
+        List<UUID> released = new ArrayList<>();
+        var registry = new ZLinkActorJoinPrewarmRegistry(released::add);
+        UUID id = UUID.randomUUID();
+        registry.register(id, ACTOR_ID, OBJECT_GENERATION, ignored -> {});
+        var terminal = new java.util.concurrent.CompletableFuture<Void>();
+        registry.begin(id, terminal, () -> {}).toCompletableFuture().join();
+        registry.expire(id).toCompletableFuture().join();
+        assertTrue(registry.find(id).isPresent());
+        assertTrue(released.isEmpty());
+        registry.releaseAsync(id).toCompletableFuture().join();
+        terminal.complete(null);
+        assertTrue(registry.isEmpty());
+        assertEquals(List.of(id), released);
+    }
+
+    @Test
+    void failedRestoreTerminalReleasesResourcesOnce() {
+        List<UUID> released = new ArrayList<>();
+        var registry = new ZLinkActorJoinPrewarmRegistry(released::add);
+        UUID id = UUID.randomUUID();
+        registry.register(id, ACTOR_ID, OBJECT_GENERATION, ignored -> {});
+        var terminal = new java.util.concurrent.CompletableFuture<Void>();
+        registry.begin(id, terminal, () -> {}).toCompletableFuture().join();
+        registry.releaseAsync(id).toCompletableFuture().join();
+        terminal.completeExceptionally(new IllegalStateException("restore failed"));
+        registry.expire(id).toCompletableFuture().join();
+        assertTrue(registry.isEmpty());
+        assertEquals(List.of(id), released);
+    }
+
+    @Test
+    void newerIdentityReplacesActivePrepareAndOldTerminalPreservesReplacement() {
+        List<UUID> released = new ArrayList<>();
+        var registry = new ZLinkActorJoinPrewarmRegistry(released::add);
+        UUID old = UUID.randomUUID();
+        UUID replacement = UUID.randomUUID();
+        registry.register(old, ACTOR_ID, OBJECT_GENERATION, ignored -> {});
+        var terminal = new java.util.concurrent.CompletableFuture<Void>();
+        registry.begin(old, terminal, () -> {}).toCompletableFuture().join();
+        registry.register(replacement, ACTOR_ID, OBJECT_GENERATION, ignored -> {});
+        assertTrue(registry.find(old).isEmpty());
+        registry.releaseAsync(old).toCompletableFuture().join();
+        terminal.complete(null);
+        assertTrue(registry.find(replacement).isPresent());
+        assertEquals(List.of(old), released);
+    }
 
     @Test
     void prewarmOnAcceptRegistersTheAttemptBeforePrepareArrives() {
@@ -33,13 +130,7 @@ final class ZLinkActorJoinPrewarmRegistryTest {
         UUID relocationId = UUID.randomUUID();
 
         ZLinkActorJoinPrewarmRegistry.Attempt attempt =
-                registry.register(
-                        relocationId,
-                        ACTOR_ID,
-                        OBJECT_GENERATION,
-                        ACTOR_TYPE,
-                        String.class,
-                        evicted -> {});
+                registry.register(relocationId, ACTOR_ID, OBJECT_GENERATION, evicted -> {});
 
         assertTrue(registry.find(relocationId).isPresent());
         assertSame(attempt, registry.find(relocationId).orElseThrow());
@@ -65,13 +156,7 @@ final class ZLinkActorJoinPrewarmRegistryTest {
         List<ZLinkActorJoinPrewarmRegistry.Attempt> evictions = new ArrayList<>();
 
         ZLinkActorJoinPrewarmRegistry.Attempt first =
-                registry.register(
-                        relocationId,
-                        ACTOR_ID,
-                        OBJECT_GENERATION,
-                        ACTOR_TYPE,
-                        String.class,
-                        evictions::add);
+                registry.register(relocationId, ACTOR_ID, OBJECT_GENERATION, evictions::add);
         registry.parkOrDeliver(
                 ACTOR_ID,
                 OBJECT_GENERATION,
@@ -81,13 +166,7 @@ final class ZLinkActorJoinPrewarmRegistryTest {
         //  for the exact same RelocationId must observe the same
         //  instance — not a fresh, empty attempt.
         ZLinkActorJoinPrewarmRegistry.Attempt second =
-                registry.register(
-                        relocationId,
-                        ACTOR_ID,
-                        OBJECT_GENERATION,
-                        ACTOR_TYPE,
-                        String.class,
-                        evictions::add);
+                registry.register(relocationId, ACTOR_ID, OBJECT_GENERATION, evictions::add);
 
         assertSame(first, second);
         assertTrue(evictions.isEmpty());
@@ -105,13 +184,12 @@ final class ZLinkActorJoinPrewarmRegistryTest {
     void rejectCleansUpTheRegisteredAttempt() {
         ZLinkActorJoinPrewarmRegistry registry = new ZLinkActorJoinPrewarmRegistry();
         UUID relocationId = UUID.randomUUID();
-        registry.register(
-                relocationId, ACTOR_ID, OBJECT_GENERATION, ACTOR_TYPE, String.class, evicted -> {});
+        registry.register(relocationId, ACTOR_ID, OBJECT_GENERATION, evicted -> {});
         assertTrue(registry.find(relocationId).isPresent());
 
         //  OnActorJoin returned Rejected: the target cleans up the
         //  temporary queue and factory preparation in the same handling.
-        registry.release(relocationId);
+        registry.releaseAsync(relocationId).toCompletableFuture().join();
 
         assertFalse(registry.find(relocationId).isPresent());
         assertTrue(registry.isEmpty());
@@ -130,15 +208,14 @@ final class ZLinkActorJoinPrewarmRegistryTest {
     void rejectFailsAnyArrivalAlreadyParked() {
         ZLinkActorJoinPrewarmRegistry registry = new ZLinkActorJoinPrewarmRegistry();
         UUID relocationId = UUID.randomUUID();
-        registry.register(
-                relocationId, ACTOR_ID, OBJECT_GENERATION, ACTOR_TYPE, String.class, evicted -> {});
+        registry.register(relocationId, ACTOR_ID, OBJECT_GENERATION, evicted -> {});
         AtomicReference<Throwable> failed = new AtomicReference<>();
         registry.parkOrDeliver(
                 ACTOR_ID,
                 OBJECT_GENERATION,
                 new ZLinkActorJoinPrewarmRegistry.ParkedMessage(new byte[] {1}, null, failed::set));
 
-        registry.release(relocationId);
+        registry.releaseAsync(relocationId).toCompletableFuture().join();
 
         assertTrue(failed.get() instanceof IllegalStateException);
     }
@@ -151,13 +228,7 @@ final class ZLinkActorJoinPrewarmRegistryTest {
         List<ZLinkActorJoinPrewarmRegistry.Attempt> evictions = new ArrayList<>();
 
         ZLinkActorJoinPrewarmRegistry.Attempt oldAttempt =
-                registry.register(
-                        oldRelocationId,
-                        ACTOR_ID,
-                        OBJECT_GENERATION,
-                        ACTOR_TYPE,
-                        String.class,
-                        evictions::add);
+                registry.register(oldRelocationId, ACTOR_ID, OBJECT_GENERATION, evictions::add);
         AtomicReference<Throwable> failed = new AtomicReference<>();
         registry.parkOrDeliver(
                 ACTOR_ID,
@@ -165,13 +236,7 @@ final class ZLinkActorJoinPrewarmRegistryTest {
                 new ZLinkActorJoinPrewarmRegistry.ParkedMessage(new byte[] {1}, null, failed::set));
 
         ZLinkActorJoinPrewarmRegistry.Attempt newAttempt =
-                registry.register(
-                        newRelocationId,
-                        ACTOR_ID,
-                        OBJECT_GENERATION,
-                        ACTOR_TYPE,
-                        String.class,
-                        evictions::add);
+                registry.register(newRelocationId, ACTOR_ID, OBJECT_GENERATION, evictions::add);
 
         //  Only one relocation temporary queue exists per object: the
         //  older exact identity is aborted, its parked arrival is failed
@@ -191,13 +256,7 @@ final class ZLinkActorJoinPrewarmRegistryTest {
         UUID newRelocationId = UUID.randomUUID();
         List<ZLinkActorJoinPrewarmRegistry.Attempt> evictions = new ArrayList<>();
 
-        registry.register(
-                oldRelocationId,
-                ACTOR_ID,
-                OBJECT_GENERATION,
-                ACTOR_TYPE,
-                String.class,
-                evictions::add);
+        registry.register(oldRelocationId, ACTOR_ID, OBJECT_GENERATION, evictions::add);
         //  PREPARE installs the real stage for the old identity.
         AtomicReference<Boolean> aborted = new AtomicReference<>(false);
         registry.completeMigration(
@@ -208,13 +267,7 @@ final class ZLinkActorJoinPrewarmRegistryTest {
         //  stage is aborted via its own liveAbort, not the "evicted"
         //  admission-bookkeeping callback (which never fires for an
         //  already-installed attempt).
-        registry.register(
-                newRelocationId,
-                ACTOR_ID,
-                OBJECT_GENERATION,
-                ACTOR_TYPE,
-                String.class,
-                evictions::add);
+        registry.register(newRelocationId, ACTOR_ID, OBJECT_GENERATION, evictions::add);
 
         assertTrue(aborted.get());
         assertTrue(
@@ -229,15 +282,14 @@ final class ZLinkActorJoinPrewarmRegistryTest {
     void validityWindowExpiryRemovesAnAcceptedButNeverStartedAttempt() {
         ZLinkActorJoinPrewarmRegistry registry = new ZLinkActorJoinPrewarmRegistry();
         UUID relocationId = UUID.randomUUID();
-        registry.register(
-                relocationId, ACTOR_ID, OBJECT_GENERATION, ACTOR_TYPE, String.class, evicted -> {});
+        registry.register(relocationId, ACTOR_ID, OBJECT_GENERATION, evicted -> {});
         assertTrue(registry.find(relocationId).isPresent());
 
         //  Accepted, but the move never started at the source
         //  (DisableRelocation/capacity/compat failure): the caller's
         //  Restore-validity timer fires this same release once the
         //  preparation validity window elapses.
-        registry.release(relocationId);
+        registry.releaseAsync(relocationId).toCompletableFuture().join();
 
         assertFalse(registry.find(relocationId).isPresent());
         assertTrue(registry.isEmpty());
@@ -247,8 +299,7 @@ final class ZLinkActorJoinPrewarmRegistryTest {
     void atomicMigrationDeliversParkedArrivalsInOrderThenInstalls() {
         ZLinkActorJoinPrewarmRegistry registry = new ZLinkActorJoinPrewarmRegistry();
         UUID relocationId = UUID.randomUUID();
-        registry.register(
-                relocationId, ACTOR_ID, OBJECT_GENERATION, ACTOR_TYPE, String.class, evicted -> {});
+        registry.register(relocationId, ACTOR_ID, OBJECT_GENERATION, evicted -> {});
         registry.parkOrDeliver(
                 ACTOR_ID,
                 OBJECT_GENERATION,
@@ -291,20 +342,8 @@ final class ZLinkActorJoinPrewarmRegistryTest {
         ZLinkActorJoinPrewarmRegistry registry = new ZLinkActorJoinPrewarmRegistry();
         UUID oldRelocationId = UUID.randomUUID();
         UUID newRelocationId = UUID.randomUUID();
-        registry.register(
-                oldRelocationId,
-                ACTOR_ID,
-                OBJECT_GENERATION,
-                ACTOR_TYPE,
-                String.class,
-                evicted -> {});
-        registry.register(
-                newRelocationId,
-                ACTOR_ID,
-                OBJECT_GENERATION,
-                ACTOR_TYPE,
-                String.class,
-                evicted -> {});
+        registry.register(oldRelocationId, ACTOR_ID, OBJECT_GENERATION, evicted -> {});
+        registry.register(newRelocationId, ACTOR_ID, OBJECT_GENERATION, evicted -> {});
 
         //  A late PREPARE for the evicted old identity must be discarded,
         //  not installed (spec 15 §4.2).

@@ -101,7 +101,7 @@ function sessionFixture(disconnectFailure, nativeSocket, routingId = zlink.Routi
     drop() { dropped = true; },
     async bind() {
       await session.context.actors.bind({ ...actor, objectGeneration: actor.generation, meshName: 'play' });
-      assert.equal(await bindingOwner.actorSlot(actor.actorId, String(routingId)), 1);
+      assert.equal(await bindingOwner.actorSlot(actor.actorId, routingId), 1);
     },
     async bindNext() {
       const stream = new framework.ZLinkManagedStream(

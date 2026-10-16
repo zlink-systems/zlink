@@ -1,12 +1,11 @@
 import type { Message } from '../../contracts/Common/Message';
 import { ZLinkBufferMessage } from '../backend/runtime-message';
 import type { ZLinkBackendMessageLike as MessageLike } from '../backend/runtime-values';
-import { randomUUID } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 import { isUtf8 } from 'node:buffer';
 import {
   ZLinkFrameworkErrorKind,
   ZLinkFrameworkException,
-  ZLinkEncodedPayload,
   type ZLinkMessageSerializer,
   type ZLinkFlowOrigin
 } from '../../contracts';
@@ -18,7 +17,10 @@ import {
   createInternalFrameworkException
 } from '../framework-errors-internal';
 import { resolveFrameworkPacketName } from '../messaging/packet-name';
-import { selectSerializerWithContentType } from '../messaging/payload-codec';
+import {
+  encodedPayloadFromOwned,
+  selectSerializerWithContentType
+} from '../messaging/payload-codec';
 import { isCanonicalCodecContentType } from '../../contracts/Configuration/CodecContentType';
 import { parseFrameworkJsonV1, stringifyFrameworkJsonV1 } from '../messaging/framework-json-v1';
 import { currentOrCreateFlow } from '../diagnostics/flow-context';
@@ -75,9 +77,14 @@ interface PreparedChannelHeader {
   readonly bytes: Buffer;
   readonly correlationOffset: number;
   readonly deadlineOffset: number;
+  readonly flowOffset: number;
 }
 
-type PreparedHeaderVariants = Map<ZLinkChannelMessageKind, Map<boolean, PreparedChannelHeader>>;
+/** Per kind, deadline presence and flow origin (`undefined` when the header carries no flow). */
+type PreparedHeaderVariants = Map<
+  ZLinkChannelMessageKind,
+  Map<boolean, Map<ZLinkFlowOrigin | undefined, PreparedChannelHeader>>
+>;
 const preparedChannelHeaders = new WeakMap<
   ReadonlyMap<string, ZLinkMessageSerializer>,
   Map<string, Map<string, Map<string, PreparedHeaderVariants>>>
@@ -88,9 +95,24 @@ const CHANNEL_CORRELATION_TEXT_LENGTH = 32;
 const PREPARED_CHANNEL_CORRELATION = '0'.repeat(CHANNEL_CORRELATION_TEXT_LENGTH);
 const PREPARED_CHANNEL_DEADLINE = '2000-01-01T00:00:00.000Z';
 const CHANNEL_CORRELATION_TEXT = /^[0-9a-f]{32}$/;
+const CHANNEL_FLOW_FIELD = ',"flowId":';
+// A flow id is a lowercase UUIDv7 (spec 27 §3): fixed 36 JSON-safe ASCII bytes.
+const PREPARED_CHANNEL_FLOW = '00000000-0000-7000-8000-000000000000';
+const CHANNEL_FLOW_TEXT = /^[0-9a-f-]{36}$/;
+
+// A per-process random 64-bit prefix followed by a per-process counter, both
+// as lowercase hex: unique among the runtime's pending requests (spec 06-obs/04
+// §3) without drawing random bytes for every request — the shape Java
+// ZLinkServiceOperationIds uses.
+const CHANNEL_CORRELATION_PREFIX = randomBytes(CHANNEL_CORRELATION_TEXT_LENGTH / 4).toString('hex');
+let channelCorrelationCounter = 0;
 
 export function newChannelCorrelationId(): string {
-  return randomUUID().replaceAll('-', '');
+  channelCorrelationCounter += 1;
+  return (
+    CHANNEL_CORRELATION_PREFIX +
+    channelCorrelationCounter.toString(16).padStart(CHANNEL_CORRELATION_TEXT_LENGTH / 2, '0')
+  );
 }
 
 export function encodeChannelEnvelopeParts(
@@ -350,7 +372,7 @@ export function decodeChannelReply<TReply>(
   }
   if (serializer !== undefined) {
     return serializer.deserialize<TReply>(
-      ZLinkEncodedPayload.from(parts[1].data()),
+      encodedPayloadFromOwned(parts[1].data()),
       Object as never
     );
   }
@@ -424,7 +446,7 @@ export function decodeChannelPayload(
     }
     const serializer = codecs?.serializers.get(envelope.header.contentType);
     if (serializer !== undefined) {
-      return serializer.deserialize(ZLinkEncodedPayload.from(envelope.payload), Object as never);
+      return serializer.deserialize(encodedPayloadFromOwned(envelope.payload), Object as never);
     }
     if (envelope.header.contentType === BINARY_CONTENT_TYPE) {
       // The receive loop owns the Message for the duration of dispatch, so
@@ -544,8 +566,9 @@ function encodeChannelHeader(
   if (
     codecs !== undefined &&
     metadata === EMPTY_APPLICATION_METADATA &&
-    flowId === undefined &&
-    flowOrigin === undefined &&
+    (flowId === undefined
+      ? flowOrigin === undefined
+      : flowOrigin !== undefined && CHANNEL_FLOW_TEXT.test(flowId)) &&
     topic === null &&
     source === undefined &&
     ((kind === ZLinkChannelMessageKind.Command &&
@@ -576,7 +599,9 @@ function encodeChannelHeader(
       correlationId,
       deadline,
       errorCode,
-      errorMessage
+      errorMessage,
+      flowId,
+      flowOrigin
     );
   }
   // The wire has a fixed field order. Measure escaped UTF-8 first, then write
@@ -629,7 +654,9 @@ function preparedChannelHeader(
   correlationId: string | null,
   deadline: string | null,
   errorCode: string | null | undefined,
-  errorMessage: string | null | undefined
+  errorMessage: string | null | undefined,
+  flowId: string | undefined,
+  flowOrigin: ZLinkFlowOrigin | undefined
 ): Buffer {
   let channels = preparedChannelHeaders.get(codecs.serializers);
   if (channels === undefined)
@@ -643,7 +670,9 @@ function preparedChannelHeader(
   let deadlines = kinds.get(kind);
   if (deadlines === undefined) kinds.set(kind, (deadlines = new Map()));
   const hasDeadline = deadline !== null;
-  let prepared = deadlines.get(hasDeadline);
+  let flows = deadlines.get(hasDeadline);
+  if (flows === undefined) deadlines.set(hasDeadline, (flows = new Map()));
+  let prepared = flows.get(flowOrigin);
   if (prepared === undefined) {
     const bytes = encodeChannelHeader(
       kind,
@@ -657,23 +686,32 @@ function preparedChannelHeader(
       errorMessage,
       undefined,
       EMPTY_APPLICATION_METADATA,
-      undefined,
-      undefined
+      flowOrigin === undefined ? undefined : PREPARED_CHANNEL_FLOW,
+      flowOrigin
     );
     prepared = {
       bytes,
       correlationOffset:
         bytes.indexOf(CHANNEL_CORRELATION_FIELD) + CHANNEL_CORRELATION_FIELD.length + 1,
-      deadlineOffset: bytes.indexOf(CHANNEL_DEADLINE_FIELD) + CHANNEL_DEADLINE_FIELD.length + 1
+      deadlineOffset: bytes.indexOf(CHANNEL_DEADLINE_FIELD) + CHANNEL_DEADLINE_FIELD.length + 1,
+      flowOffset: bytes.indexOf(CHANNEL_FLOW_FIELD) + CHANNEL_FLOW_FIELD.length + 1
     };
-    deadlines.set(hasDeadline, prepared);
+    flows.set(flowOrigin, prepared);
   }
-  if (correlationId === null) return prepared.bytes;
-  const bytes = Buffer.alloc(prepared.bytes.byteLength);
+  if (correlationId === null && flowId === undefined) return prepared.bytes;
+  const bytes = Buffer.allocUnsafe(prepared.bytes.byteLength);
   prepared.bytes.copy(bytes);
-  bytes.write(correlationId, prepared.correlationOffset, CHANNEL_CORRELATION_TEXT_LENGTH, 'ascii');
+  if (correlationId !== null)
+    bytes.write(
+      correlationId,
+      prepared.correlationOffset,
+      CHANNEL_CORRELATION_TEXT_LENGTH,
+      'ascii'
+    );
   if (deadline !== null)
     bytes.write(deadline, prepared.deadlineOffset, PREPARED_CHANNEL_DEADLINE.length, 'ascii');
+  if (flowId !== undefined)
+    bytes.write(flowId, prepared.flowOffset, PREPARED_CHANNEL_FLOW.length, 'ascii');
   return bytes;
 }
 
@@ -859,13 +897,18 @@ function parseWireJson(payload: string, schema?: ZLinkJsonSchema): unknown {
 }
 
 function parseChannelHeaderBytes(payload: Buffer): unknown {
+  const reader = new CanonicalChannelHeaderReader(payload);
+  const canonical = tryParseCanonicalChannelHeader(reader);
+  // An all-ASCII canonical header is valid UTF-8 by construction; any other
+  // header is checked before it is decoded.
+  if (canonical !== undefined && !reader.sawNonAscii) return canonical;
   if (!isUtf8(payload)) {
     throw new ZLinkFrameworkException(
       ZLinkFrameworkErrorKind.ProtocolError,
       'Channel envelope header must contain valid UTF-8.'
     );
   }
-  return tryParseCanonicalChannelHeader(payload) ?? parseFrameworkJsonV1(payload.toString());
+  return canonical ?? parseFrameworkJsonV1(payload.toString());
 }
 
 /**
@@ -874,8 +917,9 @@ function parseChannelHeaderBytes(payload: Buffer): unknown {
  * framework-json-v1 parser, which remains the sole authority for JSON
  * failures and unknown properties. Header metadata accepts every valid string key.
  */
-function tryParseCanonicalChannelHeader(payload: Buffer): Record<string, unknown> | undefined {
-  const reader = new CanonicalChannelHeaderReader(payload);
+function tryParseCanonicalChannelHeader(
+  reader: CanonicalChannelHeaderReader
+): Record<string, unknown> | undefined {
   if (!reader.consume('{"formatMarker":242,"kind":')) return undefined;
   const kind = reader.readSingleDigit();
   if (kind === undefined || !reader.consume(',"channelName":')) return undefined;
@@ -902,20 +946,31 @@ function tryParseCanonicalChannelHeader(payload: Buffer): Record<string, unknown
     deadline: deadline === NULL_JSON_STRING ? null : deadline,
     topic: topic === NULL_JSON_STRING ? null : topic
   };
-  if (!reader.readOptionalNullableString('errorCode', header)) return undefined;
-  if (!reader.readOptionalNullableString('errorMessage', header)) return undefined;
-  if (!reader.readOptionalNullableString('source', header)) return undefined;
+  if (!reader.readOptionalNullableString(CANONICAL_ERROR_CODE, 'errorCode', header))
+    return undefined;
+  if (!reader.readOptionalNullableString(CANONICAL_ERROR_MESSAGE, 'errorMessage', header))
+    return undefined;
+  if (!reader.readOptionalNullableString(CANONICAL_SOURCE, 'source', header)) return undefined;
+  // Empty metadata validates to the shared empty record.
   if (!reader.consume(',"metadata":{}')) return undefined;
-  header.metadata = {};
-  if (!reader.readOptionalString('flowId', header)) return undefined;
-  if (!reader.readOptionalSingleDigit('flowOrigin', header)) return undefined;
+  if (!reader.readOptionalString(CANONICAL_FLOW_ID, 'flowId', header)) return undefined;
+  if (!reader.readOptionalSingleDigit(CANONICAL_FLOW_ORIGIN, 'flowOrigin', header))
+    return undefined;
   return reader.consume('}') && reader.atEnd() ? header : undefined;
 }
+
+const CANONICAL_ERROR_CODE = ',"errorCode":';
+const CANONICAL_ERROR_MESSAGE = ',"errorMessage":';
+const CANONICAL_SOURCE = ',"source":';
+const CANONICAL_FLOW_ID = ',"flowId":';
+const CANONICAL_FLOW_ORIGIN = ',"flowOrigin":';
 
 const NULL_JSON_STRING = Symbol('null JSON string');
 
 class CanonicalChannelHeaderReader {
   private index = 0;
+  /** A string held a byte outside ASCII, so the caller must still check UTF-8. */
+  sawNonAscii = false;
 
   constructor(private readonly bytes: Buffer) {}
 
@@ -944,13 +999,19 @@ class CanonicalChannelHeaderReader {
     if (this.bytes[this.index] !== 0x22) return undefined;
     const start = this.index;
     this.index += 1;
+    let hasEscape = false;
     while (this.index < this.bytes.length) {
       const value = this.bytes[this.index++]!;
       if (value === 0x22) {
-        return JSON.parse(this.bytes.toString('utf8', start, this.index)) as string;
+        // Without escapes the JSON string is its own bytes; decode them once.
+        return hasEscape
+          ? (JSON.parse(this.bytes.toString('utf8', start, this.index)) as string)
+          : this.bytes.toString(this.sawNonAscii ? 'utf8' : 'latin1', start + 1, this.index - 1);
       }
       if (value < 0x20) return undefined;
+      if (value >= 0x80) this.sawNonAscii = true;
       if (value !== 0x5c) continue;
+      hasEscape = true;
       if (this.index === this.bytes.length) return undefined;
       const escaped = this.bytes[this.index++]!;
       if (escaped === 0x75) {
@@ -980,24 +1041,28 @@ class CanonicalChannelHeaderReader {
     return this.readString();
   }
 
-  readOptionalNullableString(name: string, target: Record<string, unknown>): boolean {
-    if (!this.consume(`,\"${name}\":`)) return true;
+  readOptionalNullableString(
+    token: string,
+    name: string,
+    target: Record<string, unknown>
+  ): boolean {
+    if (!this.consume(token)) return true;
     const value = this.readNullableString();
     if (value === undefined) return false;
     target[name] = value === NULL_JSON_STRING ? null : value;
     return true;
   }
 
-  readOptionalString(name: string, target: Record<string, unknown>): boolean {
-    if (!this.consume(`,\"${name}\":`)) return true;
+  readOptionalString(token: string, name: string, target: Record<string, unknown>): boolean {
+    if (!this.consume(token)) return true;
     const value = this.readString();
     if (value === undefined) return false;
     target[name] = value;
     return true;
   }
 
-  readOptionalSingleDigit(name: string, target: Record<string, unknown>): boolean {
-    if (!this.consume(`,\"${name}\":`)) return true;
+  readOptionalSingleDigit(token: string, name: string, target: Record<string, unknown>): boolean {
+    if (!this.consume(token)) return true;
     const value = this.readSingleDigit();
     if (value === undefined) return false;
     target[name] = value;

@@ -42,7 +42,7 @@ internal sealed partial class ZLinkFrameworkRuntime
         // Actor here. It only authenticates the transport source above; the
         // retired session identity is the sole lookup key on this node.
         if (
-            _actorBoundSessionCoordinator.GetExactRetiredSessionBinding(
+            GetExactRetiredSessionBinding(
                 ZLinkActorId.FromBoundary(authority.ActorId, nameof(authority.ActorId)),
                 retired.SessionOwnerNodeRid,
                 retired.SessionRid,
@@ -63,10 +63,28 @@ internal sealed partial class ZLinkFrameworkRuntime
             retired.SessionOwnerId,
             retired.SessionOwnerLeaseGeneration,
             retired.SessionRid,
-            retired.RetiredBindingGeneration,
-            binding.BindingToken
+            retired.RetiredBindingGeneration
         );
     }
+
+    internal ZLinkSessionBindingEntry? GetExactRetiredSessionBinding(
+        ZLinkActorId actorId,
+        RoutingId sessionOwnerNodeRid,
+        RoutingId sessionRid,
+        ulong sessionOwnerNodeGeneration,
+        string sessionOwnerId,
+        ulong sessionOwnerLeaseGeneration,
+        ulong bindingGeneration
+    ) =>
+        _actorBoundSessionCoordinator.GetExactRetiredSessionBinding(
+            actorId,
+            sessionOwnerNodeRid,
+            sessionRid,
+            sessionOwnerNodeGeneration,
+            sessionOwnerId,
+            sessionOwnerLeaseGeneration,
+            bindingGeneration
+        );
 
     private static bool MatchesLocalSessionOwnerFence(
         ZLinkSpotNodeRuntime nodeRuntime,

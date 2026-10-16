@@ -28,6 +28,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.HexFormat;
+import java.util.List;
 
 final class ZLinkServiceM6BSessionRelocationWireCodecTest {
     private static final RoutingId SOURCE = RoutingId.from("source");
@@ -35,6 +36,34 @@ final class ZLinkServiceM6BSessionRelocationWireCodecTest {
     private static final RoutingId SESSION = RoutingId.from("session");
 
     private final ZLinkServiceM6BWireCodec codec = new ZLinkServiceM6BWireCodec();
+
+    @Test
+    void bindingAbsentIsAValidWireResultAndAnExplicitRuntimeError() throws Exception {
+        var context = new ServiceWireCodec.DecoderContext(null, null, null, null, null);
+        for (String name : List.of("sessionRelocationSealed", "sessionRelocationBindingAbsent")) {
+            byte[] input = golden(name);
+            var generated =
+                    (ServiceWireCodec.SessionRelocationSealedCommand)
+                            ServiceWireCodec.decodeCommand(List.of(input), context);
+            assertEquals(
+                    name.equals("sessionRelocationSealed")
+                            ? ServiceWireCodec.SessionSealResult.SEALED
+                            : ServiceWireCodec.SessionSealResult.BINDING_ABSENT,
+                    generated.sealResult());
+            assertArrayEquals(input, ServiceWireCodec.encodeCommand(generated, context));
+        }
+        JsonNode fixture = new ObjectMapper().readTree(Files.readString(sharedFixture()));
+        for (JsonNode entry : fixture.path("malformed")) {
+            byte[] input = HexFormat.of().parseHex(entry.path("hex").asText());
+            assertThrows(
+                    Exception.class, () -> ServiceWireCodec.decodeCommand(List.of(input), context));
+        }
+        byte[] bytes = golden("sessionRelocationBindingAbsent");
+        var failure =
+                assertThrows(
+                        RuntimeException.class, () -> codec.decodeSessionRelocationSealed(bytes));
+        assertTrue(failure.getMessage().contains("bindingAbsent"));
+    }
 
     @Test
     void commands42And43MatchTheExactSharedShape() throws Exception {

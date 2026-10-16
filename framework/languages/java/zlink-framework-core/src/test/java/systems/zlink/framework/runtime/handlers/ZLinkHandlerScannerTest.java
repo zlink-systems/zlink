@@ -289,17 +289,14 @@ final class ZLinkHandlerScannerTest {
     }
 
     @Test
-    void missingScannedSubscriptionTopicFailsHostValidationWithHandlerName() {
+    void unannotatedSubscriptionIsAvailableForDynamicRegistration() {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         options.addHandlersFromPackageOf(MissingTopicSubscription.class);
-
-        ZLinkConfigurationException error =
-                assertThrows(ZLinkConfigurationException.class, options::validate);
-
-        assertEquals(
-                "SPOT subscription handler topic is required: "
-                        + MissingTopicSubscription.class.getName(),
-                error.getMessage());
+        options.validate();
+        assertTrue(
+                ZLinkHandlerScanner.scan(Set.of(MissingTopicSubscription.class))
+                        .handlers()
+                        .isEmpty());
     }
 
     @Test
@@ -481,7 +478,7 @@ final class ZLinkHandlerScannerTest {
         }
     }
 
-    @ZLinkSpotSubscription(topic = "room.events")
+    @ZLinkSpotSubscription(channelName = "events", topic = "room.events")
     public static final class InterfaceSpotSubscriptionHandler
             implements ZLinkSpotSubscriptionHandler<TestSpot, SpotEvent> {
         @Override

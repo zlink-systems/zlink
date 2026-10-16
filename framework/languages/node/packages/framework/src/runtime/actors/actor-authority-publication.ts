@@ -1,3 +1,4 @@
+import { routingIdsEqual } from '../routing-id';
 import { createHash } from 'node:crypto';
 import type { ActorRef } from '../../contracts';
 import { ZLinkSpotKind } from '../../contracts';
@@ -278,7 +279,7 @@ function requireActorAuthority(
     snapshot.allocation.objectKind !== 'actor' ||
     snapshot.allocation.stableType !== expected.actorType ||
     snapshot.allocation.descriptor.meshName !== expected.meshName ||
-    String(snapshot.allocation.descriptor.rid) !== String(expected.actor.nodeRid) ||
+    !routingIdsEqual(snapshot.allocation.descriptor.rid, expected.actor.nodeRid) ||
     snapshot.allocation.descriptorLifecycleGeneration !== expected.ownerNodeGeneration ||
     snapshot.ownerId !== expected.owner.ownerId ||
     snapshot.ownerLeaseGeneration !== expected.owner.leaseGeneration ||
@@ -286,7 +287,7 @@ function requireActorAuthority(
     actual.actorType !== expected.actorType ||
     actual.actor.actorId !== expected.actor.actorId ||
     actual.actor.objectGeneration !== expected.actor.objectGeneration ||
-    String(actual.actor.nodeRid) !== String(expected.actor.nodeRid)
+    !routingIdsEqual(actual.actor.nodeRid, expected.actor.nodeRid)
   ) {
     throw new Error(
       `Actor '${expected.actor.actorId}' authority fence does not match its ActorRef.`

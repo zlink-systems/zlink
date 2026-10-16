@@ -38,6 +38,18 @@ export function throwIfAborted(signal: AbortSignal | undefined): void {
   }
 }
 
+/**
+ * Whether a handler or dispatch result is a thenable the caller must wait
+ * for. Synchronous results, including null and undefined, are not.
+ */
+export function isPromiseLike<T>(value: T | PromiseLike<T>): value is PromiseLike<T> {
+  return (
+    value !== null &&
+    (typeof value === 'object' || typeof value === 'function') &&
+    typeof (value as { then?: unknown }).then === 'function'
+  );
+}
+
 export function macrotaskBoundary(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve));
 }

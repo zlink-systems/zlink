@@ -146,3 +146,78 @@ for (const trigger of ['elapsed', 'records']) {
     assert.equal(queue.snapshot().permitsInUse, 0n);
   });
 }
+
+// Spec 08 §6: the pump yields to a macrotask when its batch budget is used.
+// Idle time between records is not batch work, so a lone record that arrives
+// after the pump went idle runs and finishes without a timer yield.
+test('a record after an idle period does not spend a timer yield', async (t) => {
+  const queue = new ApplicationJobQueue(resolveApplicationJobQueueConfiguration({
+    maxQueuedApplicationJobs: 64n
+  }));
+  let ready;
+  let now = 0;
+  const claims = new Set();
+  const timers = [];
+  const dispatched = [];
+  const mailbox = new ServiceMailbox(() => ready(ReadyDomain.Application));
+  const node = {
+    setReadyHandler(handler) { ready = handler; },
+    createReadyBatch() {
+      return {
+        reset() {}, close() {},
+        takeClaim() {
+          const claim = claims.values().next().value;
+          let received = false;
+          return {
+            recvBatch() {
+              if (received) return { ok: false, records: [] };
+              received = true;
+              return { ok: true, records: claim.records.map((record) => record.stateful) };
+            },
+            release() { mailbox.release(claim); claims.delete(claim); }
+          };
+        }
+      };
+    },
+    createReceiveBatch() { return { reset() {}, close() {} }; },
+    drainReady() {
+      const claim = mailbox.tryClaim('application', 64, 1024);
+      if (!claim) return { ok: false, hasResidue: false, records: [] };
+      claims.add(claim);
+      return { ok: true, hasResidue: false, records: [{ ordinaryIngressPreAdmitted: true }] };
+    }
+  };
+  t.mock.method(global, 'setTimeout', (callback, delay) => {
+    timers.push({ callback, delay });
+    return { unref() {} };
+  });
+  const pump = new ZLinkMeshDispatchPump(node, {
+    applicationJobQueue: queue,
+    monotonicNowMs: () => now,
+    dispatch(_owner, record) { dispatched.push(record.sequence); }
+  });
+  const permits = [];
+  try {
+    pump.start();
+    for (let sequence = 0; sequence < 4; sequence++) {
+      // Each record arrives after the pump has been idle longer than its budget.
+      now += 50;
+      const permit = await queue.acquire(undefined, 'remote');
+      permit.markApplicationQueued();
+      permits.push(permit);
+      assert.equal(mailbox.tryEnqueue({
+        owner: 'spot:one', domain: 'application', parts: [Buffer.from([sequence])],
+        stateful: { sequence, parts: [], applicationJobPermit: permit }
+      }), true);
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    assert.deepEqual(dispatched, [0, 1, 2, 3]);
+    assert.deepEqual(timers, []);
+  } finally {
+    const stopping = pump.dispose();
+    for (const timer of timers) timer.callback();
+    await stopping;
+    mailbox.close();
+  }
+  assert.equal(queue.snapshot().permitsInUse, 0n);
+});

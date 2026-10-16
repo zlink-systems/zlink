@@ -1323,7 +1323,7 @@ internal sealed class ZLinkActorHandoffState(
         ulong sourceNodeGeneration,
         ulong targetNodeGeneration,
         ulong sourceAuthorityOwnerGeneration,
-        ulong targetAuthorityOwnerGeneration,
+        ulong? targetAuthorityOwnerGeneration,
         ulong sourceOwnerLeaseGeneration,
         ulong targetOwnerLeaseGeneration,
         TimeSpan duration,
@@ -1367,27 +1367,32 @@ internal sealed class ZLinkActorHandoffState(
 
                 _messageFollowExpiry?.Cancel();
                 _messageFollowExpiry = null;
-                _messageFollowRoute = new ZLinkActorMessageFollowRoute(
-                    sourceActor,
-                    targetActor,
-                    targetMeshName,
-                    sourceNodeGeneration,
-                    targetNodeGeneration,
-                    sourceAuthorityOwnerGeneration,
-                    targetAuthorityOwnerGeneration,
-                    sourceOwnerLeaseGeneration,
-                    targetOwnerLeaseGeneration,
-                    new ZLinkActorMessageFollowLease(timeProvider, duration)
-                );
+                // A null target fence is the source settlement's §10 decision
+                // to commit without Follow after a subsequent move.
+                _messageFollowRoute = targetAuthorityOwnerGeneration is { } targetGeneration
+                    ? new ZLinkActorMessageFollowRoute(
+                        sourceActor,
+                        targetActor,
+                        targetMeshName,
+                        sourceNodeGeneration,
+                        targetNodeGeneration,
+                        sourceAuthorityOwnerGeneration,
+                        targetGeneration,
+                        sourceOwnerLeaseGeneration,
+                        targetOwnerLeaseGeneration,
+                        new ZLinkActorMessageFollowLease(timeProvider, duration)
+                    )
+                    : null;
                 _staleSourceActor = sourceActor;
                 _sourcePhase = ZLinkActorSourceHandoffPhase.MessageFollowCommitted;
                 _sourceCaptureSealed = true;
                 _sourceIngressAdmission.ReleaseAll();
                 _sourceHoldAdmission.ReleaseAll();
-                diagnostic?.Invoke(
-                    $"message_follow_registered source_rid={sourceActor.NodeRid} "
-                        + $"target_rid={targetActor.NodeRid} entries=1"
-                );
+                if (_messageFollowRoute is not null)
+                    diagnostic?.Invoke(
+                        $"message_follow_registered source_rid={sourceActor.NodeRid} "
+                            + $"target_rid={targetActor.NodeRid} entries=1"
+                    );
                 var trailing = _frames
                     .Skip(Math.Min(committedFrameCount, _frames.Count))
                     .Concat(_sourceHoldFrames.Skip(_sourceCommittedHoldCount))
@@ -1400,12 +1405,14 @@ internal sealed class ZLinkActorHandoffState(
                 //  S1 (spec 25 §5): the cutover submit terminal this class
                 //  observes. Taken from timeProvider so it is source-local
                 //  and deterministic under a fake clock in tests.
-                var committedAt = _messageFollowRoute.Value.Lease.CommittedAt;
+                var committedAt =
+                    _messageFollowRoute?.Lease.CommittedAt ?? timeProvider.GetTimestamp();
+                var followDuration = _messageFollowRoute is null ? TimeSpan.Zero : duration;
                 using (ExecutionContext.SuppressFlow())
                 {
                     _ = Task.Run(() =>
                         RemoveMessageFollowRouteAfterDelayAsync(
-                            duration,
+                            followDuration,
                             retransmissionWindow,
                             committedAt,
                             expiry

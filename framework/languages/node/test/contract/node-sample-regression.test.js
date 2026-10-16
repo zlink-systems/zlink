@@ -5,7 +5,7 @@ const { ZLinkRemoteActorPacketTargetStore } = require('../../packages/framework/
 const { ZLinkNodeRawMeshBackend } = require('../../packages/framework/dist/runtime/backend/node/node-raw-mesh-backend');
 const { ApplicationJobQueue, resolveApplicationJobQueueConfiguration } = require('../../packages/framework/dist/runtime/host/application-job-queue');
 
-test('backend converts Entry membership at the shared native authority boundary', () => {
+test('backend converts Entry membership at the shared native authority boundary', async () => {
   const router = {
     setRoutingId() {}, setReceiveFlowState() {}, setReadableHandler() {}, bind() {},
     localEndpoint: () => 'inproc://node-samples-entry-authority',
@@ -28,7 +28,7 @@ test('backend converts Entry membership at the shared native authority boundary'
     backend.restoreActorAuthority('alice', 'Player', 3n, 5n, 'room', room.status().lifecycleGeneration, 8n);
     assert.equal(String(backend.actorLookup('alice').spotId), 'room');
   } finally {
-    backend.close();
+    await backend.close();
   }
 });
 

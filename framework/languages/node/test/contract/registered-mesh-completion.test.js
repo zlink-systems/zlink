@@ -55,7 +55,7 @@ for (const terminal of ['cancel', 'close']) {
     const rejected = assert.rejects(pending, error => error === reason);
     if (terminal === 'cancel') controller.abort(reason);
     else {
-      h.backend.close();
+      await h.backend.close();
       table.dispose(reason);
     }
     await rejected;

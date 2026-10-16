@@ -353,7 +353,7 @@ In User/Instance Spot relocation, the framework includes, in the
 relocation payload, the logical timer registration created by
 `addTimer(...)`, the last completed tick sequence, the next scheduled
 time, and pending ticks not yet run. The target restores the logical
-timer registration, so the application doesn't re-register the timer.
+timer registration, so the application doesn't re-register the timer in restore. If the target's `configure` or pre-Ready `onInitialize` registers a restored key, it reattaches to the restored registration under the [Spot timer §1](../../../03-spot-actor/10-spot-timer.en.md#1-timer-generation-and-cancel) exception.
 Only the currently running timer handler finishes on the source, and
 the restored tick isn't run before target Ready.
 
