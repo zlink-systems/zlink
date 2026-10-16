@@ -345,44 +345,46 @@ final class ZLinkLocalRequestAdmissionDeadlineTest {
     void admissionContinuationOutsideHandlerStartsOutsideInfrastructureTurn() throws Exception {
         heldReply = new CompletableFuture<>();
         try (var runtime = startAdmissionRuntime()) {
-            createLocalTargets(runtime);
-            var queue = applicationQueue(runtime);
-            ZLinkRequestStage<String> result;
-            CompletionStage<String> continuation;
-            try (var held =
-                    queue.acquire(ZLinkApplicationJobQueue.Origin.REMOTE)
-                            .toCompletableFuture()
-                            .get(2, TimeUnit.SECONDS)) {
-                result = submitLocal(runtime, true, Duration.ofSeconds(1), true);
-                awaitCapacityWaiter(queue);
-                continuation =
-                        result.admitted()
-                                .thenApply(
-                                        ignored -> {
-                                            assertFalse(
-                                                    java.util.Arrays.stream(
-                                                                    Thread.currentThread()
-                                                                            .getStackTrace())
-                                                            .anyMatch(
-                                                                    frame ->
-                                                                            frame.getMethodName()
-                                                                                            .equals(
-                                                                                                    "deliverGrant")
-                                                                                    || frame.getMethodName()
-                                                                                            .equals(
-                                                                                                    "publishApplicationJob")),
-                                                    "application continuation ran on the infrastructure publication stack");
-                                            return runtime.route()
-                                                    .requestToSpot("room-a", new Probe(false))
-                                                    .submit_sync(String.class);
-                                        });
+            try {
+                createLocalTargets(runtime);
+                var queue = applicationQueue(runtime);
+                ZLinkRequestStage<String> result;
+                CompletionStage<String> continuation;
+                try (var held =
+                        queue.acquire(ZLinkApplicationJobQueue.Origin.REMOTE)
+                                .toCompletableFuture()
+                                .get(2, TimeUnit.SECONDS)) {
+                    result = submitLocal(runtime, true, Duration.ofSeconds(1), true);
+                    awaitCapacityWaiter(queue);
+                    continuation =
+                            result.admitted()
+                                    .thenApply(
+                                            ignored -> {
+                                                assertFalse(
+                                                        java.util.Arrays.stream(
+                                                                        Thread.currentThread()
+                                                                                .getStackTrace())
+                                                                .anyMatch(
+                                                                        frame ->
+                                                                                frame.getMethodName()
+                                                                                                .equals(
+                                                                                                        "deliverGrant")
+                                                                                        || frame.getMethodName()
+                                                                                                .equals(
+                                                                                                        "publishApplicationJob")),
+                                                        "application continuation ran on the infrastructure publication stack");
+                                                return runtime.route()
+                                                        .requestToSpot("room-a", new Probe(false))
+                                                        .submit_sync(String.class);
+                                            });
+                }
+                assertEquals("reply", continuation.toCompletableFuture().get(2, TimeUnit.SECONDS));
+                assertFalse(result.toCompletableFuture().isDone());
+                heldReply.complete("reply");
+                assertEquals("reply", result.toCompletableFuture().get(2, TimeUnit.SECONDS));
+            } finally {
+                heldReply.complete("reply");
             }
-            assertEquals("reply", continuation.toCompletableFuture().get(2, TimeUnit.SECONDS));
-            assertFalse(result.toCompletableFuture().isDone());
-            heldReply.complete("reply");
-            assertEquals("reply", result.toCompletableFuture().get(2, TimeUnit.SECONDS));
-        } finally {
-            heldReply.complete("reply");
         }
     }
 
