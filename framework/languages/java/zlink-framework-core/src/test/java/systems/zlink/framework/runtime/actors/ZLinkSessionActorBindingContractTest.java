@@ -569,7 +569,111 @@ final class ZLinkSessionActorBindingContractTest {
     }
 
     @Test
-    void sealedBindingHoldsEveryPushUntilTheRouteCommits() {
+    void command44ArrivalWinsBeforeADequeuedSealDeadline() throws Exception {
+        FakeStream stream = new FakeStream();
+        ZLinkSessionActorsRuntime runtime = runtime(stream, Duration.ofMinutes(1));
+        ZLinkSessionActor actor =
+                runtime.bind(new ActorRef("actor-1", 7, MESH, NODE_A)).toCompletableFuture().join();
+        var relocation = relocation();
+        runtime.applyRelocationSealCommand(seal(relocation, 7, NODE_A, 9))
+                .toCompletableFuture()
+                .join();
+        var entered = new CompletableFuture<Void>();
+        var release = new CompletableFuture<Void>();
+        stream.relocationEntered = () -> entered.complete(null);
+        stream.relocationPreparation = release;
+        var applied = runtime.applyRelocationRouteCommand(route(relocation)).toCompletableFuture();
+        try {
+            entered.get(5, TimeUnit.SECONDS);
+            expireRelocationSeal(runtime);
+            assertEquals(
+                    0,
+                    stream.disconnectedPeers,
+                    "command 44 arrived before the deadline owner turn; native preparation is"
+                            + " outside the seal-arrival deadline");
+            release.complete(null);
+            applied.join();
+            assertEquals(NODE_B, actor.ref().nodeRid());
+        } finally {
+            release.complete(null);
+            applied.handle((ignored, failure) -> null).join();
+            runtime.notifyDisconnectedAll().toCompletableFuture().join();
+        }
+    }
+
+    @Test
+    void nativePreparationFailureAfterCommand44CannotLeaveIngressPending() throws Exception {
+        FakeStream stream = new FakeStream();
+        ZLinkSessionActorsRuntime runtime = runtime(stream, Duration.ofMinutes(1));
+        ZLinkSessionActor actor =
+                runtime.bind(new ActorRef("actor-1", 7, MESH, NODE_A)).toCompletableFuture().join();
+        var relocation = relocation();
+        runtime.applyRelocationSealCommand(seal(relocation, 7, NODE_A, 9))
+                .toCompletableFuture()
+                .join();
+        var held = relay(runtime, actor, "held-before-native-failure").toCompletableFuture();
+        var entered = new CompletableFuture<Void>();
+        var release = new CompletableFuture<Void>();
+        stream.relocationEntered = () -> entered.complete(null);
+        stream.relocationPreparation = release;
+        var applied = runtime.applyRelocationRouteCommand(route(relocation)).toCompletableFuture();
+        var sealTerminal = currentSealTerminal(runtime);
+        try {
+            entered.get(5, TimeUnit.SECONDS);
+            assertFalse(held.isDone());
+            var failure = new IllegalStateException("forced native route failure");
+            release.completeExceptionally(failure);
+            assertEquals(
+                    failure, assertThrows(CompletionException.class, applied::join).getCause());
+            assertEquals(1, stream.disconnectedPeers, "accepted commit failure closes its Session");
+            assertTrue(runtime.bound().isEmpty());
+            assertThrows(CompletionException.class, held::join);
+            expireRelocationSeal(runtime, sealTerminal);
+            runtime.applyRelocationRouteCommand(route(relocation)).toCompletableFuture().join();
+            assertEquals(
+                    1,
+                    stream.disconnectedPeers,
+                    "stale deadline and duplicate commit cannot close twice");
+            assertEquals(
+                    List.of(NODE_B),
+                    stream.preparedNodes,
+                    "committed target is never compensated to source");
+        } finally {
+            release.complete(null);
+            applied.handle((ignored, failure) -> null).join();
+            runtime.notifyDisconnectedAll().toCompletableFuture().join();
+            held.handle((ignored, failure) -> null).join();
+        }
+    }
+
+    @Test
+    void currentPushSubmitsBeforeCommand44WhileIngressRemainsSealed() {
+        FakeStream stream = new FakeStream();
+        ZLinkSessionActorsRuntime runtime = runtime(stream, Duration.ofMinutes(1));
+        ZLinkSessionActor actor =
+                runtime.bind(new ActorRef("actor-1", 7, MESH, NODE_A)).toCompletableFuture().join();
+        var relocation = relocation();
+        runtime.applyRelocationSealCommand(seal(relocation, 7, NODE_A, 9))
+                .toCompletableFuture()
+                .join();
+        var held = relay(runtime, actor, "move-after-seal").toCompletableFuture();
+        try {
+            assertFalse(held.isDone(), "Session ingress remains behind its seal");
+            assertTrue(push(runtime, boundSend(NODE_B, 4, 10, 5), "room-view-before-route"));
+            assertEquals(
+                    List.of("room-view-before-route"),
+                    stream.boundPushes,
+                    "the ingress seal must not hold current-binding outbound push");
+            assertTrue(stream.relays.isEmpty());
+        } finally {
+            runtime.applyRelocationRouteCommand(abort(relocation)).toCompletableFuture().join();
+            held.join();
+            runtime.notifyDisconnectedAll().toCompletableFuture().join();
+        }
+    }
+
+    @Test
+    void sealedBindingSubmitsSourceAndTargetPushesBeforeTheRouteCommits() {
         FakeStream stream = new FakeStream();
         ZLinkSessionActorsRuntime runtime =
                 runtime(
@@ -586,7 +690,7 @@ final class ZLinkSessionActorBindingContractTest {
 
         assertTrue(push(runtime, boundSend(NODE_A, 3, 9, 4), "source-while-sealed"));
         assertTrue(push(runtime, boundSend(NODE_B, 4, 9, 4), "target-while-sealed"));
-        assertEquals(List.of(), stream.boundPushes);
+        assertEquals(List.of("source-while-sealed", "target-while-sealed"), stream.boundPushes);
 
         runtime.applyRelocationRouteCommand(route(relocation)).toCompletableFuture().join();
 
@@ -595,7 +699,7 @@ final class ZLinkSessionActorBindingContractTest {
     }
 
     @Test
-    void abortedRelocationSubmitsTheHeldPushesInOrder() {
+    void abortedRelocationDoesNotResubmitAlreadyAdmittedPushes() {
         FakeStream stream = new FakeStream();
         ZLinkSessionActorsRuntime runtime =
                 runtime(stream, authoritySpotNode(Map.of(NODE_A, new ActorAuthority(3, 9, 4))));
@@ -607,6 +711,7 @@ final class ZLinkSessionActorBindingContractTest {
 
         assertTrue(push(runtime, boundSend(NODE_B, 4, 10, 5), "held-first"));
         assertTrue(push(runtime, boundSend(NODE_A, 3, 9, 4), "held-second"));
+        assertEquals(List.of("held-first", "held-second"), stream.boundPushes);
         runtime.applyRelocationRouteCommand(abort(relocation)).toCompletableFuture().join();
 
         awaitBoundPushes(stream, 2);
@@ -770,9 +875,17 @@ final class ZLinkSessionActorBindingContractTest {
     }
 
     private static void expireRelocationSeal(ZLinkSessionActorsRuntime runtime) throws Exception {
+        expireRelocationSeal(runtime, currentSealTerminal(runtime));
+    }
+
+    private static Object currentSealTerminal(ZLinkSessionActorsRuntime runtime) throws Exception {
         Field terminals = ZLinkSessionActorsRuntime.class.getDeclaredField("sealTerminals");
         terminals.setAccessible(true);
-        Object terminal = ((Map<?, ?>) terminals.get(runtime)).values().iterator().next();
+        return ((Map<?, ?>) terminals.get(runtime)).values().iterator().next();
+    }
+
+    private static void expireRelocationSeal(ZLinkSessionActorsRuntime runtime, Object terminal)
+            throws Exception {
         Method expiration =
                 java.util.Arrays.stream(ZLinkSessionActorsRuntime.class.getDeclaredMethods())
                         .filter(method -> method.getName().equals("expireRelocationSeal"))
@@ -1116,8 +1229,10 @@ final class ZLinkSessionActorBindingContractTest {
         private CompletableFuture<List<Message>> pendingDisconnectNotification;
         private CountDownLatch blockRelayEntered;
         private CountDownLatch blockRelayRelease;
-        private int relocationFailuresRemaining;
+        private final List<RoutingId> preparedNodes =
+                new java.util.concurrent.CopyOnWriteArrayList<>();
         private Runnable relocationEntered;
+        private CompletionStage<Void> relocationPreparation;
         private volatile boolean boundPushAvailable = true;
         private final List<String> boundPushes = new java.util.concurrent.CopyOnWriteArrayList<>();
         private final List<CompletableFuture<Void>> boundPushAdmissions =
@@ -1322,13 +1437,12 @@ final class ZLinkSessionActorBindingContractTest {
                 long bindingGeneration,
                 ZLinkBackendActorRef targetActor,
                 Duration timeout) {
+            preparedNodes.add(targetActor.nodeRid());
             if (relocationEntered != null) {
                 relocationEntered.run();
             }
-            if (relocationFailuresRemaining > 0) {
-                relocationFailuresRemaining--;
-                return CompletableFuture.failedFuture(
-                        new IllegalStateException("forced native route failure"));
+            if (relocationPreparation != null && preparedNodes.size() == 1) {
+                return relocationPreparation;
             }
             return ZLinkBackendStreamSocket.super.relocateBoundActor(
                     sessionRid, actorId, bindingGeneration, targetActor, timeout);

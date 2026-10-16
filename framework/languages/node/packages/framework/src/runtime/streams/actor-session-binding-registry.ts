@@ -1,11 +1,10 @@
-import { AsyncResource } from 'node:async_hooks';
 import {
   ZLinkFrameworkErrorKind,
   ZLinkFrameworkException
 } from '../../contracts/Errors/ZLinkFrameworkException';
 import { zlinkDefaultLocationOptions } from '../../contracts/Locations/Options';
 import { createAbortError, throwIfAborted } from '../abort';
-import { ZLinkStateLane } from '../execution/state-lane';
+import { startOutsideStateLane, ZLinkStateLane } from '../execution/state-lane';
 import type { RoutingId } from '../../contracts';
 import { routingIdsEqual } from '../routing-id';
 import {
@@ -36,7 +35,6 @@ interface SessionRelocationResult extends ZLinkPreparedSessionRelocationSeal {
 
 export const DEFAULT_TERMINAL_RELOCATION_CAPACITY = 4096;
 
-const detachedStateLaneResource = new AsyncResource('zlink:actor-session-binding-registry');
 export interface ZLinkActorSessionBindingActor {
   readonly actorId: string;
   readonly ref: { readonly actorId: string; readonly bindingGeneration?: bigint };
@@ -861,9 +859,18 @@ export class ZLinkActorSessionBindingRegistry<
         response,
         ready: Promise.resolve()
       };
-      const expiry = setTimeout(() => {
-        void this.lane.run(() => this.absentSessionRelocationResults.delete(key));
-      }, this.sealWaitTimeoutMs);
+      const expiry = startOutsideStateLane(() =>
+        setTimeout(() => {
+          void (async () => {
+            await this.lane.run(() => this.absentSessionRelocationResults.delete(key));
+          })().catch((error) =>
+            this.errorSink?.()?.reportRuntimeTaskException(
+              'session relocation result expiry',
+              error
+            )
+          );
+        }, this.sealWaitTimeoutMs)
+      );
       expiry.unref();
       this.absentSessionRelocationResults.set(key, { result, expiry });
       return result;
@@ -1528,10 +1535,6 @@ function assertRelocationClaim(
       true
     );
   }
-}
-
-function startOutsideStateLane<T>(work: () => T): T {
-  return detachedStateLaneResource.runInAsyncScope(work);
 }
 
 function assertSuccessorSessionIdentity(
