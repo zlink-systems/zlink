@@ -4,7 +4,8 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import org.junit.jupiter.api.Test;
 
-import systems.zlink.framework.errors.ZLinkConfigurationException;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.spots.ZLinkTimer;
 import systems.zlink.framework.spots.ZLinkTimerOptions;
 import systems.zlink.framework.spots.ZLinkTimerOverrunPolicy;
@@ -86,7 +87,7 @@ final class ZLinkRelocatedTimerRebindTest {
     }
 
     @Test
-    void handlerTypeMismatchFailsInitializationWithoutReplacingRestoredTimer() {
+    void handlerTypeMismatchFailsOnlyRegistrationWithoutReplacingRestoredTimer() {
         try (var scheduler = new ManualScheduler();
                 var registry = registry(scheduler)) {
             var snapshot = snapshot(false);
@@ -95,7 +96,42 @@ final class ZLinkRelocatedTimerRebindTest {
                     assertThrows(
                             CompletionException.class,
                             () -> initializeAdd(registry, RESTORED_KEY, OtherHandler.class));
-            assertInstanceOf(ZLinkConfigurationException.class, failed.getCause());
+            assertEquals(
+                    ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                    assertInstanceOf(ZLinkFrameworkException.class, failed.getCause()).kind());
+            assertEquals(snapshot, registry.freeze());
+        }
+    }
+
+    @Test
+    void ignoredMismatchDoesNotPoisonInitializationOrChangeTheRestoredHandle() {
+        try (var scheduler = new ManualScheduler();
+                var registry = registry(scheduler)) {
+            var snapshot = snapshot(false);
+            registry.stageRestore(snapshot);
+            ZLinkTimer restored = initializeAdd(registry, RESTORED_KEY, TickHandler.class);
+            var rejected = new CompletableFuture<ZLinkTimer>();
+            registry.runRelocationInitialization(
+                            () -> {
+                                registry.add(RESTORED_KEY, PERIOD, OtherHandler.class, OPTIONS)
+                                        .whenComplete(
+                                                (timer, failure) -> {
+                                                    if (failure == null) rejected.complete(timer);
+                                                    else rejected.completeExceptionally(failure);
+                                                })
+                                        .handle((timer, failure) -> null)
+                                        .toCompletableFuture()
+                                        .join();
+                                return CompletableFuture.completedFuture(null);
+                            })
+                    .toCompletableFuture()
+                    .join();
+            var failure = assertThrows(CompletionException.class, rejected::join);
+            assertEquals(
+                    ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                    assertInstanceOf(ZLinkFrameworkException.class, failure.getCause()).kind());
+            assertSame(restored, initializeAdd(registry, RESTORED_KEY, TickHandler.class));
+            assertFalse(restored.isDisposed());
             assertEquals(snapshot, registry.freeze());
         }
     }

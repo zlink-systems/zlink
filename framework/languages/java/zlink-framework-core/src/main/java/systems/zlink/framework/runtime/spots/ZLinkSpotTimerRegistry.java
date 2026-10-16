@@ -1,6 +1,8 @@
 package systems.zlink.framework.runtime.spots;
 
 import systems.zlink.framework.errors.ZLinkConfigurationException;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.runtime.handlers.ZLinkHandlerMethodInvoker;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
@@ -40,7 +42,7 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
     private final Map<String, ManagedTimer> timers = new LinkedHashMap<>();
     private Object spot;
     private Phase phase = Phase.RUNNING;
-    private CompletableFuture<Void> initialization;
+    private boolean initializing;
 
     private enum Phase {
         RUNNING,
@@ -138,13 +140,11 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
             throw new ZLinkConfigurationException("timer registration is sealed for relocation");
         }
         ManagedTimer existing = timers.get(name);
-        if (initialization != null && existing != null && existing.restored) {
+        if (initializing && existing != null && existing.restored) {
             if (existing.handlerType != handlerType) {
-                var failure =
-                        new ZLinkConfigurationException(
-                                "restored timer handler type mismatch: " + name);
-                initialization.completeExceptionally(failure);
-                throw failure;
+                throw new ZLinkFrameworkException(
+                        ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                        "restored timer handler type mismatch: " + name);
             }
             return new AddedTimer(existing, null, null);
         }
@@ -220,15 +220,14 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
     }
 
     <T> CompletionStage<T> runRelocationInitialization(Supplier<CompletionStage<T>> operation) {
-        var initialized = new CompletableFuture<Void>();
         return stateLane
                 .runAsync(
                         () -> {
-                            if (phase != Phase.RESTORING || initialization != null) {
+                            if (phase != Phase.RESTORING || initializing) {
                                 throw new IllegalStateException(
                                         "timer relocation staging is not active");
                             }
-                            initialization = initialized;
+                            initializing = true;
                             return null;
                         })
                 .thenComposeAsync(
@@ -245,19 +244,14 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
                                             (value, failure) ->
                                                     stateLane.runAsync(
                                                             () -> {
-                                                                initialization = null;
-                                                                if (failure == null) {
-                                                                    initialized.complete(null);
-                                                                } else {
-                                                                    initialized
-                                                                            .completeExceptionally(
-                                                                                    failure);
+                                                                initializing = false;
+                                                                if (failure != null) {
+                                                                    throw new CompletionException(
+                                                                            unwrap(failure));
                                                                 }
                                                                 return value;
                                                             }))
-                                    .thenCompose(stage -> stage)
-                                    .thenCompose(
-                                            value -> initialized.thenApply(completed -> value));
+                                    .thenCompose(stage -> stage);
                         });
     }
 

@@ -5,7 +5,8 @@ import static org.junit.jupiter.api.Assertions.*;
 import org.junit.jupiter.api.Test;
 
 import systems.zlink.framework.actors.ZLinkActor;
-import systems.zlink.framework.errors.ZLinkConfigurationException;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess;
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
@@ -85,12 +86,15 @@ final class ZLinkRelocatedTimerLifecycleTest {
                                                             envelope)
                                                     .toCompletableFuture()
                                                     .join());
-                    assertInstanceOf(ZLinkConfigurationException.class, rootCause(failure));
+                    assertEquals(
+                            ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                            assertInstanceOf(ZLinkFrameworkException.class, rootCause(failure))
+                                    .kind());
                 });
     }
 
     @Test
-    void initializeMismatchFailsReady() throws Exception {
+    void initializeMismatchFailsItsLifecycleCallback() throws Exception {
         withRuntime(
                 (lifecycle, envelope) -> {
                     var prepared =
@@ -112,7 +116,10 @@ final class ZLinkRelocatedTimerLifecycleTest {
                                                         .completeRelocationReady(prepared)
                                                         .toCompletableFuture()
                                                         .join());
-                        assertInstanceOf(ZLinkConfigurationException.class, rootCause(failure));
+                        assertEquals(
+                                ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                                assertInstanceOf(ZLinkFrameworkException.class, rootCause(failure))
+                                        .kind());
                     } finally {
                         lifecycle.discardReserved(prepared).toCompletableFuture().join();
                     }
@@ -247,7 +254,9 @@ final class ZLinkRelocatedTimerLifecycleTest {
                             "restored",
                             Duration.ofDays(2),
                             ZLinkRelocatedTimerRebindTest.OtherHandler.class,
-                            null);
+                            null)
+                    .toCompletableFuture()
+                    .join();
         }
     }
 
