@@ -15,7 +15,9 @@ if ($Local) {
     if (-not $NoBuild) {
         Push-Location $root
         try {
-            & cmake --preset default *> (Join-Path $root '.logs/build.log')
+            & cmake -P bootstrap.cmake *> (Join-Path $root '.logs/build.log')
+            if ($LASTEXITCODE -ne 0) { throw 'Framework prebuilt install failed; see .logs/build.log.' }
+            & cmake --preset default *>> (Join-Path $root '.logs/build.log')
             if ($LASTEXITCODE -ne 0) { throw 'CMake configure failed; see .logs/build.log.' }
             & cmake --build --preset default *>> (Join-Path $root '.logs/build.log')
             if ($LASTEXITCODE -ne 0) { throw 'CMake build failed; see .logs/build.log.' }

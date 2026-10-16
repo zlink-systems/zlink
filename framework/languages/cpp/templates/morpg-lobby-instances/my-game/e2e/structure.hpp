@@ -163,7 +163,7 @@ inline void check_structure (const std::filesystem::path &root)
     require (edges == expected, "Structure edge mismatch");
     for (const auto *file :
          {"README.md", "AGENTS.md", "CLAUDE.md", "CMakeLists.txt", "CMakePresets.json",
-          "vcpkg.json", "run-e2e.sh", "run-e2e.ps1", "server/session/main.cpp",
+          "bootstrap.cmake", "run-e2e.sh", "run-e2e.ps1", "server/session/main.cpp",
           "server/lobby/main.cpp", "server/instance/main.cpp", "e2e/main.cpp"})
         (void) project_path (root, file);
 }
