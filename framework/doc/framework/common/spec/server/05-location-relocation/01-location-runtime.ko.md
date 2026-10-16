@@ -172,7 +172,7 @@ Location Store가 기록하는 record와 조건만 §8~§9에서 다시 구체�
    queue에 순서대로 넣는다. Temporary queue 등록을 제거하고 regular route로 전환하되
    dispatch는 닫아 둔다. 필요한 lifecycle callback을 끝낸 뒤 application message 처리를
    시작한다.
-8. Source는 cutover를 보낸 뒤 완료 reply를 기다리지 않고 Message Follow를 유지한다.
+8. Source는 cutover를 보낸 뒤 완료 reply를 기다리지 않고 Message Follow를 유지한다(§10의 연속 이동 예외 제외).
    Memory에 유지한 payload와 relay batch는 [공통 relocation §4.4](04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)의 authority 판정 또는 source lease 만료 terminal까지 유지한다.
 
 **Handoff payload와 owner 변경은 하나의 distributed transaction이나 2PC로 묶지 않는다.**
@@ -1393,11 +1393,20 @@ target route를 채택한다.
 배제한다. 따라서 세 조건이 성립하면 이 relocation의 target CAS가 먼저 commit됐고, 그 뒤의 owner 변경은
 그 target에서 이어진 이동이다. 이 판정은 별도 commit 기록을 추가하지 않는다.
 
-이 경우 source는 commit된 첫 target으로 §7.3의 Message Follow route를 설치하고, 보관 사본을 해제하고
-source 정리를 한 번 수행한다. 만료 시각은 기존대로 이 relocation의 commit을 기준으로 한다. 첫 target
-이후의 이동은 첫 target이 가진 자신의 Message Follow route가 유효할 때만 hop으로 이어 전달한다(§7.3의
-hop 한도). 어느 hop의 route가 없거나 만료됐으면 §7.3대로 `Unavailable`이다.
-Source는 다시 읽은 현재 owner로 직접 가는 route를 만들지 않는다. `ObjectGeneration`이
+이 경우 source는 보관 사본을 해제하고 source 정리를 한 번 수행한다. Message Follow route는 다시 읽은
+owner에 따라 다르다.
+
+- **Owner가 첫 target이면** source는 다시 읽은 authority의 현재 `AuthorityOwnerGeneration`으로 §7.3의
+  route를 설치한다. 첫 target이 정규화만 했다면 이 값은 첫 commit 값과 같고(§6.1의 `Preserve`는 owner와
+  generation을 유지한다), 다른 node를 거쳐 첫 target으로 돌아왔다면 첫 target이 지금 보유한 authority의
+  값이다. 어느 경우든 route가 전달하는 message는 그 값을 가진 현재 owner가 받는다.
+- **Owner가 첫 target도 source도 아니면**(첫 target에서 다음 이동이 이어졌다) 다시 읽은 authority에는
+  첫 target의 commit 값이 남지 않고, Store는 generation을 전역 counter로 발급하므로 source는 그 값을
+  알 수 없다. Source는 §7.3의 route를 설치하지 않는다. 이 **연속 이동 예외**에서 이후 source로 도착한
+  message는 §7.3의 route 없음 결과(`Unavailable`)로 끝난다. Source는 다시 읽은 현재 owner로 직접 가는
+  route를 만들거나 첫 target의 generation을 추측하지 않는다. Bound Session의 route는 각 target의 command 44와 이후
+  이동의 seal·route 전환([Session과 Actor binding §8](../04-session/02-session-actor-binding.ko.md#8-actor-relocation-중-session의-책임))이
+  옮기며, source의 Message Follow route에 의존하지 않는다. `ObjectGeneration`이
 다르거나 `AuthorityOwnerGeneration`이 커지지 않았는데 owner가 source도 첫 target도 아니면 기존대로
 실패(`DataLost`)로 판정한다. `Preserve` 응답이 불확정이면 source lease가 유효한 동안 새 timer 없이 이 절의 Store-failure 정책으로 반복한다. Source lease 만료 또는 source가 다시 읽은 authority가 없음(`Missing`)은 source의 작업을 [공통 relocation §4.4](04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)의 expired-owner terminal로 끝낸다. `Missing`이면 source fence가 성립하지 않으므로 source는 `Preserve`를 시도하지 않는다. Source는 owner lease가
 §5에 따라 유효할 때만 dispatch를 재개한다.
