@@ -891,13 +891,22 @@ final class ZLinkJavaRawMeshNode
             RoutingId expectedRoutingId,
             long expectedLifecycleGeneration,
             String expectedSecurityIdentity) {
+        if (!descriptorStateLane.isOnLane()) {
+            return inDescriptorStateLane(
+                    () ->
+                            connectPeer(
+                                    endpoint,
+                                    expectedRoutingId,
+                                    expectedLifecycleGeneration,
+                                    expectedSecurityIdentity));
+        }
         RouterSocket current = requireStarted();
         if (endpoint == null || endpoint.isBlank()) {
             throw new IllegalArgumentException("peer endpoint is required");
         }
         //  Write-time normalization (endpoint notation policy §2.3): the
         //  acceptance point for a manually connected peer endpoint.
-        endpoint = ZLinkEndpointNotation.normalize(endpoint);
+        String normalizedEndpoint = ZLinkEndpointNotation.normalize(endpoint);
         //  0 means "no lifecycle constraint"; every other 64-bit pattern is
         //  a valid opaque CSPRNG generation token, including the ~50% that
         //  read back as a negative long (spec 13 §7.1 -- the token is never
@@ -906,7 +915,7 @@ final class ZLinkJavaRawMeshNode
         peerIntents.put(
                 intent,
                 new PeerIntent(
-                        endpoint,
+                        normalizedEndpoint,
                         expectedRoutingId,
                         expectedLifecycleGeneration,
                         expectedSecurityIdentity,
@@ -922,7 +931,7 @@ final class ZLinkJavaRawMeshNode
             // connect can deliver an inproc HELLO/ADMIT. Registering after
             // connect lets the caller-side initialization erase a rejection
             // that already arrived on the pump thread.
-            current.connect(endpoint);
+            current.connect(normalizedEndpoint);
         } catch (RuntimeException failure) {
             peerIntents.remove(intent);
             closedPeerIntents.remove(intent);
@@ -941,6 +950,15 @@ final class ZLinkJavaRawMeshNode
             RoutingId expectedRoutingId,
             long expectedLifecycleGeneration,
             String expectedSecurityIdentity) {
+        if (!descriptorStateLane.isOnLane()) {
+            return inDescriptorStateLane(
+                    () ->
+                            replacePeerConnection(
+                                    endpoint,
+                                    expectedRoutingId,
+                                    expectedLifecycleGeneration,
+                                    expectedSecurityIdentity));
+        }
         requireStarted();
         if (endpoint == null || endpoint.isBlank()) {
             throw new IllegalArgumentException("peer endpoint is required");
@@ -949,6 +967,28 @@ final class ZLinkJavaRawMeshNode
         //  the staleIntentIds lookup below and the connectPeer() call it
         //  delegates to comparing on the same normalized form.
         String normalizedEndpoint = ZLinkEndpointNotation.normalize(endpoint);
+        // Channel topology §8: an unchanged descriptor keeps its current intent.
+        Long matching =
+                peerIntents.entrySet().stream()
+                        .filter(
+                                entry ->
+                                        normalizedEndpoint.equals(entry.getValue().endpoint())
+                                                && Objects.equals(
+                                                        expectedRoutingId,
+                                                        entry.getValue().expectedRoutingId())
+                                                && expectedLifecycleGeneration
+                                                        == entry.getValue()
+                                                                .expectedLifecycleGeneration()
+                                                && Objects.equals(
+                                                        expectedSecurityIdentity,
+                                                        entry.getValue().expectedSecurityIdentity())
+                                                && !closeRequestedPeerIntents.contains(
+                                                        entry.getKey())
+                                                && !closedPeerIntents.contains(entry.getKey()))
+                        .map(Map.Entry::getKey)
+                        .findFirst()
+                        .orElse(null);
+        if (matching != null) return matching;
         //  See the opaque-token note on connectPeer above: 0 is "no
         //  constraint", any other 64-bit pattern is a valid generation.
         List<Long> staleIntentIds =
@@ -1036,6 +1076,14 @@ final class ZLinkJavaRawMeshNode
     }
 
     private void removePeerConnection(long connectionIntentId, boolean disconnectEndpoint) {
+        if (!descriptorStateLane.isOnLane()) {
+            inDescriptorStateLane(
+                    () -> {
+                        removePeerConnection(connectionIntentId, disconnectEndpoint);
+                        return null;
+                    });
+            return;
+        }
         PeerIntent removed = peerIntents.remove(connectionIntentId);
         closedPeerIntents.remove(connectionIntentId);
         closeRequestedPeerIntents.remove(connectionIntentId);
@@ -1164,64 +1212,19 @@ final class ZLinkJavaRawMeshNode
                                             if (admitted.isDone()) return null;
                                             try {
                                                 if (!selectedIntent.isDone()) {
-                                                    Long matching =
-                                                            peerIntents.entrySet().stream()
-                                                                    .filter(
-                                                                            entry ->
-                                                                                    normalized
-                                                                                                    .equals(
-                                                                                                            entry.getValue()
-                                                                                                                    .endpoint())
-                                                                                            && peerRid
-                                                                                                    .equals(
-                                                                                                            entry.getValue()
-                                                                                                                    .expectedRoutingId())
-                                                                                            && lifecycleGeneration
-                                                                                                    == entry.getValue()
-                                                                                                            .expectedLifecycleGeneration()
-                                                                                            && Objects
-                                                                                                    .equals(
-                                                                                                            securityIdentity,
-                                                                                                            entry.getValue()
-                                                                                                                    .expectedSecurityIdentity())
-                                                                                            && !closeRequestedPeerIntents
-                                                                                                    .contains(
-                                                                                                            entry
-                                                                                                                    .getKey())
-                                                                                            && !closedPeerIntents
-                                                                                                    .contains(
-                                                                                                            entry
-                                                                                                                    .getKey()))
-                                                                    .map(Map.Entry::getKey)
-                                                                    .findFirst()
-                                                                    .orElse(null);
-                                                    if (matching != null)
-                                                        selectedIntent.complete(matching);
-                                                    else {
-                                                        List<Long> stale =
-                                                                peerIntents.entrySet().stream()
-                                                                        .filter(
-                                                                                entry ->
-                                                                                        normalized
-                                                                                                .equals(
-                                                                                                        entry.getValue()
-                                                                                                                .endpoint()))
-                                                                        .map(Map.Entry::getKey)
-                                                                        .toList();
-                                                        boolean closing = false;
-                                                        for (long id : stale) {
-                                                            if (!peerIntentIsClosed(id)) {
-                                                                requestPeerIntentClose(id);
-                                                                closing = true;
-                                                            }
-                                                        }
-                                                        if (closing) return null;
+                                                    try {
                                                         selectedIntent.complete(
                                                                 replacePeerConnection(
                                                                         normalized,
                                                                         peerRid,
                                                                         lifecycleGeneration,
                                                                         securityIdentity));
+                                                    } catch (
+                                                            systems.zlink.framework.runtime.internal
+                                                                            .backend
+                                                                            .ZLinkPeerIntentClosePendingException
+                                                                    pending) {
+                                                        return null;
                                                     }
                                                 }
                                                 long intent = selectedIntent.getNow(null);
