@@ -8,6 +8,7 @@ import java.util.IdentityHashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Queue;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
@@ -116,9 +117,9 @@ final class ZLinkStreamDispatchQueue {
             if (matched != null) {
                 if (predicateFailure != null) {
                     ZLinkStreamCleanup.closeMessage(message);
-                    matched.result().completeExceptionally(predicateFailure);
-                } else if (!matched.result().complete(message)) {
-                    ZLinkStreamCleanup.closeMessage(message);
+                    matched.failClaimed(predicateFailure);
+                } else {
+                    matched.deliverClaimed(message);
                 }
                 return;
             }
@@ -174,10 +175,9 @@ final class ZLinkStreamDispatchQueue {
         }
     }
 
-    void awaitMessage(
-            String name,
-            Predicate<ZLinkStreamMessage<ZLinkStreamEncodedPayload>> predicate,
-            CompletableFuture<ZLinkStreamMessage<ZLinkStreamEncodedPayload>> result) {
+    CompletableFuture<ZLinkStreamMessage<ZLinkStreamEncodedPayload>> awaitMessage(
+            String name, Predicate<ZLinkStreamMessage<ZLinkStreamEncodedPayload>> predicate) {
+        Waiter waiter = new Waiter(name, predicate);
         // A version change may add packets while the predicate runs. Keep the
         // scan cursor across that change so an older rejected packet is not
         // tested again on every arrival.
@@ -217,21 +217,19 @@ final class ZLinkStreamDispatchQueue {
                 ZLinkStreamMessage<ZLinkStreamEncodedPayload> found = matched.message();
                 if (predicateFailure != null) {
                     ZLinkStreamCleanup.closeMessage(found);
-                    result.completeExceptionally(predicateFailure);
-                } else if (!result.complete(found)) {
-                    ZLinkStreamCleanup.closeMessage(found);
+                    waiter.failClaimed(predicateFailure);
+                } else {
+                    waiter.deliverClaimed(found);
                 }
-                return;
+                return waiter;
             }
             synchronized (queue) {
                 if (version != observedVersion) {
                     continue;
                 }
-                Waiter waiter = new Waiter(name, predicate, result);
                 waiters.add(waiter);
                 version++;
-                result.whenComplete((ignored, error) -> removeWaiter(waiter));
-                return;
+                return waiter;
             }
         }
     }
@@ -285,11 +283,9 @@ final class ZLinkStreamDispatchQueue {
         }
         pending.forEach(
                 waiter ->
-                        waiter.result()
-                                .completeExceptionally(
-                                        ZLinkStreamException.disconnected(
-                                                "the connection that the wait observed has"
-                                                        + " ended")));
+                        waiter.failClaimed(
+                                ZLinkStreamException.disconnected(
+                                        "the connection that the wait observed has" + " ended")));
     }
 
     int receivedCount(String packetName) {
@@ -380,24 +376,26 @@ final class ZLinkStreamDispatchQueue {
         }
     }
 
-    private void removeWaiter(Waiter waiter) {
+    private boolean removeWaiter(Waiter waiter) {
         synchronized (queue) {
-            if (waiters.remove(waiter)) {
-                version++;
-            }
+            return removeWaiterLocked(waiter);
         }
+    }
+
+    private boolean removeWaiterLocked(Waiter waiter) {
+        if (waiters.remove(waiter)) {
+            version++;
+            return true;
+        }
+        return false;
     }
 
     private boolean claimWaiter(
             Waiter waiter, ZLinkStreamMessage<ZLinkStreamEncodedPayload> message) {
         synchronized (queue) {
-            for (Iterator<Waiter> iterator = waiters.iterator(); iterator.hasNext(); ) {
-                if (iterator.next() == waiter) {
-                    iterator.remove();
-                    countArrivalLocked(message);
-                    version++;
-                    return true;
-                }
+            if (removeWaiterLocked(waiter)) {
+                countArrivalLocked(message);
+                return true;
             }
             return false;
         }
@@ -440,8 +438,51 @@ final class ZLinkStreamDispatchQueue {
             ZLinkStreamMessage<ZLinkStreamEncodedPayload> message,
             Supplier<CompletionStage<Void>> action) {}
 
-    private record Waiter(
-            String name,
-            Predicate<ZLinkStreamMessage<ZLinkStreamEncodedPayload>> predicate,
-            CompletableFuture<ZLinkStreamMessage<ZLinkStreamEncodedPayload>> result) {}
+    /** The queue entry owns terminal authority; completion callbacks run after its removal. */
+    private final class Waiter
+            extends CompletableFuture<ZLinkStreamMessage<ZLinkStreamEncodedPayload>> {
+        private final String name;
+        private final Predicate<ZLinkStreamMessage<ZLinkStreamEncodedPayload>> predicate;
+
+        private Waiter(
+                String name, Predicate<ZLinkStreamMessage<ZLinkStreamEncodedPayload>> predicate) {
+            this.name = name;
+            this.predicate = predicate;
+        }
+
+        String name() {
+            return name;
+        }
+
+        Predicate<ZLinkStreamMessage<ZLinkStreamEncodedPayload>> predicate() {
+            return predicate;
+        }
+
+        @Override
+        public boolean complete(ZLinkStreamMessage<ZLinkStreamEncodedPayload> message) {
+            return removeWaiter(this) && super.complete(message);
+        }
+
+        @Override
+        public boolean completeExceptionally(Throwable error) {
+            Objects.requireNonNull(error, "error");
+            return removeWaiter(this) && super.completeExceptionally(error);
+        }
+
+        @Override
+        public boolean cancel(boolean mayInterruptIfRunning) {
+            if (!removeWaiter(this)) {
+                return isCancelled();
+            }
+            return super.cancel(mayInterruptIfRunning);
+        }
+
+        private void deliverClaimed(ZLinkStreamMessage<ZLinkStreamEncodedPayload> message) {
+            super.complete(message);
+        }
+
+        private void failClaimed(Throwable error) {
+            super.completeExceptionally(error);
+        }
+    }
 }

@@ -16,7 +16,7 @@ final class ZLinkStreamWaitFailure {
 
     static <T> CompletableFuture<T> asValidationFailure(
             CompletableFuture<T> source, String message) {
-        CompletableFuture<T> result = new CompletableFuture<>();
+        CompletableFuture<T> result = withCancellation(() -> source.cancel(false));
         source.whenComplete(
                 (value, error) -> {
                     if (error == null) {
@@ -25,13 +25,21 @@ final class ZLinkStreamWaitFailure {
                     }
                     result.completeExceptionally(translate(error, message));
                 });
-        result.whenComplete(
-                (ignored, error) -> {
-                    if (result.isCancelled()) {
-                        source.cancel(false);
-                    }
-                });
         return result;
+    }
+
+    /** Revoke the underlying wait before publishing cancellation to application callbacks. */
+    static <T> CompletableFuture<T> withCancellation(Runnable cancel) {
+        return new CompletableFuture<>() {
+            @Override
+            public boolean cancel(boolean mayInterruptIfRunning) {
+                if (isDone()) {
+                    return isCancelled();
+                }
+                cancel.run();
+                return super.cancel(mayInterruptIfRunning);
+            }
+        };
     }
 
     private static Throwable translate(Throwable error, String message) {
