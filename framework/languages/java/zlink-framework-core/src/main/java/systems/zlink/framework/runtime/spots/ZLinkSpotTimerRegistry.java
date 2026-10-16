@@ -41,7 +41,14 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
     private final ZLinkStateLane stateLane = new ZLinkStateLane();
     private final Map<String, ManagedTimer> timers = new LinkedHashMap<>();
     private Object spot;
-    private boolean frozen;
+    private Phase phase = Phase.RUNNING;
+    private CompletableFuture<Void> initialization;
+
+    private enum Phase {
+        RUNNING,
+        FROZEN,
+        RESTORING
+    }
 
     private <T> T inStateLane(Supplier<T> work) {
         try {
@@ -108,16 +115,13 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
                 .thenApplyAsync(
                         added -> {
                             if (added.previous() != null) added.previous().close();
-                            added.timer().start();
+                            added.timer().publishSchedule(added.schedule());
                             return added.timer();
                         });
     }
 
     private AddedTimer addCore(
             String name, Duration period, Class<?> handlerType, ZLinkTimerOptions options) {
-        if (frozen) {
-            throw new ZLinkConfigurationException("timer registration is sealed for relocation");
-        }
         if (name == null || name.isBlank()) {
             throw new ZLinkConfigurationException("timer name is required");
         }
@@ -136,9 +140,24 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
             throw new ZLinkConfigurationException(
                     "timer maxCatchUpTicks must be greater than zero");
         }
+        if (phase == Phase.FROZEN) {
+            throw new ZLinkConfigurationException("timer registration is sealed for relocation");
+        }
+        ManagedTimer existing = timers.get(name);
+        if (initialization != null && existing != null && existing.restored) {
+            if (existing.handlerType != handlerType) {
+                var failure =
+                        new ZLinkConfigurationException(
+                                "restored timer handler type mismatch: " + name);
+                initialization.completeExceptionally(failure);
+                throw failure;
+            }
+            return new AddedTimer(existing, null, null);
+        }
         ManagedTimer timer = new ManagedTimer(name, period, handlerType, timerOptions);
         ManagedTimer previous = timers.put(name, timer);
-        return new AddedTimer(timer, previous);
+        return new AddedTimer(
+                timer, previous, timer.prepareScheduleCore(timer.schedule.initialDelayNanos()));
     }
 
     FrozenTimers freeze() {
@@ -149,8 +168,8 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
 
     private FreezeState freezeCore() {
         List<ScheduledFuture<?>> futures = List.of();
-        if (!frozen) {
-            frozen = true;
+        if (phase == Phase.RUNNING) {
+            phase = Phase.FROZEN;
             futures =
                     timers.values().stream()
                             .map(ManagedTimer::freezeCore)
@@ -171,10 +190,10 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
         List<ManagedTimer> current =
                 inStateLane(
                         () -> {
-                            if (!frozen) {
+                            if (phase == Phase.RUNNING) {
                                 return List.of();
                             }
-                            frozen = false;
+                            phase = Phase.RUNNING;
                             return List.copyOf(timers.values());
                         });
         current.forEach(ManagedTimer::resume);
@@ -191,33 +210,72 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
     }
 
     void stageRestore(FrozenTimers state) {
-        RestoreState previous = inStateLane(() -> stageRestoreCore(state));
-        previous.timers().forEach(ManagedTimer::close);
+        List<ManagedTimer> previous = inStateLane(() -> stageRestoreCore(state));
+        previous.forEach(ManagedTimer::close);
     }
 
-    private RestoreState stageRestoreCore(FrozenTimers state) {
+    private List<ManagedTimer> stageRestoreCore(FrozenTimers state) {
         List<ManagedTimer> previous = List.copyOf(timers.values());
         timers.clear();
-        frozen = true;
+        phase = Phase.RESTORING;
         for (TimerSnapshot snapshot : state.timers()) {
             ManagedTimer timer = new ManagedTimer(snapshot);
-            if (timers.put(snapshot.name(), timer) != null) {
-                throw new ZLinkConfigurationException(
-                        "duplicate timer in relocation envelope: " + snapshot.name());
-            }
+            timers.put(snapshot.name(), timer);
         }
-        return new RestoreState(previous);
+        return previous;
+    }
+
+    <T> CompletionStage<T> runRelocationInitialization(Supplier<CompletionStage<T>> operation) {
+        var initialized = new CompletableFuture<Void>();
+        return stateLane
+                .runAsync(
+                        () -> {
+                            if (phase != Phase.RESTORING || initialization != null) {
+                                throw new IllegalStateException(
+                                        "timer relocation staging is not active");
+                            }
+                            initialization = initialized;
+                            return null;
+                        })
+                .thenComposeAsync(
+                        ignored -> {
+                            CompletionStage<T> result;
+                            try {
+                                result =
+                                        java.util.Objects.requireNonNull(
+                                                operation.get(), "initialization result");
+                            } catch (RuntimeException | Error failure) {
+                                result = CompletableFuture.failedFuture(failure);
+                            }
+                            return result.handle(
+                                            (value, failure) ->
+                                                    stateLane.runAsync(
+                                                            () -> {
+                                                                initialization = null;
+                                                                if (failure == null) {
+                                                                    initialized.complete(null);
+                                                                } else {
+                                                                    initialized
+                                                                            .completeExceptionally(
+                                                                                    failure);
+                                                                }
+                                                                return value;
+                                                            }))
+                                    .thenCompose(stage -> stage)
+                                    .thenCompose(
+                                            value -> initialized.thenApply(completed -> value));
+                        });
     }
 
     void publishStagedRestore() {
         List<ManagedTimer> current =
                 inStateLane(
                         () -> {
-                            if (!frozen) {
+                            if (phase != Phase.RESTORING) {
                                 throw new IllegalStateException(
                                         "timer relocation staging is not active");
                             }
-                            frozen = false;
+                            phase = Phase.RUNNING;
                             return List.copyOf(timers.values());
                         });
         current.forEach(ManagedTimer::resume);
@@ -230,7 +288,7 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
                         () -> {
                             List<ManagedTimer> active = List.copyOf(timers.values());
                             timers.clear();
-                            frozen = false;
+                            phase = Phase.RUNNING;
                             return active;
                         });
         current.forEach(ManagedTimer::close);
@@ -242,7 +300,7 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
                         () -> {
                             List<ManagedTimer> active = List.copyOf(timers.values());
                             timers.clear();
-                            frozen = false;
+                            phase = Phase.RUNNING;
                             return active;
                         })
                 .thenComposeAsync(
@@ -316,6 +374,7 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
 
     private final class ManagedTimer implements ZLinkTimer {
         private final String name;
+        private final boolean restored;
         private final Class<?> handlerType;
         private final ZLinkHandlerMethodInvoker.PreparedMethod invocation;
         private final ZLinkTimerOptions options;
@@ -331,15 +390,18 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
         ManagedTimer(
                 String name, Duration period, Class<?> handlerType, ZLinkTimerOptions options) {
             handlers.prepare(handlerType);
+            this.restored = false;
             this.name = name;
             this.handlerType = handlerType;
             this.invocation = prepareInvocation(handlerType);
             this.options = options;
             this.schedule = new ZLinkSpotTimerSchedule(name, period, options);
+            this.nextScheduledAt = safePlusNanos(Instant.now(), schedule.initialDelayNanos());
         }
 
         ManagedTimer(TimerSnapshot snapshot) {
             handlers.prepare(snapshot.handlerType());
+            this.restored = true;
             this.name = snapshot.name();
             this.handlerType = snapshot.handlerType();
             this.invocation = prepareInvocation(handlerType);
@@ -349,20 +411,13 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
             this.pendingTick = snapshot.pendingTick().orElse(null);
         }
 
-        void start() {
-            Long delay = inStateLane(() -> disposed ? null : schedule.initialDelayNanos());
-            if (delay != null) {
-                scheduleNext(delay);
-            }
-        }
-
         private void scheduleNext(long delayNanos) {
             SchedulePlan plan = inStateLane(() -> prepareScheduleCore(delayNanos));
             publishSchedule(plan);
         }
 
         private SchedulePlan prepareScheduleCore(long delayNanos) {
-            if (disposed || frozen) {
+            if (disposed || phase != Phase.RUNNING) {
                 return null;
             }
             long boundedDelay = Math.max(0L, delayNanos);
@@ -382,7 +437,9 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
             boolean cancel =
                     inStateLane(
                             () -> {
-                                if (disposed || frozen || scheduled != plan.attempt()) {
+                                if (disposed
+                                        || phase != Phase.RUNNING
+                                        || scheduled != plan.attempt()) {
                                     return true;
                                 }
                                 future = task;
@@ -397,7 +454,7 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
             ZLinkSpotTimerSchedule.PendingTick selected =
                     inStateLane(
                             () -> {
-                                if (disposed || frozen || scheduled != attempt) {
+                                if (disposed || phase != Phase.RUNNING || scheduled != attempt) {
                                     return null;
                                 }
                                 scheduled = null;
@@ -444,7 +501,8 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
             CompletionStage<HandlerInvocation> claim =
                     stateLane.tryRunNow(
                             () -> {
-                                if (disposed || frozen || pendingTick != selected) return null;
+                                if (disposed || phase != Phase.RUNNING || pendingTick != selected)
+                                    return null;
                                 activeDispatch =
                                         new ActiveDispatch(selected, new CompletableFuture<>());
                                 return new HandlerInvocation(
@@ -483,7 +541,9 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
                         stateLane.runAsync(
                                 () -> {
                                     boolean stillCurrent =
-                                            !frozen && !disposed && pendingTick == selected;
+                                            phase == Phase.RUNNING
+                                                    && !disposed
+                                                    && pendingTick == selected;
                                     CompletableFuture<Void> dispatchCompletion =
                                             activeDispatch != null
                                                             && activeDispatch.tick() == selected
@@ -711,11 +771,9 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
 
     private static final class ScheduleAttempt {}
 
-    private record AddedTimer(ManagedTimer timer, ManagedTimer previous) {}
+    private record AddedTimer(ManagedTimer timer, ManagedTimer previous, SchedulePlan schedule) {}
 
     private record FreezeState(FrozenTimers snapshot, List<ScheduledFuture<?>> futures) {}
-
-    private record RestoreState(List<ManagedTimer> timers) {}
 
     private record SchedulePlan(ScheduleAttempt attempt, long delayNanos) {}
 

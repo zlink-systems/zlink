@@ -170,7 +170,8 @@ final class ZLinkSpotLifecycle {
             String admittingMeshName,
             Class<? extends ZLinkSpot<?>> spotType,
             String spotId,
-            long objectGeneration) {
+            long objectGeneration,
+            byte[] timerEnvelope) {
         requireRegistered(spotType);
         requireSpotId(spotId);
         if (objectGeneration == 0) {
@@ -187,7 +188,11 @@ final class ZLinkSpotLifecycle {
                 .thenCompose(
                         backendSpot ->
                                 activationFactory
-                                        .activateRelocation(spotType, backendSpot, node.routingId())
+                                        .activateRelocation(
+                                                spotType,
+                                                backendSpot,
+                                                node.routingId(),
+                                                timerEnvelope)
                                         .thenApply(
                                                 created ->
                                                         new PreparedUserSpot(
@@ -281,11 +286,6 @@ final class ZLinkSpotLifecycle {
             PreparedUserSpot prepared, ZLinkSpotAcceptedJournal.Record record) {
         requireNewPrepared(prepared);
         return prepared.created().activation().replayAccepted(record);
-    }
-
-    void stageReservedTimers(PreparedUserSpot prepared, byte[] timerEnvelope) {
-        requireNewPrepared(prepared);
-        prepared.created().activation().context.stageTimerRelocationEnvelope(timerEnvelope);
     }
 
     void publishReservedTimers(PreparedUserSpot prepared) {
