@@ -15,6 +15,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6AWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
+import systems.zlink.framework.runtime.protocol.ServiceWirePilotCodec;
 import systems.zlink.framework.runtime.streams.ZLinkStreamActorControl;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderFlag;
@@ -70,15 +71,12 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
             new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, CompletableFuture<Void>> bindingTransitions =
             new ConcurrentHashMap<>();
-    //  Command 42 terminals keyed by relocation id. The bound and the
-    //  bounded eviction mirror the C++ `_session_seal_terminals` store
-    //  (public_host_runtime.cpp:4005-4020).
-    private static final int SEAL_TERMINAL_CAPACITY = 65_536;
-    //  How many spent terminals stay behind to answer a command 42 that was
-    //  still in flight when its route reached a terminal.
-    private static final int SPENT_SEAL_TERMINAL_RETENTION = 64;
-    private final java.util.LinkedHashMap<SessionRelocationKey, SealTerminal> sealTerminals =
-            new java.util.LinkedHashMap<>();
+    //  Command 42 `sealed` result records keyed by (relocation identity, ActorId)
+    //  (Session-Actor binding §8.3). A binding keeps its open seal record and at
+    //  most its last closed one; the next seal or the binding's removal deletes it.
+    private static final int ROUTE_TERMINAL_CAPACITY = 65_536;
+    private final java.util.HashMap<SealRecordKey, SealTerminal> sealTerminals =
+            new java.util.HashMap<>();
     private final java.util.LinkedHashMap<SessionRelocationKey, RouteTerminal> routeTerminals =
             new java.util.LinkedHashMap<>();
     private final java.util.HashMap<SessionRelocationKey, RouteFlight> routeFlights =
@@ -374,8 +372,7 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                     if (relocationStopped
                             || (timeoutTerminal != null
                                     && (timeoutTerminal.deadline == null
-                                            || sealTerminals.get(
-                                                            relocationKey(timeoutTerminal.seal()))
+                                            || sealTerminals.get(sealKey(timeoutTerminal.seal()))
                                                     != timeoutTerminal))
                             || (failedRoute != null
                                     && routeFlights.get(relocationKey(failedRoute.command()))
@@ -798,19 +795,14 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
         if (previous != null) {
             abandoned = previous.detachHeld();
             if (previous.seal != null) {
-                SessionRelocationKey previousKey =
-                        new SessionRelocationKey(
-                                previous.seal,
-                                actor.actorId(),
-                                previous.objectGeneration,
-                                sessionRid,
-                                previous.bindingGeneration);
-                SealTerminal terminal = sealTerminals.get(previousKey);
+                SealTerminal terminal =
+                        sealTerminals.get(new SealRecordKey(previous.seal, actor.actorId()));
                 if (terminal != null && !terminal.consumed()) {
                     terminal.consume();
                     abandonedSeal = terminal;
                 }
             }
+            removeSealRecords(actor.actorId());
         }
         return new BindingCleanup(abandoned, abandonedSeal);
     }
@@ -854,18 +846,15 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                                     if (removed.seal != null) {
                                         SealTerminal terminal =
                                                 sealTerminals.get(
-                                                        new SessionRelocationKey(
-                                                                removed.seal,
-                                                                actor.actorId(),
-                                                                removed.objectGeneration,
-                                                                sessionRid,
-                                                                removed.bindingGeneration));
+                                                        new SealRecordKey(
+                                                                removed.seal, actor.actorId()));
                                         if (terminal != null && !terminal.consumed()) {
                                             terminal.consume();
                                             abandonedSeal = terminal;
                                         }
                                     }
                                 }
+                                removeSealRecords(actor.actorId());
                             }
                             return new BindingCleanup(abandoned, abandonedSeal);
                         });
@@ -967,12 +956,8 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                                 if (admittedGate.activeIngress == 0 && admittedGate.seal != null) {
                                     SealTerminal terminal =
                                             sealTerminals.get(
-                                                    new SessionRelocationKey(
-                                                            admittedGate.seal,
-                                                            actor.actorId(),
-                                                            admittedGate.objectGeneration,
-                                                            sessionRid,
-                                                            admittedGate.bindingGeneration));
+                                                    new SealRecordKey(
+                                                            admittedGate.seal, actor.actorId()));
                                     if (terminal != null
                                             && !terminal.completion().isDone()
                                             && !terminal.consumed()) {
@@ -1031,17 +1016,13 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
     }
 
     /**
-     * Applies relocation command 42 at this Session owner and answers with command 43. Ported from
-     * the C++ session-owner handler
-     * (`framework/languages/cpp/framework/src/runtime/stateful/public_host_runtime.cpp:3974-4078`)
-     * in the same order: cached-terminal lookup keyed by relocation id (identical retransmit
-     * re-sends the cached ACK, a conflicting seal is refused), cache bound, the binding fence check
-     * that C++ performs in `stream_session_registry_t::seal_remote_route`
-     * (`stream_session_registry.cpp:330`), then the ACK that echoes every command 42 field plus the
-     * owner's accepted high-water.
+     * Applies command 42 to this Session's current binding of the command's ActorId (Session-Actor
+     * binding §8.3). The Session owner ({@code ZLinkStreamRuntime}) routes the command here only
+     * when this Session holds that ActorId's current binding.
      *
-     * <p>A refusal completes exceptionally so the seal stays unanswered and the source retransmits
-     * on the spec 20 §5 step 8 schedule, mirroring the C++ handler's `continue`.
+     * <p>The stage completes with {@code sealed}, with {@code bindingAbsent} when the binding
+     * disappeared before this turn, or with {@code null} when the command duplicates a closed
+     * record and must not be answered. A mismatch completes exceptionally.
      */
     public CompletionStage<ZLinkServiceM6BWireCodec.SessionRelocationSealed>
             applyRelocationSealCommand(ZLinkServiceM6BWireCodec.SessionRelocationSeal command) {
@@ -1049,71 +1030,79 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                 .thenCompose(stage -> stage);
     }
 
+    /** Returns the binding generation of this Session's current binding of {@code actorId}. */
+    public java.util.OptionalLong boundBindingGeneration(String actorId) {
+        StoredBindingRoute route = bindingRoutes.get(actorId);
+        return route == null
+                ? java.util.OptionalLong.empty()
+                : java.util.OptionalLong.of(route.bindingGeneration());
+    }
+
     private CompletionStage<ZLinkServiceM6BWireCodec.SessionRelocationSealed>
             applyRelocationSealCommandCore(ZLinkServiceM6BWireCodec.SessionRelocationSeal command) {
         Objects.requireNonNull(command, "command");
-        if (!sessionRid.equals(command.session().sessionRid())) {
-            return CompletableFuture.failedFuture(
-                    new ZLinkConfigurationException(
-                            "Session relocation seal command does not target this Session"));
-        }
-        if (relocationStopped) {
-            return CompletableFuture.failedFuture(
-                    new ZLinkConfigurationException("Session relocation owner is stopped"));
-        }
-        ZLinkServiceM6BWireCodec.SessionRelocationSealed sealed;
-        SealTerminal installed;
-        SessionRelocationKey key = relocationKey(command);
-        SealTerminal cached = sealTerminals.get(key);
-        if (cached != null) {
-            if (!cached.seal().equals(command)) {
+        String actorId = command.actor().actor().actorId();
+        SealTerminal recorded = sealTerminals.get(sealKey(command));
+        if (recorded != null) {
+            if (!recorded.seal().equals(command)) {
                 return CompletableFuture.failedFuture(
                         new ZLinkConfigurationException(
                                 ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
-                                "Session relocation seal conflicts with the "
-                                        + "recorded seal for this relocation"));
+                                "Session relocation seal changed fields of the recorded"
+                                        + " command 42: "
+                                        + actorId));
             }
-            return cached.completion();
+            if (recorded.consumed()) {
+                LOGGER.warning(
+                        "late_session_relocation_seal actor="
+                                + actorId
+                                + " relocation="
+                                + command.relocation());
+                return CompletableFuture.completedFuture(null);
+            }
+            return recorded.completion();
         }
-        if (sealTerminals.size() >= SEAL_TERMINAL_CAPACITY && !evictOneSealTerminal()) {
-            return CompletableFuture.failedFuture(
-                    new ZLinkConfigurationException(
-                            "Session relocation seal terminal store is full"));
+        StoredBindingRoute observed = bindingRoutes.get(actorId);
+        IngressGate gate = ingressGates.get(actorId);
+        if (relocationStopped || observed == null || gate == null) {
+            return CompletableFuture.completedFuture(
+                    ZLinkServiceM6BWireCodec.SessionRelocationSealed.replyTo(
+                            command, ServiceWirePilotCodec.SessionSealResult.BINDING_ABSENT));
         }
-        StoredBindingRoute observed = bindingRoutes.get(command.actor().actor().actorId());
-        IngressGate gate = ingressGates.get(command.actor().actor().actorId());
-        if (!sealFenceMatches(command, observed)
-                || gate == null
+        if (!sessionRid.equals(command.session().sessionRid())
+                || !sealFenceMatches(command, observed)
                 || gate.objectGeneration != command.actor().actor().generation()
-                || gate.bindingGeneration != command.session().bindingGeneration()) {
+                || gate.bindingGeneration != command.session().bindingGeneration()
+                || command.actor().ownerLeaseGeneration() < observed.ownerLeaseGeneration()) {
             return CompletableFuture.failedFuture(
                     new ZLinkConfigurationException(
                             "Session relocation seal fence differs from the current "
                                     + "binding: "
-                                    + command.actor().actor().actorId()));
+                                    + actorId));
         }
         if (gate.seal != null) {
             return CompletableFuture.failedFuture(
                     new ZLinkConfigurationException(
                             ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
-                            "Session binding is already sealed by another relocation: "
-                                    + command.actor().actor().actorId()));
+                            "Session binding is already sealed by another relocation: " + actorId));
         }
-        sealed =
-                new ZLinkServiceM6BWireCodec.SessionRelocationSealed(
-                        command.relocation(),
-                        command.coordinator(),
-                        command.actor(),
-                        command.session());
+        removeSealRecords(actorId);
         gate.seal = command.relocation();
-        installed = new SealTerminal(command, sealed);
-        sealTerminals.put(key, installed);
+        SealTerminal installed =
+                new SealTerminal(
+                        command,
+                        ZLinkServiceM6BWireCodec.SessionRelocationSealed.replyTo(
+                                command, ServiceWirePilotCodec.SessionSealResult.SEALED));
+        sealTerminals.put(sealKey(command), installed);
         installed.armDeadline(() -> expireRelocationSeal(installed), sessionRelocationSealTimeout);
-        pruneSpentSealTerminals();
         if (ingressDrainedCore(command)) {
             installed.completeSealed();
         }
         return installed.completion();
+    }
+
+    private void removeSealRecords(String actorId) {
+        sealTerminals.keySet().removeIf(key -> key.actorId().equals(actorId));
     }
 
     private void expireRelocationSeal(SealTerminal terminal) {
@@ -1245,43 +1234,6 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
         return storedRouteMatches;
     }
 
-    //  Evicts one terminal so a new seal can be recorded: a spent one first,
-    //  mirroring C++ (public_host_runtime.cpp:4008-4019); if every terminal is
-    //  still in flight the store is genuinely full and the seal is refused.
-    private boolean evictOneSealTerminal() {
-        var iterator = sealTerminals.entrySet().iterator();
-        while (iterator.hasNext()) {
-            var entry = iterator.next();
-            if (entry.getValue().consumed()) {
-                iterator.remove();
-                return true;
-            }
-        }
-        return false;
-    }
-
-    //  A spent terminal only exists to answer a command 42 that was still in
-    //  flight when its route committed, so a small insertion-ordered tail is
-    //  enough. C++ can keep every spent terminal because its store dies with
-    //  the host process; this one lives inside a bound Session that can
-    //  outlive thousands of relocations.
-    private void pruneSpentSealTerminals() {
-        int spent = 0;
-        for (SealTerminal terminal : sealTerminals.values()) {
-            if (terminal.consumed()) {
-                spent++;
-            }
-        }
-        var iterator = sealTerminals.entrySet().iterator();
-        while (spent > SPENT_SEAL_TERMINAL_RETENTION && iterator.hasNext()) {
-            var entry = iterator.next();
-            if (entry.getValue().consumed()) {
-                iterator.remove();
-                spent--;
-            }
-        }
-    }
-
     //  Session owner가 seal을 대조할 때 쓰는 값만 본다 — Session과 Actor binding 8.1
     //  "Session owner는 다음 값만 검증한다": 현재 Session identity와 SessionRid, 현재
     //  binding generation과 ActorId/ObjectGeneration, 같은 relocation인지 구분하는
@@ -1355,22 +1307,23 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
         }
     }
 
+    private record SealRecordKey(
+            ZLinkServiceM6BWireCodec.RelocationIdentity relocation, String actorId) {}
+
+    private static SealRecordKey sealKey(ZLinkServiceM6BWireCodec.SessionRelocationSeal command) {
+        return new SealRecordKey(command.relocation(), command.actor().actor().actorId());
+    }
+
+    private static SealRecordKey sealKey(ZLinkServiceM6BWireCodec.SessionRelocationRoute command) {
+        return new SealRecordKey(command.relocation(), command.actor().actorId());
+    }
+
     private record SessionRelocationKey(
             ZLinkServiceM6BWireCodec.RelocationIdentity relocation,
             String actorId,
             long objectGeneration,
             RoutingId sessionRid,
             long bindingGeneration) {}
-
-    private static SessionRelocationKey relocationKey(
-            ZLinkServiceM6BWireCodec.SessionRelocationSeal command) {
-        return new SessionRelocationKey(
-                command.relocation(),
-                command.actor().actor().actorId(),
-                command.actor().actor().generation(),
-                command.session().sessionRid(),
-                command.session().bindingGeneration());
-    }
 
     private static SessionRelocationKey relocationKey(
             ZLinkServiceM6BWireCodec.SessionRelocationRoute command) {
@@ -1418,7 +1371,7 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
             }
             return;
         }
-        if (routeTerminals.size() >= SEAL_TERMINAL_CAPACITY) {
+        if (routeTerminals.size() >= ROUTE_TERMINAL_CAPACITY) {
             var iterator = routeTerminals.entrySet().iterator();
             if (iterator.hasNext()) {
                 iterator.next();
@@ -1467,7 +1420,7 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
             return applyRelocationAbortCore(command);
         }
         StoredBindingRoute observed = bindingRoutes.get(command.actor().actorId());
-        SealTerminal seal = sealTerminals.get(key);
+        SealTerminal seal = sealTerminals.get(sealKey(command));
         if (observed == null
                 || seal == null
                 || seal.consumed()
@@ -1513,7 +1466,7 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
             ZLinkServiceM6BWireCodec.SessionRelocationRoute command) {
         List<HeldIngress> held;
         SessionRelocationKey key = relocationKey(command);
-        SealTerminal terminal = sealTerminals.get(key);
+        SealTerminal terminal = sealTerminals.get(sealKey(command));
         IngressGate gate = ingressGates.get(command.actor().actorId());
         if (terminal == null
                 || terminal.consumed()
@@ -1527,7 +1480,6 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
         gate.seal = null;
         held = gate.detachHeld();
         recordRouteTerminalLocked(command);
-        pruneSpentSealTerminals();
         resumeHeld(held);
         return CompletableFuture.completedFuture(null);
     }
@@ -1571,7 +1523,7 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                                 SessionRelocationKey key = relocationKey(flight.command());
                                 StoredBindingRoute current =
                                         bindingRoutes.get(flight.command().actor().actorId());
-                                SealTerminal seal = sealTerminals.get(key);
+                                SealTerminal seal = sealTerminals.get(sealKey(flight.command()));
                                 IngressGate gate =
                                         ingressGates.get(flight.command().actor().actorId());
                                 ZLinkBoundActor liveActor =
@@ -1615,7 +1567,6 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                                     held = gate.detachHeld();
                                     recordRouteTerminalLocked(flight.command());
                                     routeFlights.remove(key, flight);
-                                    pruneSpentSealTerminals();
                                 }
                                 return new RouteCommitState(held, failure);
                             });
