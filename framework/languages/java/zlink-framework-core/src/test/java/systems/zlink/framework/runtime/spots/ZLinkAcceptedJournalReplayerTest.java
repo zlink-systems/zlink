@@ -127,6 +127,16 @@ final class ZLinkAcceptedJournalReplayerTest {
                             }
                         });
 
+        var bareLane =
+                assertThrows(
+                        CompletionException.class,
+                        () ->
+                                replayer.replayFrozen("actor-a", encoded)
+                                        .toCompletableFuture()
+                                        .join());
+        assertInstanceOf(IllegalArgumentException.class, bareLane.getCause());
+        assertEquals("unknown accepted journal lane: actor-a", bareLane.getCause().getMessage());
+
         replayer.replay("actor:actor-a", new ZLinkSerialExecutionQueue.QueuedRecord(1, encoded))
                 .toCompletableFuture()
                 .join();

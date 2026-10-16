@@ -49,7 +49,7 @@ final class ZLinkJavaRawMeshNodeAdmissionSourceTest {
                             local.pendingCapacityUsed());
             var observer =
                     ZLinkJavaRawMeshNode.class.getDeclaredMethod(
-                            "onPeerStateChanged", RoutingId.class, Runnable.class);
+                            "onPeerStateChanged", RoutingId.class, Runnable.class, Runnable.class);
             observer.setAccessible(true);
             var admission =
                     ZLinkJavaRawMeshNode.class.getDeclaredMethod(
@@ -73,7 +73,8 @@ final class ZLinkJavaRawMeshNodeAdmissionSourceTest {
                                                 if (observed.incrementAndGet() == 1)
                                                     initial.complete(null);
                                                 else rejected.complete(null);
-                                            })) {
+                                            },
+                                    (Runnable) () -> {})) {
                 initial.get(1, TimeUnit.SECONDS);
                 int hello = ServiceWireConstants.COMMAND_HELLO;
                 var wire =
@@ -235,7 +236,7 @@ final class ZLinkJavaRawMeshNodeAdmissionSourceTest {
             var targetInitial = new CompletableFuture<Void>();
             var method =
                     ZLinkJavaRawMeshNode.class.getDeclaredMethod(
-                            "onPeerStateChanged", RoutingId.class, Runnable.class);
+                            "onPeerStateChanged", RoutingId.class, Runnable.class, Runnable.class);
             method.setAccessible(true);
             try (var failing =
                             source.onStateChanged(
@@ -257,7 +258,8 @@ final class ZLinkJavaRawMeshNodeAdmissionSourceTest {
                                                     () -> {
                                                         targetCount.incrementAndGet();
                                                         targetInitial.complete(null);
-                                                    })) {
+                                                    },
+                                            (Runnable) () -> {})) {
                 initial.get(1, TimeUnit.SECONDS);
                 targetInitial.get(1, TimeUnit.SECONDS);
                 source.setPlacementWeight(2);

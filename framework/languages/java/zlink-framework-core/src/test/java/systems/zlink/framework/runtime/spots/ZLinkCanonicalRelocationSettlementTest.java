@@ -865,9 +865,15 @@ final class ZLinkCanonicalRelocationSettlementTest {
                                         case "observePeerRoute" ->
                                                 new ZLinkInternalMeshNode.PeerRouteObservation(
                                                         routeGeneration.get(), connected.get());
-                                        case "targetLifecycleEnded" -> false;
-                                        case "onStateChanged" -> {
-                                            ((Runnable) args[0]).run();
+                                        case "onStateChanged", "onPeerStateChanged" -> {
+                                            ((Runnable)
+                                                            args[
+                                                                    method.getName()
+                                                                                    .equals(
+                                                                                            "onPeerStateChanged")
+                                                                            ? 1
+                                                                            : 0])
+                                                    .run();
                                             yield (AutoCloseable) () -> {};
                                         }
                                         case "sendCanonicalRelocationControl" -> {

@@ -1401,16 +1401,23 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
     }
 
     public ZLinkActor publishPreparedTransferredActor(PreparedTransferredActor prepared) {
-        return publishPreparedTransferredActor(prepared, null, 0);
+        return publishPreparedTransferredActor(prepared, null, 0, null);
     }
 
     public ZLinkActor publishPreparedTransferredActor(
-            PreparedTransferredActor prepared, String targetSpotId, long authorityOwnerGeneration) {
+            PreparedTransferredActor prepared,
+            String targetSpotId,
+            long authorityOwnerGeneration,
+            ZLinkSpot<?> membershipSpot) {
         return inStateLane(
                 () -> {
                     PublishPreparedTransfer publish =
                             publishPreparedTransferredActorInStateLane(
                                     prepared, targetSpotId, authorityOwnerGeneration);
+                    if (membershipSpot != null) {
+                        markJoinedState(
+                                prepared.actor, prepared.actorRef, targetSpotId, membershipSpot);
+                    }
                     if (publish.targetSpotId() != null) {
                         spotNode.registerTransferredActor(
                                 publish.actorRef(),

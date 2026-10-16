@@ -1,5 +1,8 @@
 package systems.zlink.framework.runtime.locations;
 
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
+
 interface ZLinkAutoConnectExecutor {
     boolean connect(ZLinkAutoConnectPlanner.Target target);
 
@@ -18,9 +21,15 @@ interface ZLinkAutoConnectExecutor {
 
     default void clearNotRequired(ZLinkAutoConnectPlanner.Target target) {}
 
-    default void observeAdmissionExpectation(ZLinkAutoConnectPlanner.Target target) {}
+    default CompletionStage<Void> observeAdmissionExpectation(
+            ZLinkAutoConnectPlanner.Target target) {
+        return CompletableFuture.completedFuture(null);
+    }
 
-    default void forgetAdmissionExpectation(ZLinkAutoConnectPlanner.Target target) {}
+    default CompletionStage<Void> forgetAdmissionExpectation(
+            ZLinkAutoConnectPlanner.Target target) {
+        return CompletableFuture.completedFuture(null);
+    }
 
     ZLinkAutoConnectExecutor NONE =
             new ZLinkAutoConnectExecutor() {

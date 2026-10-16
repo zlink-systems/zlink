@@ -6477,54 +6477,12 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
 
     CompletionStage<Void> dispatchLocalActorPacket(
             SpotDispatchLine dispatchLine,
-            Object spotSurface,
             ZLinkActor actor,
             ActorPacketFrames.Header packetHeader,
             ZLinkBackendActorReceived headerPart,
             ZLinkBackendActorReceived bodyPart,
             boolean pendingHeader,
             CompletableFuture<Void> requestAdmission) {
-        SpotActorPacketHandlerRegistration handler =
-                resolveActorPacketHandler(
-                        packetHeader.packetName(),
-                        spotSurface,
-                        packetHeader.requestSeq().isPresent()
-                                ? ZLinkScannedHandlerKind.ACTOR_REQUEST
-                                : ZLinkScannedHandlerKind.ACTOR_SEND);
-        if (handler == null) {
-            boolean request = packetHeader.requestSeq().isPresent();
-            reportSpotActorHandlerMissing(
-                    packetHeader,
-                    dispatchLine.spotId(),
-                    actor.context().actorId(),
-                    headerPart.sourceNodeRid());
-            if (request) {
-                ZLinkBackendActorReceived headerCopy =
-                        pendingHeader ? headerPart : copyActorReceived(headerPart);
-                replyActorDispatchError(
-                        dispatchLine,
-                        packetHeader,
-                        headerCopy,
-                        actor.context().actorId(),
-                        new ZLinkConfigurationException(
-                                "No SPOT actor request handler is registered for '"
-                                        + packetHeader.packetName()
-                                        + "'."),
-                        "actor dispatch error reply failed");
-            } else {
-                closePendingActorHeader(headerPart, pendingHeader);
-            }
-            return CompletableFuture.completedFuture(null);
-        }
-        if (packetHeader.requestSeq().isPresent()
-                != (handler.kind() == ZLinkScannedHandlerKind.ACTOR_REQUEST)) {
-            closePendingActorHeader(headerPart, pendingHeader);
-            return CompletableFuture.completedFuture(null);
-        }
-        if (!handler.actorType().isInstance(actor)) {
-            closePendingActorHeader(headerPart, pendingHeader);
-            return CompletableFuture.completedFuture(null);
-        }
         ZLinkBackendActorReceived headerCopy =
                 pendingHeader ? headerPart : copyActorReceived(headerPart);
         Message payloadCopy =
@@ -6532,10 +6490,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         CompletionStage<Void> queued =
                 enqueueLocalActorPacket(
                         dispatchLine,
-                        spotSurface,
                         actor,
                         packetHeader,
-                        handler,
                         headerCopy,
                         payloadCopy,
                         requestAdmission);
@@ -6575,10 +6531,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
 
     private CompletionStage<Void> enqueueLocalActorPacket(
             SpotDispatchLine dispatchLine,
-            Object spotSurface,
             ZLinkActor actor,
             ActorPacketFrames.Header packetHeader,
-            SpotActorPacketHandlerRegistration handler,
             ZLinkBackendActorReceived headerCopy,
             Message payloadCopy,
             CompletableFuture<Void> requestAdmission) {
@@ -6629,10 +6583,54 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                         packetHeader,
                                                         headerCopy.sourceSessionRid()))
                                         : ZLinkFlowContext.suppress()) {
+                            Object currentSurface = localActorSpotSurface(actor);
+                            SpotDispatchLine currentDispatchLine =
+                                    (SpotDispatchLine)
+                                            (currentSurface instanceof ZLinkSpot<?> spot
+                                                    ? spot.context()
+                                                    : ((ZLinkEntrySpot<?>) currentSurface)
+                                                            .context());
+                            SpotActorPacketHandlerRegistration handler =
+                                    resolveActorPacketHandler(
+                                            packetHeader.packetName(),
+                                            currentSurface,
+                                            packetHeader.requestSeq().isPresent()
+                                                    ? ZLinkScannedHandlerKind.ACTOR_REQUEST
+                                                    : ZLinkScannedHandlerKind.ACTOR_SEND);
+                            if (handler == null) {
+                                boolean request = packetHeader.requestSeq().isPresent();
+                                reportSpotActorHandlerMissing(
+                                        packetHeader,
+                                        currentDispatchLine.spotId(),
+                                        actor.context().actorId(),
+                                        headerCopy.sourceNodeRid());
+                                if (request) {
+                                    replyActorDispatchError(
+                                            currentDispatchLine,
+                                            packetHeader,
+                                            copyActorReceived(headerCopy),
+                                            actor.context().actorId(),
+                                            new ZLinkConfigurationException(
+                                                    "No SPOT actor request handler is registered for '"
+                                                            + packetHeader.packetName()
+                                                            + "'."),
+                                            "actor dispatch error reply failed");
+                                }
+                                if (registered != null) {
+                                    registered.completeLocal();
+                                }
+                                return CompletableFuture.completedFuture(null);
+                            }
+                            if (!handler.actorType().isInstance(actor)) {
+                                if (registered != null) {
+                                    registered.completeLocal();
+                                }
+                                return CompletableFuture.completedFuture(null);
+                            }
                             return dispatchActorPacketToHandler(
-                                    dispatchLine.dispatchOutbound(),
+                                    currentDispatchLine.dispatchOutbound(),
                                     handler,
-                                    spotSurface,
+                                    currentSurface,
                                     actor,
                                     packetHeader,
                                     headerCopy,

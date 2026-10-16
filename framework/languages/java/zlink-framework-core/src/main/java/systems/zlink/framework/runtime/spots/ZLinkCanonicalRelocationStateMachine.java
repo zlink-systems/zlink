@@ -1930,9 +1930,8 @@ final class ZLinkCanonicalRelocationStateMachine
                                     });
                             return result;
                         },
-                        () -> node.targetLifecycleEnded(targetNodeRid),
                         () -> node.observePeerRoute(targetNodeRid),
-                        node::onStateChanged,
+                        (changed, ended) -> node.onPeerStateChanged(targetNodeRid, changed, ended),
                         action -> {
                             if (stateLane.isOnLane()) {
                                 action.run();

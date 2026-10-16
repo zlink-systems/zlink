@@ -217,7 +217,8 @@ final class ZLinkActorSessionCoordinator {
             String targetSpotId,
             long authorityOwnerGeneration) {
         requireActors()
-                .publishPreparedTransferredActor(actor, targetSpotId, authorityOwnerGeneration);
+                .publishPreparedTransferredActor(
+                        actor, targetSpotId, authorityOwnerGeneration, null);
     }
 
     void openRelocatedActorAdmission(ZLinkActorRuntime.PreparedTransferredActor actor) {
@@ -522,12 +523,8 @@ final class ZLinkActorSessionCoordinator {
 
     Object spotSurface(
             ZLinkActor actor, Function<String, Object> resolver, Supplier<Object> fallback) {
-        Object current = currentSpotSurface(actor);
-        if (current != null) {
-            return current;
-        }
         if (actors != null) {
-            Object resolved = actors.spotId(actor).map(resolver).orElse(null);
+            Object resolved = actor.context().spotId().map(resolver).orElse(null);
             if (resolved != null) {
                 return resolved;
             }

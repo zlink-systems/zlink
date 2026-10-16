@@ -526,6 +526,32 @@ final class EntrySpotActorDispatchTests {
     }
 
     @Test
+    void entrySpotActorDispatchNoBindMissingHandlerRepliesNoBindError() throws Exception {
+        TestBackend backend = startBackend();
+        try (ZLinkFrameworkRuntime runtime = startRuntime(backend)) {
+            runtime.actorManager()
+                    .create("actor-a", "probe")
+                    .submit()
+                    .toCompletableFuture()
+                    .get(5, TimeUnit.SECONDS);
+
+            backend.entrySpot.raiseActorReadable(
+                    actorRequestParts("actor-a", "missing-handler", "value", 44, NO_BIND));
+
+            ReplyRecord reply = awaitSingle(backend.node.noBindReplies);
+            DecodedFrame frame = decodeFrame(reply.parts().get(0));
+            assertEquals(ZLinkStreamMessageKind.ERROR, frame.header().kind());
+            assertTrue(
+                    new String(frame.body(), StandardCharsets.UTF_8)
+                            .contains("No SPOT actor request handler is registered"));
+            assertEquals(44, reply.requestId());
+            assertEquals(NO_BIND, reply.flags());
+            assertTrue(backend.node.boundSessionReplies.isEmpty());
+            assertEquals(0, backend.node.remoteSessionBinds.size());
+        }
+    }
+
+    @Test
     void entrySpotActorDispatchNoBindMissingActorRepliesNoBindError() throws Exception {
         TestBackend backend = startBackend();
         try (ZLinkFrameworkRuntime runtime = startRuntime(backend)) {

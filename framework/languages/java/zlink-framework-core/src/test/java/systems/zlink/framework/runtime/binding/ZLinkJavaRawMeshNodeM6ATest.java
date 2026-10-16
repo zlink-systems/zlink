@@ -768,11 +768,13 @@ final class ZLinkJavaRawMeshNodeM6ATest {
             local.start();
             peer.start();
             local.observePeerAdmissionExpectation(
-                    peerRid,
-                    peerEndpoint,
-                    peer.status().lifecycleGeneration(),
-                    ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY,
-                    ZLinkMeshNodeObjectRole.NONE);
+                            peerRid,
+                            peerEndpoint,
+                            peer.status().lifecycleGeneration(),
+                            ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY,
+                            ZLinkMeshNodeObjectRole.NONE)
+                    .toCompletableFuture()
+                    .join();
             long intent = local.connectPeer(peerEndpoint, peerRid);
             awaitState(local, MeshPeerState.ADMITTED);
             assertTrue(local.classifyChannelTarget("game.api").isEmpty());
@@ -783,7 +785,7 @@ final class ZLinkJavaRawMeshNodeM6ATest {
                     ZLinkOneWayCalls.ROUTE_NOT_CONNECTED,
                     local.classifyChannelTarget("game.api").orElseThrow());
 
-            local.forgetPeerAdmissionExpectation(peerRid);
+            local.forgetPeerAdmissionExpectation(peerRid).toCompletableFuture().join();
             try {
                 local.removePeerConnection(intent);
             } catch (RuntimeException alreadyDisconnected) {
@@ -883,11 +885,13 @@ final class ZLinkJavaRawMeshNodeM6ATest {
             // remote peer therefore dials us and its HELLO must still pass
             // the descriptor fence and receive ADMIT.
             local.observePeerAdmissionExpectation(
-                    peerRid,
-                    peerEndpoint,
-                    peer.status().lifecycleGeneration(),
-                    ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY,
-                    ZLinkMeshNodeObjectRole.NONE);
+                            peerRid,
+                            peerEndpoint,
+                            peer.status().lifecycleGeneration(),
+                            ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY,
+                            ZLinkMeshNodeObjectRole.NONE)
+                    .toCompletableFuture()
+                    .join();
             peer.connectPeer(localEndpoint, localRid);
 
             awaitState(local, MeshPeerState.ADMITTED);
@@ -938,11 +942,13 @@ final class ZLinkJavaRawMeshNodeM6ATest {
             local.start();
             peer.start();
             local.observePeerAdmissionExpectation(
-                    peerRid,
-                    expectedEndpoint,
-                    peer.status().lifecycleGeneration(),
-                    ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY,
-                    ZLinkMeshNodeObjectRole.NONE);
+                            peerRid,
+                            expectedEndpoint,
+                            peer.status().lifecycleGeneration(),
+                            ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY,
+                            ZLinkMeshNodeObjectRole.NONE)
+                    .toCompletableFuture()
+                    .join();
 
             peer.connectPeer(localEndpoint, localRid);
             long deadline = System.nanoTime() + Duration.ofSeconds(2).toNanos();

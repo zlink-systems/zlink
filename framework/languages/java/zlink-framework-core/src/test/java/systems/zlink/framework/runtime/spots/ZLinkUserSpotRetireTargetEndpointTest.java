@@ -1008,7 +1008,11 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
         }
 
         @Override
-        public void publishActor(Object prepared) {
+        public void publishActor(
+                Object preparedSpot,
+                Object prepared,
+                String targetSpotId,
+                Long targetOwnerGeneration) {
             operations.add("publish-actor");
             live.add((String) prepared);
         }

@@ -18,12 +18,128 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicInteger;
 
 final class ZLinkUserSpotAggregateStagingOwnerTest {
+    @Test
+    void relayedActorUsesTheAcceptedJournalLaneAndPreservesTheOperation() {
+        var backend = new FakeBackend();
+        var owner = new ZLinkUserSpotAggregateStagingOwner(backend);
+        var base = request();
+        var request =
+                new ZLinkUserSpotAggregateStagingOwner.Request(
+                        base.spotType(),
+                        base.spotStableType(),
+                        base.spotId(),
+                        base.objectGeneration(),
+                        base.spotState(),
+                        base.restoreSpotSnapshot(),
+                        base.timerEnvelope(),
+                        base.actors(),
+                        Map.of());
+        var staged = owner.stage(request, () -> false).toCompletableFuture().join();
+        byte[] frozen =
+                ZLinkAcceptedJournalTestRecords.actor(
+                        "actor-a",
+                        41,
+                        "RoomView",
+                        Map.of("trace-id", "lane-probe"),
+                        new byte[] {3});
+        byte[] original = frozen.clone();
+        var expected = ZLinkActorAcceptedJournal.decode(frozen);
+        List<String> calls = new ArrayList<>();
+        var replayer =
+                new ZLinkAcceptedJournalReplayer(
+                        record -> {
+                            throw new AssertionError("unexpected Spot dispatch");
+                        },
+                        record -> {
+                            assertEquals(expected.actorId(), record.actorId());
+                            assertEquals(expected.header(), record.header());
+                            assertEquals(expected.operationHigh(), record.operationHigh());
+                            assertEquals(expected.operationLow(), record.operationLow());
+                            assertEquals(expected.replyRouteId(), record.replyRouteId());
+                            assertEquals(expected.sourceSessionRid(), record.sourceSessionRid());
+                            assertEquals(
+                                    expected.sourceBindingGeneration(),
+                                    record.sourceBindingGeneration());
+                            assertEquals(
+                                    expected.sourceSessionSequence(),
+                                    record.sourceSessionSequence());
+                            assertArrayEquals(expected.payload(), record.payload());
+                            calls.add("dispatch");
+                            return CompletableFuture.completedFuture(Optional.of(new byte[] {9}));
+                        },
+                        new ZLinkAcceptedJournalReplayer.ReplyRelay() {
+                            @Override
+                            public CompletionStage<Void> completeSpot(
+                                    ZLinkSpotAcceptedJournal.Record record,
+                                    long sequence,
+                                    List<byte[]> reply) {
+                                throw new AssertionError("unexpected Spot reply");
+                            }
+
+                            @Override
+                            public CompletionStage<Void> completeActor(
+                                    ZLinkActorAcceptedJournal.Record record,
+                                    long sequence,
+                                    Optional<byte[]> reply) {
+                                assertEquals(1, sequence);
+                                assertEquals(41L, record.replyRouteId().orElseThrow());
+                                assertArrayEquals(new byte[] {9}, reply.orElseThrow());
+                                calls.add("reply");
+                                return CompletableFuture.completedFuture(null);
+                            }
+                        });
+        owner.stageRelayedRecord(staged, "actor-a", true, frozen).toCompletableFuture().join();
+
+        owner.publishAndReplay(staged, request, replayer).toCompletableFuture().join();
+
+        assertEquals(List.of("dispatch", "reply"), calls);
+        assertArrayEquals(original, frozen);
+        assertTrue(pending(staged).isEmpty());
+    }
+
+    @Test
+    void temporaryActorWhoseIdIsSpotStillUsesActorDispatch() {
+        var backend = new FakeBackend();
+        var owner = new ZLinkUserSpotAggregateStagingOwner(backend);
+        var base = request();
+        var request =
+                new ZLinkUserSpotAggregateStagingOwner.Request(
+                        base.spotType(),
+                        base.spotStableType(),
+                        base.spotId(),
+                        base.objectGeneration(),
+                        base.spotState(),
+                        base.restoreSpotSnapshot(),
+                        base.timerEnvelope(),
+                        List.of(actor("spot")),
+                        Map.of());
+        var staged = owner.stage(request, () -> false).toCompletableFuture().join();
+        byte[] frozen =
+                ZLinkAcceptedJournalTestRecords.actor(
+                        "spot", 41, "RoomView", Map.of(), new byte[] {3});
+        assertTrue(
+                owner.acceptActorIngress(staged, "spot", frozen, null, failure -> fail(failure)));
+
+        owner.publishAndReplay(
+                        staged,
+                        request,
+                        (lane, record) -> {
+                            throw new AssertionError("unexpected saved work");
+                        })
+                .toCompletableFuture()
+                .join();
+
+        assertEquals(1, backend.operations.stream().filter("replay:actor:spot"::equals).count());
+        assertTrue(pending(staged).isEmpty());
+    }
+
     @Test
     void successfulDiscardCompletesHeldIngressObligations() {
         var owner = new ZLinkUserSpotAggregateStagingOwner(new FakeBackend());
@@ -486,6 +602,17 @@ final class ZLinkUserSpotAggregateStagingOwnerTest {
         }
 
         @Override
+        public CompletionStage<Optional<byte[]>> replayActor(
+                Object preparedSpot,
+                Object preparedActor,
+                ZLinkActorAcceptedJournal.Record record) {
+            assertEquals(preparedActor, record.actorId());
+            assertArrayEquals(new byte[] {3}, record.payload());
+            operations.add("replay:actor:" + record.actorId());
+            return CompletableFuture.completedFuture(Optional.empty());
+        }
+
+        @Override
         public CompletionStage<Object> prepareSpot(
                 ZLinkUserSpotAggregateStagingOwner.Request request) {
             operations.add("prepare:spot");
@@ -540,16 +667,21 @@ final class ZLinkUserSpotAggregateStagingOwnerTest {
         }
 
         @Override
-        public void publishActor(Object value) {
-            live.add((String) value);
-            operations.add("publish:" + value);
-        }
-
-        @Override
-        public void publishActor(Object value, String targetSpotId, long targetOwnerGeneration) {
+        public void publishActor(
+                Object preparedSpot,
+                Object value,
+                String targetSpotId,
+                Long targetOwnerGeneration) {
             live.add((String) value);
             operations.add(
-                    "publish-target:" + value + ":" + targetSpotId + ":" + targetOwnerGeneration);
+                    targetOwnerGeneration == null
+                            ? "publish:" + value
+                            : "publish-target:"
+                                    + value
+                                    + ":"
+                                    + targetSpotId
+                                    + ":"
+                                    + targetOwnerGeneration);
         }
 
         @Override
@@ -622,7 +754,11 @@ final class ZLinkUserSpotAggregateStagingOwnerTest {
         }
 
         @Override
-        public void publishActor(Object value) {}
+        public void publishActor(
+                Object preparedSpot,
+                Object value,
+                String targetSpotId,
+                Long targetOwnerGeneration) {}
 
         @Override
         public void completeActor(Object value) {}

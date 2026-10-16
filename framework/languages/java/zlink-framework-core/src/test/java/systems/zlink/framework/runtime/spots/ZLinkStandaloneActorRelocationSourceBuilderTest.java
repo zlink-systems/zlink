@@ -688,7 +688,11 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
                     }
 
                     @Override
-                    public void publishActor(Object actor) {
+                    public void publishActor(
+                            Object preparedSpot,
+                            Object actor,
+                            String targetSpotId,
+                            Long targetOwnerGeneration) {
                         throw unused();
                     }
 
@@ -743,9 +747,15 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
                             return switch (method.getName()) {
                                 case "observePeerRoute" ->
                                         new ZLinkInternalMeshNode.PeerRouteObservation(1, true);
-                                case "targetLifecycleEnded" -> false;
-                                case "onStateChanged" -> {
-                                    ((Runnable) arguments[0]).run();
+                                case "onStateChanged", "onPeerStateChanged" -> {
+                                    ((Runnable)
+                                                    arguments[
+                                                            method.getName()
+                                                                            .equals(
+                                                                                    "onStateChanged")
+                                                                    ? 0
+                                                                    : 1])
+                                            .run();
                                     yield (AutoCloseable) () -> {};
                                 }
                                 case "status" -> status;

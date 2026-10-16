@@ -146,17 +146,17 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
                 endpoint, expectedRoutingId, expectedLifecycleGeneration, expectedSecurityIdentity);
     }
 
-    default void observePeerAdmissionExpectation(
+    default CompletionStage<Void> observePeerAdmissionExpectation(
             RoutingId peerRid,
             String endpoint,
             long lifecycleGeneration,
             String securityIdentity,
             ZLinkMeshNodeObjectRole objectRole) {
-        // Optional for alternate backends without descriptor admission.
+        return CompletableFuture.completedFuture(null);
     }
 
-    default void forgetPeerAdmissionExpectation(RoutingId peerRid) {
-        // Optional for alternate backends without descriptor admission.
+    default CompletionStage<Void> forgetPeerAdmissionExpectation(RoutingId peerRid) {
+        return CompletableFuture.completedFuture(null);
     }
 
     default void removePeerConnection(long connectionIntentId) {
@@ -200,10 +200,6 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
 
     default PeerRouteObservation observePeerRoute(RoutingId peerRid) {
         return new PeerRouteObservation(0, false);
-    }
-
-    default boolean targetLifecycleEnded(RoutingId peerRid) {
-        return false;
     }
 
     /** Returns peers that currently satisfy this backend's ready predicate. */
@@ -271,6 +267,11 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
     /** Reports an initial signal and later changes outside the source's state lane. */
     default AutoCloseable onStateChanged(Runnable listener) {
         throw new UnsupportedOperationException("MeshNode state notifications are not available");
+    }
+
+    default AutoCloseable onPeerStateChanged(
+            RoutingId target, Runnable routeChanged, Runnable lifecycleEnded) {
+        return onStateChanged(routeChanged);
     }
 
     default CompletionStage<Void> preparePeerConnectionAsync(

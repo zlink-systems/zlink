@@ -474,7 +474,11 @@ final class ZLinkActorJoinPrewarmIngressTest {
                     }
 
                     @Override
-                    public void publishActor(Object actor) {
+                    public void publishActor(
+                            Object preparedSpot,
+                            Object actor,
+                            String targetSpotId,
+                            Long targetOwnerGeneration) {
                         throw new AssertionError("unused");
                     }
 

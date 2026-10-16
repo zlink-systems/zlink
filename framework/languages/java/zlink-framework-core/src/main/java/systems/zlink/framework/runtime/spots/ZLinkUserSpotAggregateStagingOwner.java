@@ -263,11 +263,8 @@ final class ZLinkUserSpotAggregateStagingOwner {
             Object actor = staged.actors.get(index);
             String actorId = backlog.finalRequest.actors().get(index).actorId();
             Long ownerGeneration = actorOwnerGenerations.get(actorId);
-            if (ownerGeneration == null) {
-                backend.publishActor(actor);
-            } else {
-                backend.publishActor(actor, backlog.finalRequest.spotId(), ownerGeneration);
-            }
+            backend.publishActor(
+                    staged.spot, actor, backlog.finalRequest.spotId(), ownerGeneration);
         }
         return backend.publishSpot(staged.spot)
                 .thenRun(
@@ -308,17 +305,21 @@ final class ZLinkUserSpotAggregateStagingOwner {
                     if (staged.ingressClosed) {
                         return false;
                     }
+                    PendingIngress ingress =
+                            new PendingIngress(
+                                    staged.request.spotId(),
+                                    false,
+                                    acceptedJournalRecord,
+                                    reply,
+                                    failure);
                     assert staged.debugProbe.expect(
-                                    "temporary:spot:" + staged.pendingIngress.size(),
+                                    "temporary:"
+                                            + ingress.laneId()
+                                            + ":"
+                                            + staged.pendingIngress.size(),
                                     "aggregate staging owner")
                             != null;
-                    staged.pendingIngress.add(
-                            new PendingIngress(
-                                    "spot",
-                                    Objects.requireNonNull(
-                                            acceptedJournalRecord, "acceptedJournalRecord"),
-                                    reply,
-                                    failure));
+                    staged.pendingIngress.add(ingress);
                     return true;
                 });
     }
@@ -340,17 +341,17 @@ final class ZLinkUserSpotAggregateStagingOwner {
                     if (staged.ingressClosed) {
                         return false;
                     }
+                    PendingIngress ingress =
+                            new PendingIngress(
+                                    actorId, true, acceptedJournalRecord, reply, failure);
                     assert staged.debugProbe.expect(
-                                    "temporary:" + actorId + ":" + staged.pendingIngress.size(),
+                                    "temporary:"
+                                            + ingress.laneId()
+                                            + ":"
+                                            + staged.pendingIngress.size(),
                                     "aggregate staging owner")
                             != null;
-                    staged.pendingIngress.add(
-                            new PendingIngress(
-                                    actorId,
-                                    Objects.requireNonNull(
-                                            acceptedJournalRecord, "acceptedJournalRecord"),
-                                    reply,
-                                    failure));
+                    staged.pendingIngress.add(ingress);
                     return true;
                 });
     }
@@ -373,19 +374,16 @@ final class ZLinkUserSpotAggregateStagingOwner {
                                 return new IllegalStateException(
                                         "aggregate staging ingress is closed");
                             }
+                            PendingIngress ingress =
+                                    new PendingIngress(objectId, actor, frozenRecord, null, null);
                             assert staged.debugProbe.expect(
                                             "relayed:"
-                                                    + (actor ? objectId : "spot")
+                                                    + ingress.laneId()
                                                     + ":"
                                                     + staged.relayedIngress.size(),
                                             "aggregate staging owner")
                                     != null;
-                            staged.relayedIngress.add(
-                                    new PendingIngress(
-                                            actor ? objectId : "spot",
-                                            Objects.requireNonNull(frozenRecord, "frozenRecord"),
-                                            null,
-                                            null));
+                            staged.relayedIngress.add(ingress);
                             return null;
                         });
         if (closed != null) {
@@ -799,17 +797,11 @@ final class ZLinkUserSpotAggregateStagingOwner {
 
         CompletionStage<Void> publishSpot(Object preparedSpot);
 
-        void publishActor(Object preparedActor);
-
-        /**
-         * Publishes a relocated Actor and installs its target Spot route and authority fence when
-         * the target owner generation is available. Test and non-relocation backends may retain the
-         * legacy publication behavior.
-         */
-        default void publishActor(
-                Object preparedActor, String targetSpotId, long targetOwnerGeneration) {
-            publishActor(preparedActor);
-        }
+        void publishActor(
+                Object preparedSpot,
+                Object preparedActor,
+                String targetSpotId,
+                Long targetOwnerGeneration);
 
         void completeActor(Object preparedActor);
 
@@ -1113,17 +1105,23 @@ final class ZLinkUserSpotAggregateStagingOwner {
         }
 
         @Override
-        public void publishActor(Object value) {
-            actors.publishPreparedTransferredActor(
-                    (ZLinkActorRuntime.PreparedTransferredActor) value);
-        }
-
-        @Override
-        public void publishActor(Object value, String targetSpotId, long targetOwnerGeneration) {
-            actors.publishPreparedTransferredActor(
-                    (ZLinkActorRuntime.PreparedTransferredActor) value,
-                    targetSpotId,
-                    targetOwnerGeneration);
+        public void publishActor(
+                Object preparedSpot,
+                Object value,
+                String targetSpotId,
+                Long targetOwnerGeneration) {
+            var prepared = (ZLinkActorRuntime.PreparedTransferredActor) value;
+            if (targetOwnerGeneration == null) {
+                actors.publishPreparedTransferredActor(prepared);
+            } else {
+                actors.publishPreparedTransferredActor(
+                        prepared,
+                        targetSpotId,
+                        targetOwnerGeneration,
+                        (ZLinkSpot<?>)
+                                spots.preparedSpot(
+                                        (ZLinkSpotLifecycle.PreparedUserSpot) preparedSpot));
+            }
         }
 
         @Override
@@ -1182,6 +1180,15 @@ final class ZLinkUserSpotAggregateStagingOwner {
             byte[] record,
             Consumer<List<Message>> reply,
             Consumer<Throwable> failure) {
+        private PendingIngress(
+                String objectId,
+                boolean actor,
+                byte[] record,
+                Consumer<List<Message>> reply,
+                Consumer<Throwable> failure) {
+            this(actor ? "actor:" + objectId : "spot", record, reply, failure);
+        }
+
         private PendingIngress {
             Objects.requireNonNull(laneId, "laneId");
             record = Objects.requireNonNull(record, "record").clone();

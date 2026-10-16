@@ -165,7 +165,6 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> {
             CompletableFuture<Void> requestAdmission) {
         return host.dispatchLocalActorPacket(
                 context,
-                spotSurface,
                 actor,
                 packetHeader,
                 read.headerPart(),

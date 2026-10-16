@@ -632,9 +632,15 @@ final class ZLinkCanonicalRelocationReadySubmissionTest {
                                 switch (method.getName()) {
                                     case "observePeerRoute" ->
                                             new ZLinkInternalMeshNode.PeerRouteObservation(1, true);
-                                    case "targetLifecycleEnded" -> false;
-                                    case "onStateChanged" -> {
-                                        ((Runnable) args[0]).run();
+                                    case "onStateChanged", "onPeerStateChanged" -> {
+                                        ((Runnable)
+                                                        args[
+                                                                method.getName()
+                                                                                .equals(
+                                                                                        "onPeerStateChanged")
+                                                                        ? 1
+                                                                        : 0])
+                                                .run();
                                         yield (AutoCloseable) () -> {};
                                     }
                                     case "status" -> status;
@@ -700,9 +706,15 @@ final class ZLinkCanonicalRelocationReadySubmissionTest {
                                 switch (method.getName()) {
                                     case "observePeerRoute" ->
                                             new ZLinkInternalMeshNode.PeerRouteObservation(1, true);
-                                    case "targetLifecycleEnded" -> false;
-                                    case "onStateChanged" -> {
-                                        ((Runnable) args[0]).run();
+                                    case "onStateChanged", "onPeerStateChanged" -> {
+                                        ((Runnable)
+                                                        args[
+                                                                method.getName()
+                                                                                .equals(
+                                                                                        "onPeerStateChanged")
+                                                                        ? 1
+                                                                        : 0])
+                                                .run();
                                         yield (AutoCloseable) () -> {};
                                     }
                                     case "status" -> status;
