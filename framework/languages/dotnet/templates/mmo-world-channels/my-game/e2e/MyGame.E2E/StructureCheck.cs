@@ -6,6 +6,23 @@ namespace MyGame.E2E;
 
 internal static class StructureCheck
 {
+    private static readonly (
+        string From,
+        string To,
+        string Label,
+        string? Semantic
+    )[] RequiredEdges =
+    [
+        ("players", "accounts", "HTTP", null),
+        ("players", "sessionA", "STREAM", null),
+        ("players", "sessionB", "STREAM", null),
+        ("sessionA", "channelA1", "relay", null),
+        ("sessionB", "channelB", "relay", null),
+        ("channelA1", "channelA2", "relocation", null),
+        ("channelA2", "dbA", "game data", null),
+        ("channelB", "dbB", "game data", null),
+    ];
+
     private static void Require(bool condition, string message)
     {
         if (!condition)
@@ -254,7 +271,18 @@ internal static class StructureCheck
                 "Zone capacity is below bootstrap count."
             );
         }
-        foreach (var edge in Array(document, "edges"))
+        var edges = Array(document, "edges");
+        foreach (var required in RequiredEdges)
+            Require(
+                edges.Any(edge =>
+                    Text(edge, "from") == required.From
+                    && Text(edge, "to") == required.To
+                    && Text(edge, "label") == required.Label
+                    && edge?["semantic"]?.GetValue<string>() == required.Semantic
+                ),
+                $"Missing required edge: {required.From} -> {required.To} ({required.Label})."
+            );
+        foreach (var edge in edges)
         {
             Require(
                 ids.Contains(Text(edge, "from")) && ids.Contains(Text(edge, "to")),

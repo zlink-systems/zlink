@@ -5,6 +5,21 @@ namespace MyGame.E2E;
 
 internal static class StructureCheck
 {
+    private static readonly (
+        string From,
+        string To,
+        string Label,
+        string? Semantic
+    )[] RequiredEdges =
+    [
+        ("players", "session", "STREAM", null),
+        ("session", "fieldA", "relay", null),
+        ("fieldA", "fieldB", "relocation", null),
+        ("fieldB", "fieldA", "border pub/sub", "border-updates"),
+        ("fieldB", "instanceA", "GetOrCreate", null),
+        ("fieldB", "location", "Location / lease", "location-authority"),
+    ];
+
     private static readonly string[] CommandShells = ["sh", "powershell"];
 
     private static void Require(bool condition, string message)
@@ -243,7 +258,18 @@ internal static class StructureCheck
                 "Field logical IDs differ from owning configuration."
             );
         }
-        foreach (var edge in Array(document, "edges"))
+        var edges = Array(document, "edges");
+        foreach (var required in RequiredEdges)
+            Require(
+                edges.Any(edge =>
+                    Text(edge, "from") == required.From
+                    && Text(edge, "to") == required.To
+                    && Text(edge, "label") == required.Label
+                    && edge?["semantic"]?.GetValue<string>() == required.Semantic
+                ),
+                $"Missing required edge: {required.From} -> {required.To} ({required.Label})."
+            );
+        foreach (var edge in edges)
         {
             Require(
                 ids.Contains(Text(edge, "from")) && ids.Contains(Text(edge, "to")),
