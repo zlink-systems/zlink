@@ -90,8 +90,7 @@ public final class Nodes implements AutoCloseable {
                                             && !declared.zoneIds()
                                                     .contains(Rules.zoneId(Control.REPLACEMENT_X))
                                     ? Rules.ZONE_COUNT - 1
-                                    : declared.zoneCapacity(),
-                            declared.bootstrap());
+                                    : declared.zoneCapacity());
             var path = logs.resolve(id + ".json");
             Json.MAPPER.writeValue(path.toFile(), config);
             configs.put(id, path);
@@ -119,19 +118,6 @@ public final class Nodes implements AutoCloseable {
 
     void replace(String id) throws Exception {
         nodes.get(id).stop();
-        var path = configs.get(id);
-        var config = Json.MAPPER.readValue(path.toFile(), NodeConfig.class);
-        Json.MAPPER.writeValue(
-                path.toFile(),
-                new NodeConfig(
-                        config.id(),
-                        config.redisEndpoint(),
-                        config.keyPrefix(),
-                        config.meshEndpoint(),
-                        config.streamEndpoint(),
-                        config.zoneIds(),
-                        config.zoneCapacity(),
-                        false));
         startNode(id);
     }
 

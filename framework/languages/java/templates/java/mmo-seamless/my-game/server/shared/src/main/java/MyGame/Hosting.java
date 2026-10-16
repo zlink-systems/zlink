@@ -87,19 +87,17 @@ public final class Hosting {
                             });
             try {
                 ready.get(Control.HOST_DEADLINE.toSeconds(), TimeUnit.SECONDS);
-                if (config.bootstrap()) {
-                    var spots = app.getBean(ZLinkSpotManager.class);
-                    for (var zoneId : config.zoneIds()) {
-                        var created =
-                                spots.getOrCreate(zoneId, Names.ZONE)
-                                        .inMesh(Names.MESH)
-                                        .submit()
-                                        .toCompletableFuture()
-                                        .join();
-                        if (created.state() == ZLinkSpotCreateState.REJECTED)
-                            throw new IllegalStateException(
-                                    "Zone bootstrap rejected: " + zoneId + " " + created);
-                    }
+                var spots = app.getBean(ZLinkSpotManager.class);
+                for (var zoneId : config.zoneIds()) {
+                    var created =
+                            spots.getOrCreate(zoneId, Names.ZONE)
+                                    .inMesh(Names.MESH)
+                                    .submit()
+                                    .toCompletableFuture()
+                                    .join();
+                    if (created.state() == ZLinkSpotCreateState.REJECTED)
+                        throw new IllegalStateException(
+                                "Zone bootstrap rejected: " + zoneId + " " + created);
                 }
                 var endpoints = new LinkedHashMap<String, Object>();
                 endpoints.put("id", config.id());
@@ -118,7 +116,6 @@ public final class Hosting {
                 for (String command; (command = input.readLine()) != null; ) {
                     switch (command) {
                         case Control.VACATE_ZONE -> {
-                            var spots = app.getBean(ZLinkSpotManager.class);
                             var spot =
                                     spots.find(Rules.zoneId(Control.REPLACEMENT_X))
                                             .toCompletableFuture()

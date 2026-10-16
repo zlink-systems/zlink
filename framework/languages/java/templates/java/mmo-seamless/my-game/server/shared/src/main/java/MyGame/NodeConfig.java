@@ -7,5 +7,4 @@ public record NodeConfig(
         String meshEndpoint,
         String streamEndpoint,
         java.util.List<String> zoneIds,
-        int zoneCapacity,
-        boolean bootstrap) {}
+        int zoneCapacity) {}
