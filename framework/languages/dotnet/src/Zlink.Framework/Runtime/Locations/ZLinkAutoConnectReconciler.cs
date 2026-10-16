@@ -53,7 +53,10 @@ internal sealed class ZLinkAutoConnectReconciler
     private readonly bool _retainRemovedMembers;
     private ulong _localGeneration;
     private ulong _localRevision;
-    private bool _localPublished;
+
+    // Status of the last local descriptor write; null until the current
+    // local row is written. Stored means the row is published.
+    private ZLinkLocationWriteStatus? _localWriteStatus;
     private bool _storeFailed;
     private long? _storeFailureStartedAt;
     private long _recoveryDeferUntil;
@@ -101,7 +104,7 @@ internal sealed class ZLinkAutoConnectReconciler
         _options = options;
         _time = timeProvider ?? TimeProvider.System;
         _retainRemovedMembers = retainRemovedMembers;
-        _localPublished = initiallyPublished;
+        _localWriteStatus = initiallyPublished ? ZLinkLocationWriteStatus.Stored : null;
         _localGeneration = initialStoreGeneration;
     }
 
@@ -133,6 +136,10 @@ internal sealed class ZLinkAutoConnectReconciler
     /// <summary>True while the last tick could not read the store. The loop
     /// must not let a change stamp skip ticks in this state.</summary>
     internal bool StoreFailed => RunState(() => _storeFailed);
+
+    /// <summary>Status of the last local descriptor write, or null when the
+    /// current local row has not been written.</summary>
+    internal ZLinkLocationWriteStatus? LocalWriteStatus => RunState(() => _localWriteStatus);
 
     internal void SetLocalWeight(uint weight) => Volatile.Write(ref _pendingLocalWeight, weight);
 
@@ -265,6 +272,7 @@ internal sealed class ZLinkAutoConnectReconciler
                     {
                         DescriptorRevision = ++_localRevision,
                     };
+                    _localWriteStatus = null;
                     return (Continue: true, NoLocalRow: false);
                 })
                 .ConfigureAwait(false);
@@ -274,23 +282,8 @@ internal sealed class ZLinkAutoConnectReconciler
                 return true;
 
             await PublishLocalAsync(cancellationToken).ConfigureAwait(false);
-            var row = await _lane
-                .RunAsync(() => _localPublished && _localGeneration != 0 ? _localRow : null)
-                .ConfigureAwait(false);
-            if (row is null)
-                return false;
-
-            var result = await _runtime
-                .WriteDescriptorAsync(row, ZLinkLocationWriteIntent.Renew, cancellationToken)
-                .ConfigureAwait(false);
             return await _lane
-                .RunAsync(() =>
-                {
-                    _localPublished = result.Status == ZLinkLocationWriteStatus.Stored;
-                    if (_localPublished)
-                        _localGeneration = result.Generation;
-                    return _localPublished;
-                })
+                .RunAsync(() => _localWriteStatus == ZLinkLocationWriteStatus.Stored)
                 .ConfigureAwait(false);
         }
         finally
@@ -368,7 +361,7 @@ internal sealed class ZLinkAutoConnectReconciler
                     {
                         DescriptorRevision = ++_localRevision,
                     };
-                    _localPublished = false;
+                    _localWriteStatus = null;
                 }
                 if (_localRow is { } channelRow)
                 {
@@ -384,7 +377,7 @@ internal sealed class ZLinkAutoConnectReconciler
                         {
                             DescriptorRevision = ++_localRevision,
                         };
-                        _localPublished = false;
+                        _localWriteStatus = null;
                     }
                 }
                 var pendingPlacementWeight = Volatile.Read(ref _pendingPlacementWeight);
@@ -399,7 +392,7 @@ internal sealed class ZLinkAutoConnectReconciler
                         PlacementWeight = checked((int)pendingPlacementWeight),
                         DescriptorRevision = ++_localRevision,
                     };
-                    _localPublished = false;
+                    _localWriteStatus = null;
                 }
                 var pendingActivationConcurrency = Volatile.Read(ref _pendingActivationConcurrency);
                 if (
@@ -733,7 +726,7 @@ internal sealed class ZLinkAutoConnectReconciler
     {
         _storeFailureStartedAt ??= _time.GetTimestamp();
         _storeFailed = true;
-        _localPublished = false;
+        _localWriteStatus = null;
         RetryPendingTargetsWithinStoreFailureGrace();
     }
 
@@ -846,7 +839,7 @@ internal sealed class ZLinkAutoConnectReconciler
             await _lane
                 .RunAsync(() =>
                 {
-                    _localPublished = false;
+                    _localWriteStatus = null;
                     _localGeneration = 0;
                 })
                 .ConfigureAwait(false);
@@ -866,7 +859,10 @@ internal sealed class ZLinkAutoConnectReconciler
         var local = await _lane
             .RunAsync(() =>
             {
-                if (_localRow is not { } row || _localPublished)
+                if (
+                    _localRow is not { } row
+                    || _localWriteStatus == ZLinkLocationWriteStatus.Stored
+                )
                     return ((ZLinkMeshNodeDescriptor Row, ulong Generation)?)null;
                 return (Row: row, Generation: _localGeneration);
             })
@@ -883,9 +879,7 @@ internal sealed class ZLinkAutoConnectReconciler
                     cancellationToken
                 )
                 .ConfigureAwait(false);
-            await _lane
-                .RunAsync(() => _localPublished = renewed.Status == ZLinkLocationWriteStatus.Stored)
-                .ConfigureAwait(false);
+            await _lane.RunAsync(() => _localWriteStatus = renewed.Status).ConfigureAwait(false);
             return;
         }
 
@@ -904,12 +898,13 @@ internal sealed class ZLinkAutoConnectReconciler
                 .RunAsync(() =>
                 {
                     _localGeneration = claim.Generation;
-                    _localPublished = true;
+                    _localWriteStatus = claim.Status;
                 })
                 .ConfigureAwait(false);
             return;
         }
 
+        await _lane.RunAsync(() => _localWriteStatus = claim.Status).ConfigureAwait(false);
         if (claim.Status == ZLinkLocationWriteStatus.RejectedConflict)
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.AlreadyExists,

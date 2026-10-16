@@ -94,10 +94,11 @@ final class DefaultInstanceSpotContext implements ZLinkInstanceSpotContext, Spot
 
     void closeRegistration(Class<?> spotType) {
         handlers.closeRegistration(
-                configured ->
+                (configured, subscriptions) ->
                         handlerLoader.load(
                                 spotType,
                                 configured,
+                                subscriptions,
                                 (name, period, handlerType, options) ->
                                         timers.add(name, period, handlerType, options)));
     }
@@ -300,12 +301,21 @@ final class DefaultInstanceSpotContext implements ZLinkInstanceSpotContext, Spot
     @Override
     public CompletionStage<Void> enqueueActorDispatch(
             String actorId,
+            long payloadBytes,
+            Supplier<CompletionStage<Void>> operation,
+            CompletableFuture<Void> admission) {
+        return enqueueActorDispatch(actorId, operation);
+    }
+
+    @Override
+    public CompletionStage<Void> enqueueActorDispatch(
+            String actorId,
             Supplier<byte[]> acceptedJournalRecord,
             long acceptedJournalRecordSizeHint,
             Supplier<CompletionStage<Void>> operation,
-            Runnable relocationRelease) {
-        return CompletableFuture.failedFuture(
-                new IllegalStateException("Instance Spot does not own Actor dispatch"));
+            Runnable relocationRelease,
+            CompletableFuture<Void> admission) {
+        return enqueueActorDispatch(actorId, operation);
     }
 
     @Override

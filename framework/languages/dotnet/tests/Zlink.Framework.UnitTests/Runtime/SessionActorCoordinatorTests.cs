@@ -1,6 +1,7 @@
 using System.Diagnostics.Metrics;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Systems.Zlink.Framework.Runtime.Protocol;
 using Systems.Zlink.Stream.Connector.Contracts;
 using Zlink.Framework.Contracts.Messaging;
 using Zlink.Framework.LocationProvider;
@@ -13,6 +14,450 @@ namespace Zlink.Framework.UnitTests;
 
 public sealed class SessionActorCoordinatorTests
 {
+    [Fact]
+    public async Task Closed_binding_seal_returns_bindingAbsent_after_disconnect_barrier()
+    {
+        var runtime = CreateRuntime();
+        var context = CreateSessionContext(runtime, "closed-seal");
+        var actor = new ActorRef("actor-closed-seal", 1, "actors", RoutingId.From("actor-node"));
+        var bound = Assert.IsType<ZLinkSessionActor>(
+            await context.ActorCoordinator.BindOrGetActorAsync(
+                context,
+                actor,
+                CancellationToken.None
+            )
+        );
+        Assert.True(runtime.TryGetSessionActorBinding(actor.ActorId, context, out var binding));
+        var seal = ZLinkSessionRelocationWire.CreateSeal(
+            actor.ActorId,
+            actor.NodeRid,
+            new ZLinkRemoteActorBoundSessionRoute(
+                binding.SessionOwnerNodeRid,
+                context.RoutingId!.Value,
+                bound.BindingToken,
+                binding.BindingGeneration,
+                binding.ObjectGeneration,
+                binding.AuthorityOwnerGeneration,
+                binding.MeshName,
+                binding.TargetNodeGeneration,
+                binding.OwnerLeaseGeneration,
+                binding.SessionOwnerNodeGeneration,
+                0,
+                binding.SessionOwnerId,
+                binding.SessionOwnerLeaseGeneration
+            ),
+            ZLinkSessionRelocationContext.Create(
+                Guid.NewGuid(),
+                "source",
+                1,
+                actor.NodeRid,
+                1,
+                "v1"
+            )
+        );
+        var closed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var disconnect = Task.Run(async () =>
+        {
+            runtime.UnbindSessionActor(actor.ActorId, context, bound.BindingToken);
+            closed.SetResult();
+            await release.Task;
+        });
+        try
+        {
+            await closed.Task;
+            var response = await runtime.SealCanonicalSessionActorRouteAsync(
+                seal,
+                CancellationToken.None
+            );
+            var bytes = ZLinkServiceWireCodec.EncodeSessionRelocationSealed(response!.Value);
+            Assert.Equal(
+                ServiceWirePilotCodec.SessionSealResult.BindingAbsent,
+                ServiceWirePilotCodec.DecodeSessionRelocationSealed43(bytes).SealResult
+            );
+        }
+        finally
+        {
+            release.TrySetResult();
+            await disconnect;
+        }
+    }
+
+    [Fact]
+    public async Task BindingAbsent_records_are_per_participant_expire_and_do_not_route_new_bindings()
+    {
+        var time = new ControllableTimeProvider();
+        var logger = new SessionRouteLoggerFactory();
+        var table = new ZLinkSessionActorBindingTable(
+            TimeSpan.FromSeconds(30),
+            TimeSpan.FromMilliseconds(17),
+            time,
+            logger: logger.CreateLogger("bindingAbsent")
+        );
+        var runtime = CreateRuntime();
+        var context = CreateSessionContext(runtime, "absent-current");
+        var seal = BindingAbsentSeal("absent-actor", context);
+        var absent = (await table.SealCanonicalRouteAsync(seal, CancellationToken.None))!.Value;
+        Assert.Equal(ServiceWirePilotCodec.SessionSealResult.BindingAbsent, absent.SealResult);
+        Assert.Equal(0, time.ActiveTimerCount);
+        await Assert.ThrowsAsync<InvalidDataException>(async () =>
+            await table.SealCanonicalRouteAsync(
+                seal with
+                {
+                    Coordinator = seal.Coordinator with { OwnerId = "changed" },
+                },
+                CancellationToken.None
+            )
+        );
+
+        var other = seal with
+        {
+            Actor = seal.Actor with { Actor = seal.Actor.Actor with { ActorId = "other-actor" } },
+        };
+        await BindSealParticipantAsync(table, runtime, other);
+        var otherResult = (
+            await table.SealCanonicalRouteAsync(other, CancellationToken.None)
+        )!.Value;
+        Assert.Equal(ServiceWirePilotCodec.SessionSealResult.Sealed, otherResult.SealResult);
+        Assert.Equal(1, time.ActiveTimerCount);
+        await BindSealParticipantAsync(
+            table,
+            runtime,
+            seal with
+            {
+                Session = seal.Session with { BindingGeneration = 6 },
+            }
+        );
+        Assert.Equal(absent, await table.SealCanonicalRouteAsync(seal, CancellationToken.None));
+        var late = BindingAbsentAbort(seal);
+        Assert.False(await table.RouteCanonicalAsync(late, default));
+        Assert.NotNull(await table.GetBindingAsync("absent-actor", "binding-6"));
+        Assert.NotNull(await table.SealCanonicalRouteAsync(other, CancellationToken.None));
+        Assert.True(await table.RouteCanonicalAsync(BindingAbsentAbort(other), default));
+        Assert.Equal(0, time.ActiveTimerCount);
+
+        time.AdvanceMonotonic(TimeSpan.FromMilliseconds(17));
+        await Assert.ThrowsAsync<InvalidDataException>(async () =>
+            await table.SealCanonicalRouteAsync(seal, CancellationToken.None)
+        );
+        Assert.False(await table.RouteCanonicalAsync(late, default));
+        Assert.Contains(
+            logger.Entries,
+            entry =>
+                entry.Level == LogLevel.Warning
+                && entry.Message.StartsWith("late_session_route_update ", StringComparison.Ordinal)
+        );
+        await table.ResetGenerationAsync();
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Closed_seal_retries_are_ignored_until_next_seal_or_binding_removal(
+        bool commit
+    )
+    {
+        var time = new ControllableTimeProvider();
+        var logger = new SessionRouteLoggerFactory();
+        var table = new ZLinkSessionActorBindingTable(
+            TimeSpan.FromSeconds(30),
+            TimeSpan.FromMilliseconds(17),
+            time,
+            logger: logger.CreateLogger("closed-seal")
+        );
+        var runtime = CreateRuntime();
+        var context = CreateSessionContext(runtime, "closed-current");
+        var seal = BindingAbsentSeal("closed-actor", context);
+        var binding = await BindSealParticipantAsync(table, runtime, seal);
+        var first = await table.SealCanonicalRouteAsync(seal, CancellationToken.None);
+        Assert.Equal(first, await table.SealCanonicalRouteAsync(seal, CancellationToken.None));
+        await Assert.ThrowsAsync<InvalidDataException>(async () =>
+            await table.SealCanonicalRouteAsync(
+                seal with
+                {
+                    Actor = seal.Actor with { OwnerLeaseGeneration = 18 },
+                },
+                CancellationToken.None
+            )
+        );
+        var update = commit
+            ? BindingAbsentAbort(seal) with
+            {
+                SenderRole = 2,
+                Route = ZLinkServiceWireCodec.SessionRelocationRouteUpdateRecord.Commit(
+                    13,
+                    14,
+                    RoutingId.From("new-actor-owner"),
+                    4,
+                    18
+                ),
+            }
+            : BindingAbsentAbort(seal);
+        Assert.True(
+            await table.RouteCanonicalAsync(
+                update,
+                new(RoutingId.From("new-actor-owner"), 4, "actors", 14, 18)
+            )
+        );
+        Assert.Null(await table.SealCanonicalRouteAsync(seal, CancellationToken.None));
+        await Assert.ThrowsAsync<InvalidDataException>(async () =>
+            await table.SealCanonicalRouteAsync(
+                seal with
+                {
+                    Session = seal.Session with { BindingGeneration = 6 },
+                },
+                CancellationToken.None
+            )
+        );
+        Assert.Contains(
+            logger.Entries,
+            entry =>
+                entry.Level == LogLevel.Warning
+                && entry.Message.StartsWith(
+                    "late_session_relocation_seal ",
+                    StringComparison.Ordinal
+                )
+        );
+        Assert.Equal(0, time.ActiveTimerCount);
+        var next = seal with
+        {
+            RelocationId = new(2, 3),
+            Actor = seal.Actor with { OwnerLeaseGeneration = commit ? 18UL : 17UL },
+        };
+        if (commit)
+            await Assert.ThrowsAsync<InvalidDataException>(async () =>
+                await table.SealCanonicalRouteAsync(
+                    next with
+                    {
+                        Actor = seal.Actor,
+                    },
+                    CancellationToken.None
+                )
+            );
+        Assert.NotNull(await table.SealCanonicalRouteAsync(next, CancellationToken.None));
+        Assert.False(await table.RouteCanonicalAsync(BindingAbsentAbort(seal), default));
+        Assert.True(await table.RouteCanonicalAsync(BindingAbsentAbort(next), default));
+        await table.UnbindAsync("closed-actor", binding.Context, binding.BindingToken);
+        var absent = (await table.SealCanonicalRouteAsync(next, CancellationToken.None))!.Value;
+        Assert.Equal(ServiceWirePilotCodec.SessionSealResult.BindingAbsent, absent.SealResult);
+        await table.ResetGenerationAsync();
+    }
+
+    [Fact]
+    public async Task Seal_rejects_rebound_session_anywhere_on_owner_and_stale_owner_lease()
+    {
+        var time = new ControllableTimeProvider();
+        var table = new ZLinkSessionActorBindingTable(
+            TimeSpan.FromSeconds(30),
+            TimeSpan.FromMilliseconds(17),
+            time
+        );
+        var runtime = CreateRuntime();
+        var context = CreateSessionContext(runtime, "old-session");
+        var seal = BindingAbsentSeal("rebound-actor", context);
+        var old = await BindSealParticipantAsync(table, runtime, seal);
+        await table.UnbindAsync("rebound-actor", old.Context, old.BindingToken);
+        await BindSealParticipantAsync(
+            table,
+            runtime,
+            seal with
+            {
+                Session = seal.Session with
+                {
+                    SessionRid = RoutingId.From("new-session"),
+                    BindingGeneration = 6,
+                },
+            }
+        );
+        await Assert.ThrowsAsync<InvalidDataException>(async () =>
+            await table.SealCanonicalRouteAsync(seal, CancellationToken.None)
+        );
+        var current = seal with
+        {
+            Session = seal.Session with
+            {
+                SessionRid = RoutingId.From("new-session"),
+                BindingGeneration = 6,
+            },
+        };
+        await Assert.ThrowsAsync<InvalidDataException>(async () =>
+            await table.SealCanonicalRouteAsync(
+                current with
+                {
+                    Actor = current.Actor with { OwnerLeaseGeneration = 16 },
+                },
+                CancellationToken.None
+            )
+        );
+        Assert.NotNull(await table.SealCanonicalRouteAsync(current, CancellationToken.None));
+        Assert.True(await table.RouteCanonicalAsync(BindingAbsentAbort(current), default));
+        await table.ResetGenerationAsync();
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Rebind_removes_the_previous_binding_seal_record(bool closed)
+    {
+        var table = new ZLinkSessionActorBindingTable(
+            TimeSpan.FromSeconds(30),
+            TimeSpan.FromMilliseconds(17),
+            new ControllableTimeProvider()
+        );
+        var runtime = CreateRuntime();
+        var seal = BindingAbsentSeal(
+            "rebind-record",
+            CreateSessionContext(runtime, "old-record-session")
+        );
+        await BindSealParticipantAsync(table, runtime, seal);
+        await table.SealCanonicalRouteAsync(seal, CancellationToken.None);
+        if (closed)
+            Assert.True(await table.RouteCanonicalAsync(BindingAbsentAbort(seal), default));
+        await BindSealParticipantAsync(
+            table,
+            runtime,
+            seal with
+            {
+                Session = seal.Session with
+                {
+                    SessionRid = RoutingId.From("replacement-record-session"),
+                    BindingGeneration = 6,
+                },
+            }
+        );
+        await Assert.ThrowsAsync<InvalidDataException>(async () =>
+            await table.SealCanonicalRouteAsync(seal, CancellationToken.None)
+        );
+        await table.ResetGenerationAsync();
+    }
+
+    [Fact]
+    public async Task Duplicate_42_joins_the_same_accepted_frame_drain()
+    {
+        var table = new ZLinkSessionActorBindingTable(
+            TimeSpan.FromSeconds(30),
+            TimeSpan.FromMilliseconds(17),
+            new ControllableTimeProvider()
+        );
+        var runtime = CreateRuntime();
+        var seal = BindingAbsentSeal(
+            "draining-seal",
+            CreateSessionContext(runtime, "draining-seal-session")
+        );
+        var binding = await BindSealParticipantAsync(table, runtime, seal);
+        Assert.True(
+            (await table.AcceptAsync(seal.Actor.Actor.ActorId, binding.BindingToken)).Accepted
+        );
+        var first = table.SealCanonicalRouteAsync(seal, CancellationToken.None).AsTask();
+        var duplicate = table.SealCanonicalRouteAsync(seal, CancellationToken.None).AsTask();
+        try
+        {
+            Assert.False(first.IsCompleted);
+            Assert.False(duplicate.IsCompleted);
+            await Assert.ThrowsAsync<InvalidDataException>(async () =>
+                await table.SealCanonicalRouteAsync(
+                    seal with
+                    {
+                        Session = seal.Session with { SessionOwnerId = "changed" },
+                    },
+                    CancellationToken.None
+                )
+            );
+        }
+        finally
+        {
+            await table.CompleteAcceptedAsync(seal.Actor.Actor.ActorId, binding.BindingToken);
+            await Task.WhenAll(first, duplicate);
+        }
+        Assert.Equal(await first, await duplicate);
+        Assert.True(await table.RouteCanonicalAsync(BindingAbsentAbort(seal), default));
+        await table.ResetGenerationAsync();
+    }
+
+    private static ZLinkServiceWireCodec.SessionRelocationSealRecord BindingAbsentSeal(
+        string actorId,
+        ZLinkSessionContext context
+    ) =>
+        new(
+            new(1, 3),
+            new("source", 17, RoutingId.From("actor-node"), 3, "v1"),
+            1,
+            new(new(actorId, 11), RoutingId.From("actor-node"), 3, 13, 17),
+            new(
+                RoutingId.From("session-owner"),
+                7,
+                "session-owner",
+                11,
+                context.RoutingId!.Value,
+                5
+            )
+        );
+
+    private static ZLinkServiceWireCodec.SessionRelocationRouteRecord BindingAbsentAbort(
+        ZLinkServiceWireCodec.SessionRelocationSealRecord seal
+    ) =>
+        new(
+            seal.RelocationId,
+            seal.Coordinator,
+            1,
+            seal.Actor.Actor,
+            seal.Session,
+            ZLinkServiceWireCodec.SessionRelocationRouteUpdateRecord.Abort(13)
+        );
+
+    private static async Task<ZLinkSessionBindingEntry> BindSealParticipantAsync(
+        ZLinkSessionActorBindingTable table,
+        ZLinkFrameworkRuntime runtime,
+        ZLinkServiceWireCodec.SessionRelocationSealRecord seal
+    )
+    {
+        var context = CreateSessionContext(runtime, new TestStream(seal.Session.SessionRid));
+        var token = "binding-" + seal.Session.BindingGeneration;
+        var route = SessionBindingRoute(seal.Actor.Actor.ActorId, 3);
+        var actor = new ZLinkSessionActor(
+            context,
+            route.Ref.ActorId,
+            seal.Session.SessionRid,
+            token
+        );
+        await table.BindAsync(
+            ZLinkActorId.FromBoundary(route.Ref.ActorId, nameof(seal)),
+            context,
+            token,
+            actor,
+            seal.Session.BindingGeneration,
+            route,
+            seal.Session.SessionOwnerNodeGeneration,
+            seal.Session.SessionOwnerNodeRid,
+            seal.Session.SessionOwnerId,
+            seal.Session.SessionOwnerLeaseGeneration
+        );
+        return (await table.GetBindingAsync(route.Ref.ActorId, token))!;
+    }
+
+    [Fact]
+    public async Task Unbound_Submit_Failure_Does_Not_Fail_Binding_Mutation()
+    {
+        var runtime = CreateRuntime();
+        var stream = new TestStream(RoutingId.From("unbound-submit-failure"));
+        var context = CreateSessionContext(runtime, stream);
+        var actor = new ActorRef("actor-a", 1, "actors", RoutingId.From("actor-node"));
+        var bound = Assert.IsType<ZLinkSessionActor>(
+            await context.ActorCoordinator.BindOrGetActorAsync(
+                context,
+                actor,
+                CancellationToken.None
+            )
+        );
+        stream.AcceptsWrites = false;
+
+        runtime.UnbindSessionActor(actor.ActorId, context, bound.BindingToken);
+
+        Assert.Empty(context.Actors.Bound);
+        Assert.False(runtime.TryGetSessionActorBinding(actor.ActorId, context, out _));
+        Assert.Equal(2, stream.ControlWrites.Count);
+    }
+
     [Fact]
     public async Task Actor_Request_Yields_While_Registry_State_Is_Busy()
     {
@@ -189,7 +634,7 @@ public sealed class SessionActorCoordinatorTests
         Assert.Same(first, dispatch.Actor);
         context.ExitDispatch();
 
-        Assert.True(runtime.TryGetSessionActorBinding(firstRef.ActorId, out var binding));
+        Assert.True(runtime.TryGetSessionActorBinding(firstRef.ActorId, context, out var binding));
         runtime.UnbindSessionActor(firstRef.ActorId, context, binding.BindingToken);
         dispatch = Assert.IsType<ZLinkSessionDispatchContext>(
             context.EnterDispatch(
@@ -325,7 +770,9 @@ public sealed class SessionActorCoordinatorTests
             actor,
             CancellationToken.None
         );
-        Assert.True(runtime.TryGetSessionActorBinding(actor.ActorId, out var firstBinding));
+        Assert.True(
+            runtime.TryGetSessionActorBinding(actor.ActorId, context, out var firstBinding)
+        );
 
         var existing = await context.ActorCoordinator.BindOrGetActorAsync(
             context,
@@ -333,7 +780,9 @@ public sealed class SessionActorCoordinatorTests
             CancellationToken.None
         );
         Assert.Same(first, existing);
-        Assert.True(runtime.TryGetSessionActorBinding(actor.ActorId, out var unchangedBinding));
+        Assert.True(
+            runtime.TryGetSessionActorBinding(actor.ActorId, context, out var unchangedBinding)
+        );
         Assert.Equal(firstBinding.BindingToken, unchangedBinding.BindingToken);
         Assert.Equal(firstBinding.BindingGeneration, unchangedBinding.BindingGeneration);
 
@@ -343,7 +792,9 @@ public sealed class SessionActorCoordinatorTests
             CancellationToken.None
         );
         Assert.Same(first, rebound);
-        Assert.True(runtime.TryGetSessionActorBinding(actor.ActorId, out var reboundBinding));
+        Assert.True(
+            runtime.TryGetSessionActorBinding(actor.ActorId, context, out var reboundBinding)
+        );
         Assert.Equal(firstBinding.BindingToken, reboundBinding.BindingToken);
         Assert.Equal(firstBinding.BindingGeneration, reboundBinding.BindingGeneration);
     }
@@ -368,7 +819,7 @@ public sealed class SessionActorCoordinatorTests
             firstRef,
             CancellationToken.None
         );
-        Assert.True(runtime.TryGetSessionActorBinding("actor-1", out var firstSession));
+        Assert.True(runtime.TryGetSessionActorBinding("actor-1", context, out var firstSession));
         var firstToken = firstSession.BindingToken;
 
         var second = await context.ActorCoordinator.BindOrGetActorAsync(
@@ -382,7 +833,7 @@ public sealed class SessionActorCoordinatorTests
         Assert.Single(context.Actors.Bound);
         Assert.DoesNotContain(first, context.Actors.Bound);
         Assert.False(runtime.TryGetSessionActorContext("actor-1", firstToken, out _));
-        Assert.True(runtime.TryGetSessionActorBinding("actor-1", out var secondSession));
+        Assert.True(runtime.TryGetSessionActorBinding("actor-1", context, out var secondSession));
         Assert.NotEqual(firstToken, secondSession.BindingToken);
         Assert.True(
             runtime.TryGetSessionActorContext(
@@ -430,7 +881,7 @@ public sealed class SessionActorCoordinatorTests
         );
         var actor = new ActorRef("actor-remote-reply", 1, "actors", RoutingId.From("actor-node"));
         await context.ActorCoordinator.BindOrGetActorAsync(context, actor, CancellationToken.None);
-        Assert.True(runtime.TryGetSessionActorBinding(actor.ActorId, out var binding));
+        Assert.True(runtime.TryGetSessionActorBinding(actor.ActorId, context, out var binding));
         var replyCapability = runtime.TrackRemoteSessionActorRequest(
             actor.ActorId,
             requestId: 17,
@@ -467,7 +918,7 @@ public sealed class SessionActorCoordinatorTests
         );
         var actor = new ActorRef("actor-reply-fence", 1, "actors", RoutingId.From("actor-node"));
         await context.ActorCoordinator.BindOrGetActorAsync(context, actor, CancellationToken.None);
-        Assert.True(runtime.TryGetSessionActorBinding(actor.ActorId, out var binding));
+        Assert.True(runtime.TryGetSessionActorBinding(actor.ActorId, context, out var binding));
 
         var wrongFlagsCapability = runtime.TrackRemoteSessionActorRequest(
             actor.ActorId,
@@ -540,7 +991,7 @@ public sealed class SessionActorCoordinatorTests
         );
         var actor = new ActorRef("actor-reply-once", 1, "actors", RoutingId.From("actor-node"));
         await context.ActorCoordinator.BindOrGetActorAsync(context, actor, CancellationToken.None);
-        Assert.True(runtime.TryGetSessionActorBinding(actor.ActorId, out var binding));
+        Assert.True(runtime.TryGetSessionActorBinding(actor.ActorId, context, out var binding));
         Assert.True(runtime.TryAcceptSessionActorFrame(actor.ActorId, binding.BindingToken, out _));
         Assert.True(runtime.TryAcceptSessionActorFrame(actor.ActorId, binding.BindingToken, out _));
         var capability = runtime.TrackRemoteSessionActorRequest(
@@ -566,7 +1017,7 @@ public sealed class SessionActorCoordinatorTests
 
         await Task.WhenAll(Task.Run(DeliverAsync), Task.Run(DeliverAsync));
         Assert.Single(stream.Writes);
-        Assert.True(runtime.TryGetSessionActorBinding(actor.ActorId, out var afterReply));
+        Assert.True(runtime.TryGetSessionActorBinding(actor.ActorId, context, out var afterReply));
         Assert.Equal(1, afterReply.ActiveFrames);
         runtime.CompleteRemoteSessionActorRequest(
             actor.ActorId,
@@ -574,7 +1025,7 @@ public sealed class SessionActorCoordinatorTests
             binding.BindingToken,
             26
         );
-        Assert.True(runtime.TryGetSessionActorBinding(actor.ActorId, out var completed));
+        Assert.True(runtime.TryGetSessionActorBinding(actor.ActorId, context, out var completed));
         Assert.Equal(0, completed.ActiveFrames);
     }
 
@@ -601,7 +1052,7 @@ public sealed class SessionActorCoordinatorTests
             RoutingId.From("actor-node")
         );
         await context.ActorCoordinator.BindOrGetActorAsync(context, actor, CancellationToken.None);
-        Assert.True(runtime.TryGetSessionActorBinding(actor.ActorId, out var binding));
+        Assert.True(runtime.TryGetSessionActorBinding(actor.ActorId, context, out var binding));
 
         _ = runtime.TrackRemoteSessionActorRequest(actor.ActorId, 23, binding.BindingToken);
         runtime.CompleteRemoteSessionActorRequest(
@@ -646,7 +1097,13 @@ public sealed class SessionActorCoordinatorTests
             actor,
             CancellationToken.None
         );
-        Assert.True(runtime.TryGetSessionActorBinding(actor.ActorId, out var previousBinding));
+        Assert.True(
+            runtime.TryGetSessionActorBinding(
+                actor.ActorId,
+                previousContext,
+                out var previousBinding
+            )
+        );
 
         previousStream.AcceptsWrites = false;
         var replacementStream = new TestStream(RoutingId.From("session-replacement-unbound"));
@@ -660,7 +1117,9 @@ public sealed class SessionActorCoordinatorTests
         Assert.NotNull(replacement);
         Assert.Equal(2, previousStream.ControlWrites.Count);
         Assert.Single(replacementStream.ControlWrites);
-        Assert.True(runtime.TryGetSessionActorBinding(actor.ActorId, out var current));
+        Assert.True(
+            runtime.TryGetSessionActorBinding(actor.ActorId, replacementContext, out var current)
+        );
         Assert.Equal(replacementContext, current.Context);
         Assert.NotEqual(previousBinding.BindingToken, current.BindingToken);
         Assert.Equal(
@@ -693,7 +1152,11 @@ public sealed class SessionActorCoordinatorTests
             CancellationToken.None
         );
         Assert.True(
-            runtime.TryGetSessionActorBinding(previousActor.ActorId, out var previousBinding)
+            runtime.TryGetSessionActorBinding(
+                previousActor.ActorId,
+                previousContext,
+                out var previousBinding
+            )
         );
         var previousCapability = runtime.TrackRemoteSessionActorRequest(
             previousActor.ActorId,
@@ -721,7 +1184,11 @@ public sealed class SessionActorCoordinatorTests
             CancellationToken.None
         );
         Assert.True(
-            runtime.TryGetSessionActorBinding(replacementActor.ActorId, out var replacementBinding)
+            runtime.TryGetSessionActorBinding(
+                replacementActor.ActorId,
+                replacementContext,
+                out var replacementBinding
+            )
         );
         Assert.NotEqual(previousBinding.BindingToken, replacementBinding.BindingToken);
         Assert.Equal(2UL, replacementBinding.ObjectGeneration);
@@ -777,13 +1244,13 @@ public sealed class SessionActorCoordinatorTests
             RoutingId.From("actor-node")
         );
         await context.ActorCoordinator.BindOrGetActorAsync(context, actor, CancellationToken.None);
-        Assert.True(runtime.TryGetSessionActorBinding(actor.ActorId, out var binding));
+        Assert.True(runtime.TryGetSessionActorBinding(actor.ActorId, context, out var binding));
 
         Assert.True(runtime.TryAcceptSessionActorFrame(actor.ActorId, binding.BindingToken, out _));
         _ = runtime.TrackRemoteSessionActorRequest(actor.ActorId, 25, binding.BindingToken);
         time.AdvanceMonotonic(TimeSpan.FromMilliseconds(20));
         await WaitUntilAsync(() =>
-            runtime.TryGetSessionActorBinding(actor.ActorId, out var current)
+            runtime.TryGetSessionActorBinding(actor.ActorId, context, out var current)
             && current.ActiveFrames == 0
         );
         _ = runtime.TrackRemoteSessionActorRequest(actor.ActorId, 25, binding.BindingToken);
@@ -886,11 +1353,19 @@ public sealed class SessionActorCoordinatorTests
             actor,
             CancellationToken.None
         );
-        Assert.True(runtime.TryGetSessionActorBinding(actor.ActorId, out var replacement));
+        Assert.True(
+            runtime.TryGetSessionActorBinding(
+                actor.ActorId,
+                replacementContext,
+                out var replacement
+            )
+        );
 
         await oldBinding.NotifyDisconnectedAsync();
 
-        Assert.True(runtime.TryGetSessionActorBinding(actor.ActorId, out var current));
+        Assert.True(
+            runtime.TryGetSessionActorBinding(actor.ActorId, replacementContext, out var current)
+        );
         Assert.Equal(replacement.BindingToken, current.BindingToken);
         Assert.True(
             runtime.TryGetSessionActorContext(
@@ -1050,7 +1525,9 @@ public sealed class SessionActorCoordinatorTests
         Assert.Same(current, sessionB.ActorCoordinator.FindActor(actorX.ActorId));
         Assert.NotNull(sessionA.ActorCoordinator.FindActor(actorA.ActorId));
         Assert.NotNull(sessionB.ActorCoordinator.FindActor(actorB.ActorId));
-        Assert.True(runtime.TryGetSessionActorBinding(actorX.ActorId, out var currentBinding));
+        Assert.True(
+            runtime.TryGetSessionActorBinding(actorX.ActorId, sessionB, out var currentBinding)
+        );
         Assert.True(
             runtime.TryGetSessionActorContext(
                 actorX.ActorId,
@@ -1123,8 +1600,8 @@ public sealed class SessionActorCoordinatorTests
         await context.ActorCoordinator.CleanupAsync(context, CancellationToken.None);
 
         Assert.Empty(context.Actors.Bound);
-        Assert.False(runtime.TryGetSessionActorBinding(actorA.ActorId, out _));
-        Assert.False(runtime.TryGetSessionActorBinding(actorB.ActorId, out _));
+        Assert.False(runtime.TryGetSessionActorBinding(actorA.ActorId, context, out _));
+        Assert.False(runtime.TryGetSessionActorBinding(actorB.ActorId, context, out _));
         Assert.Same(actorAState, runtime.GetOrCreateActorState(actorA.ActorId));
         Assert.Same(actorBState, runtime.GetOrCreateActorState(actorB.ActorId));
     }
@@ -1194,7 +1671,7 @@ public sealed class SessionActorCoordinatorTests
 
         Assert.Same(bound, Assert.Single(context.Actors.Bound));
         Assert.Equal(previous, bound.Ref);
-        Assert.True(runtime.TryGetSessionActorBinding(previous.ActorId, out var retained));
+        Assert.True(runtime.TryGetSessionActorBinding(previous.ActorId, context, out var retained));
         Assert.Equal(previous.ObjectGeneration, retained.ObjectGeneration);
     }
 
@@ -1254,7 +1731,7 @@ public sealed class SessionActorCoordinatorTests
 
         Assert.Equal(local, rebound.Ref);
         Assert.Equal(local, Assert.Single(context.Actors.Bound).Ref);
-        Assert.True(runtime.TryGetSessionActorBinding(local.ActorId, out var exact));
+        Assert.True(runtime.TryGetSessionActorBinding(local.ActorId, context, out var exact));
         Assert.Equal(local.ObjectGeneration, exact.ObjectGeneration);
         Assert.Equal(local.MeshName, exact.MeshName);
     }
@@ -1302,7 +1779,7 @@ public sealed class SessionActorCoordinatorTests
 
         var terminal = Assert.Single(context.Actors.Bound);
         Assert.Contains(terminal.Ref, new[] { candidateA, candidateB });
-        Assert.True(runtime.TryGetSessionActorBinding(original.ActorId, out var exact));
+        Assert.True(runtime.TryGetSessionActorBinding(original.ActorId, context, out var exact));
         Assert.Equal(terminal.Ref.ObjectGeneration, exact.ObjectGeneration);
         Assert.Equal(terminal.Ref.MeshName, exact.MeshName);
     }
@@ -1398,7 +1875,7 @@ public sealed class SessionActorCoordinatorTests
             source,
             CancellationToken.None
         );
-        Assert.True(runtime.TryGetSessionActorBinding(source.ActorId, out var identity));
+        Assert.True(runtime.TryGetSessionActorBinding(source.ActorId, context, out var identity));
         const string handoffId = "handoff-route-commit";
         Assert.True(
             (
@@ -1520,7 +1997,7 @@ public sealed class SessionActorCoordinatorTests
             source,
             CancellationToken.None
         );
-        Assert.True(runtime.TryGetSessionActorBinding(source.ActorId, out var identity));
+        Assert.True(runtime.TryGetSessionActorBinding(source.ActorId, context, out var identity));
 
         // 04-session/02-session-actor-binding §3 item 3, §8.1: the route copy
         // and the owner lifecycle fields differ from the registered binding,
@@ -1534,7 +2011,6 @@ public sealed class SessionActorCoordinatorTests
             TargetNodeGeneration: identity.TargetNodeGeneration + 5,
             AuthorityOwnerGeneration: identity.AuthorityOwnerGeneration + 3,
             OwnerLeaseGeneration: identity.OwnerLeaseGeneration + 2,
-            identity.BindingToken,
             identity.BindingGeneration,
             identity.SessionOwnerNodeGeneration,
             identity.Context.RoutingId!.Value.ToHex(),
@@ -1570,9 +2046,14 @@ public sealed class SessionActorCoordinatorTests
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task Canonical_Seal_Routes_Command_44_Without_Store_Reread(bool pushBeforeRoute)
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task Canonical_Seal_Routes_Command_44_Without_Store_Reread(
+        bool pushBeforeRoute,
+        bool foreignMetadata
+    )
     {
         var loggerFactory = new SessionRouteLoggerFactory();
         var locationStore = new BlockingReadLocationStore(new ZLinkInMemoryProviderLocationStore());
@@ -1639,7 +2120,7 @@ public sealed class SessionActorCoordinatorTests
             source,
             CancellationToken.None
         );
-        Assert.True(runtime.TryGetSessionActorBinding(source.ActorId, out var identity));
+        Assert.True(runtime.TryGetSessionActorBinding(source.ActorId, context, out var identity));
 
         var relocationId = new ZLinkServiceWireCodec.RelocationWireId(101, 103);
         var seal = new ZLinkServiceWireCodec.SessionRelocationSealRecord(
@@ -1671,6 +2152,14 @@ public sealed class SessionActorCoordinatorTests
                 identity.BindingGeneration
             )
         );
+        if (foreignMetadata)
+            seal = seal with
+            {
+                Actor = seal.Actor with
+                {
+                    AuthorityOwnerGeneration = identity.AuthorityOwnerGeneration + 100,
+                },
+            };
         _ = await runtime.SealCanonicalSessionActorRouteAsync(seal, CancellationToken.None);
 
         var targetAuthority = targetAuthoritySnapshot.AuthorityOwnerGeneration;
@@ -1684,7 +2173,6 @@ public sealed class SessionActorCoordinatorTests
             targetNodeGeneration,
             targetAuthority,
             targetOwnerLease,
-            identity.BindingToken,
             identity.BindingGeneration,
             identity.SessionOwnerNodeGeneration,
             identity.Context.RoutingId.Value.ToHex(),
@@ -1702,7 +2190,12 @@ public sealed class SessionActorCoordinatorTests
 
         var command44 = new ZLinkServiceWireCodec.SessionRelocationRouteRecord(
             relocationId,
-            seal.Coordinator,
+            foreignMetadata
+                ? seal.Coordinator with
+                {
+                    OwnerId = "different-coordinator",
+                }
+                : seal.Coordinator,
             2,
             seal.Actor.Actor,
             seal.Session,
@@ -1749,16 +2242,24 @@ public sealed class SessionActorCoordinatorTests
         Assert.Single(stream.Writes);
         Assert.Equal(new byte[] { 7, 8, 9 }, stream.Writes[0].Payload);
 
-        await runtime.RouteCanonicalSessionActorAsync(
-            command44,
-            new ZLinkSessionRelocationAuthenticatedRoute(
-                targetNode,
-                targetNodeGeneration,
-                identity.MeshName,
-                targetAuthority,
-                OwnerLeaseGeneration: 0
-            ),
-            CancellationToken.None
+        Assert.True(
+            runtime.RouteCanonicalSessionActor(
+                command44 with
+                {
+                    Coordinator = command44.Coordinator with { OwnerId = "duplicate-coordinator" },
+                    Route = command44.Route with
+                    {
+                        TargetAuthorityOwnerGeneration = targetAuthority + 1,
+                    },
+                },
+                new ZLinkSessionRelocationAuthenticatedRoute(
+                    targetNode,
+                    targetNodeGeneration,
+                    identity.MeshName,
+                    targetAuthority,
+                    OwnerLeaseGeneration: 0
+                )
+            )
         );
         await runtime.RouteCanonicalSessionActorAsync(
             command44 with
@@ -1851,10 +2352,29 @@ public sealed class SessionActorCoordinatorTests
             sessionOwnerLeaseGeneration: 11
         );
 
+        var replacementContext = CreateSessionContext(runtime, "replacement-seal-sibling");
+        var replacementSibling = new ZLinkSessionActor(
+            replacementContext,
+            siblingRoute.Ref.ActorId,
+            replacementContext.RoutingId!.Value,
+            "replacement-seal-sibling-token"
+        );
+        _ = await table.BindAsync(
+            ZLinkActorId.FromBoundary(siblingRoute.Ref.ActorId, nameof(siblingRoute)),
+            replacementContext,
+            replacementSibling.BindingToken,
+            replacementSibling,
+            bindingGeneration: 7,
+            siblingRoute,
+            sessionOwnerNodeGeneration: 7,
+            sessionOwnerNodeRid: sessionOwnerRid,
+            sessionOwnerId: "session-owner",
+            sessionOwnerLeaseGeneration: 11
+        );
+
         var targetTenure = new ZLinkSessionOutboundTenure(
             route.Ref.ActorId,
             route.Ref.ObjectGeneration,
-            actor.BindingToken,
             BindingGeneration: 5,
             SessionOwnerNodeGeneration: 7,
             sessionRid
@@ -1923,6 +2443,21 @@ public sealed class SessionActorCoordinatorTests
         Assert.True(await routeWait.WaitAsync(TimeSpan.FromSeconds(1)));
         Assert.Null(await table.GetBindingAsync(route.Ref.ActorId, actor.BindingToken));
         Assert.Null(await table.GetBindingAsync(siblingRoute.Ref.ActorId, sibling.BindingToken));
+        Assert.NotNull(
+            await table.GetBindingAsync(siblingRoute.Ref.ActorId, replacementSibling.BindingToken)
+        );
+        Assert.Null(
+            await table.GetExactRetiredBindingAsync(
+                siblingRoute.Ref.ActorId,
+                sessionOwnerRid,
+                sessionRid,
+                7,
+                "session-owner",
+                11,
+                6
+            )
+        );
+
         Assert.Equal(0, time.ActiveTimerCount);
 
         var late = new ZLinkServiceWireCodec.SessionRelocationRouteRecord(
@@ -1964,7 +2499,7 @@ public sealed class SessionActorCoordinatorTests
             actor,
             CancellationToken.None
         );
-        Assert.True(runtime.TryGetSessionActorBinding(actor.ActorId, out var identity));
+        Assert.True(runtime.TryGetSessionActorBinding(actor.ActorId, context, out var identity));
         Assert.True(
             runtime.TryAcceptSessionActorFrame(
                 actor.ActorId,
@@ -2023,7 +2558,7 @@ public sealed class SessionActorCoordinatorTests
             actor,
             CancellationToken.None
         );
-        Assert.True(runtime.TryGetSessionActorBinding(actor.ActorId, out var identity));
+        Assert.True(runtime.TryGetSessionActorBinding(actor.ActorId, context, out var identity));
         Assert.True(
             (
                 await runtime.SealSessionActorRouteAsync(
@@ -2114,7 +2649,7 @@ public sealed class SessionActorCoordinatorTests
             source,
             CancellationToken.None
         );
-        Assert.True(runtime.TryGetSessionActorBinding(source.ActorId, out var identity));
+        Assert.True(runtime.TryGetSessionActorBinding(source.ActorId, context, out var identity));
         const string handoffId = "handoff-route-fences";
         Assert.True(
             (

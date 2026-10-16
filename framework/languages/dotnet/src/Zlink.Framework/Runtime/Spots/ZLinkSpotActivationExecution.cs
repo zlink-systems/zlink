@@ -1,5 +1,7 @@
 using System.Diagnostics;
 using System.Numerics;
+using Systems.Zlink.Framework.Runtime.Protocol;
+using Zlink.Framework.Runtime.Actors;
 using Zlink.Framework.Runtime.Diagnostics;
 using Zlink.Framework.Runtime.Identifiers;
 using Zlink.Framework.Runtime.Locations;
@@ -7,9 +9,12 @@ using static Zlink.Framework.Runtime.Execution.ZLinkStateLaneWait;
 
 namespace Zlink.Framework.Runtime.Spots;
 
+// CapturedMembers are the member Actors whose handoff capture this seal
+// started; an abort of the seal returns their held frames to the source.
 internal sealed record ZLinkSpotRelocationSeal(
     ZLinkSpotExecutionRelocationSeal QueueSeal,
-    IReadOnlyList<ZLinkRelocationLogicalTimer> LogicalTimers
+    IReadOnlyList<ZLinkRelocationLogicalTimer> LogicalTimers,
+    IReadOnlyList<ZLinkActorRuntimeState> CapturedMembers
 );
 
 internal sealed record ZLinkSpotRelocationApplicationState(
@@ -372,7 +377,18 @@ internal abstract partial class ZLinkSpotActivation
         // external ingress.
         return _serial.ExecuteSealedRelocationAsync(
             admissionSeal.QueueSeal,
-            static (activation, ct) => activation.UserSpot.OnInitializeAsync(ct),
+            static async (activation, ct) =>
+            {
+                activation._timers.BeginRelocatedInitialization();
+                try
+                {
+                    await activation.UserSpot.OnInitializeAsync(ct).ConfigureAwait(false);
+                }
+                finally
+                {
+                    activation._timers.EndRelocatedInitialization();
+                }
+            },
             cancellationToken
         );
     }
@@ -416,7 +432,7 @@ internal abstract partial class ZLinkSpotActivation
                 "Spot context Close requires a handler or timer turn."
             );
         return turn.YieldFrameworkCallAsync(
-            ct => _runtime.CloseCurrentSpotAsync(SpotNodeName, SpotId, ObjectGeneration, ct),
+            ct => _runtime.CloseCurrentSpotAsync(this, ct),
             cancellationToken
         );
     }
@@ -508,11 +524,42 @@ internal abstract partial class ZLinkSpotActivation
             )
         )
             return;
+        var requestSource = received.RequestSource;
+        if (
+            requestSource is null
+            && received.SourceNodeRid is { } sourceNodeRid
+            && _runtime.Registration.Locations.ResolveStore() is { } store
+        )
+        {
+            try
+            {
+                requestSource = await ZLinkRequestSourceFenceResolver
+                    .ResolveAsync(
+                        _runtime.GetSpotNodeRuntime(NodeRid).Node,
+                        store,
+                        RuntimeMeshName.Value,
+                        sourceNodeRid,
+                        received.SourceNodeGeneration,
+                        _stopSource.Token
+                    )
+                    .ConfigureAwait(false);
+            }
+            catch (Exception error)
+            {
+                _dispatcher.RejectApplicationRouteForFailure(
+                    received,
+                    ChannelName,
+                    error,
+                    _runtime.Flow.CaptureEnabled
+                );
+                return;
+            }
+        }
         var operationAdmission = (
             await _runtime.TryAdmitInboundOperationAsync(received.CanReply).ConfigureAwait(false)
         ).EnterInbound();
         ZLinkRuntimeTaskRunner.WithoutExecutionContextFlow(() =>
-            QueueApplicationRouteSerialized(received, operationAdmission)
+            QueueApplicationRouteSerialized(received, operationAdmission, requestSource)
         );
     }
 
@@ -584,7 +631,18 @@ internal abstract partial class ZLinkSpotActivation
     protected ValueTask InitializeInstanceCoreAsync(CancellationToken cancellationToken)
     {
         return ExecuteSerializedAsync(
-            static (activation, state, ct) => state.OnInitializeAsync(ct),
+            static async (activation, state, ct) =>
+            {
+                activation._timers.BeginRelocatedInitialization();
+                try
+                {
+                    await state.OnInitializeAsync(ct).ConfigureAwait(false);
+                }
+                finally
+                {
+                    activation._timers.EndRelocatedInitialization();
+                }
+            },
             InstanceSpot,
             cancellationToken
         );
@@ -1040,6 +1098,18 @@ internal abstract partial class ZLinkSpotActivation
 
     internal ValueTask AwaitStartedCloseCallsAsync(CancellationToken cancellationToken) =>
         _serial.AwaitStartedCloseCallsAsync(cancellationToken);
+
+    // The Close of this incarnation (spec 06 §7 step 1: one Close job). The
+    // first Close request claims it and later requests join it. A Close that
+    // ends without closing the incarnation releases it; a closed incarnation
+    // keeps its Close as the result. Null result means the caller holds it.
+    internal TaskCompletionSource<bool>? ClaimClose(TaskCompletionSource<bool> close) =>
+        Interlocked.CompareExchange(ref _close, close, null);
+
+    internal void ReleaseClose(TaskCompletionSource<bool> close) =>
+        Interlocked.CompareExchange(ref _close, null, close);
+
+    internal bool HasPendingClose => Volatile.Read(ref _close) is { Task.IsCompleted: false };
 
     internal bool HasCommittedClose => _successor is not null;
     internal bool HasCompletedClose => _successor?.Task.IsCompleted == true;
@@ -1541,7 +1611,8 @@ internal abstract partial class ZLinkSpotActivation
 
     private bool QueueApplicationRouteSerialized(
         ZLinkBackendRouteReceived received,
-        ZLinkInboundOperationAdmission operationAdmission
+        ZLinkInboundOperationAdmission operationAdmission,
+        ZLinkServiceWireCodec.RequestSourceFence? requestSource
     )
     {
         var replyRouteId = 0UL;
@@ -1567,7 +1638,8 @@ internal abstract partial class ZLinkSpotActivation
         {
             acceptedJournalLength = ZLinkSpotAcceptedJournal.MeasureEncodedLength(
                 received,
-                replyRouteId
+                replyRouteId,
+                requestSource
             );
         }
         catch
@@ -1577,7 +1649,7 @@ internal abstract partial class ZLinkSpotActivation
             throw;
         }
         Func<ReadOnlyMemory<byte>> acceptedJournalFactory = () =>
-            ZLinkSpotAcceptedJournal.Encode(received, replyRouteId);
+            ZLinkSpotAcceptedJournal.Encode(received, replyRouteId, requestSource);
 
         var state = received.InstanceIntent
             ? new DurableActivationDispatch(
@@ -1731,12 +1803,14 @@ internal abstract partial class ZLinkSpotActivation
         if (!operationAdmission.Accepted)
             return false;
 
+        var acceptedOperation = operationAdmission.CaptureOperation();
         if (
             _serial.TryRunDetached(
                 "user-spot-actor-frames",
                 async ct =>
                 {
                     using (operationAdmission.Lease)
+                    using (ZLinkFrameworkRuntime.EnterAcceptedOperation(acceptedOperation))
                         await _dispatcher
                             .DispatchActorFramesAsync(frames, _serial, ct)
                             .ConfigureAwait(false);
@@ -1840,8 +1914,22 @@ internal abstract partial class ZLinkSpotActivation
     {
         IReadOnlyList<ZLinkRelocationLogicalTimer>? boundaryTimers = null;
         ZLinkSpotExecutionRelocationSeal? queueSeal = null;
+        // A seal that refuses member Actor claims is the unit seal of those
+        // members too (host relocation §7, relocation 04 §4.2). Their handoff
+        // capture starts before the Spot refuses their claims, so a member
+        // frame accepted after this point is held for the handoff instead of
+        // being refused by the sealed Spot. The Spot turn gate, not the Actor
+        // mailbox, already orders member turns against this seal.
+        var capturedMembers = new List<ZLinkActorRuntimeState>();
         try
         {
+            if (!allowActorClaims)
+                foreach (var member in _actors.Snapshot())
+                {
+                    var state = _runtime.GetOrCreateActorState(member.Context.ActorId);
+                    state.Handoff.BeginCapture();
+                    capturedMembers.Add(state);
+                }
             queueSeal = await _serial
                 .SealRelocationAsync(
                     allowActorClaims,
@@ -1868,7 +1956,7 @@ internal abstract partial class ZLinkSpotActivation
                     "SPOT relocation timer boundary snapshot was not created."
                 );
             if (allowActorClaims)
-                return new ZLinkSpotRelocationSeal(queueSeal, []);
+                return new ZLinkSpotRelocationSeal(queueSeal, [], []);
             var logicalTimers = await _timers
                 .SnapshotFrozenRelocationAfterDispatchesAsync(cancellationToken)
                 .ConfigureAwait(false);
@@ -1892,13 +1980,17 @@ internal abstract partial class ZLinkSpotActivation
                         : timer;
                 })
                 .ToArray();
-            return new ZLinkSpotRelocationSeal(queueSeal, logicalTimers);
+            return new ZLinkSpotRelocationSeal(queueSeal, logicalTimers, capturedMembers);
         }
         catch
         {
             if (queueSeal is not null)
                 await _serial.TryAbortRelocationAsync(queueSeal).ConfigureAwait(false);
             _timers.Resume();
+            foreach (var state in capturedMembers)
+                await _runtime
+                    .RestoreStandaloneActorRelocationSourceAsync(state)
+                    .ConfigureAwait(false);
             throw;
         }
     }
@@ -1965,7 +2057,7 @@ internal abstract partial class ZLinkSpotActivation
             ?? throw new InvalidOperationException(
                 "A bound Session route requires a target NodeRid."
             );
-        _ = await _runtime
+        var response = await _runtime
             .SealSessionRelocationAsync(
                 route.MeshName!,
                 routeNodeRid,
@@ -1973,7 +2065,9 @@ internal abstract partial class ZLinkSpotActivation
                 cancellationToken
             )
             .ConfigureAwait(false);
-        return route;
+        return response.SealResult == ServiceWirePilotCodec.SessionSealResult.BindingAbsent
+            ? default
+            : route;
     }
 
     internal async ValueTask AbortActorBoundSessionRouteSealForRetireAsync(
@@ -2460,7 +2554,7 @@ internal abstract partial class ZLinkSpotActivation
     {
         var logicalTimers = _timers.FreezeRelocation();
         if (await _serial.TrySealRelocationAsync().ConfigureAwait(false) is { } queueSeal)
-            return new ZLinkSpotRelocationSeal(queueSeal, logicalTimers);
+            return new ZLinkSpotRelocationSeal(queueSeal, logicalTimers, []);
         _timers.Resume();
         return null;
     }
@@ -2474,7 +2568,7 @@ internal abstract partial class ZLinkSpotActivation
             await _serial.TrySealPerActorShellRelocationAsync().ConfigureAwait(false) is
             { } queueSeal
         )
-            return new ZLinkSpotRelocationSeal(queueSeal, logicalTimers);
+            return new ZLinkSpotRelocationSeal(queueSeal, logicalTimers, []);
         _timers.Resume();
         return null;
     }

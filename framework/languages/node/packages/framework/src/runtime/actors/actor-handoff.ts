@@ -1,6 +1,7 @@
 import { type ActorRef, type RoutingId, ZLinkFrameworkException } from '../../contracts';
 
 import type { Message } from '../../contracts/Common/Message';
+import { DEFAULT_REQUEST_TIMEOUT_MS } from '../../contracts/Configuration/Registration';
 import { zlinkDefaultLocationOptions } from '../../contracts/Locations/Options';
 import { releaseApplicationJobPermitForDurableHandoff } from '../application-jobs/application-job-queue-scope';
 import type { ApplicationJobOrigin } from '../application-jobs/contracts';
@@ -15,6 +16,7 @@ import {
   internalFrameworkErrorKind,
   ZLinkFrameworkInternalErrorKind
 } from '../framework-errors-internal';
+import { waitRequestReply } from '../messaging/request-deadline';
 import { encodeRoutingIdStorageHex, routingIdsEqual } from '../routing-id';
 import type { ZLinkSpotRouteTarget } from '../spots/spot-routing-internal';
 import { decodeActorRequestDeadlineUnixMs, decodeStreamHeader } from '../streams/protocol';
@@ -204,6 +206,12 @@ interface ActiveHandoff {
   pendingBytes: number;
   releaseTask?: Promise<void>;
   prefixRelease?: ActivePrefixRelease;
+  /**
+   * Settles when the released handoff this hold replaced has drained its
+   * durable prefix. This hold releases its own records only after that
+   * prefix, so ingress stays durable while an earlier durable record waits.
+   */
+  readonly predecessorRelease?: Promise<void>;
 }
 
 interface MessageFollowRoute {
@@ -322,7 +330,10 @@ export class ZLinkActorHandoffCoordinator {
     oldGeneration: bigint,
     phase: 'relocating' | 'provisional'
   ): void {
-    if (this.active.has(actorId)) {
+    // A releasing handoff has returned its hold to the Actor FIFO; only its
+    // durable prefix drain remains, and the next hold takes over its ingress.
+    const previous = this.active.get(actorId);
+    if (this.isActive(actorId)) {
       throw new Error(`Actor '${actorId}' already has an active packet handoff.`);
     }
     if (oldGeneration <= 0n) {
@@ -374,24 +385,23 @@ export class ZLinkActorHandoffCoordinator {
       pending: [],
       nextIndex: 0,
       snapshotIndex: -1,
-      pendingBytes: 0
+      pendingBytes: 0,
+      // The predecessor reports its own replay failures; only its drain order matters here.
+      predecessorRelease: previous?.releaseTask?.then(
+        () => undefined,
+        () => undefined
+      )
     });
   }
 
+  /** True while a hold owns this Actor's ingress, before its release to the Actor FIFO. */
   isActive(actorId: string): boolean {
-    return this.active.has(actorId);
+    const handoff = this.active.get(actorId);
+    return handoff !== undefined && handoff.phase !== 'releasing';
   }
 
   isProvisional(actorId: string): boolean {
     return this.active.get(actorId)?.phase === 'provisional';
-  }
-
-  promoteProvisional(actorId: string): void {
-    const handoff = this.active.get(actorId);
-    if (handoff?.phase !== 'provisional') {
-      throw new Error(`Actor '${actorId}' does not have a provisional packet handoff.`);
-    }
-    handoff.phase = 'relocating';
   }
 
   sealConnectionBoundIngress(actorId: string): void {
@@ -470,6 +480,9 @@ export class ZLinkActorHandoffCoordinator {
       return { terminal: handoff.releaseTask };
     }
     handoff.phase = 'releasing';
+    if (handoff.predecessorRelease !== undefined) {
+      start = Promise.all([handoff.predecessorRelease, start]).then(() => undefined);
+    }
     let resolveTerminal!: () => void;
     let rejectTerminal!: (reason: unknown) => void;
     const terminal = new Promise<void>((resolve, reject) => {
@@ -664,6 +677,7 @@ export class ZLinkActorHandoffCoordinator {
     admission?: ZLinkActorHandoffReplayAdmission
   ): Promise<void> {
     try {
+      await handoff.predecessorRelease;
       if (handoff.pending.length === 0) return;
       if (replay === undefined) {
         const error = new Error(
@@ -810,6 +824,10 @@ export class ZLinkActorHandoffCoordinator {
         );
       try {
         this.validateContext(actorId, context, parts, returnResponse, fallbackActorRef);
+        // Accepted handoff retains its original deadline; Message Follow uses a local relay window.
+        if (context.deadlineUnixMs !== undefined && Date.now() >= context.deadlineUnixMs) {
+          throw actorDeadlineExceeded(actorId);
+        }
       } catch (error) {
         return Promise.reject(error);
       }
@@ -984,19 +1002,6 @@ export class ZLinkActorHandoffCoordinator {
     return handoff.pending.map((entry) => entry.packet);
   }
 
-  snapshotCoreBacklog(actorId: string): readonly ZLinkActorHandoffPacket[] {
-    const handoff = this.requireActive(actorId);
-    let snapshotIndex = -1;
-    while (
-      snapshotIndex + 1 < handoff.pending.length &&
-      handoff.pending[snapshotIndex + 1].packet.returnResponse === false
-    ) {
-      snapshotIndex++;
-    }
-    handoff.snapshotIndex = snapshotIndex;
-    return handoff.pending.slice(0, snapshotIndex + 1).map((entry) => entry.packet);
-  }
-
   /**
    * Freezes the post-capture ingress segment immediately before the caller
    * appends the one-way cutover on the same relocation lane. Records returned
@@ -1015,11 +1020,18 @@ export class ZLinkActorHandoffCoordinator {
     target: ZLinkSpotRouteTarget,
     targetActorRef: ActorRef,
     results: readonly ZLinkActorHandoffResult[],
-    targetOwnerFence: ZLinkActorMessageFollowOwnerFence
+    targetOwnerFence: ZLinkActorMessageFollowOwnerFence | null
   ): void {
     const handoff = this.requireActive(actorId);
-    const committedTargetOwner = requireExactTargetOwnerFence(actorId, targetOwnerFence);
+    const committedTargetOwner =
+      targetOwnerFence === null ? null : requireExactTargetOwnerFence(actorId, targetOwnerFence);
     this.active.delete(actorId);
+    // Location runtime §10: a later owner has no source-local Follow route.
+    if (committedTargetOwner === null) {
+      const unavailable = actorLocationStale(actorId);
+      for (const pending of handoff.pending) this.failReleasedPending(pending, unavailable);
+      return;
+    }
     const byIndex = new Map(results.map((result) => [result.index, result]));
     for (let i = 0; i <= handoff.snapshotIndex; i++) {
       const pending = handoff.pending[i];
@@ -1385,9 +1397,6 @@ export class ZLinkActorHandoffCoordinator {
     if (context.objectGeneration === '0' || context.request !== request) {
       throw actorLocationStale(actorId);
     }
-    if (context.deadlineUnixMs !== undefined && Date.now() >= context.deadlineUnixMs) {
-      throw actorDeadlineExceeded(actorId);
-    }
     verifyActorMessageFollowPayload(context, parts);
   }
 
@@ -1433,7 +1442,10 @@ export class ZLinkActorHandoffCoordinator {
       return BigInt(context.targetOwner.authorityOwnerGeneration);
     }
     const current = this.options.currentOwnerFence?.(actorId);
-    if (current !== undefined && current.nodeRid === String(actor.nodeRid)) {
+    if (
+      current !== undefined &&
+      routingIdsEqual(messageFollowOwnerNodeRid(current), actor.nodeRid)
+    ) {
       return BigInt(current.authorityOwnerGeneration);
     }
     return undefined;
@@ -1526,15 +1538,16 @@ export class ZLinkActorHandoffCoordinator {
       await this.messageFollowRelayed(actorId, entry, packet, advanced);
       return undefined;
     }
-    const remainingMs = remainingRequestTime(actorId, packet.messageFollowContext.deadlineUnixMs);
+    const timeoutMs = this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+    const relayDeadlineMs = performance.now() + timeoutMs;
     if (this.options.routedTransport.requestRawToSpot === undefined) {
-      const reply = await awaitBeforeDeadline(
+      const reply = await waitRequestReply(
         this.options.routedTransport.requestToSpot<Record<string, unknown>>(target, payload, {
           packetName: ZLINK_REMOTE_ACTOR_PACKET_RELAY_PACKET,
-          timeoutMs: remainingMs ?? this.options.requestTimeoutMs
+          timeoutMs
         }),
         actorId,
-        remainingMs
+        relayDeadlineMs
       );
       if (reply.ok === false) {
         throw actorRelayError(actorId, reply.errorKind, reply.error);
@@ -1542,12 +1555,12 @@ export class ZLinkActorHandoffCoordinator {
       await this.messageFollowRelayed(actorId, entry, packet, advanced);
       return reply.response;
     }
-    const response = await awaitBeforeDeadline(
+    const response = await waitRequestReply(
       requestRoutedJsonReply(
         this.options.routedTransport,
         target,
         payload,
-        { timeoutMs: remainingMs ?? this.options.requestTimeoutMs },
+        { timeoutMs },
         `Actor Message Follow raw request is not available for '${actorId}'.`,
         (parts) => {
           if (parts.length === 0) {
@@ -1566,7 +1579,7 @@ export class ZLinkActorHandoffCoordinator {
         }
       ),
       actorId,
-      remainingMs
+      relayDeadlineMs
     );
     await this.messageFollowRelayed(actorId, entry, packet, advanced);
     return response;
@@ -1772,35 +1785,6 @@ function packetDeadlineUnixMs(parts: readonly Message[]): number | undefined {
     return decodeActorRequestDeadlineUnixMs(parts[0].data());
   } catch {
     return undefined;
-  }
-}
-
-function remainingRequestTime(
-  actorId: string,
-  deadlineUnixMs: number | undefined
-): number | undefined {
-  if (deadlineUnixMs === undefined) return undefined;
-  const remaining = deadlineUnixMs - Date.now();
-  if (remaining <= 0) throw actorDeadlineExceeded(actorId);
-  return Math.max(1, Math.ceil(remaining));
-}
-
-async function awaitBeforeDeadline<T>(
-  operation: Promise<T>,
-  actorId: string,
-  remainingMs: number | undefined
-): Promise<T> {
-  if (remainingMs === undefined) return await operation;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      operation,
-      new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(() => reject(actorDeadlineExceeded(actorId)), remainingMs);
-      })
-    ]);
-  } finally {
-    if (timer !== undefined) clearTimeout(timer);
   }
 }
 

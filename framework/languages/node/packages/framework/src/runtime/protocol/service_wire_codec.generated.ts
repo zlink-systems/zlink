@@ -1332,6 +1332,27 @@ function writeSourceCleanupState(input: SourceCleanupState, writer: Writer, cont
 export function decodeSourceCleanupState(bytes: Uint8Array, context: ServiceWireDecoderContext): SourceCleanupState { const reader = new Reader(bytes); const value = readSourceCleanupState(reader, context, {}, 0); reader.done("source-cleanup-state"); return value; }
 export function encodeSourceCleanupState(value: SourceCleanupState, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeSourceCleanupState(value, writer, context, {}, 0); return writer.result(); }
 
+export type SessionSealResult = "sealed" | "bindingAbsent";
+export function enumWireSessionSealResult(value: SessionSealResult): number { switch (value) {
+  case "sealed": return 1;
+  case "bindingAbsent": return 2;
+} }
+function readSessionSealResult(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): SessionSealResult {
+  void context; void enclosing; void flags;
+  const raw = reader.u(1); switch (Number(raw)) {
+    case 1: return "sealed";
+    case 2: return "bindingAbsent";
+    default: fail("session-seal-result enum");
+  }
+}
+
+function writeSessionSealResult(input: SessionSealResult, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
+  void context; void enclosing; void flags; const value: any = input;
+  writer.u(numeric(enumWireSessionSealResult(value)), 1);
+}
+export function decodeSessionSealResult(bytes: Uint8Array, context: ServiceWireDecoderContext): SessionSealResult { const reader = new Reader(bytes); const value = readSessionSealResult(reader, context, {}, 0); reader.done("session-seal-result"); return value; }
+export function encodeSessionSealResult(value: SessionSealResult, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeSessionSealResult(value, writer, context, {}, 0); return writer.result(); }
+
 export type ReplyRelayAckStatus = "terminalReceived" | "alreadyTerminal";
 export function enumWireReplyRelayAckStatus(value: ReplyRelayAckStatus): number { switch (value) {
   case "terminalReceived": return 1;
@@ -7584,7 +7605,127 @@ function writeRelocationPendingTimerTickVector(input: RelocationPendingTimerTick
 export function decodeRelocationPendingTimerTickVector(bytes: Uint8Array, context: ServiceWireDecoderContext): RelocationPendingTimerTickVector { const reader = new Reader(bytes); const value = readRelocationPendingTimerTickVector(reader, context, {}, 0); reader.done("relocation-pending-timer-tick-vector"); return value; }
 export function encodeRelocationPendingTimerTickVector(value: RelocationPendingTimerTickVector, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeRelocationPendingTimerTickVector(value, writer, context, {}, 0); return writer.result(); }
 
-export type RelocationEnvelopeV1 = { readonly relocation: RelocationId; readonly object: RelocationObjectIdentity; readonly applicationVersion: ApplicationVersion; readonly applicationStates: RelocationParticipantApplicationStateVector; readonly savedWork: SavedWorkVector; readonly timerRegistrations: RelocationTimerRegistrationVector; readonly pendingTimerTicks: RelocationPendingTimerTickVector };
+export type RelocationSessionBinding = { readonly participantId: NonzeroU64; readonly sessionOwnerNodeRid: Rid; readonly sessionOwnerNodeGeneration: NonzeroU64; readonly sessionOwnerId: Text8; readonly sessionOwnerLeaseGeneration: NonzeroU64; readonly sessionRid: Rid; readonly bindingGeneration: NonzeroU64 };
+
+function readRelocationSessionBinding(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): RelocationSessionBinding {
+  void context; void enclosing; void flags;
+  const value: any = {};
+  value["participantId"] = readNonzeroU64(reader, context, value, flags);
+
+
+  value["sessionOwnerNodeRid"] = readRid(reader, context, value, flags);
+
+
+  value["sessionOwnerNodeGeneration"] = readNonzeroU64(reader, context, value, flags);
+
+
+  value["sessionOwnerId"] = readText8(reader, context, value, flags);
+
+
+  value["sessionOwnerLeaseGeneration"] = readNonzeroU64(reader, context, value, flags);
+
+
+  value["sessionRid"] = readRid(reader, context, value, flags);
+
+
+  value["bindingGeneration"] = readNonzeroU64(reader, context, value, flags);
+
+
+
+
+  return value;
+}
+function* readIncrementalRelocationSessionBinding(reader: IncrementalInput, context: ServiceWireDecoderContext, enclosing: any, flags: number): Generator<void, RelocationSessionBinding, void> {
+  void context; void enclosing; void flags;
+  const value: any = {};
+  value["participantId"] = yield* readIncrementalNonzeroU64(reader, context, value, flags);
+
+
+  value["sessionOwnerNodeRid"] = yield* readIncrementalRid(reader, context, value, flags);
+
+
+  value["sessionOwnerNodeGeneration"] = yield* readIncrementalNonzeroU64(reader, context, value, flags);
+
+
+  value["sessionOwnerId"] = yield* readIncrementalText8(reader, context, value, flags);
+
+
+  value["sessionOwnerLeaseGeneration"] = yield* readIncrementalNonzeroU64(reader, context, value, flags);
+
+
+  value["sessionRid"] = yield* readIncrementalRid(reader, context, value, flags);
+
+
+  value["bindingGeneration"] = yield* readIncrementalNonzeroU64(reader, context, value, flags);
+
+
+
+
+  return value;
+}
+function writeRelocationSessionBinding(input: RelocationSessionBinding, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
+  void context; void enclosing; void flags; const value: any = input;
+
+
+  if (value["participantId"] === undefined) fail("participantId required");
+
+
+  writeNonzeroU64(numeric(value["participantId"]), writer, context, value, flags);
+  if (value["sessionOwnerNodeRid"] === undefined) fail("sessionOwnerNodeRid required");
+
+
+  writeRid(value["sessionOwnerNodeRid"], writer, context, value, flags);
+  if (value["sessionOwnerNodeGeneration"] === undefined) fail("sessionOwnerNodeGeneration required");
+
+
+  writeNonzeroU64(numeric(value["sessionOwnerNodeGeneration"]), writer, context, value, flags);
+  if (value["sessionOwnerId"] === undefined) fail("sessionOwnerId required");
+
+
+  writeText8(value["sessionOwnerId"], writer, context, value, flags);
+  if (value["sessionOwnerLeaseGeneration"] === undefined) fail("sessionOwnerLeaseGeneration required");
+
+
+  writeNonzeroU64(numeric(value["sessionOwnerLeaseGeneration"]), writer, context, value, flags);
+  if (value["sessionRid"] === undefined) fail("sessionRid required");
+
+
+  writeRid(value["sessionRid"], writer, context, value, flags);
+  if (value["bindingGeneration"] === undefined) fail("bindingGeneration required");
+
+
+  writeNonzeroU64(numeric(value["bindingGeneration"]), writer, context, value, flags);
+}
+export function decodeRelocationSessionBinding(bytes: Uint8Array, context: ServiceWireDecoderContext): RelocationSessionBinding { const reader = new Reader(bytes); const value = readRelocationSessionBinding(reader, context, {}, 0); reader.done("relocation-session-binding"); return value; }
+export function encodeRelocationSessionBinding(value: RelocationSessionBinding, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeRelocationSessionBinding(value, writer, context, {}, 0); return writer.result(); }
+
+export type RelocationSessionBindingVector = readonly RelocationSessionBinding[];
+
+function readRelocationSessionBindingVector(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): RelocationSessionBindingVector {
+  void context; void enclosing; void flags;
+  const count = Number(readU32(reader, context, enclosing, flags)); if (count > 1024) fail("relocation-session-binding-vector count"); const value: any = Array.from({ length: count }, () => readRelocationSessionBinding(reader, context, enclosing, flags));
+  try { for (let index = 1; index < value.length; ++index) if (compareResults([compareBigint(numeric(value[index - 1]["participantId"]), numeric(value[index]["participantId"]))]) >= 0) fail("relocation-session-binding-vector sorted"); } catch (error) { if (error instanceof ServiceWireProtocolError || error instanceof ServiceWireCapacityError) throw error; if (error instanceof RangeError) capacityFail("relocation-session-binding-vector constraint capacity"); throw error; }
+
+  return value;
+}
+function* readIncrementalRelocationSessionBindingVector(reader: IncrementalInput, context: ServiceWireDecoderContext, enclosing: any, flags: number): Generator<void, RelocationSessionBindingVector, void> {
+  void context; void enclosing; void flags;
+  const count = Number(yield* readIncrementalU32(reader, context, enclosing, flags)); if (count > 1024) fail("relocation-session-binding-vector count"); const value: any[] = []; for (let index = 0; index < count; ++index) { const item = yield* readIncrementalRelocationSessionBinding(reader, context, enclosing, flags); try { value.push(item); } catch { capacityFail("relocation-session-binding-vector capacity"); } }
+  try { for (let index = 1; index < value.length; ++index) if (compareResults([compareBigint(numeric(value[index - 1]["participantId"]), numeric(value[index]["participantId"]))]) >= 0) fail("relocation-session-binding-vector sorted"); } catch (error) { if (error instanceof ServiceWireProtocolError || error instanceof ServiceWireCapacityError) throw error; if (error instanceof RangeError) capacityFail("relocation-session-binding-vector constraint capacity"); throw error; }
+
+  return value;
+}
+function writeRelocationSessionBindingVector(input: RelocationSessionBindingVector, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
+  void context; void enclosing; void flags; const value: any = input;
+  if (!Array.isArray(value) || value.length > 1024) fail("relocation-session-binding-vector count");
+  try { for (let index = 1; index < value.length; ++index) if (compareResults([compareBigint(numeric(value[index - 1]["participantId"]), numeric(value[index]["participantId"]))]) >= 0) fail("relocation-session-binding-vector sorted"); } catch (error) { if (error instanceof ServiceWireProtocolError || error instanceof ServiceWireCapacityError) throw error; if (error instanceof RangeError) capacityFail("relocation-session-binding-vector constraint capacity"); throw error; }
+
+  writeU32(value.length, writer, context, enclosing, flags); for (const item of value) writeRelocationSessionBinding(item, writer, context, enclosing, flags);
+}
+export function decodeRelocationSessionBindingVector(bytes: Uint8Array, context: ServiceWireDecoderContext): RelocationSessionBindingVector { const reader = new Reader(bytes); const value = readRelocationSessionBindingVector(reader, context, {}, 0); reader.done("relocation-session-binding-vector"); return value; }
+export function encodeRelocationSessionBindingVector(value: RelocationSessionBindingVector, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeRelocationSessionBindingVector(value, writer, context, {}, 0); return writer.result(); }
+
+export type RelocationEnvelopeV1 = { readonly relocation: RelocationId; readonly object: RelocationObjectIdentity; readonly applicationVersion: ApplicationVersion; readonly applicationStates: RelocationParticipantApplicationStateVector; readonly savedWork: SavedWorkVector; readonly timerRegistrations: RelocationTimerRegistrationVector; readonly pendingTimerTicks: RelocationPendingTimerTickVector; readonly sessionBindings: RelocationSessionBindingVector };
 
 function readRelocationEnvelopeV1(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): RelocationEnvelopeV1 {
   void context; void enclosing; void flags;
@@ -7608,6 +7749,9 @@ function readRelocationEnvelopeV1(reader: Reader, context: ServiceWireDecoderCon
 
 
   value["pendingTimerTicks"] = readRelocationPendingTimerTickVector(reader, context, value, flags);
+
+
+  value["sessionBindings"] = readRelocationSessionBindingVector(reader, context, value, flags);
 
 
 
@@ -7636,6 +7780,9 @@ function* readIncrementalRelocationEnvelopeV1(reader: IncrementalInput, context:
 
 
   value["pendingTimerTicks"] = yield* readIncrementalRelocationPendingTimerTickVector(reader, context, value, flags);
+
+
+  value["sessionBindings"] = yield* readIncrementalRelocationSessionBindingVector(reader, context, value, flags);
 
 
 
@@ -7674,6 +7821,10 @@ function writeRelocationEnvelopeV1(input: RelocationEnvelopeV1, writer: Writer, 
 
 
   writeRelocationPendingTimerTickVector(value["pendingTimerTicks"], writer, context, value, flags);
+  if (value["sessionBindings"] === undefined) fail("sessionBindings required");
+
+
+  writeRelocationSessionBindingVector(value["sessionBindings"], writer, context, value, flags);
 }
 export function decodeRelocationEnvelopeV1(bytes: Uint8Array, context: ServiceWireDecoderContext): RelocationEnvelopeV1 { const reader = new Reader(bytes); const value = readRelocationEnvelopeV1(reader, context, {}, 0); reader.done("relocation-envelope-v1"); return value; }
 export function encodeRelocationEnvelopeV1(value: RelocationEnvelopeV1, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeRelocationEnvelopeV1(value, writer, context, {}, 0); return writer.result(); }
@@ -8885,7 +9036,7 @@ const frames: Uint8Array[] = [writer.result()];
 return frames; }
 export function validateSessionRelocationSealCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context;  }
 
-export type SessionRelocationSealedCommand = { readonly command: "sessionRelocationSealed"; readonly flags: number; readonly relocation: RelocationId; readonly coordinator: RelocationCoordinatorFence; readonly actor: ActorRouteFence; readonly sessionOwnerNodeRid: Rid; readonly sessionOwnerNodeGeneration: NonzeroU64; readonly sessionOwnerId: Text8; readonly sessionOwnerLeaseGeneration: NonzeroU64; readonly sessionRid: Rid; readonly bindingGeneration: NonzeroU64; };
+export type SessionRelocationSealedCommand = { readonly command: "sessionRelocationSealed"; readonly flags: number; readonly relocation: RelocationId; readonly coordinator: RelocationCoordinatorFence; readonly actor: ActorRouteFence; readonly sessionOwnerNodeRid: Rid; readonly sessionOwnerNodeGeneration: NonzeroU64; readonly sessionOwnerId: Text8; readonly sessionOwnerLeaseGeneration: NonzeroU64; readonly sessionRid: Rid; readonly bindingGeneration: NonzeroU64; readonly sealResult: SessionSealResult; };
 export function decodeSessionRelocationSealedCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): SessionRelocationSealedCommand { if (!frames.length) fail("sessionRelocationSealed frames"); const reader = new Reader(frames[0]); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1 || Number(reader.u(1)) !== 43) fail("sessionRelocationSealed header"); const flags = Number(reader.u(1)); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("sessionRelocationSealed flags"); const value: any = { command: "sessionRelocationSealed", flags };
   value["relocation"] = readRelocationId(reader, context, value, flags);
 
@@ -8912,6 +9063,9 @@ export function decodeSessionRelocationSealedCommand(frames: readonly Uint8Array
 
 
   value["bindingGeneration"] = readNonzeroU64(reader, context, value, flags);
+
+
+  value["sealResult"] = readSessionSealResult(reader, context, value, flags);
 
 
 reader.done("sessionRelocationSealed"); let frameIndex = 1;
@@ -8956,6 +9110,10 @@ export function encodeSessionRelocationSealedCommand(value: SessionRelocationSea
 
 
   writeNonzeroU64(numeric(value["bindingGeneration"]), writer, context, value, value.flags);
+  if (value["sealResult"] === undefined) fail("sealResult required");
+
+
+  writeSessionSealResult(value["sealResult"], writer, context, value, value.flags);
 const frames: Uint8Array[] = [writer.result()];
 
 return frames; }

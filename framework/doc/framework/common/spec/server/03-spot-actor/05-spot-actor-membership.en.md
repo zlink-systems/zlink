@@ -38,9 +38,9 @@ owner information changes to a new value.
 is a non-zero unsigned 63-bit conceptual value distinguishing an incarnation
 re-created under the same logical identity. `ObjectGeneration` is kept even
 when membership or the [owner](../00-foundation/02-glossary.en.md#owner) MeshNode changes
-within the same incarnation. Instead, the provider issues a larger
+within the same incarnation. Instead, the Framework issues a larger
 [`AuthorityOwnerGeneration`](../00-foundation/02-glossary.en.md#authorityownergeneration) —
-a provider-issued value marking the order in which the authority owner
+a value marking the order in which the authority owner
 changed for the same object incarnation — to distinguish the new owner.
 
 Authority recorded in the Location Store includes the following information.
@@ -991,7 +991,8 @@ owner lease, and local admission deadline.
 ## 9. Message Follow
 
 After commit and within `MessageFollowDuration`, the source relays
-messages arriving at the old address to the committed target. Relay
+messages arriving at the old address to the committed target (except under
+[Location runtime §10](../05-location-relocation/01-location-runtime.en.md#10-when-a-store-response-isnt-received)'s chained-move exception). Relay
 doesn't read the Store or run an application handler, and it preserves
 original operation identity, generation, payload, and reply route. After
 route duration ends, a request arriving at the old address ends with

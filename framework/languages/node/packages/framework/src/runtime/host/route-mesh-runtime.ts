@@ -586,7 +586,7 @@ export class ZLinkRouteMeshRuntimeCoordinator implements ZLinkRouteMeshRuntime {
       const callbackFailed = cleanup.some(
         (value) => value.status === 'rejected' && hasTeardownFailure(value.reason)
       );
-      result = { kind: 'forceStopped', reason: callbackFailed ? 'teardown_failed' : reason };
+      result = { kind: 'forceStopped', reason: callbackFailed ? 'teardown_failed' : reason, error };
       for (const [meshName, state] of entries) {
         this.transition(meshName, state, ZLinkTopologyState.Failed);
       }

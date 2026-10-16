@@ -786,7 +786,6 @@ stream_session_registry_t::commit_remote_route (const std::string &connection_id
                                                 std::uint64_t binding_generation,
                                                 const std::string &actor_id,
                                                 std::uint64_t object_generation,
-                                                std::uint64_t previous_authority_owner_generation,
                                                 object_ref_t target,
                                                 std::uint64_t target_node_generation,
                                                 std::uint64_t target_owner_lease_generation,
@@ -796,9 +795,8 @@ stream_session_registry_t::commit_remote_route (const std::string &connection_id
     auto admission =
       _lane
         .run ([this, &connection_id, binding_generation, &actor_id, object_generation,
-               previous_authority_owner_generation, target = std::move (target),
-               target_node_generation, target_owner_lease_generation, &commit_terminal,
-               &hook_error] () mutable -> stream_route_admission_t {
+               target = std::move (target), target_node_generation, target_owner_lease_generation,
+               &commit_terminal, &hook_error] () mutable -> stream_route_admission_t {
             const auto connection = _connections.find (connection_id);
             auto *aggregate = current_aggregate_unlocked (actor_id);
             if (connection == _connections.end () || aggregate == nullptr
@@ -809,14 +807,11 @@ stream_session_registry_t::commit_remote_route (const std::string &connection_id
             const auto last_sequence = aggregate->next_inbound_sequence - 1;
             if (aggregate->binding.actor.kind != object_kind_t::actor
                 || aggregate->binding.actor.object_generation != object_generation
-                || aggregate->binding.actor.authority_owner_generation
-                     != previous_authority_owner_generation
                 || !aggregate->barrier_token || !_barriers.contains (*aggregate->barrier_token)
                 || !exact_actor (_barriers.at (*aggregate->barrier_token), aggregate->binding.actor)
                 || target.kind != object_kind_t::actor || target.key != actor_id
-                || target.object_generation != object_generation
-                || target.authority_owner_generation <= previous_authority_owner_generation
-                || target_node_generation == 0 || target_owner_lease_generation == 0
+                || target.object_generation != object_generation || target_node_generation == 0
+                || target_owner_lease_generation == 0
                 || !aggregate->ingress_drain->active.empty ()) {
                 return {stateful_error_t::conflict, aggregate->binding, last_sequence};
             }
@@ -843,20 +838,18 @@ stream_session_registry_t::commit_remote_route (const std::string &connection_id
     return finish_remote_route (actor_id, std::move (admission), hook_error);
 }
 
-stream_route_admission_t stream_session_registry_t::acknowledge_remote_abort (
-  const std::string &connection_id,
-  std::uint64_t binding_generation,
-  const std::string &actor_id,
-  std::uint64_t object_generation,
-  std::uint64_t current_authority_owner_generation,
-  route_terminal_commit_t commit_terminal)
+stream_route_admission_t
+stream_session_registry_t::acknowledge_remote_abort (const std::string &connection_id,
+                                                     std::uint64_t binding_generation,
+                                                     const std::string &actor_id,
+                                                     std::uint64_t object_generation,
+                                                     route_terminal_commit_t commit_terminal)
 {
     std::exception_ptr hook_error;
     auto admission =
       _lane
         .run ([this, &connection_id, binding_generation, &actor_id, object_generation,
-               current_authority_owner_generation, &commit_terminal,
-               &hook_error] () -> stream_route_admission_t {
+               &commit_terminal, &hook_error] () -> stream_route_admission_t {
             const auto connection = _connections.find (connection_id);
             auto *aggregate = current_aggregate_unlocked (actor_id);
             if (connection == _connections.end () || aggregate == nullptr
@@ -867,8 +860,6 @@ stream_route_admission_t stream_session_registry_t::acknowledge_remote_abort (
             const auto last_sequence = aggregate->next_inbound_sequence - 1;
             if (aggregate->binding.actor.kind != object_kind_t::actor
                 || aggregate->binding.actor.object_generation != object_generation
-                || aggregate->binding.actor.authority_owner_generation
-                     != current_authority_owner_generation
                 || !aggregate->barrier_token || !_barriers.contains (*aggregate->barrier_token)
                 || !exact_actor (_barriers.at (*aggregate->barrier_token),
                                  aggregate->binding.actor)) {

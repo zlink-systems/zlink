@@ -8,6 +8,124 @@ namespace Zlink.Framework.UnitTests;
 
 public sealed class CanonicalActorJoinIngressReplyTests
 {
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task Relocation_prepare_stops_when_the_target_intent_ends(
+        bool targetReady,
+        bool prepareOnWorker
+    )
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var source = new ZLinkManagedMeshNode(context, "mesh");
+        var suffix = Guid.NewGuid().ToString("N");
+        source.SetRoutingId(RoutingId.From($"prepare-source-{suffix}"));
+        source.SetBind($"inproc://prepare-source-{suffix}");
+        source.Start();
+        var targetRid = RoutingId.From("prepare-target");
+        var targetEndpoint = $"inproc://prepare-target-{suffix}";
+        var replyWithheld = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        await using var target = targetReady
+            ? new ZLinkManagedMeshNode(
+                context,
+                "mesh",
+                nativeTerminalReplySubmitOverride: _ =>
+                {
+                    replyWithheld.TrySetResult();
+                    return SubmitResult.Ok;
+                }
+            )
+            : null;
+        if (target is not null)
+        {
+            target.SetRoutingId(targetRid);
+            target.SetBind(targetEndpoint);
+            target.SetCanonicalRelocationTarget(new CountingRelocationTarget());
+            target.Start();
+            source.ConnectPeer(targetEndpoint, targetRid);
+            await WaitUntilAsync(() => source.Status().AdmittedPeerCount == 1);
+        }
+        var targetGeneration = target?.Status().LifecycleGeneration ?? 1;
+        source.SetPeerExpectation(
+            targetRid,
+            targetEndpoint,
+            ZLinkServiceSecurityIdentity.Plaintext,
+            targetGeneration
+        );
+        var payload = ZLinkRelocationTransferPayload.Create(
+            new ZLinkRelocationEnvelope(
+                Guid.NewGuid(),
+                1,
+                new byte[32],
+                [
+                    new ZLinkRelocationParticipantEnvelope(
+                        new ZLinkAuthorityKey("actor:mesh:actor"),
+                        ZLinkPlacementObjectKind.Actor,
+                        1,
+                        1,
+                        new byte[] { 1 },
+                        [],
+                        []
+                    ),
+                ]
+            ),
+            1024
+        );
+        var prepare = new ZLinkServiceWireCodec.RelocationPrepareRecord(
+            new(1, 1),
+            1,
+            new(
+                "source-owner",
+                1,
+                source.RoutingId,
+                source.Status().LifecycleGeneration,
+                "v-source"
+            ),
+            new(targetRid, targetGeneration, "target-owner", 1),
+            1,
+            new(1, "actor", "actor", 1, 1),
+            source.RoutingId,
+            source.Status().LifecycleGeneration,
+            (ulong)payload.TotalLength,
+            (uint)payload.ChunkCount,
+            payload.ChecksumCrc32c,
+            1
+        );
+        var preparationStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        Task StartPreparation()
+        {
+            var request = source
+                .PrepareCanonicalRelocationAsync(
+                    targetRid,
+                    prepare,
+                    payload,
+                    TimeSpan.FromSeconds(5),
+                    CancellationToken.None
+                )
+                .AsTask();
+            preparationStarted.SetResult();
+            return request;
+        }
+        var pending = prepareOnWorker ? Task.Run(StartPreparation) : StartPreparation();
+        await preparationStarted.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        if (targetReady)
+            await replyWithheld.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        Assert.False(pending.IsCompleted);
+        source.RemovePeerExpectation(targetRid, targetEndpoint);
+        if (targetReady)
+            source.DisconnectPeer(targetRid);
+        var failure = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+            await pending.WaitAsync(TimeSpan.FromSeconds(3))
+        );
+        Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, failure.Kind);
+    }
+
     [Fact]
     public async Task RelocationPrepare_DuplicateRepliesShareRestoreAndManifestConflictRepliesFailed()
     {
@@ -1095,6 +1213,58 @@ public sealed class CanonicalActorJoinIngressReplyTests
         await Task.Delay(TimeSpan.FromSeconds(3));
 
         Assert.Equal(1UL, runtime.Target.Status().AdmittedPeerCount);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task PumpCloseRejectsNewImmediateSendsBeforeNodeDisposal(
+        bool publishDrainingAfterClose
+    )
+    {
+        await using var runtime = await ConnectedRuntime.CreateAsync(_ => SubmitResult.Ok);
+        var pump = new Zlink.Framework.Runtime.Backend.DotNet.ZLinkMeshDispatchPump(
+            runtime.Target,
+            runtime.Target.Completions
+        );
+        await pump.DisposeAsync();
+        if (publishDrainingAfterClose)
+            runtime.Target.PublishDraining();
+        Assert.Equal(MeshNodeState.Stopped, runtime.Target.Status().State);
+        using var payload = Message.From(new byte[] { 1 });
+        var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+            await runtime.Target.SendToNodeDirectAsync(
+                runtime.SourceRid,
+                [payload],
+                SendFlags.None,
+                default,
+                CancellationToken.None
+            )
+        );
+        Assert.Equal(ZLinkFrameworkErrorKind.ShuttingDown, error.Kind);
+    }
+
+    [Fact]
+    public async Task ImmediatelyAdmittedSend_CompletesFromTheSubmitResultWithoutACompletionEntry()
+    {
+        await using var runtime = await ConnectedRuntime.CreateAsync(_ => SubmitResult.Ok);
+        // Spec 01-submit-and-completion §10: an immediately admitted send completes
+        // from its submit result and makes no completion-table entry, so the
+        // submitter holds a completed send and a closed table cannot reject it.
+        runtime.Target.Completions.FailAll(RequestResult.Terminated);
+        for (var index = 0; index < 16; index++)
+        {
+            using var payload = Message.From(new byte[] { 1 });
+            var send = runtime.Target.SendToNodeDirectAsync(
+                runtime.SourceRid,
+                [payload],
+                SendFlags.None,
+                default,
+                CancellationToken.None
+            );
+            Assert.True(send.IsCompletedSuccessfully);
+            await send;
+        }
     }
 
     [Fact]

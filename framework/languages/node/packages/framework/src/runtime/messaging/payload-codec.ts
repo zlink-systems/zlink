@@ -17,10 +17,7 @@ import {
   materializeZLinkMessageValue,
   readZLinkMessageDeclaredType
 } from '../../contracts/Common/ZLinkMessage';
-import {
-  adoptEncodedPayload,
-  borrowEncodedPayload
-} from '../../contracts/Common/encoded-payload-storage';
+import { borrowEncodedPayload } from '../../contracts/Common/encoded-payload-storage';
 import { ZLinkConfigurationException } from '../configuration';
 import { parseFrameworkJsonV1, stringifyFrameworkJsonV1 } from './framework-json-v1';
 import type { ZLinkJsonSchema } from '../../contracts/Handlers/JsonContract';
@@ -434,13 +431,13 @@ function toRuntimeMessage(payload: ZLinkEncodedPayload): Message {
     : RuntimeMessage.fromOwned(owned);
 }
 
-function encodedPayloadFromOwned(bytes: Uint8Array): ZLinkEncodedPayload {
-  if (!Buffer.isBuffer(bytes)) {
-    return ZLinkEncodedPayload.from(bytes);
-  }
-  const payload = ZLinkEncodedPayload.from(Buffer.alloc(0));
-  adoptEncodedPayload(payload, bytes);
-  return payload;
+/**
+ * Wraps received bytes for a serializer without copying them. Binding receive
+ * Buffers keep their storage after the message closes and nothing writes to
+ * them, so the payload may adopt them; the public from() and data() still copy.
+ */
+export function encodedPayloadFromOwned(bytes: Uint8Array): ZLinkEncodedPayload {
+  return ZLinkEncodedPayload.fromOwned(bytes);
 }
 
 function rememberContentType(message: Message, contentType: string): Message {

@@ -10,6 +10,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import systems.zlink.framework.configuration.ZLinkApplicationJobQueueProfile;
 import systems.zlink.framework.monitoring.ZLinkFlowOrigin;
@@ -174,6 +176,35 @@ final class ZLinkSerialExecutionQueueTest {
                 assertEquals("second", second.join());
                 assertEquals(1, terminals.get());
             }
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void committedMessageSubmitsDirectlyToItsWorker(boolean shared) throws Exception {
+        var submittingThread = new AtomicReference<Thread>();
+        var submitted = new CompletableFuture<Void>();
+        var release = new CompletableFuture<Void>();
+        try (var executor =
+                Executors.newThreadPerTaskExecutor(
+                        command -> {
+                            submittingThread.set(Thread.currentThread());
+                            submitted.complete(null);
+                            return Thread.ofVirtual().unstarted(command);
+                        })) {
+            var queue = new ZLinkSerialExecutionQueue(executor, ZLinkExecutionLanePolicy.spot());
+            if (shared) new ZLinkSerialExecutionQueue.SharedSpotGate(queue);
+            var caller = Thread.currentThread();
+            var completed = queue.enqueue(() -> release, null);
+            try {
+                submitted.get(3, TimeUnit.SECONDS);
+                assertSame(caller, submittingThread.get());
+                assertFalse(completed.toCompletableFuture().isDone());
+            } finally {
+                release.complete(null);
+            }
+            completed.toCompletableFuture().get(3, TimeUnit.SECONDS);
+            queue.close();
         }
     }
 

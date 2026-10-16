@@ -1,7 +1,31 @@
+using Zlink.Framework.Runtime.Locations;
+
 namespace Zlink.Framework.Runtime.Spots;
 
 internal abstract partial class ZLinkSpotActivation
 {
+    internal async ValueTask ConfigureAsync(
+        IReadOnlyList<ZLinkScannedSpotHandler> handlers,
+        Action configure,
+        IReadOnlyList<ZLinkRelocationLogicalTimer>? logicalTimers,
+        CancellationToken cancellationToken
+    )
+    {
+        if (logicalTimers is not null)
+            await RestoreLogicalTimersAsync(logicalTimers).ConfigureAwait(false);
+        _timers.BeginRelocatedInitialization();
+        try
+        {
+            foreach (var handler in handlers)
+                await ApplyScannedHandlerAsync(handler, cancellationToken).ConfigureAwait(false);
+            configure();
+        }
+        finally
+        {
+            _timers.EndRelocatedInitialization();
+        }
+    }
+
     protected void AddPacketCore<THandler>()
         where THandler : class
     {
@@ -61,7 +85,8 @@ internal abstract partial class ZLinkSpotActivation
             throw new InvalidOperationException("SPOT has already been attached to this context.");
 
         if (!ReferenceEquals(spot.Context, this))
-            throw new InvalidOperationException(
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.InvalidOperation,
                 $"SPOT '{spot.GetType().FullName}' must expose the context provided by the runtime."
             );
 
@@ -87,7 +112,8 @@ internal abstract partial class ZLinkSpotActivation
         if (_spot is not null)
             throw new InvalidOperationException("SPOT has already been attached to this context.");
         if (!ReferenceEquals(spot.Context, this))
-            throw new InvalidOperationException(
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.InvalidOperation,
                 $"Instance Spot '{spot.GetType().FullName}' must expose the context provided by the runtime."
             );
 
@@ -116,13 +142,22 @@ internal abstract partial class ZLinkSpotActivation
     protected async ValueTask BindUserDescriptorsAsync(CancellationToken cancellationToken)
     {
         await _subscriptions
-            .BindAsync(Spot, NativeSpot, DefaultRequestTimeout, cancellationToken)
+            .BindAsync(
+                Spot,
+                NativeSpot,
+                DefaultRequestTimeout,
+                cancellationToken,
+                _runtime
+                    .Registration.SpotNodes.Values.Where(node => node.SpotNodeName == SpotNodeName)
+                    .SelectMany(static node => node.ChannelMemberships)
+                    .Select(static membership => membership.ChannelName)
+            )
             .ConfigureAwait(false);
         _actorJoins.Bind(Spot);
         _actorHandlers?.Bind();
     }
 
-    internal async ValueTask ApplyScannedHandlerAsync(
+    private async ValueTask ApplyScannedHandlerAsync(
         ZLinkScannedSpotHandler handler,
         CancellationToken cancellationToken
     )

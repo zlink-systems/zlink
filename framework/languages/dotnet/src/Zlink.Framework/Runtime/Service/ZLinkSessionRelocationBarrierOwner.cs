@@ -6,7 +6,7 @@ namespace Zlink.Framework.Runtime.Service;
 internal sealed class ZLinkSessionRelocationBarrierOwner(ZLinkFrameworkRuntime runtime)
     : ISessionRelocationBarrierTarget
 {
-    public ValueTask<ZLinkServiceWireCodec.SessionRelocationSealedRecord> SealAsync(
+    public ValueTask<ZLinkServiceWireCodec.SessionRelocationSealedRecord?> SealAsync(
         ZLinkServiceWireCodec.SessionRelocationSealRecord seal,
         RoutingId authenticatedSourceNodeRid,
         CancellationToken cancellationToken
@@ -23,30 +23,5 @@ internal sealed class ZLinkSessionRelocationBarrierOwner(ZLinkFrameworkRuntime r
         ZLinkServiceWireCodec.SessionRelocationRouteRecord route,
         ZLinkSessionRelocationAuthenticatedRoute authenticatedRoute,
         CancellationToken cancellationToken
-    )
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        var senderMatches =
-            route.Route.Action == ZLinkServiceWireCodec.SessionRelocationRouteAction.Commit
-                ? route.SenderRole == (byte)ServiceWireCodec.RelocationRole.Target
-                    && route.Route.TargetNodeRid == authenticatedRoute.NodeRid
-                    && route.Route.TargetNodeGeneration == authenticatedRoute.NodeGeneration
-                    && route.Route.TargetAuthorityOwnerGeneration
-                        == authenticatedRoute.AuthorityOwnerGeneration
-                : route.SenderRole == (byte)ServiceWireCodec.RelocationRole.Source
-                    && route.Coordinator.NodeRid == authenticatedRoute.NodeRid
-                    && route.Coordinator.NodeGeneration == authenticatedRoute.NodeGeneration
-                    && route.Route.CurrentAuthorityOwnerGeneration
-                        == authenticatedRoute.AuthorityOwnerGeneration;
-        if (!senderMatches)
-            throw new InvalidDataException(
-                $"Command {(byte)ServiceWireConstants.Command.SessionRelocationRoute} sender role does not match the authenticated source."
-            );
-
-        return runtime.RouteCanonicalSessionActorAsync(
-            route,
-            authenticatedRoute,
-            cancellationToken
-        );
-    }
+    ) => runtime.RouteCanonicalSessionActorAsync(route, authenticatedRoute, cancellationToken);
 }

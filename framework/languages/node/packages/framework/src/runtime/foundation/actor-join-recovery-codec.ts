@@ -131,7 +131,7 @@ export function encodeCanonicalActorJoinRecoverySavedWork(
   const replyContentType =
     operationId === undefined
       ? null
-      : requireText(input.replyContentType, 'Actor Join reply content type');
+      : (nullableText(input.replyContentType ?? null, 'Actor Join reply content type') ?? null);
   const metadata = encodeMetadataJson({
     Request: {
       ActorId: requireText(input.actorId, 'Actor id'),
@@ -288,7 +288,7 @@ export function decodeCanonicalActorJoinRecoverySavedWork(
   const operationLow = integer(metadata.OperationIdLow, 'OperationIdLow');
   const hasOperation = operationHigh !== 0n || operationLow !== 0n;
   const replyContentType = nullableText(metadata.ReplyContentType, 'ReplyContentType');
-  if (hasOperation !== (replyContentType !== undefined)) {
+  if (!hasOperation && replyContentType !== undefined) {
     throw new TypeError('Canonical Actor Join recovery reply identity is invalid.');
   }
   const targetNodeRid = base64(metadata.TargetNodeRid, 'TargetNodeRid');

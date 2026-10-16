@@ -289,17 +289,14 @@ final class ZLinkHandlerScannerTest {
     }
 
     @Test
-    void missingScannedSubscriptionTopicFailsHostValidationWithHandlerName() {
+    void unannotatedSubscriptionIsAvailableForDynamicRegistration() {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         options.addHandlersFromPackageOf(MissingTopicSubscription.class);
-
-        ZLinkConfigurationException error =
-                assertThrows(ZLinkConfigurationException.class, options::validate);
-
-        assertEquals(
-                "SPOT subscription handler topic is required: "
-                        + MissingTopicSubscription.class.getName(),
-                error.getMessage());
+        options.validate();
+        assertTrue(
+                ZLinkHandlerScanner.scan(Set.of(MissingTopicSubscription.class))
+                        .handlers()
+                        .isEmpty());
     }
 
     @Test
@@ -335,11 +332,31 @@ final class ZLinkHandlerScannerTest {
         assertEquals(String.class, handler.replyType());
     }
 
+    @Test
+    void skipsOpenGenericHandlerTypes() {
+        ZLinkScannedHandlerCatalog catalog =
+                ZLinkHandlerScanner.scan(Set.of(ZLinkHandlerScannerTest.class));
+
+        assertTrue(
+                catalog.handlers().stream()
+                        .noneMatch(
+                                handler ->
+                                        handler.handlerType() == OpenGenericRequestHandler.class));
+    }
+
     public static final class UngroupedInterfaceHandler
             implements ZLinkRequestHandler<String, String> {
         @Override
         public CompletionStage<String> handle(String request, ZLinkMessageContext context) {
             return CompletableFuture.completedFuture(request);
+        }
+    }
+
+    public static final class OpenGenericRequestHandler<T>
+            implements ZLinkRequestHandler<T, String> {
+        @Override
+        public CompletionStage<String> handle(T request, ZLinkMessageContext context) {
+            return CompletableFuture.completedFuture("ignored");
         }
     }
 
@@ -461,7 +478,7 @@ final class ZLinkHandlerScannerTest {
         }
     }
 
-    @ZLinkSpotSubscription(topic = "room.events")
+    @ZLinkSpotSubscription(channelName = "events", topic = "room.events")
     public static final class InterfaceSpotSubscriptionHandler
             implements ZLinkSpotSubscriptionHandler<TestSpot, SpotEvent> {
         @Override

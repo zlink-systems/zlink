@@ -1,7 +1,7 @@
 // GENERATED FILE - DO NOT EDIT.
 // Produced by framework/languages/node/scripts/sync-unity-webgl-package.mjs from
 // @zlink-systems/stream-connector (package root, IIFE build).
-// Package version: 0.30.0
+// Package version: 0.30.1
 //
 // This is the same TypeScript connector the npm package root ships. The UPM
 // adapter adds no wire runtime of its own (stream-connector spec 32 section 11).
@@ -795,8 +795,335 @@ var ZlinkStreamConnectorBundle = (() => {
     }
   }
 
+  // packages/stream-wire/src/internal/framework-json-v1.ts
+  var SIGNED_64_MIN = -(1n << 63n);
+  var UNSIGNED_64_MAX = (1n << 64n) - 1n;
+  function stringifyFrameworkJsonV1(value, schema, replacer) {
+    if (value === void 0 || typeof value === "function" || typeof value === "symbol") {
+      throw new TypeError("framework-json-v1 payload is not a JSON value.");
+    }
+    const encoded = JSON.stringify(
+      value,
+      replacer === void 0 ? frameworkJsonV1Replacer : function(key, item) {
+        const transformed = replacer.call(this, key, item);
+        return frameworkJsonV1Replacer.call({ [key]: transformed }, key, transformed);
+      }
+    );
+    if (schema !== void 0) {
+      validateFrameworkJsonV1Value(JSON.parse(encoded), schema, "$", false);
+    }
+    return encoded;
+  }
+  function frameworkJsonV1Replacer(key, item) {
+    const source = this[key];
+    if (typeof source === "number" && !Number.isFinite(source)) {
+      throw new TypeError("framework-json-v1 only accepts finite JSON numbers.");
+    }
+    if (typeof source === "bigint") {
+      if (source < SIGNED_64_MIN || source > UNSIGNED_64_MAX) {
+        throw new RangeError("framework-json-v1 64-bit integer is outside the supported range.");
+      }
+      return source.toString(10);
+    }
+    if (source instanceof Uint8Array) {
+      return encodeBase64(source);
+    }
+    if (source instanceof Date) {
+      throw new TypeError("framework-json-v1 does not implicitly encode Date values.");
+    }
+    if (typeof source === "object" && source !== null && typeof source.toJSON === "function") {
+      throw new TypeError("framework-json-v1 does not implicitly invoke custom toJSON methods.");
+    }
+    return item;
+  }
+  function parseFrameworkJsonV1(text, options = {}, schema, reviver) {
+    if (text.charCodeAt(0) === 65279) {
+      throw new SyntaxError("framework-json-v1 does not allow a UTF-8 BOM.");
+    }
+    new JsonPropertyScanner(text, options).scan();
+    const parsed = JSON.parse(text, reviver);
+    return schema === void 0 ? parsed : validateFrameworkJsonV1Value(parsed, schema, "$", true);
+  }
+  var NUMBER_TOKEN_PATTERN = /-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?/uy;
+  var BASE64_PATTERN = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u;
+  var INT32_MIN = -2147483648;
+  var INT32_MAX = 2147483647;
+  var UINT32_MAX2 = 4294967295;
+  function validateFrameworkJsonV1Value(value, schema, path, decode) {
+    switch (schema.type) {
+      case "boolean":
+        if (typeof value !== "boolean") schemaFailure(path, "a boolean");
+        return value;
+      case "string":
+        if (typeof value !== "string") schemaFailure(path, "a string");
+        return value;
+      case "number":
+        if (typeof value !== "number" || !Number.isFinite(value))
+          schemaFailure(path, "a finite number");
+        return value;
+      case "int32":
+        if (!Number.isInteger(value) || value < INT32_MIN || value > INT32_MAX) {
+          schemaFailure(path, "an int32 JSON number");
+        }
+        return value;
+      case "uint32":
+        if (!Number.isInteger(value) || value < 0 || value > UINT32_MAX2) {
+          schemaFailure(path, "a uint32 JSON number");
+        }
+        return value;
+      case "int64":
+        return validateDecimalInteger(value, path, true, decode);
+      case "uint64":
+        return validateDecimalInteger(value, path, false, decode);
+      case "bytes": {
+        if (typeof value !== "string" || !BASE64_PATTERN.test(value)) {
+          schemaFailure(path, "padded RFC 4648 base64");
+        }
+        if (!hasCanonicalBase64Padding(value))
+          schemaFailure(path, "canonical padded RFC 4648 base64");
+        return decode ? decodeBase64(value) : value;
+      }
+      case "enum":
+        if (typeof value !== "string" || !schema.names.includes(value)) {
+          schemaFailure(path, `one of ${schema.names.join(", ")}`);
+        }
+        return value;
+      case "nullable":
+        return value === null ? null : validateFrameworkJsonV1Value(value, schema.value, path, decode);
+      case "array":
+        if (!Array.isArray(value)) schemaFailure(path, "an array");
+        return value.map(
+          (item, index) => validateFrameworkJsonV1Value(item, schema.items, `${path}[${index}]`, decode)
+        );
+      case "record": {
+        if (!isJsonObject(value)) schemaFailure(path, "an object");
+        const result = {};
+        for (const [name, item] of Object.entries(value)) {
+          result[name] = validateFrameworkJsonV1Value(item, schema.values, `${path}.${name}`, decode);
+        }
+        return decode ? result : value;
+      }
+      case "object": {
+        if (!isJsonObject(value)) schemaFailure(path, "an object");
+        const input = value;
+        for (const name of schema.required) {
+          if (!Object.prototype.hasOwnProperty.call(input, name)) {
+            throw new TypeError(`framework-json-v1 required property '${path}.${name}' is missing.`);
+          }
+        }
+        const result = {};
+        for (const [name, item] of Object.entries(input)) {
+          const propertySchema = schema.properties[name];
+          if (propertySchema === void 0) {
+            if (schema.additionalProperties === false) {
+              throw new TypeError(`framework-json-v1 property '${path}.${name}' is not allowed.`);
+            }
+            continue;
+          }
+          result[name] = validateFrameworkJsonV1Value(
+            item,
+            propertySchema,
+            `${path}.${name}`,
+            decode
+          );
+        }
+        return decode ? result : value;
+      }
+    }
+  }
+  function validateDecimalInteger(value, path, signed, decode) {
+    if (typeof value !== "string" || !/^(?:0|[1-9][0-9]*|-[1-9][0-9]*)$/u.test(value)) {
+      schemaFailure(
+        path,
+        signed ? "a canonical int64 decimal string" : "a canonical uint64 decimal string"
+      );
+    }
+    const parsed = BigInt(value);
+    const minimum = signed ? SIGNED_64_MIN : 0n;
+    const maximum = signed ? (1n << 63n) - 1n : UNSIGNED_64_MAX;
+    if (parsed < minimum || parsed > maximum)
+      schemaFailure(path, signed ? "an int64 value" : "a uint64 value");
+    return decode ? parsed : value;
+  }
+  function isJsonObject(value) {
+    return typeof value === "object" && value !== null && !Array.isArray(value);
+  }
+  function schemaFailure(path, expected) {
+    throw new TypeError(`framework-json-v1 value '${path}' must be ${expected}.`);
+  }
+  var JsonPropertyScanner = class {
+    constructor(text, options) {
+      this.text = text;
+      this.options = options;
+      __publicField(this, "index", 0);
+    }
+    scan() {
+      this.skipWhitespace();
+      this.scanValue();
+      this.skipWhitespace();
+      if (this.index !== this.text.length) this.fail("trailing data");
+    }
+    scanValue() {
+      this.skipWhitespace();
+      const token = this.text[this.index];
+      if (token === "{") return this.scanObject();
+      if (token === "[") return this.scanArray();
+      if (token === '"') {
+        this.scanString();
+        return;
+      }
+      if (token === "t") return this.scanLiteral("true");
+      if (token === "f") return this.scanLiteral("false");
+      if (token === "n") return this.scanLiteral("null");
+      this.scanNumber();
+    }
+    scanObject() {
+      var _a, _b;
+      this.index++;
+      this.skipWhitespace();
+      if (this.text[this.index] === "}") {
+        this.index++;
+        return;
+      }
+      const properties = /* @__PURE__ */ new Set();
+      for (; ; ) {
+        this.skipWhitespace();
+        if (this.text[this.index] !== '"') this.fail("object property name");
+        const property = this.scanString();
+        if (properties.has(property)) {
+          throw new SyntaxError(`framework-json-v1 duplicate property '${property}'.`);
+        }
+        properties.add(property);
+        if (((_b = (_a = this.options).rejectPropertyName) == null ? void 0 : _b.call(_a, property)) === true) {
+          throw new SyntaxError(`framework-json-v1 property '${property}' is not allowed.`);
+        }
+        this.skipWhitespace();
+        if (this.text[this.index] !== ":") this.fail("':' after object property");
+        this.index++;
+        this.scanValue();
+        this.skipWhitespace();
+        const delimiter = this.text[this.index++];
+        if (delimiter === "}") return;
+        if (delimiter !== ",") this.fail("',' or '}' after object property");
+      }
+    }
+    scanArray() {
+      this.index++;
+      this.skipWhitespace();
+      if (this.text[this.index] === "]") {
+        this.index++;
+        return;
+      }
+      for (; ; ) {
+        this.scanValue();
+        this.skipWhitespace();
+        const delimiter = this.text[this.index++];
+        if (delimiter === "]") return;
+        if (delimiter !== ",") this.fail("',' or ']' after array item");
+      }
+    }
+    scanString() {
+      const start = this.index++;
+      let sawEscape = false;
+      for (; ; ) {
+        if (this.index >= this.text.length) this.fail("unterminated string");
+        const character = this.text[this.index++];
+        if (character === '"') {
+          return sawEscape ? JSON.parse(this.text.slice(start, this.index)) : this.text.slice(start + 1, this.index - 1);
+        }
+        if (character === "\\") {
+          sawEscape = true;
+          if (this.index >= this.text.length) this.fail("unterminated escape");
+          const escaped = this.text[this.index++];
+          if (escaped === "u") this.index += 4;
+        }
+      }
+    }
+    scanLiteral(value) {
+      if (!this.text.startsWith(value, this.index)) this.fail(value);
+      this.index += value.length;
+    }
+    scanNumber() {
+      NUMBER_TOKEN_PATTERN.lastIndex = this.index;
+      const match = NUMBER_TOKEN_PATTERN.exec(this.text);
+      if (match === null) this.fail("JSON value");
+      if (!Number.isFinite(Number(match[0]))) {
+        throw new TypeError("framework-json-v1 only accepts finite JSON numbers.");
+      }
+      this.index += match[0].length;
+    }
+    skipWhitespace() {
+      for (; ; ) {
+        const code = this.text.charCodeAt(this.index);
+        if (code === 32 || code === 9 || code === 10 || code === 13) {
+          this.index += 1;
+          continue;
+        }
+        return;
+      }
+    }
+    fail(expected) {
+      throw new SyntaxError(`framework-json-v1 expected ${expected} at offset ${this.index}.`);
+    }
+  };
+  var BASE64_STRING_CHUNK_BYTES = 8192;
+  var BASE64_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  function hasCanonicalBase64Padding(value) {
+    if (value.endsWith("=="))
+      return (BASE64_ALPHABET.indexOf(value.charAt(value.length - 3)) & 15) === 0;
+    if (value.endsWith("="))
+      return (BASE64_ALPHABET.indexOf(value.charAt(value.length - 2)) & 3) === 0;
+    return true;
+  }
+  function encodeBase64(bytes) {
+    let binary = "";
+    for (let offset = 0; offset < bytes.length; offset += BASE64_STRING_CHUNK_BYTES) {
+      binary += String.fromCharCode(...bytes.subarray(offset, offset + BASE64_STRING_CHUNK_BYTES));
+    }
+    return btoa(binary);
+  }
+  function decodeBase64(value) {
+    const binary = atob(value);
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index);
+    return bytes;
+  }
+
+  // packages/stream-wire/src/internal/json-contract.ts
+  var ZLINK_PACKET_JSON_CONTRACTS = Symbol.for("@zlink-systems/framework:packet-json-contracts");
+  function isPrototypeKey(name) {
+    return name === "__proto__" || name === "prototype" || name === "constructor";
+  }
+
+  // packages/stream-wire/src/internal/packet-json-contract.ts
+  var ZLINK_DECORATOR_METADATA = Symbol.for("@zlink-systems/framework:decorator");
+  function readZLinkDecoratorMetadata(target) {
+    if (!Object.prototype.hasOwnProperty.call(target, ZLINK_DECORATOR_METADATA)) {
+      return [];
+    }
+    return target[ZLINK_DECORATOR_METADATA];
+  }
+  function readFrameworkPacketJsonContract(type, explicitPacketName) {
+    const expectedPacketName = normalizePacketName(explicitPacketName);
+    for (const metadata of readZLinkDecoratorMetadata(type)) {
+      if (metadata.kind === "packet" && metadata.jsonContract !== void 0 && (expectedPacketName === void 0 || normalizePacketName(metadata.packetName) === expectedPacketName)) {
+        return metadata.jsonContract;
+      }
+    }
+    return void 0;
+  }
+  function normalizePacketName(value) {
+    if (typeof value !== "string") {
+      return void 0;
+    }
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : void 0;
+  }
+
   // packages/stream-connector/src/Contracts/ZlinkStreamJsonCodec.ts
   var zlinkStreamJsonCodecName = "json";
+  var encoder = new TextEncoder();
+  var decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
   var codecOptions = {};
   var zlinkStreamJsonCodec = {
     configure(options) {
@@ -805,20 +1132,37 @@ var ZlinkStreamConnectorBundle = (() => {
     encode(payload, messageType) {
       return toJson(payload, messageType);
     },
-    decode(payload) {
-      return fromJson(payload);
+    decode(payload, messageType) {
+      return decodeJson(payload, messageType != null ? messageType : payload.messageType);
     }
   };
   function toJson(value, messageType) {
+    var _a;
+    const type = messageType != null ? messageType : inferMessageType(value);
     return {
       codec: 1 /* Json */,
-      payload: new TextEncoder().encode(JSON.stringify(value, codecOptions.replacer)),
-      messageType: messageType != null ? messageType : inferMessageType(value)
+      payload: encoder.encode(
+        stringifyFrameworkJsonV1(
+          value,
+          type === void 0 ? void 0 : (_a = readFrameworkPacketJsonContract(type)) == null ? void 0 : _a.payload,
+          codecOptions.replacer
+        )
+      ),
+      messageType: type
     };
   }
   function fromJson(payload) {
+    return decodeJson(payload, payload.messageType);
+  }
+  function decodeJson(payload, messageType) {
+    var _a;
     ensureJson(payload);
-    return JSON.parse(new TextDecoder().decode(payload.payload), safeJsonReviver);
+    return parseFrameworkJsonV1(
+      decoder.decode(payload.payload),
+      { rejectPropertyName: isPrototypeKey },
+      messageType === void 0 ? void 0 : (_a = readFrameworkPacketJsonContract(messageType)) == null ? void 0 : _a.payload,
+      codecOptions.reviver
+    );
   }
   function ensureJson(payload) {
     if (payload.codec !== 1 /* Json */) {
@@ -832,18 +1176,6 @@ var ZlinkStreamConnectorBundle = (() => {
     }
     const constructor = (_a = Object.getPrototypeOf(value)) == null ? void 0 : _a.constructor;
     return constructor === Object ? void 0 : constructor;
-  }
-  function safeJsonReviver(key, value) {
-    if (isPrototypeKey(key)) {
-      throw new Error(`JSON payload key '${key}' is not allowed.`);
-    }
-    if (codecOptions.reviver !== void 0) {
-      return codecOptions.reviver.call(this, key, value);
-    }
-    return value;
-  }
-  function isPrototypeKey(key) {
-    return key === "__proto__" || key === "constructor" || key === "prototype";
   }
 
   // packages/stream-connector/src/Runtime/ZlinkStreamSupport.ts

@@ -93,8 +93,6 @@ internal sealed class ZLinkActorRuntimeState(
 
     public ZLinkSpotActivation? Activation { get; private set; }
 
-    public ZLinkActorDispatchState? CurrentDispatch { get; private set; }
-
     public ZLinkActorContext? Context { get; private set; }
 
     public IZLinkActor? Actor { get; private set; }
@@ -1201,7 +1199,6 @@ internal sealed class ZLinkActorRuntimeState(
         SessionId = null;
         Stream = null;
         Activation = null;
-        CurrentDispatch = null;
         Context = null;
         Actor = null;
         ClearActorMetric();
@@ -1271,9 +1268,24 @@ internal sealed class ZLinkActorRuntimeState(
         public object? GetService(Type serviceType) => null;
     }
 
-    public void PrepareForTransferredActivation() => RunState(PrepareForTransferredActivationCore);
+    internal async ValueTask PrepareForTransferredActivationAsync(
+        CancellationToken cancellationToken
+    )
+    {
+        var terminal = await ExecuteLockedAsync(
+                () => _terminalLifecycleCompletion,
+                cancellationToken
+            )
+            .ConfigureAwait(false);
+        if (terminal is not null)
+            // Framework API §11: source retirement publishes its handoff result
+            // before async handler disposal finishes. Reentry needs that existing
+            // terminal fence; the source finalizer owns reporting disposal errors.
+            await Task.WhenAny(terminal).WaitAsync(cancellationToken).ConfigureAwait(false);
 
-    internal void PrepareForTransferredActivationOnLane() => PrepareForTransferredActivationCore();
+        await ExecuteLockedAsync(PrepareForTransferredActivationCore, cancellationToken)
+            .ConfigureAwait(false);
+    }
 
     private void PrepareForTransferredActivationCore()
     {
@@ -1620,30 +1632,46 @@ internal sealed class ZLinkActorRuntimeState(
     }
 
     public async ValueTask ExecuteDispatchAsync(
-        ZlinkStreamHeader header,
         Func<CancellationToken, ValueTask> operation,
         CancellationToken cancellationToken
     )
     {
         using var turn = await _dispatchMailbox.EnterAsync(cancellationToken).ConfigureAwait(false);
         EnsureDispatchAvailable();
-        using var dispatch = EnterDispatch(header);
+        using var dispatch = EnterDispatch();
         await operation(cancellationToken).ConfigureAwait(false);
     }
 
     public async ValueTask<T> ExecuteDispatchAsync<T>(
-        ZlinkStreamHeader header,
         Func<CancellationToken, ValueTask<T>> operation,
         bool countAsPendingRequest,
         CancellationToken cancellationToken,
-        bool allowRelocationReplay = false
+        bool allowRelocationReplay = false,
+        ZLinkSpotRelocationActorQueueReservation? replayReservation = null
     )
     {
+        if (replayReservation is not null)
+        {
+            T result = default!;
+            await replayReservation
+                .ExecuteAsync(
+                    ActorId,
+                    async ct =>
+                    {
+                        EnsureDispatchAvailable(allowRelocationReplay);
+                        using var dispatch = EnterDispatch();
+                        result = await operation(ct).ConfigureAwait(false);
+                    },
+                    cancellationToken
+                )
+                .ConfigureAwait(false);
+            return result;
+        }
         using var turn = await _dispatchMailbox
             .EnterAsync(cancellationToken, countAsPendingRequest)
             .ConfigureAwait(false);
         EnsureDispatchAvailable(allowRelocationReplay);
-        using var dispatch = EnterDispatch(header);
+        using var dispatch = EnterDispatch();
         return await operation(cancellationToken).ConfigureAwait(false);
     }
 
@@ -1704,25 +1732,17 @@ internal sealed class ZLinkActorRuntimeState(
         );
     }
 
-    public DispatchScope EnterDispatch(ZlinkStreamHeader header)
-    {
-        var previous = CurrentDispatch;
-        var previousAmbient = AmbientDispatch.Value;
-        var ownership = new DispatchOwnership(this);
-        CurrentDispatch = new ZLinkActorDispatchState(header);
-        AmbientDispatch.Value = ownership;
-        return new DispatchScope(this, previous, previousAmbient, ownership);
-    }
-
-    public DispatchScope EnterDeferredJoinExecution()
+    public DispatchScope EnterDispatch()
     {
         var previousAmbient = AmbientDispatch.Value;
         var ownership = new DispatchOwnership(this);
         AmbientDispatch.Value = ownership;
-        return new DispatchScope(this, CurrentDispatch, previousAmbient, ownership);
+        return new DispatchScope(previousAmbient, ownership);
     }
 
-    public DispatchScope EnterForwardedDispatchExecution() => EnterDeferredJoinExecution();
+    public DispatchScope EnterDeferredJoinExecution() => EnterDispatch();
+
+    public DispatchScope EnterForwardedDispatchExecution() => EnterDispatch();
 
     private async Task ClearActorCreationTaskWhenCompletedAsync(Task<IZLinkActor> creationTask)
     {
@@ -1772,30 +1792,20 @@ internal sealed class ZLinkActorRuntimeState(
 
     public readonly struct DispatchScope : IDisposable
     {
-        private readonly ZLinkActorRuntimeState? _state;
-        private readonly ZLinkActorDispatchState? _previous;
         private readonly DispatchOwnership? _previousAmbient;
         private readonly DispatchOwnership? _ownership;
 
-        internal DispatchScope(
-            ZLinkActorRuntimeState state,
-            ZLinkActorDispatchState? previous,
-            DispatchOwnership? previousAmbient,
-            DispatchOwnership ownership
-        )
+        internal DispatchScope(DispatchOwnership? previousAmbient, DispatchOwnership ownership)
         {
-            _state = state;
-            _previous = previous;
             _previousAmbient = previousAmbient;
             _ownership = ownership;
         }
 
         public void Dispose()
         {
-            if (_state is not null)
+            if (_ownership is not null)
             {
-                _ownership?.Deactivate();
-                _state.CurrentDispatch = _previous;
+                _ownership.Deactivate();
                 AmbientDispatch.Value = _previousAmbient;
             }
         }

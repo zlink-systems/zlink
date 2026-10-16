@@ -349,6 +349,14 @@ flowchart LR
 예약이 필요하지 않다. 모든 완료 경로가 같은 방식을 사용해야 새 경로를 추가해도 경쟁
 규칙이 달라지지 않는다.
 
+이 경쟁은 완료가 나중에 도착하는 operation에만 있다. Binding send의 admission 결과는
+[§15](#15-binding-send-terminal-소비-구현)대로 확정한다. 즉시 admission된 send는 그 결과로
+완료하며 진행 중 호출 표에 항목을 만들지 않는다. 그 send에는 경쟁할 다른 완료 경로가
+없다 — one-way send에는 timeout·취소 입력이 없고(§7), 이미 확정된 결과는 종료로 바뀌지
+않는다. `BACKPRESSURED`로 나중의 admission을 기다리는 send와 모든 request는 항목을
+등록하고 위의 꺼내기로 완료 권한을 확정한다. 어느 경우든 caller continuation은
+[§11](#11-완료-callback의-execution-turn-구현)의 새 execution turn 조건을 따른다.
+
 Service wire의 request는 서로 다른 두 값을 함께 보존한다. 둘 다 Framework 내부
 값이며 application에는 노출하지 않는다.
 
@@ -410,6 +418,11 @@ dispatcher에 넣고, 아래에서 정한 새 execution turn 조건에 따라 �
 다른 자원의 상위 호출 stack 전체가 반환됐다는 전역 순서까지 요구하지 않는다. 그 turn을 어느 실행 자원이
 실행하는지는 [Messaging hot path 「4.4」](08-messaging-hot-path.ko.md#44-실행-자원-배치--수신-역할-인계)가
 정한다.
+
+**대기를 어디서 시작했는지는 이 조건을 바꾸지 않는다.** Application thread처럼 runtime 실행 문맥 밖에서
+시작해 돌아갈 lane이 없어도, Framework가 전달하는 완료 callback과 비동기 재개는 위 새 execution turn 조건과
+Messaging hot path 「4.4」의 실행 자원 배치를 따른다. Application이 언어의 future·task·promise에 직접 등록한 의존 작업의 실행
+위치와 동기 blocking 대기가 반환하는 thread는 그 언어 API의 계약을 따른다.
 
 **완료 callback을 dispatcher에 넣는 일은 실패하지 않는다.** Dispatcher에 상한이 없기
 때문이다. 자리가 없다는 이유로 request를 거부하거나, 이미 수락한 호출의 완료를 버리는

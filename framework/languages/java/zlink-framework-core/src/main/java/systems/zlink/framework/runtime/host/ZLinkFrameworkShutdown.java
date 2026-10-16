@@ -3,6 +3,7 @@ package systems.zlink.framework.runtime.host;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorOrigin;
+import systems.zlink.framework.runtime.internal.execution.ZLinkTeardownExecutor;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -25,6 +26,12 @@ final class ZLinkFrameworkShutdown {
 
     private final ArrayDeque<Supplier<CompletionStage<Void>>> actions = new ArrayDeque<>();
 
+    /**
+     * Registers a stage that closes a runtime resource. The next stage starts only after this one
+     * returned, also after the host deadline expired: a later stage closes what an earlier one
+     * still uses (the Core context under a mesh pump), and the expired deadline only stops stages
+     * that wait for application progress.
+     */
     void defer(String stage, Runnable action) {
         deferStage(stage, () -> ZLinkTeardownExecutor.submit(action));
     }

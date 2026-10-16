@@ -258,6 +258,12 @@ internal static class ServiceWireCodec
         SourceLeaseExpired = 2
     }
 
+    internal enum SessionSealResult : byte
+    {
+        Sealed = 1,
+        BindingAbsent = 2
+    }
+
     internal enum ReplyRelayAckStatus : byte
     {
         TerminalReceived = 1,
@@ -675,7 +681,11 @@ internal static class ServiceWireCodec
 
     internal sealed record RelocationPendingTimerTickVector(IReadOnlyList<RelocationPendingTimerTick> Items);
 
-    internal sealed record RelocationEnvelopeV1(RelocationId Relocation, RelocationObjectIdentity Object, ApplicationVersion ApplicationVersion, RelocationParticipantApplicationStateVector ApplicationStates, SavedWorkVector SavedWork, RelocationTimerRegistrationVector TimerRegistrations, RelocationPendingTimerTickVector PendingTimerTicks);
+    internal sealed record RelocationSessionBinding(NonzeroU64 ParticipantId, Rid SessionOwnerNodeRid, NonzeroU64 SessionOwnerNodeGeneration, Text8 SessionOwnerId, NonzeroU64 SessionOwnerLeaseGeneration, Rid SessionRid, NonzeroU64 BindingGeneration);
+
+    internal sealed record RelocationSessionBindingVector(IReadOnlyList<RelocationSessionBinding> Items);
+
+    internal sealed record RelocationEnvelopeV1(RelocationId Relocation, RelocationObjectIdentity Object, ApplicationVersion ApplicationVersion, RelocationParticipantApplicationStateVector ApplicationStates, SavedWorkVector SavedWork, RelocationTimerRegistrationVector TimerRegistrations, RelocationPendingTimerTickVector PendingTimerTicks, RelocationSessionBindingVector SessionBindings);
 
     internal sealed record Hello1(byte Flags,ServiceAdmission Admission);
 
@@ -737,7 +747,7 @@ internal static class ServiceWireCodec
 
     internal sealed record SessionRelocationSeal42(byte Flags,RelocationId Relocation,RelocationCoordinatorFence Coordinator,RelocationRole SenderRole,ActorRouteFence Actor,Rid SessionOwnerNodeRid,NonzeroU64 SessionOwnerNodeGeneration,Text8 SessionOwnerId,NonzeroU64 SessionOwnerLeaseGeneration,Rid SessionRid,NonzeroU64 BindingGeneration);
 
-    internal sealed record SessionRelocationSealed43(byte Flags,RelocationId Relocation,RelocationCoordinatorFence Coordinator,ActorRouteFence Actor,Rid SessionOwnerNodeRid,NonzeroU64 SessionOwnerNodeGeneration,Text8 SessionOwnerId,NonzeroU64 SessionOwnerLeaseGeneration,Rid SessionRid,NonzeroU64 BindingGeneration);
+    internal sealed record SessionRelocationSealed43(byte Flags,RelocationId Relocation,RelocationCoordinatorFence Coordinator,ActorRouteFence Actor,Rid SessionOwnerNodeRid,NonzeroU64 SessionOwnerNodeGeneration,Text8 SessionOwnerId,NonzeroU64 SessionOwnerLeaseGeneration,Rid SessionRid,NonzeroU64 BindingGeneration,SessionSealResult SealResult);
 
     internal sealed record SessionRelocationRoute44(byte Flags,RelocationId Relocation,RelocationCoordinatorFence Coordinator,RelocationRole SenderRole,ActorRef Actor,Rid SessionOwnerNodeRid,NonzeroU64 SessionOwnerNodeGeneration,Text8 SessionOwnerId,NonzeroU64 SessionOwnerLeaseGeneration,Rid SessionRid,NonzeroU64 BindingGeneration,SessionRelocationRouteUpdate Route);
 
@@ -1683,6 +1693,19 @@ internal static class ServiceWireCodec
     private static void WriteSourceCleanupState(Writer writer, SourceCleanupState value, DecodeContext context)
     {
         if (!Enum.IsDefined(value)) throw Error("source-cleanup-state: unknown enum");
+        writer.U8((byte)value);
+    }
+
+    internal static SessionSealResult DecodeSessionSealResult(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadSessionSealResult(reader, context); reader.End("session-seal-result"); return value; }
+    internal static byte[] EncodeSessionSealResult(SessionSealResult value, DecodeContext context) { var writer = new Writer(); WriteSessionSealResult(writer, value, context); return writer.ToArray(); }
+    private static SessionSealResult ReadSessionSealResult(Reader reader, DecodeContext context)
+    {
+        var raw = reader.U8();
+        return raw switch { 1 => SessionSealResult.Sealed, 2 => SessionSealResult.BindingAbsent, _ => throw Error("session-seal-result: unknown enum") };
+    }
+    private static void WriteSessionSealResult(Writer writer, SessionSealResult value, DecodeContext context)
+    {
+        if (!Enum.IsDefined(value)) throw Error("session-seal-result: unknown enum");
         writer.U8((byte)value);
     }
 
@@ -5696,6 +5719,56 @@ internal static class ServiceWireCodec
         WriteNonzeroU64(writer, item.Order, context);
         return writer.ToArray();
     }
+    internal static RelocationSessionBinding DecodeRelocationSessionBinding(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadRelocationSessionBinding(reader, context); reader.End("relocation-session-binding"); return value; }
+    internal static byte[] EncodeRelocationSessionBinding(RelocationSessionBinding value, DecodeContext context) { var writer = new Writer(); WriteRelocationSessionBinding(writer, value, context); return writer.ToArray(); }
+    private static RelocationSessionBinding ReadRelocationSessionBinding(Reader reader, DecodeContext context)
+    {
+        var ParticipantId = ReadNonzeroU64(reader, context);
+        var SessionOwnerNodeRid = ReadRid(reader, context);
+        var SessionOwnerNodeGeneration = ReadNonzeroU64(reader, context);
+        var SessionOwnerId = ReadText8(reader, context);
+        var SessionOwnerLeaseGeneration = ReadNonzeroU64(reader, context);
+        var SessionRid = ReadRid(reader, context);
+        var BindingGeneration = ReadNonzeroU64(reader, context);
+        var value = new RelocationSessionBinding(ParticipantId, SessionOwnerNodeRid, SessionOwnerNodeGeneration, SessionOwnerId, SessionOwnerLeaseGeneration, SessionRid, BindingGeneration);
+        return value;
+    }
+    private static void WriteRelocationSessionBinding(Writer writer, RelocationSessionBinding value, DecodeContext context)
+    {
+        WriteNonzeroU64(writer, value.ParticipantId, context);
+        WriteRid(writer, value.SessionOwnerNodeRid, context);
+        WriteNonzeroU64(writer, value.SessionOwnerNodeGeneration, context);
+        WriteText8(writer, value.SessionOwnerId, context);
+        WriteNonzeroU64(writer, value.SessionOwnerLeaseGeneration, context);
+        WriteRid(writer, value.SessionRid, context);
+        WriteNonzeroU64(writer, value.BindingGeneration, context);
+    }
+
+    internal static RelocationSessionBindingVector DecodeRelocationSessionBindingVector(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadRelocationSessionBindingVector(reader, context); reader.End("relocation-session-binding-vector"); return value; }
+    internal static byte[] EncodeRelocationSessionBindingVector(RelocationSessionBindingVector value, DecodeContext context) { var writer = new Writer(); WriteRelocationSessionBindingVector(writer, value, context); return writer.ToArray(); }
+    private static RelocationSessionBindingVector ReadRelocationSessionBindingVector(Reader reader, DecodeContext context)
+    {
+        var count = checked((int)ReadU32(reader, context).Value);
+        if (count > 1024) throw Error("relocation-session-binding-vector: count");
+        var items = new RelocationSessionBinding[count];
+        for (var i = 0; i < count; ++i) items[i] = ReadRelocationSessionBinding(reader, context);
+        var value = new RelocationSessionBindingVector(items);
+        try { for (var index = 1; index < value.Items.Count; index++) { var previous = KeyRelocationSessionBindingVector0(value.Items[index - 1], context); var current = KeyRelocationSessionBindingVector0(value.Items[index], context); var compared = CompareBytes(previous, current); if (compared == 0) throw Error("duplicate vector item"); if (compared > 0) throw Error("unsorted vector"); } } catch (OutOfMemoryException) { throw Capacity("relocation-session-binding-vector constraint capacity"); }
+        return value;
+    }
+    private static void WriteRelocationSessionBindingVector(Writer writer, RelocationSessionBindingVector value, DecodeContext context)
+    {
+        try { for (var index = 1; index < value.Items.Count; index++) { var previous = KeyRelocationSessionBindingVector0(value.Items[index - 1], context); var current = KeyRelocationSessionBindingVector0(value.Items[index], context); var compared = CompareBytes(previous, current); if (compared == 0) throw Error("duplicate vector item"); if (compared > 0) throw Error("unsorted vector"); } } catch (OutOfMemoryException) { throw Capacity("relocation-session-binding-vector constraint capacity"); }
+        if (value.Items.Count > 1024) throw Error("relocation-session-binding-vector: count");
+        WriteU32(writer, new U32(checked((uint)value.Items.Count)), context);
+        foreach (var item in value.Items) WriteRelocationSessionBinding(writer, item, context);
+    }
+    private static byte[] KeyRelocationSessionBindingVector0(RelocationSessionBinding item, DecodeContext context)
+    {
+        var writer = new Writer();
+        WriteNonzeroU64(writer, item.ParticipantId, context);
+        return writer.ToArray();
+    }
     internal static RelocationEnvelopeV1 DecodeRelocationEnvelopeV1(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadRelocationEnvelopeV1(reader, context); reader.End("relocation-envelope-v1"); return value; }
     internal static byte[] EncodeRelocationEnvelopeV1(RelocationEnvelopeV1 value, DecodeContext context) { var writer = new Writer(); WriteRelocationEnvelopeV1(writer, value, context); return writer.ToArray(); }
     private static RelocationEnvelopeV1 ReadRelocationEnvelopeV1(Reader reader, DecodeContext context)
@@ -5707,7 +5780,8 @@ internal static class ServiceWireCodec
         var SavedWork = ReadSavedWorkVector(reader, context);
         var TimerRegistrations = ReadRelocationTimerRegistrationVector(reader, context);
         var PendingTimerTicks = ReadRelocationPendingTimerTickVector(reader, context);
-        var value = new RelocationEnvelopeV1(Relocation, Object, ApplicationVersion, ApplicationStates, SavedWork, TimerRegistrations, PendingTimerTicks);
+        var SessionBindings = ReadRelocationSessionBindingVector(reader, context);
+        var value = new RelocationEnvelopeV1(Relocation, Object, ApplicationVersion, ApplicationStates, SavedWork, TimerRegistrations, PendingTimerTicks, SessionBindings);
         return value;
     }
     private static void WriteRelocationEnvelopeV1(Writer writer, RelocationEnvelopeV1 value, DecodeContext context)
@@ -5719,6 +5793,7 @@ internal static class ServiceWireCodec
         WriteSavedWorkVector(writer, value.SavedWork, context);
         WriteRelocationTimerRegistrationVector(writer, value.TimerRegistrations, context);
         WriteRelocationPendingTimerTickVector(writer, value.PendingTimerTicks, context);
+        WriteRelocationSessionBindingVector(writer, value.SessionBindings, context);
     }
     internal static Hello1 DecodeHello1(IReadOnlyList<byte[]> frames,DecodeContext context)
     {
@@ -6878,10 +6953,11 @@ internal static class ServiceWireCodec
         var SessionOwnerLeaseGeneration = ReadNonzeroU64(body, context);
         var SessionRid = ReadRid(body, context);
         var BindingGeneration = ReadNonzeroU64(body, context);
+        var SealResult = ReadSessionSealResult(body, context);
         body.End("body");
         var index=1;
         if(index!=frames.Count)throw Error("extra frame");
-        var value=new SessionRelocationSealed43(flags,Relocation,Coordinator,Actor,SessionOwnerNodeRid,SessionOwnerNodeGeneration,SessionOwnerId,SessionOwnerLeaseGeneration,SessionRid,BindingGeneration);
+        var value=new SessionRelocationSealed43(flags,Relocation,Coordinator,Actor,SessionOwnerNodeRid,SessionOwnerNodeGeneration,SessionOwnerId,SessionOwnerLeaseGeneration,SessionRid,BindingGeneration,SealResult);
         return value;
     }
     internal static SessionRelocationSealed43 DecodeSessionRelocationSealed43(byte[] frame,DecodeContext context)=>DecodeSessionRelocationSealed43(new[]{frame},context);
@@ -6901,6 +6977,7 @@ internal static class ServiceWireCodec
         WriteNonzeroU64(body, value.SessionOwnerLeaseGeneration, context);
         WriteRid(body, value.SessionRid, context);
         WriteNonzeroU64(body, value.BindingGeneration, context);
+        WriteSessionSealResult(body, value.SealResult, context);
         var frames=new List<byte[]>{body.ToArray()};
         return frames.ToArray();
     }
@@ -7277,7 +7354,7 @@ internal static class ServiceWireCodec
         internal int ReadByte(LogicalFrame frame,int retained){if(Consumed>=frame.End)throw Error("bounded logical value");if(at==chunk.Length){if(finalChunk)throw new EndOfStreamException("truncated logical stream");waiting=true;buffered=Math.Min(retained,7);return -1;}Consumed++;return chunk[at++];}
         internal object? Run(byte[] input,bool finalInput){chunk=input;at=0;finalChunk=finalInput;waiting=false;buffered=0;try{if(awaitingFinal){if(input.Length!=0)throw new LogicalInternalException(LogicalFailureKind.Trailing,"logical stream trailing bytes");if(finalInput)return result;waiting=true;return null;}while(!waiting&&result is null)stack.Peek().Resume(this);if(result is not null){if(at!=input.Length)throw new LogicalInternalException(LogicalFailureKind.Trailing,"logical stream trailing bytes");if(finalInput)return result;awaitingFinal=true;waiting=true;return null;}if(at!=input.Length)throw new InvalidOperationException("logical decoder did not consume chunk");if(finalInput)throw new EndOfStreamException("truncated logical stream");return null;}finally{chunk=Array.Empty<byte>();}}
     }
-    private sealed class LogicalRelocationEnvelopeV1Frame:LogicalFrame{private readonly object?[] values=new object?[7];internal LogicalRelocationEnvelopeV1Frame(long end):base(end){}internal override void Resume(LogicalMachine m){var context=m.Context;switch(State){case 0:{State=1;m.Push(new LogicalRelocationIdFrame(End));return;}case 1:{values[0]=TakeChild();State=2;return;}case 2:{State=3;m.Push(new LogicalRelocationObjectIdentityFrame(End));return;}case 3:{values[1]=TakeChild();State=4;return;}case 4:{State=5;m.Push(new LogicalApplicationVersionFrame(End));return;}case 5:{values[2]=TakeChild();State=6;return;}case 6:{State=7;m.Push(new LogicalRelocationParticipantApplicationStateVectorFrame(End));return;}case 7:{values[3]=TakeChild();State=8;return;}case 8:{State=9;m.Push(new LogicalSavedWorkVectorFrame(End));return;}case 9:{values[4]=TakeChild();State=10;return;}case 10:{State=11;m.Push(new LogicalRelocationTimerRegistrationVectorFrame(End));return;}case 11:{values[5]=TakeChild();State=12;return;}case 12:{State=13;m.Push(new LogicalRelocationPendingTimerTickVectorFrame(End));return;}case 13:{values[6]=TakeChild();State=14;return;}case 14:{var value=new RelocationEnvelopeV1(((RelocationId)values[0]!),((RelocationObjectIdentity)values[1]!),((ApplicationVersion)values[2]!),((RelocationParticipantApplicationStateVector)values[3]!),((SavedWorkVector)values[4]!),((RelocationTimerRegistrationVector)values[5]!),((RelocationPendingTimerTickVector)values[6]!));m.Complete(value);return;}default:throw new InvalidOperationException();}}}
+    private sealed class LogicalRelocationEnvelopeV1Frame:LogicalFrame{private readonly object?[] values=new object?[8];internal LogicalRelocationEnvelopeV1Frame(long end):base(end){}internal override void Resume(LogicalMachine m){var context=m.Context;switch(State){case 0:{State=1;m.Push(new LogicalRelocationIdFrame(End));return;}case 1:{values[0]=TakeChild();State=2;return;}case 2:{State=3;m.Push(new LogicalRelocationObjectIdentityFrame(End));return;}case 3:{values[1]=TakeChild();State=4;return;}case 4:{State=5;m.Push(new LogicalApplicationVersionFrame(End));return;}case 5:{values[2]=TakeChild();State=6;return;}case 6:{State=7;m.Push(new LogicalRelocationParticipantApplicationStateVectorFrame(End));return;}case 7:{values[3]=TakeChild();State=8;return;}case 8:{State=9;m.Push(new LogicalSavedWorkVectorFrame(End));return;}case 9:{values[4]=TakeChild();State=10;return;}case 10:{State=11;m.Push(new LogicalRelocationTimerRegistrationVectorFrame(End));return;}case 11:{values[5]=TakeChild();State=12;return;}case 12:{State=13;m.Push(new LogicalRelocationPendingTimerTickVectorFrame(End));return;}case 13:{values[6]=TakeChild();State=14;return;}case 14:{State=15;m.Push(new LogicalRelocationSessionBindingVectorFrame(End));return;}case 15:{values[7]=TakeChild();State=16;return;}case 16:{var value=new RelocationEnvelopeV1(((RelocationId)values[0]!),((RelocationObjectIdentity)values[1]!),((ApplicationVersion)values[2]!),((RelocationParticipantApplicationStateVector)values[3]!),((SavedWorkVector)values[4]!),((RelocationTimerRegistrationVector)values[5]!),((RelocationPendingTimerTickVector)values[6]!),((RelocationSessionBindingVector)values[7]!));m.Complete(value);return;}default:throw new InvalidOperationException();}}}
     private sealed class LogicalRelocationIdFrame:LogicalFrame{private readonly object?[] values=new object?[2];internal LogicalRelocationIdFrame(long end):base(end){}internal override void Resume(LogicalMachine m){var context=m.Context;switch(State){case 0:{State=1;m.Push(new LogicalU64Frame(End));return;}case 1:{values[0]=TakeChild();State=2;return;}case 2:{State=3;m.Push(new LogicalU64Frame(End));return;}case 3:{values[1]=TakeChild();State=4;return;}case 4:{var value=new RelocationId(((U64)values[0]!),((U64)values[1]!));if (value.High.Value == 0 && value.Low.Value == 0) throw Error("not-both-zero");m.Complete(value);return;}default:throw new InvalidOperationException();}}}
     private sealed class LogicalU64Frame:LogicalFrame{internal LogicalU64Frame(long end):base(end){}internal override void Resume(LogicalMachine m){var context=m.Context;var bytes=m.Take(this,8,true);if(bytes is null)return;var value=checked((ulong)m.UInt(bytes));if(value<0UL)throw Error("u64: range");if(value>18446744073709551615UL)throw Error("u64: range");m.Complete(new U64(value));}}
     private sealed class LogicalRelocationObjectIdentityFrame:LogicalFrame{private readonly object?[] values=new object?[1];private object?[] caseValues=Array.Empty<object?>();private long bodyEnd;internal LogicalRelocationObjectIdentityFrame(long end):base(end){}internal override void Resume(LogicalMachine m){var context=m.Context;switch(State){case 0:{State=1;m.Push(new LogicalStatefulObjectKindFrame(End));return;}case 1:{values[0]=TakeChild();State=2;return;}case 2:{State=3;m.Push(new LogicalU16Frame(End));return;}case 3:{bodyEnd=m.Bound(End,(ulong)((U16)TakeChild()).Value);State=4;return;}case 5:{State=6;m.Push(new LogicalActorRefFrame(bodyEnd));return;}case 6:{caseValues[0]=TakeChild();State=7;return;}case 7:{State=8;m.Push(new LogicalNonzeroU64Frame(bodyEnd));return;}case 8:{caseValues[1]=TakeChild();State=9;return;}case 9:{m.Exact(bodyEnd,"relocation-object-identity");var value=new RelocationObjectIdentityCase0(((StatefulObjectKind)values[0]!),((ActorRef)caseValues[0]!),((NonzeroU64)caseValues[1]!));m.Complete(value);return;}case 10:{State=11;m.Push(new LogicalSpotRefFrame(bodyEnd));return;}case 11:{caseValues[0]=TakeChild();State=12;return;}case 12:{State=13;m.Push(new LogicalNonzeroU64Frame(bodyEnd));return;}case 13:{caseValues[1]=TakeChild();State=14;return;}case 14:{m.Exact(bodyEnd,"relocation-object-identity");var value=new RelocationObjectIdentityCase1(((StatefulObjectKind)values[0]!),((SpotRef)caseValues[0]!),((NonzeroU64)caseValues[1]!));m.Complete(value);return;}case 15:{State=16;m.Push(new LogicalText8Frame(bodyEnd));return;}case 16:{caseValues[0]=TakeChild();State=17;return;}case 17:{State=18;m.Push(new LogicalText8Frame(bodyEnd));return;}case 18:{caseValues[1]=TakeChild();State=19;return;}case 19:{State=20;m.Push(new LogicalNonzeroU64Frame(bodyEnd));return;}case 20:{caseValues[2]=TakeChild();State=21;return;}case 21:{m.Exact(bodyEnd,"relocation-object-identity");var value=new RelocationObjectIdentityCase2(((StatefulObjectKind)values[0]!),((Text8)caseValues[0]!),((Text8)caseValues[1]!),((NonzeroU64)caseValues[2]!));m.Complete(value);return;}case 4:{if(((StatefulObjectKind)values[0]!)==StatefulObjectKind.Actor){caseValues=new object?[2];State=5;return;}else if(((StatefulObjectKind)values[0]!)==StatefulObjectKind.UserSpot){caseValues=new object?[2];State=10;return;}else if(((StatefulObjectKind)values[0]!)==StatefulObjectKind.InstanceSpot){caseValues=new object?[3];State=15;return;}throw Error("relocation-object-identity: discriminator");}default:throw new InvalidOperationException();}}}
@@ -7338,6 +7415,8 @@ internal static class ServiceWireCodec
     private sealed class LogicalOrdinalOrZeroFrame:LogicalFrame{internal LogicalOrdinalOrZeroFrame(long end):base(end){}internal override void Resume(LogicalMachine m){var context=m.Context;var bytes=m.Take(this,8,true);if(bytes is null)return;var value=checked((ulong)m.UInt(bytes));if(value<0UL)throw Error("ordinal-or-zero: range");if(value>9223372036854775807UL)throw Error("ordinal-or-zero: range");m.Complete(new OrdinalOrZero(value));}}
     private sealed class LogicalRelocationPendingTimerTickVectorFrame:LogicalFrame{private int count,index;private List<RelocationPendingTimerTick> values=null!;internal LogicalRelocationPendingTimerTickVectorFrame(long end):base(end){}internal override void Resume(LogicalMachine m){var context=m.Context;switch(State){case 0:{State=1;m.Push(new LogicalU32Frame(End));return;}case 1:{var encodedCount=(ulong)((U32)TakeChild()).Value;if(encodedCount>int.MaxValue)throw Capacity("relocation-pending-timer-tick-vector: capacity");count=(int)encodedCount;values=new List<RelocationPendingTimerTick>();State=2;return;}case 2:{if(index==count){var value=new RelocationPendingTimerTickVector(values);try { for (var index = 1; index < value.Items.Count; index++) { var previous = KeyRelocationPendingTimerTickVector0(value.Items[index - 1], context); var current = KeyRelocationPendingTimerTickVector0(value.Items[index], context); var compared = CompareBytes(previous, current); if (compared == 0) throw Error("duplicate vector item"); if (compared > 0) throw Error("unsorted vector"); } } catch (OutOfMemoryException) { throw Capacity("relocation-pending-timer-tick-vector constraint capacity"); }m.Complete(value);return;}State=3;m.Push(new LogicalRelocationPendingTimerTickFrame(End));return;}case 3:{try{values.Add((RelocationPendingTimerTick)TakeChild());}catch(OutOfMemoryException){throw Capacity("relocation-pending-timer-tick-vector: capacity");}index++;State=2;return;}default:throw new InvalidOperationException();}}}
     private sealed class LogicalRelocationPendingTimerTickFrame:LogicalFrame{private readonly object?[] values=new object?[7];internal LogicalRelocationPendingTimerTickFrame(long end):base(end){}internal override void Resume(LogicalMachine m){var context=m.Context;switch(State){case 0:{State=1;m.Push(new LogicalNonzeroU64Frame(End));return;}case 1:{values[0]=TakeChild();State=2;return;}case 2:{State=3;m.Push(new LogicalNonzeroU64Frame(End));return;}case 3:{values[1]=TakeChild();State=4;return;}case 4:{State=5;m.Push(new LogicalText8Frame(End));return;}case 5:{values[2]=TakeChild();State=6;return;}case 6:{State=7;m.Push(new LogicalNonzeroU64Frame(End));return;}case 7:{values[3]=TakeChild();State=8;return;}case 8:{State=9;m.Push(new LogicalNonzeroU64Frame(End));return;}case 9:{values[4]=TakeChild();State=10;return;}case 10:{State=11;m.Push(new LogicalU64Frame(End));return;}case 11:{values[5]=TakeChild();State=12;return;}case 12:{State=13;m.Push(new LogicalOrdinalOrZeroFrame(End));return;}case 13:{values[6]=TakeChild();State=14;return;}case 14:{var value=new RelocationPendingTimerTick(((NonzeroU64)values[0]!),((NonzeroU64)values[1]!),((Text8)values[2]!),((NonzeroU64)values[3]!),((NonzeroU64)values[4]!),((U64)values[5]!),((OrdinalOrZero)values[6]!));m.Complete(value);return;}default:throw new InvalidOperationException();}}}
+    private sealed class LogicalRelocationSessionBindingVectorFrame:LogicalFrame{private int count,index;private List<RelocationSessionBinding> values=null!;internal LogicalRelocationSessionBindingVectorFrame(long end):base(end){}internal override void Resume(LogicalMachine m){var context=m.Context;switch(State){case 0:{State=1;m.Push(new LogicalU32Frame(End));return;}case 1:{var encodedCount=(ulong)((U32)TakeChild()).Value;if(encodedCount>int.MaxValue)throw Capacity("relocation-session-binding-vector: capacity");count=(int)encodedCount;if(count>1024)throw Error("relocation-session-binding-vector: count");values=new List<RelocationSessionBinding>();State=2;return;}case 2:{if(index==count){var value=new RelocationSessionBindingVector(values);try { for (var index = 1; index < value.Items.Count; index++) { var previous = KeyRelocationSessionBindingVector0(value.Items[index - 1], context); var current = KeyRelocationSessionBindingVector0(value.Items[index], context); var compared = CompareBytes(previous, current); if (compared == 0) throw Error("duplicate vector item"); if (compared > 0) throw Error("unsorted vector"); } } catch (OutOfMemoryException) { throw Capacity("relocation-session-binding-vector constraint capacity"); }m.Complete(value);return;}State=3;m.Push(new LogicalRelocationSessionBindingFrame(End));return;}case 3:{try{values.Add((RelocationSessionBinding)TakeChild());}catch(OutOfMemoryException){throw Capacity("relocation-session-binding-vector: capacity");}index++;State=2;return;}default:throw new InvalidOperationException();}}}
+    private sealed class LogicalRelocationSessionBindingFrame:LogicalFrame{private readonly object?[] values=new object?[7];internal LogicalRelocationSessionBindingFrame(long end):base(end){}internal override void Resume(LogicalMachine m){var context=m.Context;switch(State){case 0:{State=1;m.Push(new LogicalNonzeroU64Frame(End));return;}case 1:{values[0]=TakeChild();State=2;return;}case 2:{State=3;m.Push(new LogicalRidFrame(End));return;}case 3:{values[1]=TakeChild();State=4;return;}case 4:{State=5;m.Push(new LogicalNonzeroU64Frame(End));return;}case 5:{values[2]=TakeChild();State=6;return;}case 6:{State=7;m.Push(new LogicalText8Frame(End));return;}case 7:{values[3]=TakeChild();State=8;return;}case 8:{State=9;m.Push(new LogicalNonzeroU64Frame(End));return;}case 9:{values[4]=TakeChild();State=10;return;}case 10:{State=11;m.Push(new LogicalRidFrame(End));return;}case 11:{values[5]=TakeChild();State=12;return;}case 12:{State=13;m.Push(new LogicalNonzeroU64Frame(End));return;}case 13:{values[6]=TakeChild();State=14;return;}case 14:{var value=new RelocationSessionBinding(((NonzeroU64)values[0]!),((Rid)values[1]!),((NonzeroU64)values[2]!),((Text8)values[3]!),((NonzeroU64)values[4]!),((Rid)values[5]!),((NonzeroU64)values[6]!));m.Complete(value);return;}default:throw new InvalidOperationException();}}}
     internal sealed class LogicalRelocationEnvelopeV1Decoder
     {
         internal const int MaximumContinuationDepth=12;private readonly LogicalMachine machine;private bool terminal;private long totalInputByteCount;

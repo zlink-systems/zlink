@@ -6,7 +6,7 @@ const {
   ZLinkActorPacketKind,
   ZLinkSpotActorHandlerRegistryRuntime
 } = require('../../packages/framework/dist/runtime/actors');
-const { ZLinkSpotActorSend } = require('../../packages/framework/dist');
+const { ZLinkSpotActorSend, ZLinkFrameworkException, ZLinkFrameworkErrorKind } = require('../../packages/framework/dist');
 
 test('Spot addHandler projects actor metadata into the actor dispatcher registry', () => {
   class PlayerActor {}
@@ -35,16 +35,40 @@ test('Spot addHandler projects actor metadata into the actor dispatcher registry
   );
 });
 
-test('repeated Spot subscription registration keeps one handler entry', () => {
+test('repeated Spot subscription registration fails activation with InvalidOperation', () => {
   class PublishHandler {}
   const registry = new DefaultZLinkSpotHandlerRegistry();
 
   registry.addSubscribe(PublishHandler, 'mesh', 'topic');
-  registry.addSubscribe(PublishHandler, 'mesh', 'topic');
+  assert.throws(() => registry.addSubscribe(PublishHandler, 'mesh', 'topic'), (error) =>
+    error instanceof ZLinkFrameworkException && error.kind === ZLinkFrameworkErrorKind.InvalidOperation);
 
   assert.deepEqual(registry.snapshot(), [
     { kind: 'subscribe', handlerType: PublishHandler, channelName: 'mesh', topic: 'topic' }
   ]);
+});
+
+test('empty Spot topic and duplicate packet fail with InvalidOperation', () => {
+  class PublishHandler {}
+  const registry = new DefaultZLinkSpotHandlerRegistry();
+  const invalid = (error) => error instanceof ZLinkFrameworkException &&
+    error.kind === ZLinkFrameworkErrorKind.InvalidOperation;
+  assert.throws(() => registry.addSubscribe(PublishHandler, 'mesh', ''), invalid);
+  registry.addPacket(PublishHandler, 'packet');
+  assert.throws(() => registry.addPacket(PublishHandler, 'packet'), invalid);
+});
+
+test('Spot subscriptions require channel membership and accept a registered channel', () => {
+  const { ZLinkNodeRawMeshBackend } = require('../../packages/framework/dist/runtime/backend/node/node-raw-mesh-backend');
+  const { ServiceStatefulRuntime } = require('../../packages/framework/dist/runtime/foundation/service-stateful-runtime');
+  const backend = new ZLinkNodeRawMeshBackend('mesh', 'node', {});
+  const stateful = new ServiceStatefulRuntime({ setServiceIngress() {} }, 'node', 1n);
+  backend.stateful = stateful;
+  const spot = stateful.createSpot('spot');
+  assert.throws(() => backend.setSpotSubscription(spot, 'unjoined-channel', 'topic'),
+    (error) => error instanceof ZLinkFrameworkException && error.kind === ZLinkFrameworkErrorKind.InvalidOperation);
+  backend.addChannelName('events');
+  assert.doesNotThrow(() => backend.setSpotSubscription(spot, 'events', 'topic'));
 });
 
 test('different Spot subscription registrations remain independent', () => {

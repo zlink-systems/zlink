@@ -28,6 +28,7 @@ import systems.zlink.framework.channels.ZLinkRouteSendHandler;
 import systems.zlink.framework.channels.ZLinkSendHandler;
 import systems.zlink.framework.configuration.ZLinkEndpointConnections;
 import systems.zlink.framework.configuration.ZLinkLogLevel;
+import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
@@ -721,6 +722,9 @@ final class ChannelMessagingTest {
         logger.addHandler(fileHandler);
 
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
+        //  The record must carry flow= — flow IDs exist only while message-flow
+        //  tracing is on, at Normal or Detailed (04-flow-correlation.ko.md:91).
+        options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL);
         {
             var channel = listenClientServer(options, "profile", "tcp://127.0.0.1:0");
             channel.addRequestHandler(EchoHandler.class, EchoRequest.class, String.class);
@@ -737,6 +741,7 @@ final class ChannelMessagingTest {
             String endpoint =
                     runtime.listenerStatus(ZLinkListenerKind.CLIENT_SERVER, "profile").endpoint();
             DefaultZLinkFrameworkOptions clientOptions = new DefaultZLinkFrameworkOptions();
+            clientOptions.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL);
             clientOptions.addClientServerChannel("profile").client().connect(endpoint);
             try (ZLinkFrameworkRuntime client =
                     RuntimeTestSupport.startFramework(
@@ -1803,6 +1808,7 @@ final class ChannelMessagingTest {
                         .join();
             } catch (CompletionException ex) {
                 if (ex.getCause() instanceof ZLinkFrameworkException frameworkError
+                        && frameworkError.getMessage() != null
                         && frameworkError.getMessage().contains("HANDLER_MISSING")) {
                     return frameworkError;
                 }

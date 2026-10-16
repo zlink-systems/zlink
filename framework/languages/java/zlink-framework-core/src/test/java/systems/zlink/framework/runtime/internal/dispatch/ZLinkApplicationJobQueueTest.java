@@ -29,6 +29,31 @@ import java.util.concurrent.atomic.AtomicReference;
 
 final class ZLinkApplicationJobQueueTest {
     @Test
+    void rotationBudgetReservesFreeCapacityOnceAndReturnsTheRestToWaiters() {
+        try (var queue = queue(4)) {
+            var first =
+                    queue.acquire(ZLinkApplicationJobQueue.Origin.REMOTE)
+                            .toCompletableFuture()
+                            .join();
+            assertEquals(3, queue.reserveRotationBudget(63));
+            assertEquals(4, queue.snapshot().permitsInUse());
+            var taken = queue.takeRotationPermit();
+            var waiter =
+                    queue.acquire(ZLinkApplicationJobQueue.Origin.REMOTE).toCompletableFuture();
+            assertFalse(waiter.isDone());
+            queue.abandonRotationBudget(2);
+            assertTrue(waiter.isDone(), "a returned budget permit grants the oldest waiter");
+            assertEquals(3, queue.snapshot().permitsInUse());
+            assertEquals(1, queue.reserveRotationBudget(63));
+            queue.abandonRotationBudget(1);
+            waiter.join().close();
+            taken.abandonReservation();
+            first.abandonReservation();
+            assertEquals(0, queue.snapshot().permitsInUse());
+        }
+    }
+
+    @Test
     void inlineAcquireContinuationDoesNotBlockAnotherGrant() throws Exception {
         try (var queue = queue(2)) {
             var heldFirst =
@@ -621,6 +646,7 @@ final class ZLinkApplicationJobQueueTest {
                         candidates(1),
                         100,
                         0);
+        java.util.concurrent.Executor executor = Thread::startVirtualThread;
         CountDownLatch firstPauseEntered = new CountDownLatch(1);
         CountDownLatch releaseFirstPause = new CountDownLatch(1);
         AtomicLong pauseCalls = new AtomicLong();
@@ -644,10 +670,11 @@ final class ZLinkApplicationJobQueueTest {
                         () ->
                                 queue.acquire(ZLinkApplicationJobQueue.Origin.REMOTE)
                                         .toCompletableFuture()
-                                        .join());
+                                        .join(),
+                        executor);
         assertTrue(firstPauseEntered.await(1, TimeUnit.SECONDS));
 
-        CompletableFuture<Void> close = CompletableFuture.runAsync(queue::close);
+        CompletableFuture<Void> close = CompletableFuture.runAsync(queue::close, executor);
         CompletableFuture<Void> unregister = null;
         try {
             close.get(1, TimeUnit.SECONDS);
@@ -658,7 +685,8 @@ final class ZLinkApplicationJobQueueTest {
                                 unregisterStarted.countDown();
                                 first.close();
                                 second.close();
-                            });
+                            },
+                            executor);
             assertTrue(unregisterStarted.await(1, TimeUnit.SECONDS));
             CompletableFuture<Void> currentUnregister = unregister;
             assertThrows(

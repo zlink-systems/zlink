@@ -66,8 +66,8 @@ Entry Spot ID issuance, format, and conflict rules for an Object Server MeshNode
 An Object Server MeshNode issues the Entry Spot ID and publishes it on its descriptor
 whether or not the application registered an Entry Spot type. Registering an Entry Spot
 type only chooses the application handler this Spot runs; it doesn't change whether the
-descriptor carries `entrySpotId`, and it doesn't decide whether the node can serve a
-remote creation request.
+descriptor carries `entrySpotId`, but it does decide whether the node is a candidate for
+creating new Actors ([Actor model §6.3](04-actor-model.en.md#63-selecting-mesh-and-placement-target)).
 
 The MeshNode descriptor mapping and publication rule for the Entry Spot ID are defined by
 [Transport RID and Spot ID Policy §6.3](../02-channel-transport/04-network-listener-identity.en.md#63-entry-spot-id).
@@ -292,6 +292,19 @@ If `MeshName` differs or the trust profiles differ, it isn't admitted. When more
 exists for the same RID, Core selects one ([Core ROUTER §10.1](../../../../../../../core/doc/spec/core/socket/07-router.en.md#101-observing-the-selected-route)), and the framework
 admits only the handshake received on the selected route.
 
+**A node that has not yet received the peer's admission acceptance (ADMIT) on the selected route
+sends HELLO on that route again at each existing liveness management interval.** When the selection
+changes, Core discards the pending records of the standby pipe right before promoting it
+([Core ROUTER §10.1](../../../../../../../core/doc/spec/core/socket/07-router.en.md#101-observing-the-selected-route)), so a HELLO sent first on the new route may never reach
+the peer. HELLO is idempotent for the same identity. No separate timer is added for this, and HELLO
+is not sent again once ADMIT has been received.
+
+**Until admission is confirmed by a handshake on the selected route, records other than the
+handshake received on that route are discarded without processing, and no response is sent.** The
+same applies to records the peer sent before the handshake of a new route after the selected route
+changed. A durable operation lost this way is sent again by the sender as defined in
+[Actor model §8.1](04-actor-model.en.md#81-failure).
+
 Lifecycle generation is a non-zero opaque equality token. Which lifecycle is
 newer isn't judged by numeric magnitude.
 
@@ -313,6 +326,14 @@ The intention to keep a connection to a specific peer is expressed as a
 [connection intent](../00-foundation/02-glossary.en.md#connection-intent) that the
 application configuration or the auto-connect owner registers once per peer. The runtime
 attempts connect and reconnect only while the intent exists.
+
+**When the auto-connect owner receives an immediate-reconcile request for a specific peer, it applies
+the ordinary reconcile decision to that peer without waiting for its period.** It rereads that peer's
+descriptor through the existing Location resolver, and in automatic mode the rule that only the
+smaller RID starts connect still holds. The request creates no new kind of intent or separate state;
+the requester observes the peer's ready route as the result. Who sends the request and when is
+defined by [relocation §4.3](../05-location-relocation/04-relocation-flow.en.md#43-restore-the-target-without-running-it)
+and [Session and Actor Binding §8.1](../04-session/02-session-actor-binding.en.md#81-seal-held-messages-and-route-switchover).
 
 - **Removing an outbound intent also removes the binding's connection registration for
   that endpoint, as one decision.** The intent owner calls the binding's public disconnect.
@@ -358,6 +379,10 @@ sequenceDiagram
         Note over A,B: when two pipes exist for the same RID, Core selects one and the framework admits only on the selected route
     end
 ```
+
+**The accepting side records the other side as an admitted peer and then submits the admission
+acceptance.** Records this node sends to that peer on the same Application lane as the admission acceptance
+(DATA and REQUEST) leave after the admission acceptance.
 
 ### 7.2 Channel Weight Update
 

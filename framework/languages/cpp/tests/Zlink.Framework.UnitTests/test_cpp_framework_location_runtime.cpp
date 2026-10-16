@@ -14,6 +14,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <atomic>
 #include <future>
 #include <stop_token>
@@ -23,6 +24,20 @@ namespace zlink::framework::runtime
 {
 struct location_runtime_test_access_t
 {
+    template <typename Now>
+    static std::chrono::milliseconds first_heartbeat_delay (location_runtime_t &runtime, Now now)
+    {
+        const auto claim_started_at = now ();
+        runtime.renew_owner_lease_once ();
+        auto heartbeat = std::make_shared<location_runtime_t::heartbeat_owner_t> ();
+        auto delay = std::chrono::milliseconds::zero ();
+        runtime.heartbeat_loop (heartbeat, claim_started_at, now,
+                                [&] (auto &, auto &, auto remaining, auto, auto...) {
+                                    delay = remaining;
+                                    heartbeat->stop.store (true, std::memory_order_release);
+                                });
+        return delay;
+    }
     static state_lane_t &lane (location_runtime_t &runtime) { return runtime._lane; }
     static auto snapshot (const location_runtime_t &runtime)
     {
@@ -58,6 +73,60 @@ constexpr auto admission_observation_timeout = std::chrono::milliseconds (100);
 const location_options_t asynchronous_heartbeat_options{
   .owner_lease_renew_interval = std::chrono::milliseconds (5),
   .owner_lease_ttl = std::chrono::seconds (15)};
+
+class advancing_claim_store_t : public in_memory_location_repository_t
+{
+  public:
+    advancing_claim_store_t (std::chrono::steady_clock::time_point &now,
+                             std::chrono::milliseconds claim_duration,
+                             bool fail_claim) :
+        _now (now), _claim_duration (claim_duration), _fail_claim (fail_claim)
+    {
+    }
+
+    zlink::framework::task_t<zlink::framework::owner_lease_claim_result_t>
+    claim_owner_lease (std::string owner_id, std::chrono::milliseconds ttl) override
+    {
+        _now += _claim_duration;
+        if (_fail_claim)
+            throw std::runtime_error ("Store unavailable");
+        return in_memory_location_repository_t::claim_owner_lease (std::move (owner_id), ttl);
+    }
+
+    zlink::framework::task_t<zlink::framework::owner_lease_read_result_t>
+    read_owner_lease (std::string owner_id) override
+    {
+        if (_fail_claim)
+            throw std::runtime_error ("Store unavailable");
+        return in_memory_location_repository_t::read_owner_lease (std::move (owner_id));
+    }
+
+  private:
+    std::chrono::steady_clock::time_point &_now;
+    std::chrono::milliseconds _claim_duration;
+    bool _fail_claim;
+};
+
+TEST (ZLinkFrameworkLocationRuntime, FirstHeartbeatIsDueFromInitialLeaseOperationStart)
+{
+    using access_t = zlink::framework::runtime::location_runtime_test_access_t;
+    for (bool fail_claim : {false, true}) {
+        for (auto duration : {std::chrono::milliseconds (50), std::chrono::milliseconds (150)}) {
+            SCOPED_TRACE (::testing::Message ()
+                          << "fail_claim=" << fail_claim << " claim_ms=" << duration.count ());
+            auto now = std::chrono::steady_clock::now ();
+            advancing_claim_store_t store (now, duration, fail_claim);
+            location_runtime_t runtime (
+              store,
+              location_options_t{.owner_lease_renew_interval = std::chrono::milliseconds (100)},
+              "owner-first-heartbeat");
+            EXPECT_EQ (access_t::first_heartbeat_delay (runtime, [&] { return now; }),
+                       std::max (std::chrono::milliseconds::zero (),
+                                 std::chrono::milliseconds (100) - duration));
+            EXPECT_TRUE (runtime.cleanup_owner ());
+        }
+    }
+}
 
 TEST (ZLinkFrameworkLocationRuntime, ReceiveAdmissionDoesNotJoinBusyLocationLane)
 {

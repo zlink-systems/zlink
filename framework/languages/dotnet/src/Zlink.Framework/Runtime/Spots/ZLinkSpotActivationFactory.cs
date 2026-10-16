@@ -34,7 +34,8 @@ internal sealed class ZLinkSpotActivationFactory(
         Type spotType,
         IZLinkBackendSpot nativeSpot,
         string spotId,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        IReadOnlyList<ZLinkRelocationLogicalTimer>? logicalTimers = null
     ) =>
         (
             await CreateUserSpotAsync(
@@ -43,7 +44,8 @@ internal sealed class ZLinkSpotActivationFactory(
                     spotId,
                     ZLinkMessage.Empty,
                     invokeCreate: false,
-                    cancellationToken
+                    cancellationToken,
+                    logicalTimers
                 )
                 .ConfigureAwait(false)
         ).Activation;
@@ -54,7 +56,8 @@ internal sealed class ZLinkSpotActivationFactory(
         string spotId,
         ZLinkMessage request,
         bool invokeCreate,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        IReadOnlyList<ZLinkRelocationLogicalTimer>? logicalTimers = null
     )
     {
         AsyncServiceScope spotScope = default;
@@ -86,12 +89,15 @@ internal sealed class ZLinkSpotActivationFactory(
                 ActivatorUtilities.CreateInstance(spotScope.ServiceProvider, spotType, activation);
 
             activation.AttachSpot(spot);
-            foreach (var handler in frameworkRegistration.ScannedHandlerCatalog.SpotHandlers)
-                await activation
-                    .ApplyScannedHandlerAsync(handler, cancellationToken)
-                    .ConfigureAwait(false);
 
-            spot.Configure();
+            await activation
+                .ConfigureAsync(
+                    frameworkRegistration.ScannedHandlerCatalog.SpotHandlers,
+                    spot.Configure,
+                    logicalTimers,
+                    cancellationToken
+                )
+                .ConfigureAwait(false);
             await activation.BindDescriptorsAsync(cancellationToken).ConfigureAwait(false);
             if (!invokeCreate)
                 activation.AttachNativeDispatch();
@@ -102,6 +108,7 @@ internal sealed class ZLinkSpotActivationFactory(
         }
         catch (Exception initializationFailure)
         {
+            initializationFailure = ConfigurationFailure(initializationFailure);
             var failures = new ZLinkFailureCollector(initializationFailure);
             if (activation is null)
             {
@@ -126,7 +133,8 @@ internal sealed class ZLinkSpotActivationFactory(
         IZLinkBackendSpot nativeSpot,
         string spotId,
         CancellationToken cancellationToken,
-        bool restoreLogicalTimers = false
+        bool restoreLogicalTimers = false,
+        IReadOnlyList<ZLinkRelocationLogicalTimer>? logicalTimers = null
     )
     {
         AsyncServiceScope spotScope = default;
@@ -151,17 +159,21 @@ internal sealed class ZLinkSpotActivationFactory(
             var spot = (IZLinkInstanceSpot)
                 ActivatorUtilities.CreateInstance(spotScope.ServiceProvider, spotType, activation);
             activation.AttachInstanceSpot(spot);
-            foreach (var handler in frameworkRegistration.ScannedHandlerCatalog.SpotHandlers)
-                await activation
-                    .ApplyScannedHandlerAsync(handler, cancellationToken)
-                    .ConfigureAwait(false);
-            spot.Configure();
+            await activation
+                .ConfigureAsync(
+                    frameworkRegistration.ScannedHandlerCatalog.SpotHandlers,
+                    spot.Configure,
+                    logicalTimers,
+                    cancellationToken
+                )
+                .ConfigureAwait(false);
             await activation.BindDescriptorsAsync(cancellationToken).ConfigureAwait(false);
             await activation.InitializeAsync(cancellationToken).ConfigureAwait(false);
             return activation;
         }
         catch (Exception initializationFailure)
         {
+            initializationFailure = ConfigurationFailure(initializationFailure);
             var failures = new ZLinkFailureCollector(initializationFailure);
             if (activation is null)
             {
@@ -180,6 +192,15 @@ internal sealed class ZLinkSpotActivationFactory(
             );
         }
     }
+
+    internal static Exception ConfigurationFailure(Exception failure) =>
+        failure is ZLinkConfigurationException configuration
+            ? new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.InvalidOperation,
+                configuration.Message,
+                innerException: configuration
+            )
+            : failure;
 }
 
 internal readonly record struct ZLinkSpotActivationCreateResult(

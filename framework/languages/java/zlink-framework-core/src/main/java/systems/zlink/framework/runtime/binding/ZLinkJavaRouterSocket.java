@@ -9,6 +9,8 @@ import systems.zlink.contracts.sockets.Socket;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRecvMode;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRouterSocket;
+import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry;
 
 import java.time.Duration;
 import java.util.List;
@@ -18,6 +20,10 @@ import java.util.concurrent.CompletionStage;
 final class ZLinkJavaRouterSocket implements ZLinkBackendRouterSocket, ZLinkJavaSocketBacked {
     private final RouterSocket socket;
     private final ZLinkJavaSocketReceivePoller receivePoller;
+    private final ZLinkServiceOperationRegistry operations =
+            new ZLinkServiceOperationRegistry(
+                    ZLinkProcessExecutionLanes.deadlines(),
+                    ZLinkOneWayCalls.failureForStatus(ZLinkOneWayCalls.SHUTDOWN));
 
     ZLinkJavaRouterSocket(RouterSocket socket) {
         this.socket = socket;
@@ -127,7 +133,7 @@ final class ZLinkJavaRouterSocket implements ZLinkBackendRouterSocket, ZLinkJava
 
     @Override
     public synchronized CompletionStage<Void> send(RoutingId routingId, List<Message> parts) {
-        return ZLinkJavaSocketSupport.submit(socket.send(routingId), parts);
+        return ZLinkJavaSocketSupport.submit(socket.send(routingId), parts, operations);
     }
 
     @Override
@@ -154,6 +160,7 @@ final class ZLinkJavaRouterSocket implements ZLinkBackendRouterSocket, ZLinkJava
 
     @Override
     public synchronized void close() {
+        operations.close();
         receivePoller.close();
         socket.close();
     }

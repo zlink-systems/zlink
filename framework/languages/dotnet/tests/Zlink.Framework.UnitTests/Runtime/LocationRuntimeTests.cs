@@ -483,13 +483,19 @@ public sealed class LocationRuntimeTests
     {
         var inner = new ZLinkInMemoryLocationStore();
         var store = new CancelAfterCommittedClaimWithHangingReleaseStore(inner);
+        // The renew deadline runs on this clock, so the caller's cancellation
+        // reaches the runtime before the deadline (spec 01-location-runtime
+        // startup: a deadline that ends first completes startup).
+        var time = new ControllableTimeProvider();
+        var renewTimeout = TimeSpan.FromMilliseconds(25);
         var runtime = new ZLinkLocationRuntime(
             new ZLinkLocationOptions
             {
-                OwnerLeaseRenewTimeout = TimeSpan.FromMilliseconds(25),
+                OwnerLeaseRenewTimeout = renewTimeout,
                 OwnerLeaseRenewInterval = TimeSpan.FromHours(1),
             },
-            store
+            store,
+            time
         );
         using var cancellation = new CancellationTokenSource();
 
@@ -499,6 +505,10 @@ public sealed class LocationRuntimeTests
         await store.ClaimStarted.Task.WaitAsync(TimeSpan.FromSeconds(1));
         var startedAt = Stopwatch.GetTimestamp();
         cancellation.Cancel();
+        // The release ignores cancellation and ends at the cleanup deadline,
+        // which is the startup renew deadline.
+        await store.ReleaseStarted.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        time.AdvanceMonotonic(renewTimeout);
 
         var error = await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
             start.WaitAsync(TimeSpan.FromSeconds(1))
@@ -511,6 +521,100 @@ public sealed class LocationRuntimeTests
             await inner.ReadOwnerLeaseAsync(store.ClaimOwnerId!)
         );
         Assert.Equal(0, store.RenewCalls);
+    }
+
+    [Fact]
+    public async Task Startup_CancellationAfterTheRenewTimeout_ReleasesTheConfirmedClaim()
+    {
+        var inner = new ZLinkInMemoryLocationStore();
+        var store = new CommittedClaimUntilCancelledStore(inner);
+        var time = new ControllableTimeProvider();
+        var renewTimeout = TimeSpan.FromMilliseconds(25);
+        var runtime = new ZLinkLocationRuntime(
+            new ZLinkLocationOptions
+            {
+                OwnerLeaseRenewTimeout = renewTimeout,
+                OwnerLeaseRenewInterval = TimeSpan.FromHours(1),
+            },
+            store,
+            time
+        );
+        using var cancellation = new CancellationTokenSource();
+        // The caller cancels after the renew timeout ended the claim attempt.
+        runtime.OwnerLeaseRenewalFailed += cancellation.Cancel;
+
+        var start = runtime
+            .StartAsync(
+                RoutingId.From("cancelled-after-timeout-node"),
+                cancellation.Token,
+                CancellationToken.None
+            )
+            .AsTask();
+        await store.ClaimStarted.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        time.AdvanceMonotonic(renewTimeout);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            start.WaitAsync(TimeSpan.FromSeconds(1))
+        );
+        Assert.Equal(1, store.ReleaseCalls);
+        Assert.IsType<ZLinkOwnerLeaseReadResult.Missing>(
+            await inner.ReadOwnerLeaseAsync(store.ClaimOwnerId!)
+        );
+        Assert.Equal(0, store.RenewCalls);
+    }
+
+    // Commits the claim, then answers only when the claim request is cancelled.
+    private sealed class CommittedClaimUntilCancelledStore(IZLinkLocationRepository inner)
+        : ZLinkLocationStoreTestDouble
+    {
+        private int _releaseCalls;
+        private int _renewCalls;
+
+        public TaskCompletionSource ClaimStarted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public string? ClaimOwnerId { get; private set; }
+
+        public int ReleaseCalls => Volatile.Read(ref _releaseCalls);
+
+        public int RenewCalls => Volatile.Read(ref _renewCalls);
+
+        public override async ValueTask<ZLinkOwnerLeaseClaimResult> ClaimOwnerLeaseAsync(
+            string ownerId,
+            TimeSpan leaseTtl,
+            CancellationToken cancellationToken = default
+        )
+        {
+            ClaimOwnerId = ownerId;
+            _ = await inner.ClaimOwnerLeaseAsync(ownerId, leaseTtl);
+            ClaimStarted.TrySetResult();
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            throw new InvalidOperationException("The claim answers only by cancellation.");
+        }
+
+        public override ValueTask<ZLinkOwnerLeaseReadResult> ReadOwnerLeaseAsync(
+            string ownerId,
+            CancellationToken cancellationToken = default
+        ) => inner.ReadOwnerLeaseAsync(ownerId, cancellationToken);
+
+        public override ValueTask<ZLinkOwnerLeaseRenewResult> RenewOwnerLeaseAsync(
+            ZLinkLocationOwnerToken token,
+            TimeSpan leaseTtl,
+            CancellationToken cancellationToken = default
+        )
+        {
+            Interlocked.Increment(ref _renewCalls);
+            return inner.RenewOwnerLeaseAsync(token, leaseTtl, cancellationToken);
+        }
+
+        public override ValueTask<ZLinkOwnerLeaseReleaseResult> ReleaseOwnerLeaseAsync(
+            ZLinkLocationOwnerToken token,
+            CancellationToken cancellationToken = default
+        )
+        {
+            Interlocked.Increment(ref _releaseCalls);
+            return inner.ReleaseOwnerLeaseAsync(token, cancellationToken);
+        }
     }
 
     [Fact]
@@ -533,17 +637,41 @@ public sealed class LocationRuntimeTests
         await runtime.StopAsync();
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task FirstHeartbeat_IsDueFromTheInitialLeaseOperationStart(bool claimFails)
+    {
+        var options = new ZLinkLocationOptions
+        {
+            OwnerLeaseRenewInterval = TimeSpan.FromMilliseconds(100),
+        };
+        var time = new HeartbeatTimeProvider(options.OwnerLeaseRenewTimeout);
+        await using var runtime = new ZLinkLocationRuntime(
+            options,
+            new FlakyOwnerLeaseStore(new ZLinkInMemoryLocationStore(time)) { Fail = claimFails },
+            time
+        );
+        runtime.OwnerLeaseRenewed += _ => time.Timestamp = 50;
+        runtime.OwnerLeaseRenewalFailed += () => time.Timestamp = 50;
+
+        await runtime.StartAsync(RoutingId.From("first-heartbeat-node"));
+
+        var first = await time.FirstTimer.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(TimeSpan.FromMilliseconds(50), first.DueTime);
+    }
+
     [Fact]
     public async Task Heartbeat_UsesActualStartAfterLateTimer_AndWaitsForInFlightRenewal()
     {
-        var time = new HeartbeatTimeProvider();
+        var options = new ZLinkLocationOptions
+        {
+            OwnerLeaseRenewInterval = TimeSpan.FromMilliseconds(100),
+        };
+        var time = new HeartbeatTimeProvider(options.OwnerLeaseRenewTimeout);
         var inner = new ZLinkInMemoryLocationStore(time);
         var store = new BlockingHeartbeatStore(inner, blockedRenewCall: 1);
-        var runtime = new ZLinkLocationRuntime(
-            new ZLinkLocationOptions { OwnerLeaseRenewInterval = TimeSpan.FromMilliseconds(100) },
-            store,
-            time
-        );
+        var runtime = new ZLinkLocationRuntime(options, store, time);
         try
         {
             await runtime.StartAsync(RoutingId.From("late-heartbeat-node"));
@@ -979,6 +1107,9 @@ public sealed class LocationRuntimeTests
 
         public string? ClaimOwnerId { get; private set; }
 
+        public TaskCompletionSource ReleaseStarted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
         public int ReleaseCalls => Volatile.Read(ref _releaseCalls);
 
         public int RenewCalls => Volatile.Read(ref _renewCalls);
@@ -1016,6 +1147,7 @@ public sealed class LocationRuntimeTests
         )
         {
             Interlocked.Increment(ref _releaseCalls);
+            ReleaseStarted.TrySetResult();
             return new ValueTask<ZLinkOwnerLeaseReleaseResult>(_release.Task);
         }
     }
@@ -1059,7 +1191,9 @@ public sealed class LocationRuntimeTests
         }
     }
 
-    private sealed class HeartbeatTimeProvider : TimeProvider
+    // Captures the heartbeat delay timers. Renew deadlines run on the same
+    // clock with the renew timeout as due time; they are not heartbeat timers.
+    private sealed class HeartbeatTimeProvider(TimeSpan renewTimeout) : TimeProvider
     {
         private int _timerCount;
         public long Timestamp { get; set; }
@@ -1082,6 +1216,8 @@ public sealed class LocationRuntimeTests
         )
         {
             var timer = new HeartbeatTimer(callback, state, dueTime);
+            if (dueTime == renewTimeout)
+                return timer;
             if (Interlocked.Increment(ref _timerCount) == 1)
                 FirstTimer.TrySetResult(timer);
             else

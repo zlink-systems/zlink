@@ -98,7 +98,7 @@ public sealed partial class StreamConnectorTests
                 ZlinkStreamMetadata.Empty
             );
             var payload = compressionCodec.Compress(
-                JsonSerializer.SerializeToUtf8Bytes(new Pong("compressed"))
+                new Pong("compressed").ToJson().Payload.ToArray()
             );
             await WritePacketAsync(stream, headerCodec.Encode(header).ToArray(), payload.ToArray());
             await received.Task.WaitAsync(TimeSpan.FromSeconds(5));
@@ -235,9 +235,7 @@ public sealed partial class StreamConnectorTests
                 "custom-pong",
                 ZlinkStreamMetadata.Empty
             );
-            var payload = compressionCodec.Compress(
-                JsonSerializer.SerializeToUtf8Bytes(new Pong("custom"))
-            );
+            var payload = compressionCodec.Compress(new Pong("custom").ToJson().Payload.ToArray());
             await WritePacketAsync(stream, headerCodec.Encode(header).ToArray(), payload.ToArray());
             await received.Task.WaitAsync(TimeSpan.FromSeconds(5));
         });
@@ -291,7 +289,7 @@ public sealed partial class StreamConnectorTests
                 ZlinkStreamMetadata.Empty
             );
             var payload = compressionCodec.Compress(
-                JsonSerializer.SerializeToUtf8Bytes(new Pong("disabled"))
+                new Pong("disabled").ToJson().Payload.ToArray()
             );
             await WritePacketAsync(stream, headerCodec.Encode(header).ToArray(), payload.ToArray());
             await error.Task.WaitAsync(TimeSpan.FromSeconds(5));

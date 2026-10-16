@@ -1097,7 +1097,7 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
         var probe = new DrainExecutionProbe();
         var operations = probe.Operations with
         {
-            StopRuntime = token =>
+            StopRuntime = (_, token) =>
             {
                 token.ThrowIfCancellationRequested();
                 return ValueTask.CompletedTask;
@@ -2657,7 +2657,7 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
                     return ValueTask.CompletedTask;
                 },
                 GetRemainderCounts: static () => new ZLinkDrainRemainderCounts(0, 0, 0, 0),
-                StopRuntime: _ =>
+                StopRuntime: (_, _) =>
                 {
                     Events.Add("stop-runtime");
                     return ValueTask.CompletedTask;

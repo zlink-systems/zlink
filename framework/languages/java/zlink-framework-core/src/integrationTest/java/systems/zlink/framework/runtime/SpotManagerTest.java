@@ -536,10 +536,15 @@ final class SpotManagerTest {
 
     public static final class GameSpot implements ZLinkSpot<ZLinkActor> {
         static final AtomicInteger closingCalls = new AtomicInteger();
+        private final ZLinkSpotContext context;
+
+        public GameSpot(ZLinkSpotContext context) {
+            this.context = context;
+        }
 
         @Override
         public ZLinkSpotContext context() {
-            return null;
+            return context;
         }
 
         @Override

@@ -1,3 +1,4 @@
+import { routingIdsEqual } from '../routing-id';
 import type { ApplicationJobOrigin } from '../application-jobs/contracts';
 import { dispatchReasonFromError } from '../diagnostics/dispatch-error-details';
 import type {
@@ -215,6 +216,7 @@ export interface ZLinkSpotManagerOptions {
     operation: () => Promise<T>
   ) => Promise<T>;
   readonly actorCountProvider?: (spotId: RoutingId) => number;
+  readonly releaseActorMembers?: (meshName: string, spotId: RoutingId) => Promise<void>;
   readonly userSpotExecutionMode?: (
     meshName: string,
     spotType: Type<ZLinkSpot>
@@ -408,6 +410,7 @@ export class DefaultZLinkSpotManager {
       nodeRid: options.nodeRid,
       nodeRidProvider: options.nodeRidProvider,
       actorCountProvider: options.actorCountProvider,
+      releaseActorMembers: options.releaseActorMembers,
       userSpotExecutionMode: options.userSpotExecutionMode,
       userSpotRelocationCoordinationMode: options.userSpotRelocationCoordinationMode,
       channelClient: options.channelClient,
@@ -511,6 +514,7 @@ export class DefaultZLinkSpotManager {
     spotId: RoutingId,
     objectGeneration: bigint,
     authorityOwnerGeneration: bigint,
+    restoredTimers: readonly import('./spot-timer').ZLinkTimerRelocationState[],
     signal?: AbortSignal
   ): Promise<ZLinkSpotActivation> {
     this.activations.stage(meshName, spotId);
@@ -523,6 +527,7 @@ export class DefaultZLinkSpotManager {
         spotId,
         objectGeneration,
         authorityOwnerGeneration,
+        restoredTimers,
         signal
       );
     } catch (error) {
@@ -535,9 +540,14 @@ export class DefaultZLinkSpotManager {
     activation: ZLinkSpotActivation,
     beforeAdmission?: () => Promise<void>
   ): Promise<void> {
-    await activation.serial.execute(() => activation.spot.onInitialize?.());
+    // Spot timer §1: OnInitialize before Ready reattaches restored keys; the
+    // relocation-ready completion and later callbacks use the ordinary rule.
+    await activation.serial.execute(() =>
+      activation.timers.runRelocationInitialization(() => activation.spot.onInitialize?.())
+    );
     await beforeAdmission?.();
     this.activations.publish(activation.meshName, activation.spotId);
+    await activation.timers.publishRelocation();
   }
 
   async abortRelocationSpot(activation: ZLinkSpotActivation): Promise<void> {
@@ -1510,14 +1520,6 @@ export class DefaultZLinkSpotManager {
 
   async commitActorLeaveAfterTransfer(spotId: RoutingId, actorId: string): Promise<void> {
     await this.actorMembership.commitActorLeaveAfterTransfer(spotId, actorId);
-  }
-
-  async restoreActorAfterFailedTransfer(
-    spotId: RoutingId,
-    actor: ZLinkActor,
-    signal?: AbortSignal
-  ): Promise<void> {
-    await this.actorMembership.restoreActorAfterFailedTransfer(spotId, actor, signal);
   }
 
   async beginActorTransfer(spotId: RoutingId, actorId: string): Promise<void> {
@@ -2870,11 +2872,7 @@ export class DefaultZLinkSpotManager {
           control.previousMembershipEpoch
         );
       };
-      if (this.options.actorTransferRuntime === undefined) {
-        await callback();
-      } else {
-        await this.options.actorTransferRuntime.notifyCoreSourceLeave(actor, callback);
-      }
+      await callback();
       return;
     }
     if (spotId === null) {
@@ -3038,9 +3036,7 @@ export class DefaultZLinkSpotManager {
           if (sourceJoinedActor === undefined && pendingTransfer === undefined) {
             return;
           }
-          await this.options.actorTransferRuntime.notifyCoreSourceLeave(actor, () =>
-            activation.spot.onLeaveActor(actor)
-          );
+          await activation.spot.onLeaveActor(actor);
         }
         activation.commitActorDeparture(actor.context.actorId);
         return;
@@ -3079,7 +3075,7 @@ export class DefaultZLinkSpotManager {
     }
     const outcome = admission.result ?? (await admission.resultTask);
     if ('error' in outcome) throw outcome.error;
-    if (!outcome.accepted || admission.state !== 'admitted') {
+    if (!outcome.accepted || (admission.state !== 'admitted' && admission.state !== 'restoring')) {
       throw new Error(`Actor Join relocation '${relocationId}' has no accepted admission.`);
     }
     const entrySpotId = this.options.entryNodeRidProvider?.() ?? this.options.entryNodeRid;
@@ -3139,6 +3135,11 @@ export class DefaultZLinkSpotManager {
     return true;
   }
 
+  beginActorJoinRelocation(relocationId: string): () => void {
+    this.formalRemoteActorAdmissions.beginRestore(relocationId);
+    return () => this.formalRemoteActorAdmissions.finishRestore(relocationId);
+  }
+
   async restoreCanonicalActorJoinRecovery(
     recovery: CanonicalActorJoinRecovery,
     signal?: AbortSignal
@@ -3151,7 +3152,11 @@ export class DefaultZLinkSpotManager {
       );
     }
     const outcome = admission.result ?? (await admission.resultTask);
-    if ('error' in outcome || !outcome.accepted || admission.state !== 'admitted') {
+    if (
+      'error' in outcome ||
+      !outcome.accepted ||
+      (admission.state !== 'admitted' && admission.state !== 'restoring')
+    ) {
       throw new Error(
         `Actor Join recovery '${recovery.request.handoffId}' has no accepted admission.`
       );
@@ -3559,7 +3564,7 @@ function validateRemoteAdmissionCommit(
     expected.targetSpotGeneration !== (control.currentSpotGeneration ?? 0n) ||
     actorRef === undefined ||
     actorRef.actorId !== expected.actorRef.actorId ||
-    String(actorRef.nodeRid) !== String(expected.actorRef.nodeRid) ||
+    !routingIdsEqual(actorRef.nodeRid, expected.actorRef.nodeRid) ||
     actorRef.objectGeneration !== expected.actorRef.objectGeneration
   ) {
     throw new ZLinkConfigurationException(

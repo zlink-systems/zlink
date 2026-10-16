@@ -26,12 +26,20 @@
 #include <stop_token>
 #include <string>
 #include <tuple>
+#include <utility>
 #include <vector>
+
+namespace zlink::framework::detail
+{
+class delay_owner_t;
+}
 
 namespace zlink::framework::runtime::stateful
 {
 
 using inventory_digest_t = std::array<std::uint8_t, 32>;
+using relocation_session_binding_t =
+  std::pair<protocol::actor_identity_t, protocol::relocation_envelope_session_binding_t>;
 
 struct relocation_stored_t
 {
@@ -306,27 +314,22 @@ struct eligible_relocation_unit_t
         std::vector<std::uint8_t> target_node_routing_id;
         std::uint64_t target_node_generation = 0;
         std::uint64_t application_version = 0;
-        std::vector<protocol::session_relocation_route_t> session_routes;
+        std::vector<relocation_session_binding_t> session_bindings;
         /* Join relocation appends its canonical ZLJR saved-work record to
          * the sealed Actor snapshot before the immutable envelope is
          * encoded. Ordinary relocation leaves this callback empty. */
         std::function<bool (std::vector<frozen_object_state_t> &)> augment_frozen;
-        std::function<task_t<std::optional<std::vector<protocol::session_relocation_route_t>>> ()>
-          capture_session_routes;
+        std::function<task_t<std::optional<std::vector<relocation_session_binding_t>>> ()>
+          capture_session_bindings;
         /* Sends the Restore request carrying the payload manifest. The
          * request frame must be enqueued on the ordered mesh connection
          * before the first suspension so the relocationState chunks the
          * caller sends next arrive after it. The returned task completes
          * once the target's relay-ready reply arrives (after the target
-         * assembled, verified, and restored the payload). The captured
-         * bound-session commit routes ride beside the request: the schema
-         * relocation-envelope-v1 payload deliberately has no session-route
-         * section, and command 44 commit must still originate from the
-         * target runtime (20 §5), so the target stages them here. */
-        std::function<task_t<relocation_reason_t> (
-          const std::vector<frozen_object_state_t> &,
-          const relocation_payload_manifest_t &,
-          const std::vector<protocol::session_relocation_route_t> &)>
+         * assembled, verified, and restored the payload). Sealed Session
+         * identities are carried in the canonical envelope. */
+        std::function<task_t<relocation_reason_t> (const std::vector<frozen_object_state_t> &,
+                                                   const relocation_payload_manifest_t &)>
           prepare_target;
         /* Sends one relocationState chunk on the same ordered mesh
          * connection as the Restore request and the relay lane. */
@@ -335,22 +338,14 @@ struct eligible_relocation_unit_t
                                     const relocation_ingress_batch_t &)>
           send_relocation_data;
         std::function<void (const object_ref_t &, const turn_record_t &)> send_application;
-        enum class cutover_enqueue_t
-        {
-            not_enqueued,
-            enqueued,
-            uncertain
-        };
-        std::function<task_t<cutover_enqueue_t> (const protocol::relocation_cutover_t &)>
-          send_cutover;
+        std::function<task_t<bool> (const protocol::relocation_cutover_t &)> send_cutover;
         /* The unit Restore absolute deadline, owned by the source: from it the
          * source settles authority with its Preserve fence (01 §10). */
         std::chrono::steady_clock::time_point restore_deadline{};
         /* The existing host lifecycle ends source settlement after shutdown. */
         std::function<bool ()> source_stopped;
-        /* Whether the ordered connection to the target is currently up; a
-         * reconnect after a break resends the batch and cutover (28 §4.4). */
-        std::function<bool ()> target_connected;
+        // Core selected generation and admission readiness, observed by MeshNode.
+        std::function<std::pair<std::uint64_t, bool> ()> target_route;
         // This is valid only after an exact target failure and before a
         // Cutover enqueue.  It fences source admission restoration.
         std::function<bool ()> abort_target_before_cutover;
@@ -532,6 +527,7 @@ class maintenance_runtime_t
       std::uint64_t advertised_receive_chunk_limit_bytes = 0);
 
     void attach_relocation_wire (raw_relocation_replay_coordinator_t &wire) noexcept;
+    void bind_delay_owner (detail::delay_owner_t &owner) noexcept { _delay_owner = &owner; }
     /* Expired-owner terminal (28 §4.4): replies Unavailable once to each
      * pending request of the object and drops its accepted records. */
     void attach_unavailable_terminal (std::function<void (const object_ref_t &)> terminal) noexcept;
@@ -565,7 +561,8 @@ class maintenance_runtime_t
     static std::vector<std::uint8_t>
     encode_envelope (const std::vector<frozen_object_state_t> &participants,
                      const protocol::relocation_id_t &relocation,
-                     std::uint64_t application_version = 1);
+                     std::uint64_t application_version = 1,
+                     const std::vector<relocation_session_binding_t> &session_bindings = {});
     static std::optional<protocol::relocation_envelope_t>
     decode_envelope (const std::vector<std::uint8_t> &payload) noexcept;
     /* Target-side model mapping: the caller supplies the store-derived
@@ -605,7 +602,7 @@ class maintenance_runtime_t
     task_t<relocation_result_t>
     relocate_terminal (std::shared_ptr<relocation_terminal_state_t> state);
     task_t<bool> relocate_seal (std::shared_ptr<relocation_terminal_state_t> state);
-    task_t<bool> capture_relocation_session_routes (
+    task_t<bool> capture_relocation_session_bindings (
       eligible_relocation_unit_t::canonical_wire_context_t &context);
     bool relocate_encode (const std::shared_ptr<relocation_terminal_state_t> &state);
     task_t<bool> relocate_prepare_target (std::shared_ptr<relocation_terminal_state_t> state);
@@ -659,6 +656,7 @@ class maintenance_runtime_t
     std::shared_ptr<relocation_store_port_t> _relocations;
     relocation_limits_t _limits;
     observer_t _observer;
+    detail::delay_owner_t *_delay_owner = nullptr;
     mutable std::mutex _gate_mutex;
     relocation_gate_snapshot_t _gate;
     raw_relocation_replay_coordinator_t *_relocation_wire = nullptr;

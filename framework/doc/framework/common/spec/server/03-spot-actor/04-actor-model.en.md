@@ -324,7 +324,7 @@ and timer information are kept after the move. Neither policy changes
 `ObjectGeneration`, since it's the same logical Actor moving. On a cross-node
 move where the owner changes, only
 [`AuthorityOwnerGeneration`](../00-foundation/02-glossary.en.md#authorityownergeneration) —
-a provider-issued value marking the order in which the authority owner
+a value marking the order in which the authority owner
 changed for the same object incarnation — increases.
 
 When an Actor bound to a Session moves,
@@ -461,11 +461,23 @@ decide the Mesh.
 The framework checks target candidates in the following order.
 
 1. Checks object role.
-2. Checks whether the requested stable type is registered.
+2. Checks whether the requested stable type is registered. A Create or GetOrCreate that makes a
+   new Actor keeps only the Object Servers among them that registered an Entry Spot type accepting
+   that Actor stable type (nodes whose descriptor capability has `entryAccepted` set to `true`).
 3. Checks whether active/pending capacity remains.
 4. Applies node-wide placement weight to the remaining candidates.
 
 The caller doesn't select the target node or endpoint.
+
+On the node that creates a new Actor, the Entry Spot accepting that Actor stable type approves the
+Actor's initial Entry Spot membership with `OnCreateActor` ([Spot model §3.2](01-spot-model.en.md#32-lifecycle-callback-per-spot-kind)). So a
+node that registered an Actor factory but no Entry Spot type accepting that type doesn't create new
+Actors. Such a node can still be the join or relocation target of an existing Actor. If the selected
+target has no such Entry Spot type, it ends that creation as a Framework failure before the callback
+(`Unavailable`, sent as its representative wire code in [Error model §2.1](../00-foundation/07-framework-error-model.en.md#21-wire-failure-codes-and-errorkind)).
+This result isn't the application's `Rejected`, so the Framework excludes that host run generation and
+picks another candidate up to the deadline, as for a `Reserve` failure in
+[Location runtime §7](../05-location-relocation/01-location-runtime.en.md#7-creating-an-actor-or-user-spot).
 
 ### 6.4 Creation Request and Factory Execution
 
@@ -615,12 +627,18 @@ owned by
   in the Core socket contract means the application for application requests
   and the framework for durable operations.
 - **The only replay condition is a typed transient transport failure with no
-  terminal envelope received (a missing route, the single timeout caused by a
-  handover, a lost reply, a disconnect).** A protocol error, an encode or
+  terminal envelope received (a missing route, observing after submission a
+  selected route of the peer whose route generation differs from the one that was
+  ready at submission, a lost reply, a disconnect).** A protocol error, an encode or
   configuration failure, or a typed non-replayable terminal ends the operation
   with that failure at once — resending the same input wouldn't change the
   result. An operation whose terminal envelope (`Created`, `Existing`,
   `Rejected`, `Failed`, and so on) was received is not resent.
+- **A replay is submitted when a resend is needed and the target peer is ready
+  on the current route.** If the peer is already ready when the failure is
+  handled, the replay is submitted at once; otherwise it is submitted on the
+  transition in which the peer becomes ready. No separate retry timer or
+  periodic check is kept.
 - **Each attempt uses the entire remaining deadline and there is no attempt
   limit.** The cause decides the kind of exhaustion: exhausted without any
   attempt ever being admitted ends with `Unavailable` per the
@@ -725,8 +743,8 @@ Gate, Yield, Actor-claim, and self-request observations reference
 - After `Rejected` or `Failed`, `Find` doesn't find the Actor and the reserved
   capacity is returned.
 - A durable lifecycle operation (Actor create/join, session bind) continues
-  with the same `OperationId` after a missing route, the single timeout caused
-  by a handover, or a lost reply, and receives its original terminal within the
+  with the same `OperationId` after a missing route, a change of the selected
+  route after submission, or a lost reply, and receives its original terminal within the
   deadline; resubmission of an application request in the same situation follows
   [Submit and completion §5](../01-execution/01-submit-and-completion.en.md#5-backpressure-and-error-classification).
 - A durable operation that was never admitted by the deadline ends with

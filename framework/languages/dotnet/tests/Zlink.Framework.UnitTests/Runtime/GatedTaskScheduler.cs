@@ -32,7 +32,9 @@ internal sealed class GatedTaskScheduler : TaskScheduler
         Schedule(task);
     }
 
-    internal void Release()
+    internal void Release() => _ = ReleaseAsync();
+
+    internal Task ReleaseAsync()
     {
         Task[] tasks;
         lock (_tasks)
@@ -43,6 +45,7 @@ internal sealed class GatedTaskScheduler : TaskScheduler
         }
         foreach (var task in tasks)
             Schedule(task);
+        return Task.WhenAll(tasks);
     }
 
     private void Schedule(Task task) => ThreadPool.QueueUserWorkItem(_ => TryExecuteTask(task));

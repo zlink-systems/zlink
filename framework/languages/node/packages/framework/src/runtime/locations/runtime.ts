@@ -1,3 +1,5 @@
+import { ZLinkDescriptorPublicationUnconfirmedError } from './descriptor-publication';
+import { isIndeterminateLocationStoreFailure } from './location-store-failure';
 import { listAllMeshNodeDescriptors } from './location-store-pages';
 import { MILLISECONDS_PER_SECOND } from '../diagnostics/runtime-metrics';
 import { ZLINK_PROVIDER_MAX_PAGE_SIZE } from '../../contracts/Locations/Stores';
@@ -154,7 +156,9 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
   private readonly liveRows: ZLinkLiveRowFilter;
   private readonly leaseTracker: ZLinkOwnerLeaseTracker;
   private readonly ownershipLostHandlers = new Set<(event: ZLinkOwnershipLostEvent) => void>();
-  private readonly ownerLeaseRenewedHandlers = new Set<(renewal: ZLinkOwnerLeaseRenewed) => void>();
+  private readonly ownerLeaseRenewedHandlers = new Set<
+    (renewal: ZLinkOwnerLeaseRenewed, wasOwnerLeaseUsable: boolean) => void
+  >();
   private readonly ownerLeaseRenewalFailedHandlers = new Set<() => void>();
   private heartbeatTimer: unknown;
   private heartbeatRenewal?: Promise<unknown>;
@@ -169,7 +173,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
     readonly name: string;
   }[];
   private readonly rewriteAuthorityPayloadForOwner?: ZLinkLocationRuntimeOptions['rewriteAuthorityPayloadForOwner'];
-  private nextLeaseRenewAtMs?: number;
+  private leaseOperationStartedAtMs = 0;
   private ownerToken?: ZLinkLocationOwnerToken;
   private lastOwnerToken?: ZLinkLocationOwnerToken;
   private ownerLeaseDeadlineMs?: number;
@@ -221,6 +225,19 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
 
   get currentOwnerToken(): ZLinkLocationOwnerToken | undefined {
     return this.ownerToken;
+  }
+
+  /** Location runtime §5: a startup Store request ends within the renew timeout. */
+  async writeDescriptor<T>(
+    action: (signal?: AbortSignal) => Promise<T>,
+    signal?: AbortSignal
+  ): Promise<T> {
+    try {
+      return await withTimeout(action, this.options.ownerLeaseRenewTimeoutMs, signal);
+    } catch (error) {
+      if (!isIndeterminateLocationStoreFailure(error, signal)) throw error;
+      throw new ZLinkDescriptorPublicationUnconfirmedError(error);
+    }
   }
 
   closeOwnerLeaseAdmission(error: unknown): void {
@@ -315,11 +332,15 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
     this.ownershipLostHandlers.delete(handler);
   }
 
-  addOwnerLeaseRenewedHandler(handler: (renewal: ZLinkOwnerLeaseRenewed) => void): void {
+  addOwnerLeaseRenewedHandler(
+    handler: (renewal: ZLinkOwnerLeaseRenewed, wasOwnerLeaseUsable: boolean) => void
+  ): void {
     this.ownerLeaseRenewedHandlers.add(handler);
   }
 
-  removeOwnerLeaseRenewedHandler(handler: (renewal: ZLinkOwnerLeaseRenewed) => void): void {
+  removeOwnerLeaseRenewedHandler(
+    handler: (renewal: ZLinkOwnerLeaseRenewed, wasOwnerLeaseUsable: boolean) => void
+  ): void {
     this.ownerLeaseRenewedHandlers.delete(handler);
   }
 
@@ -349,12 +370,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
     const claim = this.renewOwnerLeaseOnce(signal, shutdownSignal);
     this.heartbeatRenewal = claim;
     try {
-      const claimed = await claim;
-      if (claimed) {
-        this.scheduleHeartbeat();
-        return;
-      }
-      this.nextLeaseRenewAtMs = this.monotonicNowMs() + this.options.ownerLeaseRenewIntervalMs;
+      await claim;
       this.scheduleHeartbeat();
     } catch (error) {
       this.started = false;
@@ -375,7 +391,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
       this.clearTimer(this.heartbeatTimer);
       this.heartbeatTimer = undefined;
     }
-    this.nextLeaseRenewAtMs = undefined;
+    this.leaseOperationStartedAtMs = 0;
     this.ownerLeaseDeadlineMs = undefined;
     await this.cleanupOwner(signal);
   }
@@ -473,9 +489,9 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
       return await this.claimFreshOwnerLease(signal, shutdownSignal);
     }
 
-    const wasOwnerLeaseUsable = this.ownerLeaseUsable;
     try {
       const renewStartedAtMs = this.monotonicNowMs();
+      this.leaseOperationStartedAtMs = renewStartedAtMs;
       const result = await withTimeout(
         (renewSignal) =>
           this.stores.ownerLeaseStore.renewOwnerLease(
@@ -502,6 +518,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
         // another heartbeat interval.
         return await this.claimFreshOwnerLease(signal, shutdownSignal);
       }
+      const wasOwnerLeaseUsable = this.ownerLeaseUsable;
       this.ownerLeaseHealthy = true;
       this.ownerLeaseRenewedAt = result.storeNow;
       this.setOwnerLeaseDeadline(
@@ -511,8 +528,8 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
         result.storeNow
       );
       this.lastError = undefined;
-      if (!wasOwnerLeaseUsable) {
-        for (const handler of this.ownerLeaseRenewedHandlers) handler(result);
+      for (const handler of this.ownerLeaseRenewedHandlers) {
+        handler(result, wasOwnerLeaseUsable);
       }
       return true;
     } catch (error) {
@@ -529,10 +546,15 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
     shutdownSignal?: () => AbortSignal
   ): Promise<boolean> {
     const claimStartedAtMs = this.monotonicNowMs();
-    const timeoutDeadline = performance.now() + this.options.ownerLeaseRenewTimeoutMs;
+    this.leaseOperationStartedAtMs = claimStartedAtMs;
+    const timeoutStartedAtMs = performance.now();
     let claim: Awaited<ReturnType<ZLinkOwnerLeaseStore['claimOwnerLease']>>;
     try {
-      claim = await this.claimOwnerLeaseWithConfirmation(timeoutDeadline, signal, shutdownSignal);
+      claim = await this.claimOwnerLeaseWithConfirmation(
+        timeoutStartedAtMs,
+        signal,
+        shutdownSignal
+      );
     } catch (error) {
       if (signal?.aborted === true) throw error;
       if (error instanceof ZLinkOwnerLeaseClaimError) throw error;
@@ -562,13 +584,15 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
         claim.storeNow
       );
       this.lastError = undefined;
-      this.nextLeaseRenewAtMs = this.monotonicNowMs() + this.options.ownerLeaseRenewIntervalMs;
       for (const handler of this.ownerLeaseRenewedHandlers) {
-        handler({
-          kind: 'renewed',
-          leaseExpiresAt: claim.leaseExpiresAt,
-          storeNow: claim.storeNow
-        });
+        handler(
+          {
+            kind: 'renewed',
+            leaseExpiresAt: claim.leaseExpiresAt,
+            storeNow: claim.storeNow
+          },
+          false
+        );
       }
       return true;
     } catch (error) {
@@ -579,7 +603,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
   }
 
   private async claimOwnerLeaseWithConfirmation(
-    timeoutDeadline: number,
+    timeoutStartedAtMs: number,
     signal?: AbortSignal,
     shutdownSignal?: () => AbortSignal
   ): Promise<Awaited<ReturnType<ZLinkOwnerLeaseStore['claimOwnerLease']>>> {
@@ -594,7 +618,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
             this.options.ownerLeaseTtlMs,
             claimSignal
           )),
-        remainingTimeoutMs(timeoutDeadline),
+        remainingTimeoutMs(timeoutStartedAtMs, this.options.ownerLeaseRenewTimeoutMs),
         signal
       );
     } catch (error) {
@@ -604,7 +628,9 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
         try {
           await withTimeout(
             () => request!,
-            cleanupSignal === undefined ? remainingTimeoutMs(timeoutDeadline) : undefined,
+            cleanupSignal === undefined
+              ? remainingTimeoutMs(timeoutStartedAtMs, this.options.ownerLeaseRenewTimeoutMs)
+              : undefined,
             cleanupSignal
           );
         } catch (completionError) {
@@ -621,7 +647,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
       }
       const confirmed = await this.confirmOwnerLease(
         error,
-        timeoutDeadline,
+        timeoutStartedAtMs,
         signal,
         shutdownSignal
       );
@@ -631,13 +657,13 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
     if (claim.kind !== 'conflict') return claim;
     const conflict = new ZLinkOwnerLeaseClaimError(claim.kind);
     return (
-      (await this.confirmOwnerLease(conflict, timeoutDeadline, signal, shutdownSignal)) ?? claim
+      (await this.confirmOwnerLease(conflict, timeoutStartedAtMs, signal, shutdownSignal)) ?? claim
     );
   }
 
   private async confirmOwnerLease(
     originalError: unknown,
-    timeoutDeadline: number,
+    timeoutStartedAtMs: number,
     signal?: AbortSignal,
     shutdownSignal?: () => AbortSignal
   ): Promise<
@@ -647,7 +673,9 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
     const cancelled = signal?.aborted === true;
     const cleanupSignal = cancelled ? shutdownSignal?.() : undefined;
     const confirmationTimeoutMs =
-      cleanupSignal === undefined ? remainingTimeoutMs(timeoutDeadline) : undefined;
+      cleanupSignal === undefined
+        ? remainingTimeoutMs(timeoutStartedAtMs, this.options.ownerLeaseRenewTimeoutMs)
+        : undefined;
     if (confirmationTimeoutMs !== undefined && confirmationTimeoutMs <= 0) throw originalError;
     let confirmed: Awaited<ReturnType<ZLinkOwnerLeaseStore['readOwnerLease']>>;
     try {
@@ -753,7 +781,10 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
       updatedAt: new Date()
     };
     let result = await this.guardWrite(() =>
-      this.stores.locationStore.updateMeshNode(stamped, intent, signal)
+      this.writeDescriptor(
+        (writeSignal) => this.stores.locationStore.updateMeshNode(stamped, intent, writeSignal),
+        signal
+      )
     );
     if (
       intent === ZLinkLocationWriteIntent.Renew &&
@@ -765,7 +796,15 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
       // NewClaim as a bounded fallback. If another owner has recreated the
       // row, NewClaim remains rejected and the caller keeps the conflict.
       result = await this.guardWrite(() =>
-        this.stores.locationStore.updateMeshNode(stamped, ZLinkLocationWriteIntent.NewClaim, signal)
+        this.writeDescriptor(
+          (writeSignal) =>
+            this.stores.locationStore.updateMeshNode(
+              stamped,
+              ZLinkLocationWriteIntent.NewClaim,
+              writeSignal
+            ),
+          signal
+        )
       );
     }
     this.notifyIfStale(
@@ -1316,8 +1355,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
     if (!this.started) {
       return;
     }
-    const scheduledAt =
-      this.nextLeaseRenewAtMs ?? this.monotonicNowMs() + this.options.ownerLeaseRenewIntervalMs;
+    const scheduledAt = this.leaseOperationStartedAtMs + this.options.ownerLeaseRenewIntervalMs;
     const delayMs = Math.max(0, scheduledAt - this.monotonicNowMs());
     this.heartbeatTimer = this.setTimer(() => {
       this.heartbeatTimer = undefined;
@@ -1325,7 +1363,6 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
       for (const scope of this.leaseScopes) {
         this.metrics?.recordOwnerLeaseRenewLateness(lateness, scope.kind, scope.name);
       }
-      this.nextLeaseRenewAtMs = this.monotonicNowMs() + this.options.ownerLeaseRenewIntervalMs;
       if (
         this.ownerLeaseDeadlineMs !== undefined &&
         this.monotonicNowMs() >= this.ownerLeaseDeadlineMs
@@ -1479,8 +1516,8 @@ class OwnerLeaseRenewTimeoutError extends Error {
   }
 }
 
-function remainingTimeoutMs(timeoutDeadline: number): number {
-  return Math.max(0, timeoutDeadline - performance.now());
+function remainingTimeoutMs(timeoutStartedAtMs: number, timeoutMs: number): number {
+  return Math.max(0, timeoutMs - (performance.now() - timeoutStartedAtMs));
 }
 
 function errorMessage(error: unknown): string {

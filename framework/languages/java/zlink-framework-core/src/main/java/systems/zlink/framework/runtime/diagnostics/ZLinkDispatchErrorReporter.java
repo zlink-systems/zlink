@@ -115,6 +115,11 @@ public final class ZLinkDispatchErrorReporter {
         return flow.captureEnabled();
     }
 
+    /** Whether a dispatch error record would be written at the live level. */
+    public boolean errorsEnabled() {
+        return flow.dispatchErrorsEnabled();
+    }
+
     public void report(ZLinkDispatchFailure error) {
         ZLinkMessageFlowTracer.TracePoint tracePoint = flow.beginDispatchError();
         if (tracePoint == null) {

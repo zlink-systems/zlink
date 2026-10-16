@@ -357,6 +357,41 @@ test('typed framework-json-v1 schema consumes every shared golden vector', () =>
   }
 });
 
+test('typed server payload decode requires enum names and rejects ordinal representations', () => {
+  class ProfileReportReq {}
+  framework.ZLinkPacket('profile.report', {
+    payload: {
+      type: 'object',
+      properties: {
+        reasonId: { type: 'enum', names: ['nickname', 'profile', 'harassment', 'other'] }
+      },
+      required: ['reasonId']
+    }
+  })(ProfileReportReq);
+
+  const valid = Message.from(Buffer.from('{"reasonId":"profile"}'));
+  try {
+    assert.equal(
+      payloadCodec.decodeFrameworkTypedPayloadMessage(valid, undefined, ProfileReportReq).reasonId,
+      'profile'
+    );
+  } finally {
+    valid.close();
+  }
+
+  for (const reasonId of [1, '1']) {
+    const message = Message.from(Buffer.from(JSON.stringify({ reasonId })));
+    try {
+      assert.throws(
+        () => payloadCodec.decodeFrameworkTypedPayloadMessage(message, undefined, ProfileReportReq),
+        /PayloadDecodeFailed/
+      );
+    } finally {
+      message.close();
+    }
+  }
+});
+
 test('Channel request and reply apply the packet JSON contract without a codec registration', () => {
   const contract = {
     payload: {
@@ -540,6 +575,23 @@ test('public encoded payload keeps defensive input and output copies', () => {
 
   assert.equal(payload.getString(), 'stable');
   assert.equal(Buffer.from(payload.toBytes()).toString(), 'stable');
+});
+
+test('public encoded payload retains an owned view and exposes it without copying', () => {
+  const backing = Uint8Array.from([0, 10, 20, 30, 40]);
+  const input = backing.subarray(1, 4);
+  const payload = framework.ZLinkEncodedPayload.fromOwned(input);
+  const view = payload.view();
+
+  assert.equal(view.buffer, input.buffer);
+  assert.equal(view.byteOffset, input.byteOffset);
+  assert.equal(view.byteLength, input.byteLength);
+  assert.deepEqual([...view], [10, 20, 30]);
+  backing[2] = 21;
+  assert.deepEqual([...payload.view()], [10, 21, 30]);
+  const copied = payload.data();
+  copied[0] = 99;
+  assert.equal(payload.view()[0], 10);
 });
 
 test('selective application serializer leaves framework payload encoding on JSON', () => {

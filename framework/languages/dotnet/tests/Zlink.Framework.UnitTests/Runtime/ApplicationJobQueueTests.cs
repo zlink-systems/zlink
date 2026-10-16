@@ -426,12 +426,14 @@ public sealed class ApplicationJobQueueTests
             ZLinkApplicationJobOrigin.Remote
         );
         blockPause = true;
-        var secondTask = Task.Run(async () =>
+        var secondTask = RunOnDedicatedThread(async () =>
             await queue.AcquireAsync(CancellationToken.None, ZLinkApplicationJobOrigin.Remote)
         );
 
         Assert.True(pauseEntered.Wait(TimeSpan.FromSeconds(1)));
-        var releaseTask = Task.Run(async () => await first.ReleaseForHandlerStartAsync());
+        var releaseTask = RunOnDedicatedThread(async () =>
+            await first.ReleaseForHandlerStartAsync()
+        );
         Assert.True(
             SpinWait.SpinUntil(
                 () =>
@@ -545,18 +547,18 @@ public sealed class ApplicationJobQueueTests
                 releasePause.Wait();
             }
         );
-        var acquire = Task.Run(async () =>
+        var acquire = RunOnDedicatedThread(async () =>
             await queue.AcquireAsync(CancellationToken.None, ZLinkApplicationJobOrigin.Remote)
         );
         Assert.True(pauseEntered.Wait(TimeSpan.FromSeconds(1)));
 
-        var dispose = Task.Run(queue.Dispose);
+        var dispose = RunOnDedicatedThread(queue.Dispose);
         await dispose.WaitAsync(TimeSpan.FromSeconds(1));
 
         var unregisterStarted = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
-        var unregister = Task.Run(async () =>
+        var unregister = RunOnDedicatedThread(async () =>
         {
             unregisterStarted.SetResult();
             await registration.DisposeAsync();
@@ -586,7 +588,7 @@ public sealed class ApplicationJobQueueTests
                 releasePause.Wait();
             }
         );
-        var acquire = Task.Run(async () =>
+        var acquire = RunOnDedicatedThread(async () =>
             await queue.AcquireAsync(CancellationToken.None, ZLinkApplicationJobOrigin.Remote)
         );
         try
@@ -713,7 +715,7 @@ public sealed class ApplicationJobQueueTests
             ZLinkApplicationJobOrigin.Remote
         );
         time.Arm();
-        var waiting = Task.Run(async () =>
+        var waiting = RunOnDedicatedThread(async () =>
             await queue.AcquireAsync(CancellationToken.None, ZLinkApplicationJobOrigin.Remote)
         );
 
@@ -862,15 +864,6 @@ public sealed class ApplicationJobQueueTests
     }
 
     [Fact]
-    public void Only_terminal_record_kinds_bypass_dispatch_admission()
-    {
-        Assert.False(ZLinkMeshDispatchPump.RequiresApplicationAdmission(MeshRecordKind.Completion));
-        Assert.False(ZLinkMeshDispatchPump.RequiresApplicationAdmission(MeshRecordKind.SendReady));
-        Assert.True(ZLinkMeshDispatchPump.RequiresApplicationAdmission(MeshRecordKind.NodeSend));
-        Assert.True(ZLinkMeshDispatchPump.RequiresApplicationAdmission(MeshRecordKind.SpotControl));
-    }
-
-    [Fact]
     public async Task Reset_preserves_current_and_rebases_peak_while_clearing_wait_totals()
     {
         using var queue = CreateQueue(limit: 2);
@@ -934,6 +927,40 @@ public sealed class ApplicationJobQueueTests
         Assert.Equal(1UL, currentEpoch.CapacityWaitCount);
         Assert.Equal(TimeSpan.FromSeconds(2), currentEpoch.CapacityWaitDuration);
     }
+
+    // A test that parks a receive-flow or clock callback must not park a
+    // ThreadPool worker, and the actor it then times against a budget must not
+    // wait for one. The test host keeps a worker in its socket loop, so with
+    // two effective processors the parked callback leaves no worker for a
+    // Task.Run item until ThreadPool starvation injection, which a one-second
+    // budget does not cover.
+    private static Task RunOnDedicatedThread(Action work) =>
+        Task.Factory.StartNew(
+            work,
+            CancellationToken.None,
+            TaskCreationOptions.LongRunning,
+            TaskScheduler.Default
+        );
+
+    private static Task RunOnDedicatedThread(Func<Task> work) =>
+        Task
+            .Factory.StartNew(
+                work,
+                CancellationToken.None,
+                TaskCreationOptions.LongRunning,
+                TaskScheduler.Default
+            )
+            .Unwrap();
+
+    private static Task<T> RunOnDedicatedThread<T>(Func<Task<T>> work) =>
+        Task
+            .Factory.StartNew(
+                work,
+                CancellationToken.None,
+                TaskCreationOptions.LongRunning,
+                TaskScheduler.Default
+            )
+            .Unwrap();
 
     private static ZLinkApplicationJobQueue CreateQueue(
         ulong limit,

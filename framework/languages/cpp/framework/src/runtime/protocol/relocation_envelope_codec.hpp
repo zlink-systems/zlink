@@ -81,6 +81,19 @@ struct relocation_envelope_pending_tick_t
                             const relocation_envelope_pending_tick_t &) = default;
 };
 
+struct relocation_envelope_session_binding_t
+{
+    std::uint64_t participant_id = 0;
+    std::vector<std::uint8_t> session_owner_node_rid;
+    std::uint64_t session_owner_node_generation = 0;
+    std::string session_owner_id;
+    std::uint64_t session_owner_lease_generation = 0;
+    std::vector<std::uint8_t> session_rid;
+    std::uint64_t binding_generation = 0;
+    friend bool operator== (const relocation_envelope_session_binding_t &,
+                            const relocation_envelope_session_binding_t &) = default;
+};
+
 struct relocation_envelope_t
 {
     relocation_id_t relocation;
@@ -93,6 +106,7 @@ struct relocation_envelope_t
     std::vector<relocation_envelope_saved_work_t> saved_work;
     std::vector<relocation_envelope_timer_t> timer_registrations;
     std::vector<relocation_envelope_pending_tick_t> pending_timer_ticks;
+    std::vector<relocation_envelope_session_binding_t> session_bindings;
 
     friend bool operator== (const relocation_envelope_t &, const relocation_envelope_t &) = default;
 };

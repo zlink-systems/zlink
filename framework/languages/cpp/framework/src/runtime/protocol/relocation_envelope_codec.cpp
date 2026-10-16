@@ -96,6 +96,12 @@ generated_envelope_t to_generated (const relocation_envelope_t &envelope)
           {tick.participant_id, tick.order, tick.timer_name, tick.delivery_index,
            tick.scheduled_index, tick.scheduled_at_unix_milliseconds, tick.skipped_ticks});
     }
+    for (const auto &binding : envelope.session_bindings)
+        result.session_bindings.push_back ({binding.participant_id, binding.session_owner_node_rid,
+                                            binding.session_owner_node_generation,
+                                            binding.session_owner_id,
+                                            binding.session_owner_lease_generation,
+                                            binding.session_rid, binding.binding_generation});
     return result;
 }
 
@@ -129,6 +135,12 @@ relocation_envelope_t from_generated (const generated_envelope_t &envelope)
           {tick.participant_id, tick.order, tick.timer_name, tick.delivery_index,
            tick.scheduled_index, tick.scheduled_at_unix_milliseconds, tick.skipped_ticks});
     }
+    for (const auto &binding : envelope.session_bindings)
+        result.session_bindings.push_back ({binding.participant_id, binding.session_owner_node_rid,
+                                            binding.session_owner_node_generation,
+                                            binding.session_owner_id,
+                                            binding.session_owner_lease_generation,
+                                            binding.session_rid, binding.binding_generation});
     return result;
 }
 

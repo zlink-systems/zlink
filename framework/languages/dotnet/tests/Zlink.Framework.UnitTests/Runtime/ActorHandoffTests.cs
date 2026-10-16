@@ -953,7 +953,7 @@ public sealed class ActorHandoffTests
     }
 
     [Fact]
-    public void TransferredActivation_ClearsRetiredSourceFollow_ButKeepsImportedTarget()
+    public async Task TransferredActivation_ClearsRetiredSourceFollow_ButKeepsImportedTarget()
     {
         var state = new ZLinkActorRuntimeState("actor-1");
         var previousSource = ActorRef("node-a", 1);
@@ -966,7 +966,7 @@ public sealed class ActorHandoffTests
         var imported = HandoffFrame(3, arrivalIndex: 0);
         Assert.True(state.Handoff.Import(CommitRequest("handoff-return", [imported]), out _));
 
-        state.PrepareForTransferredActivation();
+        await state.PrepareForTransferredActivationAsync(CancellationToken.None);
 
         Assert.Equal(
             ZLinkActorFrameRoute.Current,
@@ -1062,7 +1062,7 @@ public sealed class ActorHandoffTests
     }
 
     [Fact]
-    public void NewActivationAfterMigration_ReopensTheClosedActorActivation()
+    public async Task NewActivationAfterMigration_ReopensTheClosedActorActivation()
     {
         using var services = new ServiceCollection().BuildServiceProvider();
         var state = new ZLinkActorRuntimeState("actor-1", services: services);
@@ -1076,7 +1076,7 @@ public sealed class ActorHandoffTests
 
         Assert.Throws<InvalidOperationException>(() => state.HandlerInstances);
 
-        state.PrepareForTransferredActivation();
+        await state.PrepareForTransferredActivationAsync(CancellationToken.None);
 
         Assert.False(state.ContextInvalidated);
         Assert.NotNull(state.HandlerInstances);
@@ -1384,14 +1384,6 @@ public sealed class ActorHandoffTests
 
         var exception = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
             await state.ExecuteDispatchAsync(
-                new ZlinkStreamHeader(
-                    ZlinkStreamMessageKind.Send,
-                    ZlinkStreamCodec.Raw,
-                    ZlinkStreamHeaderFlags.None,
-                    null,
-                    "blocked",
-                    ZlinkStreamMetadata.Empty
-                ),
                 _ =>
                 {
                     invoked = true;
@@ -1419,7 +1411,6 @@ public sealed class ActorHandoffTests
         Task? escapedChild = null;
 
         await state.ExecuteDispatchAsync(
-            Header("first"),
             _ =>
             {
                 escapedChild = Task.Run(async () =>
@@ -1442,7 +1433,6 @@ public sealed class ActorHandoffTests
         );
         var secondDispatch = state
             .ExecuteDispatchAsync(
-                Header("second"),
                 async _ =>
                 {
                     secondEntered.TrySetResult();

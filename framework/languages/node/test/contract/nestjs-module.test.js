@@ -98,11 +98,11 @@ function exposeLegacyTestSpotAsMeshNode(spotNode) {
     configureObjectPlacement() {},
     selectObjectPlacement() { return undefined; },
     start() {},
-    shutdown() {
+    async shutdown() {
       return 0;
     },
-    close() {
-      void dispose?.();
+    async close() {
+      await dispose?.();
     },
     connectPeer(options) {
       if (options.expectedRid !== undefined) {
@@ -3949,7 +3949,7 @@ test('framework runtime host defers Entry Spot lifecycle until Core materializes
       this.context.handlers.addHandler(GenericHandler);
       this.context.handlers.addPacket(PacketHandler, 'entry.packet');
       this.context.handlers.addSubscribe(SubscribeHandler, 'game', 'entry.topic');
-      this.context.handlers.addSpotHandler(SpotHandler);
+      this.context.handlers.addTimerHandler(SpotHandler);
       registry = this.context.handlers;
     }
     async onInitialize() {

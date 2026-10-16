@@ -34,6 +34,7 @@
 #include "runtime/stateful/raw_stateful_dispatch.hpp"
 #include "runtime/stateful/public_host_runtime.hpp"
 #include "runtime/stateful/stateful_object_runtime.hpp"
+#include "runtime/timers/async_delay.hpp"
 #include "runtime/stateful/stream_session_registry.hpp"
 #include "runtime/spots/actor_transfer_coordinator.hpp"
 #include "runtime/spots/spot_runtime.hpp"
@@ -78,6 +79,13 @@ using namespace std::chrono_literals;
 namespace
 {
 
+bool ready_peer (const mesh::service_topology_registry_t &topology,
+                 const std::vector<std::uint8_t> &routing_id)
+{
+    const auto peer = topology.peer (routing_id);
+    return peer && peer->ready;
+}
+
 template <class T> T await_task (zlink::framework::task_t<T> task)
 {
     return std::move (task).result ().value ();
@@ -105,10 +113,16 @@ void from_json (const nlohmann::json &, quest_probe_t &)
 {
 }
 
-zlink::framework::task_t<std::vector<zlink::message_t>>
-await_native_reply (zlink::async_result_t<std::vector<zlink::message_t>> pending)
+zlink::framework::task_t<zlink::request_result_t>
+await_native_request_terminal (zlink::async_result_t<std::vector<zlink::message_t>> pending)
 {
-    co_return co_await std::move (pending);
+    try {
+        (void) co_await std::move (pending);
+        co_return zlink::request_result_t::ok;
+    }
+    catch (const zlink::request_error_t &error) {
+        co_return error.result ();
+    }
 }
 
 class actor_send_spot_resolver_t final : public zlink::framework::runtime::spot_address_resolver_t
@@ -317,6 +331,8 @@ void verify_actor_calls_keep_selected_route_until_follow_notice ()
         store->claim_owner_lease ("actor-send-new-owner", 30s).result ().value ())
         .token;
 
+    std::mutex delay_mutex;
+    detail::delay_owner_t delays (delay_mutex);
     const auto core_context = std::make_shared<zlink::context_t> ();
     const auto make_runtime = [core_context] (std::string rid) {
         auto state = zlink::framework::test::runtime_failure_fixture<
@@ -473,8 +489,8 @@ void verify_actor_calls_keep_selected_route_until_follow_notice ()
     serializer_registry_t serializers;
     old_target->bind_serializers (serializers);
     new_target->bind_serializers (serializers);
-    auto client =
-      runtime::make_actor_client (live_locations, serializers, {source}, {}, location_options);
+    auto client = runtime::make_actor_client (live_locations, serializers, {source}, {},
+                                              location_options, delays);
 
     const auto collect_actor_sends = [] (detail::mesh_node_runtime_t &target,
                                          std::chrono::milliseconds budget,
@@ -515,8 +531,8 @@ void verify_actor_calls_keep_selected_route_until_follow_notice ()
     // A second application scope can resolve the same singleton MeshNode
     // after this client has already cached A. Its notice registration cannot
     // replace the first client's exact-fence invalidation subscription.
-    auto second_client =
-      runtime::make_actor_client (live_locations, serializers, {source}, {}, location_options);
+    auto second_client = runtime::make_actor_client (live_locations, serializers, {source}, {},
+                                                     location_options, delays);
 
     const auto new_actor = detail::actor_ref_access_t::make (
       new_placement.node_rid, "route-probe", key.global_id, committed.ready.object_generation);
@@ -915,14 +931,14 @@ void verify_session_relocation_gateway_commit_is_atomic ()
       17,
       {stateful::object_kind_t::actor, "relocating-actor", 7, 11, "game", "source-node"},
       4,
-      13};
+      14};
     const stateful::stream_binding_t target{
       previous.connection,
       previous.binding_generation,
       {stateful::object_kind_t::actor, "relocating-actor", 7, 12, "game", "target-node"},
       23,
       29};
-    const protocol::session_relocation_route_t route{
+    protocol::session_relocation_route_t route{
       {31, 37},
       {"source-owner", 13, zlink::routing_id_t::from (std::string ("source-node")).to_bytes (), 4,
        "authority-v1"},
@@ -936,6 +952,8 @@ void verify_session_relocation_gateway_commit_is_atomic ()
       17,
       {protocol::session_relocation_route_action_t::commit, 11, 12,
        zlink::routing_id_t::from (std::string ("target-node")).to_bytes (), 23, 0, 37}};
+    route.coordinator.owner_id = "transport-coordinator";
+    route.route.previous_authority_owner_generation = 10;
     const auto target_ref = actor_ref_access_t::make (node_rid_t::from_string ("target-node"),
                                                       "game.actor", "relocating-actor", 7);
     assert (gateway.update_actor_ref (target_ref));
@@ -1444,7 +1462,7 @@ void verify_bound_session_push_uses_session_registry_when_gateway_projection_rej
     ++target.authority_owner_generation;
     const auto committed = session_owner->sessions ().commit_remote_route (
       connection.connection_id, binding.binding_generation, previous.key,
-      previous.object_generation, previous.authority_owner_generation, target, 19, 23);
+      previous.object_generation, target, 19, 23);
     assert (committed.error == stateful::stateful_error_t::none);
     assert (committed.binding && committed.binding->owner_lease_generation == 23);
 
@@ -1732,6 +1750,15 @@ class recording_actor_client_t final : public zlink::framework::actor_client_t
     zlink::framework::serializer_registry_t serializers;
 };
 
+// A handler awaits its Yield: the Spot gate is released where it suspends.
+zlink::framework::task_t<zlink::framework::message_t>
+await_other_actor_yield (recording_actor_client_t &client)
+{
+    using namespace zlink::framework;
+    actor_request_call_t request (client, actor_id_t ("actor-2"), "OtherRequest", message_t{});
+    co_return co_await request.yield_message ();
+}
+
 zlink::framework::task_t<zlink::framework::message_t>
 request_after_actor_await (recording_actor_client_t &client)
 {
@@ -1893,8 +1920,9 @@ void verify_public_host_route_fence_reads_store_without_second_cache (bool relea
     const auto noop_dispatch = [] (const host::ready_record_t &, const host::receive_record_t &,
                                    std::vector<zlink::message_t>) {};
     const auto connect_deadline = std::chrono::steady_clock::now () + 5s;
-    while (!source->transport ().topology ().peer (target->status ().routing_id ().to_bytes ())
-           && std::chrono::steady_clock::now () < connect_deadline) {
+    while (
+      !ready_peer (source->transport ().topology (), target->status ().routing_id ().to_bytes ())
+      && std::chrono::steady_clock::now () < connect_deadline) {
         (void) source->dispatch_ready (noop_dispatch);
         (void) target->dispatch_ready (noop_dispatch);
         std::this_thread::sleep_for (1ms);
@@ -2141,9 +2169,7 @@ void verify_actor_yield_releases_spot_gate_before_reply ()
 
     assert (queue.try_post_async ("different-member-actor-yield", [&] (auto complete) {
         runtime::actor_execution_scope_t actor_scope ("player:actor-1", "spot-1");
-        actor_request_call_t request (actor_client, actor_id_t ("actor-2"), "OtherRequest",
-                                      message_t{});
-        request_task = std::make_shared<task_t<message_t>> (request.yield_message ());
+        request_task = std::make_shared<task_t<message_t>> (await_other_actor_yield (actor_client));
         detail::observe_task_completion (
           *request_task,
           [&, request_task, complete = std::move (complete)] (const auto &result) mutable {
@@ -2352,8 +2378,8 @@ void verify_actor_create_replays_after_reciprocal_handover ()
         assert (await_task (target.pump_one (now)) != mesh::raw_mesh_pump_result_t::protocol_error);
     };
     const auto admission_deadline = std::chrono::steady_clock::now () + 2s;
-    while ((!source.topology ().peer (target_descriptor.node_routing_id)
-            || !target.topology ().peer (source_descriptor.node_routing_id))
+    while ((!ready_peer (source.topology (), target_descriptor.node_routing_id)
+            || !ready_peer (target.topology (), source_descriptor.node_routing_id))
            && std::chrono::steady_clock::now () < admission_deadline)
         pump ();
     assert (source.topology ().peer (target_descriptor.node_routing_id));
@@ -2901,9 +2927,9 @@ void verify_session_route_supports_repeated_relocation ()
     auto remote = source;
     remote.node_id = "node-b";
     ++remote.authority_owner_generation;
-    const auto first_commit = sessions.commit_remote_route (
-      connection.connection_id, binding.binding_generation, source.key, source.object_generation,
-      source.authority_owner_generation, remote, 12, 23);
+    const auto first_commit =
+      sessions.commit_remote_route (connection.connection_id, binding.binding_generation,
+                                    source.key, source.object_generation, remote, 12, 23);
     assert (first_commit.error == stateful::stateful_error_t::none);
     assert (first_commit.binding);
     assert (first_commit.binding->actor == remote);
@@ -2922,9 +2948,9 @@ void verify_session_route_supports_repeated_relocation ()
     auto returned = remote;
     returned.node_id = source.node_id;
     ++returned.authority_owner_generation;
-    const auto return_commit = sessions.commit_remote_route (
-      connection.connection_id, binding.binding_generation, source.key, source.object_generation,
-      remote.authority_owner_generation, returned, 11, 31);
+    const auto return_commit =
+      sessions.commit_remote_route (connection.connection_id, binding.binding_generation,
+                                    source.key, source.object_generation, returned, 11, 31);
     assert (return_commit.error == stateful::stateful_error_t::none);
     assert (return_commit.binding);
     assert (return_commit.binding->actor == returned);
@@ -2954,8 +2980,7 @@ void verify_session_route_commit_stores_target_lease ()
     bool registry_reentry_rejected = false;
     const auto committed = sessions.commit_remote_route (
       connection.connection_id, binding.binding_generation, source.key, source.object_generation,
-      source.authority_owner_generation, target, 19, 23,
-      [&] (const stateful::stream_route_admission_t &projected) {
+      target, 19, 23, [&] (const stateful::stream_route_admission_t &projected) {
           projection_hook_called = true;
           assert (projected.binding);
           assert (projected.binding->owner_lease_generation == 23);
@@ -3364,8 +3389,14 @@ void verify_public_host_dispatches_one_application_record_per_turn ()
     const auto noop_dispatch = [] (const host::ready_record_t &, const host::receive_record_t &,
                                    std::vector<zlink::message_t>) {};
     const auto connect_deadline = mesh::service_liveness_registry_t::clock_t::now () + 5s;
-    while ((!source->transport ().topology ().peer (target_status.routing_id ().to_bytes ())
-            || !target->transport ().topology ().peer (source_status.routing_id ().to_bytes ()))
+    const auto peers_ready = [&] {
+        const auto source_peer =
+          source->transport ().topology ().peer (target_status.routing_id ().to_bytes ());
+        const auto target_peer =
+          target->transport ().topology ().peer (source_status.routing_id ().to_bytes ());
+        return source_peer && source_peer->ready && target_peer && target_peer->ready;
+    };
+    while (!peers_ready ()
            && mesh::service_liveness_registry_t::clock_t::now () < connect_deadline) {
         await_task (source->dispatch_ready (noop_dispatch));
         await_task (target->dispatch_ready (noop_dispatch));
@@ -3373,6 +3404,7 @@ void verify_public_host_dispatches_one_application_record_per_turn ()
     }
     assert (source->transport ().topology ().peer (target_status.routing_id ().to_bytes ()));
     assert (target->transport ().topology ().peer (source_status.routing_id ().to_bytes ()));
+    assert (peers_ready ());
 
     const std::vector<zlink::message_t> first{zlink::message_t::from (std::string ("first"))};
     const std::vector<zlink::message_t> second{zlink::message_t::from (std::string ("second"))};
@@ -3494,9 +3526,10 @@ void verify_public_host_batches_with_finite_permits ()
     const auto noop_dispatch = [] (const host::ready_record_t &, const host::receive_record_t &,
                                    std::vector<zlink::message_t>) {};
     const auto connect_deadline = mesh::service_liveness_registry_t::clock_t::now () + 5s;
-    while ((!source->transport ().topology ().peer (target_status.routing_id ().to_bytes ())
-            || !target->transport ().topology ().peer (source_status.routing_id ().to_bytes ()))
-           && mesh::service_liveness_registry_t::clock_t::now () < connect_deadline) {
+    while (
+      (!ready_peer (source->transport ().topology (), target_status.routing_id ().to_bytes ())
+       || !ready_peer (target->transport ().topology (), source_status.routing_id ().to_bytes ()))
+      && mesh::service_liveness_registry_t::clock_t::now () < connect_deadline) {
         await_task (source->dispatch_ready (noop_dispatch));
         await_task (target->dispatch_ready (noop_dispatch));
         std::this_thread::sleep_for (1ms);
@@ -3617,13 +3650,13 @@ void verify_public_host_fifo_drains_before_liveness_probe ()
                                    std::vector<zlink::message_t>) {};
     const auto connect_deadline = mesh::service_liveness_registry_t::clock_t::now () + 5s;
     const auto admit = [&] (host::public_host_runtime_t &runtime, const zlink::routing_id_t &peer) {
-        while (!runtime.transport ().topology ().peer (peer.to_bytes ())
+        while (!ready_peer (runtime.transport ().topology (), peer.to_bytes ())
                && clock_t::now () < connect_deadline) {
             await_task (runtime.dispatch_ready (noop_dispatch));
-            if (!runtime.transport ().topology ().peer (peer.to_bytes ()))
+            if (!ready_peer (runtime.transport ().topology (), peer.to_bytes ()))
                 wait_for_input (runtime.transport (), connect_deadline);
         }
-        return runtime.transport ().topology ().peer (peer.to_bytes ()).has_value ();
+        return ready_peer (runtime.transport ().topology (), peer.to_bytes ());
     };
     // Each endpoint must keep servicing its handshake while the other waits
     // for input. A wait on one endpoint cannot drive the other's receive turn.
@@ -3778,9 +3811,10 @@ void verify_logical_multicast_continues_after_one_target_failure ()
     const auto noop_dispatch = [] (const host::ready_record_t &, const host::receive_record_t &,
                                    std::vector<zlink::message_t>) {};
     const auto connect_deadline = mesh::service_liveness_registry_t::clock_t::now () + 5s;
-    while ((!source->transport ().topology ().peer (target_status.routing_id ().to_bytes ())
-            || !target->transport ().topology ().peer (source_status.routing_id ().to_bytes ()))
-           && mesh::service_liveness_registry_t::clock_t::now () < connect_deadline) {
+    while (
+      (!ready_peer (source->transport ().topology (), target_status.routing_id ().to_bytes ())
+       || !ready_peer (target->transport ().topology (), source_status.routing_id ().to_bytes ()))
+      && mesh::service_liveness_registry_t::clock_t::now () < connect_deadline) {
         (void) source->dispatch_ready (noop_dispatch);
         (void) target->dispatch_ready (noop_dispatch);
         std::this_thread::sleep_for (1ms);
@@ -4104,7 +4138,7 @@ void verify_same_node_session_seal_waits_for_active_ingress ()
     assert (relocation_store->size () == 1);
 
     const auto target_authority_owner_generation = actor_object->authority_owner_generation + 7;
-    const protocol::session_relocation_route_t route{
+    protocol::session_relocation_route_t route{
       seal.relocation,
       seal.coordinator,
       protocol::relocation_role_t::target,
@@ -4118,6 +4152,8 @@ void verify_same_node_session_seal_waits_for_active_ingress ()
       {protocol::session_relocation_route_action_t::commit,
        actor_object->authority_owner_generation, target_authority_owner_generation,
        status.routing_id ().to_bytes (), status.lifecycle_generation (), 0, 13}};
+    route.coordinator.owner_id = "transport-coordinator";
+    ++route.route.previous_authority_owner_generation;
     assert (local->route_session_remote (status.routing_id (), route).result ().value ());
     assert (local->wait_for_dispatch_activity (-1ms, false, std::nullopt));
     auto current = local->sessions ().current_binding (actor_object->key);
@@ -4393,8 +4429,8 @@ void verify_raw_spot_and_actor_routing ()
     const auto target_descriptor = target.topology ().local_descriptor ();
     const auto deadline = mesh::service_liveness_registry_t::clock_t::now () + 5s;
     assert (source.connect_peer (target.endpoint (), target_descriptor));
-    while ((!source.topology ().peer (target_descriptor.node_routing_id)
-            || !target.topology ().peer (source_descriptor.node_routing_id))
+    while ((!ready_peer (source.topology (), target_descriptor.node_routing_id)
+            || !ready_peer (target.topology (), source_descriptor.node_routing_id))
            && mesh::service_liveness_registry_t::clock_t::now () < deadline) {
         const auto now = mesh::service_liveness_registry_t::clock_t::now ();
         (void) source.observe_routes ();
@@ -5042,8 +5078,8 @@ void verify_node_request_requires_remote_admission ()
          .result ()
          .value ());
 
-    while ((!source.topology ().peer (target_descriptor.node_routing_id)
-            || !target.topology ().peer (source_descriptor.node_routing_id))
+    while ((!ready_peer (source.topology (), target_descriptor.node_routing_id)
+            || !ready_peer (target.topology (), source_descriptor.node_routing_id))
            && mesh::service_liveness_registry_t::clock_t::now () < deadline) {
         const auto now = mesh::service_liveness_registry_t::clock_t::now ();
         (void) source.observe_routes ();
@@ -5112,7 +5148,7 @@ void verify_node_request_requires_remote_admission ()
     target.close ();
 }
 
-void verify_unadmitted_request_is_rejected_without_framework_queue ()
+void verify_unadmitted_request_is_dropped_without_framework_queue ()
 {
     mesh::raw_mesh_node_owner_t target (mesh::raw_mesh_node_options_t{
       .descriptor = descriptor ("overflow-target"),
@@ -5125,9 +5161,7 @@ void verify_unadmitted_request_is_rejected_without_framework_queue ()
     zlink::framework::test::completion_poller_driver_t completion_owner (source);
     source.set_routing_id (zlink::routing_id_t::from ("overflow-source"));
     source.connect (target.endpoint ());
-    std::this_thread::sleep_for (50ms);
 
-    using native_reply_t = std::vector<zlink::message_t>;
     const auto payload = protocol::encode_application_payload (
       {"DeferredRequest", "application/json", bytes ("request")});
     auto header = zlink::message_t::from (protocol::encode_node_request_header (1));
@@ -5143,7 +5177,7 @@ void verify_unadmitted_request_is_rejected_without_framework_queue ()
         pumped =
           target.pump_one (mesh::service_liveness_registry_t::clock_t::now ()).result ().value ();
     }
-    assert (pumped == mesh::raw_mesh_pump_result_t::protocol_error);
+    assert (pumped == mesh::raw_mesh_pump_result_t::infrastructure);
     assert (target.mailbox ().pending_messages (mesh::service_mailbox_domain_t::application) == 0);
 
     zlink::received_t hello;
@@ -5152,14 +5186,9 @@ void verify_unadmitted_request_is_rejected_without_framework_queue ()
     assert (protocol::decode_header (hello.parts ().front ().to_bytes ()).kind
             == protocol::command::hello);
 
-    auto rejected_reply = await_native_reply (std::move (request)).result ().value ();
-    assert (rejected_reply.size () == 1);
-    const auto reply = protocol::decode_reply_header (rejected_reply.front ().to_bytes ());
-    assert (reply.correlation == 1);
-    assert (reply.terminal_result
-            == static_cast<std::uint32_t> (protocol::request_terminal_result::notConnected));
-    assert (reply.failure_code
-            == static_cast<std::uint32_t> (protocol::framework_error_code::none));
+    // MeshNode §7.1: admission rejection is silent; only the original native deadline ends it.
+    assert (await_native_request_terminal (std::move (request)).result ().value ()
+            == zlink::request_result_t::timed_out);
     target.close ();
 }
 
@@ -5182,8 +5211,8 @@ void verify_queued_owner_accepts_request_without_blocking_other_owner ()
     const auto published_target = target.topology ().local_descriptor ();
     const auto deadline = mesh::service_liveness_registry_t::clock_t::now () + 5s;
     assert (source.connect_peer (target.endpoint (), published_target));
-    while ((!source.topology ().peer (published_target.node_routing_id)
-            || !target.topology ().peer (source_descriptor.node_routing_id))
+    while ((!ready_peer (source.topology (), published_target.node_routing_id)
+            || !ready_peer (target.topology (), source_descriptor.node_routing_id))
            && mesh::service_liveness_registry_t::clock_t::now () < deadline) {
         const auto now = mesh::service_liveness_registry_t::clock_t::now ();
         (void) source.observe_routes ();
@@ -5315,8 +5344,8 @@ void verify_raw_terminal_reply_relay ()
     const auto target_descriptor = target.topology ().local_descriptor ();
     const auto deadline = mesh::service_liveness_registry_t::clock_t::now () + 5s;
     assert (source.connect_peer (target.endpoint (), target_descriptor));
-    while ((!source.topology ().peer (target_descriptor.node_routing_id)
-            || !target.topology ().peer (source_descriptor.node_routing_id))
+    while ((!ready_peer (source.topology (), target_descriptor.node_routing_id)
+            || !ready_peer (target.topology (), source_descriptor.node_routing_id))
            && mesh::service_liveness_registry_t::clock_t::now () < deadline) {
         const auto now = mesh::service_liveness_registry_t::clock_t::now ();
         (void) source.observe_routes ();
@@ -5506,8 +5535,8 @@ void verify_durable_reply_relay_single_winner ()
     const auto target_descriptor = target.topology ().local_descriptor ();
     auto deadline = std::chrono::steady_clock::now () + 5s;
     assert (source.connect_peer (target.endpoint (), target_descriptor));
-    while ((!source.topology ().peer (target_descriptor.node_routing_id)
-            || !target.topology ().peer (source_descriptor.node_routing_id))
+    while ((!ready_peer (source.topology (), target_descriptor.node_routing_id)
+            || !ready_peer (target.topology (), source_descriptor.node_routing_id))
            && std::chrono::steady_clock::now () < deadline) {
         const auto now = mesh::service_liveness_registry_t::clock_t::now ();
         (void) source.observe_routes ();
@@ -5983,6 +6012,7 @@ void verify_remote_user_spot_create_close_terminal_once ()
     std::size_t recovery_accepted_finishes = 0;
     struct recovery_barrier_t final : detail::deferred_barrier_t
     {
+        task_t<void> run (std::function<task_t<void> ()> work) override { return work (); }
         explicit recovery_barrier_t (std::size_t &finishes) : _finishes (finishes) {}
         result_t<void> activate (std::function<void ()> work) override
         {
@@ -6084,9 +6114,11 @@ void verify_remote_user_spot_create_close_terminal_once ()
     auto deadline = std::chrono::steady_clock::now () + 5s;
     auto dispatch = [] (const host::ready_record_t &, const host::receive_record_t &,
                         std::vector<zlink::message_t>) {};
-    while ((!source->transport ().topology ().peer (target->status ().routing_id ().to_bytes ())
-            || !target->transport ().topology ().peer (source->status ().routing_id ().to_bytes ()))
-           && std::chrono::steady_clock::now () < deadline) {
+    while (
+      (!ready_peer (source->transport ().topology (), target->status ().routing_id ().to_bytes ())
+       || !ready_peer (target->transport ().topology (),
+                       source->status ().routing_id ().to_bytes ()))
+      && std::chrono::steady_clock::now () < deadline) {
         (void) source->dispatch_ready (dispatch);
         (void) target->dispatch_ready (dispatch);
         std::this_thread::sleep_for (1ms);
@@ -6671,6 +6703,28 @@ void verify_remote_user_spot_create_close_terminal_once ()
        static_cast<std::uint64_t> (reservation->fence.target.owner.lease_generation),
        reservation->fence.capacity_bundle.spot_slots},
       unix_deadline};
+    const auto send_create_and_wait = [&] (const protocol::user_spot_create_header_t &request) {
+        std::optional<protocol::user_spot_create_reply_t> reply;
+        assert (source
+                  ->create_user_spot_remote (
+                    target->status ().routing_id (), request, 5s,
+                    [&] (foundation::operation_terminal_t terminal,
+                         protocol::user_spot_create_reply_t result,
+                         std::optional<protocol::application_payload_t>) {
+                        assert (terminal == foundation::operation_terminal_t::completed);
+                        reply = std::move (result);
+                    })
+                  .result ()
+                  .value ());
+        const auto wait_deadline = std::chrono::steady_clock::now () + 5s;
+        while (!reply && std::chrono::steady_clock::now () < wait_deadline) {
+            (void) target->dispatch_ready (dispatch);
+            (void) source->dispatch_ready (dispatch);
+            std::this_thread::sleep_for (1ms);
+        }
+        assert (reply);
+        return std::move (*reply);
+    };
     auto invalid_create = create;
     invalid_create.operation = {98, 1};
     invalid_create.spot_id = invalid_spot_id;
@@ -6761,6 +6815,48 @@ void verify_remote_user_spot_create_close_terminal_once ()
     assert (replayed_mismatch_reply->header.failure_code
             == static_cast<std::uint32_t> (protocol::framework_error_code::spotTypeMismatch));
     assert (materialize_count == 0);
+
+    auto moving_create = create;
+    moving_create.operation = {99, 2};
+    moving_create.deadline_unix_ms =
+      static_cast<std::uint64_t> (std::chrono::duration_cast<std::chrono::milliseconds> (
+                                    std::chrono::system_clock::now ().time_since_epoch () + 5s)
+                                    .count ());
+    const auto moving_inventory = target->objects ().try_begin_maintenance_inventory ();
+    assert (moving_inventory);
+    const auto moving_reply = send_create_and_wait (moving_create);
+    assert (moving_reply.header.terminal_result
+            == static_cast<std::uint32_t> (protocol::request_terminal_result::conflict));
+    assert (moving_reply.header.failure_code
+            == static_cast<std::uint32_t> (protocol::framework_error_code::spotMoving));
+    target->objects ().end_maintenance_inventory ();
+
+    const stateful::object_ref_t reserved_ref{
+      stateful::object_kind_t::user_spot,
+      spot_id,
+      reservation->fence.object_generation,
+      reservation->fence.authority_owner_generation,
+      reservation->fence.target.mesh_name,
+      std::string (reservation->fence.target.node_rid.value ())};
+    const auto local_reservation =
+      target->objects ().begin_reserved_object (reserved_ref, "room", {0x41, 0x42});
+    assert (local_reservation.status == stateful::create_status_t::reserved);
+    assert (local_reservation.factory_owner);
+    auto joined_create = create;
+    joined_create.operation = {99, 9};
+    joined_create.deadline_unix_ms =
+      static_cast<std::uint64_t> (std::chrono::duration_cast<std::chrono::milliseconds> (
+                                    std::chrono::system_clock::now ().time_since_epoch () + 5s)
+                                    .count ());
+    const auto joined_reply = send_create_and_wait (joined_create);
+    assert (joined_reply.header.terminal_result
+            == static_cast<std::uint32_t> (protocol::request_terminal_result::internalError));
+    assert (joined_reply.header.failure_code
+            == static_cast<std::uint32_t> (protocol::framework_error_code::requestFailed));
+    assert (target->objects ().abort_create (local_reservation.attempt)
+            == stateful::stateful_error_t::none);
+    assert (materialize_count == 0);
+
     const auto replay_expiry_unix_ms = mismatch_create.deadline_unix_ms + 51;
     while (static_cast<std::uint64_t> (std::chrono::duration_cast<std::chrono::milliseconds> (
                                          std::chrono::system_clock::now ().time_since_epoch ())
@@ -7233,7 +7329,7 @@ void verify_draining_target_relocation_prepare (bool already_accepted)
       [] (stateful::frozen_object_state_t &, const stateful::object_ref_t &,
           const protocol::relocation_prepare_t &) { return true; },
       [] (const stateful::object_ref_t &)
-        -> std::optional<std::tuple<std::string, std::string, std::uint64_t>> {
+        -> std::optional<zlink::framework::runtime::actor_authority_payload_t> {
           return std::nullopt;
       },
       [] (const std::string &, const stateful::object_ref_t &) {},
@@ -7249,9 +7345,10 @@ void verify_draining_target_relocation_prepare (bool already_accepted)
     const auto dispatch = [] (const host::ready_record_t &, const host::receive_record_t &,
                               std::vector<zlink::message_t>) {};
     const auto deadline = std::chrono::steady_clock::now () + 5s;
-    while ((!source->transport ().topology ().peer (target_status.routing_id ().to_bytes ())
-            || !target->transport ().topology ().peer (source_status.routing_id ().to_bytes ()))
-           && std::chrono::steady_clock::now () < deadline) {
+    while (
+      (!ready_peer (source->transport ().topology (), target_status.routing_id ().to_bytes ())
+       || !ready_peer (target->transport ().topology (), source_status.routing_id ().to_bytes ()))
+      && std::chrono::steady_clock::now () < deadline) {
         (void) source->dispatch_ready (dispatch);
         (void) target->dispatch_ready (dispatch);
     }
@@ -7368,12 +7465,21 @@ int main (int argc, char **argv)
 {
     // This test drives runtime parts without a host.
     zlink::framework::runtime::install_host_context_hooks ();
+    if (argc == 2 && std::string_view (argv[1]) == "--unadmitted-request") {
+        verify_unadmitted_request_is_dropped_without_framework_queue ();
+        return 0;
+    }
     if (argc == 2 && std::string_view (argv[1]) == "--owner-request-rejection") {
         verify_queued_owner_accepts_request_without_blocking_other_owner ();
         return 0;
     }
     if (argc == 2 && std::string_view (argv[1]) == "--fifo-liveness") {
         verify_public_host_fifo_drains_before_liveness_probe ();
+        return 0;
+    }
+    if (argc == 2 && std::string_view (argv[1]) == "--session-owner-route") {
+        verify_same_node_session_seal_waits_for_active_ingress ();
+        verify_session_relocation_gateway_commit_is_atomic ();
         return 0;
     }
     verify_actor_create_replays_after_reciprocal_handover ();
@@ -7430,7 +7536,7 @@ int main (int argc, char **argv)
     verify_atomic_raw_stateful_ingress_commit ();
     verify_relocated_source_reply_failure_keeps_terminal_record ();
     verify_node_request_requires_remote_admission ();
-    verify_unadmitted_request_is_rejected_without_framework_queue ();
+    verify_unadmitted_request_is_dropped_without_framework_queue ();
     verify_queued_owner_accepts_request_without_blocking_other_owner ();
     verify_raw_terminal_reply_relay ();
     verify_relocation_data_duplicates_are_distinct_arrivals ();

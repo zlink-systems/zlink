@@ -158,12 +158,11 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> {
         closeRouteReceived(received);
     }
 
-    final boolean hasActiveRouteReceives() {
-        return !activeRouteReceives.isEmpty();
-    }
-
     CompletionStage<Void> dispatchResolvedActorPacket(
-            ZLinkActor actor, ActorPacketFrames.Header packetHeader, ActorMessageRead read) {
+            ZLinkActor actor,
+            ActorPacketFrames.Header packetHeader,
+            ActorMessageRead read,
+            CompletableFuture<Void> requestAdmission) {
         return host.dispatchLocalActorPacket(
                 context,
                 spotSurface,
@@ -171,7 +170,8 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> {
                 packetHeader,
                 read.headerPart(),
                 read.bodyPart(),
-                read.fromPendingHeader());
+                read.fromPendingHeader(),
+                requestAdmission);
     }
 
     final CompletionStage<Void> admitActor(List<ZLinkBackendActorReceived> messages) {
@@ -253,8 +253,11 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> {
                         continue;
                     }
                     ZLinkActor actor = localActor.get();
-                    if (host.dispatchActorControlPacket(
-                            packetHeader, headerPart, actor, pendingHeader)) {
+                    var control =
+                            host.dispatchActorControlPacket(
+                                    packetHeader, headerPart, bodyPart, actor, pendingHeader);
+                    if (control != null) {
+                        dispatches.add(control);
                         continue;
                     }
                     // Admit every Actor packet to its own Actor queue before waiting
@@ -268,8 +271,10 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> {
                                             admission.apply(
                                                     () ->
                                                             dispatchResolvedActorPacket(
-                                                                    actor, packetHeader, read)),
-                                    requestAdmission);
+                                                                    actor,
+                                                                    packetHeader,
+                                                                    read,
+                                                                    requestAdmission)));
                     dispatched.whenComplete(
                             (done, failure) ->
                                     host.closePendingActorHeader(headerPart, pendingHeader));
@@ -627,8 +632,33 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> {
                 .whenComplete((ignored, error) -> packet.close());
     }
 
+    /**
+     * Admits one Logical Multicast child. A receive owner offers the permit it holds for this child
+     * in the current scope, and the child takes it: a 1:N fanout posts no more jobs than the
+     * permits it holds (spec 04 application job queue). A local publication holds none, so the
+     * child takes its own host permit before it is posted (spec 04 section 3).
+     */
+    final Boolean admitTopic(ZLinkBackendTopicMessage received) {
+        if (systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext
+                .hasTransferableQueuedOwnership()) {
+            return postTopic(received);
+        }
+        host.admitNewApplicationJob(
+                        context, () -> CompletableFuture.completedFuture(postTopic(received)))
+                .whenComplete(
+                        (posted, failure) -> {
+                            if (failure != null) received.parts().forEach(Message::close);
+                        });
+        return true;
+    }
+
+    /** Posts one topic child with the permit the current scope carries for it. */
+    boolean postTopic(ZLinkBackendTopicMessage received) {
+        dispatchSpotSubscription(received);
+        return true;
+    }
+
     final CompletionStage<Void> dispatchSpotSubscription(ZLinkBackendTopicMessage received) {
-        boolean leaseReleaseScheduled = false;
         try {
             if (received.parts().isEmpty()) {
                 host.reportSpotSubscriptionDropped(
@@ -670,7 +700,10 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> {
             }
             CompletionStage<Void> tail = CompletableFuture.completedFuture(null);
             List<SpotSubscriptionHandlerRegistration> matchingHandlers =
-                    context.handlerCatalog().subscriptionHandlers(received.topic()).stream()
+                    context
+                            .handlerCatalog()
+                            .subscriptionHandlers(received.channelName(), received.topic())
+                            .stream()
                             .filter(handler -> handler.packetName().equals(packet.packetName()))
                             .toList();
             if (!matchingHandlers.isEmpty()) {
@@ -751,11 +784,7 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> {
                 systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.encodeHeader(
                         systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.reply(
                                 requestHeader));
-        try {
-            received.reply(List.of(replyHeader, reply));
-        } finally {
-            replyHeader.close();
-        }
+        received.reply(List.of(replyHeader, reply));
     }
 
     final void closeActiveRouteReceives() {

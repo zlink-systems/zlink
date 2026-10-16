@@ -16,6 +16,238 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
     private const string EphemeralTcpEndpoint = "tcp://127.0.0.1:0";
 
     [Fact]
+    public async Task OperationDeadline_ExpiresAtOccupiedTicksWithoutExpiringEarly()
+    {
+        var clock = new OperationDeadlineClock();
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = new ZLinkManagedMeshNode(
+            context,
+            MeshName,
+            deadlineTimeProvider: clock
+        );
+        const System.Reflection.BindingFlags flags =
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+        var begin = typeof(ZLinkManagedMeshNode)
+            .GetMethods(flags)
+            .Single(method =>
+                method.Name == "TryBeginOperation" && method.GetParameters().Length == 3
+            );
+        var expire = typeof(ZLinkManagedMeshNode).GetMethod("ExpireOperations", flags)!;
+        var operations = typeof(ZLinkManagedMeshNode)
+            .GetField("_operations", flags)!
+            .GetValue(node)!;
+        var count = operations.GetType().GetProperty("Count")!;
+        Assert.True(
+            (bool)
+                begin.Invoke(
+                    node,
+                    [MeshOperationKind.NodeRequest, TimeSpan.FromMilliseconds(20), null]
+                )!
+        );
+        Assert.True(
+            (bool)
+                begin.Invoke(
+                    node,
+                    [
+                        MeshOperationKind.NodeRequest,
+                        TimeSpan.FromMilliseconds(10) + TimeSpan.FromTicks(1),
+                        null,
+                    ]
+                )!
+        );
+
+        // Hot-path E3: a timer wheel rounds deadlines up to the next 1ms occupied tick.
+        var wait = typeof(ZLinkManagedMeshNode).GetMethod("OperationWaitBound", flags)!;
+        Assert.Equal(TimeSpan.FromMilliseconds(11), wait.Invoke(node, null));
+        clock.Timestamp = 9 * TimeSpan.TicksPerMillisecond;
+        expire.Invoke(node, null);
+        Assert.Equal(2, count.GetValue(operations));
+        clock.Timestamp = 10 * TimeSpan.TicksPerMillisecond;
+        expire.Invoke(node, null);
+        Assert.Equal(2, count.GetValue(operations));
+        clock.Timestamp = 11 * TimeSpan.TicksPerMillisecond;
+        expire.Invoke(node, null);
+        Assert.Equal(1, count.GetValue(operations));
+        clock.Timestamp = 20 * TimeSpan.TicksPerMillisecond;
+        expire.Invoke(node, null);
+        Assert.Equal(0, count.GetValue(operations));
+        expire.Invoke(node, null);
+        Assert.Equal(0, count.GetValue(operations));
+        Assert.Equal(TimeSpan.FromMilliseconds(100), wait.Invoke(node, null));
+    }
+
+    [Fact]
+    public async Task OperationDeadline_PreservesRoundsAndResumesABudgetedSlot()
+    {
+        var clock = new OperationDeadlineClock();
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = new ZLinkManagedMeshNode(
+            context,
+            MeshName,
+            deadlineTimeProvider: clock
+        );
+        const System.Reflection.BindingFlags flags =
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+        var type = typeof(ZLinkManagedMeshNode);
+        var begin = type.GetMethods(flags)
+            .Single(method =>
+                method.Name == "TryBeginOperation" && method.GetParameters().Length == 3
+            );
+        var expire = type.GetMethod("ExpireOperations", flags)!;
+        var operations = type.GetField("_operations", flags)!.GetValue(node)!;
+        var count = operations.GetType().GetProperty("Count")!;
+        object?[] longRegistration =
+        [
+            MeshOperationKind.NodeRequest,
+            TimeSpan.FromMilliseconds(513),
+            null,
+        ];
+        Assert.True((bool)begin.Invoke(node, longRegistration)!);
+        // Hot-path E3: occupied-slot visits cannot expire an entry with remaining rounds.
+        foreach (var tick in new[] { 1, 257, 512 })
+        {
+            clock.Timestamp = tick * TimeSpan.TicksPerMillisecond;
+            expire.Invoke(node, null);
+            Assert.Equal(1, count.GetValue(operations));
+        }
+        clock.Timestamp = 513 * TimeSpan.TicksPerMillisecond;
+        expire.Invoke(node, null);
+        Assert.Equal(0, count.GetValue(operations));
+        object?[] firstRegistration =
+        [
+            MeshOperationKind.NodeRequest,
+            TimeSpan.FromMilliseconds(1),
+            null,
+        ];
+        Assert.True((bool)begin.Invoke(node, firstRegistration)!);
+        var first = firstRegistration[2]!;
+        var token = (CancellationToken)
+            first.GetType().GetProperty("Token", flags)!.GetValue(first)!;
+        // The first terminal spends the whole management budget on the injected clock.
+        using var slowTerminal = token.Register(() =>
+            clock.Timestamp +=
+                Zlink.Framework.Runtime.Dispatch.ZLinkReceiveBatchBudget.MaximumMilliseconds
+                * TimeSpan.TicksPerMillisecond
+        );
+        for (var index = 0; index < 2; index++)
+            Assert.True(
+                (bool)
+                    begin.Invoke(
+                        node,
+                        [MeshOperationKind.NodeRequest, TimeSpan.FromMilliseconds(1), null]
+                    )!
+            );
+        clock.Timestamp = 514 * TimeSpan.TicksPerMillisecond;
+        expire.Invoke(node, null);
+        Assert.Equal(2, count.GetValue(operations));
+        expire.Invoke(node, null);
+        Assert.Equal(0, count.GetValue(operations));
+    }
+
+    [Fact]
+    public async Task OperationDeadline_RoundsOnlyVisitsYieldAtTheBudgetAndResumeFromTheCursor()
+    {
+        var clock = new OperationDeadlineClock();
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = new ZLinkManagedMeshNode(
+            context,
+            MeshName,
+            deadlineTimeProvider: clock
+        );
+        const System.Reflection.BindingFlags flags =
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+        var type = typeof(ZLinkManagedMeshNode);
+        var begin = type.GetMethods(flags)
+            .Single(method =>
+                method.Name == "TryBeginOperation" && method.GetParameters().Length == 3
+            );
+        var expire = type.GetMethod("ExpireOperations", flags)!;
+        var operations = type.GetField("_operations", flags)!.GetValue(node)!;
+        var count = operations.GetType().GetProperty("Count")!;
+        for (var index = 0; index < 8; index++)
+            Assert.True(
+                (bool)
+                    begin.Invoke(
+                        node,
+                        [MeshOperationKind.NodeRequest, TimeSpan.FromMilliseconds(257), null]
+                    )!
+            );
+        Assert.True(
+            (bool)
+                begin.Invoke(
+                    node,
+                    [MeshOperationKind.NodeRequest, TimeSpan.FromMilliseconds(1), null]
+                )!
+        );
+        // §4.2: every slot visit, a rounds-only one included, reads the management budget
+        // counted from entry; four reads exhaust it.
+        clock.Timestamp = TimeSpan.TicksPerMillisecond;
+        clock.Step = TimeSpan.TicksPerMillisecond / 4;
+        expire.Invoke(node, null);
+        Assert.Equal(9, count.GetValue(operations));
+        var turns = 1;
+        while ((int)count.GetValue(operations)! == 9)
+        {
+            Assert.True(++turns < 9);
+            expire.Invoke(node, null);
+        }
+        Assert.Equal(8, count.GetValue(operations));
+        clock.Step = 0;
+        clock.Timestamp = 257 * TimeSpan.TicksPerMillisecond;
+        expire.Invoke(node, null);
+        Assert.Equal(0, count.GetValue(operations));
+    }
+
+    private sealed class OperationDeadlineClock : TimeProvider
+    {
+        internal long Timestamp;
+        internal long Step;
+        public override long TimestampFrequency => TimeSpan.TicksPerSecond;
+
+        // Each read advances the clock by Step.
+        public override long GetTimestamp()
+        {
+            var timestamp = Timestamp;
+            Timestamp += Step;
+            return timestamp;
+        }
+
+        public override DateTimeOffset GetUtcNow() => DateTimeOffset.UnixEpoch;
+    }
+
+    [Fact]
+    public async Task OperationTerminal_OnlyTheAtomicTakeOwnerCancelsItsLifetime()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = new ZLinkManagedMeshNode(context, MeshName);
+        const System.Reflection.BindingFlags flags =
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+        var type = typeof(ZLinkManagedMeshNode);
+        var begin = type.GetMethods(flags)
+            .Single(method =>
+                method.Name == "TryBeginOperation" && method.GetParameters().Length == 3
+            );
+        object?[] registration = [MeshOperationKind.NodeRequest, TimeSpan.FromHours(1), null];
+        Assert.True((bool)begin.Invoke(node, registration)!);
+        var pending = registration[2]!;
+        var pendingType = pending.GetType();
+        var identity = (MeshOperationId)
+            pendingType.GetProperty("OperationId", flags)!.GetValue(pending)!;
+        var take = type.GetMethods(flags)
+            .Single(method =>
+                method.Name == "TryRemoveOperation"
+                && method.GetParameters()[0].ParameterType == typeof(ulong)
+            );
+        object?[] terminal = [identity.Low, null, false];
+        Assert.True((bool)take.Invoke(node, terminal)!);
+        type.GetMethod("RemoveManagedOperation", flags)!.Invoke(node, [pending]);
+        var token = (CancellationToken)pendingType.GetProperty("Token", flags)!.GetValue(pending)!;
+        Assert.False(token.IsCancellationRequested);
+        pendingType.GetMethod("Complete", flags)!.Invoke(pending, null);
+        Assert.True(token.IsCancellationRequested);
+    }
+
+    [Fact]
     public void DrainGate_SealedForShutdown_OnlyByTheShutdownOwner()
     {
         var gate = new ZLinkDrainAdmissionGate();
@@ -635,7 +867,7 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
     }
 
     [Fact]
-    public async Task QueuedAdmit_SurvivesConnectionReadyDeliveredAfterHello()
+    public async Task AdmittedPeer_SurvivesConnectionReadyDeliveredAfterHello()
     {
         var scheduler = new GatedTaskScheduler();
         DeferredReadyMonitor? transportMonitor = null;
@@ -674,10 +906,15 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
             )
                 peer.Send().Message(hello).Submit();
 
-            // Hello validates ingress, but a queued Admit is not a ready route.
-            // A late transport READY must preserve this pending handshake.
-            await scheduler.Queued;
-            Assert.Equal(0U, node.Status().AdmittedPeerCount);
+            // MeshNode §7.1: accepting the Hello records the peer as admitted
+            // before the Admit is submitted. A late transport READY must preserve
+            // that admission.
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => node.Status().AdmittedPeerCount == 1,
+                    TimeSpan.FromSeconds(5)
+                )
+            );
             var pending = Assert.Single(node.Peers());
             await transportMonitor!.ReadyCaptured;
             transportMonitor.ReleaseReady();
@@ -686,33 +923,22 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
             Assert.Equal(pending.LifecycleGeneration, afterReady.LifecycleGeneration);
             Assert.Equal(pending.DescriptorRevision, afterReady.DescriptorRevision);
             Assert.Equal(pending.LastChangedMs, afterReady.LastChangedMs);
-            Assert.Equal(0U, node.Status().AdmittedPeerCount);
+            Assert.Equal(1U, node.Status().AdmittedPeerCount);
 
-            // Update follows the queued Admit on the same socket. It makes a
-            // discarded Admit observable as the wrong first record, without a
-            // receive deadline or waiting for an absent message.
+            // Update follows the Admit on the same socket. It makes a discarded
+            // Admit observable as the wrong first admission record. Admission
+            // starts liveness, so probes may arrive between them. Await the
+            // released scheduler batch before blocking on its socket output.
             node.PublishDraining();
-            scheduler.Release();
-            foreach (
-                var expected in new[]
-                {
-                    ServiceWireConstants.Command.Admit,
-                    ServiceWireConstants.Command.Update,
-                }
-            )
-            {
-                using var received = Received.Create();
-                Assert.True(peer.Recv(received));
-                Assert.True(
-                    ZLinkServiceWireCodec.TryDecodeRouteAdmission(
-                        received.FirstPart().AsSpan(),
-                        out var command,
-                        out _,
-                        out _
-                    )
-                );
-                Assert.Equal(expected, command);
-            }
+            await scheduler.ReleaseAsync();
+            Assert.Equal(
+                ServiceWireConstants.Command.Admit,
+                await ReceiveAdmissionCommandAsync(peer)
+            );
+            Assert.Equal(
+                ServiceWireConstants.Command.Update,
+                await ReceiveAdmissionCommandAsync(peer)
+            );
 
             Assert.True(
                 SpinWait.SpinUntil(
@@ -797,6 +1023,60 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
             Assert.Equal(1U, node.Status().AdmittedPeerCount);
             Assert.Equal(MeshPeerState.Admitted, Assert.Single(node.Peers()).State);
             Assert.Equal(1UL, monitor.Status().PeerAdmitted);
+        }
+    }
+
+    // MeshNode §7.1: the accepting side records the peer as admitted before it submits
+    // the Admit. A peer that has received its Admit is therefore already counted.
+    [Fact]
+    public async Task InboundHello_RecordsThePeerAsAdmittedBeforeItsAdmitArrives()
+    {
+        const int peerCount = 32;
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = new ZLinkManagedMeshNode(context, MeshName);
+        var suffix = Guid.NewGuid().ToString("N");
+        node.SetRoutingId(RoutingId.From($"admit-order-node-{suffix}"));
+        node.SetBind(EphemeralTcpEndpoint);
+        node.AddChannel(MeshName);
+        node.Start();
+        var endpoint = node.Status().LocalEndpoint;
+        var peers = new List<IDealerSocket>();
+        try
+        {
+            for (var index = 0; index < peerCount; index++)
+            {
+                var peer = context.CreateDealerSocket();
+                peers.Add(peer);
+                peer.SetRoutingId(RoutingId.From($"admit-order-peer-{index}-{suffix}"));
+                peer.Connect(endpoint);
+            }
+            await Task.WhenAll(
+                peers.Select(
+                    (peer, index) =>
+                        SendAsync(
+                            peer,
+                            ZLinkServiceWireCodec.EncodeRouteAdmission(
+                                ServiceWireConstants.Command.Hello,
+                                MeshName,
+                                $"inproc://admit-order-peer-{index}-{suffix}",
+                                lifecycleGeneration: 7,
+                                descriptorRevision: 3,
+                                new Dictionary<string, uint>(StringComparer.Ordinal),
+                                objectRole: (byte)ZLinkMeshNodeObjectRole.Server
+                            )
+                        )
+                )
+            );
+            for (var received = 1; received <= peerCount; received++)
+            {
+                await ReceiveAdmitAsync(peers[received - 1]);
+                Assert.True(node.Status().AdmittedPeerCount >= (uint)received);
+            }
+        }
+        finally
+        {
+            foreach (var peer in peers)
+                peer.Dispose();
         }
     }
 
@@ -1069,6 +1349,15 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
     // Skips liveness probes; returns once a route Admit arrives.
     private static async Task ReceiveAdmitAsync(IDealerSocket socket)
     {
+        while (await ReceiveAdmissionCommandAsync(socket) != ServiceWireConstants.Command.Admit) { }
+    }
+
+    // Skips records that are not route admission records (liveness probes) and returns
+    // the next admission command.
+    private static async Task<ServiceWireConstants.Command> ReceiveAdmissionCommandAsync(
+        IDealerSocket socket
+    )
+    {
         var deadlineTimeout = TimeSpan.FromSeconds(2);
         var deadlineStarted = Stopwatch.GetTimestamp();
         while (Stopwatch.GetElapsedTime(deadlineStarted) < deadlineTimeout)
@@ -1083,14 +1372,13 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
                         out _,
                         out _
                     )
-                    && command == ServiceWireConstants.Command.Admit
                 )
-                    return;
+                    return command;
                 continue;
             }
             await Task.Delay(10);
         }
-        throw new TimeoutException("The route Admit reply was not received.");
+        throw new TimeoutException("No route admission record was received.");
     }
 
     private static async Task AssertNoAdmitAsync(IDealerSocket socket)

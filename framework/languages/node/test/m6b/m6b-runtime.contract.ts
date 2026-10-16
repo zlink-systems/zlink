@@ -441,6 +441,8 @@ test('Message Follow invalidates a Spot route only when every source fence still
             ? { descriptor: { lifecycleGeneration: 19n } }
             : undefined
     },
+    observePeerRoute: () => ({ generation: 1n, ready: true }),
+    observePeerRouteChanged: () => () => {},
     observePeerConnectionIntentRemoved() {
       return () => {};
     },
@@ -529,6 +531,8 @@ test('Actor Message Follow reaches the owner cache invalidator only from the adm
             ? { descriptor: { lifecycleGeneration: 23n } }
             : undefined
     },
+    observePeerRoute: () => ({ generation: 1n, ready: true }),
+    observePeerRouteChanged: () => () => {},
     observePeerConnectionIntentRemoved() {
       return () => {};
     },
@@ -761,6 +765,8 @@ test('remote Actor command 49 preserves reservation fences and replays one termi
       peer: (nodeRid: string) =>
         nodeRid === 'source' ? { descriptor: { lifecycleGeneration: 5n } } : undefined
     },
+    observePeerRoute: () => ({ generation: 1n, ready: true }),
+    observePeerRouteChanged: () => () => {},
     observePeerConnectionIntentRemoved() {
       return () => {};
     },
@@ -881,6 +887,8 @@ test('remote User Spot target executes once and rewrites correlation on terminal
       peer: (nodeRid: string) =>
         nodeRid === 'source' ? { descriptor: { lifecycleGeneration: 5n } } : undefined
     },
+    observePeerRoute: () => ({ generation: 1n, ready: true }),
+    observePeerRouteChanged: () => () => {},
     observePeerConnectionIntentRemoved() {
       return () => {};
     },
@@ -1129,6 +1137,8 @@ test('remote User Spot command 48 close replays one terminal without closing twi
       peer: (nodeRid: string) =>
         nodeRid === 'source' ? { descriptor: { lifecycleGeneration: 5n } } : undefined
     },
+    observePeerRoute: () => ({ generation: 1n, ready: true }),
+    observePeerRouteChanged: () => () => {},
     observePeerConnectionIntentRemoved() {
       return () => {};
     },
@@ -1493,6 +1503,8 @@ test('outbound stateful routes use resolved authority generations and never obje
           ? { descriptor: { lifecycleGeneration: 7n } }
           : undefined
     },
+    observePeerRoute: () => ({ generation: 1n, ready: true }),
+    observePeerRouteChanged: () => () => {},
     observePeerConnectionIntentRemoved() {
       return () => {};
     },
@@ -1611,6 +1623,8 @@ test('outbound stateful routes use resolved authority generations and never obje
 
 test('general Actor messages resolve the current incarnation while exact controls keep generation fences', async () => {
   const raw = {
+    observePeerRoute: () => ({ generation: 1n, ready: true }),
+    observePeerRouteChanged: () => () => {},
     observePeerConnectionIntentRemoved() {
       return () => {};
     },
@@ -1650,6 +1664,8 @@ test('remote Actor request is fenced as moving when the target mailbox rejects a
     topology: {
       peer: () => ({ descriptor: { lifecycleGeneration: 7n } })
     },
+    observePeerRoute: () => ({ generation: 1n, ready: true }),
+    observePeerRouteChanged: () => () => {},
     observePeerConnectionIntentRemoved() {
       return () => {};
     },
@@ -1706,6 +1722,8 @@ test('remote Actor request is fenced as moving when the target mailbox rejects a
 test('a new Instance incarnation outranks a reset authority owner generation', async () => {
   const raw = {
     topology: { peer: () => undefined },
+    observePeerRoute: () => ({ generation: 1n, ready: true }),
+    observePeerRouteChanged: () => () => {},
     observePeerConnectionIntentRemoved() {
       return () => {};
     },
@@ -1799,6 +1817,8 @@ test('a new Instance incarnation outranks a reset authority owner generation', a
 test('a Ready Instance terminal forgets its route after local close releases authority', async () => {
   const raw = {
     topology: { peer: () => undefined },
+    observePeerRoute: () => ({ generation: 1n, ready: true }),
+    observePeerRouteChanged: () => () => {},
     observePeerConnectionIntentRemoved() {
       return () => {};
     },
@@ -1862,6 +1882,8 @@ test('a Ready Instance terminal forgets its route after local close releases aut
 test('Instance Close removes a stale Ready target without removing a newer generation', () => {
   const raw = {
     topology: { peer: () => undefined },
+    observePeerRoute: () => ({ generation: 1n, ready: true }),
+    observePeerRouteChanged: () => () => {},
     observePeerConnectionIntentRemoved: () => () => {},
     setServiceIngress() {},
     sendService: () => true
@@ -1902,6 +1924,8 @@ test('Instance Close removes a stale Ready target without removing a newer gener
 test('Instance Close without an intent or generation leaves stateful cleanup empty', () => {
   const raw = {
     topology: { peer: () => undefined },
+    observePeerRoute: () => ({ generation: 1n, ready: true }),
+    observePeerRouteChanged: () => () => {},
     observePeerConnectionIntentRemoved: () => () => {},
     setServiceIngress() {},
     sendService: () => true
@@ -1930,6 +1954,8 @@ test('direct Spot ingress accepts a prior incarnation route for the current Read
     topology: {
       peer: () => undefined
     },
+    observePeerRoute: () => ({ generation: 1n, ready: true }),
+    observePeerRouteChanged: () => () => {},
     observePeerConnectionIntentRemoved() {
       return () => {};
     },
@@ -1990,6 +2016,8 @@ test('direct Spot application admission accepts a StoreVersion-only authority ad
       topology: {
         peer: () => undefined
       },
+      observePeerRoute: () => ({ generation: 1n, ready: true }),
+      observePeerRouteChanged: () => () => {},
       observePeerConnectionIntentRemoved() {
         return () => {};
       },
@@ -2061,6 +2089,8 @@ test('direct Spot request maps an owner fence mismatch to Unavailable', async ()
     topology: {
       peer: () => undefined
     },
+    observePeerRoute: () => ({ generation: 1n, ready: true }),
+    observePeerRouteChanged: () => () => {},
     observePeerConnectionIntentRemoved() {
       return () => {};
     },
@@ -2480,6 +2510,8 @@ test('remote Entry Spot actor join derives the well-known node route fence', asy
     mailbox: {
       tryEnqueue: () => true
     },
+    observePeerRoute: () => ({ generation: 1n, ready: true }),
+    observePeerRouteChanged: () => () => {},
     observePeerConnectionIntentRemoved() {
       return () => {};
     },
@@ -2537,6 +2569,8 @@ test('Spot Message Follow holds ingress, relays with the committed fence, and re
         return true;
       }
     },
+    observePeerRoute: () => ({ generation: 1n, ready: true }),
+    observePeerRouteChanged: () => () => {},
     observePeerConnectionIntentRemoved() {
       return () => {};
     },
@@ -2712,6 +2746,40 @@ test('Spot Message Follow holds ingress, relays with the committed fence, and re
   );
   assert.equal(runtime.abortSpotMessageFollowIngress(abortSeal), true);
   assert.equal(restored.length, 2);
+
+  runtime.restoreSpotAuthority('chained-room', 'user_spot', 'Room', 9n, 13n);
+  const chainedSource = {
+    ...source,
+    spot: { spotId: 'chained-room', generation: 9n },
+    authorityOwnerGeneration: 13n
+  };
+  const chainedSeal = runtime.sealSpotMessageFollowIngress(chainedSource);
+  assert.ok(chainedSeal);
+  assert.equal(
+    await ingress?.({
+      command: M6bServiceWireCommand.spotRequest,
+      flags: 0,
+      sourceRoutingId: 'caller',
+      sourceRoute: Buffer.from('reply-route'),
+      requestSequence: 18n,
+      parts: [encodeSpotHeader('spotRequest', 'source-spot', chainedSource, 92n), payload]
+    }),
+    'application'
+  );
+  const relayCount = relayed.length;
+  assert.equal(await runtime.commitSpotMessageFollowIngress(chainedSeal, null, 30_000), true);
+  assert.equal(
+    await runtime.commitSpotMessageFollowIngress(chainedSeal, null, 30_000),
+    false,
+    'the seal is consumed once'
+  );
+  assert.equal(relayed.length, relayCount, 'a chained commit sends no Follow');
+  assert.equal(restored.length, 2, 'a chained commit never restores ingress to the source');
+  assert.equal(replies.length, 2);
+  assert.equal(
+    decodeStatefulReply(replies[1]![0]!, 92n, 'spotRequest').failureCode,
+    ServiceWireFrameworkErrorCode.actorLocationStale
+  );
   runtime.close();
 });
 
@@ -2722,6 +2790,8 @@ test('Spot Message Follow does not impose a record-count or stored-byte admissio
       ) => unknown)
     | undefined;
   const raw = {
+    observePeerRoute: () => ({ generation: 1n, ready: true }),
+    observePeerRouteChanged: () => () => {},
     observePeerConnectionIntentRemoved() {
       return () => {};
     },
@@ -2775,6 +2845,8 @@ test('Instance activation encoding distinguishes absent metadata from explicit e
     topology: {
       peer: () => ({ descriptor: { lifecycleGeneration: 7n } })
     },
+    observePeerRoute: () => ({ generation: 1n, ready: true }),
+    observePeerRouteChanged: () => () => {},
     observePeerConnectionIntentRemoved() {
       return () => {};
     },
@@ -2826,6 +2898,8 @@ test('retained peer routes may submit while endpoint convergence reports not rea
       peer: (nodeRid: string) =>
         nodeRid === 'retained-peer' ? { descriptor: { lifecycleGeneration: 7n } } : undefined
     },
+    observePeerRoute: () => ({ generation: 1n, ready: true }),
+    observePeerRouteChanged: () => () => {},
     observePeerConnectionIntentRemoved() {
       return () => {};
     },
@@ -2934,6 +3008,8 @@ test('target-owned Instance activation reserves before factory, commits before o
         return true;
       }
     },
+    observePeerRoute: () => ({ generation: 1n, ready: true }),
+    observePeerRouteChanged: () => () => {},
     observePeerConnectionIntentRemoved() {
       return () => {};
     },
@@ -3049,6 +3125,8 @@ test('durable missing Instance authority discards a materialized orphan before r
         return true;
       }
     },
+    observePeerRoute: () => ({ generation: 1n, ready: true }),
+    observePeerRouteChanged: () => () => {},
     observePeerConnectionIntentRemoved() {
       return () => {};
     },
@@ -3181,6 +3259,8 @@ test('Instance activation joins a Creating authority when local materialization 
         return true;
       }
     },
+    observePeerRoute: () => ({ generation: 1n, ready: true }),
+    observePeerRouteChanged: () => () => {},
     observePeerConnectionIntentRemoved() {
       return () => {};
     },
@@ -3295,6 +3375,8 @@ test('Instance activation joins a Creating authority after local materialization
         return true;
       }
     },
+    observePeerRoute: () => ({ generation: 1n, ready: true }),
+    observePeerRouteChanged: () => () => {},
     observePeerConnectionIntentRemoved() {
       return () => {};
     },
@@ -3411,6 +3493,8 @@ test('Ready Instance route rematerializes a missing application before admission
         return true;
       }
     },
+    observePeerRoute: () => ({ generation: 1n, ready: true }),
+    observePeerRouteChanged: () => () => {},
     observePeerConnectionIntentRemoved() {
       return () => {};
     },
@@ -3480,6 +3564,8 @@ test('Instance activation CAS loser does not invoke the local factory', async ()
       peer: () => ({ descriptor: { lifecycleGeneration: 7n } })
     },
     mailbox: { tryEnqueue: () => true },
+    observePeerRoute: () => ({ generation: 1n, ready: true }),
+    observePeerRouteChanged: () => () => {},
     observePeerConnectionIntentRemoved() {
       return () => {};
     },
@@ -3569,6 +3655,8 @@ for (const scenario of [
       replyService: (record: RawServiceIngressRecord, parts: readonly Buffer[]) => {
         replies.push({ ingress: record, parts });
       },
+      observePeerRoute: () => ({ generation: 1n, ready: true }),
+      observePeerRouteChanged: () => () => {},
       observePeerConnectionIntentRemoved() {
         return () => {};
       },
@@ -3680,6 +3768,8 @@ test('Missing Instance activation refuses a concurrent reservation after the pri
       redirected = { targetNodeRid, parts };
       return true;
     },
+    observePeerRoute: () => ({ generation: 1n, ready: true }),
+    observePeerRouteChanged: () => () => {},
     observePeerConnectionIntentRemoved() {
       return () => {};
     },
@@ -3768,6 +3858,8 @@ test('draining Instance owner rejects stale Missing activation before materializ
     },
     mailbox: { tryEnqueue: () => assert.fail('A draining owner must not admit the stale message') },
     sendService: () => true,
+    observePeerRoute: () => ({ generation: 1n, ready: true }),
+    observePeerRouteChanged: () => () => {},
     observePeerConnectionIntentRemoved() {
       return () => {};
     },
@@ -3844,6 +3936,8 @@ test('stale local Instance projection refuses a newer remote Ready authority', a
       redirected = { targetNodeRid, parts };
       return true;
     },
+    observePeerRoute: () => ({ generation: 1n, ready: true }),
+    observePeerRouteChanged: () => () => {},
     observePeerConnectionIntentRemoved() {
       return () => {};
     },
@@ -3952,6 +4046,8 @@ test('stale local Instance projection reconciles a newer same-node Ready authori
       sent.push(targetNodeRid);
       return true;
     },
+    observePeerRoute: () => ({ generation: 1n, ready: true }),
+    observePeerRouteChanged: () => () => {},
     observePeerConnectionIntentRemoved() {
       return () => {};
     },
@@ -4056,6 +4152,8 @@ test('Promise authority resumes the retained activation envelope after Store com
         return true;
       }
     },
+    observePeerRoute: () => ({ generation: 1n, ready: true }),
+    observePeerRouteChanged: () => () => {},
     observePeerConnectionIntentRemoved() {
       return () => {};
     },
@@ -4722,6 +4820,8 @@ test('bound-session replacement is one-way, does not retry admission, and fences
           return true;
         }
       },
+      observePeerRoute: () => ({ generation: 1n, ready: true }),
+      observePeerRouteChanged: () => () => {},
       observePeerConnectionIntentRemoved() {
         return () => {};
       },
@@ -4940,6 +5040,8 @@ test('mailbox saturation reports dropped actor binding control records', async (
       peer: () => ({ descriptor: { lifecycleGeneration: 3n } })
     },
     mailbox: { tryEnqueue: () => false },
+    observePeerRoute: () => ({ generation: 1n, ready: true }),
+    observePeerRouteChanged: () => () => {},
     observePeerConnectionIntentRemoved() {
       return () => {};
     },
@@ -4999,6 +5101,8 @@ test('active session bind replies only after the Actor binding control turn', as
         return true;
       }
     },
+    observePeerRoute: () => ({ generation: 1n, ready: true }),
+    observePeerRouteChanged: () => () => {},
     observePeerConnectionIntentRemoved() {
       return () => {};
     },
@@ -5147,6 +5251,8 @@ test('concurrent remote bind completions publish the newest Session-owner genera
       peer: () => ({ descriptor: { lifecycleGeneration: 3n } })
     },
     mailbox: { tryEnqueue: () => true },
+    observePeerRoute: () => ({ generation: 1n, ready: true }),
+    observePeerRouteChanged: () => () => {},
     observePeerConnectionIntentRemoved() {
       return () => {};
     },
@@ -5219,6 +5325,8 @@ test('remote Session bind publishes its exact Location fence for the first Actor
       peer: () => ({ descriptor: { lifecycleGeneration: 3n } })
     },
     mailbox: { tryEnqueue: () => true },
+    observePeerRoute: () => ({ generation: 1n, ready: true }),
+    observePeerRouteChanged: () => () => {},
     observePeerConnectionIntentRemoved() {
       return () => {};
     },
@@ -5375,6 +5483,8 @@ test('authority reconciliation exact-reads complete scans and publishes only Rea
 test('live Instance route fences reject an older reconcile snapshot', async () => {
   const raw = {
     topology: { peer: () => undefined },
+    observePeerRoute: () => ({ generation: 1n, ready: true }),
+    observePeerRouteChanged: () => () => {},
     observePeerConnectionIntentRemoved() {
       return () => {};
     },
@@ -6027,6 +6137,7 @@ test('raw backend dispatches Spot requests and Actor sends through M6B owners', 
     hostApplicationJobQueue()
   );
   backend.setBind(endpoint);
+  backend.addChannelName('events');
   backend.start();
   const instanceRoute = {
     targetNodeRid: 'm6b-node',
@@ -6297,17 +6408,17 @@ test('raw backend dispatches Spot requests and Actor sends through M6B owners', 
     assert.equal(staleCompletion.failureErrno, 21);
   } finally {
     await authorityRoutes.stop();
-    backend.close();
+    await backend.close();
   }
 });
 
-test('closed raw backend accepts a completed Instance Close notification', () => {
+test('closed raw backend accepts a completed Instance Close notification', async () => {
   const backend = new ZLinkNodeRawMeshBackend(
     'm6b-mesh',
     'm6b-node',
     new ZLinkNodeRawBindingPort()
   );
-  backend.close();
+  await backend.close();
   assert.doesNotThrow(() => backend.completeClosedInstance('tenant:closed', 8n));
 });
 
@@ -7269,6 +7380,8 @@ function readyInstanceIngressHarness(
         return true;
       }
     },
+    observePeerRoute: () => ({ generation: 1n, ready: true }),
+    observePeerRouteChanged: () => () => {},
     observePeerConnectionIntentRemoved() {
       return () => {};
     },

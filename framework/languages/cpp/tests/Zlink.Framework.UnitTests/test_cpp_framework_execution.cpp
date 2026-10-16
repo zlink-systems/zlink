@@ -32,6 +32,7 @@
 #include "runtime/stateful/public_store_adapters.hpp"
 #include "runtime/streams/session_serial_executor.hpp"
 #include "runtime/timers/core_timer_drain_loop.hpp"
+#include "runtime/timers/async_delay.hpp"
 #include "runtime/timers/timer_runtime.hpp"
 
 #include <zlink/framework/contracts/spots/spot.hpp>
@@ -929,9 +930,12 @@ bool verify_timer_terminal_precedes_lifecycle_close_turn ()
         return task_t<void> (result_t<void>::success ());
     };
     timer_state->handler_invoker =
-      [state, &close_requested] (void *, void *, serializer_registry_t &,
-                                 const timer_tick_t &) -> task_t<zlink::message_t> {
-        auto context = spot_context_access_t::create (state);
+      [weak_state = std::weak_ptr<spot_context_state_t> (state), &close_requested] (
+        void *, void *, serializer_registry_t &, const timer_tick_t &) -> task_t<zlink::message_t> {
+        const auto owner = weak_state.lock ();
+        if (!owner)
+            throw std::logic_error ("timer fixture lost its Spot context");
+        auto context = spot_context_access_t::create (owner);
         context.close ();
         close_requested.store (true, std::memory_order_release);
         co_return zlink::message_t{};
@@ -978,9 +982,13 @@ bool verify_timer_self_cancel_completes_after_callback ()
     std::atomic_bool callback_completed{false};
     std::atomic_bool cancel_was_pending_in_callback{false};
     timer_state->handler_invoker =
-      [timer_state, &callback_completed, &cancel_was_pending_in_callback] (
-        void *, void *, serializer_registry_t &, const timer_tick_t &) -> task_t<zlink::message_t> {
-        auto cancellation = timer_test_access_t::create (timer_state).cancel ();
+      [weak_timer = std::weak_ptr<timer_state_t> (timer_state), &callback_completed,
+       &cancel_was_pending_in_callback] (void *, void *, serializer_registry_t &,
+                                         const timer_tick_t &) -> task_t<zlink::message_t> {
+        const auto owner = weak_timer.lock ();
+        if (!owner)
+            throw std::logic_error ("timer fixture lost its timer state");
+        auto cancellation = timer_test_access_t::create (owner).cancel ();
         cancel_was_pending_in_callback.store (!cancellation.await_ready (),
                                               std::memory_order_release);
         callback_completed.store (true, std::memory_order_release);
@@ -4810,7 +4818,11 @@ bool verify_wire_actor_join_admission_is_approval_only_and_later_attempt_wins ()
         source.expect_peer (target_descriptor);
         const bool connected = source.connect_peer (target_owner.endpoint (), target_descriptor);
         const auto connect_deadline = std::chrono::steady_clock::now () + 2s;
-        while (connected && !source.topology ().peer (target_descriptor.node_routing_id)
+        const auto peer_ready = [&] {
+            const auto peer = source.topology ().peer (target_descriptor.node_routing_id);
+            return peer && peer->ready;
+        };
+        while (connected && !peer_ready ()
                && std::chrono::steady_clock::now () < connect_deadline) {
             const auto now = runtime::mesh::service_liveness_registry_t::clock_t::now ();
             (void) source.observe_routes ();
@@ -4819,7 +4831,7 @@ bool verify_wire_actor_join_admission_is_approval_only_and_later_attempt_wins ()
             (void) target_owner.pump_one (now).result ();
             std::this_thread::sleep_for (1ms);
         }
-        if (!connected || !source.topology ().peer (target_descriptor.node_routing_id)) {
+        if (!connected || !peer_ready ()) {
             source.close ();
             target_owner.close ();
             return false;
@@ -5492,9 +5504,11 @@ class actor_cutover_authority_t final
     {
         if (on_publish)
             on_publish ();
+        auto issued_target = target;
+        issued_target.authority_owner_generation = source.authority_owner_generation + 1;
         authority_relocation_reference_t reference{
           .source = source,
-          .target = target,
+          .target = issued_target,
           .relocation_reference = std::move (relocation_reference),
           .checksum_crc32c = checksum_crc32c,
           .inventory_digest = inventory_digest,
@@ -6963,8 +6977,12 @@ bool verify_remote_actor_cutover_completion_is_target_owned ()
       std::make_shared<stateful::public_relocation_store_adapter_t> (relocation_repository);
     auto source_state = make_state ("actor-cutover-source", false);
     auto target_state = make_state ("actor-cutover-target", true);
+    std::mutex delay_mutex;
+    delay_owner_t delays (delay_mutex);
     mesh_node_runtime_t source (source_state);
     mesh_node_runtime_t target (target_state);
+    source.bind_delay_owner (delays);
+    target.bind_delay_owner (delays);
     struct spot_route_fixture_t
     {
         zlink::routing_id_t node = zlink::routing_id_t::from (std::uint32_t{0});
@@ -7674,11 +7692,12 @@ int verify_deferred_join_waits_for_handler_terminal_across_yield ()
             if (!zlink::framework::detail::defer_current_serial_turn (
                   [&] { record ("join"); }, [&] { record ("join-discarded"); }))
                 throw std::runtime_error ("join was not deferred");
-            auto plan = zlink::framework::detail::prepare_serial_turn_await (true);
-            if (!plan)
+            auto turn = zlink::framework::detail::capture_current_serial_turn ();
+            auto resume = zlink::framework::detail::release_serial_turn_for_resume (*turn);
+            if (!resume)
                 throw std::runtime_error ("turn was not released");
             record ("yield");
-            plan->scheduler ([&, turn = plan->turn, fail_after_yield] {
+            resume ([&, turn, fail_after_yield] {
                 record ("continuation");
                 if (fail_after_yield)
                     turn->cancel_deferred ();
@@ -9156,6 +9175,33 @@ int main (int argc, char **argv)
     }
     if (elastic_executor.live_worker_count () != 0) {
         return 24;
+    }
+
+    {
+        // A worker that returns on idle timeout is joined by its owner before
+        // the next worker starts, so returned threads do not accumulate.
+        constexpr int restart_rounds = 8;
+        zlink::framework::runtime::offload_executor_t restarting_executor (
+          0, 1, std::chrono::milliseconds (1));
+        for (int round = 0; round < restart_rounds; ++round) {
+            std::atomic_bool ran = false;
+            if (!restarting_executor.try_submit ([&] { ran.store (true); })) {
+                return 76;
+            }
+            for (int attempt = 0;
+                 attempt < 2500 && (!ran.load () || restarting_executor.live_worker_count () != 0);
+                 ++attempt) {
+                std::this_thread::sleep_for (std::chrono::milliseconds (2));
+            }
+            if (!ran.load () || restarting_executor.live_worker_count () != 0) {
+                return 77;
+            }
+        }
+        if (restarting_executor.owned_thread_count () > 1) {
+            std::cerr << "offload executor kept returned workers: "
+                      << restarting_executor.owned_thread_count () << '\n';
+            return 78;
+        }
     }
 
     if (!verify_spot_wide_consumer_waits_for_shared_gate ()) {

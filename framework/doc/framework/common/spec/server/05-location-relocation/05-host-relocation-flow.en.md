@@ -777,9 +777,9 @@ called [`DeadlineExceeded`](../00-foundation/02-glossary.en.md#deadlineexceeded)
 | A `DisableRelocation` policy remains. | `Blocked/RelocationDisabled` |
 | After target selection, the transferred state schema/type adapter is incompatible, or `Capture` and `Restore` both fail across every allowed retry. | `Blocked/StateIncompatible` |
 | Before relay-ready reply acceptance, the Framework cancels a callback due to the deadline or work exceeds the deadline. | `Blocked/DeadlineExceeded` |
-| Target explicitly rejects Restore before relay-ready reply, so the source queue can be restored. | Restores source workload that hasn't attempted cutover and returns `Blocked/RelocationFailed` |
+| Target explicitly rejects Restore before relay-ready reply, so the source queue can be restored. This includes a PREPARE rejected by the target's Shutdown admission seal. | Restores source workload that hasn't attempted cutover and returns `Blocked/RelocationFailed` |
 | Target commit remains unconfirmed at Restore expiry after relay-ready. | The source settles authority with the `Preserve` fence in [Location runtime §6.1 and §10](01-location-runtime.en.md#61-read-and-cas). If every unit's source fence wins, the host returns to `Serving` with `Blocked/RelocationFailed`; if every target commit is confirmed, it returns `Relocated/None`; if units committed on both sides, it ends in `Error` with `Blocked/RelocationFailed`. An indeterminate fence retains the work under the existing Store-failure policy while the source lease is valid. |
-| The source owner lease expires before `Preserve` succeeds. | The unit fails under the expired-owner terminal in [common relocation §4.4](04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover); the host enters `Error` and returns `Blocked/RelocationFailed` with source owner lease expiry as the cause. Target staging follows [Location runtime §10](01-location-runtime.en.md#10-when-a-store-response-isnt-received). |
+| [Location runtime §10](01-location-runtime.en.md#10-when-a-store-response-isnt-received) ends source work under the expired-owner terminal (source owner lease expiry or authority `Missing`). | The unit fails under the expired-owner terminal in [common relocation §4.4](04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover); the host enters `Error` and returns `Blocked/RelocationFailed`. The cause is the condition §10 settled. Target staging follows [Location runtime §10](01-location-runtime.en.md#10-when-a-store-response-isnt-received). |
 
 An explicit failure before relay-ready or a later successful source `Preserve` fence
 resumes that unit's source authority and queue. A unit with confirmed target commit does
@@ -787,7 +787,7 @@ not return to source. The host result follows the settled per-unit authority in 
 
 At Restore expiry, an unconfirmed target commit is settled by the source `Preserve`
 fence under [Location runtime §10](01-location-runtime.en.md#10-when-a-store-response-isnt-received).
-An indeterminate Store response keeps the prepared unit and retained accepted work while the source lease is valid. Expiry follows the expired-owner row above. The host result follows the table above. A Session route-update failure
+An indeterminate Store response keeps the prepared unit and retained accepted work while the source lease is valid. The expired-owner terminal follows the row above. The host result follows the table above. A Session route-update failure
 follows the Session seal-timeout result and does not revert confirmed target authority.
 
 If the directly transferred payload's checksum differs from the assembly result, the
@@ -875,7 +875,8 @@ twice isn't a valid bounded teardown.
 `Shutdown` in `Relocated` only cleans up accepted work and infrastructure. Calling it
 directly from `Serving` doesn't move objects.
 
-While `Relocated`, the source retains Message Follow routes and the descriptors, peer
+While `Relocated`, the source retains Message Follow routes (except units with no route under
+[Location runtime §10](01-location-runtime.en.md#10-when-a-store-response-isnt-received)'s chained-move exception) and the descriptors, peer
 connections, and listeners required to forward sends and requests that still arrive at
 the old address, and also keeps each unit's cutover retransmission copy until its
 authority settlement and retransmission-copy cleanup end (common relocation §4.4). A deployment that needs the full configured

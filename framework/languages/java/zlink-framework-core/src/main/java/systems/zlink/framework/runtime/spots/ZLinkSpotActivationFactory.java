@@ -1,6 +1,7 @@
 package systems.zlink.framework.runtime.spots;
 
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.configuration.ZLinkSpotRelocationCoordinationMode;
 import systems.zlink.framework.configuration.ZLinkUserSpotExecutionMode;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
@@ -14,6 +15,7 @@ import systems.zlink.framework.runtime.handlers.ZLinkHandlerStages;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpot;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpotDispatchInfo;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendTopicMessage;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalAsyncSpotDispatchHandler;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.spots.ZLinkEntrySpot;
@@ -126,7 +128,8 @@ final class ZLinkSpotActivationFactory {
     CompletionStage<SpotActivationCreateResult> activateRelocation(
             Class<? extends ZLinkSpot<?>> spotType,
             ZLinkBackendSpot backendSpot,
-            RoutingId nodeRid) {
+            RoutingId nodeRid,
+            byte[] timerEnvelope) {
         DefaultSpotContext context =
                 new DefaultSpotContext(
                         host,
@@ -150,32 +153,48 @@ final class ZLinkSpotActivationFactory {
                                 + spotType.getName());
             }
             context.setSpot(spot);
-            spot.configure();
-            context.closeRegistration();
-            context.bindSubscriptions(backendSpot);
+            context.stageTimerRelocationEnvelope(timerEnvelope);
         } catch (RuntimeException failure) {
             return SpotActivationBase.finishCleanup(failure, context.closeResourcesAsync())
                     .thenApply(ignored -> null);
         }
 
-        // Relocation has no creation request. The old activate() reuse ran
-        // onCreate/onInitialize before the target ingress seal was acquired.
-        return CompletableFuture.completedFuture(
-                new SpotActivationCreateResult(
-                        new SpotActivation(host, handlerInvoker, spot, backendSpot, context),
-                        ZLinkSpotCreateResponse.accept()));
+        return context.runTimerRelocationInitialization(
+                        () -> {
+                            spot.configure();
+                            context.closeRegistration();
+                            context.bindSubscriptions(backendSpot);
+                            return CompletableFuture.completedFuture(
+                                    new SpotActivationCreateResult(
+                                            new SpotActivation(
+                                                    host,
+                                                    handlerInvoker,
+                                                    spot,
+                                                    backendSpot,
+                                                    context),
+                                            ZLinkSpotCreateResponse.accept()));
+                        })
+                .exceptionallyCompose(
+                        failure ->
+                                SpotActivationBase.finishCleanup(
+                                                failure, context.closeResourcesAsync())
+                                        .thenApply(ignored -> null));
     }
 
     CompletionStage<Void> initializeRelocation(SpotActivation activation) {
         return activation
                 .context
-                .runLifecycleExecution(
+                .runTimerRelocationInitialization(
                         () ->
-                                host.runWithOutbound(
-                                        activation.context.dispatchOutbound(),
+                                activation.context.runLifecycleExecution(
                                         () ->
-                                                ZLinkHandlerStages.fromStageSupplier(
-                                                        activation.spot()::onInitialize)))
+                                                host.runWithOutbound(
+                                                        activation.context.dispatchOutbound(),
+                                                        () ->
+                                                                ZLinkHandlerStages
+                                                                        .fromStageSupplier(
+                                                                                activation.spot()
+                                                                                        ::onInitialize))))
                 .thenRun(() -> registerDispatchHandler(activation.backendSpot, activation));
     }
 
@@ -187,7 +206,27 @@ final class ZLinkSpotActivationFactory {
                 new DefaultEntrySpotContext(host, workerPool, handlerLoader, nodeRid, backendSpot);
         ZLinkEntrySpot<?> entrySpot;
         try {
-            entrySpot = createEntrySpot(entrySpotType, context);
+            // The node's Entry Spot owns Actor infrastructure even when the application
+            // registers no Entry Spot type (MeshNode spec §3.2).
+            entrySpot =
+                    entrySpotType == null
+                            ? new ZLinkEntrySpot<ZLinkActor>() {
+                                @Override
+                                public ZLinkEntrySpotContext context() {
+                                    return context;
+                                }
+
+                                @Override
+                                public CompletionStage<Void> onJoinedActor(ZLinkActor actor) {
+                                    return CompletableFuture.completedFuture(null);
+                                }
+
+                                @Override
+                                public CompletionStage<Void> onLeaveActor(ZLinkActor actor) {
+                                    return CompletableFuture.completedFuture(null);
+                                }
+                            }
+                            : createEntrySpot(entrySpotType, context);
         } catch (RuntimeException failure) {
             return SpotActivationBase.finishCleanup(failure, context.closeResourcesAsync())
                     .thenApply(ignored -> null);
@@ -220,12 +259,12 @@ final class ZLinkSpotActivationFactory {
         }
         EntrySpotActivation activation =
                 new EntrySpotActivation(host, handlerInvoker, entrySpot, backendSpot, context);
-        context.enqueueDispatch(
+        return context.enqueueDispatch(
                         () ->
                                 host.runWithOutbound(
                                         context.dispatchOutbound(),
                                         () ->
-                                                ZLinkHandlerStages.fromRunnable(
+                                                ZLinkHandlerStages.fromStageSupplier(
                                                         entrySpot::onInitialize)))
                 .handle(
                         (ignored, failure) ->
@@ -233,13 +272,17 @@ final class ZLinkSpotActivationFactory {
                                         ? CompletableFuture.<Void>completedFuture(null)
                                         : SpotActivationBase.finishCleanup(
                                                 failure, context.closeResourcesAsync()))
-                .thenCompose(stage -> stage);
-        registerDispatchHandler(
-                backendSpot,
-                activation::handleDispatchEvent,
-                activation::admitRoute,
-                activation::admitActor);
-        return CompletableFuture.completedFuture(activation);
+                .thenCompose(stage -> stage)
+                .thenApply(
+                        ignored -> {
+                            registerDispatchHandler(
+                                    backendSpot,
+                                    activation::handleDispatchEvent,
+                                    activation::admitRoute,
+                                    activation::admitTopic,
+                                    activation::admitActor);
+                            return activation;
+                        });
     }
 
     /** Activates an Instance Spot on the MeshNode {@code nodeRid} of {@code meshName}. */
@@ -315,10 +358,12 @@ final class ZLinkSpotActivationFactory {
                             var activation =
                                     new ZLinkInstanceSpotActivation(
                                             host, handlerInvoker, spot, backendSpot, context);
+                            // Instance Spots do not register Logical Multicast handlers.
                             registerDispatchHandler(
                                     backendSpot,
                                     activation::handleDispatchEvent,
                                     activation::admitRoute,
+                                    message -> null,
                                     activation::admitActor);
                             return activation;
                         })
@@ -379,6 +424,7 @@ final class ZLinkSpotActivationFactory {
             Function<ZLinkBackendSpotDispatchInfo, CompletionStage<Void>> handler,
             BiFunction<ZLinkBackendReceived, CompletableFuture<Void>, CompletionStage<Void>>
                     routeHandler,
+            Function<ZLinkBackendTopicMessage, Boolean> topicHandler,
             BiFunction<
                             java.util.List<
                                     systems.zlink.framework.runtime.internal.backend
@@ -397,6 +443,11 @@ final class ZLinkSpotActivationFactory {
                     public CompletionStage<Void> handleRoute(
                             ZLinkBackendReceived received, CompletableFuture<Void> admission) {
                         return routeHandler.apply(received, admission);
+                    }
+
+                    @Override
+                    public Boolean handleTopic(ZLinkBackendTopicMessage message) {
+                        return topicHandler.apply(message);
                     }
 
                     @Override

@@ -18,7 +18,7 @@ Every release runs in GitHub Actions; nothing is published from a local machine.
 | Binding Node | `@zlink-systems/zlink` (with linux-x64 prebuild) | npm | `bindings-release.yml` | `node/v*` tag or dispatch | npm Trusted Publishing (OIDC, provenance) |
 | Binding Java | `systems.zlink:zlink`, `zlink-ext-netty` | Maven Central, GitHub Packages | `bindings-release.yml` | `java/v*` tag or dispatch | `MAVEN_CENTRAL_*`, `SIGNING_*` (GPG) |
 | Binding .NET | `Zlink` nupkg (+snupkg) | nuget.org | `release-dotnet.yml` (target `binding`) | `dotnet/v*` tag or dispatch | nuget Trusted Publishing (`NuGet/login`, policy `zlink-dotnet-release`) |
-| Framework C++ | source archive + sha256 (`cmake -P framework/languages/cpp/cmake/prepare-source-archive.cmake`: `framework/languages/cpp` + `framework/runtime` + `framework/LICENSE`, generated protocol headers verified with `--check`), plus shared prebuilt archives + sha256 for the four supported platforms (Framework shared libraries, headers, and CMake config with that platform's Core prebuilt and C++ binding); all assets are built from the single resolved release ref (`framework/v*` or `framework-cpp/v*` for a tag run, `framework-cpp/vA.B.C` for a dispatch) | GitHub Release at the resolved release ref | `framework-release.yml`; runner and compiler matrix in `framework/languages/cpp/packaging/prebuilt-platforms.json` | `framework/v*` or `framework-cpp/v*` tag, or `target=cpp` dispatch (`cpp_platform` reruns one platform) | `GITHUB_TOKEN` |
+| Framework C++ | source archive + sha256 (`framework/languages/cpp/scripts/package-source.py`: `framework/languages/cpp` without `packaging/` + `framework/runtime` + `framework/LICENSE`, byte-for-byte reproducible from the commit, generated protocol headers verified with `--check`, hashes must equal the tag's recipe values), plus shared prebuilt archives + sha256 for the four supported platforms (Framework shared libraries, headers, and CMake config with that platform's Core prebuilt and C++ binding); all assets are built from the single resolved release ref (`framework/v*` or `framework-cpp/v*` for a tag run, `framework-cpp/vA.B.C` for a dispatch) | GitHub Release at the resolved release ref | `framework-release.yml`; runner and compiler matrix in `framework/languages/cpp/packaging/prebuilt-platforms.json` | `framework/v*` or `framework-cpp/v*` tag, or `target=cpp` dispatch (`cpp_platform` reruns one platform) | `GITHUB_TOKEN` |
 | Framework Node | 8 `@zlink-systems/*` packages | npm | `framework-release.yml` | `framework-node/v*` tag or `target=node` dispatch | npm Trusted Publishing (registered per package) |
 | Framework JVM | 13 `systems.zlink:zlink-framework-*` artifacts (incl. Kotlin) | Maven Central | `framework-release.yml` | `framework-java/v*` tag or `target=java` dispatch | `MAVEN_CENTRAL_*`, `SIGNING_*` |
 | Framework .NET | 9 packages (`Zlink.Framework*`, `Zlink.HttpClient`, `Zlink.Stream.Connector`, ...) | nuget.org | `release-dotnet.yml` (target `framework`) | `framework-dotnet/v*` tag or dispatch | nuget Trusted Publishing |
@@ -62,9 +62,21 @@ so the order never inverts.
 3. Framework: update the target language VERSION and push `framework-<language>/vA.B.C`.
    `framework-release.yml` publishes only the selected C++, Node, or JVM packages; .NET uses
    `release-dotnet.yml`. The workflow waits until the pinned binding package is served by its registry.
-4. Conan and vcpkg: update `core/packaging/conan/conandata.yml` and
-   `vcpkg/ports/zlink/portfile.cmake` with the source tarball hashes and open PRs upstream. Draft
-   bodies are in `doc/building/pr-drafts/`.
+   For C++, the recipes are written on the release branch before the tag (#1941). Commit the version
+   bump, run `scripts/dev/release-check.sh --write framework cpp A.B.C`, commit the changed recipes,
+   and tag that commit. The command builds the commit's source archive with
+   `framework/languages/cpp/scripts/package-source.py` and writes the version, SHA512, and sha256 into
+   `vcpkg/ports/zlink-framework` and `framework/languages/cpp/packaging/conan`. `conandata.yml` keeps
+   only this release's entry. The archive is byte-for-byte reproducible from the commit and does not
+   contain `packaging/`, so the recipe commit does not change the archive. `framework-release.yml`
+   runs the same command again on the tag and fails before publishing when the recipes change.
+4. Conan and vcpkg (Core and binding C++): **after the release, the `sync-recipes` job updates
+   `conandata.yml` and `portfile.cmake` with `release-check.sh --write` and opens a PR to `main`**
+   (Issue #378). A person checks the values in that PR and merges it. The values are hashes of the
+   release assets and can be computed only after the tag exists, so this step comes after step 3.
+   The Framework C++ recipes are written before the tag in step 3.
+   Opening PRs in the upstream repositories (`microsoft/vcpkg`, `conan-io/conan-center-index`) is
+   still done by a person. Draft bodies are in `doc/building/pr-drafts/`.
 5. Node lockfiles: after Framework Node is published, run `npm install --package-lock-only` in
    `tutorial`, `tutorial/StreamClient`, `tutorial/HttpClient`, and `quickstart` under
    `framework/languages/node`, and commit the lockfiles to `main`. The release bump updates only

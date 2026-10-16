@@ -1495,9 +1495,9 @@ still starts and completes as its chunks flow in order.
 ### Cutover Retransmission Window
 
 The period during which the source retains the pre-boundary relay batch and cutover copy
-and can retransmit the same batch after a connection failure. Under
-[common relocation §4.4](../05-location-relocation/04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover),
-the source keeps the copy until target commit, source `Preserve` settlement, or the source-lease-expiry terminal.
+and can retransmit the same batch after a connection failure. The source keeps the copy until
+[Location runtime §10](../05-location-relocation/01-location-runtime.en.md#10-when-a-store-response-isnt-received)
+settles the source work.
 Neither the cutover-wait Warning nor Restore expiry alone ends this period.
 
 <a id="safe-to-shutdown"></a>
@@ -1837,8 +1837,9 @@ Descriptor values are only used to quickly filter candidates — actual slot
 acquisition is confirmed by the Location Store's atomic reservation.
 
 A remote MeshNode checks the endpoint and Object role from this registration
-information. If both descriptors' Object role is `Client`, an automatic connection
-intent isn't created. For every other pair, the actual transport handshake must also
+information. Which pairs need no connection by the Object role, and when an automatic
+connection intent is created, is owned by
+[Channel topology §8](../02-channel-transport/01-channel-topology.en.md#8-routemesh-peer-connection-and-discovery-automatic-rid-comparison-manual-descriptor-based). For a pair that connects, the actual transport handshake must also
 re-verify that MeshName, RID, lifecycle generation, Object role, and security
 identity match the registration information, before completing peer admission.
 
@@ -2456,16 +2457,16 @@ different owner's or a restarted process's value.
 <a id="authority-owner-generation"></a>
 ### AuthorityOwnerGeneration
 
-A provider-issued value indicating the order in which the authority owner changed
+A value indicating the order in which the authority owner changed
 within the same object incarnation. Different from ObjectGeneration, which
 distinguishes whether an object was re-created after deletion.
 
 | Item | Content |
 |---|---|
-| Shape | Provider-issued monotonic generation |
+| Shape | Framework-issued monotonic generation |
 | .NET notation | `ulong AuthorityOwnerGeneration` |
 | Public composition | A single integer in the range `1..long.MaxValue`. |
-| Creation/management | Issued by the Location Store provider's global durable counter on initial reserve and on a `NewOwner` transition. |
+| Creation/management | Issued by the Framework on initial reserve and on a `NewOwner` transition, as [Location runtime §3.2](../05-location-relocation/01-location-runtime.en.md#32-object-re-creation-and-owner-change-use-different-generation-numbers) defines. |
 | Lifetime | A new value is used when the owner changes within the same ObjectGeneration. Doesn't wrap at the maximum value — fails with `GenerationExhausted` instead. |
 
 <a id="owner-lease-generation"></a>

@@ -220,6 +220,7 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
             null!,
             CancellationToken.None,
             new ZLinkRuntimeErrorSink(),
+            new ZLinkRuntimeTaskRunner(new ZLinkRuntimeErrorSink(), CancellationToken.None),
             timeProvider: time
         );
 
@@ -298,11 +299,24 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
     [InlineData(5)]
     public async Task ClientRequestStartedBeforeServerUsesRequestBudgetForAdmission(int iteration)
     {
+        var flowPath = Path.Combine(
+            Zlink.Framework.Tests.Common.FrameworkTestEnvironment.CreateTestLogDirectory(
+                "client-admission-close"
+            ),
+            "messages.flow"
+        );
+        using var flow = new TestHostMessageFlowListener(flowPath);
         using var reservation = ReserveBoundTcpPort();
         var port = ((System.Net.IPEndPoint)reservation.LocalEndPoint!).Port;
         var endpoint = $"tcp://{AdmissionTestServerHost}:{port}";
         await using var client = CreateClient(endpoint);
         await using var server = CreateServer(port, bindHost: AdmissionTestServerHost);
+        client
+            .GetRequiredService<ZLinkFrameworkRegistration>()
+            .DispatchOptions.Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
+        server
+            .GetRequiredService<ZLinkFrameworkRegistration>()
+            .DispatchOptions.Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
         var clientRuntime = client.GetRequiredService<ZLinkFrameworkRuntime>();
         var serverRuntime = server.GetRequiredService<ZLinkFrameworkRuntime>();
         await clientRuntime.StartAsync(CancellationToken.None);
@@ -706,6 +720,11 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
                 .AddRequestHandler<FlowEchoHandler, FlowEchoRequest, EchoReply>();
         });
         await using var server = services.BuildServiceProvider();
+        // Flow-correlation §4: flow IDs are carried only while message-flow
+        // tracing is on, at Normal or Detailed.
+        server
+            .GetRequiredService<ZLinkFrameworkRegistration>()
+            .DispatchOptions.Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
         var serverRuntime = server.GetRequiredService<ZLinkFrameworkRuntime>();
 
         await serverRuntime.StartAsync(CancellationToken.None);
@@ -714,6 +733,9 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
             await GetServerBundle(serverState, "work").ClientServerServer!.ReadAsync()
         ).AdvertisedEndpoint;
         await using var client = CreateClient(endpoint);
+        client
+            .GetRequiredService<ZLinkFrameworkRegistration>()
+            .DispatchOptions.Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
         var clientRuntime = client.GetRequiredService<ZLinkFrameworkRuntime>();
         await clientRuntime.StartAsync(CancellationToken.None);
         try
@@ -2524,6 +2546,55 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
             )
         );
         Assert.Equal(17UL, probeId);
+    }
+
+    [Fact]
+    public async Task AdmissionReply_ProgressesBehindAPushedUpdate()
+    {
+        using var context = Systems.Zlink.Zlink.CreateContext();
+        using var router = CreateClientServerRouter(context);
+        router.Bind("tcp://127.0.0.1:0");
+        var endpoint = router.Options.LastEndpoint;
+        await using var client = CreateClient(endpoint);
+        var runtime = client.GetRequiredService<ZLinkFrameworkRuntime>();
+        await runtime.StartAsync(CancellationToken.None);
+        try
+        {
+            var transport = runtime.GetClientServerClientRuntime("work");
+            using var hello = await PollReceivedAsync(
+                storage => TryReceive(router, storage),
+                TimeSpan.FromSeconds(5)
+            );
+            Assert.True(ZLinkClientServerControlProtocol.TryDecodeHello(hello.Parts, out _));
+            var clientRid =
+                hello.RoutingId ?? throw new InvalidOperationException("missing client routing id");
+            using var update = ZLinkClientServerControlProtocol.EncodeUpdate(
+                new ZLinkClientServerControlProtocol.Admission(
+                    "work",
+                    RoutingId.From("manual-server"),
+                    1,
+                    1,
+                    100,
+                    ZLinkFrameworkRuntimeState.Serving,
+                    "plaintext",
+                    1024 * 1024,
+                    endpoint
+                )
+            );
+            await router.Send(clientRid).Message(update).Async(CancellationToken.None).Admitted;
+            ReplyAdmission(router, hello, endpoint);
+
+            await WaitUntilAsync(
+                transport,
+                () => transport.ReadyCount == 1,
+                TimeSpan.FromSeconds(5)
+            );
+            Assert.Equal(1, transport.PhysicalConnectionCount);
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
     }
 
     [Fact]

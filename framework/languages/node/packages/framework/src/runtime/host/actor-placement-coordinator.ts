@@ -1,3 +1,4 @@
+import { encodeRoutingIdStorageHex, routingIdsEqual } from '../routing-id';
 import {
   ZLinkFrameworkInternalErrorKind,
   createInternalFrameworkException,
@@ -158,7 +159,7 @@ export class ZLinkActorPlacementCoordinator {
           );
         }
         if (reserved.kind === 'placementCapacityExhausted') {
-          excluded.add(String(target.nodeRid));
+          excluded.add(encodeRoutingIdStorageHex(target.nodeRid));
           continue;
         }
         if (reserved.kind === 'alreadyExists' || reserved.kind === 'conflict') {
@@ -542,7 +543,7 @@ function requireExactReservation(
     current.allocation.stableType !== record.stableType ||
     current.objectGeneration !== record.reservation.objectGeneration ||
     current.authorityOwnerGeneration !== record.reservation.authorityOwnerGeneration ||
-    String(current.allocation.descriptor.rid) !== record.reservation.targetNodeRid ||
+    !routingIdsEqual(current.allocation.descriptor.rid, record.reservation.targetNodeRid) ||
     current.allocation.descriptorLifecycleGeneration !== record.reservation.targetNodeGeneration ||
     current.ownerId !== record.reservation.targetOwnerId ||
     current.ownerLeaseGeneration !== record.reservation.targetOwnerLeaseGeneration ||

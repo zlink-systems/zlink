@@ -526,7 +526,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
                                                     .ZLinkBackendActorRef(
                                                     TARGET_RID, "actor-b", objectGeneration),
                                             9,
-                                            sourceOwnerGeneration + 1,
+                                            sourceOwnerGeneration,
                                             targetOwner.leaseGeneration())),
                             () -> stagedTargetRecord,
                             List.of(Message.from("target-staged-payload")),
@@ -741,6 +741,13 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
                         new Class<?>[] {ZLinkInternalMeshNode.class},
                         (proxy, method, arguments) -> {
                             return switch (method.getName()) {
+                                case "observePeerRoute" ->
+                                        new ZLinkInternalMeshNode.PeerRouteObservation(1, true);
+                                case "targetLifecycleEnded" -> false;
+                                case "onStateChanged" -> {
+                                    ((Runnable) arguments[0]).run();
+                                    yield (AutoCloseable) () -> {};
+                                }
                                 case "status" -> status;
                                 case "sendCanonicalRelocationControl" ->
                                         peer.get()

@@ -8,18 +8,42 @@ internal static class ZLinkRequestSubmissionOutcome
         CancellationToken cancellationToken = default,
         Service.ZLinkServiceLiveness? receiveAdmission = null,
         ZLinkRequestAdmission? requestAdmission = null
+    ) =>
+        SubmitAndAwaitReplyAsync(
+            operation,
+            timeout,
+            out _,
+            cancellationToken,
+            receiveAdmission,
+            requestAdmission
+        );
+
+    internal static Task<IReadOnlyList<Message>> SubmitAndAwaitReplyAsync(
+        RequestSubmitOperation operation,
+        TimeSpan timeout,
+        out Task nativeAdmission,
+        CancellationToken cancellationToken = default,
+        Service.ZLinkServiceLiveness? receiveAdmission = null,
+        ZLinkRequestAdmission? requestAdmission = null
     )
     {
         var started = System.Diagnostics.Stopwatch.GetTimestamp();
         // Binding owns the reply timeout and caller cancellation. Only an
         // initial admission wait needs the Framework's end-to-end budget.
         var submission = operation.Async(cancellationToken);
+        // Spec 08 §3 E4: the result classification decides whether the
+        // binding admission is consumed. Only a backpressured request hands
+        // its admission to a caller that orders later frames after it.
+        if (!ZLinkBindingSubmissionOutcome.RequiresAdmission(submission.Result, requestAdmission))
+        {
+            nativeAdmission = Task.CompletedTask;
+            return submission.Reply;
+        }
+
         var admitted = requestAdmission is null
             ? submission.Admitted
             : ObserveAdmissionAsync(submission.Admitted, requestAdmission);
-        if (!ZLinkBindingSubmissionOutcome.RequiresAdmission(submission.Result))
-            return submission.Reply;
-
+        nativeAdmission = admitted;
         var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         try
         {

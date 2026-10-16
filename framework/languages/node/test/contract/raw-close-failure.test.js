@@ -157,7 +157,7 @@ test('start rollback propagates failed socket cleanup and defers context disposa
   assert.equal(contextCloses, 0);
 });
 
-test('raw mesh backend retains its failed transport owner', () => {
+test('raw mesh backend retains its failed transport owner', async () => {
   const backend = new ZLinkNodeRawMeshBackend('play', 'close-failure', {});
   let attempts = 0;
   const failure = new Error('first transport close failed');
@@ -166,11 +166,11 @@ test('raw mesh backend retains its failed transport owner', () => {
       if (++attempts === 1) throw failure;
     }
   };
-  assert.throws(
+  await assert.rejects(
     () => backend.close(),
     (error) => error === failure
   );
-  backend.close();
+  await backend.close();
   assert.equal(attempts, 2);
 });
 

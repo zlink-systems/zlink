@@ -32,7 +32,7 @@ object를 처음 배치할 곳을 정할 때 사용하는 속성이며 authority
 `ActorRef`와 `SpotRef`의 [`ObjectGeneration`](../00-foundation/02-glossary.ko.md#objectgeneration)은
 같은 logical identity로 다시 만들어진 incarnation을 구분하는, 0이 아닌 unsigned 63-bit
 conceptual value다. 같은 incarnation에서 membership이나 [owner](../00-foundation/02-glossary.ko.md#owner) MeshNode가 바뀌어도
-`ObjectGeneration`은 유지한다. 대신 provider가 더 큰, 같은 incarnation에서 authority owner가
+`ObjectGeneration`은 유지한다. 대신 Framework가 더 큰, 같은 incarnation에서 authority owner가
 바뀐 순서를 나타내는
 [`AuthorityOwnerGeneration`](../00-foundation/02-glossary.ko.md#authorityownergeneration)을
 발급하여 새 owner를 구분한다.
@@ -813,7 +813,7 @@ admission deadline 때문에 message, timer, phase update와 cleanup을 수행�
 ## 9. Message Follow
 
 Commit 뒤 source는 `MessageFollowDuration` 안에서 이전 주소로 도착한 message를 committed
-target으로 relay한다. Relay는 Store를 읽거나 application handler를 실행하지 않으며 original
+target으로 relay한다([Location runtime §10](../05-location-relocation/01-location-runtime.ko.md#10-store-응답을-받지-못했을-때)의 연속 이동 예외 제외). Relay는 Store를 읽거나 application handler를 실행하지 않으며 original
 operation identity, generation, payload와 reply route를 유지한다. Route duration이 끝난 뒤 이전
 주소로 도착한 request는 `Unavailable`로 끝난다.
 

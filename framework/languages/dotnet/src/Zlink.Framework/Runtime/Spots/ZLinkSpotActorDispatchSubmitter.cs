@@ -1,6 +1,7 @@
 namespace Zlink.Framework.Runtime.Spots;
 
 internal sealed class ZLinkSpotActorDispatchSubmitter(
+    ZLinkFrameworkRuntime runtime,
     ZLinkSpotSerialExecutor serial,
     ZLinkSpotActorPacketDispatcher dispatcher
 )
@@ -20,6 +21,9 @@ internal sealed class ZLinkSpotActorDispatchSubmitter(
 
         try
         {
+            using var operation = (
+                await AdmitActorOperationAsync(queueReservation).ConfigureAwait(false)
+            ).Enter();
             var state = new ActorDispatchState(
                 dispatcher,
                 actor,
@@ -28,28 +32,15 @@ internal sealed class ZLinkSpotActorDispatchSubmitter(
                 ownedPayload,
                 sourceSessionRid
             );
-            var execution =
-                queueReservation is not null
-                    ? queueReservation.ExecuteAsync(
-                        runtimeState.ActorId,
-                        ct => DispatchAsync(null!, state, ct),
-                        cancellationToken
-                    )
-                : relocationSeal is not null
-                    ? serial.ExecuteRelocationActorAsync(
-                        relocationSeal,
-                        runtimeState.ActorId,
-                        DispatchAsync,
-                        state,
-                        cancellationToken
-                    )
-                : serial.ExecuteActorAsync(
+            await SubmitAsync(
                     runtimeState.ActorId,
                     DispatchAsync,
                     state,
+                    relocationSeal,
+                    queueReservation,
                     cancellationToken
-                );
-            await execution.ConfigureAwait(false);
+                )
+                .ConfigureAwait(false);
         }
         catch
         {
@@ -73,6 +64,9 @@ internal sealed class ZLinkSpotActorDispatchSubmitter(
 
         try
         {
+            using var operation = (
+                await AdmitActorOperationAsync(queueReservation).ConfigureAwait(false)
+            ).Enter();
             ZLinkFrameworkDebugLog.SpotDiscovery(
                 $"actor_serial_submit_begin actor={runtimeState.ActorId} correlation_id={header.CorrelationId}"
             );
@@ -84,28 +78,15 @@ internal sealed class ZLinkSpotActorDispatchSubmitter(
                 ownedPayload,
                 sourceSessionRid
             );
-            var execution =
-                queueReservation is not null
-                    ? queueReservation.ExecuteAsync(
-                        runtimeState.ActorId,
-                        ct => DispatchForReplyAsync(null!, state, ct),
-                        cancellationToken
-                    )
-                : relocationSeal is not null
-                    ? serial.ExecuteRelocationActorAsync(
-                        relocationSeal,
-                        runtimeState.ActorId,
-                        DispatchForReplyAsync,
-                        state,
-                        cancellationToken
-                    )
-                : serial.ExecuteActorAsync(
+            await SubmitAsync(
                     runtimeState.ActorId,
                     DispatchForReplyAsync,
                     state,
+                    relocationSeal,
+                    queueReservation,
                     cancellationToken
-                );
-            await execution.ConfigureAwait(false);
+                )
+                .ConfigureAwait(false);
 
             var reply =
                 state.Reply
@@ -123,6 +104,38 @@ internal sealed class ZLinkSpotActorDispatchSubmitter(
             throw;
         }
     }
+
+    private ValueTask<ZLinkFrameworkRuntime.ZLinkRuntimeOperationAdmission> AdmitActorOperationAsync(
+        ZLinkSpotRelocationActorQueueReservation? reservation
+    ) =>
+        // The validated replay reservation already owns its accepted queue turn.
+        // Filling it does not start another host operation after the seal.
+        reservation is not null
+            ? ValueTask.FromResult(default(ZLinkFrameworkRuntime.ZLinkRuntimeOperationAdmission))
+            : runtime.TryAdmitInboundOperationAsync(countAsRequest: false);
+
+    private ValueTask SubmitAsync<TState>(
+        string actorId,
+        Func<ZLinkSpotActivation, TState, CancellationToken, ValueTask> dispatch,
+        TState state,
+        ZLinkSpotExecutionRelocationSeal? relocationSeal,
+        ZLinkSpotRelocationActorQueueReservation? queueReservation,
+        CancellationToken cancellationToken
+    ) =>
+        // A validated replay reservation reaches this submitter only from
+        // ZLinkActorRuntimeState.ExecuteDispatchAsync, which already runs
+        // the replay inside that reserved queue turn.
+        queueReservation is not null
+            ? dispatch(null!, state, cancellationToken)
+        : relocationSeal is not null
+            ? serial.ExecuteRelocationActorAsync(
+                relocationSeal,
+                actorId,
+                dispatch,
+                state,
+                cancellationToken
+            )
+        : serial.ExecuteActorAsync(actorId, dispatch, state, cancellationToken);
 
     private static async ValueTask DispatchAsync(
         ZLinkSpotActivation _,

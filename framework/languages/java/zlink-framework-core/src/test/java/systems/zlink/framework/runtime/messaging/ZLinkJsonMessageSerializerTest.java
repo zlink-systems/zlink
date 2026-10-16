@@ -73,6 +73,27 @@ final class ZLinkJsonMessageSerializerTest {
     }
 
     @Test
+    void enumFieldsUseNamesAndRejectOrdinals() {
+        ZLinkJsonMessageSerializer serializer = new ZLinkJsonMessageSerializer();
+        EnumPayload expected = new EnumPayload(ProfileReportReason.profile);
+
+        ZLinkEncodedPayload encoded = serializer.serialize(expected);
+        assertEquals(
+                "{\"reasonId\":\"profile\"}", new String(encoded.bytes(), StandardCharsets.UTF_8));
+        assertEquals(expected, serializer.deserialize(encoded, EnumPayload.class));
+
+        for (String json : List.of("{\"reasonId\":1}", "{\"reasonId\":\"1\"}")) {
+            assertThrows(
+                    IllegalArgumentException.class,
+                    () ->
+                            serializer.deserialize(
+                                    ZLinkEncodedPayload.from(json.getBytes(StandardCharsets.UTF_8)),
+                                    EnumPayload.class),
+                    json);
+        }
+    }
+
+    @Test
     void preservesNullRecordFields() {
         ZLinkJsonMessageSerializer serializer = new ZLinkJsonMessageSerializer();
 
@@ -169,6 +190,8 @@ final class ZLinkJsonMessageSerializerTest {
 
     record ProfileReply(String value) {}
 
+    record EnumPayload(ProfileReportReason reasonId) {}
+
     record CourierActorFound(String courierId, ActorRefWire actor) {}
 
     record ActorRefWire(String nodeRid, String actorId, long generation) {}
@@ -195,5 +218,12 @@ final class ZLinkJsonMessageSerializerTest {
     enum GoldenState {
         Ready,
         Closed
+    }
+
+    enum ProfileReportReason {
+        nickname,
+        profile,
+        harassment,
+        other
     }
 }

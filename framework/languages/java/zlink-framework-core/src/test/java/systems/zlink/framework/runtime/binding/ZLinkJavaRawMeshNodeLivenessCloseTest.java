@@ -10,6 +10,7 @@ import systems.zlink.contracts.sockets.ReceiveFlowState;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceLivenessRegistry;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceNodeDescriptor;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceTopologyRegistry;
+import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
@@ -19,6 +20,9 @@ import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicInteger;
 
 final class ZLinkJavaRawMeshNodeLivenessCloseTest {
+    private static final Duration OBSERVE_WINDOW = Duration.ofSeconds(2);
+    private static final Duration POLL_WAIT = Duration.ofMillis(10);
+
     @Test
     void expiryRemovesPhysicalTargetAndSettlesPendingSendOnce() throws Exception {
         verify(false, false);
@@ -53,15 +57,16 @@ final class ZLinkJavaRawMeshNodeLivenessCloseTest {
             source.bind(endpoint);
             target.connect(endpoint);
             port.ensureReceivePollerRegistered(source);
-            long readyBy = System.nanoTime() + Duration.ofSeconds(2).toNanos();
+            long readyBy = System.nanoTime() + OBSERVE_WINDOW.toNanos();
             while (source.routesSnapshot().isEmpty() && System.nanoTime() < readyBy)
-                port.waitForReady(source, Duration.ofMillis(10));
+                port.waitForReady(source, POLL_WAIT);
             assertEquals(1, source.routesSnapshot().size());
             var topology = new ZLinkServiceTopologyRegistry(descriptor(local));
             set(node, "topology", topology);
             assertEquals(
                     ZLinkServiceTopologyRegistry.AdmissionResult.ADMITTED,
-                    topology.admit(descriptor(peer), "route:11"));
+                    topology.admit(
+                            descriptor(peer), "route:11", ServiceWireConstants.COMMAND_HELLO));
             var liveness = (ZLinkServiceLivenessRegistry) field(node, "liveness");
             var retired = liveness.admit(peer, "route:11", 0);
             topology.bindLiveness(peer, retired);
@@ -79,7 +84,7 @@ final class ZLinkJavaRawMeshNodeLivenessCloseTest {
             var observed = pending.whenComplete((ignored, failure) -> terminals.incrementAndGet());
             if (receive) retired.recordReceived(Duration.ofSeconds(14).toNanos());
             if (replacement) {
-                topology.admit(descriptor(peer), "route:12");
+                topology.admit(descriptor(peer), "route:12", ServiceWireConstants.COMMAND_HELLO);
                 topology.bindLiveness(
                         peer, liveness.admit(peer, "route:12", Duration.ofSeconds(14).toNanos()));
             }
@@ -93,11 +98,16 @@ final class ZLinkJavaRawMeshNodeLivenessCloseTest {
                 assertTrue(topology.peer(peer).isEmpty());
                 tick(node, Duration.ofSeconds(16).toNanos());
             }
-            long end = System.nanoTime() + Duration.ofSeconds(2).toNanos();
+            long end = System.nanoTime() + OBSERVE_WINDOW.toNanos();
             while (!observed.toCompletableFuture().isDone() && System.nanoTime() < end)
-                port.waitForReady(source, Duration.ofMillis(10));
+                port.waitForReady(source, POLL_WAIT);
             assertTrue(observed.toCompletableFuture().isCompletedExceptionally());
             assertEquals(1, terminals.get());
+            // disconnectRid settles the waiting send at once, but the selected-route row leaves
+            // the snapshot only after the asynchronous pipe termination (Core socket
+            // zlink_disconnect_rid, Core ROUTER §10.1). The two have no order between them.
+            while (!source.routesSnapshot().isEmpty() && System.nanoTime() < end)
+                port.waitForReady(source, POLL_WAIT);
             assertTrue(source.routesSnapshot().isEmpty());
         }
     }

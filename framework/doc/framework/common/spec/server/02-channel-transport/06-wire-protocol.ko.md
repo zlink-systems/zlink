@@ -365,7 +365,7 @@ Payload: 5A 46 01 01
 ### `framework-json-v1` profile 규칙
 
 Framework의 기본 typed application message가 사용하는 `framework-json-v1`의 공개 encoding·validation
-규칙은 [Message model §2.3](../00-foundation/05-message-model.ko.md#5-framework-json-v1-typed-payload-profile)이 단독으로
+규칙은 [Message model §5](../00-foundation/05-message-model.ko.md#5-framework-json-v1-typed-payload-profile)이 단독으로
 소유한다. Runtime은 그 profile로 payload를 검증하고 typed value로 변환한다. 이 문서는 별도 규칙 집합을
 정의하지 않으며 parser 선택, buffer 재사용과 원본 UTF-8 bytes의 transport 전달 방식만 내부 구현으로 둔다.
 
@@ -571,7 +571,9 @@ seal/route-update leg만 추가하므로, 수신자는 canonical `actorJoin`(28)
 ### Session seal과 source relay
 
 - Relocation coordinator는 source application dispatch를 멈추기 전에 command 42로 bound Session
-  binding을 seal한다. Command 43은 seal 설치 결과를 알린다.
+  binding을 seal한다. Command 42는 relocation target node(`targetNodeRid`·`targetNodeGeneration`)를 함께 싣는다 —
+  Session owner는 이 값으로만 target과의 route 준비를 요청한다([Session과 Actor binding §8.1](../04-session/02-session-actor-binding.ko.md#81-seal-held-message와-route-전환)).
+  Command 43은 seal 설치 결과(`sealResult`: `sealed` 또는 `bindingAbsent`)를 알린다.
 - Session owner는 current Session identity, binding generation, ActorId·ObjectGeneration과
   relocation identity만 확인한다. Numeric high-water를 만들거나 Actor authority를 다시 조회하지
   않는다.
@@ -584,9 +586,10 @@ seal/route-update leg만 추가하므로, 수신자는 canonical `actorJoin`(28)
 ### Relocation manifest와 direct chunk transfer
 
 - Source는 command 40 `relocationPrepare`을 `[request]`로 보내 temporary queue 설치와 뒤이을
-  전송의 payload manifest 선언을 요청한다. Body에는 object identity, source node RID·generation과
-  payload를 설명하는 `payloadTotalLength`, `payloadChunkCount`, `payloadChecksumCrc32c`가
-  들어간다. relocation-root pointer나 Relocation Store lookup key는 싣지 않는다 —
+  전송의 payload manifest 선언을 요청한다. Body에는 object identity, source node RID·generation,
+  payload를 설명하는 `payloadTotalLength`, `payloadChunkCount`, `payloadChecksumCrc32c`와 relocation을
+  시작한 source operation의 absolute deadline `deadlineUnixMs`가 들어간다. Target은 relay 수신 준비
+  대기를 이 값으로 끝낸다([relocation §4.3](../05-location-relocation/04-relocation-flow.ko.md#43-target은-실행하지-않은-상태로-복원한다)). relocation-root pointer나 Relocation Store lookup key는 싣지 않는다 —
   Prepare 하나로 이어질 direct transfer(source memory 원본)를 완전히 설명한다. Target은 temporary
   queue가 수신 준비되었을 때만 command 30 `relocationReady`를 `[reply]`로 보낸다. 이 pair는
   선언한 manifest 외의 message·byte allowance나 participant reservation을 협상하지 않는다.
@@ -707,6 +710,9 @@ Session seal을 복원한다. 그 뒤 submit 결과만으로 source를 복원하
 - Session route는 Session owner의 current Session과 binding에서만 검증한다.
 - Command 42는 current binding을 seal하고 command 43은 seal 설치 결과만 반환한다.
   Command 43은 Session message sequence나 high-water를 전달하지 않는다.
+- Command 43의 마지막 body field `sealResult`(u8)는 `sealed`(1) 또는 `bindingAbsent`(2)다. Exact binding이
+  이미 정리됐으면 Session owner는 seal 없이 `bindingAbsent`를 반환하고, coordinator는 그 Session을 envelope와
+  command 44에서 뺀다([Session·Actor binding §8.3](../04-session/02-session-actor-binding.ko.md#83-이미-정리된-binding에-대한-seal)).
 - Command 44는 session-route update이면 target runtime이, relay-ready reply가 accepted 상태가 되기 전 abort이면 source coordinator가 `[send]`로
   전달한다. Route update는 relocation identity, current binding generation,
   ActorId·ObjectGeneration과 target route를 포함한다. Session owner는 Location Store나 Actor

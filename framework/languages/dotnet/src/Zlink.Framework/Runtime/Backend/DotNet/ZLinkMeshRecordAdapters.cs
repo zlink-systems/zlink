@@ -170,7 +170,7 @@ internal static class ZLinkMeshRecordAdapters
         Func<IReadOnlyList<Message>, SubmitResult>? directReply = null
     )
     {
-        IReadOnlyList<Message> messages = batch.RetainMessage(index);
+        IReadOnlyList<Message> messages = batch.TakeMessage(index);
         if (messages.Count == 0)
             return Array.Empty<ZLinkBackendActorPart>();
 

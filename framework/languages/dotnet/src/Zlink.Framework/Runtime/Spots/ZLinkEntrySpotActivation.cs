@@ -298,11 +298,25 @@ internal sealed partial class ZLinkEntrySpotActivation
 
     public void Configure()
     {
-        EntrySpot.Configure();
-        _configurationOpen = false;
-        _packets.Bind(EntrySpot);
-        _subscriptions.Bind(EntrySpot, _nativeSpot);
-        _actorHandlers.Bind();
+        try
+        {
+            EntrySpot.Configure();
+            _configurationOpen = false;
+            _packets.Bind(EntrySpot);
+            _subscriptions.Bind(
+                EntrySpot,
+                _nativeSpot,
+                _runtime
+                    .Registration.SpotNodes.Values.Where(node => node.SpotNodeName == SpotNodeName)
+                    .SelectMany(static node => node.ChannelMemberships)
+                    .Select(static membership => membership.ChannelName)
+            );
+            _actorHandlers.Bind();
+        }
+        catch (ZLinkConfigurationException failure)
+        {
+            throw ZLinkSpotActivationFactory.ConfigurationFailure(failure);
+        }
     }
 
     public ValueTask InitializeAsync(CancellationToken cancellationToken)

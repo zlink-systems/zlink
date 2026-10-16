@@ -221,6 +221,7 @@ internal static class ZLinkActorRemoteJoinRecoveryCodec
             )
             || (
                 (value.OperationIdHigh != 0 || value.OperationIdLow != 0)
+                && value.ReplyContentType is not null
                 && string.IsNullOrWhiteSpace(value.ReplyContentType)
             )
         )

@@ -6,6 +6,7 @@ import systems.zlink.framework.runtime.actors.ZLinkActorDispatchTarget;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpot;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerInstanceOwner;
 
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Executor;
 import java.util.function.Supplier;
@@ -64,13 +65,12 @@ abstract class ZLinkSpotContextHost {
     abstract CompletionStage<Void> enqueueActorDispatch(
             String actorId, long payloadBytes, Supplier<CompletionStage<Void>> operation);
 
-    CompletionStage<Void> enqueueActorDispatch(
+    abstract CompletionStage<Void> enqueueActorDispatch(
             ZLinkActorDispatchTarget target,
             String actorId,
             long payloadBytes,
-            Supplier<CompletionStage<Void>> operation) {
-        return enqueueActorDispatch(actorId, payloadBytes, operation);
-    }
+            Supplier<CompletionStage<Void>> operation,
+            CompletableFuture<Void> admission);
 
     abstract CompletionStage<Void> enqueueActorDispatch(
             String actorId,
@@ -79,18 +79,12 @@ abstract class ZLinkSpotContextHost {
             Supplier<CompletionStage<Void>> operation,
             Runnable relocationRelease);
 
-    CompletionStage<Void> enqueueActorDispatch(
+    abstract CompletionStage<Void> enqueueActorDispatch(
             ZLinkActorDispatchTarget target,
             String actorId,
             Supplier<byte[]> acceptedJournalRecord,
             long acceptedJournalRecordSizeHint,
             Supplier<CompletionStage<Void>> operation,
-            Runnable relocationRelease) {
-        return enqueueActorDispatch(
-                actorId,
-                acceptedJournalRecord,
-                acceptedJournalRecordSizeHint,
-                operation,
-                relocationRelease);
-    }
+            Runnable relocationRelease,
+            CompletableFuture<Void> admission);
 }

@@ -91,7 +91,7 @@ One relocation unit's handoff state owns these values.
 |---|---|
 | Object identity | Fixes ActorId or SpotId and `ObjectGeneration`. |
 | Source fence | Fixes source node RID/node generation and the initially read owner generation. |
-| Target fence | Fixes target node RID/node generation and the requested new owner generation. |
+| Target fence | Fixes target node RID/node generation. The new owner generation is issued in the `NewOwner` transition of [Location runtime §6.1](01-location-runtime.en.md#61-read-and-cas). |
 | Relocation identity | Distinguishes retries and late completions belonging to the same handoff. |
 | Saved-work reference | Refers to captured state, existing queue, and timers held in source memory pending the direct payload chunk transfer. |
 | Relay connection | Fixes TCP order between the source relay and the cutover boundary. |
@@ -126,7 +126,7 @@ sends it directly to the target, and until authority settles or the source-lease
 The direct-transfer payload is the schema's `relocation-envelope-v1`: a canonical
 big-endian field stream with no monolithic provider envelope. In schema declaration
 order, it contains `relocation`, `object`, `applicationVersion`, `applicationStates`,
-`savedWork`, `timerRegistrations`, and `pendingTimerTicks`. The target reconstructs the
+`savedWork`, `timerRegistrations`, `pendingTimerTicks`, and `sessionBindings`. The target reconstructs the
 canonical ordered participant inventory from the Location Store's authority keys, sorted
 by UTF-8 authority-key bytes. Participant identity is deliberately absent from the
 stream: `participantId` is that sorted inventory's zero-based index plus one, and every
@@ -142,6 +142,16 @@ schedule indices, and next scheduled Unix-millisecond cursor. `pendingTimerTicks
 carries the participant/order sequence, timer name, delivery and scheduled indices,
 scheduled timestamp, and skipped-tick count. Native timer handles and callback
 continuations are not part of this frozen saved-work record.
+
+`sessionBindings` carries, for each participant sealed under §4.1, the Session owner
+identity confirmed by command 43 with `sealResult = sealed` (`sessionOwnerNodeRid`, `sessionOwnerNodeGeneration`,
+`sessionOwnerId`, `sessionOwnerLeaseGeneration`) together with `sessionRid` and
+`bindingGeneration`. A participant without a binding, and a participant whose command 43 is
+`bindingAbsent`, has no entry
+([Session and Actor Binding §8.3](../04-session/02-session-actor-binding.en.md#83-sealing-an-already-cleaned-binding)). The target builds the
+command 44 commit of
+[Session and Actor Binding §8.2](../04-session/02-session-actor-binding.en.md#82-control-messages-42-43-44)
+from this entry.
 
 Command 40, `relocationPrepare`, is the manifest for this stream. Its
 `payloadTotalLength`, `payloadChunkCount`, and `payloadChecksumCrc32c` describe the
@@ -210,6 +220,20 @@ and aren't mixed with source relay.
 
 The temporary queue and saved-work span form an ordered durable backlog before dispatch and own their payloads after finite handoff. Permit return and later acquisition for staging ingress and runnable callbacks follow [Application job queue §3](../01-execution/04-application-job-queue-and-backpressure.en.md#3-ordinary-ingress-permit-order).
 
+**Before reporting ready to receive relay, the target secures a ready route to the Session owner of
+each incoming binding.** For each entry in the relocation envelope's `sessionBindings` (§4.2) whose Session
+owner is a node other than the target, the target checks whether a
+[ready](../00-foundation/02-glossary.en.md#ready) route to that Session owner node exists. A Session
+owner on the target node itself needs no route. If not, it asks its auto-connect owner to reconcile that peer immediately
+([MeshNode §7.1](../03-spot-actor/03-mesh-node.en.md#71-peer-connection)) and doesn't send ready to
+receive relay until the route is ready. The time limit of this wait is the source operation deadline
+(`deadlineUnixMs`) that command 40 carries, and the target creates no new timer or retry. It waits in
+the target attempt's continuation without occupying an infrastructure receive loop or an application
+handler turn. If that deadline or target shutdown ends the wait, the target sends an explicit failure
+reply instead of ready to receive relay and removes the staging it was assembling. The source is still owner, so it restores the source queue and the
+matching Session seal as for §9's explicit failure. Because the target finishes this preparation
+before commit, the first Actor→Session push after commit doesn't fail for a missing route.
+
 Once the temporary queue and Restore are ready, the target reports **ready to receive
 relay** to the source. This notification isn't relocation completion. The Location
 Store owner is still the source, and the target doesn't run an application handler. The
@@ -255,9 +279,12 @@ also arrived, so this comparison always succeeds on the normal path; a compariso
 failure is an Error signaling an implementation defect.
 
 The server setting `RelocationCutoverWaitTimeout` (**default 1,000 ms**) is only a
-Warning threshold measured from the ready-to-receive-relay reply until cutover arrives. If the connection breaks and cutover is lost, and
-the source process is still running, the source resends the whole pre-boundary relay
-batch and the cutover over a new connection. The target discards the partially received
+Warning threshold measured from the ready-to-receive-relay reply until cutover arrives. If the connection breaks, or the source later observes a
+selected route of the target whose route generation differs from the one that was
+ready when it submitted pre-boundary relay or cutover, so that cutover may have
+been lost, and the source
+process is still running, the source resends the whole pre-boundary relay batch and
+the cutover over a new connection (the new selected route). The target discards the partially received
 pre-boundary relay span and replaces it wholly with the retransmitted batch — a whole
 replacement, not per-record deduplication or partial merge, so the order inside the span
 is fixed by the batch order even on the new connection. When the verification values
@@ -514,8 +541,9 @@ last item's ownership transfers to ordinary terminal ownership or is cleaned up.
 
 The Location Store CAS is the transition point that keeps owner from existing
 simultaneously at both source and target. The target supplies the expected source owner
-and generation as the condition, and requests its own node and the new owner generation
-as new values.
+and generation as the condition, and requests its own node as the new owner. The new owner
+generation is issued in the `NewOwner` transition this CAS executes, and the target uses
+the value in the CAS result for later fences.
 
 | CAS result | Handling |
 |---|---|
@@ -574,6 +602,8 @@ defined by [Complete Host Relocation Flow](05-host-relocation-flow.en.md).
 | Timing | Owner and queue kept | Result and follow-up |
 |---|---|---|
 | Failure before target selection or preparation | Source | Doesn't block source dispatch and fails the operation. |
+| Command 43 is `bindingAbsent` | Source, relocation continues | Treats that participant as unbound and leaves it out of `sessionBindings` and command 44 ([Session and Actor Binding §8.3](../04-session/02-session-actor-binding.en.md#83-sealing-an-already-cleaned-binding)). |
+| Command 42 rejected, or seal wait deadline reached | Source | Confirms restoration of every participant capture already started to the source queue, then sends the matching command 44 abort to participants already `sealed`, and fails the operation. The order is the abort order of [Session and Actor Binding §8.1](../04-session/02-session-actor-binding.en.md#81-seal-held-messages-and-route-switchover). |
 | Explicit failure after Session seal but before the ready-to-receive-relay reply reaches its accepted state | Source | Doesn't run the target's temporary queue. Restores source queue and matching Session seal from the payload kept in memory. |
 | Chunk assembly result doesn't match the Restore request's checksum | Source | Target doesn't start restoration, sends an explicit failure reply, and removes the chunks being assembled. Source restores the queue from the memory payload and fails the operation. No retry. |
 | A Restore request with the same relocation identity arrives with a length or checksum different from the first | Source | Target neither reuses nor overwrites the existing assembly and ends with an explicit conflict failure. Source restores as with the explicit failure above. |
@@ -613,7 +643,9 @@ redefine those values and only adds the following two.
 
 - **Session connection and relay depend on this forwarding path.** Without it, a
   session connected to a moved Actor silently disconnects even if the move itself
-  succeeds. So Message Follow isn't an optional performance optimization.
+  succeeds. So Message Follow isn't an optional performance optimization. The only exception is
+  [Location runtime §10](01-location-runtime.en.md#10-when-a-store-response-isnt-received)'s
+  chained-move exception, where each target's command 44 moves the Session routes.
 - Message Follow's forwarding volume has no separate cap set by this handoff — beyond
   the hop count and duration limit Location Runtime sets, no relocation-specific record
   count or byte cap is added.

@@ -400,11 +400,14 @@ final class ZLinkStatusPublisherTest {
                         },
                         new CompletableFuture<>()));
 
-        assertTrue(slowEntered.await(1, TimeUnit.SECONDS));
-        state.set(2);
-        publisher.signal();
-        assertEquals(2, fastTerminal.get(1, TimeUnit.SECONDS));
-        releaseSlow.countDown();
+        try {
+            assertTrue(slowEntered.await(1, TimeUnit.SECONDS));
+            state.set(2);
+            publisher.signal();
+            assertEquals(2, fastTerminal.get(1, TimeUnit.SECONDS));
+        } finally {
+            releaseSlow.countDown();
+        }
     }
 
     @Test

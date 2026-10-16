@@ -8,6 +8,7 @@ import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.framework.runtime.internal.binding.spot.ActorTransferPrepare;
 import systems.zlink.framework.runtime.internal.binding.spot.ActorTransferToken;
 import systems.zlink.framework.runtime.internal.binding.spot.PrepareActorTransferResult;
+import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry;
 
@@ -22,6 +23,11 @@ import java.util.function.Consumer;
 import java.util.function.Supplier;
 
 public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
+    /** Node-owned JVM source turn; backends without a separate owner use the selector turn. */
+    default ZLinkStateLane sourceTransportLane() {
+        return null;
+    }
+
     RoutingId routingId();
 
     void setRoutingId(RoutingId routingId);
@@ -385,13 +391,15 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
         return new byte[0];
     }
 
-    void bindRemoteActorBoundSession(
-            ZLinkBackendActorRef actor, RoutingId sourceNodeRid, RoutingId sourceSessionRid);
-
-    default void installRelocatingActorBoundSession(
+    /**
+     * Installs the relocating bound Session route as one remote binding transition of the {@link
+     * RemoteSessionBindingOwner}, which binds the Actor context in the same owner turn.
+     */
+    default CompletionStage<Void> installRelocatingActorBoundSession(
             ZLinkServiceM6BWireCodec.ActorRouteFence actor,
             ZLinkServiceM6BWireCodec.SessionOwnerFence session) {
         // Alternate backends may wait for the ordinary binding announcement.
+        return CompletableFuture.completedFuture(null);
     }
 
     default Optional<BoundSessionRoute> boundSessionRoute(ZLinkBackendActorRef actor) {
@@ -414,6 +422,37 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
             long sessionOwnerNodeGeneration,
             RoutingId sessionRid,
             long bindingGeneration) {}
+
+    default void setRemoteSessionBindingOwner(RemoteSessionBindingOwner owner) {}
+
+    /**
+     * Owner of the remote bound Session fact. The node's remote route and the Actor context change
+     * only inside {@link #apply}, which runs the transition in the owner turn; a caller already in
+     * that turn runs it inline.
+     */
+    @FunctionalInterface
+    interface RemoteSessionBindingOwner {
+        CompletionStage<Boolean> apply(
+                ZLinkInternalSpotNode node,
+                ZLinkBackendActorRef actor,
+                java.util.function.Function<RemoteSessionBindingTransition, Boolean> transition);
+    }
+
+    /** Actor-context side of one remote binding transition, applied in the owner turn. */
+    interface RemoteSessionBindingTransition {
+        RemoteSessionBindingTransition NONE =
+                new RemoteSessionBindingTransition() {
+                    @Override
+                    public void bind(BoundSessionRoute route) {}
+
+                    @Override
+                    public void retire(BoundSessionRoute route) {}
+                };
+
+        void bind(BoundSessionRoute route);
+
+        void retire(BoundSessionRoute route);
+    }
 
     @FunctionalInterface
     interface MessageFollowRelayHandler {

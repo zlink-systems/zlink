@@ -318,7 +318,8 @@ Redis store는 `@zlink-systems/framework-locations-redis`가 제공한다(§1).
 [channel-messaging §9](../../02-channel-transport/02-channel-messaging.ko.md#10-검증-요구)와
 [spot-messaging §8](../../03-spot-actor/02-spot-messaging.ko.md)이 소유하는 규칙을 따른다.
 
-**Node는 모든 위반을 startup 시점 설정 예외로 던진다.** 설정 실수를 즉시 드러내는 쪽이 기본
+**Node는 host 구성에서 정한 등록의 위반을 startup 시점 설정 예외로 던진다.** Spot `Configure()`에서 정한
+등록의 검사 시점은 [공통 API 「23」](../../00-foundation/06-framework-api.ko.md#23-startup-validation)이 정한다. 설정 실수를 즉시 드러내는 쪽이 기본
 규칙이다.
 
 ## 12. 회귀 테스트

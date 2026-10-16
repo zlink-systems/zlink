@@ -113,6 +113,11 @@ public interface ZLinkSpotRelocationAdapter<TSpot> {
  TSpot spot, byte[] state, ZLinkRelocationCancellation cancellation);
 }
 
+public interface ZLinkSpotHandlerRegistry {
+ void addHandler(Class<?> handlerType);
+ void addSubscribe(Class<?> handlerType, String channelName, String topic);
+}
+
 public interface ZLinkSpotContext {
  String meshName();
  String spotId();
@@ -172,6 +177,8 @@ public interface ZLinkSpotManager {
 }
 
 ```
+
+`addSubscribe(handlerType, channelName, topic)` registers the `ChannelName`/`topic` pair of [Spot messaging §5.1](../../../03-spot-actor/02-spot-messaging.en.md#51-subscription-registration-values-and-when-they-are-checked) at runtime. The method arguments own the registered values, and `handlerType` doesn't need `@ZLinkSpotSubscription`. Like .NET `ZLinkSpotSubscriptionAttribute`, `@ZLinkSpotSubscription` declares `spotNodeName`, `channelName` and `topic`, and an annotation registration's `ChannelName` is `channelName()`. If the handler also carries the annotation, the annotation's registration and this call's registration are separate subscriptions. Duplicate rejection and its check timing follow §5.1. Kotlin calls the same Java method.
 
 The Java runtime creates each Spot packet/request/subscription/timer
 handler once per Spot activation and reuses it. An Actor send/request
@@ -281,7 +288,7 @@ In User/Instance Spot relocation, the framework includes, in the
 relocation payload, the logical timer registration created by
 `addTimer(...)`, the last completed tick sequence, the next scheduled
 time, and pending ticks not yet run. The target restores the logical
-timer registration, so the application doesn't re-register the timer.
+timer registration, so the application doesn't re-register the timer in restore. If the target's `Configure` or pre-Ready `onInitialize` registers a restored key, it reattaches to the restored registration under the [Spot timer §1](../../../03-spot-actor/10-spot-timer.en.md#1-timer-generation-and-cancel) exception.
 Only the currently running timer callback finishes on the source, and the
 restored tick isn't submitted to the application handler before target
 Ready.
@@ -532,6 +539,7 @@ public final class systems.zlink.framework.spots.ZLinkSpotCreateState extends ja
 }
 public interface systems.zlink.framework.spots.ZLinkSpotHandlerRegistry {
  public abstract void addHandler(java.lang.Class<?>);
+ public abstract void addSubscribe(java.lang.Class<?>, java.lang.String, java.lang.String);
 }
 public final class systems.zlink.framework.spots.ZLinkSpotKind extends java.lang.Enum<systems.zlink.framework.spots.ZLinkSpotKind> {
  public static final systems.zlink.framework.spots.ZLinkSpotKind INVALID;

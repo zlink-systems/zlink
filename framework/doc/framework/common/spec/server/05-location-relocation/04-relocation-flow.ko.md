@@ -83,7 +83,7 @@ Relocation unit 하나의 handoff state는 다음 값을 소유한다.
 |---|---|
 | Object identity | ActorId 또는 SpotId와 `ObjectGeneration`을 고정한다. |
 | Source fence | Source node RID·node generation과 처음 읽은 owner generation을 고정한다. |
-| Target fence | Target node RID·node generation과 요청할 새 owner generation을 고정한다. |
+| Target fence | Target node RID·node generation을 고정한다. 새 owner generation은 [Location runtime §6.1](01-location-runtime.ko.md#61-read와-cas)의 `NewOwner` 전환에서 발급된다. |
 | Relocation identity | Retry와 late completion이 같은 handoff에 속하는지 구분한다. |
 | Saved-work reference | 갈무리한 state·기존 queue·timer가 direct payload chunk transfer를 기다리며 source memory에 머무는 것을 가리킨다. |
 | Relay connection | Source relay와 cutover boundary의 TCP 순서를 고정한다. |
@@ -117,7 +117,7 @@ Source는 payload 전체를 memory에 유지한 채 target에 직접 전송하�
 직접 전송 payload는 schema의 `relocation-envelope-v1`이다. Provider 전체 envelope 없이
 canonical big-endian field stream으로 encoding한다. Schema 선언 순서는 `relocation`, `object`,
 `applicationVersion`, `applicationStates`, `savedWork`, `timerRegistrations`,
-`pendingTimerTicks`다. Target은 Location Store의 authority key를 UTF-8 authority-key byte
+`pendingTimerTicks`, `sessionBindings`다. Target은 Location Store의 authority key를 UTF-8 authority-key byte
 순서로 정렬해 canonical participant inventory를 재구성한다. Participant identity는 stream에
 의도적으로 넣지 않는다. `participantId`는 이 정렬된 inventory의 zero-based index에 1을 더한
 값이고, 모든 participant vector는 schema가 선언한 key로 정렬되고 unique해야 한다.
@@ -131,6 +131,14 @@ delivery·schedule index, 다음 Unix-millisecond schedule cursor가 들어간�
 participant/order sequence, timer name, delivery·scheduled index, scheduled timestamp,
 skipped-tick count가 들어간다. Native timer handle과 callback continuation은 이 frozen
 saved-work record에 넣지 않는다.
+
+`sessionBindings`에는 §4.1에서 seal한 participant마다 command 43이 `sealResult = sealed`로 확인한 Session owner
+identity(`sessionOwnerNodeRid`, `sessionOwnerNodeGeneration`, `sessionOwnerId`,
+`sessionOwnerLeaseGeneration`)와 `sessionRid`, `bindingGeneration`이 들어간다. Bind되지 않은
+participant와 command 43이 `bindingAbsent`인 participant는 항목이 없다
+([Session과 Actor binding §8.3](../04-session/02-session-actor-binding.ko.md#83-이미-정리된-binding에-대한-seal)). Target은 이 항목으로
+[Session과 Actor binding §8.2](../04-session/02-session-actor-binding.ko.md#82-control-message-424344)의
+command 44 commit을 만든다.
 
 Command 40 `relocationPrepare`가 이 stream의 manifest다. `payloadTotalLength`,
 `payloadChunkCount`, `payloadChecksumCrc32c`가 complete encoded logical stream을 설명한다.
@@ -191,6 +199,18 @@ checksum이 도착하면 기존 조립을 재사용하지도 덮어쓰지도 않
 
 Temporary queue와 saved-work 구간은 dispatch 전 ordered durable backlog이며, 유한한 handoff 뒤 payload를 소유한다. Staging ingress와 runnable callback의 permit 반환·재획득은 [Application job queue §3](../01-execution/04-application-job-queue-and-backpressure.ko.md#3-ordinary-ingress-permit-순서)을 따른다.
 
+**Target은 relay 수신 준비 완료를 알리기 전에 옮겨 오는 binding의 Session owner와 ready route를 확보한다.**
+Relocation envelope의 `sessionBindings`(§4.2) 항목 중 Session owner가 target과 다른 node인 항목마다,
+target은 그 Session owner node와 [ready](../00-foundation/02-glossary.ko.md#ready) route가 있는지 확인한다.
+Session owner가 target node 자신이면 확보할 route가 없다. 없으면 자신의 auto-connect
+owner에 그 peer의 즉시 reconcile을 요청하고([MeshNode §7.1](../03-spot-actor/03-mesh-node.ko.md#71-peer-연결)),
+route가 ready가 될 때까지 relay 수신 준비 완료를 보내지 않는다. 이 대기의 기한은 command 40이 실어 오는
+source operation deadline(`deadlineUnixMs`)이며, target은 새 timer나 retry를 만들지 않는다. Target attempt의
+continuation에서 기다리며 infrastructure 수신 loop나 application handler turn을 점유하지 않는다. 그 deadline이나
+target 종료로 대기가 끝나면 relay 수신 준비 완료 대신 명시적 실패 reply를 보내고 조립 중인 staging을 정리한다. Source는 아직 owner이므로 §9의 명시적 실패와
+같이 source queue와 matching Session seal을 복원한다. Target이 이 준비를 끝낸 뒤 commit해야 commit 뒤의 첫
+Actor→Session push가 route 부재로 실패하지 않는다.
+
 Temporary queue와 Restore가 준비되면 target은 source에 **relay 수신 준비 완료**를 알린다. 이
 통지는 relocation 완료가 아니다. Location Store owner는 아직 source이며 target은 application
 handler를 실행하지 않는다. Target은 staged payload마다 target-side retained-byte owner를
@@ -231,8 +251,9 @@ Cutover가 target에 도착하면 같은 connection에서 boundary보다 앞서 
 Error다.
 
 Server 설정 `RelocationCutoverWaitTimeout`(**기본 1,000 ms**)은 relay 수신 준비 reply부터
-cutover 도착까지의 Warning 임계값일 뿐이다. Connection이 끊겨 cutover가 유실된 경우, source process가 실행 중이면 source는 새
-connection으로 boundary 전 relay batch 전체와 cutover를 다시 보낸다. Target은 부분 수신한
+cutover 도착까지의 Warning 임계값일 뿐이다. Connection이 끊기거나, boundary 전 relay나 cutover를 제출할 때 ready였던 route generation과 다른
+target의 선택 route를 그 뒤 source가 관찰해 cutover가 유실됐을 수 있는 경우, source process가 실행 중이면 source는 새
+connection(새 선택 route)으로 boundary 전 relay batch 전체와 cutover를 다시 보낸다. Target은 부분 수신한
 boundary 전 relay 구간을 폐기하고 재전송된 batch 전체로 한 번에 교체한다 — 개별 중복 제거나
 부분 병합이 아니라 전체 교체이므로, 새 connection에서도 구간 안의 순서가 batch 순서로
 확정된다. 확인 값이 일치하면 target은 CAS와 queue 개방을 진행한다.
@@ -470,8 +491,9 @@ terminal ownership으로 이전되거나 정리될 때까지 유지한다.
 ## 6. Location Store 전환 계약
 
 Location Store CAS는 owner가 동시에 source와 target 두 곳에 존재하지 않게 만드는 전환점이다.
-Target은 예상한 source owner와 generation을 조건으로 주고, 자기 node와 새 owner generation을
-새 값으로 요청한다.
+Target은 예상한 source owner와 generation을 조건으로 주고 자기 node를 새 owner로 요청한다.
+새 owner generation은 이 CAS로 실행하는 `NewOwner` 전환에서 발급되며, target은 CAS 결과의 값을
+이후 fence에 쓴다.
 
 | CAS 결과 | 처리 |
 |---|---|
@@ -525,6 +547,8 @@ Session owner가 검증하는 값, seal과 route 전환의 정확한 시점·tim
 | 발생 시점 | 유지하는 owner와 queue | 결과와 후속 처리 |
 |---|---|---|
 | Target 선택 또는 준비 전 실패 | Source | Source dispatch를 막지 않고 operation을 실패시킨다. |
+| Command 43이 `bindingAbsent` | Source, relocation 계속 | 그 participant를 bind되지 않은 participant로 다루고 `sessionBindings`와 command 44에서 뺀다([Session과 Actor binding §8.3](../04-session/02-session-actor-binding.ko.md#83-이미-정리된-binding에-대한-seal)). |
+| Command 42 거부 또는 seal 대기 deadline | Source | 이미 시작한 모든 participant capture를 source queue로 복원해 확정한 뒤, 이미 `sealed`인 participant에 matching command 44 abort를 보내고 operation을 실패로 끝낸다. 순서는 [Session과 Actor binding §8.1](../04-session/02-session-actor-binding.ko.md#81-seal-held-message와-route-전환)의 abort 순서다. |
 | Session seal 뒤, relay 수신 준비 reply가 accepted 상태가 되기 전 명시적인 실패 | Source | Target temporary queue를 실행하지 않는다. Memory에 유지한 payload로 source queue와 matching Session seal을 복원한다. |
 | Chunk 조립 결과가 Restore 요청의 checksum과 다름 | Source | Target은 복원을 시작하지 않고 명시적 실패 reply를 보내며 조립 중인 chunk를 제거한다. Source는 memory의 payload로 queue를 복원하고 operation을 실패로 끝낸다. 재시도하지 않는다. |
 | 같은 relocation identity의 Restore 요청에 처음과 다른 길이나 checksum이 도착 | Source | Target은 기존 조립을 재사용하지도 덮어쓰지도 않고 명시적 conflict 실패로 끝낸다. Source는 위 명시적 실패와 같이 복원한다. |
@@ -559,7 +583,8 @@ reply route를 유지한다. Store를 다시 읽거나 application handler를 so
 
 - **Session 연결과 중계가 이 전달 경로에 의존한다.** 이 경로가 없으면 이동한 Actor에 연결된
   session은 이동 자체가 성공해도 조용히 끊긴다. 따라서 Message Follow는 선택적인 성능
-  최적화가 아니다.
+  최적화가 아니다. 유일한 예외는 [Location runtime §10](01-location-runtime.ko.md#10-store-응답을-받지-못했을-때)의
+  연속 이동 예외이며, 그때 Session route는 각 target의 command 44가 옮긴다.
 - Message Follow의 전달량에는 이 handoff가 별도로 두는 상한이 없다 — Location runtime이 정한
   hop 수와 기간 제한 외에 relocation 전용 record 수·byte 상한을 추가하지 않는다.
 

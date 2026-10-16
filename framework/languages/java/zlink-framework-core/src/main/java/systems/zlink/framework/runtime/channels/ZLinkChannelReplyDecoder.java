@@ -20,9 +20,20 @@ final class ZLinkChannelReplyDecoder {
     }
 
     <TReply> TReply decode(List<Message> replies, Class<TReply> replyType, String failurePrefix) {
-        systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.Header header =
+        return decode(
+                replies,
                 systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.tryDecodeHeader(
-                        replies, false);
+                        replies, false),
+                replyType,
+                failurePrefix);
+    }
+
+    /** Decodes with the header the caller already read; {@code null} means no envelope. */
+    <TReply> TReply decode(
+            List<Message> replies,
+            systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.Header header,
+            Class<TReply> replyType,
+            String failurePrefix) {
         if (header != null) {
             if (header.isError()) {
                 throw new ZLinkFrameworkException(

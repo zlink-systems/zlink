@@ -72,7 +72,7 @@ until Ready commit or fenced failure cleanup finishes.
 
 [ObjectGeneration](02-glossary.en.md#objectgeneration),
 [AuthorityOwnerGeneration](02-glossary.en.md#authorityownergeneration) (the
-provider-issued value indicating the order in which the authority owner changed
+value indicating the order in which the authority owner changed
 within the same object incarnation), attempt, and the owner lease token are used
 only for Store fencing and never included in the application message payload or
 handler context.

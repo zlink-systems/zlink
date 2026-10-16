@@ -7,6 +7,56 @@ namespace Zlink.Framework.UnitTests;
 public sealed class MaintenanceRuntimeTests
 {
     [Fact]
+    public void Status_Reuses_Last_Publication_When_Public_Fields_Are_Unchanged()
+    {
+        using var fixture = Create();
+
+        var initial = fixture.Runtime.Status;
+
+        Assert.Equal(1UL, initial.Sequence);
+        Assert.Same(initial, fixture.Runtime.Status);
+        fixture.Runtime.MarkServing();
+        var serving = fixture.Runtime.Status;
+        Assert.Equal(initial.Sequence + 1, serving.Sequence);
+        Assert.Same(serving, fixture.Runtime.Status);
+    }
+
+    [Fact]
+    public async Task Observe_Uses_The_Same_Publication_As_Status()
+    {
+        using var fixture = Create();
+        fixture.Runtime.MarkServing();
+        var initial = fixture.Runtime.Status;
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        await using var observer = fixture
+            .Runtime.ObserveAsync(cancellation.Token)
+            .GetAsyncEnumerator();
+
+        Assert.True(await observer.MoveNextAsync());
+        Assert.Same(initial, observer.Current.Status);
+        Assert.Same(observer.Current.Status, fixture.Runtime.Status);
+
+        fixture.Runtime.MarkError();
+        Assert.True(await observer.MoveNextAsync());
+        Assert.Equal(initial.Sequence + 1, observer.Current.Status.Sequence);
+        Assert.Same(observer.Current.Status, fixture.Runtime.Status);
+    }
+
+    [Fact]
+    public void Publication_Does_Not_Advance_Sequence_For_Unchanged_Public_Fields()
+    {
+        using var fixture = Create();
+        fixture.Runtime.MarkError();
+        var first = fixture.Runtime.Status;
+
+        fixture.Runtime.MarkError();
+
+        Assert.Equal(first.Sequence, fixture.Runtime.Status.Sequence);
+        Assert.Equal(first.ObservedAt, fixture.Runtime.Status.ObservedAt);
+        Assert.Same(first, fixture.Runtime.Status);
+    }
+
+    [Fact]
     public void LifecycleRuntimeTypes_AreOwnedBy_FrameworkCoreAssembly()
     {
         var coreAssembly = typeof(ZLinkFrameworkRuntime).Assembly;
@@ -89,10 +139,14 @@ public sealed class MaintenanceRuntimeTests
             safeToShutdownSnapshot: () => safeToShutdown
         );
 
-        Assert.False(runtime.Status.SafeToShutdown);
+        var initial = runtime.Status;
+        Assert.False(initial.SafeToShutdown);
 
         safeToShutdown = true;
-        Assert.True(runtime.Status.SafeToShutdown);
+        var changed = runtime.Status;
+        Assert.True(changed.SafeToShutdown);
+        Assert.Equal(initial.Sequence + 1, changed.Sequence);
+        Assert.Same(changed, runtime.Status);
     }
 
     [Fact]
@@ -115,19 +169,26 @@ public sealed class MaintenanceRuntimeTests
 
         Assert.NotNull(changeHandler);
         using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-        var observed = runtime
+        await using var observed = runtime
             .ObserveAsync(cancellation.Token)
             .GetAsyncEnumerator(cancellation.Token);
         var initial = await observed.MoveNextAsync();
         Assert.True(initial);
         Assert.False(observed.Current.Status.SafeToShutdown);
+        var initialStatus = observed.Current.Status;
+        changeHandler!.Invoke();
+        changeHandler.Invoke();
+        Assert.Same(initialStatus, runtime.Status);
 
         safeToShutdown = true;
-        changeHandler!.Invoke();
+        changeHandler.Invoke();
 
         var next = await observed.MoveNextAsync();
         Assert.True(next);
         Assert.True(observed.Current.Status.SafeToShutdown);
+        Assert.Equal(initialStatus.Sequence + 1, observed.Current.Status.Sequence);
+        Assert.Equal(default, observed.Current.Loss);
+        Assert.Same(observed.Current.Status, runtime.Status);
     }
 
     [Fact]

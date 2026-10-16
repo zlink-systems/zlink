@@ -675,10 +675,22 @@ test('Actor replacement retains the session turn until callback terminal', async
   }
 });
 
-test('stalled Actor binding replacement callback is force-closed at its lifecycle deadline', async () => {
+test('stalled Actor binding replacement callback is force-closed at its lifecycle deadline', async (t) => {
+  const { ZLINK_DEFAULT_SERIAL_SCHEDULER_OPTIONS } = require(
+    '../../packages/framework/dist/runtime/execution/serial-execution-queue'
+  );
+  let schedulerNow = 0;
+  t.mock.method(performance, 'now', () => schedulerNow);
   const socket = new FakeStreamSocket();
   const clock = new FakeLivenessClock();
-  const events = [];
+  let dispatchOtherSession;
+  const otherSessionDispatched = new Promise(resolve => { dispatchOtherSession = resolve; });
+  let physicalClose;
+  const physicallyClosed = new Promise(resolve => { physicalClose = resolve; });
+  t.mock.method(socket, 'disconnectPeer', (routingId) => {
+    socket.disconnects.push(routingId);
+    if (routingId === 'session-a') physicalClose();
+  });
   let callbackStarted;
   const callbackDidStart = new Promise((resolve) => {
     callbackStarted = resolve;
@@ -686,6 +698,8 @@ test('stalled Actor binding replacement callback is force-closed at its lifecycl
   let releaseCallback;
   const callbackTerminal = new Promise((resolve) => { releaseCallback = resolve; });
   let disconnected = false;
+  let notifyDisconnected;
+  const didDisconnect = new Promise(resolve => { notifyDisconnected = resolve; });
   const runtime = createStreamRuntime({
     socket,
     livenessClock: clock,
@@ -697,12 +711,19 @@ test('stalled Actor binding replacement callback is force-closed at its lifecycl
           callbackStarted();
           await callbackTerminal;
         },
-        async onDisconnected() { disconnected = true; },
-        async onDispatch(header) {
-          events.push([context.sessionId, header.packetName]);
+        async onDisconnected() {
+          disconnected = true;
+          notifyDisconnected();
+        },
+        async onDispatch() {
+          if (context.sessionId === 'session-b') dispatchOtherSession();
         }
       };
     }
+  });
+  t.after(async () => {
+    releaseCallback();
+    await runtime.dispose();
   });
   runtime.start();
   runtime.markConnected('session-a');
@@ -723,24 +744,19 @@ test('stalled Actor binding replacement callback is force-closed at its lifecycl
   await callbackDidStart;
 
   socket.emitPacket('session-b', fakeHeader({ name: 'OtherSession' }), fakeJsonMessage('b'));
-  await waitForCondition(
-    () => events.some((event) => event[0] === 'session-b'),
-    'independent session dispatch while callback is pending'
-  );
+  await otherSessionDispatched;
   assert.deepEqual(socket.disconnects, []);
 
   await clock.advance(49);
   assert.deepEqual(socket.disconnects, []);
   await clock.advance(1);
-  await waitForCondition(
-    () => socket.disconnects.includes('session-a'),
-    'stalled replacement callback deadline close'
-  );
+  await physicallyClosed;
+  assert.deepEqual(socket.disconnects, ['session-a']);
   assert.equal(disconnected, false);
+  schedulerNow += ZLINK_DEFAULT_SERIAL_SCHEDULER_OPTIONS.ownerTimeBudget;
   releaseCallback();
-  await clock.flush();
+  await didDisconnect;
   assert.equal(disconnected, true);
-  await runtime.dispose();
 });
 
 test('STREAM application claim remains active through async handler terminal cleanup', async () => {
@@ -1906,6 +1922,53 @@ test('stream session node runtime preserves multipart raw parts while assembling
   await runtime.dispose();
 });
 
+test('STREAM receive readiness cycles retain a bounded number of pending promises', async (t) => {
+  const { createHook } = require('node:async_hooks');
+  const waits = Array.from({ length: 34 }, () => {
+    let enter;
+    const entered = new Promise(resolve => { enter = resolve; });
+    return { entered, enter };
+  });
+  let index = 0;
+  const pending = new Set();
+  const hook = createHook({
+    init(id, type) { if (type === 'PROMISE') pending.add(id); },
+    promiseResolve(id) { pending.delete(id); }
+  });
+  const runtime = createStreamRuntime({
+    socket: new FakeStreamSocket(),
+    readablePoller: {
+      wait() { return false; },
+      waitForReadable(signal) {
+        return new Promise(resolve => {
+          const done = () => {
+            signal.removeEventListener('abort', done);
+            resolve(false);
+          };
+          signal.addEventListener('abort', done, { once: true });
+          waits[index++].enter(done);
+        });
+      },
+      markDrained() {},
+      dispose() {}
+    }
+  });
+  t.after(async () => {
+    hook.disable();
+    await runtime.dispose();
+  });
+  hook.enable();
+  runtime.start();
+  let release = await waits[0].entered;
+  const initialPending = pending.size;
+  for (let cycle = 1; cycle < waits.length; cycle += 1) {
+    release();
+    release = await waits[cycle].entered;
+  }
+  assert.ok(pending.size <= initialPending,
+    `pending promises grew from ${initialPending} to ${pending.size}`);
+});
+
 test('stream session node runtime checks Poller readiness before Framework recv', async () => {
   const socket = new FakeStreamSocket();
   const waits = [];
@@ -2134,6 +2197,70 @@ test('stream session onDisconnected can explicitly notify bound actors before cl
   ]);
   assert.equal(await bindingRuntime.find('actor-a'), undefined);
 });
+
+const disconnectShutdownStressIterations = 100;
+for (const termination of ['logical', 'physical', 'disconnect-then-shutdown']) {
+  test(`actor unbound submission follows ${termination} session termination`, async () => {
+    const physical = termination !== 'logical';
+    const iterations =
+      termination === 'disconnect-then-shutdown' ? disconnectShutdownStressIterations : 1;
+    for (let iteration = 0; iteration < iterations; iteration++) {
+      const sessionId = 'unbound-termination-contract';
+      const socket = new FakeStreamSocket();
+      const bindingRuntime = new framework.ZLinkStreamBindingRuntime({
+        async notifyDisconnected() {}
+      });
+      let notifyConnected;
+      const connected = new Promise((resolve) => {
+        notifyConnected = resolve;
+      });
+      let context;
+      const runtime = new framework.ZLinkStreamSessionRuntime(
+        {
+          socket,
+          bindingRuntime,
+          sessionFactory(ctx) {
+            context = ctx;
+            return {
+              context: ctx,
+              onConnected() {
+                notifyConnected();
+              }
+            };
+          }
+        },
+        sessionId
+      );
+      try {
+        runtime.enqueueConnected();
+        await connected;
+        const actor = await context.actors.bind({
+          nodeRid: 'actor-node',
+          actorId: 'actor-a',
+          objectGeneration: 1n,
+          meshName: 'actors'
+        });
+        if (physical) {
+          if (termination === 'disconnect-then-shutdown') runtime.enqueueDisconnected();
+          await runtime.drainClose();
+          await runtime.dispose();
+          assert.deepEqual(socket.disconnects, [sessionId]);
+        } else {
+          await actor.notifyDisconnected();
+          assert.deepEqual(socket.disconnects, []);
+        }
+        const unbound = socket.sent.filter(({ bytes }) => {
+          return decodeServerSentFrame({ bytes }).header.name === '$zlink.actor.unbound';
+        });
+        assert.equal(unbound.length, physical ? 0 : 1);
+        assert.equal(await bindingRuntime.find('actor-a'), undefined);
+      } finally {
+        await runtime.dispose();
+      }
+    }
+  });
+}
+
 
 test('physical stream disconnect automatically notifies every captured actor and always cleans up', async () => {
   const socket = new FakeStreamSocket();

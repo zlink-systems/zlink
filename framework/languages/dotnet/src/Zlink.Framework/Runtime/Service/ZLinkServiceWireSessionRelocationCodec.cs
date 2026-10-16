@@ -44,7 +44,9 @@ internal static partial class ZLinkServiceWireCodec
         RelocationWireId RelocationId,
         RelocationCoordinatorFence Coordinator,
         SessionActorRouteFenceRecord Actor,
-        SessionOwnerFenceRecord Session
+        SessionOwnerFenceRecord Session,
+        ServiceWirePilotCodec.SessionSealResult SealResult =
+            ServiceWirePilotCodec.SessionSealResult.Sealed
     );
 
     internal readonly record struct SessionRelocationRouteUpdateRecord(
@@ -152,7 +154,8 @@ internal static partial class ZLinkServiceWireCodec
                 ToGenerated(record.RelocationId),
                 ToGenerated(record.Coordinator),
                 ToGenerated(record.Actor),
-                ToGenerated(record.Session)
+                ToGenerated(record.Session),
+                record.SealResult
             )
         );
     }
@@ -178,7 +181,8 @@ internal static partial class ZLinkServiceWireCodec
             FromGenerated(generated.Relocation),
             FromGenerated(generated.Coordinator),
             FromGeneratedActorFence(generated.Actor),
-            FromGenerated(generated.Session)
+            FromGenerated(generated.Session),
+            generated.SealResult
         );
         return true;
     }

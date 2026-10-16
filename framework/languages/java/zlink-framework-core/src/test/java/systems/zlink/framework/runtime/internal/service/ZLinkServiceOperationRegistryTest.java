@@ -13,6 +13,7 @@ import org.junit.jupiter.api.Test;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 
+import java.lang.reflect.Proxy;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -23,6 +24,8 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ForkJoinPool;
+import java.util.concurrent.ForkJoinTask;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
@@ -33,6 +36,345 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
 final class ZLinkServiceOperationRegistryTest {
+    @Test
+    void sendTerminalDoesNotDetachAPendingRequestDeadlineBucket() {
+        AtomicLong clock = new AtomicLong();
+        try (var scheduler = new CountingScheduler();
+                var registry =
+                        new ZLinkServiceOperationRegistry(
+                                scheduler, new IllegalStateException("closed"), clock::get)) {
+            var binding = new CompletableFuture<Void>();
+            var send = registry.submitSend(() -> binding);
+            // The first full wheel revolution shares slot zero with an unindexed SEND slot.
+            Duration timeout = Duration.ofMillis(256);
+            var request = registry.register(timeout);
+            scheduler.shutdown();
+            scheduler.close();
+            binding.complete(null);
+            assertNull(send.toCompletableFuture().join());
+            assertEquals(1, registry.pendingCount());
+            assertEquals(1, registry.expire(timeout.toNanos()));
+            assertTrue(
+                    assertThrows(CompletionException.class, request::join).getCause()
+                            instanceof TimeoutException);
+            assertEquals(0, registry.pendingCount());
+        }
+    }
+
+    @Test
+    void sendOnlyRegistryNeverSchedulesMaintenance() {
+        var scheduler = new MaintenanceScheduler();
+        try (var registry = new ZLinkServiceOperationRegistry(scheduler.executor)) {
+            assertEquals(0, scheduler.schedules);
+            var binding = new CompletableFuture<Void>();
+            var send = registry.submitSend(() -> binding);
+            assertEquals(1, registry.pendingCount());
+            assertEquals(0, scheduler.schedules);
+            binding.complete(null);
+            assertNull(send.toCompletableFuture().join());
+            assertEquals(0, scheduler.schedules);
+        }
+        assertEquals(0, scheduler.schedules);
+        assertFalse(scheduler.cancelled);
+    }
+
+    @Test
+    void firstRequestStartsMaintenanceOnceAndCloseCancelsIt() {
+        var scheduler = new MaintenanceScheduler();
+        AtomicLong clock = new AtomicLong(100);
+        var registry =
+                new ZLinkServiceOperationRegistry(
+                        scheduler.executor, new IllegalStateException("closed"), clock::get);
+        try (registry) {
+            assertEquals(0, scheduler.schedules);
+            var first = registry.register(Duration.ofNanos(10));
+            assertEquals(1, scheduler.schedules);
+            clock.set(109);
+            scheduler.command.run();
+            assertFalse(first.isDone());
+            clock.set(110);
+            scheduler.command.run();
+            assertFalse(first.isDone());
+            clock.set(100 + TimeUnit.MILLISECONDS.toNanos(1));
+            scheduler.command.run();
+            assertTrue(
+                    assertThrows(CompletionException.class, first::join).getCause()
+                            instanceof TimeoutException);
+            var second = registry.register(Duration.ofNanos(10));
+            assertEquals(1, scheduler.schedules);
+            assertFalse(scheduler.cancelled);
+            assertTrue(registry.discard(second.id()));
+        }
+        assertTrue(scheduler.cancelled);
+        assertEquals(1, scheduler.schedules);
+        assertThrows(IllegalStateException.class, () -> registry.register(Duration.ofSeconds(1)));
+        assertEquals(1, scheduler.schedules);
+    }
+
+    @Test
+    void sendIgnoresRequestDeadlineAndCallerCancellation() {
+        AtomicLong clock = new AtomicLong(100);
+        try (var scheduler = new CountingScheduler();
+                var registry =
+                        new ZLinkServiceOperationRegistry(
+                                scheduler, new IllegalStateException("closed"), clock::get)) {
+            var binding = new CompletableFuture<Void>();
+            var send = registry.submitSend(() -> binding);
+            var request = registry.register(Duration.ofNanos(10));
+            assertTrue(send.toCompletableFuture().cancel(false));
+            assertFalse(binding.isDone());
+            assertEquals(2, registry.pendingCount());
+            clock.set(110);
+            assertEquals(0, registry.expire(clock.get()));
+            clock.set(100 + TimeUnit.MILLISECONDS.toNanos(1));
+            assertEquals(1, registry.expire(clock.get()));
+            assertTrue(
+                    assertThrows(CompletionException.class, request::join).getCause()
+                            instanceof TimeoutException);
+            assertEquals(1, registry.pendingCount());
+            assertFalse(send.toCompletableFuture().isDone());
+            var cancelledRequest = registry.register(Duration.ofNanos(10));
+            assertTrue(cancelledRequest.cancel(false));
+            assertThrows(CancellationException.class, cancelledRequest::join);
+            assertEquals(1, registry.pendingCount());
+            binding.complete(null);
+            assertNull(send.toCompletableFuture().join());
+            assertEquals(0, registry.pendingCount());
+        }
+    }
+
+    @Test
+    void closeBetweenRegistrationAndObserverWinsAgainstAlreadyCompletedAdmission()
+            throws Exception {
+        var closeFailure = new IllegalStateException("closed");
+        try (var scheduler = new CountingScheduler();
+                var registry = new ZLinkServiceOperationRegistry(scheduler, closeFailure)) {
+            var send =
+                    registry.submitSend(
+                            () -> {
+                                assertEquals(1, registry.pendingCount());
+                                registry.close();
+                                return CompletableFuture.completedFuture(null);
+                            });
+            assertSame(
+                    closeFailure,
+                    assertThrows(CompletionException.class, () -> send.toCompletableFuture().join())
+                            .getCause());
+            assertEquals(0, registry.pendingCount());
+        }
+    }
+
+    @Test
+    void lateSendTerminalCannotCompleteReusedSlot() throws Exception {
+        try (var scheduler = new CountingScheduler();
+                var registry = new ZLinkServiceOperationRegistry(scheduler)) {
+            var oldBinding = new CompletableFuture<Void>();
+            var old = registry.submitSend(() -> oldBinding);
+            var active = ZLinkServiceOperationRegistry.class.getDeclaredField("activeHead");
+            active.setAccessible(true);
+            var oldEntry = active.get(registry);
+            var idField = oldEntry.getClass().getDeclaredField("id");
+            idField.setAccessible(true);
+            var oldId = (UUID) idField.get(oldEntry);
+            assertTrue(registry.discard(oldId));
+            var nextBinding = new CompletableFuture<Void>();
+            var next = registry.submitSend(() -> nextBinding);
+            assertSame(oldEntry, active.get(registry));
+            oldBinding.complete(null);
+            assertEquals(1, registry.pendingCount());
+            assertFalse(next.toCompletableFuture().isDone());
+            assertFalse(old.toCompletableFuture().isDone());
+            nextBinding.complete(null);
+            assertNull(next.toCompletableFuture().join());
+            assertEquals(0, registry.pendingCount());
+        }
+    }
+
+    @Test
+    void sendTerminalCallbackRunsOnDispatcherOutsideRegistryGate() throws Exception {
+        try (var scheduler = new CountingScheduler();
+                var registry = new ZLinkServiceOperationRegistry(scheduler)) {
+            var binding = new CompletableFuture<Void>();
+            var send = registry.submitSend(() -> binding);
+            var gateField = ZLinkServiceOperationRegistry.class.getDeclaredField("gate");
+            gateField.setAccessible(true);
+            var gate = gateField.get(registry);
+            var callback =
+                    send.thenRun(
+                            () -> {
+                                assertSame(ForkJoinPool.commonPool(), ForkJoinTask.getPool());
+                                assertTrue(ZLinkServiceCompletionDispatcher.isCurrentCompletion());
+                                assertFalse(Thread.holdsLock(gate));
+                                var request = registry.register(Duration.ofSeconds(1));
+                                assertTrue(registry.discard(request.id()));
+                            });
+            binding.complete(null);
+            callback.toCompletableFuture().get(5, TimeUnit.SECONDS);
+        }
+    }
+
+    @Test
+    void closeAndBindingTerminalRaceCompletesEachSendExactlyOnce() throws Exception {
+        try (var workers = Executors.newFixedThreadPool(2);
+                var scheduler = new CountingScheduler()) {
+            for (int index = 0; index < 32; index++) {
+                var closeFailure = new IllegalStateException("closed");
+                var routeLoss = new IllegalStateException("route lost");
+                boolean failAdmission = index % 2 == 0;
+                try (var registry = new ZLinkServiceOperationRegistry(scheduler, closeFailure)) {
+                    var binding = new CompletableFuture<Void>();
+                    var send = registry.submitSend(() -> binding);
+                    var callbacks = new AtomicInteger();
+                    var observed =
+                            send.handle(
+                                    (ignored, failure) -> {
+                                        callbacks.incrementAndGet();
+                                        return failure;
+                                    });
+                    var start = new java.util.concurrent.CyclicBarrier(3);
+                    var closing =
+                            workers.submit(
+                                    () -> {
+                                        start.await(5, TimeUnit.SECONDS);
+                                        registry.close();
+                                        return null;
+                                    });
+                    var admitting =
+                            workers.submit(
+                                    () -> {
+                                        start.await(5, TimeUnit.SECONDS);
+                                        if (failAdmission) binding.completeExceptionally(routeLoss);
+                                        else binding.complete(null);
+                                        return null;
+                                    });
+                    start.await(5, TimeUnit.SECONDS);
+                    closing.get(5, TimeUnit.SECONDS);
+                    admitting.get(5, TimeUnit.SECONDS);
+                    var failure = observed.toCompletableFuture().get(5, TimeUnit.SECONDS);
+                    if (failure != null) {
+                        var terminal =
+                                org.junit.jupiter.api.Assertions.assertInstanceOf(
+                                                CompletionException.class, failure)
+                                        .getCause();
+                        assertTrue(
+                                terminal == closeFailure
+                                        || (failAdmission && terminal == routeLoss));
+                    } else assertFalse(failAdmission);
+                    assertEquals(1, callbacks.get());
+                    assertEquals(0, registry.pendingCount());
+                }
+            }
+        }
+    }
+
+    @Test
+    void registrationUsesTheCallerResultAsItsHandle() {
+        try (var scheduler = java.util.concurrent.Executors.newSingleThreadScheduledExecutor();
+                var registry = new ZLinkServiceOperationRegistry(scheduler)) {
+            var operation = registry.register(java.time.Duration.ofSeconds(5));
+            org.junit.jupiter.api.Assertions.assertSame(operation, operation.completion());
+            registry.discard(operation.id());
+        }
+    }
+
+    @Test
+    void wheelHandlesMixedDeadlinesAndIdentities() {
+        AtomicLong clock = new AtomicLong();
+        try (var scheduler = new CountingScheduler();
+                var registry =
+                        new ZLinkServiceOperationRegistry(
+                                scheduler, new IllegalStateException("closed"), clock::get)) {
+            List<ZLinkServiceOperationRegistry.Operation<Object>> operations = new ArrayList<>();
+            for (int index = 0; index < 100; index++) {
+                int timeout = (index * 37 % 100) + 1;
+                operations.add(
+                        registry.register(
+                                new UUID(index % 2, index + 1), Duration.ofMillis(timeout)));
+            }
+            scheduler.shutdown();
+            scheduler.close();
+            assertEquals(50, registry.expire(TimeUnit.MILLISECONDS.toNanos(50)));
+            for (int index = 0; index < operations.size(); index++) {
+                int timeout = (index * 37 % 100) + 1;
+                if (timeout <= 50)
+                    assertThrows(
+                            CompletionException.class, operations.get(index).completion()::join);
+                else assertFalse(operations.get(index).completion().isDone());
+            }
+            assertEquals(50, registry.expire(TimeUnit.MILLISECONDS.toNanos(100)));
+            assertEquals(0, registry.pendingCount());
+        }
+    }
+
+    @Test
+    void expirationYieldsAtTheManagementBudgetAndResumesAfterTerminalRemoval() {
+        AtomicLong clock = new AtomicLong();
+        try (var scheduler = new CountingScheduler();
+                var registry =
+                        new ZLinkServiceOperationRegistry(
+                                scheduler,
+                                new IllegalStateException("closed"),
+                                () -> {
+                                    clock.addAndGet(
+                                            systems.zlink.framework.runtime.internal.dispatch
+                                                    .ZLinkReceiveBatchBudget
+                                                    .DEFAULT_MAX_ELAPSED_NANOS);
+                                    return new TimeoutException("expired");
+                                },
+                                clock::get)) {
+            var first = registry.register(Duration.ofMillis(1));
+            var removed = registry.register(Duration.ofMillis(1));
+            var last = registry.register(Duration.ofMillis(1));
+
+            scheduler.shutdown();
+            scheduler.close();
+            assertEquals(1, registry.expire(TimeUnit.MILLISECONDS.toNanos(1)));
+            assertTrue(registry.discard(removed.id()));
+            assertEquals(1, registry.expire(clock.get()));
+            assertEquals(0, registry.pendingCount());
+            assertThrows(CompletionException.class, first.completion()::join);
+            assertThrows(CompletionException.class, last.completion()::join);
+        }
+    }
+
+    @Test
+    void roundsOnlyVisitsYieldAtTheManagementBudgetAndResumeFromTheCursor() {
+        long budget =
+                systems.zlink.framework.runtime.internal.dispatch.ZLinkReceiveBatchBudget
+                        .DEFAULT_MAX_ELAPSED_NANOS;
+        AtomicLong clock = new AtomicLong();
+        AtomicLong step = new AtomicLong();
+        try (var scheduler = new CountingScheduler();
+                var registry =
+                        new ZLinkServiceOperationRegistry(
+                                scheduler,
+                                new IllegalStateException("closed"),
+                                () -> clock.getAndAdd(step.get()))) {
+            List<ZLinkServiceOperationRegistry.Operation<Object>> later = new ArrayList<>();
+            for (int index = 0; index < 8; index++)
+                later.add(registry.register(Duration.ofMillis(257)));
+            var due = registry.register(Duration.ofMillis(1));
+            scheduler.shutdown();
+            scheduler.close();
+            // §4.2: every slot visit, a rounds-only one included, reads the management budget
+            // counted from entry; four reads exhaust it.
+            step.set(budget / 4);
+            long tick = TimeUnit.MILLISECONDS.toNanos(1);
+
+            assertEquals(0, registry.expire(tick));
+            assertFalse(due.completion().isDone());
+            int turns = 1;
+            while (registry.expire(tick) == 0) assertTrue(++turns < 9);
+            assertThrows(CompletionException.class, due.completion()::join);
+            assertEquals(8, registry.pendingCount());
+            for (var operation : later) assertFalse(operation.completion().isDone());
+
+            step.set(0);
+            assertEquals(8, registry.expire(TimeUnit.MILLISECONDS.toNanos(257)));
+            assertEquals(0, registry.pendingCount());
+        }
+    }
+
     @Test
     void oneMaintenanceTaskServesEveryPendingDeadlineAndExpiresAtTheBoundary() {
         AtomicLong clock = new AtomicLong(100);
@@ -45,8 +387,13 @@ final class ZLinkServiceOperationRegistryTest {
 
             assertEquals(1, scheduler.fixedRateSchedules.get());
             assertEquals(0, scheduler.otherSchedules.get());
+            // The scheduled maintenance would race the explicit expiries below and take
+            // entries from a slot already under the cursor; the test drives every turn.
+            scheduler.shutdownNow();
+            // Hot-path E3: timer-wheel deadlines expire at the next 1ms tick, never early.
             assertEquals(0, registry.expire(109));
-            assertEquals(2, registry.expire(110));
+            assertEquals(0, registry.expire(110));
+            assertEquals(2, registry.expire(100 + TimeUnit.MILLISECONDS.toNanos(1)));
             assertEquals(0, registry.pendingCount());
             assertTrue(
                     assertThrows(CompletionException.class, first.completion()::join).getCause()
@@ -59,18 +406,49 @@ final class ZLinkServiceOperationRegistryTest {
 
     @Test
     void deadlineComparisonSurvivesNanoTimeWraparound() {
-        AtomicLong clock = new AtomicLong(Long.MAX_VALUE - 2);
+        long tickNanos = TimeUnit.MILLISECONDS.toNanos(1);
+        long origin = Long.MAX_VALUE - tickNanos;
+        Duration timeout = Duration.ofMillis(2);
+        AtomicLong clock = new AtomicLong(origin);
         try (var scheduler = new CountingScheduler();
                 var registry =
                         new ZLinkServiceOperationRegistry(
                                 scheduler, new IllegalStateException("closed"), clock::get)) {
-            var operation = registry.register(Duration.ofNanos(5));
+            var operation = registry.register(timeout);
+            long deadline = origin + timeout.toNanos();
 
+            scheduler.shutdown();
+            scheduler.close();
+            assertTrue(deadline < 0);
             assertEquals(0, registry.expire(Long.MAX_VALUE));
-            assertEquals(1, registry.expire(Long.MIN_VALUE + 2));
+            assertFalse(operation.completion().isDone());
+            assertEquals(0, registry.expire(deadline - 1));
+            assertFalse(operation.completion().isDone());
+            clock.set(deadline + 1);
+            assertEquals(1, registry.expire(clock.get()));
             assertTrue(
                     assertThrows(CompletionException.class, operation.completion()::join).getCause()
                             instanceof TimeoutException);
+            assertEquals(0, registry.pendingCount());
+        }
+    }
+
+    @Test
+    void wheelRoundsDoNotExpireInEarlierRevolutions() {
+        AtomicLong clock = new AtomicLong();
+        try (var scheduler = new CountingScheduler();
+                var registry =
+                        new ZLinkServiceOperationRegistry(
+                                scheduler, new IllegalStateException("closed"), clock::get)) {
+            var operation = registry.register(Duration.ofMillis(513));
+            scheduler.shutdown();
+            scheduler.close();
+            // Hot-path E3: occupied-slot visits preserve the remaining wheel rounds.
+            assertEquals(0, registry.expire(TimeUnit.MILLISECONDS.toNanos(1)));
+            assertEquals(0, registry.expire(TimeUnit.MILLISECONDS.toNanos(257)));
+            assertEquals(0, registry.expire(TimeUnit.MILLISECONDS.toNanos(512)));
+            assertEquals(1, registry.expire(TimeUnit.MILLISECONDS.toNanos(513)));
+            assertThrows(CompletionException.class, operation.completion()::join);
         }
     }
 
@@ -207,7 +585,9 @@ final class ZLinkServiceOperationRegistryTest {
                                             ignored -> {}));
             try {
                 assertTrue(entered.await(1, TimeUnit.SECONDS));
-                var expiry = workers.submit(() -> registry.expire(1L));
+                // Hot-path E3: expiry runs at the first 1ms timer-wheel tick after the deadline.
+                var expiry =
+                        workers.submit(() -> registry.expire(TimeUnit.MILLISECONDS.toNanos(1)));
                 assertEquals(1, expiry.get(1, TimeUnit.SECONDS));
                 assertEquals(0, registry.pendingCount());
             } finally {
@@ -275,10 +655,10 @@ final class ZLinkServiceOperationRegistryTest {
         try (var scheduler = Executors.newSingleThreadScheduledExecutor();
                 var registry = new ZLinkServiceOperationRegistry(scheduler)) {
             var operation = registry.register(Duration.ofSeconds(1));
-            var entriesField = ZLinkServiceOperationRegistry.class.getDeclaredField("entries");
-            entriesField.setAccessible(true);
-            var entries = (java.util.Map<?, ?>) entriesField.get(registry);
-            Object entry = entries.get(operation.id());
+            var lookup =
+                    ZLinkServiceOperationRegistry.class.getDeclaredMethod("findEntry", UUID.class);
+            lookup.setAccessible(true);
+            Object entry = lookup.invoke(registry, operation.id());
             for (var field : entry.getClass().getDeclaredFields()) {
                 if (Throwable.class.isAssignableFrom(field.getType())) {
                     field.setAccessible(true);
@@ -287,6 +667,23 @@ final class ZLinkServiceOperationRegistryTest {
             }
             assertTrue(registry.complete(operation.id(), "success"));
             assertEquals("success", operation.completion().join());
+        }
+    }
+
+    @Test
+    void discardedCallerCannotCancelAReusedPendingSlot() {
+        try (var scheduler = Executors.newSingleThreadScheduledExecutor();
+                var registry = new ZLinkServiceOperationRegistry(scheduler)) {
+            UUID id = UUID.randomUUID();
+            for (int index = 0; index < 256; index++) {
+                var old = registry.register(id, Duration.ofSeconds(5));
+                assertTrue(registry.discard(id));
+                var current = registry.register(id, Duration.ofSeconds(5));
+                assertFalse(old.completion().cancel(false));
+                assertEquals(1, registry.pendingCount());
+                assertFalse(current.completion().isDone());
+                assertTrue(registry.discard(id));
+            }
         }
     }
 
@@ -419,19 +816,26 @@ final class ZLinkServiceOperationRegistryTest {
         try (ZLinkServiceOperationRegistry registry =
                 new ZLinkServiceOperationRegistry(scheduler)) {
             var operation = registry.register(Duration.ofSeconds(1));
-            var callbackThread = new java.util.concurrent.CompletableFuture<String>();
-            String callerThread = Thread.currentThread().getName();
+            var callbackThread = new CompletableFuture<Thread>();
+            var completionPool = new AtomicReference<ForkJoinPool>();
+            var completionContext = new AtomicReference<Boolean>();
+            Thread callerThread = Thread.currentThread();
             operation
                     .completion()
                     .whenComplete(
-                            (ignored, failure) ->
-                                    callbackThread.complete(Thread.currentThread().getName()));
+                            (ignored, failure) -> {
+                                completionPool.set(ForkJoinTask.getPool());
+                                completionContext.set(
+                                        ZLinkServiceCompletionDispatcher.isCurrentCompletion());
+                                callbackThread.complete(Thread.currentThread());
+                            });
 
             assertTrue(registry.complete(operation.id(), "reply"));
-            String actualThread = callbackThread.orTimeout(1, TimeUnit.SECONDS).join();
+            Thread actualThread = callbackThread.orTimeout(1, TimeUnit.SECONDS).join();
             assertEquals("reply", operation.completion().join());
             assertNotEquals(callerThread, actualThread);
-            assertEquals("zlink-jvm-service-completion", actualThread);
+            assertSame(ForkJoinPool.commonPool(), completionPool.get());
+            assertTrue(completionContext.get());
         } finally {
             scheduler.shutdownNow();
         }
@@ -543,6 +947,58 @@ final class ZLinkServiceOperationRegistryTest {
         }
     }
 
+    @Test
+    void concurrentTerminalProducersKeepTheirPublicationOrder() throws Exception {
+        ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
+        var producers = Executors.newFixedThreadPool(4);
+        try (ZLinkServiceOperationRegistry registry =
+                new ZLinkServiceOperationRegistry(scheduler)) {
+            List<List<ZLinkServiceOperationRegistry.Operation<Integer>>> operations =
+                    new ArrayList<>();
+            List<List<Integer>> observed = new ArrayList<>();
+            CountDownLatch start = new CountDownLatch(1);
+            CountDownLatch callbacks = new CountDownLatch(256);
+            for (int producer = 0; producer < 4; producer++) {
+                List<ZLinkServiceOperationRegistry.Operation<Integer>> pending = new ArrayList<>();
+                List<Integer> values = new java.util.concurrent.CopyOnWriteArrayList<>();
+                observed.add(values);
+                for (int index = 0; index < 64; index++) {
+                    var operation = registry.<Integer>register(Duration.ofHours(1));
+                    operation
+                            .completion()
+                            .thenAccept(
+                                    value -> {
+                                        values.add(value);
+                                        callbacks.countDown();
+                                    });
+                    pending.add(operation);
+                }
+                operations.add(pending);
+            }
+            List<java.util.concurrent.Future<?>> submitted = new ArrayList<>();
+            for (var pending : operations) {
+                submitted.add(
+                        producers.submit(
+                                () -> {
+                                    await(start);
+                                    for (int index = 0; index < pending.size(); index++) {
+                                        assertTrue(
+                                                registry.complete(pending.get(index).id(), index));
+                                    }
+                                }));
+            }
+            start.countDown();
+            for (var submission : submitted) submission.get(5, TimeUnit.SECONDS);
+            assertTrue(callbacks.await(5, TimeUnit.SECONDS));
+            List<Integer> expected = java.util.stream.IntStream.range(0, 64).boxed().toList();
+            for (var values : observed) assertEquals(expected, values);
+            assertEquals(0, registry.pendingCount());
+        } finally {
+            producers.shutdownNow();
+            scheduler.shutdownNow();
+        }
+    }
+
     private static void await(CountDownLatch latch) {
         try {
             latch.await();
@@ -550,6 +1006,43 @@ final class ZLinkServiceOperationRegistryTest {
             Thread.currentThread().interrupt();
             throw new IllegalStateException(interrupted);
         }
+    }
+
+    private static final class MaintenanceScheduler {
+        private int schedules;
+        private boolean cancelled;
+        private Runnable command;
+        private final ScheduledFuture<?> future =
+                (ScheduledFuture<?>)
+                        Proxy.newProxyInstance(
+                                ScheduledFuture.class.getClassLoader(),
+                                new Class<?>[] {ScheduledFuture.class},
+                                (proxy, method, args) -> {
+                                    if (method.getName().equals("cancel")) {
+                                        assertEquals(false, args[0]);
+                                        cancelled = true;
+                                        return true;
+                                    }
+                                    throw new AssertionError(method);
+                                });
+        private final ScheduledExecutorService executor =
+                (ScheduledExecutorService)
+                        Proxy.newProxyInstance(
+                                ScheduledExecutorService.class.getClassLoader(),
+                                new Class<?>[] {ScheduledExecutorService.class},
+                                (proxy, method, args) -> {
+                                    assertEquals("scheduleAtFixedRate", method.getName());
+                                    schedules++;
+                                    command = (Runnable) args[0];
+                                    TimeUnit unit = (TimeUnit) args[3];
+                                    assertEquals(
+                                            Duration.ofMillis(1).toNanos(),
+                                            unit.toNanos((long) args[1]));
+                                    assertEquals(
+                                            Duration.ofMillis(1).toNanos(),
+                                            unit.toNanos((long) args[2]));
+                                    return future;
+                                });
     }
 
     private static final class CountingScheduler extends ScheduledThreadPoolExecutor {

@@ -39,6 +39,7 @@ class zlink_builder_t;
 
 namespace zlink::framework::detail
 {
+class delay_owner_t;
 
 std::string canonical_actor_join_handoff_id (const std::vector<std::uint8_t> &source_actor_node_rid,
                                              std::string_view actor_id,
@@ -159,10 +160,6 @@ struct bound_session_relocation_route_t
     location_owner_token_t session_owner;
     zlink::routing_id_t session;
     std::uint64_t binding_generation = 0;
-    std::uint64_t observed_sequence = 0;
-
-    friend bool operator== (const bound_session_relocation_route_t &,
-                            const bound_session_relocation_route_t &) = default;
 };
 
 class mesh_node_runtime_t
@@ -184,6 +181,7 @@ class mesh_node_runtime_t
     void cancel_pending_dispatch_waits () noexcept;
     void signal_dispatch_activity ();
     void bind_serializers (serializer_registry_t &serializers) noexcept;
+    void bind_delay_owner (delay_owner_t &owner) noexcept { _delay_owner = &owner; }
     void bind_descriptor_publisher (
       std::function<void (const std::map<std::string, int> &, int, std::uint64_t)> publisher);
     void configure_user_spot_operations (std::shared_ptr<location_repository_t> store,
@@ -251,7 +249,8 @@ class mesh_node_runtime_t
     void connect_peer (const zlink::routing_id_t &expected_routing_id,
                        const std::string &endpoint,
                        std::uint64_t expected_lifecycle_generation = 0,
-                       std::string security_identity = "default");
+                       std::string security_identity = "default",
+                       bool automatic = false);
     void connect_peer (const std::string &endpoint, std::string security_identity = "default");
     void expect_peer (const zlink::routing_id_t &expected_routing_id,
                       const std::string &endpoint,
@@ -260,7 +259,8 @@ class mesh_node_runtime_t
     void forget_peer (const zlink::routing_id_t &expected_routing_id, const std::string &endpoint);
     void disconnect_peer (const std::string &endpoint) noexcept;
     void disconnect_peer (const zlink::routing_id_t &expected_routing_id,
-                          const std::string &endpoint) noexcept;
+                          const std::string &endpoint,
+                          bool automatic = false) noexcept;
     bool wait_for_peer_ready (const zlink::routing_id_t &target,
                               std::chrono::milliseconds timeout) const;
 
@@ -522,10 +522,8 @@ class mesh_node_runtime_t
     struct session_relocation_checkpoint_t
     {
         runtime::stateful::object_ref_t source;
-        authority_snapshot_t authority;
         bound_session_relocation_route_t session;
         host::session_relocation_seal_result_t seal;
-        std::uint64_t seal_boundary_sequence = 0;
     };
 
     struct session_relocation_seal_outcome_t
@@ -552,8 +550,11 @@ class mesh_node_runtime_t
     prepare_remote_application_actor_join (std::shared_ptr<remote_actor_join_state_t> state);
     task_t<actor_join_reply_t>
     finalize_remote_application_actor_join (std::shared_ptr<remote_actor_join_state_t> state);
-    task_t<result_t<void>> deliver_remote_actor_join (const remote_actor_join_state_t &state,
-                                                      const result_t<actor_join_reply_t> &joined);
+    task_t<result_t<void>> deliver_actor_join (actor_ref_t actor,
+                                               std::optional<spot_id_t> source_spot,
+                                               std::uint64_t operation_high,
+                                               std::uint64_t operation_low,
+                                               const result_t<actor_join_reply_t> &joined);
     task_t<actor_join_reply_t> fail_remote_actor_join (const remote_actor_join_state_t &state,
                                                        const result_t<actor_join_reply_t> &failed,
                                                        std::string message);
@@ -580,25 +581,20 @@ class mesh_node_runtime_t
       runtime::protocol::relocation_coordinator_fence_t coordinator,
       std::chrono::milliseconds timeout,
       std::chrono::steady_clock::time_point operation_deadline);
-    task_t<std::optional<std::vector<runtime::protocol::session_relocation_route_t>>>
-    capture_session_routes (
+    task_t<std::optional<std::vector<runtime::stateful::relocation_session_binding_t>>>
+    capture_session_bindings (
       std::vector<std::pair<runtime::stateful::object_ref_t, authority_snapshot_t>> participants,
       runtime::protocol::relocation_id_t relocation,
       runtime::protocol::relocation_coordinator_fence_t coordinator,
-      mesh_node_descriptor_t target,
       std::shared_ptr<session_relocation_seal_outcome_t> outcome,
       std::shared_ptr<bool> attempted,
       std::chrono::steady_clock::time_point operation_deadline);
-    runtime::protocol::session_relocation_route_t make_session_relocation_route (
-      const session_relocation_checkpoint_t &checkpoint,
-      const zlink::routing_id_t &target_node,
-      std::uint64_t target_node_generation,
-      std::uint64_t target_owner_lease_generation,
-      runtime::protocol::session_relocation_route_action_t action) const;
+    static runtime::stateful::relocation_session_binding_t
+    make_session_binding (const session_relocation_checkpoint_t &checkpoint);
+    runtime::protocol::session_relocation_route_t
+    make_session_relocation_abort (const session_relocation_checkpoint_t &checkpoint) const;
     task_t<bool>
-    route_bound_sessions (const std::vector<session_relocation_checkpoint_t> &checkpoints,
-                          const mesh_node_descriptor_t &target,
-                          runtime::protocol::session_relocation_route_action_t action);
+    abort_bound_sessions (const std::vector<session_relocation_checkpoint_t> &checkpoints);
 
     struct peer_callback_gate_t
     {
@@ -660,6 +656,7 @@ class mesh_node_runtime_t
     std::function<void (const std::map<std::string, int> &, int, std::uint64_t)>
       _descriptor_publisher;
     std::shared_ptr<host::public_host_runtime_t> _node;
+    delay_owner_t *_delay_owner = nullptr;
     std::shared_ptr<peer_callback_gate_t> _peer_callback_gate =
       std::make_shared<peer_callback_gate_t> ();
     runtime::offload_executor_t _message_follow_subscription_lane_executor;

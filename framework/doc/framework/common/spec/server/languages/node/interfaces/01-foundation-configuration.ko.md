@@ -207,7 +207,7 @@ export interface ZLinkMeshObjectClientBuilder {
 }
 
 export interface ZLinkMeshObjectServerBuilder {
- addEntrySpot<TEntrySpot extends ZLinkEntrySpot>(entrySpotType: Type<TEntrySpot>): this;
+ addEntrySpot<TEntrySpot extends ZLinkEntrySpot>(entrySpotType: Type<TEntrySpot>, actorType: string): this;
  addSpotFactory<TSpot extends ZLinkSpot>(
  spotType: string,
  implementation: Type<TSpot>,
@@ -264,6 +264,8 @@ export interface ZLinkCodecRegistryBuilder {
 }
 ```
 
+`addEntrySpot`의 `actorType`은 그 Entry Spot type이 받는 Actor stable type이며 `addActorFactory`의 `actorType`과 같은 이름을 쓴다. TypeScript의 Actor type 인자는 실행 중에 남지 않으므로 Node.js는 이 값으로 Entry Spot이 받는 type을 안다. 새 Actor 생성 후보 판정은 [Actor model §6.3](../../../03-spot-actor/04-actor-model.ko.md#63-mesh와-placement-target-선택)이 정한다.
+
 Codec registrar의 `contentType`에는 parameter가 없는 ASCII `type/subtype`을 전달한다. Registry는
 startup에 값 앞뒤의 SP와 TAB을 제거하고 ASCII 대문자를 소문자로 바꾼다. 이 결과가 registry에서
 사용하는 canonical content-type이다. Parameter, 값 내부의 공백 또는 non-ASCII token이 있으면
@@ -288,7 +290,7 @@ Registry는 startup 뒤 바뀌지 않는다. 송신 선택 결과는 declared ty
 않았거나 canonical form이 아닌 값은 JSON으로 다시 해석하지 않고
 `ZLinkFrameworkErrorKind.ProtocolError`로 완료한다.
 
-Entry Spot 등록은 구현 type만 받는다. Entry Spot의 `SpotId`는 Framework가
+Entry Spot 등록은 구현 type과 그 Entry Spot이 받는 Actor stable type만 받는다. Entry Spot의 `SpotId`는 Framework가
 `<prefix>-entry-<lowercase-canonical-uuid-v4>` 형식으로 발급한다. caller가 fixed `RoutingId`나
 `SpotId`를 지정하는 option은 제공하지 않는다.
 

@@ -27,8 +27,8 @@ Application 공개 API나 공통 native runtime을 제공하지 않는다.
 - `golden/instance-activation-recovery-v1.json`: target-owned cold activation의 source·target lifecycle,
   operation·reply·deadline, command 39 metadata presence·frame과 complete first application payload를 복원하는
   immutable envelope golden fixture
-- `golden/relocation-envelope-v1.json`: 네 runtime이 Relocation Store가 단독 소유하는 non-empty saved work·timer
-  bytes를 읽고 쓰는 golden fixture
+- `golden/relocation-envelope-v1.json`: 네 runtime이 Relocation Store가 단독 소유하는 non-empty saved work·timer와
+  seal한 Session binding bytes를 읽고 쓰는 golden fixture
 - `golden/reply-relay-v1.json`: maintenance request의 terminal reply relay command 33과 exact source fence를
   닫는 ACK command 46을 네 runtime codec이 같은 bytes로 읽고 쓰는 golden fixture
 - `golden/relocation-control-v1.json`: maintenance relocation의 Ready reply·post-capture ingress Data·one-way

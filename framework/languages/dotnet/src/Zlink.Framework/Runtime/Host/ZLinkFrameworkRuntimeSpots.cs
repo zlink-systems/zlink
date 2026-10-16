@@ -181,21 +181,13 @@ internal sealed partial class ZLinkFrameworkRuntime
     }
 
     internal async ValueTask<bool> CloseCurrentSpotAsync(
-        string spotNodeName,
-        string spotId,
-        ulong objectGeneration,
+        ZLinkSpotActivation activation,
         CancellationToken cancellationToken
     )
     {
         using var operation = (await AdmitOperationAsync().ConfigureAwait(false)).Enter();
         return await _spots
-            .CloseLocalByIdAsync(
-                GetOrStartState(),
-                spotNodeName,
-                spotId,
-                objectGeneration,
-                cancellationToken
-            )
+            .CloseFromContextAsync(GetOrStartState(), activation, cancellationToken)
             .ConfigureAwait(false);
     }
 
@@ -270,19 +262,24 @@ internal sealed partial class ZLinkFrameworkRuntime
     /// <summary>The registered MeshNode for a physical mesh. ChannelName
     /// select-one calls (IZLinkRouteClient) submit through this node's entry
     /// spot so weight, ready and drain admission stay Core-owned (spec 11 §3).</summary>
+    /// <remarks>SpotNodes is written only while the state is created, before
+    /// the Running publication that <see cref="GetOrStartState"/> reads, so a
+    /// send reads it without a state-lane turn (spec 08 §3 E2).</remarks>
     internal ZLinkSpotNodeRuntime GetMeshNodeRuntime(string meshName) =>
-        AwaitStateLane(GetMeshNodeRuntimeAsync(meshName));
+        GetOrStartState().SpotNodes.TryGetValue(meshName, out var nodeRuntime)
+            ? nodeRuntime
+            : throw new ZLinkConfigurationException($"RouteMesh '{meshName}' is not registered.");
 
     internal ValueTask<ZLinkSpotNodeRuntime> GetMeshNodeRuntimeAsync(string meshName)
     {
-        var state = GetOrStartState();
-        return state.RunStateAsync(() =>
-            state.SpotNodes.TryGetValue(meshName, out var nodeRuntime)
-                ? nodeRuntime
-                : throw new ZLinkConfigurationException(
-                    $"RouteMesh '{meshName}' is not registered."
-                )
-        );
+        try
+        {
+            return ValueTask.FromResult(GetMeshNodeRuntime(meshName));
+        }
+        catch (Exception failure)
+        {
+            return ValueTask.FromException<ZLinkSpotNodeRuntime>(failure);
+        }
     }
 
     internal ValueTask<ZLinkSpotNodeRuntime> ResolveRouteMeshNodeForChannelAsync(string channelName)

@@ -259,24 +259,29 @@ processes.
 | --- | --- | --- |
 | One-way packet in front of a User Spot | `ZLinkSpotPacketHandler<TSpot, TMessage>` | `@ZLinkPacket` |
 | Request in front of a User Spot | `ZLinkSpotRequestHandler<TSpot, TRequest, TReply>` | `@ZLinkSpotRequest` |
-| A Logical Multicast subscription event | `ZLinkSpotSubscriptionHandler<TSpot, TEvent>` | `@ZLinkSpotSubscription(spotNodeName, topic)` |
+| A Logical Multicast subscription event | `ZLinkSpotSubscriptionHandler<TSpot, TEvent>` | `@ZLinkSpotSubscription(spotNodeName = "game", channelName = "events", topic = "orders")` |
 | A one-way packet in front of a User Spot's member Actor | `ZLinkSpotActorSendHandler<TSpot, TActor, TMessage>` | `@ZLinkSpotActorSend` |
 | A request in front of a User Spot's member Actor | `ZLinkSpotActorRequestHandler<TSpot, TActor, TRequest, TReply>` | `@ZLinkSpotActorRequest` |
 | A Spot's periodic timer | `ZLinkSpotTimerHandler<TSpot>` | `@ZLinkSpotTimer(name, periodMillis)` |
 | A packet in front of an Instance Spot | The same shape as a User Spot's packet handler | `@ZLinkPacket` |
 
 `ZLinkSpotHandlerRegistry.addHandler(Class<?>)` and
-`ZLinkInstanceSpotHandlerRegistry.addPacket(Class<?>)` are single registration methods that do not
-distinguish handler kind — the annotation and implemented interface determine the actual role.
+`ZLinkInstanceSpotHandlerRegistry.addPacket(Class<?>)` determine the handler kind from the annotation and implemented interface.
 
 **Completion result.** Registers synchronously with no return value. Omitting the packet name
 uses the annotation's `value()`/`packetName()`, and the type name if there is no annotation
-either. A duplicate handler key under the same owner surfaces as a `ZLinkConfigurationException`
-in startup validation.
+either. For a duplicate handler key within the same owner, the check timing and failure outcome follow [Common API "23"](../../common/spec/server/00-foundation/06-framework-api.en.md#23-startup-validation).
 
 **When to use.** Registers every handler this Spot will process, each time `configure()` is
 called. See the registration entries in the topology-discovery category for Node/Channel
 handlers, and the stream-session category for STREAM session handlers.
+
+Register a channel and topic determined at runtime as follows. The annotation is optional;
+when present, its registration is a separate subscription. Duplicate rejection follows [Spot messaging §5.1](../../common/spec/server/03-spot-actor/02-spot-messaging.en.md#51-subscription-registration-values-and-when-they-are-checked).
+
+```java
+context().handlers().addSubscribe(ProjectionUpdatedHandler.class, channelName, topic);
+```
 
 ---
 

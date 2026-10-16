@@ -1,3 +1,4 @@
+import { routingIdsEqual, toBackendRoutingId } from '../routing-id';
 import {
   ServiceRelocationAuthorityPayloadCodec,
   serviceRelocationAuthorityApplicationPayload
@@ -2682,13 +2683,27 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         currentRow.kind === 'found'
           ? { kind: 'version', key: rowKey, expected: currentRow.value.version }
           : { kind: 'missing', key: rowKey };
-      const result = await this.provider.write(
-        {
-          conditions: [leaseValueCondition(leaseKey, { ownerId, leaseGeneration }), rowCondition],
-          mutations: [{ kind: 'put', key: rowKey, bytes: encodedDescriptor }]
-        },
-        signal
-      );
+      let result: Awaited<ReturnType<ZLinkLocationStore['write']>>;
+      try {
+        result = await this.provider.write(
+          {
+            conditions: [leaseValueCondition(leaseKey, { ownerId, leaseGeneration }), rowCondition],
+            mutations: [{ kind: 'put', key: rowKey, bytes: encodedDescriptor }]
+          },
+          signal
+        );
+      } catch (failure) {
+        // Location runtime §10: the Store may have applied a write whose result
+        // was lost. Re-read the same key; the same bytes confirm the write.
+        const confirmed = await this.provider.read(rowKey, signal).catch(() => undefined);
+        if (
+          confirmed?.kind === 'found' &&
+          Buffer.from(confirmed.value.bytes).equals(Buffer.from(encodedDescriptor))
+        ) {
+          return { status: WriteStatus.Stored, generation, updatedAt: confirmed.value.storeNow };
+        }
+        throw failure;
+      }
       if (result.kind === 'applied') {
         return { status: WriteStatus.Stored, generation, updatedAt: result.storeNow };
       }
@@ -4202,7 +4217,7 @@ function liveTargetDescriptor(
   );
   const lease = decodeOwnerRecord(leaseRead.value.bytes);
   return descriptor.meshName === target.meshName &&
-    String(descriptor.rid) === String(target.nodeRid) &&
+    routingIdsEqual(descriptor.rid, toBackendRoutingId(target.nodeRid)) &&
     descriptor.lifecycleGeneration === target.nodeLifecycleGeneration &&
     descriptor.ownerId === target.owner.ownerId &&
     descriptor.leaseGeneration === target.owner.leaseGeneration &&
@@ -4337,7 +4352,7 @@ function sameCreationTarget(
 ): boolean {
   return (
     snapshot.allocation.descriptor.meshName === target.meshName &&
-    String(snapshot.allocation.descriptor.rid) === String(target.nodeRid) &&
+    routingIdsEqual(snapshot.allocation.descriptor.rid, target.nodeRid) &&
     snapshot.allocation.descriptorLifecycleGeneration === target.nodeLifecycleGeneration &&
     snapshot.ownerId === target.owner.ownerId &&
     snapshot.ownerLeaseGeneration === target.owner.leaseGeneration
@@ -4413,10 +4428,6 @@ function canTakeOverStoredLocation(
     currentLeaseGeneration !== nextLeaseGeneration &&
     liveLeaseGeneration === nextLeaseGeneration
   );
-}
-
-function persistMeshDescriptor(descriptor: ZLinkMeshNodeDescriptor): ZLinkMeshNodeDescriptor {
-  return descriptor;
 }
 
 function reviveMeshDescriptor(descriptor: ZLinkMeshNodeDescriptor): ZLinkMeshNodeDescriptor {
@@ -4550,7 +4561,7 @@ function matchesSpot(value: ZLinkSpotLocation, filter: ZLinkSpotLocationFilter):
   return (
     (filter.meshName === undefined || value.meshName === filter.meshName) &&
     (filter.spotType === undefined || value.spotType === filter.spotType) &&
-    (filter.nodeRid === undefined || String(value.ownerNodeRid) === String(filter.nodeRid)) &&
+    (filter.nodeRid === undefined || routingIdsEqual(value.ownerNodeRid, filter.nodeRid)) &&
     (filter.spotKind === undefined || value.spotKind === filter.spotKind)
   );
 }
@@ -4558,7 +4569,7 @@ function matchesSpot(value: ZLinkSpotLocation, filter: ZLinkSpotLocationFilter):
 function matchesActor(value: ZLinkActorLocation, filter: ZLinkActorLocationFilter): boolean {
   return (
     (filter.actorType === undefined || value.actorType === filter.actorType) &&
-    (filter.nodeRid === undefined || String(value.ownerNodeRid) === String(filter.nodeRid)) &&
+    (filter.nodeRid === undefined || routingIdsEqual(value.ownerNodeRid, filter.nodeRid)) &&
     (filter.spotId === undefined || String(value.spotId) === String(filter.spotId)) &&
     (filter.locationKind === undefined || value.spotKind === filter.locationKind)
   );
@@ -4568,7 +4579,7 @@ function matchesRoute(value: ZLinkRouteLocation, filter: ZLinkRouteLocationFilte
   return (
     (filter.routeKind === undefined || value.routeKind === filter.routeKind) &&
     (filter.ownerNodeRid === undefined ||
-      String(value.ownerNodeRid) === String(filter.ownerNodeRid)) &&
+      routingIdsEqual(value.ownerNodeRid, filter.ownerNodeRid)) &&
     (filter.ownerId === undefined || value.ownerId === filter.ownerId)
   );
 }
@@ -4589,13 +4600,14 @@ function descriptorOwnerLeaseGeneration(value: OwnedStoreRecord): bigint | undef
   return undefined;
 }
 
+// Location runtime §10: a write whose result was lost is confirmed by reading
+// the same key. The stored row already is this write when it differs only in
+// the time the Store stamped, as for every other descriptor kind.
 function sameMeshDescriptor(
   left: ZLinkMeshNodeDescriptor,
   right: ZLinkMeshNodeDescriptor
 ): boolean {
-  return Buffer.from(encodeJson(persistMeshDescriptor(left))).equals(
-    Buffer.from(encodeJson(persistMeshDescriptor(right)))
-  );
+  return descriptorFingerprint(left, ['updatedAt']) === descriptorFingerprint(right, ['updatedAt']);
 }
 
 function sameClientServerDescriptor(

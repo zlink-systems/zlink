@@ -9,7 +9,7 @@ import {
   ZLinkDispatchMessageKind,
   ZLinkRuntimeMessageFlowOutcome as ZLinkMessageFlowOutcome
 } from '../../contracts/Dispatch/ZLinkDispatchOptions';
-import { throwIfAborted } from '../abort';
+import { isPromiseLike, throwIfAborted } from '../abort';
 import { type ZLinkApplicationWorkClaim, shouldCompactBackingArray } from '../admission';
 
 import {
@@ -94,29 +94,6 @@ const systemLivenessClock: ZLinkStreamLivenessClock = {
   setTimer: (callback, delayMs) => setTimeout(callback, Math.min(delayMs, MAX_TIMER_DELAY_MS)),
   clearTimer: (timer) => clearTimeout(timer as ReturnType<typeof setTimeout>)
 };
-
-class ZLinkStreamReceiveWake {
-  private pending?: Promise<void>;
-  private resolvePending?: () => void;
-  private readonly finish = (): void => {
-    const resolve = this.resolvePending;
-    this.pending = undefined;
-    this.resolvePending = undefined;
-    resolve?.();
-  };
-
-  wait(): Promise<void> {
-    if (this.pending !== undefined) return this.pending;
-    this.pending = new Promise<void>((resolve) => {
-      this.resolvePending = resolve;
-    });
-    return this.pending;
-  }
-
-  wake(): void {
-    this.finish();
-  }
-}
 
 export interface ZLinkStreamSessionContextFactory {
   createSessionContext(
@@ -928,7 +905,7 @@ export class ZLinkStreamSessionNodeRuntime {
   private readonly receiveAbortController = new AbortController();
   private receiveLoop: Promise<void> | undefined;
   private monitorLoop: Promise<void> | undefined;
-  private readonly receiveWake = new ZLinkStreamReceiveWake();
+  private receiveWake: AbortController | undefined;
   private receiveWorkSinceYield = 0;
   constructor(
     private readonly options: ZLinkStreamSessionNodeRuntimeOptions & ZLinkStreamLivenessOptions
@@ -1455,14 +1432,20 @@ export class ZLinkStreamSessionNodeRuntime {
   }
 
   private async waitReceiveLoopWake(signal: AbortSignal): Promise<void> {
-    await Promise.race([
-      this.options.readablePoller.waitForReadable(signal),
-      this.receiveWake.wait()
-    ]);
+    const wake = new AbortController();
+    this.receiveWake = wake;
+    try {
+      // Readiness, internal wake and shutdown share one cancellable wait;
+      // no losing Promise retains reactions across receive cycles.
+      await this.options.readablePoller.waitForReadable(AbortSignal.any([signal, wake.signal]));
+    } finally {
+      wake.abort();
+      this.receiveWake = undefined;
+    }
   }
 
   private wakeReceiveLoop(): void {
-    this.receiveWake.wake();
+    this.receiveWake?.abort();
   }
 
   private getOrCreateSession(routingId: unknown): ZLinkStreamSessionRuntime | undefined {
@@ -1509,10 +1492,6 @@ function streamMonitorEndpointKey(
 function streamMonitorHasEndpoint(event: ZLinkBackendSocketMonitorEvent): boolean {
   const endpoint = event as { readonly localAddr?: string; readonly remoteAddr?: string };
   return endpoint.localAddr !== undefined || endpoint.remoteAddr !== undefined;
-}
-
-function isPromiseLike<T>(value: T | Promise<T>): value is Promise<T> {
-  return typeof (value as { then?: unknown }).then === 'function';
 }
 
 function normalizeStreamCloseReason(reason: string): string {

@@ -1,25 +1,47 @@
-import { AsyncResource } from 'node:async_hooks';
 import {
   ZLinkFrameworkErrorKind,
   ZLinkFrameworkException
 } from '../../contracts/Errors/ZLinkFrameworkException';
 import { zlinkDefaultLocationOptions } from '../../contracts/Locations/Options';
 import { createAbortError, throwIfAborted } from '../abort';
-import { ZLinkStateLane } from '../execution/state-lane';
+import { startOutsideStateLane, ZLinkStateLane } from '../execution/state-lane';
+import type { RoutingId } from '../../contracts';
+import { routingIdsEqual } from '../routing-id';
 import {
   ZLinkFrameworkInternalErrorKind,
   createInternalFrameworkException
 } from '../framework-errors-internal';
+import {
+  encodeSessionRelocationSeal,
+  encodeSessionRelocationRoute,
+  type ServiceSessionRelocationRoute,
+  serviceSessionRelocationIdentityKey,
+  type ServiceSessionRelocationSeal,
+  type ServiceSessionRelocationSealed
+} from '../foundation/service-stateful-wire-codec';
+import { ServiceWireProtocolError } from '../foundation/service-wire-m6a-codec';
+import { ZLinkRemoteBoundSessionFenceError } from '../actors/bound-session-wire';
+
+export interface ZLinkPreparedSessionRelocationSeal {
+  readonly response: ServiceSessionRelocationSealed;
+  readonly ready: Promise<void>;
+}
+
+interface SessionRelocationResult extends ZLinkPreparedSessionRelocationSeal {
+  readonly key: string;
+  readonly fingerprint: string;
+  readonly seal?: ZLinkActorSessionRelocationState;
+}
+
 export const DEFAULT_TERMINAL_RELOCATION_CAPACITY = 4096;
 
-const detachedStateLaneResource = new AsyncResource('zlink:actor-session-binding-registry');
 export interface ZLinkActorSessionBindingActor {
   readonly actorId: string;
   readonly ref: { readonly actorId: string; readonly bindingGeneration?: bigint };
 }
 
 export interface ZLinkActorSessionBindingContext<TActor extends ZLinkActorSessionBindingActor> {
-  readonly routingId?: unknown;
+  readonly routingId?: RoutingId;
   readonly actorSlotControls?: {
     enqueueBound(actorSlot: number, actorId: string): Promise<void>;
     enqueueUnbound(actorSlot: number): Promise<void>;
@@ -36,9 +58,10 @@ export interface ZLinkActorSessionRoute<
   readonly actor: TActor;
   readonly bindingToken: string;
   readonly actorSlot?: number;
-  readonly sessionIdentity?: string;
+  readonly sessionIdentity?: RoutingId;
   readonly activeFrames: ZLinkActorSessionActiveFrames;
   sealId?: string;
+  sessionRelocationResult?: SessionRelocationResult;
   authorityFence?: ZLinkActorSessionAuthorityFence;
 }
 
@@ -46,8 +69,8 @@ export interface ZLinkActorSessionRelocationClaim {
   readonly actorId: string;
   readonly actorGeneration: bigint;
   readonly bindingGeneration: bigint;
-  readonly sessionIdentity?: string;
-  readonly actorNodeRid?: string;
+  readonly sessionIdentity?: RoutingId;
+  readonly actorNodeRid?: RoutingId;
   readonly actorNodeGeneration?: bigint;
   readonly sealId: string;
 }
@@ -88,8 +111,8 @@ interface ZLinkActorSessionRelocationState {
   readonly actorId: string;
   readonly actorGeneration: bigint;
   readonly bindingGeneration: bigint;
-  readonly sessionIdentity?: string;
-  readonly actorNodeRid?: string;
+  readonly sessionIdentity?: RoutingId;
+  readonly actorNodeRid?: RoutingId;
   readonly actorNodeGeneration?: bigint;
   readonly sealId: string;
   phase: 'sealed' | 'applying' | 'applied' | 'terminal';
@@ -143,6 +166,13 @@ export class ZLinkActorSessionBindingRegistry<
   >();
   private readonly activeFrameWaiters = new Map<string, Set<ZLinkActorSessionActiveFrameWaiter>>();
   private readonly relocations = new Map<string, ZLinkActorSessionRelocationQueue>();
+  private readonly absentSessionRelocationResults = new Map<
+    string,
+    {
+      readonly result: SessionRelocationResult;
+      readonly expiry: ReturnType<typeof setTimeout>;
+    }
+  >();
   private readonly terminalRelocations = new Map<ZLinkActorSessionRelocationState, true>();
 
   constructor(
@@ -170,7 +200,7 @@ export class ZLinkActorSessionBindingRegistry<
     actor: TActor,
     bindingToken: string,
     authorityFence?: ZLinkActorSessionAuthorityFence,
-    sessionIdentity?: string,
+    sessionIdentity?: RoutingId,
     commitActor?: () => void
   ): Promise<void> {
     await this.lane.run(() =>
@@ -192,7 +222,7 @@ export class ZLinkActorSessionBindingRegistry<
     actor: TActor,
     bindingToken: string,
     authorityFence?: ZLinkActorSessionAuthorityFence,
-    sessionIdentity?: string,
+    sessionIdentity?: RoutingId,
     commitActor?: () => void
   ): void {
     const current = this.routes.get(actor.actorId);
@@ -262,6 +292,7 @@ export class ZLinkActorSessionBindingRegistry<
       sessionIdentity: sessionIdentity ?? sessionIdentityFromContext(context),
       activeFrames: previous?.activeFrames ?? { count: 0, requests: new Set() },
       sealId: previous?.sealId,
+      sessionRelocationResult: sameBinding ? previous.sessionRelocationResult : undefined,
       authorityFence: authorityFence ?? previous?.authorityFence
     });
   }
@@ -285,7 +316,7 @@ export class ZLinkActorSessionBindingRegistry<
     actor: TActor,
     bindingToken: string,
     authorityFence?: ZLinkActorSessionAuthorityFence,
-    sessionIdentity?: string,
+    sessionIdentity?: RoutingId,
     commitActor?: () => void
   ): Promise<void> {
     await this.lane.run(() =>
@@ -308,7 +339,7 @@ export class ZLinkActorSessionBindingRegistry<
     bindingToken: string,
     sealId: string,
     authorityFence?: ZLinkActorSessionAuthorityFence,
-    sessionIdentity?: string,
+    sessionIdentity?: RoutingId,
     commitActor?: () => void
   ): Promise<void> {
     await this.lane.run(() =>
@@ -332,7 +363,7 @@ export class ZLinkActorSessionBindingRegistry<
     bindingToken: string,
     sealId: string,
     authorityFence?: ZLinkActorSessionAuthorityFence,
-    sessionIdentity?: string,
+    sessionIdentity?: RoutingId,
     commitActor?: () => void
   ): void {
     if (previous.sealId !== sealId) {
@@ -378,13 +409,13 @@ export class ZLinkActorSessionBindingRegistry<
   /** Selects the route only when it is the exact Session binding (§8.1 validation values). */
   async routeForSessionBinding(
     actorId: string,
-    sessionRid: string,
+    sessionRid: RoutingId,
     bindingGeneration?: bigint
   ): Promise<ZLinkActorSessionRoute<TContext, TActor> | undefined> {
     return await this.lane.run(() => {
       const route = this.routeCore(actorId);
       const generation = route?.actor.ref.bindingGeneration;
-      return route?.sessionIdentity === sessionRid &&
+      return routingIdsEqual(route?.sessionIdentity, sessionRid) &&
         (bindingGeneration === undefined || generation === bindingGeneration)
         ? route
         : undefined;
@@ -778,6 +809,139 @@ export class ZLinkActorSessionBindingRegistry<
     await this.waitForActiveFrames(actorId, signal);
   }
 
+  async prepareSessionRelocationSeal(
+    value: ServiceSessionRelocationSeal,
+    signal?: AbortSignal
+  ): Promise<ZLinkPreparedSessionRelocationSeal | undefined> {
+    for (;;) {
+      const step = await this.lane.run(() => this.prepareSessionRelocationSealCore(value, signal));
+      if (step === undefined || !('predecessor' in step)) return step;
+      await waitForSessionRelocation(step.predecessor, signal);
+    }
+  }
+
+  private prepareSessionRelocationSealCore(
+    value: ServiceSessionRelocationSeal,
+    signal?: AbortSignal
+  ): ZLinkPreparedSessionRelocationSeal | { readonly predecessor: Promise<void> } | undefined {
+    const actorId = value.actor.actor.actorId;
+    const key = serviceSessionRelocationIdentityKey(value);
+    const fingerprint = encodeSessionRelocationSeal(value).toString('base64');
+    const route = this.routes.get(actorId);
+    const bindingResult = route?.sessionRelocationResult;
+    const recorded =
+      this.absentSessionRelocationResults.get(key)?.result ??
+      (bindingResult?.key === key ? bindingResult : undefined);
+    if (recorded !== undefined) {
+      if (recorded.fingerprint !== fingerprint) {
+        throw new ServiceWireProtocolError(
+          `Session relocation '${key}' repeated command 42 with different bytes.`
+        );
+      }
+      if (recorded.seal?.phase === 'terminal') {
+        console.warn(`late_session_relocation_seal session=${value.session.sessionRid}`);
+        return undefined;
+      }
+      return recorded;
+    }
+    throwIfAborted(signal);
+    const response: ServiceSessionRelocationSealed = {
+      relocation: value.relocation,
+      coordinator: value.coordinator,
+      actor: value.actor,
+      session: value.session,
+      sealResult: route === undefined ? 'bindingAbsent' : 'sealed'
+    };
+    if (route === undefined) {
+      const result: SessionRelocationResult = {
+        key,
+        fingerprint,
+        response,
+        ready: Promise.resolve()
+      };
+      const expiry = startOutsideStateLane(() =>
+        setTimeout(() => {
+          void (async () => {
+            await this.lane.run(() => this.absentSessionRelocationResults.delete(key));
+          })().catch((error) =>
+            this.errorSink?.()?.reportRuntimeTaskException(
+              'session relocation result expiry',
+              error
+            )
+          );
+        }, this.sealWaitTimeoutMs)
+      );
+      expiry.unref();
+      this.absentSessionRelocationResults.set(key, { result, expiry });
+      return result;
+    }
+    const expected = {
+      objectGeneration: value.actor.actor.generation,
+      bindingGeneration: value.session.bindingGeneration
+    };
+    if (
+      !routingIdsEqual(route.sessionIdentity, value.session.sessionRid) ||
+      !routeMatchesFence(route, expected) ||
+      (route.authorityFence !== undefined &&
+        value.actor.ownerLeaseGeneration < route.authorityFence.ownerLeaseGeneration) ||
+      (route.sealId !== undefined && route.sealId !== key)
+    ) {
+      throw new ZLinkRemoteBoundSessionFenceError(
+        `Actor '${actorId}' command 42 was fenced by its exact Session route.`
+      );
+    }
+    const step = this.prepareRelocationSeal(
+      {
+        actorId,
+        actorGeneration: value.actor.actor.generation,
+        bindingGeneration: value.session.bindingGeneration,
+        sessionIdentity: value.session.sessionRid,
+        actorNodeRid: value.actor.actor.nodeRid,
+        actorNodeGeneration: value.actor.targetNodeGeneration,
+        sealId: key
+      },
+      expected,
+      signal
+    );
+    if (step.kind === 'predecessor') return { predecessor: step.wait };
+    const result: SessionRelocationResult = {
+      key,
+      fingerprint,
+      response,
+      ready: step.wait,
+      seal: this.relocations.get(actorId)!.seals.get(key)!
+    };
+    route.sessionRelocationResult = result;
+    return result;
+  }
+
+  async acceptSessionRelocationRoute(value: ServiceSessionRelocationRoute): Promise<boolean> {
+    return await this.lane.run(() => {
+      const key = serviceSessionRelocationIdentityKey(value);
+      if (this.absentSessionRelocationResults.has(key)) return false;
+      const result = this.routes.get(value.actor.actorId)?.sessionRelocationResult;
+      if (
+        result?.seal?.phase === 'terminal' &&
+        result.key === key &&
+        result.seal.applyFingerprint !== undefined &&
+        result.seal.applyFingerprint !== encodeSessionRelocationRoute(value).toString('base64')
+      ) {
+        throw new ServiceWireProtocolError(
+          `Session relocation '${result.key}' repeated command 44 with different bytes.`
+        );
+      }
+      return result?.key === key && result.seal !== undefined && result.seal.phase !== 'terminal';
+    });
+  }
+
+  async clearSessionRelocationResults(): Promise<void> {
+    await this.lane.run(() => {
+      for (const { expiry } of this.absentSessionRelocationResults.values()) clearTimeout(expiry);
+      this.absentSessionRelocationResults.clear();
+      for (const route of this.routes.values()) route.sessionRelocationResult = undefined;
+    });
+  }
+
   async sealRelocation(
     claim: ZLinkActorSessionRelocationClaim,
     expected: ZLinkActorSessionRouteFence,
@@ -997,11 +1161,14 @@ export class ZLinkActorSessionBindingRegistry<
    * single physical route's disconnect, which must not disturb a relocation
    * seal it does not own (see `clearRouteRelocation`).
    */
-  async clearRelocation(actorId: string, error: unknown): Promise<void> {
-    await this.lane.run(() => this.clearRelocationCore(actorId, error));
+  async clearRelocation(actorId: string, error: unknown, sealId?: string): Promise<void> {
+    await this.lane.run(() => this.clearRelocationCore(actorId, error, sealId));
   }
 
-  private clearRelocationCore(actorId: string, error: unknown): void {
+  private clearRelocationCore(actorId: string, error: unknown, sealId?: string): void {
+    const result = this.routes.get(actorId)?.sessionRelocationResult;
+    if (sealId !== undefined && (result?.key !== sealId || result.seal?.phase === 'terminal'))
+      return;
     const queue = this.relocations.get(actorId);
     if (queue === undefined) return;
     this.rejectSealWaiters(
@@ -1018,7 +1185,8 @@ export class ZLinkActorSessionBindingRegistry<
     this.relocations.delete(actorId);
     for (const state of queue.seals.values()) {
       this.terminalRelocations.delete(state);
-      if (state.phase !== 'terminal') state.resolveTerminal();
+      state.phase = 'terminal';
+      state.resolveTerminal();
     }
   }
 
@@ -1044,7 +1212,7 @@ export class ZLinkActorSessionBindingRegistry<
     const ownsActiveSeal =
       activeState !== undefined &&
       activeState.phase !== 'terminal' &&
-      activeState.sessionIdentity === route.sessionIdentity;
+      routingIdsEqual(activeState.sessionIdentity, route.sessionIdentity);
     if (!ownsActiveSeal) {
       // Nothing this exact route still holds open — leave terminal
       // retention and any other Session's active seal untouched.
@@ -1054,6 +1222,7 @@ export class ZLinkActorSessionBindingRegistry<
     queue.activeSealId = undefined;
     queue.seals.delete(activeSealId!);
     this.terminalRelocations.delete(activeState);
+    activeState.phase = 'terminal';
     activeState.resolveTerminal();
     this.deleteEmptyRelocationQueue(queue);
   }
@@ -1356,8 +1525,8 @@ function assertRelocationClaim(
   if (
     state.actorGeneration !== claim.actorGeneration ||
     state.bindingGeneration !== claim.bindingGeneration ||
-    state.sessionIdentity !== claim.sessionIdentity ||
-    state.actorNodeRid !== claim.actorNodeRid ||
+    !routingIdsEqual(state.sessionIdentity, claim.sessionIdentity) ||
+    !routingIdsEqual(state.actorNodeRid, claim.actorNodeRid) ||
     state.actorNodeGeneration !== claim.actorNodeGeneration
   ) {
     throw createInternalFrameworkException(
@@ -1368,10 +1537,6 @@ function assertRelocationClaim(
   }
 }
 
-function startOutsideStateLane<T>(work: () => T): T {
-  return detachedStateLaneResource.runInAsyncScope(work);
-}
-
 function assertSuccessorSessionIdentity(
   predecessor: ZLinkActorSessionRelocationState,
   successor: ZLinkActorSessionRelocationClaim
@@ -1379,7 +1544,7 @@ function assertSuccessorSessionIdentity(
   if (
     predecessor.actorGeneration !== successor.actorGeneration ||
     predecessor.bindingGeneration !== successor.bindingGeneration ||
-    predecessor.sessionIdentity !== successor.sessionIdentity
+    !routingIdsEqual(predecessor.sessionIdentity, successor.sessionIdentity)
   ) {
     throw createInternalFrameworkException(
       ZLinkFrameworkInternalErrorKind.ActorLocationStale,
@@ -1415,8 +1580,8 @@ function routeMatchesFence<
 function sessionIdentityFromContext<
   TActor extends ZLinkActorSessionBindingActor,
   TContext extends ZLinkActorSessionBindingContext<TActor>
->(context: TContext): string | undefined {
-  return context.routingId === undefined ? undefined : String(context.routingId);
+>(context: TContext): RoutingId | undefined {
+  return context.routingId;
 }
 
 function waitForSessionRelocation(operation: Promise<void>, signal?: AbortSignal): Promise<void> {

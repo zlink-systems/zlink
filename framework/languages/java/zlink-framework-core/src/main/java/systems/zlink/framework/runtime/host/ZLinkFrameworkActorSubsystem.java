@@ -160,6 +160,12 @@ final class ZLinkFrameworkActorSubsystem {
                 }
             }
         }
+        ZLinkMessageFlowTracer flowTracer =
+                new ZLinkMessageFlowTracer(
+                        registration.dispatchOptions(),
+                        handlerFactory,
+                        registration.handlerExecutor(),
+                        eventDispatcher);
         ZLinkActorClient actorClient =
                 spots != null && storeLocationResolvers != null
                         ? new ZLinkActorClientRuntime(
@@ -169,13 +175,7 @@ final class ZLinkFrameworkActorSubsystem {
                                 registration.defaultRequestTimeout(),
                                 null,
                                 runtimeReady,
-                                () ->
-                                        registration
-                                                        .dispatchOptions()
-                                                        .diagnostics()
-                                                        .effectiveMessageFlow()
-                                                != systems.zlink.framework.configuration
-                                                        .ZLinkMessageFlowLogMode.OFF)
+                                flowTracer::captureEnabled)
                         : null;
         registerActorServices(runtimeHandlers, actorClient, actorDirectory, actors);
         wireActorRuntime(
@@ -188,7 +188,8 @@ final class ZLinkFrameworkActorSubsystem {
                 storeLocationResolvers,
                 remoteAddressResolver,
                 meshNodes,
-                actors);
+                actors,
+                flowTracer);
         return new ZLinkFrameworkActorSubsystem(actors, actorDirectory, actorClient);
     }
 
@@ -231,7 +232,8 @@ final class ZLinkFrameworkActorSubsystem {
             SpotTransportAddressResolver remoteAddressResolver,
             Map<String, systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode>
                     meshNodes,
-            ZLinkActorRuntime actors) {
+            ZLinkActorRuntime actors,
+            ZLinkMessageFlowTracer flowTracer) {
         if (actors == null) {
             return;
         }
@@ -282,17 +284,20 @@ final class ZLinkFrameworkActorSubsystem {
                                                         notice);
                                             }));
         }
-        actors.setMessageFlowTracer(
-                new ZLinkMessageFlowTracer(
-                        registration.dispatchOptions(),
-                        handlerFactory,
-                        registration.handlerExecutor(),
-                        eventDispatcher));
+        actors.setMessageFlowTracer(flowTracer);
         actors.setRoutedTransport(channels, () -> spots.primaryNode().entrySpot().spotId());
         if (remoteAddressResolver != null) {
             actors.setRemoteAddressResolver(remoteAddressResolver);
         }
         spots.attachActorRuntime(actors);
+        java.util.stream.Stream.concat(
+                        java.util.stream.Stream.of(spots.primaryNode()),
+                        meshNodes.values().stream().map(node -> node.spotNode()))
+                .distinct()
+                .forEach(
+                        node ->
+                                node.setRemoteSessionBindingOwner(
+                                        actors::applyRemoteSessionBinding));
         // Canonical service-wire actorJoin(28) is decoded by the raw mesh
         // boundary, while admission remains in the Spot runtime so it shares
         // the S3 Location Store fence/type resolution with routed joins.

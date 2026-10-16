@@ -61,8 +61,8 @@ Object Server MeshNode의 Entry Spot ID 발급·형식·충돌 규칙은
 
 Object Server MeshNode는 application이 Entry Spot type을 등록했는지와 무관하게 Entry Spot
 ID를 발급하고 descriptor에 싣는다. Entry Spot type 등록은 이 Spot이 실행할 application
-handler를 정할 뿐이며, descriptor의 `entrySpotId` 유무를 바꾸지 않는다. 원격 생성 요청을
-받을 수 있는지도 이 등록으로 갈리지 않는다.
+handler를 정할 뿐이며, descriptor의 `entrySpotId` 유무를 바꾸지 않는다. 새 Actor 생성
+후보가 되는지는 이 등록이 정한다([Actor model §6.3](04-actor-model.ko.md#63-mesh와-placement-target-선택)).
 
 MeshNode descriptor의 Entry Spot ID mapping과 공개 규칙은
 [Transport RID와 Spot ID 정책 §6.3](../02-channel-transport/04-network-listener-identity.ko.md#63-entry-spot-id)이 정한다.
@@ -271,6 +271,17 @@ Peer handshake에서는 다음 정보를 교환한다.
 하나를 선택하며([Core ROUTER §10.1](../../../../../../../core/doc/spec/core/socket/07-router.ko.md#101-선택-route-관찰)), Framework는 선택된 route에서 받은
 handshake만 admission한다.
 
+**선택 route에서 상대의 admission 수락(ADMIT)을 아직 받지 못한 node는 그 route로 HELLO를 기존 liveness
+관리 주기마다 다시 보낸다.** 선택이 바뀔 때 Core는 승격 직전 standby pipe의 대기 record를 버리므로
+([Core ROUTER §10.1](../../../../../../../core/doc/spec/core/socket/07-router.ko.md#101-선택-route-관찰)), 새 route로 먼저 보낸 HELLO가 상대에 도착하지
+않을 수 있다. HELLO는 같은 identity에 대해 멱등이다. 이를 위해 별도 timer를 두지 않으며, ADMIT을 받으면
+다시 보내지 않는다.
+
+**선택 route에서 handshake로 admission을 확인하기 전에 그 route로 받은 handshake 밖의 record는 처리하지
+않고 버리며, 응답을 보내지 않는다.** 선택 route가 바뀐 뒤 상대가 새 route의 handshake보다 먼저 보낸
+record도 같다. 이렇게 잃은 durable operation은 송신 측이 [Actor 모델 §8.1](04-actor-model.ko.md#81-실패)대로
+다시 보낸다.
+
 Lifecycle generation은 0이 아닌 opaque equality token이다. 숫자 크기로 어느
 lifecycle이 더 새로운지 판단하지 않는다.
 
@@ -289,6 +300,13 @@ Automatic RouteMesh에서는 RID가 더 작은 MeshNode만 connect를 시작한�
 특정 peer와 연결을 유지하려는 의도는 application 구성이나 auto-connect 소유자가 peer마다
 하나씩 등록하는 [connection intent](../00-foundation/02-glossary.ko.md#connection-intent)로
 표현한다. Runtime은 intent가 있는 동안만 connect와 재연결을 시도한다.
+
+**Auto-connect owner는 특정 peer의 즉시 reconcile 요청을 받으면 주기를 기다리지 않고 그 peer에 평소
+reconcile 판정을 적용한다.** 그 peer의 descriptor를 기존 Location resolver로 다시 읽으며, automatic에서
+RID가 더 작은 쪽만 connect를 시작하는 규칙도 그대로다. 이 요청은 새 종류의 intent나 별도 상태를 만들지
+않고, 요청한 쪽은 결과로 그 peer의 ready route를 관찰한다. 누가 언제 요청하는지는
+[relocation §4.3](../05-location-relocation/04-relocation-flow.ko.md#43-target은-실행하지-않은-상태로-복원한다)과
+[Session·Actor binding §8.1](../04-session/02-session-actor-binding.ko.md#81-seal-held-message와-route-전환)이 정한다.
 
 - **Outbound intent를 제거하면 같은 결정으로 그 endpoint의 binding 연결 등록도 제거한다.**
   Intent 소유자가 binding의 public disconnect를 호출한다. 같은 endpoint에 inbound peer가 있어도
@@ -329,6 +347,10 @@ sequenceDiagram
         Note over A,B: 같은 RID의 pipe가 둘이면 Core가 하나를 선택하고, Framework는 선택 route에서만 admission한다
     end
 ```
+
+**수락하는 쪽은 상대를 admitted peer로 기록한 뒤 admission 수락을 제출한다.** 이 node가 그 peer로
+admission 수락과 같은 Application lane에 보내는 record(DATA·REQUEST)는 admission 수락보다 뒤에
+나간다.
 
 ### 7.2 Channel weight 갱신
 

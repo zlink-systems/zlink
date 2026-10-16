@@ -23,7 +23,7 @@ internal sealed class ZLinkSpotActorPacketDispatcher(
             dispatchErrors.Flow.CaptureEnabled,
             ZLinkFlowOrigin.Inbound
         );
-        using var dispatch = runtimeState.EnterDispatch(header);
+        using var dispatch = runtimeState.EnterDispatch();
         var scope = CreateScope(
             actor,
             header,
@@ -74,7 +74,7 @@ internal sealed class ZLinkSpotActorPacketDispatcher(
         RoutingId? sourceSessionRid
     )
     {
-        using var dispatch = runtimeState.EnterDispatch(header);
+        using var dispatch = runtimeState.EnterDispatch();
         var scope = CreateScope(
             actor,
             header,

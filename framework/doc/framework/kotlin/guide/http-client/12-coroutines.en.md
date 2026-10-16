@@ -26,7 +26,8 @@ This chapter covers why those extensions do not occupy a thread and where a coro
 
 `await`, `awaitRaw`, `fetch`, `awaitDownload`, and `yield` are suspend functions. The extensions resume the
 coroutine when the `CompletionStage` completes, so no thread is occupied while an HTTP response is pending. `yield`
-is the server request builder terminator that waits while retaining the current execution turn.
+is the server request builder terminator. It releases the execution gate while waiting, so other handlers of the
+same Spot can run, and after the response arrives it re-acquires the gate and resumes in that Spot's turn.
 
 The tutorial below reads a typed response through the body-only suspend extension.
 

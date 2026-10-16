@@ -199,7 +199,7 @@ function decodeSessionRelocationBarrier(hex) {
     if (senderRole !== 1) fail("invalid-field");
     result = { command, relocation, coordinator, senderRole: "source", actor: actorFence(), session: session() };
   } else if (command === 43) {
-    // Command 43 returns only the exact seal-install result and carries no
+    // Command 43 returns only the exact seal result and carries no
     // Session-message sequence or high-water (internal-service-wire-protocol).
     result = {
       command,
@@ -208,6 +208,9 @@ function decodeSessionRelocationBarrier(hex) {
       actor: actorFence(),
       session: session(),
     };
+    const sealResult = byte();
+    if (sealResult !== 1 && sealResult !== 2) fail("invalid-field");
+    result.sealResult = sealResult === 1 ? "sealed" : "bindingAbsent";
   } else if (command === 44) {
     const senderRole = byte();
     const actorRef = actor();
@@ -226,6 +229,7 @@ function decodeSessionRelocationBarrier(hex) {
         targetAuthorityOwnerGeneration: u64(),
         targetNodeRid: text8(),
         targetNodeGeneration: u64(),
+        targetOwnerLeaseGeneration: u64(),
       };
       if (BigInt(route.targetAuthorityOwnerGeneration)
           <= BigInt(route.previousAuthorityOwnerGeneration)) fail("invalid-field");
@@ -349,12 +353,21 @@ const barrierRecords = new Map(sessionBarrierFixture.canonical.map((fixture) => 
   }
   return [fixture.name, decoded];
 }));
-if (barrierRecords.size !== 4
+if (barrierRecords.size !== 5
     || !barrierRecords.has("sessionRelocationSeal")
     || !barrierRecords.has("sessionRelocationSealed")
+    || !barrierRecords.has("sessionRelocationBindingAbsent")
     || !barrierRecords.has("sessionRelocationRouteCommit")
     || !barrierRecords.has("sessionRelocationRouteAbort")) {
   throw new Error("session relocation barrier canonical fixture is incomplete");
+}
+for (const fixture of sessionBarrierFixture.malformed) {
+  try {
+    decodeSessionRelocationBarrier(fixture.hex);
+    throw new Error(`malformed session barrier fixture accepted: ${fixture.name}`);
+  } catch (error) {
+    if (error.code !== fixture.error) throw error;
+  }
 }
 const receiverCases = new Map(sessionBarrierFixture.receiverCases.map((entry) => [entry.name, entry]));
 if (receiverCases.get("identicalSealDuplicate")?.result !== "idempotent"

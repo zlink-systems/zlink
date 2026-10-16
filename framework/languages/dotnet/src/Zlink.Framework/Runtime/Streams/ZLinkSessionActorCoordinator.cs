@@ -325,8 +325,15 @@ internal sealed class ZLinkSessionActorCoordinator(
                 throw new InvalidOperationException(
                     "Actor session binding requires a stream routing id."
                 );
-            var localBindingToken = Guid.NewGuid().ToString("N");
             const ulong localGeneration = 1;
+            var localBindingToken = ZLinkActorBoundSessionBindingToken.Canonical(
+                localSessionRid,
+                localGeneration,
+                localSessionRid.ToHex(),
+                localGeneration,
+                localSessionRid,
+                bindingGeneration
+            );
             runtime.BindActorSession(
                 actor.ActorId,
                 null,
@@ -368,7 +375,6 @@ internal sealed class ZLinkSessionActorCoordinator(
                 ZLinkFrameworkErrorKind.InvalidOperation,
                 "Session owner lifecycle generation is unavailable."
             );
-        var bindingToken = Guid.NewGuid().ToString("N");
         string sessionOwnerId;
         ulong sessionOwnerLeaseGeneration;
         try
@@ -382,6 +388,14 @@ internal sealed class ZLinkSessionActorCoordinator(
             sessionOwnerId = sessionNodeRid.ToHex();
             sessionOwnerLeaseGeneration = sessionOwnerNodeGeneration;
         }
+        var bindingToken = ZLinkActorBoundSessionBindingToken.Canonical(
+            sessionNodeRid,
+            sessionOwnerNodeGeneration,
+            sessionOwnerId,
+            sessionOwnerLeaseGeneration,
+            sessionRid,
+            bindingGeneration
+        );
         var request = new ZLinkRemoteSessionBindRequest(
             actor.ActorId,
             actor.NodeRid.ToBytes().ToArray(),
@@ -476,7 +490,7 @@ internal sealed class ZLinkSessionActorCoordinator(
         if (ZLinkFrameworkDebugLog.SpotDiscoveryEnabled)
         {
             var observedRoute = await runtime
-                .GetSessionActorRouteAsync(actorRef.ActorId, actorRef.BindingToken, actorRef)
+                .GetSessionActorRouteAsync(actorRef)
                 .ConfigureAwait(false);
             var relayRoute = observedRoute.GetValueOrDefault();
             ZLinkFrameworkDebugLog.SpotDiscovery(

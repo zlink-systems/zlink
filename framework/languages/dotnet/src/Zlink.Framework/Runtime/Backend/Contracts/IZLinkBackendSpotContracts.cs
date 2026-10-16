@@ -9,11 +9,11 @@ internal interface IZLinkBackendSpotNode : IAsyncDisposable
 {
     ValueTask ForceStopAsync(CancellationToken cancellationToken) => DisposeAsync();
 
-    // Observation-only: the live diagnostics gate for spec 27 §4. Backends
-    // that re-encode relayed envelopes consult it so an Off host neither
+    // Observation-only: the existing tracer owns the live gate (spec 26/27).
+    // Backends that re-encode relayed envelopes consult it so an Off host neither
     // validates nor copies inbound flow fields forward. Default keeps fakes
     // and gate-less standalone nodes on the historical always-on behavior.
-    void SetFlowCaptureGate(Func<bool> flowCaptureEnabled) { }
+    void SetFlowTracer(ZLinkMessageFlowTracer flow) { }
 
     // Logical Multicast target failures are observed at the MeshNode, where
     // the target RID and Core submit result are still available. Backends
@@ -26,6 +26,8 @@ internal interface IZLinkBackendSpotNode : IAsyncDisposable
     void SetPeerAdmissionSealGate(Func<bool> sealedForShutdown) { }
 
     RoutingId RoutingId { get; }
+
+    ZLinkPeerRouteObservation ObservePeerRoute(RoutingId target);
 
     void SetRoutingId(RoutingId routingId);
 
@@ -261,15 +263,19 @@ internal interface IZLinkBackendSpotNode : IAsyncDisposable
         SendFlags flags
     );
 
+    /// <summary>Consumes the original parts on success and failure.</summary>
     ValueTask SendToActorAsync(
         ZLinkBackendActorRef actor,
         IReadOnlyList<Message> parts,
         SendFlags flags,
         CancellationToken cancellationToken
-    ) =>
-        ValueTask.FromException(
+    )
+    {
+        ZLinkMessageParts.DisposeAll(parts);
+        return ValueTask.FromException(
             new NotSupportedException("This MeshNode backend does not support direct Actor sends.")
         );
+    }
 
     ValueTask<IReadOnlyList<Message>> RequestToActorAsync(
         ZLinkBackendActorRef actor,
@@ -441,6 +447,8 @@ internal interface IZLinkBackendCanonicalRelocation
 internal interface IZLinkBackendSessionRelocationBarrier
 {
     void SetSessionRelocationBarrierTarget(ISessionRelocationBarrierTarget target);
+
+    void CompleteSessionRelocation(Guid relocationId);
 
     ValueTask<ZLinkServiceWireCodec.SessionRelocationSealedRecord> SealSessionRelocationAsync(
         RoutingId sessionOwnerNodeRid,

@@ -28,6 +28,7 @@ public final class ZLinkServiceRelocationEnvelopeCodec {
                     savedWork(generated.savedWork()),
                     timerRegistrations(generated.timerRegistrations()),
                     pendingTimerTicks(generated.pendingTimerTicks()),
+                    generated.sessionBindings(),
                     canonical);
         } catch (IOException failure) {
             throw invalid("envelope", failure);
@@ -129,12 +130,14 @@ public final class ZLinkServiceRelocationEnvelopeCodec {
             List<SavedWorkEntry> savedWork,
             List<TimerRegistration> timerRegistrations,
             List<PendingTimerTick> pendingTimerTicks,
+            List<ServiceWirePilotCodec.RelocationSessionBinding> sessionBindings,
             byte[] canonicalBytes) {
         public Envelope {
             applicationStates = List.copyOf(applicationStates);
             savedWork = List.copyOf(savedWork);
             timerRegistrations = List.copyOf(timerRegistrations);
             pendingTimerTicks = List.copyOf(pendingTimerTicks);
+            sessionBindings = List.copyOf(sessionBindings);
             canonicalBytes = canonicalBytes.clone();
         }
 

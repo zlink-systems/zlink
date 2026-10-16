@@ -273,13 +273,17 @@ final class DefaultEntrySpotContext implements ZLinkEntrySpotContext, SpotDispat
 
     @Override
     public CompletionStage<Void> enqueueActorDispatch(
-            String actorId, long payloadBytes, Supplier<CompletionStage<Void>> operation) {
+            String actorId,
+            long payloadBytes,
+            Supplier<CompletionStage<Void>> operation,
+            CompletableFuture<Void> admission) {
         Objects.requireNonNull(actorId, "actorId");
         return host.enqueueActorDispatch(
                 serials,
                 actorId,
                 payloadBytes,
-                () -> runApplicationExecution(actorId, false, operation));
+                () -> runApplicationExecution(actorId, false, operation),
+                admission);
     }
 
     @Override
@@ -288,7 +292,8 @@ final class DefaultEntrySpotContext implements ZLinkEntrySpotContext, SpotDispat
             Supplier<byte[]> acceptedJournalRecord,
             long acceptedJournalRecordSizeHint,
             Supplier<CompletionStage<Void>> operation,
-            Runnable relocationRelease) {
+            Runnable relocationRelease,
+            CompletableFuture<Void> admission) {
         Objects.requireNonNull(actorId, "actorId");
         return host.enqueueActorDispatch(
                 serials,
@@ -296,7 +301,8 @@ final class DefaultEntrySpotContext implements ZLinkEntrySpotContext, SpotDispat
                 acceptedJournalRecord,
                 acceptedJournalRecordSizeHint,
                 () -> runApplicationExecution(actorId, false, operation),
-                relocationRelease);
+                relocationRelease,
+                admission);
     }
 
     @Override
@@ -395,13 +401,14 @@ final class DefaultEntrySpotContext implements ZLinkEntrySpotContext, SpotDispat
 
     void closeRegistration() {
         handlerCatalog.closeRegistration(
-                handlerTypes ->
-                        handlerLoader.load(entrySpot.getClass(), handlerTypes, this::addTimer));
+                (handlerTypes, subscriptions) ->
+                        handlerLoader.load(
+                                entrySpot.getClass(), handlerTypes, subscriptions, this::addTimer));
     }
 
     void bindSubscriptions(ZLinkBackendSpot spot) {
-        for (String topic : handlerCatalog.subscriptionTopics()) {
-            spot.setSubscription(topic);
+        for (var subscription : handlerCatalog.subscriptions()) {
+            spot.setSubscription(subscription.channelName(), subscription.topic());
         }
     }
 
@@ -570,6 +577,12 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
     }
 
     void setSpot(ZLinkSpot<?> spot) {
+        if (spot.context() != this) {
+            throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                    "SPOT must expose the context provided by the runtime: "
+                            + spot.getClass().getName());
+        }
         this.spot = spot;
         timers.setSpot(spot);
         actorTimers.values().forEach(timer -> timer.setSpot(spot));
@@ -702,6 +715,11 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
                         envelope, name -> loadTimerHandler(loader, name)));
     }
 
+    <T> CompletionStage<T> runTimerRelocationInitialization(
+            Supplier<CompletionStage<T>> operation) {
+        return timers.runRelocationInitialization(operation);
+    }
+
     void publishStagedTimerRelocation() {
         timers.publishStagedRestore();
     }
@@ -774,13 +792,17 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
 
     @Override
     public CompletionStage<Void> enqueueActorDispatch(
-            String actorId, long payloadBytes, Supplier<CompletionStage<Void>> operation) {
+            String actorId,
+            long payloadBytes,
+            Supplier<CompletionStage<Void>> operation,
+            CompletableFuture<Void> admission) {
         Objects.requireNonNull(actorId, "actorId");
         return host.enqueueActorDispatch(
                 serials,
                 actorId,
                 payloadBytes,
-                () -> runActorApplication(actorId, serials.usesSharedExecutionGate(), operation));
+                () -> runActorApplication(actorId, serials.usesSharedExecutionGate(), operation),
+                admission);
     }
 
     @Override
@@ -789,7 +811,8 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
             Supplier<byte[]> acceptedJournalRecord,
             long acceptedJournalRecordSizeHint,
             Supplier<CompletionStage<Void>> operation,
-            Runnable relocationRelease) {
+            Runnable relocationRelease,
+            CompletableFuture<Void> admission) {
         Objects.requireNonNull(actorId, "actorId");
         Objects.requireNonNull(acceptedJournalRecord, "acceptedJournalRecord");
         Objects.requireNonNull(relocationRelease, "relocationRelease");
@@ -799,7 +822,8 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
                 acceptedJournalRecord,
                 acceptedJournalRecordSizeHint,
                 () -> runActorApplication(actorId, serials.usesSharedExecutionGate(), operation),
-                relocationRelease);
+                relocationRelease,
+                admission);
     }
 
     private CompletionStage<Void> runActorApplication(
@@ -1149,12 +1173,14 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
 
     void closeRegistration() {
         handlerCatalog.closeRegistration(
-                handlerTypes -> handlerLoader.load(spot.getClass(), handlerTypes, this::addTimer));
+                (handlerTypes, subscriptions) ->
+                        handlerLoader.load(
+                                spot.getClass(), handlerTypes, subscriptions, this::addTimer));
     }
 
     void bindSubscriptions(ZLinkBackendSpot spot) {
-        for (String topic : handlerCatalog.subscriptionTopics()) {
-            spot.setSubscription(topic);
+        for (var subscription : handlerCatalog.subscriptions()) {
+            spot.setSubscription(subscription.channelName(), subscription.topic());
         }
     }
 

@@ -247,23 +247,28 @@ public void configure() {
 | --- | --- | --- |
 | User Spot 앞 one-way packet | `ZLinkSpotPacketHandler<TSpot, TMessage>` | `@ZLinkPacket` |
 | User Spot 앞 request | `ZLinkSpotRequestHandler<TSpot, TRequest, TReply>` | `@ZLinkSpotRequest` |
-| Logical Multicast 구독 이벤트 | `ZLinkSpotSubscriptionHandler<TSpot, TEvent>` | `@ZLinkSpotSubscription(spotNodeName, topic)` |
+| Logical Multicast 구독 이벤트 | `ZLinkSpotSubscriptionHandler<TSpot, TEvent>` | `@ZLinkSpotSubscription(spotNodeName = "game", channelName = "events", topic = "orders")` |
 | User Spot의 member Actor 앞 one-way packet | `ZLinkSpotActorSendHandler<TSpot, TActor, TMessage>` | `@ZLinkSpotActorSend` |
 | User Spot의 member Actor 앞 request | `ZLinkSpotActorRequestHandler<TSpot, TActor, TRequest, TReply>` | `@ZLinkSpotActorRequest` |
 | Spot 주기 timer | `ZLinkSpotTimerHandler<TSpot>` | `@ZLinkSpotTimer(name, periodMillis)` |
 | Instance Spot 앞 packet | User Spot의 packet handler와 같은 모양 | `@ZLinkPacket` |
 
 `ZLinkSpotHandlerRegistry.addHandler(Class<?>)`와
-`ZLinkInstanceSpotHandlerRegistry.addPacket(Class<?>)`는 handler 종류를 구분하지 않는 단일 등록
-메서드다 — annotation과 구현 interface로 실제 역할을 판별한다.
+`ZLinkInstanceSpotHandlerRegistry.addPacket(Class<?>)`는 annotation과 구현 interface로 handler의 역할을 판별합니다.
 
 **완료 결과.** 반환값 없이 동기로 등록된다. Packet name을 생략하면 annotation의 `value()`/
-`packetName()`을 사용하고, annotation도 없으면 타입 이름을 사용한다. 같은 owner의 handler key 중복은
-startup 검증에서 `ZLinkConfigurationException`으로 드러난다.
+`packetName()`을 사용하고, annotation도 없으면 타입 이름을 사용한다. 같은 owner의 handler key 중복의 검사 시점과 실패 결과는 [공통 API 「23」](../../common/spec/server/00-foundation/06-framework-api.ko.md#23-startup-validation)을 따른다.
 
 **선택 기준.** `configure()`가 호출될 때마다 이 Spot이 처리할 모든 handler를 등록한다.
 Node·Channel handler는 topology-discovery category의 등록 항목을, STREAM session handler는
 stream-session category를 참고한다.
+
+실행 중 정한 channel과 topic은 다음과 같이 등록합니다. annotation은 선택이며, 함께 있으면
+annotation 등록과 호출 등록은 별개 subscription입니다. 중복은 [Spot messaging §5.1](../../common/spec/server/03-spot-actor/02-spot-messaging.ko.md#51-subscription-등록-값과-검사-시점)을 따릅니다.
+
+```java
+context().handlers().addSubscribe(ProjectionUpdatedHandler.class, channelName, topic);
+```
 
 ---
 

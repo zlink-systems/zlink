@@ -102,7 +102,6 @@ final class ZLinkActorDispatchSerials {
                                 new QueuedTurn(
                                         actorId,
                                         snapshot.target(),
-                                        COMPLETED,
                                         snapshot.incarnation(),
                                         activation));
     }
@@ -120,7 +119,9 @@ final class ZLinkActorDispatchSerials {
                                                             () ->
                                                                     actorTargets.computeIfAbsent(
                                                                             actorId,
-                                                                            ignored -> resolved)));
+                                                                            ignored ->
+                                                                                    initializeOnRegistry(
+                                                                                            resolved))));
                         });
     }
 
@@ -164,24 +165,10 @@ final class ZLinkActorDispatchSerials {
                                                                                 prepareOnRegistry(
                                                                                         actorId,
                                                                                         snapshot,
-                                                                                        resolved))))
-                .thenApply(
-                        prepared -> {
-                            if (prepared.admission() != null) {
-                                try {
-                                    prepared.turn()
-                                            .activation()
-                                            .executeLifecycleNext(
-                                                    () -> prepared.barrier(), prepared.admission());
-                                } catch (RuntimeException | Error failure) {
-                                    prepared.admission().completeExceptionally(failure);
-                                }
-                            }
-                            return prepared.turn();
-                        });
+                                                                                        resolved))));
     }
 
-    private PreparedTurn prepareOnRegistry(
+    private QueuedTurn prepareOnRegistry(
             String actorId,
             ZLinkActorDispatchTarget.ActivationSnapshot snapshot,
             QueuedTurn resolved) {
@@ -190,25 +177,44 @@ final class ZLinkActorDispatchSerials {
                 && ((previous.target() == snapshot.target()
                                 && previous.incarnation() == snapshot.incarnation())
                         || teardowns.containsKey(actorId))) {
-            return new PreparedTurn(previous, null, null);
+            return previous;
         }
         if (resolved == null) return null;
-        CompletionStage<Void> barrier = lifecycleBarriers.get(actorId);
-        CompletableFuture<Void> admission =
-                barrier != null && previous != null ? new CompletableFuture<>() : null;
-        QueuedTurn turn =
-                new QueuedTurn(
-                        actorId,
-                        snapshot.target(),
-                        admission == null ? COMPLETED : admission,
-                        snapshot.incarnation(),
-                        resolved.activation());
+        QueuedTurn turn = initializeOnRegistry(resolved);
         actorTargets.put(actorId, turn);
-        return new PreparedTurn(turn, barrier, admission);
+        return turn;
     }
 
-    private record PreparedTurn(
-            QueuedTurn turn, CompletionStage<Void> barrier, CompletableFuture<Void> admission) {}
+    private QueuedTurn initializeOnRegistry(QueuedTurn turn) {
+        CompletionStage<Void> barrier = lifecycleBarriers.get(turn.actorId());
+        if (barrier == null
+                && turn.incarnation() instanceof ZLinkActorRuntime.DefaultActorContext context) {
+            CompletionStage<Void> moving = context.moveCompletion();
+            if (!moving.toCompletableFuture().isDone()) {
+                CompletableFuture<Void> released = new CompletableFuture<>();
+                retainLifecycleBarrierOnRegistry(turn.actorId(), released);
+                moving.whenComplete((ignored, failure) -> released.complete(null));
+                barrier = released;
+            }
+        }
+        if (barrier != null) {
+            // Both a restored activation and a retargeted activation accept payloads behind
+            // their existing lifecycle completion. Admission belongs to the queue commit.
+            CompletionStage<Void> lifecycle = barrier;
+            turn.activation().executeLifecycleNext(() -> lifecycle, null);
+        }
+        return turn;
+    }
+
+    private void retainLifecycleBarrierOnRegistry(
+            String actorId, CompletableFuture<Void> released) {
+        lifecycleBarriers.put(actorId, released);
+        released.whenComplete(
+                (ignored, failure) -> {
+                    if (stateLane.isOnLane()) lifecycleBarriers.remove(actorId, released);
+                    else onRegistry(() -> lifecycleBarriers.remove(actorId, released));
+                });
+    }
 
     CompletionStage<ZLinkSerialExecutionQueue> relocationLaneAsync(String actorId) {
         return trackedTurnAsync(actorId).thenApply(turn -> turn.activation().relocationLane());
@@ -296,8 +302,18 @@ final class ZLinkActorDispatchSerials {
             long payloadBytes,
             Supplier<CompletionStage<Void>> operation,
             Runnable relocationRelease) {
+        return enqueue(turn, payloadBytes, operation, relocationRelease, null);
+    }
+
+    CompletionStage<Void> enqueue(
+            QueuedTurn turn,
+            long payloadBytes,
+            Supplier<CompletionStage<Void>> operation,
+            Runnable relocationRelease,
+            CompletableFuture<Void> requestAdmission) {
         Supplier<CompletionStage<Void>> turnOperation = () -> runTurn(turn, operation);
-        CompletableFuture<Void> admission = new CompletableFuture<>();
+        CompletableFuture<Void> admission =
+                requestAdmission == null ? new CompletableFuture<>() : requestAdmission;
         return enqueueAfterAdmission(
                 turn,
                 admission,
@@ -341,8 +357,25 @@ final class ZLinkActorDispatchSerials {
             long acceptedJournalRecordSizeHint,
             Supplier<CompletionStage<Void>> operation,
             Runnable relocationRelease) {
+        return enqueueLazyRecord(
+                turn,
+                acceptedJournalRecord,
+                acceptedJournalRecordSizeHint,
+                operation,
+                relocationRelease,
+                null);
+    }
+
+    CompletionStage<Void> enqueueLazyRecord(
+            QueuedTurn turn,
+            Supplier<byte[]> acceptedJournalRecord,
+            long acceptedJournalRecordSizeHint,
+            Supplier<CompletionStage<Void>> operation,
+            Runnable relocationRelease,
+            CompletableFuture<Void> requestAdmission) {
         Supplier<CompletionStage<Void>> turnOperation = () -> runTurn(turn, operation);
-        CompletableFuture<Void> admission = new CompletableFuture<>();
+        CompletableFuture<Void> admission =
+                requestAdmission == null ? new CompletableFuture<>() : requestAdmission;
         return enqueueAfterAdmission(
                 turn,
                 admission,
@@ -405,22 +438,16 @@ final class ZLinkActorDispatchSerials {
                                             QueuedTurn tracked =
                                                     actorTargets.computeIfAbsent(
                                                             actorId, ignored -> resolved);
-                                            lifecycleBarriers.put(actorId, released);
+                                            retainLifecycleBarrierOnRegistry(actorId, released);
                                             return tracked;
                                         }))
                 .thenCompose(
-                        turn -> {
-                            CompletableFuture<Void> admitted = new CompletableFuture<>();
-                            CompletionStage<Void> barrier =
-                                    turn.activation()
-                                            .executeLifecycleNext(
-                                                    () -> runTurn(turn, operation), admitted);
-                            return admitted.thenCompose(ignored -> barrier);
-                        })
+                        turn ->
+                                turn.activation()
+                                        .executeLifecycleNext(() -> runTurn(turn, operation), null))
                 .whenComplete(
                         (ignored, error) -> {
                             released.complete(null);
-                            onRegistry(() -> lifecycleBarriers.remove(actorId, released));
                         });
     }
 
@@ -500,17 +527,11 @@ final class ZLinkActorDispatchSerials {
                         .transferToQueuedJob();
         CompletionStage<Void> queued;
         try {
-            queued =
-                    turn.barrierAdmission()
-                            .thenCompose(
-                                    ignored -> {
-                                        try (var scope =
-                                                systems.zlink.framework.runtime.internal.dispatch
-                                                        .ZLinkApplicationJobContext.enterQueued(
-                                                        ownership)) {
-                                            return enqueue.apply(admission);
-                                        }
-                                    });
+            try (var scope =
+                    systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext
+                            .enterQueued(ownership)) {
+                queued = enqueue.apply(admission);
+            }
         } catch (RuntimeException | Error failure) {
             queued = CompletableFuture.failedFuture(failure);
         }
@@ -590,7 +611,6 @@ final class ZLinkActorDispatchSerials {
     record QueuedTurn(
             String actorId,
             ZLinkActorDispatchTarget target,
-            CompletionStage<Void> barrierAdmission,
             Object incarnation,
             ZLinkActorSerialExecutor activation) {}
 

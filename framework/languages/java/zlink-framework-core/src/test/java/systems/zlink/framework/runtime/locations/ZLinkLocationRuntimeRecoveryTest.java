@@ -298,12 +298,13 @@ final class ZLinkLocationRuntimeRecoveryTest {
     }
 
     @Test
-    void heartbeatWaitsForPendingClaimAndStartsItsIntervalAfterCompletion() throws Exception {
+    void heartbeatWaitsForPendingClaimAndNeverOverlapsRenewals() throws Exception {
         var claim = new CompletableFuture<ZLinkOwnerLeaseClaimResult>();
-        var renewStarted = new CountDownLatch(1);
-        var overlappingRenewal = new CountDownLatch(1);
         var releaseRenew = new CompletableFuture<ZLinkOwnerLeaseRenewResult>();
         var renewCount = new AtomicInteger();
+        var renewStarted = new CompletableFuture<Void>();
+        var clock = new java.util.concurrent.atomic.AtomicLong(Duration.ofSeconds(1).toNanos());
+        var scheduler = new ZLinkLocationFirstHeartbeatTest.RecordingScheduler();
         var store =
                 new ZLinkLocationStoreTestAdapter() {
                     @Override
@@ -315,10 +316,8 @@ final class ZLinkLocationRuntimeRecoveryTest {
                     @Override
                     public CompletionStage<ZLinkOwnerLeaseRenewResult> renewOwnerLease(
                             ZLinkLocationOwnerToken token, Duration ttl) {
-                        if (renewCount.incrementAndGet() > 1) {
-                            overlappingRenewal.countDown();
-                        }
-                        renewStarted.countDown();
+                        renewCount.incrementAndGet();
+                        renewStarted.complete(null);
                         return releaseRenew;
                     }
                 };
@@ -327,26 +326,42 @@ final class ZLinkLocationRuntimeRecoveryTest {
                         ZLinkRegisteredLocationStores.fromUnified(store),
                         "owner-a",
                         Duration.ofSeconds(15),
-                        Duration.ofSeconds(1),
+                        Duration.ofMillis(100),
                         Duration.ofSeconds(5),
-                        Duration.ofSeconds(1))) {
+                        Duration.ofSeconds(1),
+                        clock::get,
+                        scheduler)) {
             var startup = runtime.start(RoutingId.from("node-a")).toCompletableFuture();
-            assertFalse(renewStarted.await(2, TimeUnit.SECONDS));
+            clock.addAndGet(Duration.ofMillis(150).toNanos());
+            assertFalse(startup.isDone());
+            assertEquals(0, renewCount.get());
+            assertEquals(1, scheduler.tasks.size(), "only the claim timeout is scheduled");
+            assertEquals(5000, scheduler.tasks.getFirst().getDelay(TimeUnit.MILLISECONDS));
             Instant now = Instant.now();
             claim.complete(
                     new ZLinkOwnerLeaseClaimed(
                             new ZLinkLocationOwnerToken("owner-a", 1), now.plusSeconds(15), now));
             startup.get(1, TimeUnit.SECONDS);
-            assertFalse(
-                    renewStarted.await(500, TimeUnit.MILLISECONDS),
-                    "the initial claim completion starts the first renewal interval");
-            assertTrue(renewStarted.await(2, TimeUnit.SECONDS));
+            var heartbeat = scheduler.tasks.getLast();
+            // Location section 5: the initial claim already consumed the renewal interval.
+            assertEquals(0, heartbeat.getDelay(TimeUnit.MILLISECONDS));
+            heartbeat.run();
+            renewStarted.join();
+            assertEquals(1, renewCount.get());
+            clock.addAndGet(Duration.ofSeconds(1).toNanos());
             assertFalse(releaseRenew.isDone());
-            assertFalse(overlappingRenewal.await(2, TimeUnit.SECONDS));
-            assertEquals(1, renewCount.get(), "a pending renewal must not overlap");
+            assertEquals(
+                    0,
+                    scheduler.tasks.stream().filter(task -> !task.isDone()).count(),
+                    "a pending renewal must not schedule an overlapping renewal");
+            var scheduled = scheduler.nextTask();
             releaseRenew.complete(
                     new systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseRenewed(
                             now.plusSeconds(15), now));
+            var next = scheduled.join();
+            assertEquals(1, renewCount.get());
+            assertFalse(next.isDone());
+            assertEquals(0, next.getDelay(TimeUnit.MILLISECONDS));
         }
     }
 

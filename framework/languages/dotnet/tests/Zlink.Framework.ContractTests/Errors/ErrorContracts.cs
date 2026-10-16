@@ -63,7 +63,8 @@ public sealed class ErrorContracts
                         token
                     );
                 },
-                CancellationToken.None
+                CancellationToken.None,
+                () => new ZLinkPeerRouteObservation(1, 1, new TaskCompletionSource().Task)
             )
         );
 

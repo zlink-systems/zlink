@@ -231,7 +231,7 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
                         : null
                 )
                 .AsTask();
-            reservation.BindExecution(execution, lane.NotifyReadiness);
+            reservation.BindExecution(execution, lane);
             return reservation;
         }
         catch
@@ -264,7 +264,12 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
                         )
                     )
                     .ConfigureAwait(false);
-        var claim = await AcquireApplicationClaimAsync().ConfigureAwait(false);
+        // A sealed Spot (Close or relocation) does not run the tick. The tick
+        // stays undelivered: Close cleans it with the old incarnation and a
+        // relocation seal carries it as a pending tick (Spot messaging §7,
+        // host relocation §12). It is not an application handler failure.
+        if (await TryAcquireApplicationClaimAsync().ConfigureAwait(false) is not { } claim)
+            return;
         await RunClaimedAsync(
                 lane,
                 ct => ExecuteTimerOperationAsync(operation, state, ct),
@@ -478,9 +483,15 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
     internal bool HasPendingAcceptedState(Func<object, bool> predicate) =>
         _queue.HasPendingAcceptedState(predicate);
 
+    // Ingress admits accepted states in a state lane turn, so the step 3
+    // decision of Spot messaging §7 runs in one too: an intent that reached
+    // this Spot before the decision is admitted before it.
     internal ValueTask<bool> HasPendingAcceptedStateOrCloseApplicationAdmissionAsync(
         Func<object, bool> predicate
-    ) => _queue.HasPendingAcceptedStateOrCloseApplicationAdmissionAsync(predicate);
+    ) =>
+        RunBarrierStateAsync(() =>
+            _queue.HasPendingAcceptedStateOrCloseApplicationAdmission(predicate)
+        );
 
     internal ValueTask<bool> VisitPendingAcceptedStateAsync(
         ZLinkSpotSerialExecutor? successor,
@@ -1617,9 +1628,6 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
     {
         return TryAcquireApplicationClaim() ?? RejectedApplicationClaim();
     }
-
-    private async ValueTask<ZLinkExecutionClaim> AcquireApplicationClaimAsync() =>
-        await TryAcquireApplicationClaimAsync().ConfigureAwait(false) ?? RejectedApplicationClaim();
 
     private static ZLinkExecutionClaim RejectedApplicationClaim() =>
         throw new ZLinkFrameworkException(

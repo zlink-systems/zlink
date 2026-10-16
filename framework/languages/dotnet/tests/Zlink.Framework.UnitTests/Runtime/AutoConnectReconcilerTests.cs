@@ -762,6 +762,52 @@ public sealed class AutoConnectReconcilerTests
     }
 
     [Fact]
+    public async Task Serving_Publication_After_Store_Failure_Writes_The_New_Revision_Once()
+    {
+        var fixture = await FixtureAsync();
+        await fixture.Reconciler.TickAsync();
+        var before = Assert.Single((await fixture.Store.ListMeshNodesAsync("play", default)).Items);
+        await fixture.Reconciler.NoteStoreFailureAsync();
+
+        Assert.True(await fixture.Reconciler.MarkServingAsync());
+
+        var serving = Assert.Single(
+            (await fixture.Store.ListMeshNodesAsync("play", default)).Items
+        );
+        Assert.Equal(ZLinkFrameworkRuntimeState.Serving, serving.State);
+        Assert.Equal(before.DescriptorRevision + 1, serving.DescriptorRevision);
+        Assert.Equal(before.LeaseGeneration, serving.LeaseGeneration);
+        await fixture.Reconciler.TickAsync();
+        Assert.Equal(
+            serving,
+            Assert.Single((await fixture.Store.ListMeshNodesAsync("play", default)).Items)
+        );
+    }
+
+    [Fact]
+    public async Task Serving_Publication_Does_Not_Overwrite_A_Newer_Stored_Revision()
+    {
+        var fixture = await FixtureAsync();
+        await fixture.Reconciler.TickAsync();
+        var before = Assert.Single((await fixture.Store.ListMeshNodesAsync("play", default)).Items);
+        var newer = before with
+        {
+            DescriptorRevision = before.DescriptorRevision + 2,
+            State = ZLinkFrameworkRuntimeState.Draining,
+        };
+        Assert.Equal(
+            ZLinkLocationWriteStatus.Stored,
+            (await fixture.Store.UpdateMeshNodeAsync(newer, ZLinkLocationWriteIntent.Renew)).Status
+        );
+
+        Assert.False(await fixture.Reconciler.MarkServingAsync());
+
+        var stored = Assert.Single((await fixture.Store.ListMeshNodesAsync("play", default)).Items);
+        Assert.Equal(newer.DescriptorRevision, stored.DescriptorRevision);
+        Assert.Equal(ZLinkFrameworkRuntimeState.Draining, stored.State);
+    }
+
+    [Fact]
     public async Task Claimed_Startup_Row_Uses_Renew_Then_Exact_Owner_Cleanup()
     {
         var time = new ManualTimeProvider();

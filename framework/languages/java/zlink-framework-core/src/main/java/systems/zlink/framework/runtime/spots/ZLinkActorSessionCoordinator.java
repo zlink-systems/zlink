@@ -8,13 +8,11 @@ import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
-import systems.zlink.framework.runtime.actors.ZLinkActorReplyRoute;
 import systems.zlink.framework.runtime.actors.ZLinkActorRuntime;
 import systems.zlink.framework.runtime.actors.ZLinkSessionActorsRuntime.LocalActorReply;
 import systems.zlink.framework.runtime.handlers.ZLinkHandlerStages;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
-import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
 import systems.zlink.framework.spots.ZLinkSpot;
 
@@ -141,6 +139,13 @@ final class ZLinkActorSessionCoordinator {
         requireActors().refreshRelocationMessageFollow(source, target);
     }
 
+    CompletionStage<Void> confirmRelocationMessageFollow(
+            systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
+                            .ActorRouteFence
+                    source) {
+        return requireActors().confirmRelocationMessageFollow(source);
+    }
+
     void abortRelocationMessageFollow(
             systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
                             .ActorRouteFence
@@ -262,54 +267,13 @@ final class ZLinkActorSessionCoordinator {
                 .isPresent();
     }
 
-    CompletionStage<Void> dispatch(ZLinkActor actor, Supplier<CompletionStage<Void>> operation) {
-        return requireActors().submitActorDispatch(actor.context().actorId(), operation);
-    }
-
-    CompletionStage<Optional<Message>> captureMoving(
-            ZLinkActor actor,
-            ZLinkStreamHeader header,
-            Message payload,
-            ZLinkActorReplyRoute replyRoute) {
-        return requireActors().captureMovingPacket(actor, header, payload, replyRoute);
-    }
-
-    Optional<ZLinkBackendActorRef> messageFollowTargetActorRef(ZLinkActor actor) {
-        return requireActors().messageFollowTargetActorRef(actor);
-    }
-
-    boolean isMoving(ZLinkActor actor) {
-        return requireActors().isMoving(actor);
-    }
-
-    CompletionStage<Void> awaitMoveCompletion(ZLinkActor actor) {
-        return requireActors().awaitMoveCompletion(actor);
-    }
-
     CompletionStage<Optional<LocalActorReply>> dispatchLocalSession(
             ZLinkBackendActorRef actorRef,
             ZLinkStreamHeader header,
             Message payload,
             Predicate<String> isLocalSpot,
             Function<LocalDispatch, CompletionStage<Optional<LocalActorReply>>> localDispatch) {
-        return dispatchLocalSession(actorRef, 0, header, payload, isLocalSpot, localDispatch, true);
-    }
-
-    CompletionStage<Optional<LocalActorReply>> dispatchLocalSession(
-            ZLinkBackendActorRef actorRef,
-            long acceptedSessionSequence,
-            ZLinkStreamHeader header,
-            Message payload,
-            Predicate<String> isLocalSpot,
-            Function<LocalDispatch, CompletionStage<Optional<LocalActorReply>>> localDispatch) {
-        return dispatchLocalSession(
-                actorRef,
-                acceptedSessionSequence,
-                header,
-                payload,
-                isLocalSpot,
-                localDispatch,
-                true);
+        return dispatchLocalSession(actorRef, null, header, payload, isLocalSpot, localDispatch);
     }
 
     CompletionStage<Optional<Message>> dispatchTransferBacklog(
@@ -417,14 +381,13 @@ final class ZLinkActorSessionCoordinator {
                 .thenCompose(ignored -> result);
     }
 
-    private CompletionStage<Optional<LocalActorReply>> dispatchLocalSession(
+    CompletionStage<Optional<LocalActorReply>> dispatchLocalSession(
             ZLinkBackendActorRef actorRef,
-            long acceptedSessionSequence,
+            byte[] acceptedRecord,
             ZLinkStreamHeader header,
             Message payload,
             Predicate<String> isLocalSpot,
-            Function<LocalDispatch, CompletionStage<Optional<LocalActorReply>>> localDispatch,
-            boolean captureMovingPacket) {
+            Function<LocalDispatch, CompletionStage<Optional<LocalActorReply>>> localDispatch) {
         ZLinkActorRuntime runtime = requireActors();
         Optional<ZLinkActor> localActor = runtime.localActor(actorRef.actorId());
         if (localActor.isEmpty()) {
@@ -434,10 +397,9 @@ final class ZLinkActorSessionCoordinator {
                             "local actor is not available: " + actorRef.actorId()));
         }
         ZLinkActor actor = localActor.get();
-        if (captureMovingPacket && runtime.isMoving(actor)) {
+        if (runtime.isMoving(actor)) {
             CompletionStage<Optional<Message>> captured =
-                    runtime.captureMovingPacket(
-                            actor, header, payload, null, acceptedSessionSequence);
+                    runtime.captureMovingPacket(actor, header, payload, null, acceptedRecord);
             if (captured != null) {
                 return captured.thenApply(
                         reply ->
@@ -448,7 +410,7 @@ final class ZLinkActorSessionCoordinator {
                             ignored ->
                                     dispatchLocalSession(
                                             actorRef,
-                                            acceptedSessionSequence,
+                                            acceptedRecord,
                                             header,
                                             payload,
                                             isLocalSpot,
@@ -462,7 +424,11 @@ final class ZLinkActorSessionCoordinator {
             // switched its route. The committed Message Follow target is the
             // only valid dispatch surface during that bounded interval.
             return runtime.dispatchRemoteJoinedActor(
-                            messageFollowTarget.orElseThrow(), null, header, payload)
+                            messageFollowTarget.orElseThrow(),
+                            null,
+                            header,
+                            payload,
+                            acceptedRecord == null ? new byte[0] : acceptedRecord)
                     .thenApply(reply -> decodeRoutedReply(header, reply));
         }
         if (joinedSpotId.isPresent()
@@ -470,20 +436,19 @@ final class ZLinkActorSessionCoordinator {
                 && !isLocalSpot.test(joinedSpotId.get())
                 && runtime.canRouteRemoteJoinedSpot(joinedSpotId.get())) {
             return runtime.dispatchRemoteJoinedActor(
-                            runtime.currentRef(actor), joinedSpotId.get(), header, payload)
+                            runtime.currentRef(actor),
+                            joinedSpotId.get(),
+                            header,
+                            payload,
+                            acceptedRecord == null ? new byte[0] : acceptedRecord)
                     .thenApply(reply -> decodeRoutedReply(header, reply));
         }
-        if (!captureMovingPacket) {
-            // Transfer commit already owns the actor's serialized turn. Queuing
-            // replay behind that turn would wait on the commit that is waiting
-            // for this replay to finish.
-            return localDispatch.apply(new LocalDispatch(actor, joinedSpotId));
-        }
         CompletableFuture<Optional<LocalActorReply>> result = new CompletableFuture<>();
-        byte[] acceptedRecord =
-                runtime.encodeLocalSessionActorAccepted(
-                        actor, header, payload, acceptedSessionSequence);
-        if (acceptedRecord.length == 0) {
+        byte[] journalRecord =
+                acceptedRecord == null
+                        ? runtime.encodeLocalActorAccepted(actor, header, payload)
+                        : acceptedRecord;
+        if (journalRecord.length == 0) {
             return CompletableFuture.failedFuture(
                     new ZLinkConfigurationException(
                             "canonical local Session Actor journal context is unavailable"));
@@ -491,7 +456,7 @@ final class ZLinkActorSessionCoordinator {
         return runtime.submitActorDispatch(
                         actor.context().actorId(),
                         ZLinkActorAcceptedJournal.encode(
-                                actor.context().actorId(), header, payload, acceptedRecord),
+                                actor.context().actorId(), header, payload, journalRecord),
                         () ->
                                 invokeLocalDispatch(
                                         localDispatch,
@@ -512,25 +477,11 @@ final class ZLinkActorSessionCoordinator {
 
     CompletionStage<Optional<Message>> runPacketTurn(
             ZLinkActor actor,
-            boolean request,
-            boolean noBindRequest,
             ZLinkBackendActorReceived headerPart,
-            ZLinkInternalSpotNode primaryNode,
             Supplier<CompletionStage<Optional<Message>>> operation,
             Supplier<byte[]> relocationRecord,
             Runnable relocationRelease) {
         ZLinkActorRuntime runtime = requireActors();
-        if (request
-                && !noBindRequest
-                && !runtime.hasBoundSession(
-                        actor, headerPart.sourceNodeRid(), headerPart.sourceSessionRid())) {
-            bindNativeSession(
-                    actor,
-                    primaryNode,
-                    headerPart.actor(),
-                    headerPart.sourceNodeRid(),
-                    headerPart.sourceSessionRid());
-        }
         String actorId = actor.context().actorId();
         CompletableFuture<Optional<Message>> result = new CompletableFuture<>();
         Supplier<CompletionStage<Void>> turn =
@@ -563,37 +514,6 @@ final class ZLinkActorSessionCoordinator {
 
     boolean hasBoundSession(ZLinkActor actor) {
         return requireActors().hasBoundSession(actor);
-    }
-
-    void bindNativeSession(
-            ZLinkActor actor,
-            ZLinkInternalSpotNode node,
-            ZLinkBackendActorRef actorRef,
-            RoutingId sourceNodeRid,
-            RoutingId sourceSessionRid) {
-        ZLinkInternalSpotNode.BoundSessionRoute route =
-                node.boundSessionRoute(actorRef)
-                        .filter(
-                                candidate ->
-                                        candidate.sessionOwnerNodeRid().equals(sourceNodeRid)
-                                                && candidate.sessionRid().equals(sourceSessionRid)
-                                                && candidate.bindingGeneration() > 0)
-                        .orElseThrow(
-                                () ->
-                                        new ZLinkFrameworkException(
-                                                ZLinkFrameworkErrorKind.UNAVAILABLE,
-                                                "bound Session runtime route is unavailable or"
-                                                        + " stale: "
-                                                        + actorRef.actorId()));
-        requireActors()
-                .bindNativeSession(
-                        actor,
-                        node,
-                        actorRef,
-                        sourceNodeRid,
-                        sourceSessionRid,
-                        route.bindingGeneration(),
-                        0);
     }
 
     Object spotSurface(

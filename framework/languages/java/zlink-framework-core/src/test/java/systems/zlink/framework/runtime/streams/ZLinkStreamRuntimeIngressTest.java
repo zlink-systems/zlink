@@ -55,6 +55,7 @@ import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry;
 import systems.zlink.framework.runtime.messaging.ZLinkJsonMessageSerializer;
+import systems.zlink.framework.runtime.protocol.ServiceWirePilotCodec;
 import systems.zlink.framework.streams.ZLinkSession;
 import systems.zlink.framework.streams.ZLinkSessionContext;
 import systems.zlink.framework.streams.ZLinkSessionDispatchContext;
@@ -886,6 +887,42 @@ final class ZLinkStreamRuntimeIngressTest {
         assertLivenessCloseReason(idleStream, "idle_timeout");
     }
 
+    private static final int DISCONNECT_SHUTDOWN_STRESS_ITERATIONS = 100;
+
+    @org.junit.jupiter.api.RepeatedTest(DISCONNECT_SHUTDOWN_STRESS_ITERATIONS)
+    void clientDisposeImmediatelyFollowedByDrainDoesNotSubmitActorUnbound() throws Exception {
+        FakeStream stream = new FakeStream();
+        ReplacementFixture fixture = startReplacement(stream);
+        runtimes.add(fixture.runtime());
+        TestSession session = awaitSession();
+        assertTrue(session.dispatchLatch.await(5, TimeUnit.SECONDS));
+        ZLinkActor actor =
+                fixture.actors()
+                        .getOrCreateLocalActor(REPLACEMENT_ACTOR, ZLinkActor.class)
+                        .toCompletableFuture()
+                        .join()
+                        .orElseThrow();
+        ZLinkBackendActorRef actorRef = fixture.actors().currentRef(actor);
+        session.context()
+                .actors()
+                .bind(
+                        new ActorRef(
+                                actorRef.actorId(),
+                                actorRef.generation(),
+                                MESH,
+                                actorRef.nodeRid()))
+                .toCompletableFuture()
+                .join();
+
+        stream.errorHandler.handle(PEER_A, MonitorEventType.DISCONNECTED, 0, "DISCONNECTED");
+        fixture.runtime().beginDrain();
+        fixture.runtime().closeAsync().toCompletableFuture().get(5, TimeUnit.SECONDS);
+
+        assertEquals(List.of("disconnected"), session.transportClosed.get(5, TimeUnit.SECONDS));
+        assertTrue(session.context().actors().bound().isEmpty());
+        assertEquals(0, stream.actorUnboundSubmissions.get());
+    }
+
     @Test
     void drainedCloseUsesServerDrainMetricReason() throws Exception {
         FakeStream stream = new FakeStream();
@@ -1236,6 +1273,201 @@ final class ZLinkStreamRuntimeIngressTest {
                 .toCompletableFuture()
                 .join();
         assertEquals(relocation, sealed.relocation());
+    }
+
+    @Test
+    void closedSessionCommand42AnswersBindingAbsentWithoutASeal() throws Exception {
+        FakeStream stream = new FakeStream();
+        ReplacementFixture fixture = startReplacement(stream);
+        runtimes.add(fixture.runtime());
+        AtomicInteger disconnectCallbacks = new AtomicInteger();
+        fixture.actors()
+                .setDisconnectedNotifier(
+                        ignored -> {
+                            disconnectCallbacks.incrementAndGet();
+                            return CompletableFuture.completedFuture(null);
+                        });
+        TestSession session = awaitSession();
+        assertTrue(session.dispatchLatch.await(5, TimeUnit.SECONDS));
+        ZLinkBackendActorRef actorRef = bindLocalActor(fixture, session, "closed-session-actor");
+        var relocation = new ZLinkServiceM6BWireCodec.RelocationIdentity(3, 5);
+        var seal = sessionSeal(relocation, actorRef, PEER_A, 1);
+
+        stream.errorHandler.handle(PEER_A, MonitorEventType.DISCONNECTED, 0, "DISCONNECTED");
+        assertEquals(List.of("disconnected"), session.transportClosed.get(5, TimeUnit.SECONDS));
+        awaitCondition(() -> disconnectCallbacks.get() == 1, "disconnect callback did not run");
+
+        assertEquals(
+                ServiceWirePilotCodec.SessionSealResult.BINDING_ABSENT,
+                sealResult(fixture.runtime(), actorRef, seal));
+        assertEquals(
+                ServiceWirePilotCodec.SessionSealResult.BINDING_ABSENT,
+                sealResult(fixture.runtime(), actorRef, seal),
+                "the same command 42 is answered from the bindingAbsent record");
+        var changed =
+                assertThrows(
+                        CompletionException.class,
+                        () ->
+                                sealResult(
+                                        fixture.runtime(),
+                                        actorRef,
+                                        sessionSeal(relocation, actorRef, PEER_A, 2)));
+        assertEquals(
+                ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                ((ZLinkFrameworkException) changed.getCause()).kind());
+        //  A late command 44 for the bindingAbsent record is a Warning only.
+        fixture.runtime()
+                .handleSessionRelocationRoute(
+                        actorRef.nodeRid(),
+                        new ZLinkServiceM6BWireCodec()
+                                .encodeSessionRelocationRoute(sessionAbort(seal)))
+                .toCompletableFuture()
+                .get(5, TimeUnit.SECONDS);
+        assertEquals(1, disconnectCallbacks.get(), "relocation never repeats the callback");
+    }
+
+    @Test
+    void oneRelocationKeepsSeparateResultsForEachActorParticipant() throws Exception {
+        FakeStream stream = new FakeStream();
+        ReplacementFixture fixture = startReplacement(stream);
+        runtimes.add(fixture.runtime());
+        TestSession session = awaitSession();
+        assertTrue(session.dispatchLatch.await(5, TimeUnit.SECONDS));
+        ZLinkBackendActorRef bound = bindLocalActor(fixture, session, "bound-participant");
+        ZLinkBackendActorRef absent =
+                fixture.actors()
+                        .currentRef(
+                                fixture.actors()
+                                        .getOrCreateLocalActor(
+                                                "unbound-participant", ZLinkActor.class)
+                                        .toCompletableFuture()
+                                        .join()
+                                        .orElseThrow());
+        var relocation = new ZLinkServiceM6BWireCodec.RelocationIdentity(3, 6);
+        var absentSeal = sessionSeal(relocation, absent, PEER_A, 1);
+        var boundSeal = sessionSeal(relocation, bound, PEER_A, 1);
+
+        assertEquals(
+                ServiceWirePilotCodec.SessionSealResult.BINDING_ABSENT,
+                sealResult(fixture.runtime(), absent, absentSeal));
+        assertEquals(
+                ServiceWirePilotCodec.SessionSealResult.SEALED,
+                sealResult(fixture.runtime(), bound, boundSeal));
+        assertEquals(
+                ServiceWirePilotCodec.SessionSealResult.BINDING_ABSENT,
+                sealResult(fixture.runtime(), absent, absentSeal));
+        fixture.runtime()
+                .handleSessionRelocationRoute(
+                        bound.nodeRid(),
+                        new ZLinkServiceM6BWireCodec()
+                                .encodeSessionRelocationRoute(sessionAbort(boundSeal)))
+                .toCompletableFuture()
+                .get(5, TimeUnit.SECONDS);
+        assertNull(
+                fixture.runtime()
+                        .handleSessionRelocationSeal(
+                                bound.nodeRid(),
+                                new ZLinkServiceM6BWireCodec()
+                                        .encodeSessionRelocationSeal(boundSeal))
+                        .toCompletableFuture()
+                        .get(5, TimeUnit.SECONDS),
+                "the participant's closed sealed record is not answered");
+    }
+
+    @Test
+    void command42ForAnotherBindingOfABoundActorIsAMismatch() throws Exception {
+        FakeStream stream = new FakeStream();
+        ReplacementFixture fixture = startReplacement(stream);
+        runtimes.add(fixture.runtime());
+        TestSession session = awaitSession();
+        assertTrue(session.dispatchLatch.await(5, TimeUnit.SECONDS));
+        ZLinkBackendActorRef actorRef = bindLocalActor(fixture, session, "rebound-actor");
+        //  A command 42 for the binding before a rebind names another Session.
+        var stale =
+                sessionSeal(
+                        new ZLinkServiceM6BWireCodec.RelocationIdentity(3, 7), actorRef, PEER_B, 1);
+
+        var failure =
+                assertThrows(
+                        CompletionException.class,
+                        () -> sealResult(fixture.runtime(), actorRef, stale));
+        assertTrue(
+                failure.getCause().getMessage().contains("current binding"),
+                "a different current binding is a mismatch, not bindingAbsent: "
+                        + failure.getCause().getMessage());
+    }
+
+    private static ZLinkBackendActorRef bindLocalActor(
+            ReplacementFixture fixture, TestSession session, String actorId) {
+        ZLinkActor actor =
+                fixture.actors()
+                        .getOrCreateLocalActor(actorId, ZLinkActor.class)
+                        .toCompletableFuture()
+                        .join()
+                        .orElseThrow();
+        ZLinkBackendActorRef actorRef = fixture.actors().currentRef(actor);
+        session.context()
+                .actors()
+                .bind(
+                        new ActorRef(
+                                actorRef.actorId(),
+                                actorRef.generation(),
+                                MESH,
+                                actorRef.nodeRid()))
+                .toCompletableFuture()
+                .join();
+        return actorRef;
+    }
+
+    private static ZLinkServiceM6BWireCodec.SessionRelocationSeal sessionSeal(
+            ZLinkServiceM6BWireCodec.RelocationIdentity relocation,
+            ZLinkBackendActorRef actorRef,
+            RoutingId sessionRid,
+            long bindingGeneration) {
+        return new ZLinkServiceM6BWireCodec.SessionRelocationSeal(
+                relocation,
+                new ZLinkServiceM6BWireCodec.RelocationCoordinatorFence(
+                        "actor-owner", 11, actorRef.nodeRid(), 3, "store-v1"),
+                ZLinkServiceM6BWireCodec.RelocationRole.SOURCE,
+                new ZLinkServiceM6BWireCodec.ActorRouteFence(actorRef, 3, 7, 11),
+                new ZLinkServiceM6BWireCodec.SessionOwnerFence(
+                        RoutingId.from("session-owner-node"),
+                        3,
+                        "session-owner",
+                        5,
+                        sessionRid,
+                        bindingGeneration));
+    }
+
+    private static ZLinkServiceM6BWireCodec.SessionRelocationRoute sessionAbort(
+            ZLinkServiceM6BWireCodec.SessionRelocationSeal seal) {
+        return new ZLinkServiceM6BWireCodec.SessionRelocationRoute(
+                seal.relocation(),
+                seal.coordinator(),
+                ZLinkServiceM6BWireCodec.RelocationRole.SOURCE,
+                new ZLinkServiceM6BWireCodec.ActorIdentity(
+                        seal.actor().actor().actorId(), seal.actor().actor().generation()),
+                seal.session(),
+                ZLinkServiceM6BWireCodec.SessionRelocationRouteAction.ABORT,
+                0,
+                seal.actor().authorityOwnerGeneration(),
+                null,
+                0,
+                0);
+    }
+
+    private static ServiceWirePilotCodec.SessionSealResult sealResult(
+            ZLinkStreamRuntime runtime,
+            ZLinkBackendActorRef actorRef,
+            ZLinkServiceM6BWireCodec.SessionRelocationSeal seal)
+            throws Exception {
+        byte[] reply =
+                runtime.handleSessionRelocationSeal(
+                                actorRef.nodeRid(),
+                                new ZLinkServiceM6BWireCodec().encodeSessionRelocationSeal(seal))
+                        .toCompletableFuture()
+                        .join();
+        return ServiceWirePilotCodec.decodeSessionRelocationSealed43(reply).sealResult();
     }
 
     @Test
@@ -1899,6 +2131,7 @@ final class ZLinkStreamRuntimeIngressTest {
         private final AtomicInteger zeroReadinessWaits = new AtomicInteger();
         private final AtomicBoolean receiveReady = new AtomicBoolean();
         private final AtomicInteger sessionClosingSends = new AtomicInteger();
+        private final AtomicInteger actorUnboundSubmissions = new AtomicInteger();
         private final CountDownLatch sessionClosingSendsLatch = new CountDownLatch(1);
         private final CompletableFuture<RoutingId> disconnectedPeer = new CompletableFuture<>();
         private final AtomicInteger disconnectCalls = new AtomicInteger();
@@ -2087,6 +2320,9 @@ final class ZLinkStreamRuntimeIngressTest {
                 ZLinkStreamHeader header,
                 List<Message> parts,
                 SendFlags flags) {
+            if (ZLinkStreamActorControl.UNBOUND.equals(header.packetName())) {
+                actorUnboundSubmissions.incrementAndGet();
+            }
             if (HEARTBEAT_PING.equals(header.packetName())) {
                 heartbeatPingAttempted.countDown();
                 if (failHeartbeatPingSend) {

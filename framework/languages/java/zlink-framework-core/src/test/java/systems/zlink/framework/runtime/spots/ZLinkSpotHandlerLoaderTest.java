@@ -8,12 +8,14 @@ import org.junit.jupiter.api.Test;
 
 import systems.zlink.framework.ZLinkEncodedPayload;
 import systems.zlink.framework.ZLinkMessageSerializer;
-import systems.zlink.framework.errors.ZLinkConfigurationException;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.handlers.ZLinkPacket;
 import systems.zlink.framework.handlers.ZLinkSpotActorRequest;
 import systems.zlink.framework.handlers.ZLinkSpotSubscription;
 import systems.zlink.framework.runtime.handlers.ZLinkScannedHandlerCatalog;
 import systems.zlink.framework.runtime.handlers.ZLinkScannedHandlerKind;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSubscription;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.spots.ZLinkSpotSubscriptionHandler;
 import systems.zlink.testfixtures.subscriptionmissing.MissingTopicSubscription;
@@ -61,7 +63,7 @@ final class ZLinkSpotHandlerLoaderTest {
                         handlerType -> null);
 
         assertThrows(
-                ZLinkConfigurationException.class,
+                ZLinkFrameworkException.class,
                 () ->
                         loader.load(
                                 TestSpot.class,
@@ -79,9 +81,9 @@ final class ZLinkSpotHandlerLoaderTest {
                         new ZLinkSpotActorHandlerCatalog(scannedHandlers, new TrackingSerializer()),
                         handlerType -> null);
 
-        ZLinkConfigurationException error =
+        ZLinkFrameworkException error =
                 assertThrows(
-                        ZLinkConfigurationException.class,
+                        ZLinkFrameworkException.class,
                         () ->
                                 loader.load(
                                         Object.class,
@@ -89,6 +91,7 @@ final class ZLinkSpotHandlerLoaderTest {
                                         (name, period, handlerType, options) ->
                                                 CompletableFuture.completedFuture(null)));
 
+        assertEquals(ZLinkFrameworkErrorKind.INVALID_OPERATION, error.kind());
         assertEquals(
                 "SPOT subscription handler topic is required: "
                         + MissingTopicSubscription.class.getName(),
@@ -111,10 +114,118 @@ final class ZLinkSpotHandlerLoaderTest {
                         (name, period, handlerType, options) ->
                                 CompletableFuture.completedFuture(null));
 
-        assertEquals(1, registrations.subscriptionHandlers().get("shared-topic").size());
+        assertEquals(
+                1,
+                registrations
+                        .subscriptionHandlers()
+                        .get(new ZLinkBackendSubscription("events", "shared-topic"))
+                        .size());
         assertEquals(
                 ConfiguredTopicSubscription.class,
-                registrations.subscriptionHandlers().get("shared-topic").get(0).handlerType());
+                registrations
+                        .subscriptionHandlers()
+                        .get(new ZLinkBackendSubscription("events", "shared-topic"))
+                        .get(0)
+                        .handlerType());
+    }
+
+    @Test
+    void duplicateSubscriptionIsRejected() {
+        var scanned = new ZLinkScannedHandlerCatalog(List.of());
+        var loader =
+                new ZLinkSpotHandlerLoader(
+                        scanned,
+                        new ZLinkSpotActorHandlerCatalog(scanned, new TrackingSerializer()),
+                        type -> null);
+        assertThrows(
+                ZLinkFrameworkException.class,
+                () ->
+                        loader.load(
+                                TestSpot.class,
+                                List.of(
+                                        ConfiguredTopicSubscription.class,
+                                        ConfiguredTopicSubscription.class),
+                                (name, period, type, options) ->
+                                        CompletableFuture.completedFuture(null)));
+    }
+
+    @Test
+    void dynamicSubscriptionUsesRuntimeArgumentsWithoutAnnotation() throws Exception {
+        var catalog =
+                configuredSubscription(
+                        DynamicSubscription.class,
+                        "channel",
+                        "dynamic." + TestSpot.class.getSimpleName());
+        assertEquals(
+                java.util.Set.of(
+                        new ZLinkBackendSubscription(
+                                "channel", "dynamic." + TestSpot.class.getSimpleName())),
+                catalog.subscriptions());
+        assertEquals(
+                1,
+                catalog.subscriptionHandlers("channel", "dynamic." + TestSpot.class.getSimpleName())
+                        .size());
+        assertTrue(
+                catalog.subscriptionHandlers("other", "dynamic." + TestSpot.class.getSimpleName())
+                        .isEmpty());
+    }
+
+    @Test
+    void annotationAndDynamicSubscriptionCoexist() throws Exception {
+        var catalog =
+                configuredSubscription(ConfiguredTopicSubscription.class, "channel", "dynamic");
+        assertEquals(2, catalog.subscriptions().size());
+    }
+
+    private ZLinkSpotHandlerCatalog configuredSubscription(
+            Class<?> type, String channel, String topic) throws Exception {
+        var catalog = new ZLinkSpotHandlerCatalog("closed");
+        catalog.addSubscribe(type, channel, topic);
+        var scanned = new ZLinkScannedHandlerCatalog(List.of());
+        var loader =
+                new ZLinkSpotHandlerLoader(
+                        scanned,
+                        new ZLinkSpotActorHandlerCatalog(scanned, new TrackingSerializer()),
+                        ignored -> null);
+        catalog.closeRegistration(
+                (types, subscriptions) ->
+                        loader.load(
+                                TestSpot.class,
+                                types,
+                                subscriptions,
+                                (name, period, handlerType, options) ->
+                                        CompletableFuture.completedFuture(null)));
+        return catalog;
+    }
+
+    private static final class DynamicSubscription
+            implements ZLinkSpotSubscriptionHandler<TestSpot, FirstEvent> {
+        public CompletionStage<Void> handle(TestSpot spot, FirstEvent event) {
+            return CompletableFuture.completedFuture(null);
+        }
+    }
+
+    @Test
+    void duplicateDynamicAndAnnotationKeysAreRejected() {
+        var scanned = new ZLinkScannedHandlerCatalog(List.of());
+        var loader =
+                new ZLinkSpotHandlerLoader(
+                        scanned,
+                        new ZLinkSpotActorHandlerCatalog(scanned, new TrackingSerializer()),
+                        ignored -> null);
+        var catalog = new ZLinkSpotHandlerCatalog("closed");
+        catalog.addSubscribe(ConfiguredTopicSubscription.class, "events", "shared-topic");
+        assertThrows(
+                ZLinkFrameworkException.class,
+                () ->
+                        catalog.closeRegistration(
+                                (types, subscriptions) ->
+                                        loader.load(
+                                                TestSpot.class,
+                                                types,
+                                                subscriptions,
+                                                (name, period, type, options) ->
+                                                        CompletableFuture.completedFuture(null))));
     }
 
     private static ZLinkHandlerActivator trackingActivator(Set<Class<?>> preparedHandlers) {
@@ -142,7 +253,7 @@ final class ZLinkSpotHandlerLoaderTest {
 
     private static final class TestActor {}
 
-    @ZLinkSpotSubscription(topic = "shared-topic")
+    @ZLinkSpotSubscription(channelName = "events", topic = "shared-topic")
     private static final class ConfiguredTopicSubscription
             implements ZLinkSpotSubscriptionHandler<TestSpot, FirstEvent> {
         @Override
@@ -162,14 +273,14 @@ final class ZLinkSpotHandlerLoaderTest {
     private static final class SecondEvent {}
 
     private static final class FirstSubscription {
-        @ZLinkSpotSubscription(topic = "shared-topic")
+        @ZLinkSpotSubscription(channelName = "events", topic = "shared-topic")
         public CompletionStage<Void> handle(TestSpot spot, FirstEvent event) {
             return CompletableFuture.completedFuture(null);
         }
     }
 
     private static final class SecondSubscription {
-        @ZLinkSpotSubscription(topic = "shared-topic")
+        @ZLinkSpotSubscription(channelName = "events", topic = "shared-topic")
         public CompletionStage<Void> handle(TestSpot spot, SecondEvent event) {
             return CompletableFuture.completedFuture(null);
         }

@@ -104,6 +104,8 @@ struct admitted_peer_t
     // use it only as an operation-local availability epoch; it is not a wire
     // generation or an ordering token.
     std::uint64_t admission_epoch = 0;
+    // The remote ADMIT was received on this exact selected route.
+    bool ready = false;
     service_liveness_registry_t::connection_t liveness;
 };
 
@@ -127,15 +129,25 @@ class service_topology_registry_t
     monitoring_snapshot_async () const;
     void set_change_handler (std::function<void ()> handler);
 
+    struct peer_observation_t
+    {
+        std::optional<admitted_peer_t> peer;
+        task_t<void> changed;
+    };
+    using peer_observer_t = std::function<peer_observation_t ()>;
+    peer_observer_t observe_peer (std::vector<std::uint8_t> node_routing_id) const;
+
     peer_admission_result_t admit (service_node_descriptor_t descriptor,
                                    std::vector<std::uint8_t> connection_id,
                                    service_liveness_registry_t::clock_t::time_point now =
-                                     service_liveness_registry_t::clock_t::now ());
+                                     service_liveness_registry_t::clock_t::now (),
+                                   protocol::command command = protocol::command::admit);
     peer_admission_result_t admit (service_node_descriptor_t descriptor,
                                    std::vector<std::uint8_t> connection_id,
                                    const service_node_descriptor_t &expected_descriptor,
                                    service_liveness_registry_t::clock_t::time_point now =
-                                     service_liveness_registry_t::clock_t::now ());
+                                     service_liveness_registry_t::clock_t::now (),
+                                   protocol::command command = protocol::command::admit);
     bool disconnect (const std::vector<std::uint8_t> &node_routing_id,
                      const std::vector<std::uint8_t> &connection_id);
 
@@ -164,19 +176,24 @@ class service_topology_registry_t
     peer_admission_result_t admit_impl (service_node_descriptor_t descriptor,
                                         std::vector<std::uint8_t> connection_id,
                                         const service_node_descriptor_t *expected_descriptor,
-                                        service_liveness_registry_t::clock_t::time_point now);
+                                        service_liveness_registry_t::clock_t::time_point now,
+                                        protocol::command command);
+    struct topology_state_t;
+    std::function<void ()> publish_topology (std::shared_ptr<topology_state_t> next);
 
     runtime::offload_executor_t _lane_executor;
     mutable runtime::state_lane_t _lane{_lane_executor};
     struct topology_state_t
     {
         service_node_descriptor_t local;
+        std::shared_ptr<task_completion_source_t<void>> changed =
+          std::make_shared<task_completion_source_t<void>> ();
         std::map<std::vector<std::uint8_t>, admitted_peer_t, byte_vector_less_t> peers;
     };
 
     // The registry publishes its sole descriptor/peer state at mutation turns.
     // Readers retain the immutable publication without entering the state lane.
-    std::shared_ptr<const topology_state_t> _topology;
+    std::shared_ptr<std::shared_ptr<const topology_state_t>> _topology;
     service_liveness_registry_t *const _liveness_owner;
     std::map<std::vector<std::uint8_t>, service_node_descriptor_t, byte_vector_less_t>
       _not_required_peers;

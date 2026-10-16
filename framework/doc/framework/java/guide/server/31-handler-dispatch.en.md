@@ -220,14 +220,20 @@ The interface names and registration methods per language are as follows.
 | --- | --- | --- |
 | A one-way packet addressed to the Spot | `ZLinkSpotPacketHandler<TSpot, TMessage>` | `addHandler(THandler.class)` |
 | A request addressed to the Spot | `ZLinkSpotRequestHandler<TSpot, TRequest, TReply>` | `addHandler(THandler.class)` |
-| A Logical Multicast subscription event | `ZLinkSpotSubscriptionHandler<TSpot, TEvent>` | `@ZLinkSpotSubscription(topic)` on the handler + `addHandler(THandler.class)` |
+| A Logical Multicast subscription event | `ZLinkSpotSubscriptionHandler<TSpot, TEvent>` | `@ZLinkSpotSubscription(spotNodeName = "game", channelName = "events", topic = "orders")` on the handler + `addHandler(THandler.class)` |
 | A timer tick | `ZLinkSpotTimerHandler<TSpot>` | `context.addTimer(name, period, THandler.class, options)` ([Timers and workers](36-timer-worker.en.md)) |
 | A one-way packet addressed to a member Actor | `ZLinkSpotActorSendHandler<TSpot, TActor, TMessage>` | `@ZLinkSpotActorSend` on the handler + `addHandler(THandler.class)` |
 | A request addressed to a member Actor | `ZLinkSpotActorRequestHandler<TSpot, TActor, TRequest, TReply>` | `@ZLinkSpotActorRequest` on the handler + `addHandler(THandler.class)` |
 
-**There's a single registration method, `addHandler`.** What kind of handler it is comes
-from the interface it implements and its annotation. The packet name comes from the
-message type's `@ZLinkPacket`.
+**`addHandler` determines the handler kind from its interface and annotation.**
+The packet name comes from the message type's `@ZLinkPacket`. Register a channel and topic
+determined at runtime as follows.
+
+```java
+context().handlers().addSubscribe(ProjectionUpdatedHandler.class, channelName, topic);
+```
+
+The annotation is optional; when present, its three values define a separate subscription.
 
 A handler takes the target Spot instance as its first argument. It runs inside the Spot, so
 it touches state directly, with no lock.

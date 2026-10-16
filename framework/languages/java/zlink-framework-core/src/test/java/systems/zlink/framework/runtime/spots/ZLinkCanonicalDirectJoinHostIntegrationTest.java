@@ -364,6 +364,17 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
             ZLinkSpotRetireControl.TargetEndpoint observedEndpoint =
                     new ZLinkSpotRetireControl.TargetEndpoint() {
                         @Override
+                        public CompletionStage<Void> beginPrepare(
+                                UUID id, CompletionStage<Void> terminal, Runnable superseded) {
+                            return endpoint.beginPrepare(id, terminal, superseded);
+                        }
+
+                        @Override
+                        public CompletionStage<Void> endPrepare(UUID id) {
+                            return endpoint.endPrepare(id);
+                        }
+
+                        @Override
                         public ZLinkSpotRetireControl.TargetProfile applyTargetProfile(
                                 ZLinkSpotRetireControl.StageRequest request,
                                 long defaultActorSpotGeneration) {
@@ -439,8 +450,11 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
 
             ZLinkActor sourceActor = sourceActors.localActor(ACTOR_ID).orElseThrow();
             ZLinkBackendActorRef sourceRef = sourceActors.currentRef(sourceActor);
-            sourceActors.bindNativeSession(
-                    sourceActor, inertSpotNode(), sourceRef, SOURCE_RID, SESSION_RID, 7, 0);
+            sourceActors
+                    .bindNativeSession(
+                            sourceActor, inertSpotNode(), sourceRef, SOURCE_RID, SESSION_RID, 7)
+                    .toCompletableFuture()
+                    .join();
 
             CompletableFuture<Void> activeTurn = new CompletableFuture<>();
             ZLinkSerialExecutionQueue sourceQueue =
@@ -450,6 +464,7 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                             .toCompletableFuture()
                             .join();
             CompletionStage<Void> blocker = sourceQueue.enqueueLifecycleBarrier(() -> activeTurn);
+            link.sourceQueue = sourceQueue;
             AtomicInteger released = new AtomicInteger();
             CompletionStage<Void> b1Accepted =
                     sourceQueue.enqueueRelocatable(
@@ -467,10 +482,6 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
             UUID relocationId = UUID.randomUUID();
             ZLinkActorJoinOperationId operationId = new ZLinkActorJoinOperationId(0x1111L, 0x2222L);
             assertNotEquals(relocationId, new UUID(operationId.high(), operationId.low()));
-            ZLinkMessage admissionReply =
-                    ZLinkMessage.fromEncoded(
-                            systems.zlink.framework.ZLinkEncodedPayload.from(new byte[] {9, 4}),
-                            targetSpots.serializerForSpot());
             var admission =
                     new ZLinkActorJoinRelocationPort.CanonicalAdmission(
                             relocationId,
@@ -489,7 +500,6 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                             targetDescriptor.leaseGeneration(),
                             targetSpot,
                             actor -> ((TrackingSpot) targetSpot).onJoinedActor(actor),
-                            admissionReply,
                             "application/json",
                             new byte[0],
                             TIMEOUT);
@@ -618,9 +628,9 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                 b1Accepted.toCompletableFuture().get(4, TimeUnit.SECONDS);
                 assertEquals(1, EVENTS.stream().filter("command44.abort"::equals).count());
                 assertEquals(1, EVENTS.stream().filter("source.replay:B1"::equals).count());
-                assertTrue(
-                        EVENTS.indexOf("source.replay:B1") < EVENTS.indexOf("command44.abort"),
-                        "source queue must replay before command 44 abort: " + EVENTS);
+                // Relocation flow section 4.4 requires queue restoration before abort.
+                // Application handler execution has its own execution gate.
+                assertBefore("source.queue.restored", "command44.abort");
                 assertEquals(0, targetCommits.get());
                 assertFalse(EVENTS.contains("target.open"));
                 assertEquals(0, sourceAttemptCount(sourceJoin));
@@ -635,6 +645,25 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                                 .STOPPED,
                         sourceShutdown.get(7, TimeUnit.SECONDS).outcome(),
                         "source events: " + EVENTS);
+                return;
+            }
+            if (scenario == Scenario.BINDING_ABSENT) {
+                //  Session-Actor binding §8.3: the Session owner reported that the binding
+                //  is already gone, so the Actor moves without a Session binding.
+                var submission = moved.get(5, TimeUnit.SECONDS);
+                assertEquals(TARGET_RID, submission.targetActor().nodeRid());
+                link.targetCompletion.get(4, TimeUnit.SECONDS);
+                assertEquals(1, EVENTS.stream().filter("command42"::equals).count());
+                assertTrue(
+                        ZLinkServiceRelocationEnvelopeCodec.decode(
+                                        link.targetRequest.get().relocationPayload())
+                                .sessionBindings()
+                                .isEmpty(),
+                        "a bindingAbsent participant has no envelope Session binding");
+                assertTrue(link.targetRequest.get().sessionRoutes().isEmpty());
+                assertFalse(EVENTS.contains("command44"), "no command 44 for bindingAbsent");
+                assertFalse(EVENTS.contains("command44.abort"));
+                assertEquals(1, targetCommits.get());
                 return;
             }
             if (scenario.joinedFailure() != null || scenario == Scenario.COMPLETION_FAILURE) {
@@ -756,6 +785,7 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
             assertBefore("replay:D1", "command44");
             assertBefore("command44", "client.push.terminal");
             assertBefore("client.push.terminal", "target.normalize");
+            link.checkCanonicalBindingRetries().toCompletableFuture().get(1, TimeUnit.SECONDS);
             assertTrue(EVENTS.contains("route.duplicate.noop"));
             assertTrue(EVENTS.contains("route.changed.conflict"));
             assertEquals(2, released.get());
@@ -1094,7 +1124,8 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
         JOINED_TYPED_FAILURE(LeaveMode.DELIVER),
         JOINED_GENERIC_FAILURE(LeaveMode.DELIVER),
         COMPLETION_FAILURE(LeaveMode.DELIVER),
-        SHUTDOWN_DURING_RESTORE(LeaveMode.DELIVER);
+        SHUTDOWN_DURING_RESTORE(LeaveMode.DELIVER),
+        BINDING_ABSENT(LeaveMode.DELIVER);
 
         private final LeaveMode leaveMode;
 
@@ -1126,6 +1157,7 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
     }
 
     private static final class CanonicalLink {
+        private ZLinkSerialExecutionQueue sourceQueue;
         private final AtomicReference<ZLinkCanonicalRelocationStateMachine> sourceMachine =
                 new AtomicReference<>();
         private final AtomicReference<ZLinkCanonicalRelocationStateMachine> targetMachine =
@@ -1138,12 +1170,96 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
         private final AtomicReference<CompletionStage<Void>> leftCompletion =
                 new AtomicReference<>();
         private final AtomicReference<byte[]> cutover = new AtomicReference<>();
+
+        private CompletionStage<Void> checkCanonicalBindingRetries() {
+            var original = targetRequest.get();
+            byte[] prepareBytes = canonicalPrepare.get();
+            var prepare = ZLinkCanonicalRelocationProtocol.decodePrepare(prepareBytes);
+            var binding =
+                    ZLinkServiceRelocationEnvelopeCodec.decode(original.relocationPayload())
+                            .sessionBindings()
+                            .getFirst();
+            var changedBinding =
+                    new systems.zlink.framework.runtime.protocol.ServiceWirePilotCodec
+                            .RelocationSessionBinding(
+                            binding.participantId(),
+                            binding.sessionOwnerNodeRid(),
+                            binding.sessionOwnerNodeGeneration(),
+                            binding.sessionOwnerId(),
+                            binding.sessionOwnerLeaseGeneration(),
+                            binding.sessionRid(),
+                            binding.bindingGeneration() + 1);
+            byte[] changedPayload =
+                    org.junit.jupiter.api.Assertions.assertDoesNotThrow(
+                            () -> {
+                                var value =
+                                        systems.zlink.framework.runtime.protocol
+                                                .ServiceWirePilotCodec.decodeRelocationEnvelopeV1(
+                                                List.of(original.relocationPayload()));
+                                return systems.zlink.framework.runtime.protocol
+                                        .ServiceWirePilotCodec.encodeRelocationEnvelopeV1(
+                                        new systems.zlink.framework.runtime.protocol
+                                                .ServiceWirePilotCodec.RelocationEnvelopeV1(
+                                                value.relocationHigh(),
+                                                value.relocationLow(),
+                                                value.object(),
+                                                value.applicationVersion(),
+                                                value.applicationStates(),
+                                                value.savedWork(),
+                                                value.timerRegistrations(),
+                                                value.pendingTimerTicks(),
+                                                List.of(changedBinding)));
+                            });
+            var checksum = new java.util.zip.CRC32C();
+            checksum.update(changedPayload);
+            var changedPrepare =
+                    new ZLinkCanonicalRelocationProtocol.Prepare(
+                            prepare.id(),
+                            prepare.targetAttemptGeneration(),
+                            prepare.coordinator(),
+                            prepare.target(),
+                            prepare.initiatorRole(),
+                            prepare.object(),
+                            prepare.sourceNodeRid(),
+                            prepare.sourceNodeGeneration(),
+                            new ZLinkCanonicalRelocationProtocol.Manifest(
+                                    changedPayload.length,
+                                    prepare.manifest().chunkCount(),
+                                    checksum.getValue()),
+                            prepare.applicationVersion());
+            return targetMachine
+                    .get()
+                    .apply(
+                            SOURCE_RID,
+                            1L,
+                            ServiceWireConstants.COMMAND_RELOCATION_PREPARE,
+                            prepareBytes)
+                    .thenCompose(
+                            reply -> {
+                                ZLinkCanonicalRelocationProtocol.decodeReady(reply);
+                                EVENTS.add("route.duplicate.noop");
+                                return targetMachine
+                                        .get()
+                                        .apply(
+                                                SOURCE_RID,
+                                                2L,
+                                                ServiceWireConstants.COMMAND_RELOCATION_PREPARE,
+                                                ZLinkCanonicalRelocationProtocol.encodePrepare(
+                                                        changedPrepare));
+                            })
+                    .thenAccept(
+                            reply -> {
+                                ZLinkCanonicalRelocationProtocol.decodeFailed(reply);
+                                EVENTS.add("route.changed.conflict");
+                            });
+        }
+
         private final AtomicReference<ZLinkSpotRetireControl.StageRequest> targetRequest =
                 new AtomicReference<>();
         private final AtomicLong readyTransportSuccessNanos = new AtomicLong();
         private final CompletableFuture<Void> targetCompletion = new CompletableFuture<>();
         private final AtomicBoolean readyInjected = new AtomicBoolean();
-        private final AtomicBoolean routeDuplicateChecked = new AtomicBoolean();
+        private final AtomicReference<byte[]> canonicalPrepare = new AtomicReference<>();
         private final ZLinkServiceM6BWireCodec codec = new ZLinkServiceM6BWireCodec();
         private final ZLinkInternalMeshNode source;
         private final ZLinkInternalMeshNode target;
@@ -1201,6 +1317,14 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                             new Class<?>[] {ZLinkInternalMeshNode.class},
                             (proxy, method, arguments) ->
                                     switch (method.getName()) {
+                                        case "observePeerRoute" ->
+                                                new ZLinkInternalMeshNode.PeerRouteObservation(
+                                                        1, true);
+                                        case "targetLifecycleEnded" -> false;
+                                        case "onStateChanged" -> {
+                                            ((Runnable) arguments[0]).run();
+                                            yield (AutoCloseable) () -> {};
+                                        }
                                         case "status" -> status;
                                         case "setActorLeftHandler" -> {
                                             if (sourceSide) {
@@ -1224,6 +1348,7 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                                                             == ServiceWireConstants
                                                                     .COMMAND_RELOCATION_PREPARE) {
                                                 EVENTS.add("canonical.prepare");
+                                                canonicalPrepare.set(command.clone());
                                             } else if (sourceSide
                                                     && code
                                                             == ServiceWireConstants
@@ -1240,86 +1365,6 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                                             delivered =
                                                     peer.get()
                                                             .apply(descriptor.rid(), code, command);
-                                            if (sourceSide
-                                                    && code
-                                                            == ServiceWireConstants
-                                                                    .COMMAND_RELOCATION_DATA) {
-                                                byte[] frozen =
-                                                        ZLinkCanonicalRelocationProtocol.decodeData(
-                                                                        command)
-                                                                .frozenRecord();
-                                                if (frozen.length >= 4
-                                                        && Byte.toUnsignedInt(frozen[0])
-                                                                == ServiceWireConstants.MAGIC_0
-                                                        && Byte.toUnsignedInt(frozen[1])
-                                                                == ServiceWireConstants.MAGIC_1
-                                                        && Byte.toUnsignedInt(frozen[2])
-                                                                == ServiceWireConstants.WIRE_MAJOR
-                                                        && Byte.toUnsignedInt(frozen[3])
-                                                                == ServiceWireConstants
-                                                                        .COMMAND_SESSION_RELOCATION_SEALED
-                                                        && routeDuplicateChecked.compareAndSet(
-                                                                false, true)) {
-                                                    var sealed =
-                                                            codec.decodeSessionRelocationSealed(
-                                                                    frozen);
-                                                    var session = sealed.session();
-                                                    byte[] changed =
-                                                            codec.encodeSessionRelocationSealed(
-                                                                    new ZLinkServiceM6BWireCodec
-                                                                            .SessionRelocationSealed(
-                                                                            sealed.relocation(),
-                                                                            sealed.coordinator(),
-                                                                            sealed.actor(),
-                                                                            new ZLinkServiceM6BWireCodec
-                                                                                    .SessionOwnerFence(
-                                                                                    session
-                                                                                            .nodeRid(),
-                                                                                    session
-                                                                                            .nodeGeneration(),
-                                                                                    session
-                                                                                            .ownerId(),
-                                                                                    session
-                                                                                            .ownerLeaseGeneration(),
-                                                                                    session
-                                                                                            .sessionRid(),
-                                                                                    session
-                                                                                                    .bindingGeneration()
-                                                                                            + 1)));
-                                                    delivered =
-                                                            delivered
-                                                                    .thenCompose(
-                                                                            ignored ->
-                                                                                    endpoint.get()
-                                                                                            .stageRelayedRecord(
-                                                                                                    targetRequest
-                                                                                                            .get(),
-                                                                                                    frozen))
-                                                                    .thenRun(
-                                                                            () ->
-                                                                                    EVENTS.add(
-                                                                                            "route.duplicate.noop"))
-                                                                    .thenCompose(
-                                                                            ignored ->
-                                                                                    endpoint.get()
-                                                                                            .stageRelayedRecord(
-                                                                                                    targetRequest
-                                                                                                            .get(),
-                                                                                                    changed))
-                                                                    .handle(
-                                                                            (ignored, failure) -> {
-                                                                                assertNotNull(
-                                                                                        failure,
-                                                                                        "changed"
-                                                                                                + " command43"
-                                                                                                + " must"
-                                                                                                + " conflict");
-                                                                                EVENTS.add(
-                                                                                        "route.changed.conflict");
-                                                                                return null;
-                                                                            });
-                                                }
-                                            }
                                             if (!sourceSide
                                                     && code
                                                             == ServiceWireConstants
@@ -1340,17 +1385,28 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                                         }
                                         case "requestSessionRelocationSeal" -> {
                                             var seal =
-                                                    codec.decodeSessionRelocationSeal(
-                                                            (byte[]) arguments[1]);
+                                                    ServiceWirePilotCodec
+                                                            .decodeSessionRelocationSeal42(
+                                                                    (byte[]) arguments[1]);
                                             EVENTS.add("command42");
                                             yield CompletableFuture.completedFuture(
-                                                    codec.encodeSessionRelocationSealed(
-                                                            new ZLinkServiceM6BWireCodec
-                                                                    .SessionRelocationSealed(
-                                                                    seal.relocation(),
-                                                                    seal.coordinator(),
-                                                                    seal.actor(),
-                                                                    seal.session())));
+                                                    ServiceWirePilotCodec
+                                                            .encodeSessionRelocationSealed43(
+                                                                    new ServiceWirePilotCodec
+                                                                            .SessionRelocationSealed43(
+                                                                            seal.relocation(),
+                                                                            seal.coordinator(),
+                                                                            seal.actor(),
+                                                                            seal.session(),
+                                                                            scenario
+                                                                                            == Scenario
+                                                                                                    .BINDING_ABSENT
+                                                                                    ? ServiceWirePilotCodec
+                                                                                            .SessionSealResult
+                                                                                            .BINDING_ABSENT
+                                                                                    : ServiceWirePilotCodec
+                                                                                            .SessionSealResult
+                                                                                            .SEALED)));
                                         }
                                         case "sendSessionRelocationRoute" -> {
                                             var route =
@@ -1361,6 +1417,14 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                                                         ZLinkServiceM6BWireCodec
                                                                 .SessionRelocationRouteAction.ABORT,
                                                         route.action());
+                                                Field relocation =
+                                                        ZLinkSerialExecutionQueue.class
+                                                                .getDeclaredField("relocation");
+                                                relocation.setAccessible(true);
+                                                assertNull(
+                                                        relocation.get(sourceQueue),
+                                                        "source queue must leave its relocation cut before abort");
+                                                EVENTS.add("source.queue.restored");
                                                 EVENTS.add("command44.abort");
                                                 yield CompletableFuture.completedFuture(null);
                                             }
@@ -1498,20 +1562,21 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
         }
 
         @Override
-        public void prepareBoundSession(
+        public CompletionStage<Void> prepareBoundSession(
                 Object actor,
                 ZLinkStandaloneActorRelocationStagingOwner.Request request,
                 ZLinkServiceM6BWireCodec.ActorRouteFence actorRoute,
                 ZLinkServiceM6BWireCodec.SessionOwnerFence session) {
             var prepared = (ZLinkActorRuntime.PreparedTransferredActor) actor;
-            actorRuntime.bindNativeSession(
-                    prepared.actor(),
-                    pushSpotNode(),
-                    actorRoute.actor(),
-                    session.nodeRid(),
-                    session.sessionRid(),
-                    session.bindingGeneration(),
-                    0);
+            return actorRuntime
+                    .bindNativeSession(
+                            prepared.actor(),
+                            pushSpotNode(),
+                            actorRoute.actor(),
+                            session.nodeRid(),
+                            session.sessionRid(),
+                            session.bindingGeneration())
+                    .thenApply(ignored -> null);
         }
 
         @Override
@@ -1647,6 +1712,9 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
             ACCEPTED.set(accepted.operationId());
             ACCEPTED_STAGE.get().complete(accepted.operationId());
             EVENTS.add("target.accepted");
+            if (currentScenario == Scenario.BINDING_ABSENT) {
+                return CompletableFuture.completedFuture(null);
+            }
             return context.boundSession().send(new JoinGameStatePush("WaitingForPlayers")).submit();
         }
     }

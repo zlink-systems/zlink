@@ -223,7 +223,7 @@ internal static class ZLinkScannedSessionHandlerScanner
         var candidates = new List<ZLinkScannedSessionHandler>();
         foreach (var handlerType in assembly.GetTypes())
         {
-            if (handlerType.IsAbstract || handlerType.IsInterface)
+            if (!ZLinkHandlerScanner.IsScannableHandlerType(handlerType))
                 continue;
 
             if (sessionTypes.Contains(handlerType))

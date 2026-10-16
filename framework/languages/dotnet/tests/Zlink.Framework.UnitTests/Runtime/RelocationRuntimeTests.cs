@@ -24,6 +24,140 @@ namespace Zlink.Framework.UnitTests;
 public sealed class RelocationRuntimeTests
 {
     [Fact]
+    public void Target_generation_is_the_first_store_publication_result()
+    {
+        var stage = CreateTargetStageForHeldJournal();
+        var spot = stage.SpotParticipant;
+        Assert.Equal(2UL, stage.TargetAuthorityOwnerGeneration);
+
+        stage.RememberAuthorityPublication([new(spot.AuthorityKey, PublishedAuthority(spot, 9))]);
+        Assert.Equal(9UL, stage.TargetAuthorityOwnerGeneration);
+        Assert.Equal(9UL, stage.TargetAuthorityOwnerGenerationFor(spot));
+
+        // The Store result that published the target owns the generation; a
+        // later publication cannot replace it.
+        stage.RememberAuthorityPublication([new(spot.AuthorityKey, PublishedAuthority(spot, 10))]);
+        Assert.Equal(9UL, stage.TargetAuthorityOwnerGeneration);
+
+        static ZLinkAuthoritySnapshot PublishedAuthority(
+            ZLinkRelocationParticipantEnvelope participant,
+            ulong authorityOwnerGeneration
+        ) =>
+            new(
+                "v-published",
+                ReadOnlyMemory<byte>.Empty,
+                participant.ObjectGeneration,
+                authorityOwnerGeneration,
+                "target-owner",
+                1,
+                new ZLinkPlacementAllocation(
+                    ZLinkPlacementAllocationState.Active,
+                    participant.ObjectKind,
+                    "Game.Room",
+                    new ZLinkMeshNodeDescriptorKey("mesh", RoutingId.From("target")),
+                    1,
+                    new ZLinkCapacityVector(0, 1, null)
+                ),
+                null,
+                DateTimeOffset.UnixEpoch
+            );
+    }
+
+    [Fact]
+    public async Task Concurrent_target_stages_share_reconciliation_scheduling_without_failure()
+    {
+        const int callers = 8;
+        const int rounds = 64;
+        using var services = CreateRuntimeServices();
+        var runtime = CreateBareRuntime(services);
+        var registration = new ZLinkFrameworkRegistration();
+        ZLinkSpotRetireTargetRuntime target = null!;
+        var failures = new ConcurrentQueue<Exception>();
+        using var barrier = new Barrier(callers + 1);
+        var workers = Enumerable
+            .Range(0, callers)
+            .Select(_ =>
+                Task.Factory.StartNew(
+                    () =>
+                    {
+                        for (var round = 0; round < rounds; round++)
+                        {
+                            barrier.SignalAndWait();
+                            var error = Record.Exception(target.ScheduleReconciliation);
+                            if (error is not null)
+                                failures.Enqueue(error);
+                            barrier.SignalAndWait();
+                        }
+                    },
+                    CancellationToken.None,
+                    TaskCreationOptions.LongRunning,
+                    TaskScheduler.Default
+                )
+            )
+            .ToArray();
+        for (var round = 0; round < rounds; round++)
+        {
+            target = new ZLinkSpotRetireTargetRuntime(services, runtime, registration);
+            barrier.SignalAndWait();
+            barrier.SignalAndWait();
+        }
+        await Task.WhenAll(workers);
+        Assert.Empty(failures);
+    }
+
+    [Fact]
+    public async Task Scheduled_reconciliation_runs_before_the_polling_interval_elapses()
+    {
+        using var services = CreateRuntimeServices();
+        var runtime = CreateBareRuntime(services);
+        await runtime.StartAsync(CancellationToken.None);
+        try
+        {
+            var registration = new ZLinkFrameworkRegistration();
+            registration.Locations.UseInMemoryStores = true;
+            registration.Locations.Options.PollingInterval = TimeSpan.FromMinutes(5);
+            var target = new ZLinkSpotRetireTargetRuntime(services, runtime, registration);
+
+            // The first pass removes the first expired stage and then waits
+            // for the polling interval.
+            Assert.True(TrackExpiredPublishedStage(target));
+            target.ScheduleReconciliation();
+            Assert.True(
+                SpinWait.SpinUntil(() => target.ActiveStageCount == 0, TimeSpan.FromSeconds(5))
+            );
+
+            // A stage tracked after that pass is removed only by a later pass,
+            // so only the schedule wake can run it before the interval elapses.
+            Assert.True(TrackExpiredPublishedStage(target));
+            Assert.Equal(1, target.ActiveStageCount);
+            target.ScheduleReconciliation();
+            Assert.True(
+                SpinWait.SpinUntil(() => target.ActiveStageCount == 0, TimeSpan.FromSeconds(5))
+            );
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+
+        static bool TrackExpiredPublishedStage(ZLinkSpotRetireTargetRuntime target)
+        {
+            var envelope = CreateEnvelope() with { AggregateId = Guid.NewGuid() };
+            var stage = CreateTargetStageForHeldJournal() with
+            {
+                Envelope = envelope,
+                ExpiresAt = TimeSpan.Zero,
+            };
+            Volatile.Write(ref stage.Published, 1);
+            Volatile.Write(ref stage.SessionRoutesConverged, 1);
+            return target.TryTrackStage(
+                new ZLinkAggregateFence(envelope.AggregateId, envelope.AggregateGeneration),
+                stage
+            );
+        }
+    }
+
+    [Fact]
     public void Target_observation_accepts_only_byte_exact_steady_authority()
     {
         var (stage, _) = CreateCanonicalPublishedReconciliationFixture();
@@ -199,7 +333,7 @@ public sealed class RelocationRuntimeTests
             CancellationToken.None
         );
 
-        Assert.Equal(435, read.LogicalLength);
+        Assert.Equal(ReadCanonicalRelocationGolden().Length, read.LogicalLength);
         Assert.Equal(1, read.ChunkCount);
         Assert.Equal(
             Enumerable.Range(0, 32).Select(static value => (byte)value),
@@ -589,7 +723,7 @@ public sealed class RelocationRuntimeTests
             ZLinkRelocationEnvelopeCodec.Encode(canonical)
         );
         var actor = restored.Participants.Single(static participant =>
-            participant.CanonicalParticipantId == 2
+            participant.CanonicalParticipantId == 1
         );
         var restoredJob = Assert.Single(actor.AcceptedJobs);
 
@@ -2028,7 +2162,7 @@ public sealed class RelocationRuntimeTests
         );
         var canonicalEncoded = ZLinkRelocationEnvelopeCodec.Encode(canonical);
         var canonicalDecoded = ZLinkRelocationEnvelopeCodec.Decode(canonicalEncoded);
-        var restoredAccepted = canonicalDecoded.Participants[1].AcceptedJobs;
+        var restoredAccepted = canonicalDecoded.Participants[0].AcceptedJobs;
         Assert.Equal(recordCount, restoredAccepted.Count);
         Assert.Equal<ulong>(1, restoredAccepted[0].AcceptedSequence);
         Assert.Equal<ulong>(recordCount, restoredAccepted[^1].AcceptedSequence);

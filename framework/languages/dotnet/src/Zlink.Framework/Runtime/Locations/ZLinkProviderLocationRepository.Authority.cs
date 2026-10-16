@@ -5,6 +5,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Zlink.Framework.Internal;
 using Zlink.Framework.Runtime.Actors;
 using Zlink.Framework.Runtime.Configuration;
 using Zlink.Framework.Runtime.Spots;
@@ -642,31 +643,20 @@ internal sealed partial class ZLinkProviderLocationRepository
             return StaleAuthorityReclaimResult.RecoveryRequired;
         if (ZLinkRelocationAuthorityPayloadCodec.TryDecode(current.Snapshot.Payload.Span, out _))
             return StaleAuthorityReclaimResult.RecoveryRequired;
-        var ownerKey = OwnerKey(current.Snapshot.OwnerId);
         var descriptorKey = MeshKey(
             current.Snapshot.Allocation.Descriptor.MeshName,
             current.Snapshot.Allocation.Descriptor.Rid
         );
-        var ownerRead = await _provider
-            .ReadAsync(ownerKey, cancellationToken)
-            .ConfigureAwait(false);
+        var owners = new Dictionary<string, ZLinkStoreReadResult>(StringComparer.Ordinal)
+        {
+            [current.Snapshot.OwnerId] = await _provider
+                .ReadAsync(OwnerKey(current.Snapshot.OwnerId), cancellationToken)
+                .ConfigureAwait(false),
+        };
         var descriptorRead = await _provider
             .ReadAsync(descriptorKey, cancellationToken)
             .ConfigureAwait(false);
-        var ownerLive = false;
-        ZLinkStoreCondition ownerCondition;
-        if (ownerRead is ZLinkStoreReadResult.Found ownerFound)
-        {
-            var owner = DecodeOwner(ownerFound.Value.Bytes);
-            if (owner.OwnerId != current.Snapshot.OwnerId || ownerFound.Value.ExpiresAt is null)
-                throw new InvalidDataException("The Location Store owner lease record is invalid.");
-            ownerLive =
-                owner.LeaseGeneration == current.Snapshot.OwnerLeaseGeneration
-                && ownerFound.Value.ExpiresAt > ownerFound.Value.StoreNow;
-            ownerCondition = new ZLinkStoreCondition.Version(ownerKey, ownerFound.Value.Version);
-        }
-        else
-            ownerCondition = new ZLinkStoreCondition.Missing(ownerKey);
+        var ownerLive = IsOwnerLeaseLive(owners[current.Snapshot.OwnerId], current.Snapshot);
         if (active)
         {
             if (ownerLive)
@@ -681,6 +671,7 @@ internal sealed partial class ZLinkProviderLocationRepository
                     ZLinkRetryAdvice.RetryAfterStateChange
                 );
         }
+        IReadOnlyList<StoredAuthority> members = [];
         if (active)
         {
             if (current.Snapshot.Allocation.ObjectKind == ZLinkPlacementObjectKind.UserSpot)
@@ -696,41 +687,12 @@ internal sealed partial class ZLinkProviderLocationRepository
                         ZLinkFrameworkErrorKind.Unavailable,
                         "User Spot is not steady Ready."
                     );
-                ZLinkAuthorityScanCursor? cursor = null;
-                do
-                {
-                    var scan = await ListAuthoritiesAsync(
-                            ZLinkAuthorityKeyCodec.Prefix(ZLinkAuthorityKeyKind.Actor),
-                            cursor,
-                            ZLinkPageRequestPolicy.MaximumPageSize,
-                            cancellationToken
-                        )
-                        .ConfigureAwait(false);
-                    if (scan is ZLinkAuthorityScanResult.ScanExpired)
-                    {
-                        cursor = null;
-                        continue;
-                    }
-                    var page = ((ZLinkAuthorityScanResult.Page)scan).Value;
-                    if (
-                        page.Items.Any(entry =>
-                            ZLinkActorAuthorityPayloadCodec.TryDecodeRelocating(
-                                entry.Snapshot.Payload.Span,
-                                out var member
-                            )
-                            && member.CurrentSpotKind == ZLinkSpotKind.User
-                            && member.CurrentSpotId == spot.SpotId
-                            && member.CurrentSpotGeneration == current.Snapshot.ObjectGeneration
-                        )
+                members = await ReadEndedUserSpotMembersAsync(
+                        spot.SpotId,
+                        current.Snapshot.ObjectGeneration,
+                        cancellationToken
                     )
-                        throw new ZLinkFrameworkException(
-                            ZLinkFrameworkErrorKind.Unavailable,
-                            "User Spot still has members."
-                        );
-                    cursor = page.NextCursor;
-                    if (cursor is null)
-                        break;
-                } while (true);
+                    .ConfigureAwait(false);
             }
             else if (
                 current.Snapshot.Allocation.ObjectKind == ZLinkPlacementObjectKind.InstanceSpot
@@ -767,47 +729,94 @@ internal sealed partial class ZLinkProviderLocationRepository
         }
         else
             descriptorCondition = new ZLinkStoreCondition.Missing(descriptorKey);
+        if (!active && current.Meta.ReservedCreation is null)
+            return StaleAuthorityReclaimResult.RecoveryRequired;
 
         var conditions = new List<ZLinkStoreCondition>
         {
             new ZLinkStoreCondition.Version(AuthorityMetaKey(current.Key), current.Version),
-            ownerCondition,
             descriptorCondition,
         };
         var mutations = new List<ZLinkStoreMutation>
         {
             new ZLinkStoreMutation.Delete(AuthorityMetaKey(current.Key)),
         };
-        var capacity = await ReadCapacityAsync(
-                current.Snapshot.Allocation.Descriptor,
-                cancellationToken
-            )
-            .ConfigureAwait(false);
-        var nextCapacity = capacity.Record.Clone();
-        conditions.Add(capacity.Condition);
-        if (!active && current.Meta.ReservedCreation is null)
-            return StaleAuthorityReclaimResult.RecoveryRequired;
-        if (capacity.Condition is not ZLinkStoreCondition.Missing)
+        // §6.1: every remaining member must be an ended-owner member. Each one
+        // is released in the same batch, fenced by its authority version and
+        // by the observed state of its own owner lease.
+        foreach (var member in members)
         {
+            if (!owners.TryGetValue(member.Snapshot.OwnerId, out var memberOwner))
+            {
+                memberOwner = await _provider
+                    .ReadAsync(OwnerKey(member.Snapshot.OwnerId), cancellationToken)
+                    .ConfigureAwait(false);
+                owners.Add(member.Snapshot.OwnerId, memberOwner);
+            }
+            if (IsOwnerLeaseLive(memberOwner, member.Snapshot))
+                throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.Unavailable,
+                    "User Spot still has a member with a live owner lease.",
+                    ZLinkRetryAdvice.RetryAfterStateChange
+                );
+            conditions.Add(
+                new ZLinkStoreCondition.Version(AuthorityMetaKey(member.Key), member.Version)
+            );
+            mutations.Add(new ZLinkStoreMutation.Delete(AuthorityMetaKey(member.Key)));
+        }
+        foreach (var (ownerId, read) in owners)
+            conditions.Add(
+                read is ZLinkStoreReadResult.Found found
+                    ? new ZLinkStoreCondition.Version(OwnerKey(ownerId), found.Value.Version)
+                    : new ZLinkStoreCondition.Missing(OwnerKey(ownerId))
+            );
+        var capacities = new Dictionary<ZLinkStoreKey, StoredCapacity>();
+        foreach (
+            var (allocation, pendingDelta, activeDelta) in members
+                .Select(member => (member.Snapshot.Allocation, 0, -1))
+                .Prepend((current.Snapshot.Allocation, active ? 0 : -1, active ? -1 : 0))
+        )
+        {
+            var key = CapacityKey(allocation.Descriptor);
+            if (!capacities.TryGetValue(key, out var capacity))
+            {
+                capacity = await ReadCapacityAsync(allocation.Descriptor, cancellationToken)
+                    .ConfigureAwait(false);
+                capacities.Add(key, capacity);
+                conditions.Add(capacity.Condition);
+            }
+            if (capacity.Condition is ZLinkStoreCondition.Missing)
+                continue;
             try
             {
-                ApplyCapacity(
-                    nextCapacity,
-                    current.Snapshot.Allocation,
-                    pendingDelta: active ? 0 : -1,
-                    activeDelta: active ? -1 : 0
-                );
+                ApplyCapacity(capacity.Record, allocation, pendingDelta, activeDelta);
             }
             catch (InvalidDataException)
             {
-                var observed = await ReadAuthorityRecordAsync(current.Key, cancellationToken)
-                    .ConfigureAwait(false);
-                if (observed is null || observed.Version != current.Version)
-                    return StaleAuthorityReclaimResult.Conflict;
+                foreach (var authority in members.Prepend(current))
+                {
+                    var observed = await ReadAuthorityRecordAsync(authority.Key, cancellationToken)
+                        .ConfigureAwait(false);
+                    if (observed is null || observed.Version != authority.Version)
+                        return StaleAuthorityReclaimResult.Conflict;
+                }
                 throw;
             }
-            mutations.Add(new ZLinkStoreMutation.Put(capacity.Key, Encode(nextCapacity), null));
         }
+        foreach (var capacity in capacities.Values)
+            if (capacity.Condition is not ZLinkStoreCondition.Missing)
+                mutations.Add(
+                    new ZLinkStoreMutation.Put(capacity.Key, Encode(capacity.Record), null)
+                );
+        // §6.1: the Spot and its ended members are released in one batch or not
+        // at all. Every mutated key is also a condition key, so the condition
+        // count is the batch's unique key count.
+        if (conditions.Count > ZLinkLocationStoreLimits.MaximumUniqueKeys)
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.Unavailable,
+                "User Spot member release exceeds one Location Store batch.",
+                ZLinkRetryAdvice.RetryAfterStateChange
+            );
 
         var result = await _provider
             .WriteAsync(new ZLinkStoreWriteRequest(conditions, mutations), cancellationToken)
@@ -815,6 +824,92 @@ internal sealed partial class ZLinkProviderLocationRepository
         return result is ZLinkStoreWriteResult.Applied
             ? StaleAuthorityReclaimResult.Reclaimed
             : StaleAuthorityReclaimResult.Conflict;
+    }
+
+    private static bool IsOwnerLeaseLive(
+        ZLinkStoreReadResult read,
+        ZLinkAuthoritySnapshot authority
+    )
+    {
+        if (read is not ZLinkStoreReadResult.Found found)
+            return false;
+        var owner = DecodeOwner(found.Value.Bytes);
+        if (owner.OwnerId != authority.OwnerId || found.Value.ExpiresAt is null)
+            throw new InvalidDataException("The Location Store owner lease record is invalid.");
+        return owner.LeaseGeneration == authority.OwnerLeaseGeneration
+            && found.Value.ExpiresAt > found.Value.StoreNow;
+    }
+
+    // Reads every Actor membership of one User Spot incarnation from one
+    // complete snapshot scan. An expired snapshot restarts the scan; a Store
+    // failure propagates. A member that is relocating, part of an aggregate or
+    // not yet activated keeps the Spot (§6.1).
+    private async ValueTask<IReadOnlyList<StoredAuthority>> ReadEndedUserSpotMembersAsync(
+        string spotId,
+        ulong objectGeneration,
+        CancellationToken cancellationToken
+    )
+    {
+        var prefix = AuthorityMetaPrefix(
+            ZLinkAuthorityKeyCodec.Prefix(ZLinkAuthorityKeyKind.Actor)
+        );
+        var members = new List<StoredAuthority>();
+        ZLinkStoreScanCursor? cursor = null;
+        for (; ; )
+        {
+            var scan = await _provider
+                .ScanAsync(
+                    new ZLinkStoreScanRequest(
+                        prefix,
+                        cursor,
+                        ZLinkPageRequestPolicy.MaximumPageSize
+                    ),
+                    cancellationToken
+                )
+                .ConfigureAwait(false);
+            if (scan is ZLinkStoreScanResult.Expired)
+            {
+                members.Clear();
+                cursor = null;
+                continue;
+            }
+            var page = ((ZLinkStoreScanResult.Page)scan).Value;
+            foreach (var item in page.Items)
+            {
+                var stored = await ReadAuthorityRecordAsync(
+                        DecodeAuthorityKey(item.Key),
+                        item.Value,
+                        projectCommittedAggregate: true,
+                        cancellationToken
+                    )
+                    .ConfigureAwait(false);
+                if (
+                    stored is null
+                    || !ZLinkActorAuthorityPayloadCodec.TryDecodeRelocating(
+                        stored.Snapshot.Payload.Span,
+                        out var member
+                    )
+                    || member.CurrentSpotKind != ZLinkSpotKind.User
+                    || member.CurrentSpotId != spotId
+                    || member.CurrentSpotGeneration != objectGeneration
+                )
+                    continue;
+                if (
+                    stored.Meta.AggregateFence is not null
+                    || stored.Snapshot.Allocation.State != ZLinkPlacementAllocationState.Active
+                    || !ZLinkActorAuthorityPayloadCodec.IsSteadyReady(stored.Snapshot.Payload.Span)
+                )
+                    throw new ZLinkFrameworkException(
+                        ZLinkFrameworkErrorKind.Unavailable,
+                        "User Spot still has a relocating or unactivated member.",
+                        ZLinkRetryAdvice.RetryAfterStateChange
+                    );
+                members.Add(stored);
+            }
+            cursor = page.NextCursor;
+            if (cursor is null)
+                return members;
+        }
     }
 
     public async ValueTask<bool> ReleaseEndedReservationAsync(
@@ -4188,6 +4283,7 @@ internal sealed partial class ZLinkProviderLocationRepository
         CancellationToken cancellationToken
     )
     {
+        const int MaximumProjectionReadAttempts = 8;
         var metaKey = AuthorityMetaKey(key);
         // The authority record is one opaque row (checklist C-2b): a single
         // read is already byte-atomic, so the old read-verify-retry loop
@@ -4195,7 +4291,7 @@ internal sealed partial class ZLinkProviderLocationRepository
         // key's version is gone. Retry here exists only for the aggregate
         // participant-projection race noted below, not for payload/meta
         // consistency.
-        for (var attempt = 0; attempt < 8; attempt++)
+        for (var attempt = 0; attempt < MaximumProjectionReadAttempts; attempt++)
         {
             var first = knownMeta is null
                 ? await _provider.ReadAsync(metaKey, cancellationToken).ConfigureAwait(false)
@@ -4213,10 +4309,9 @@ internal sealed partial class ZLinkProviderLocationRepository
                         cancellationToken
                     )
                     .ConfigureAwait(false);
-                if (
-                    aggregate?.Record.Status == AggregateStatus.Committed
-                    && !aggregate.Record.ParticipantsNormalized
-                )
+                // Normalization can finish between the authority and aggregate reads.
+                // The captured participant row still needs its committed projection.
+                if (aggregate?.Record.Status == AggregateStatus.Committed)
                 {
                     if (meta.AggregateParticipantIndex is not { } index)
                         throw new ZLinkRelocationDataLostException(

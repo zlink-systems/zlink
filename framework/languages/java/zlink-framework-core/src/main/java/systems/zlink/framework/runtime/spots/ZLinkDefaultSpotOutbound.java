@@ -721,7 +721,8 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
                                     timeout);
             try {
                 var submitted = call.metadata(metadata.values()).submit(replyType);
-                ZLinkRequestStages.forwardAdmission(requestAdmission, submitted.admitted());
+                ZLinkRequestStages.forwardAdmission(
+                        requestAdmission, ZLinkRequestStages.ownerAdmission(submitted));
                 return submitted;
             } catch (RuntimeException failure) {
                 transportPayload.close();

@@ -22,6 +22,8 @@ namespace Zlink.Framework.UnitTests;
 
 public sealed partial class StatefulServiceRuntimeTests
 {
+    private const int LocalActorPayloadSize = 4096;
+
     [Fact]
     public void ActorCreationWireAndDurableTerminalPreserveIdentityAndRejectedReply()
     {
@@ -544,6 +546,135 @@ public sealed partial class StatefulServiceRuntimeTests
         Assert.Equal(authorityOwnerGeneration, received[0].AuthorityOwnerGeneration);
         Assert.Equal(ownerLeaseGeneration, received[0].OwnerLeaseGeneration);
         Assert.Equal(1UL, ownerLeaseGeneration);
+    }
+
+    [Fact]
+    public async Task LocalActorDirectSendRetainsPayloadUntilMailboxRelease()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = NewNode(context, "local-direct-actor-node");
+        var actor = node.CreateActor("local-direct-actor");
+        DrainAndDispose(node);
+
+        var payload = Message.Allocate(LocalActorPayloadSize);
+        using var witness = payload.Copy();
+        try
+        {
+            var send = node.SendToActorDirectAsync(
+                actor,
+                [payload],
+                SendFlags.None,
+                CancellationToken.None
+            );
+            Assert.True(send.IsCompletedSuccessfully);
+            await send;
+            Assert.Equal(3, witness.RefCount);
+        }
+        finally
+        {
+            payload.Dispose();
+        }
+        Assert.Equal(2, witness.RefCount);
+
+        using (var ready = new MeshReadyBatch())
+        {
+            node.DrainReady(MeshReadyDomains.Application, ready, RecvFlags.DontWait);
+            Assert.Equal(1, ready.Count);
+            Assert.Equal(actor, ready[0].Actor);
+            using var claim = ready.TakeClaim(0);
+            using var received = new MeshReceiveBatch();
+            Assert.True(claim.Receive(received, RecvFlags.DontWait));
+            Assert.Equal(MeshRecordKind.ActorSend, received[0].Kind);
+            Assert.Equal(2, witness.RefCount);
+        }
+        Assert.Equal(1, witness.RefCount);
+        DrainAndDispose(node);
+        Assert.Equal(1, witness.RefCount);
+    }
+
+    [Fact]
+    public async Task OwnedLocalActorDirectSendTransfersTheOriginalPayload()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = NewNode(context, "owned-local-actor-node");
+        var actor = node.CreateActor("owned-local-actor");
+        DrainAndDispose(node);
+        var payload = Message.Allocate(LocalActorPayloadSize);
+        using var witness = payload.Copy();
+        await node.SendToActorDirectAsync(
+            actor,
+            [payload],
+            SendFlags.None,
+            CancellationToken.None,
+            ownsParts: true
+        );
+        Assert.Equal(2, witness.RefCount);
+        using (var ready = new MeshReadyBatch())
+        {
+            node.DrainReady(MeshReadyDomains.Application, ready, RecvFlags.DontWait);
+            using var claim = ready.TakeClaim(0);
+            using var received = new MeshReceiveBatch();
+            Assert.True(claim.Receive(received, RecvFlags.DontWait));
+            var transferred = received.TakeMessage(0);
+            Assert.Same(payload, Assert.Single(transferred));
+            received.Reset();
+            Assert.Equal(2, witness.RefCount);
+            foreach (var part in transferred)
+                part.Dispose();
+        }
+        Assert.Equal(1, witness.RefCount);
+        DrainAndDispose(node);
+        Assert.Equal(1, witness.RefCount);
+    }
+
+    [Fact]
+    public async Task OwnedLocalActorDirectSendRejectionReleasesTheOriginalPayload()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = NewNode(context, "owned-rejected-actor-node");
+        var actor = new ActorRef("missing-actor", 1, "play", node.RoutingId);
+        var payload = Message.Allocate(LocalActorPayloadSize);
+        using var witness = payload.Copy();
+        await Assert.ThrowsAsync<ZlinkSubmitException>(async () =>
+            await node.SendToActorDirectAsync(
+                actor,
+                [payload],
+                SendFlags.None,
+                CancellationToken.None,
+                ownsParts: true
+            )
+        );
+        Assert.Equal(1, witness.RefCount);
+    }
+
+    [Fact]
+    public async Task OwnedLocalActorDirectSendAfterShutdownReleasesTheOriginalPayload()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        using var jobs = new ZLinkApplicationJobQueue(
+            new(ZLinkApplicationJobQueueProfile.Balanced, 1, 1, 1)
+        );
+        await using var node = new ZLinkManagedMeshNode(
+            context,
+            "owned-closed-actor",
+            applicationJobQueue: jobs
+        );
+        node.SetRoutingId(RoutingId.From("owned-closed-actor-node"));
+        node.Start();
+        var actor = node.CreateActor("owned-closed-actor");
+        await node.DisposeAsync();
+        var payload = Message.Allocate(LocalActorPayloadSize);
+        using var witness = payload.Copy();
+        await Assert.ThrowsAsync<ObjectDisposedException>(async () =>
+            await node.SendToActorDirectAsync(
+                actor,
+                [payload],
+                SendFlags.None,
+                CancellationToken.None,
+                ownsParts: true
+            )
+        );
+        Assert.Equal(1, witness.RefCount);
     }
 
     [Fact]
@@ -1236,6 +1367,8 @@ public sealed partial class StatefulServiceRuntimeTests
         Assert.Equal(requestSource, follower.LastRequestSource);
         Assert.Empty(follower.LastApplicationMetadata);
         Assert.Equal([193], follower.LastPayload);
+        // The reply reaches the caller before the handler's finally runs on the owner thread.
+        await follower.HandlerCompleted.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.True(follower.DisposedByHandler);
         Assert.All(
             follower.LastMessages,
@@ -1781,14 +1914,12 @@ public sealed partial class StatefulServiceRuntimeTests
                 .SendToSpot(target.RoutingId, spotId, spot.LifecycleGeneration, [payload])
         );
 
+        using var finalReady = new MeshReadyBatch();
         await WaitUntilAsync(() =>
         {
-            using var ready = new MeshReadyBatch();
-            target.DrainReady(MeshReadyDomains.Application, ready, RecvFlags.DontWait);
-            return ready.Count == 2;
+            target.DrainReady(MeshReadyDomains.Application, finalReady, RecvFlags.DontWait);
+            return finalReady.Count == 2;
         });
-        using var finalReady = new MeshReadyBatch();
-        target.DrainReady(MeshReadyDomains.Application, finalReady, RecvFlags.DontWait);
         Assert.Contains(
             Enumerable.Range(0, finalReady.Count),
             index => finalReady[index].OwnerKind == MeshOwnerKind.Actor
@@ -1804,15 +1935,13 @@ public sealed partial class StatefulServiceRuntimeTests
             SubmitResult.Ok,
             source.RequestToActor(actor, [payload], out var operation, TimeSpan.FromSeconds(1))
         );
-        await WaitUntilAsync(() =>
-        {
-            using var ready = new MeshReadyBatch();
-            target.DrainReady(MeshReadyDomains.Application, ready, RecvFlags.DontWait);
-            return ready.Count == 1;
-        });
         using (var requestReady = new MeshReadyBatch())
         {
-            target.DrainReady(MeshReadyDomains.Application, requestReady, RecvFlags.DontWait);
+            await WaitUntilAsync(() =>
+            {
+                target.DrainReady(MeshReadyDomains.Application, requestReady, RecvFlags.DontWait);
+                return requestReady.Count == 1;
+            });
             using var requestClaim = requestReady.TakeClaim(0);
             using var requestBatch = new MeshReceiveBatch();
             Assert.True(requestClaim.Receive(requestBatch, RecvFlags.DontWait));
@@ -1881,15 +2010,13 @@ public sealed partial class StatefulServiceRuntimeTests
             SubmitResult.Ok,
             source.RequestToActor(actor, [payload], out var operation, TimeSpan.FromSeconds(3))
         );
-        await WaitUntilAsync(() =>
-        {
-            using var ready = new MeshReadyBatch();
-            target.DrainReady(MeshReadyDomains.Application, ready, RecvFlags.DontWait);
-            return ready.Count == 1;
-        });
         using (var requestReady = new MeshReadyBatch())
         {
-            target.DrainReady(MeshReadyDomains.Application, requestReady, RecvFlags.DontWait);
+            await WaitUntilAsync(() =>
+            {
+                target.DrainReady(MeshReadyDomains.Application, requestReady, RecvFlags.DontWait);
+                return requestReady.Count == 1;
+            });
             using var requestClaim = requestReady.TakeClaim(0);
             using var requestBatch = new MeshReceiveBatch();
             Assert.True(requestClaim.Receive(requestBatch, RecvFlags.DontWait));
@@ -1973,15 +2100,13 @@ public sealed partial class StatefulServiceRuntimeTests
             SubmitResult.Ok,
             source.RequestToActor(actor, [payload], out var operation, TimeSpan.FromSeconds(3))
         );
-        await WaitUntilAsync(() =>
-        {
-            using var ready = new MeshReadyBatch();
-            target.DrainReady(MeshReadyDomains.Application, ready, RecvFlags.DontWait);
-            return ready.Count == 1;
-        });
         using (var requestReady = new MeshReadyBatch())
         {
-            target.DrainReady(MeshReadyDomains.Application, requestReady, RecvFlags.DontWait);
+            await WaitUntilAsync(() =>
+            {
+                target.DrainReady(MeshReadyDomains.Application, requestReady, RecvFlags.DontWait);
+                return requestReady.Count == 1;
+            });
             using var requestClaim = requestReady.TakeClaim(0);
             using var requestBatch = new MeshReceiveBatch();
             Assert.True(requestClaim.Receive(requestBatch, RecvFlags.DontWait));
@@ -2158,6 +2283,8 @@ public sealed partial class StatefulServiceRuntimeTests
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();
         await using var caller = NewNode(context, "reply-terminal-caller");
+        // Drive the receive management owner that processes operation deadlines.
+        caller.Start();
         var requestSource = new ZLinkServiceWireCodec.RequestSourceFence(
             "reply-terminal-owner",
             1,
@@ -3612,6 +3739,89 @@ public sealed partial class StatefulServiceRuntimeTests
         Assert.Equal(1, operationTarget.CreateCount);
         Assert.Equal(source.RoutingId, operationTarget.LastOperation.SourceNodeRid);
         Assert.Equal(reservation, operationTarget.LastOperation.Reservation);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Unadmitted_records_are_silently_discarded_before_validation(
+        bool infrastructure
+    )
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = NewNode(context, "unadmitted-record-node");
+        await using var peer = context.CreateRouterSocket();
+        using var completions = new TestCompletionPollerDriver(peer);
+        await using var monitor = node.OpenMonitor();
+        var suffix = Guid.NewGuid().ToString("N");
+        var nodeEndpoint = $"inproc://unadmitted-node-{suffix}";
+        var peerEndpoint = $"inproc://unadmitted-peer-{suffix}";
+        var peerRid = RoutingId.From($"unadmitted-peer-{suffix}");
+        peer.SetRoutingId(peerRid);
+        peer.Bind(peerEndpoint);
+        node.SetBind(nodeEndpoint);
+        node.ConnectPeer(peerEndpoint, peerRid);
+        node.Start();
+        using (var hello = await ReceiveRouterEnvelopeAsync(peer)) { }
+
+        var unadmittedRecord = infrastructure
+            ? ZLinkServiceWireCodec.EncodeRouteAdmission(
+                ServiceWireConstants.Command.Update,
+                "mesh",
+                peerEndpoint,
+                lifecycleGeneration: 1,
+                descriptorRevision: 1,
+                new Dictionary<string, uint>(StringComparer.Ordinal),
+                objectRole: (byte)ZLinkMeshNodeObjectRole.Server
+            )
+            : new byte[]
+            {
+                ServiceWireConstants.Magic0,
+                ServiceWireConstants.Magic1,
+                ServiceWireConstants.WireMajor,
+                (byte)ServiceWireConstants.Command.SpotSend,
+                0,
+            };
+        using var record = Message.From(unadmittedRecord);
+        await peer.Send(node.RoutingId).Message(record).Async(CancellationToken.None).Admitted;
+
+        // Admission is an ordered barrier after the unadmitted record. The
+        // application header above is deliberately incomplete: admission must
+        // fence it before application validation can report a protocol error.
+        using var admit = Message.From(
+            ZLinkServiceWireCodec.EncodeRouteAdmission(
+                ServiceWireConstants.Command.Admit,
+                "mesh",
+                peerEndpoint,
+                lifecycleGeneration: 1,
+                descriptorRevision: 1,
+                new Dictionary<string, uint>(StringComparer.Ordinal),
+                objectRole: (byte)ZLinkMeshNodeObjectRole.Server
+            )
+        );
+        await peer.Send(node.RoutingId).Message(admit).Async(CancellationToken.None).Admitted;
+        await WaitUntilAsync(() => node.Status().AdmittedPeerCount == 1);
+        Assert.Equal(0UL, monitor.Status().ProtocolErrors);
+        Assert.Equal(0UL, node.Status().PendingApplicationMessages);
+
+        using var invalidAdmittedRecord = Message.From(
+            infrastructure
+                ? ZLinkServiceWireCodec.EncodeRouteAdmission(
+                    ServiceWireConstants.Command.Update,
+                    "mesh",
+                    peerEndpoint,
+                    lifecycleGeneration: 2,
+                    descriptorRevision: 1,
+                    new Dictionary<string, uint>(StringComparer.Ordinal),
+                    objectRole: (byte)ZLinkMeshNodeObjectRole.Server
+                )
+                : unadmittedRecord
+        );
+        await peer.Send(node.RoutingId)
+            .Message(invalidAdmittedRecord)
+            .Async(CancellationToken.None)
+            .Admitted;
+        await WaitUntilAsync(() => monitor.Status().ProtocolErrors != 0);
     }
 
     [Fact]
@@ -5393,6 +5603,13 @@ public sealed partial class StatefulServiceRuntimeTests
 
         public bool DisposedByHandler { get; private set; }
 
+        private readonly TaskCompletionSource _handlerCompleted = new(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+
+        // Completes after DisposedByHandler is set, so a test can order its reads after the handler's finally.
+        public Task HandlerCompleted => _handlerCompleted.Task;
+
         public bool TryFollow(IReadOnlyList<ZLinkBackendActorPart> parts)
         {
             Count++;
@@ -5421,6 +5638,7 @@ public sealed partial class StatefulServiceRuntimeTests
             {
                 ZLinkMessageParts.DisposeAll(LastMessages);
                 DisposedByHandler = true;
+                _handlerCompleted.TrySetResult();
             }
         }
     }

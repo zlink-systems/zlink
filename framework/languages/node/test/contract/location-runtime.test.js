@@ -189,7 +189,13 @@ test('location runtime renews owner lease, records store failure, and recovers',
   assert.equal(runtime.lastError, undefined);
 });
 
-test('location runtime completes startup without a lease after the initial claim times out', async () => {
+test('location runtime completes startup without a lease after the initial claim times out', async t => {
+  const renewIntervalMs = 25;
+  const renewTimeoutMs = 5;
+  let now = 0;
+  t.mock.method(performance, 'now', () => now);
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+
   const store = new internal.ZLinkInMemoryLocationStore();
   const timers = [];
   const leaseStore = {
@@ -207,19 +213,20 @@ test('location runtime completes startup without a lease after the initial claim
     ownerLeaseStore: leaseStore,
     timers,
     locationOptions: {
-      ownerLeaseRenewIntervalMs: 25,
-      ownerLeaseRenewTimeoutMs: 5
+      ownerLeaseRenewIntervalMs: renewIntervalMs,
+      ownerLeaseRenewTimeoutMs: renewTimeoutMs
     }
   });
-  const keepAlive = setTimeout(() => {}, 100);
 
-  await runtime.start(rid('node-startup-timeout'));
-  clearTimeout(keepAlive);
+  const startup = runtime.start(rid('node-startup-timeout'));
+  now += renewTimeoutMs;
+  t.mock.timers.tick(renewTimeoutMs);
+  await startup;
 
   assert.equal(runtime.isStarted, true);
   assert.equal(runtime.currentOwnerToken, undefined);
   assert.equal(runtime.ownerLeaseUsable, false);
-  assert.ok(timers[0].delayMs > 0 && timers[0].delayMs <= 25);
+  assert.equal(timers[0].delayMs, renewIntervalMs - renewTimeoutMs);
   await runtime.stop();
 });
 
@@ -260,7 +267,8 @@ test('location runtime claims on the next heartbeat after startup Store recovery
 });
 
 test('location runtime installs the same late-committed lease after heartbeat Conflict', async t => {
-  let now = performance.now();
+  const initialMockClockMs = 511.99999999999994;
+  let now = initialMockClockMs;
   t.mock.method(performance, 'now', () => now);
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const store = new internal.ZLinkInMemoryLocationStore();
@@ -787,6 +795,58 @@ test('location runtime bounds fixed routing-id owner lease renewal by the config
   await runtime.stop();
 });
 
+for (const failClaim of [false, true]) {
+  test(`first heartbeat uses the initial claim start (claim failure: ${failClaim})`, async () => {
+    let monotonicMs = 0;
+    const timers = [];
+    let storeUnavailable = failClaim;
+    const store = new internal.ZLinkInMemoryLocationStore(() => new Date(0));
+    const ownerLeaseStore = {
+      async claimOwnerLease(...args) {
+        const result = await store.claimOwnerLease(...args);
+        monotonicMs += 50;
+        if (storeUnavailable) throw new Error('Store unavailable');
+        return result;
+      },
+      async readOwnerLease(...args) {
+        if (storeUnavailable) throw new Error('Store unavailable');
+        return store.readOwnerLease(...args);
+      },
+      releaseOwnerLease: (...args) => store.releaseOwnerLease(...args),
+      removeAllByOwner: (...args) => store.removeAllByOwner(...args)
+    };
+    const runtime = new internal.ZLinkLocationRuntime({
+      stores: {
+        locationStore: store,
+        authorityStore: store,
+        peerStore: store,
+        spotStore: store,
+        actorStore: store,
+        routeStore: store,
+        ownerLeaseStore
+      },
+      options: {
+        ownerLeaseRenewIntervalMs: 100,
+        ownerLeaseRenewTimeoutMs: 1000
+      },
+      monotonicNowMs: () => monotonicMs,
+      setTimer(callback, delayMs) {
+        timers.push({ callback, delayMs });
+        return timers.length;
+      },
+      clearTimer() {}
+    });
+    try {
+      await runtime.start(rid('node-a'));
+      assert.equal(timers.length, 1);
+      assert.equal(timers[0].delayMs, 50);
+    } finally {
+      storeUnavailable = false;
+      await runtime.stop();
+    }
+  });
+}
+
 test('location runtime schedules heartbeats from the actual monotonic start after a late renewal', async () => {
   const store = new internal.ZLinkInMemoryLocationStore();
   const timers = [];
@@ -864,6 +924,95 @@ test('location runtime subtracts Store round trip from local lease eligibility',
   assert.equal(runtime.ownerLeaseUsable, false);
   await runtime.stop();
 });
+
+for (const expiresDuringRenewal of [false, true]) {
+  for (const queuedResult of [false, true]) {
+    test(`lease recovery observes admission at result application (expires: ${expiresDuringRenewal}, queued: ${queuedResult})`, async () => {
+      const store = new internal.ZLinkInMemoryLocationStore(() => new Date(0));
+      let monotonicMs = 1_000;
+      let resolveResponse;
+      let rejectResponse;
+      const response = new Promise((resolve, reject) => {
+        resolveResponse = resolve;
+        rejectResponse = reject;
+      });
+      let resolveSubmitted;
+      let rejectSubmitted;
+      const submitted = new Promise((resolve, reject) => {
+        resolveSubmitted = resolve;
+        rejectSubmitted = reject;
+      });
+      const ownerLeaseStore = {
+        claimOwnerLease: store.claimOwnerLease.bind(store),
+        readOwnerLease: store.readOwnerLease.bind(store),
+        renewOwnerLease(...args) {
+          store.renewOwnerLease(...args).then(resolveSubmitted, rejectSubmitted);
+          return response;
+        },
+        releaseOwnerLease: store.releaseOwnerLease.bind(store)
+      };
+      const runtime = runtimeFor(store, {
+        ownerLeaseStore,
+        monotonicNowMs: () => monotonicMs,
+        locationOptions: {
+          ownerLeaseTtlMs: 15_000,
+          ownerLeaseRenewIntervalMs: 5_000,
+          ownerLeaseRenewTimeoutMs: 3_000,
+          ownerLeaseFencingMarginMs: 5_000
+        }
+      });
+      let renewals = 0;
+      let recoveries = 0;
+      runtime.addOwnerLeaseRenewedHandler((_renewal, wasOwnerLeaseUsable) => {
+        renewals += 1;
+        if (!wasOwnerLeaseUsable) recoveries += 1;
+        assert.equal(runtime.ownerLeaseUsable, true);
+      });
+      let renewal;
+      try {
+        await runtime.start(rid('lease-recovery'));
+        renewals = 0;
+        recoveries = 0;
+        monotonicMs = 10_000;
+        assert.equal(runtime.ownerLeaseUsable, true);
+        renewal = runtime.renewOwnerLeaseOnce();
+        const renewed = await submitted;
+        assert.equal(runtime.ownerLeaseUsable, true);
+        if (queuedResult) {
+          resolveResponse(renewed);
+          let usableAtBoundary;
+          let recoveriesAtBoundary;
+          await new Promise(resolve => queueMicrotask(() => {
+            if (expiresDuringRenewal) monotonicMs = 11_000;
+            usableAtBoundary = runtime.ownerLeaseUsable;
+            recoveriesAtBoundary = recoveries;
+            resolve();
+          }));
+          assert.equal(usableAtBoundary, !expiresDuringRenewal);
+          assert.equal(recoveriesAtBoundary, 0, 'the Store response still awaits application');
+        } else {
+          if (expiresDuringRenewal) monotonicMs = 11_000;
+          assert.equal(runtime.ownerLeaseUsable, !expiresDuringRenewal);
+          resolveResponse(renewed);
+        }
+        assert.equal(await renewal, true);
+        assert.equal(runtime.ownerLeaseUsable, true);
+        assert.equal(renewals, 1);
+        assert.equal(recoveries, expiresDuringRenewal ? 1 : 0);
+        monotonicMs = 19_999;
+        assert.equal(runtime.ownerLeaseUsable, true);
+        monotonicMs = 20_000;
+        assert.equal(runtime.ownerLeaseUsable, false, 'renewal retains the request-start deadline');
+      } finally {
+        if (renewal !== undefined) {
+          rejectResponse(new Error('test cleanup'));
+          await renewal;
+        }
+        await runtime.stop();
+      }
+    });
+  }
+}
 
 test('location runtime waits for an in-flight heartbeat before removing the owner lease', async () => {
   const store = new internal.ZLinkInMemoryLocationStore();
@@ -1383,7 +1532,7 @@ test('location lifecycle already-owned claim does not activate a second instance
   assert.notEqual(await store.resolveActor({ meshName: 'play', actorId: 'actor-1' }), undefined);
 });
 
-test('location lifecycle rolls failed activation back and renews actor spot state', async () => {
+test('location lifecycle rolls failed activation back and renews the claimed Actor ref', async () => {
   const store = new internal.ZLinkInMemoryLocationStore(() => new Date(Date.UTC(2026, 6, 3, 0, 0, 0)));
   await liveUserSpotAuthority(store, 'play', 'spot-1', 7n);
 
@@ -1421,35 +1570,12 @@ test('location lifecycle rolls failed activation back and renews actor spot stat
     },
     3n
   );
-  await node.lifecycle.notifyActorJoinedSpot('player', 'actor-1', 'play', 'spot-1', 7n, 11n, 3n);
-  const joined = await store.resolveActor({ meshName: 'play', actorId: 'actor-1' });
-  assert.deepEqual(joined.actorRef, {
-    nodeRid: rid('node-a'),
-    actorId: 'actor-1',
-    objectGeneration: 1n,
-    meshName: 'play'
+  const current = await store.resolveActor({ meshName: 'play', actorId: 'actor-1' });
+  assert.deepEqual(current.actorRef, {
+    nodeRid: rid('node-a'), actorId: 'actor-1', objectGeneration: 1n, meshName: 'play'
   });
-  assert.equal(joined.spotKind, framework.ZLinkSpotKind.User);
-  assert.equal(joined.meshName, 'play');
-  assert.equal(joined.spotId, 'spot-1');
-  assert.equal(joined.spotGeneration, 7n);
-  assert.equal(joined.membershipEpoch, 11n);
-
-  await node.lifecycle.notifyActorLeftSpot(
-    'player',
-    'actor-1',
-    'play-entry-00000000-0000-4000-8000-000000000001',
-    13n,
-    17n,
-    3n
-  );
-  const left = await store.resolveActor({ meshName: 'play', actorId: 'actor-1' });
-  assert.equal(left.spotKind, framework.ZLinkSpotKind.Entry);
-  assert.equal(left.spotId, 'play-entry-00000000-0000-4000-8000-000000000001');
-  assert.equal(left.spotGeneration, 13n);
-  assert.equal(left.membershipEpoch, 17n);
-  assert.equal(left.ownerNodeGeneration, 3n);
-  assert.equal('generation' in left, false);
+  assert.equal(current.ownerNodeGeneration, 3n);
+  assert.equal('generation' in current, false);
 });
 
 test('location lifecycle deactivates stale hosted actor and protects new owner row', async () => {
@@ -1469,7 +1595,7 @@ test('location lifecycle deactivates stale hosted actor and protects new owner r
   assert.equal(takeover.status, internal.ZLinkLocationWriteStatus.Stored);
 
   await assert.rejects(
-    () => nodeA.lifecycle.notifyActorJoinedSpot('player', 'actor-1', 'play', 'spot-1', 7n, 11n, 3n),
+    () => nodeA.lifecycle.setActorRef('player', 'actor-1', { nodeRid: rid('node-a'), actorId: 'actor-1', objectGeneration: 1n, meshName: 'play' }, 3n),
     /renewal.*rejected/i
   );
   await Promise.resolve();
@@ -1820,7 +1946,7 @@ test('store location resolvers seed reusable SpotHandle snapshots from live rows
     },
     3n
   );
-  await node.lifecycle.notifyActorJoinedSpot('player', 'actor-1', 'play', 'spot-1', 7n, 11n, 3n);
+  await node.lifecycle.takeoverActorJoinedSpot('player', 'actor-1', { nodeRid: rid('node-a'), actorId: 'actor-1', objectGeneration: 1n, meshName: 'play' }, 'play', 'spot-1', 7n, 11n, 3n);
   actorAddress = await resolvers.resolveActorSpotHandle('play', 'actor-1');
   assert.equal(actorAddress.spotId, 'spot-1');
   const actorTarget = await internal.resolveSpotHandle(actorAddress);
@@ -1869,9 +1995,10 @@ test('actor resolver keeps the current Actor route while its enclosing Spot proj
     objectGeneration: 5n,
     meshName: 'play'
   });
-  await firstOwner.lifecycle.notifyActorJoinedSpot(
+  await firstOwner.lifecycle.takeoverActorJoinedSpot(
     'player',
     actorId,
+    { nodeRid: rid('node-a'), actorId, objectGeneration: 5n, meshName: 'play' },
     'play',
     spotId,
     7n,

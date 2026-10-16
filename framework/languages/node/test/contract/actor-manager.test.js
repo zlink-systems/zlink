@@ -2206,7 +2206,9 @@ test('ZLinkActorContext joinSpot uses binary codec extensions without raw reques
     const actorRef = { nodeRid: 'node-b', actorId: 'alice', generation: 1n };
     const joinCoordinator = {
       async joinSpot(actor, state, spotId, request) {
-        const decoded = serializer.deserialize(request);
+        const decoded = serializer.deserialize(
+          framework.ZLinkEncodedPayload.fromOwned(request.data())
+        );
         calls.push(`joinSpot:${actor.actorId}:${state.actorId}:${spotId}:${decoded.text}`);
         return { accepted: true, actor: actorRef, reply: replyMessage };
       },
@@ -2354,21 +2356,7 @@ test('ZLinkActorNativeJoinCoordinator keeps remote joins on the formal Core surf
       async remoteActorBinder(actorRef) {
         events.push(`bind:${actorRef.nodeRid}:${actorRef.actorId}:${actorRef.objectGeneration}`);
       },
-      sourceTransfer: {
-        async prepareSource(joinedActor) {
-          return {
-            state: framework.ZLinkMessage.fromEncoded(
-              framework.ZLinkEncodedPayload.from(Buffer.alloc(0))
-            ),
-            handoffBacklog: [],
-            onSourceLeaveSubmitted() {},
-            commit() {
-              events.push(`leave:${joinedActor.actorId}`);
-            },
-            async rollback() {}
-          };
-        }
-      }
+      sourceTransfer: {}
     })
   });
   const actor = await manager.getOrCreateActor('alice', 'player');
@@ -2822,10 +2810,8 @@ function boundSessionCommand44Harness(overrides = {}) {
     actorManager: () => ({ getState: () => state }),
     primaryMeshNode: () => ({}),
     async notifyEntrySpotActorLeft() {},
-    async restoreEntrySpotActorJoined() {},
     locationLifecycle: () => undefined,
     actorHandoff: {},
-    actorTransferRegistry: {},
     authorityStore: () => ({
       async readAuthority() {
         return authority;
@@ -2874,7 +2860,7 @@ test('target ownership publication submits one exact command 44 without a comple
     actor: {
       actorId: 'actor-route',
       generation: 9n,
-      nodeRid: 'target-node'
+      nodeRid: rid('target-node')
     },
     session: serviceWireRelocation.session,
     route: {
@@ -2882,7 +2868,7 @@ test('target ownership publication submits one exact command 44 without a comple
       previousAuthorityOwnerGeneration: 16n,
       targetAuthorityOwnerGeneration: 17n,
       targetOwnerLeaseGeneration: 23n,
-      targetNodeRid: 'target-node',
+      targetNodeRid: rid('target-node'),
       targetNodeGeneration: 19n
     }
   });
@@ -2952,10 +2938,8 @@ test('target route opening remains a no-op when no relocation route was publishe
     actorManager: () => undefined,
     primaryMeshNode: () => ({}),
     async notifyEntrySpotActorLeft() {},
-    async restoreEntrySpotActorJoined() {},
     locationLifecycle: () => undefined,
     actorHandoff: {},
-    actorTransferRegistry: {},
     authorityStore: () => undefined,
     relocationStore: () => undefined,
     sessionRelocationWire: () => ({
@@ -2993,10 +2977,8 @@ test('ordinary remote Session binding does not publish command 44 before relocat
     actorManager: () => ({ getState: () => state }),
     primaryMeshNode: () => ({}),
     async notifyEntrySpotActorLeft() {},
-    async restoreEntrySpotActorJoined() {},
     locationLifecycle: () => undefined,
     actorHandoff: {},
-    actorTransferRegistry: {},
     authorityStore: () => undefined,
     relocationStore: () => undefined,
     sessionRelocationWire: () => ({
@@ -3072,29 +3054,37 @@ test('source command 42 seal captures the exact fence and rollback submits one-w
       }
     }),
     async notifyEntrySpotActorLeft() {},
-    async restoreEntrySpotActorJoined() {},
     locationLifecycle: () => undefined,
     actorHandoff: {
       begin() {},
-      isActive() { return false; },
+      isActive() {
+        return false;
+      },
       sealConnectionBoundIngress() {},
-      snapshotCoreBacklog() { return [{ index: 0, header: 'aA==', payload: 'Yg==', returnResponse: false }]; },
+      snapshot() {
+        return [{ index: 0, header: 'aA==', payload: 'Yg==', returnResponse: false }];
+      },
       cancel() {},
-      pendingCount() { return 1; }
+      pendingCount() {
+        return 1;
+      }
     },
-    actorTransferRegistry: {
-      async transferOut() { return { state: encodedMessage('state') }; }
-    },
-    authorityStore: () => ({ async readAuthority() { return authority; } }),
+    authorityStore: () => ({
+      async readAuthority() {
+        return authority;
+      }
+    }),
     relocationStore: () => undefined,
     liveDescriptors: async (meshName) => {
       assert.equal(meshName, 'session.route');
-      return [{
-        rid: rid('session-node'),
-        lifecycleGeneration: 4n,
-        ownerId: 'session-owner',
-        leaseGeneration: 8n
-      }];
+      return [
+        {
+          rid: rid('session-node'),
+          lifecycleGeneration: 4n,
+          ownerId: 'session-owner',
+          leaseGeneration: 8n
+        }
+      ];
     },
     sessionRelocationWire: () => ({
       async requestSessionRelocationSeal(meshName, targetNodeRid, request) {
@@ -3113,12 +3103,11 @@ test('source command 42 seal captures the exact fence and rollback submits one-w
     clearRemoteActorPacketTarget() {}
   });
 
-  const prepared = await runtime.prepareSource(
+  const prepared = await runtime.prepareMaintenanceSession(
     actor,
     state,
     undefined,
-    'core',
-    undefined,
+    true,
     relocation
   );
   assert.equal(seals.length, 1);
@@ -3129,23 +3118,23 @@ test('source command 42 seal captures the exact fence and rollback submits one-w
     coordinator: {
       ownerId: 'source-owner',
       leaseGeneration: 5n,
-      nodeRid: 'source-node',
+      nodeRid: rid('source-node'),
       nodeGeneration: 2n,
       expectedAuthorityStoreVersion: 'authority-source-1'
     },
     senderRole: 'source',
     actor: {
-      actor: { actorId: 'actor-seal', generation: 9n, nodeRid: 'source-node' },
+      actor: { actorId: 'actor-seal', generation: 9n, nodeRid: rid('source-node') },
       targetNodeGeneration: 2n,
       authorityOwnerGeneration: 3n,
       ownerLeaseGeneration: 5n
     },
     session: {
-      sessionOwnerNodeRid: 'session-node',
+      sessionOwnerNodeRid: rid('session-node'),
       sessionOwnerNodeGeneration: 4n,
       sessionOwnerId: 'session-owner',
       sessionOwnerLeaseGeneration: 8n,
-      sessionRid: 'session-rid',
+      sessionRid: rid('session-rid'),
       bindingGeneration: 11n
     }
   });
@@ -3165,99 +3154,13 @@ test('source command 42 seal captures the exact fence and rollback submits one-w
     relocation,
     coordinator: seals[0].request.coordinator,
     senderRole: 'source',
-    actor: { actorId: 'actor-seal', generation: 9n, nodeRid: 'source-node' },
+    actor: { actorId: 'actor-seal', generation: 9n, nodeRid: rid('source-node') },
     session: seals[0].request.session,
     route: {
       action: 'abort',
       currentAuthorityOwnerGeneration: 3n
     }
   });
-  assert.equal(moving, false);
-});
-
-test('Core source leave submission releases the target fence before its callback result', async () => {
-  const actor = { context: { actorId: 'actor-source-leave-order' } };
-  let moving = false;
-  const state = {
-    actorType: 'player',
-    nativeActorRef: {
-      nodeRid: rid('source-node'),
-      actorId: actor.context.actorId,
-      generation: 9n
-    },
-    beginMove() { moving = true; },
-    endMove() { moving = false; }
-  };
-  const runtime = new ZLinkActorTransferRuntime({
-    routeTransport: {},
-    spotManager: () => undefined,
-    actorManager: () => ({ getState: () => state }),
-    primaryMeshNode: () => ({}),
-    async notifyEntrySpotActorLeft() {},
-    async restoreEntrySpotActorJoined() {},
-    locationLifecycle: () => undefined,
-    actorHandoff: {
-      isActive() { return false; },
-      begin() {},
-      snapshotCoreBacklog() { return []; },
-      cancel() {}
-    },
-    actorTransferRegistry: {
-      async transferOut() { return { state: encodedMessage('state') }; }
-    },
-    authorityStore: () => undefined,
-    relocationStore: () => undefined,
-    clearRemoteActorPacketTarget() {}
-  });
-  const prepared = await runtime.prepareSource(actor, state, undefined, 'core');
-  const events = [];
-  let observeSubmission;
-  const submissionObserved = new Promise((resolve) => {
-    observeSubmission = resolve;
-  });
-  let finishCallback;
-  const callbackResult = new Promise((resolve) => {
-    finishCallback = resolve;
-  });
-  let sourceLeaveCompleted = false;
-  let sourceLeaveSubmitted = false;
-  assert.ok(prepared.sourceLeaveSubmitted instanceof Promise);
-  void prepared.sourceLeaveSubmitted.then(() => {
-    sourceLeaveSubmitted = true;
-  });
-  void prepared.sourceLeaveCompletion.then(() => {
-    sourceLeaveCompleted = true;
-  });
-  prepared.onSourceLeaveSubmitted(async () => {
-    events.push('source-leave-submitted');
-    observeSubmission();
-  });
-
-  const notification = runtime.notifyCoreSourceLeave(actor, async () => {
-    events.push('source-leave-callback-invoked');
-    await callbackResult;
-    events.push('source-leave-callback-completed');
-  });
-  await submissionObserved;
-
-  assert.deepEqual(events, [
-    'source-leave-callback-invoked',
-    'source-leave-submitted'
-  ]);
-  await prepared.sourceLeaveSubmitted;
-  assert.equal(sourceLeaveSubmitted, true);
-  assert.equal(sourceLeaveCompleted, false);
-
-  finishCallback();
-  await notification;
-  await prepared.sourceLeaveCompletion;
-  assert.deepEqual(events, [
-    'source-leave-callback-invoked',
-    'source-leave-submitted',
-    'source-leave-callback-completed'
-  ]);
-  assert.equal(sourceLeaveCompleted, true);
-  await prepared.rollback();
   assert.equal(moving, false);
 });
 
@@ -3393,10 +3296,8 @@ test('precommit abort reopens source admission and replays backlog before one-wa
       }
     }),
     async notifyEntrySpotActorLeft() {},
-    async restoreEntrySpotActorJoined() {},
     locationLifecycle: () => undefined,
     actorHandoff: coordinator,
-    actorTransferRegistry: {},
     authorityStore: () => ({ async readAuthority() { return authority; } }),
     relocationStore: () => undefined,
     liveDescriptors: async () => [{
@@ -3469,9 +3370,10 @@ test('precommit abort reopens source admission and replays backlog before one-wa
       clearTimeout(timeout);
     }
     await prefixTerminal;
+    // Relocation 04 §4.1: the Session seal precedes the source dispatch stop.
     assert.deepEqual(events, [
-      'begin-transfer',
       'session-sealed',
+      'begin-transfer',
       'cancel-transfer',
       'prefix-admitted',
       'session-abort',
@@ -3505,10 +3407,8 @@ test('target route opening never submits a second route after command 44', async
     actorManager: () => undefined,
     primaryMeshNode: () => ({}),
     async notifyEntrySpotActorLeft() {},
-    async restoreEntrySpotActorJoined() {},
     locationLifecycle: () => undefined,
     actorHandoff: {},
-    actorTransferRegistry: {},
     authorityStore: () => undefined,
     relocationStore: () => undefined,
     sessionRelocationWire: () => ({
@@ -3741,7 +3641,6 @@ test('one-way command 44 shutdown failure preserves the committed target without
       }
     }),
     actorHandoff: {},
-    actorTransferRegistry: {},
     relocationStore: () => undefined,
     sessionRelocationWire: () => ({
       async requestSessionRelocationSeal() {
@@ -3827,7 +3726,6 @@ test('native target actor location installs its enclosing User Spot Ready route'
     }),
     authorityStore: () => undefined,
     actorHandoff: {},
-    actorTransferRegistry: {},
     clearRemoteActorPacketTarget() {}
   });
 
@@ -3869,7 +3767,6 @@ test('transferred actor commit does not duplicate the native session binding res
     async notifyEntrySpotActorLeft() {},
     locationLifecycle: () => undefined,
     actorHandoff: {},
-    actorTransferRegistry: {},
     clearRemoteActorPacketTarget() {}
   });
 
@@ -4008,11 +3905,7 @@ test('public cross-node Entry Join reuses the Host relocation owner after admiss
           };
         }
       },
-      sourceTransfer: {
-        async prepareSource() {
-          assert.fail('direct Join must not construct the legacy transfer/commit state machine');
-        }
-      },
+      sourceTransfer: {},
       actorJoinRelocation: {
         async relocateActorJoin(input) {
           assert.notEqual(
@@ -5307,7 +5200,7 @@ async function localCoordinatorFixture({ entry = false, admissionError } = {}) {
       reportSourceLeaveError(error) { throw error; },
       spotRouteResolver: { async resolve() { return target; } },
       entrySpotIdProvider: () => 'node-a',
-      locationLifecycle: { async notifyActorJoinedSpot() { events.push('store'); }, async notifyActorLeftSpot() { events.push('store'); } },
+      locationLifecycle: { async commitActorMembership() { events.push('store'); } },
       async localSpotJoin(_spot, _actor, _request, commit) {
         events.push('admission');
         if (admissionError) throw admissionError;

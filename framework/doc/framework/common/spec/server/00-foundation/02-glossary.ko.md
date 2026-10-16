@@ -1419,8 +1419,8 @@ payload도 chunk가 순서대로 흘러가며 시작하고 완료할 수 있다.
 ### 재전송 창 (Cutover retransmission window)
 
 Source가 boundary 전 relay batch와 cutover 사본을 보관하고, connection 장애 뒤 같은
-batch를 재전송할 수 있는 기간이다. Source는 [공통 relocation §4.4](../05-location-relocation/04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)의
-target commit, source `Preserve` fence 또는 source lease 만료 terminal까지 사본을 유지한다. Cutover 대기
+batch를 재전송할 수 있는 기간이다. Source는 [Location runtime §10](../05-location-relocation/01-location-runtime.ko.md#10-store-응답을-받지-못했을-때)이
+source 작업의 결과를 확정할 때까지 사본을 유지한다. Cutover 대기
 Warning과 Restore deadline만으로 이 기간을 끝내지 않는다.
 
 <a id="safe-to-shutdown"></a>
@@ -1743,8 +1743,9 @@ count 및 설정한 limit을 서로 구분한 projection이다. 일반 object �
 Descriptor 값은 후보를 빠르게 거르는 데만 사용하고, 실제 slot 확보 여부는 Location Store의 atomic
 reservation으로 확정한다.
 
-Remote MeshNode는 이 등록 정보에서 endpoint와 Object role을 확인한다. 두 descriptor의
-Object role이 모두 `Client`이면 automatic connection intent를 만들지 않는다. 그 밖의
+Remote MeshNode는 이 등록 정보에서 endpoint와 Object role을 확인한다. Object role로 연결이
+필요 없는 pair와 automatic connection intent를 만드는 조건은
+[Channel topology §8](../02-channel-transport/01-channel-topology.ko.md#8-routemesh-peer-연결과-discoveryautomatic-rid-비교-manual-descriptor-기반)이 정한다. 연결하는
 pair는 실제 transport handshake에서 MeshName, RID, lifecycle generation, Object role과
 security identity가 등록 정보와 같은지 다시 확인하고 peer admission을 마쳐야 한다.
 
@@ -2345,15 +2346,15 @@ owner-local 값이다. 다른 owner나 재시작한 process의 값과 크기를 
 ### AuthorityOwnerGeneration
 
 같은 object incarnation에서 authority owner가 바뀐 순서를 나타내는
-provider 발급 값이다. Object가 delete 뒤 다시 생성되었는지를 구분하는
+값이다. Object가 delete 뒤 다시 생성되었는지를 구분하는
 ObjectGeneration과는 다른 값이다.
 
 | 항목 | 내용 |
 |---|---|
-| 형태 | Provider-issued monotonic generation |
+| 형태 | Framework-issued monotonic generation |
 | .NET 표기 | `ulong AuthorityOwnerGeneration` |
 | 공개 구성 | `1..long.MaxValue` 범위의 정수 하나다. |
-| 생성·관리 | Location Store provider의 global durable counter가 initial reserve와 `NewOwner` transition에서 발급한다. |
+| 생성·관리 | [Location runtime §3.2](../05-location-relocation/01-location-runtime.ko.md#32-object-재생성과-owner-변경은-다른-세대-번호를-사용한다)가 정한 대로 Framework가 initial reserve와 `NewOwner` transition에서 발급한다. |
 | 수명 | 같은 ObjectGeneration 안에서 owner가 바뀔 때 새 값을 사용한다. 최대값에서 값을 처음으로 되돌리지 않고 `GenerationExhausted`로 실패한다. |
 
 <a id="owner-lease-generation"></a>

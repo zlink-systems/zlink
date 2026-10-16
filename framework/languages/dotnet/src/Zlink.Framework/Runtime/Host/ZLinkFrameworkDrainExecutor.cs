@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace Zlink.Framework.Runtime.Host;
@@ -326,7 +327,7 @@ internal sealed class ZLinkFrameworkDrainExecutor : IZLinkDrainExecutor
                 await _operations.StopAutoConnect(deadlineToken).ConfigureAwait(false);
             await CleanupOwnerAsync(deadlineToken).ConfigureAwait(false);
             await _stopMeshMonitoring().ConfigureAwait(false);
-            await _operations.StopRuntime(deadlineToken).ConfigureAwait(false);
+            await _operations.StopRuntime(absoluteDeadline, deadlineToken).ConfigureAwait(false);
             if (_operations.HasLocationRuntime)
                 await _operations.StopLocation(deadlineToken).ConfigureAwait(false);
             return Result(null);
@@ -674,7 +675,7 @@ internal sealed record ZLinkDrainExecutionOperations(
     Func<CancellationToken, ValueTask> FreezeOwnerWrites,
     Func<CancellationToken, ValueTask> CleanupOwner,
     Func<ZLinkDrainRemainderCounts> GetRemainderCounts,
-    Func<CancellationToken, ValueTask> StopRuntime,
+    Func<DateTimeOffset, CancellationToken, ValueTask> StopRuntime,
     Func<CancellationToken, ValueTask> ForceStopRuntime,
     Func<CancellationToken, ValueTask> StopAutoConnect,
     Func<CancellationToken, ValueTask> StopLocation,
@@ -720,7 +721,11 @@ internal sealed record ZLinkDrainExecutionOperations(
             runtime.GetDrainRemainderCounts,
             runtime.StopAsync,
             runtime.ForceStopAsync,
-            autoConnect is null ? static _ => ValueTask.CompletedTask : autoConnect.StopAsync,
+            autoConnect is null
+                ? static _ => ValueTask.CompletedTask
+                : runtime
+                    .Services.GetRequiredService<ZLinkAutoConnectLifecycleCoordinator>()
+                    .StopAsync,
             locationRuntime is null
                 ? static _ => ValueTask.CompletedTask
                 : locationRuntime.StopAsync,

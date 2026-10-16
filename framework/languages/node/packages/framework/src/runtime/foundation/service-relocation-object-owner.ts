@@ -17,6 +17,7 @@ const DEFAULT_RELOCATION_CALLBACK_CONCURRENCY = 8;
 
 export interface ServiceRelocationSealedWork {
   readonly boundSessionState: Uint8Array;
+  readonly sessionBinding?: ServiceRelocationParticipant['sessionBinding'];
   readonly queuedMessages: readonly ServiceRelocationQueuedMessage[];
   readonly timers: readonly ServiceRelocationTimer[];
 }
@@ -29,7 +30,7 @@ export interface ServiceRelocationCaptureUnit {
   readonly authorityOwnerGeneration: bigint;
   seal(signal?: AbortSignal): Promise<ServiceRelocationSealedWork>;
   captureApplicationState(signal?: AbortSignal): Promise<Uint8Array>;
-  commitSeal(): Promise<void> | void;
+  commitSeal(followAuthorities: ReadonlyMap<string, ZLinkAuthoritySnapshot>): Promise<void> | void;
   abortSeal(): Promise<void> | void;
   /** Expired-owner terminal: pending requests fail once and dispatch stays closed. */
   discardSeal?(reason: unknown): Promise<void> | void;
@@ -43,12 +44,14 @@ export class ServiceCapturedObjectRelocation {
     private readonly units: readonly ServiceRelocationCaptureUnit[]
   ) {}
 
-  async commitSource(): Promise<void> {
+  async commitSource(
+    followAuthorities: ReadonlyMap<string, ZLinkAuthoritySnapshot>
+  ): Promise<void> {
     if (this.terminal === 'committed') return;
     if (this.terminal !== 'open') {
       throw new Error(`Relocation source capture was already ${this.terminal}.`);
     }
-    for (const unit of this.units) await unit.commitSeal();
+    for (const unit of this.units) await unit.commitSeal(followAuthorities);
     this.terminal = 'committed';
   }
 
@@ -57,17 +60,10 @@ export class ServiceCapturedObjectRelocation {
     if (this.terminal !== 'open') {
       throw new Error(`A ${this.terminal} relocation source capture cannot be aborted.`);
     }
-    const failures: unknown[] = [];
-    for (const unit of [...this.units].reverse()) {
-      try {
-        await unit.abortSeal();
-      } catch (error) {
-        failures.push(error);
-      }
-    }
-    this.terminal = 'aborted';
-    if (failures.length !== 0) {
-      throw new AggregateError(failures, 'Relocation source rollback was incomplete.');
+    try {
+      await abortSourceSeals(this.units);
+    } finally {
+      this.terminal = 'aborted';
     }
   }
 
@@ -166,31 +162,37 @@ export class ServiceRelocationObjectCaptureOwner {
   ): Promise<ServiceCapturedObjectRelocation> {
     const captured: Array<{
       readonly unit: ServiceRelocationCaptureUnit;
-      readonly work: ServiceRelocationSealedWork;
+      work?: ServiceRelocationSealedWork;
     }> = [];
     try {
       for (const unit of units) {
         signal?.throwIfAborted();
-        const work = await unit.seal(signal);
-        captured.push({ unit, work });
+        const capture: (typeof captured)[number] = { unit };
+        captured.push(capture);
+        capture.work = await unit.seal(signal);
       }
       const participants = await mapConcurrentOrdered(
         captured,
         this.maxConcurrentCallbacks,
-        async ({ unit, work }) => ({
-          key: unit.authorityKey,
-          objectKind: unit.objectKind,
-          stableType: unit.stableType,
-          objectGeneration: unit.objectGeneration,
-          authorityOwnerGeneration: unit.authorityOwnerGeneration,
-          applicationState: Buffer.from(await unit.captureApplicationState(signal)),
-          boundSessionState: Buffer.from(work.boundSessionState),
-          queuedMessages: work.queuedMessages.map((message) => ({
-            sequence: message.sequence,
-            payload: Buffer.from(message.payload)
-          })),
-          timers: work.timers.map((timer) => ({ ...timer }))
-        }),
+        async ({ unit, work: sealedWork }) => {
+          // Application capture starts only after every seal completed.
+          const work = sealedWork!;
+          return {
+            key: unit.authorityKey,
+            objectKind: unit.objectKind,
+            stableType: unit.stableType,
+            objectGeneration: unit.objectGeneration,
+            authorityOwnerGeneration: unit.authorityOwnerGeneration,
+            applicationState: Buffer.from(await unit.captureApplicationState(signal)),
+            boundSessionState: Buffer.from(work.boundSessionState),
+            ...(work.sessionBinding === undefined ? {} : { sessionBinding: work.sessionBinding }),
+            queuedMessages: work.queuedMessages.map((message) => ({
+              sequence: message.sequence,
+              payload: Buffer.from(message.payload)
+            })),
+            timers: work.timers.map((timer) => ({ ...timer }))
+          };
+        },
         signal
       );
       return new ServiceCapturedObjectRelocation(
@@ -203,9 +205,30 @@ export class ServiceRelocationObjectCaptureOwner {
         units
       );
     } catch (error) {
-      for (const { unit } of captured.reverse()) await unit.abortSeal();
+      try {
+        await abortSourceSeals(captured.map(({ unit }) => unit));
+      } catch (rollbackError) {
+        throw new AggregateError(
+          [error, rollbackError],
+          'Relocation capture failed and source rollback was incomplete.'
+        );
+      }
       throw error;
     }
+  }
+}
+
+async function abortSourceSeals(units: readonly ServiceRelocationCaptureUnit[]): Promise<void> {
+  const failures: unknown[] = [];
+  for (const unit of [...units].reverse()) {
+    try {
+      await unit.abortSeal();
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  if (failures.length !== 0) {
+    throw new AggregateError(failures, 'Relocation source rollback was incomplete.');
   }
 }
 
@@ -232,7 +255,6 @@ export interface ServiceRelocationTargetObjectPort<THidden extends ServiceReloca
     message: ServiceRelocationQueuedMessage,
     signal?: AbortSignal
   ): Promise<void>;
-  restoreTimer(hidden: THidden, timer: ServiceRelocationTimer, signal?: AbortSignal): Promise<void>;
   normalize(
     hidden: THidden,
     authority: ZLinkAuthoritySnapshot,
@@ -330,9 +352,6 @@ export class ServiceRelocationObjectRestoreOwner<
       await this.target.restoreBoundSession(hidden, participant.boundSessionState, signal);
       for (const message of participant.queuedMessages) {
         await this.target.replayQueuedMessage(hidden, message, signal);
-      }
-      for (const timer of participant.timers) {
-        await this.target.restoreTimer(hidden, timer, signal);
       }
     }
   }

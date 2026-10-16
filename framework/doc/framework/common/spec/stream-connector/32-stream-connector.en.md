@@ -391,7 +391,7 @@ kind with a user-defined payload, not `Error`.
 | MessagePack | 2 |
 | Protobuf | 3 |
 
-**JSON is the default codec.** Every language's connector takes one
+**JSON is the default codec, and its encoding and validation follow the same [framework-json-v1 profile](../server/00-foundation/05-message-model.en.md#5-the-framework-json-v1-typed-payload-profile) as server typed payloads.** Every language's connector takes one
 typed payload codec as a connector creation option, used together for
 typed send, request, and receive. MessagePack/Protobuf are provided by
 an optional package with that codec implementation. A public API for

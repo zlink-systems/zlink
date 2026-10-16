@@ -38,6 +38,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkMeshBackendAdapter;
 import systems.zlink.framework.runtime.internal.binding.spot.MeshPeerEntry;
 import systems.zlink.framework.runtime.internal.drain.ZLinkMeshDrainCoordinator;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
+import systems.zlink.framework.runtime.internal.execution.ZLinkTeardownExecutor;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAutoConnectPeer;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
@@ -85,8 +86,8 @@ import java.util.concurrent.Flow;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Supplier;
 import java.util.logging.Logger;
 
@@ -152,11 +153,13 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
     // options so every surface observes setMessageFlowMode live.
     private final AtomicReference<ZLinkMessageFlowLogMode> messageFlowMode;
     private final ZLinkRuntimeEventDispatcher eventDispatcher;
-    private final systems.zlink.framework.runtime.internal.monitoring.ZLinkStatusPublisher<
+    private static final String RUNTIME_STATUS_SOURCE = "host";
+    private final systems.zlink.framework.runtime.internal.monitoring.ZLinkTopologyStatusSource<
                     systems.zlink.framework.monitoring.ZLinkFrameworkRuntimeStatus>
-            runtimeStatusPublisher =
-                    systems.zlink.framework.runtime.internal.monitoring.ZLinkStatusPublisher.create(
-                            () -> runtimeStatus(terminationSequence.get()),
+            runtimeStatusSource =
+                    new systems.zlink.framework.runtime.internal.monitoring
+                            .ZLinkTopologyStatusSource<>(
+                            (key, previous) -> runtimeStatus(),
                             status ->
                                     List.of(
                                             status.state(),
@@ -167,8 +170,19 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                                             status.relocationResult(),
                                             status.terminationResult(),
                                             status.safeToShutdown()),
-                            ignored -> runtimeState,
-                            64,
+                            (status, sequence) ->
+                                    new ZLinkFrameworkRuntimeStatus(
+                                            status.state(),
+                                            status.isReady(),
+                                            status.acceptingWork(),
+                                            status.deadline(),
+                                            status.relocationResult(),
+                                            status.terminationResult(),
+                                            status.safeToShutdown(),
+                                            status.capacity(),
+                                            sequence,
+                                            status.observedAt()),
+                            ZLinkFrameworkRuntimeStatus::sequence,
                             status ->
                                     status.state() == ZLinkFrameworkRuntimeState.STOPPED
                                             || status.state() == ZLinkFrameworkRuntimeState.ERROR,
@@ -483,6 +497,11 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                                         .options()
                                         .sessionRelocationSealTimeout())
                         : null;
+
+        if (this.spotRetire != null) {
+            this.spotRetire.onSourceQuiescenceChanged(
+                    () -> runtimeStatusSource.signal(RUNTIME_STATUS_SOURCE));
+        }
 
         this.capacityMetricRegistration =
                 ZLinkRuntimeMetrics.registerHostCapacity(this::capacityStatus);
@@ -942,7 +961,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
     }
 
     public ZLinkFrameworkRuntimeStatus status() {
-        return runtimeStatus(terminationSequence.get());
+        return runtimeStatusSource.snapshot(RUNTIME_STATUS_SOURCE);
     }
 
     public void resetCapacityMetrics() {
@@ -966,7 +985,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
     }
 
     public Flow.Publisher<ZLinkObservedStatus<ZLinkFrameworkRuntimeStatus>> observe() {
-        return runtimeStatusPublisher;
+        return runtimeStatusSource.observe(RUNTIME_STATUS_SOURCE, 64);
     }
 
     public CompletionStage<ZLinkFrameworkRelocationResult> relocate(
@@ -1045,18 +1064,12 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                         (reason, failure) -> {
                             Throwable preflightFailure = unwrapCompletionFailure(failure);
                             ZLinkFrameworkRelocationReason blocker =
-                                    activeTermination.get() != null
-                                            ? ZLinkFrameworkRelocationReason.SHUTDOWN_REQUESTED
-                                            : failure == null
+                                    relocationReason(
+                                            preflightFailure,
+                                            false,
+                                            failure == null
                                                     ? toPublicRelocationReason(reason)
-                                                    : preflightFailure instanceof TimeoutException
-                                                                    || preflightFailure
-                                                                            instanceof
-                                                                            CancellationException
-                                                            ? ZLinkFrameworkRelocationReason
-                                                                    .DEADLINE_EXCEEDED
-                                                            : ZLinkFrameworkRelocationReason
-                                                                    .STORE_UNAVAILABLE;
+                                                    : ZLinkFrameworkRelocationReason.NONE);
                             if (blocker != ZLinkFrameworkRelocationReason.NONE) {
                                 completeRelocation(
                                         candidate,
@@ -1078,8 +1091,10 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                                         Throwable relocationCause =
                                                 unwrapCompletionFailure(relocationFailure);
                                         ZLinkFrameworkRelocationReason failureReason =
-                                                relocationFailureReason(
-                                                        relocationCause, relocationPublished.get());
+                                                relocationReason(
+                                                        relocationCause,
+                                                        relocationPublished.get(),
+                                                        ZLinkFrameworkRelocationReason.NONE);
                                         ZLinkFrameworkRelocationResult result =
                                                 relocationFailure == null
                                                                 && activeTermination.get() == null
@@ -1169,27 +1184,23 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                             ZLinkFrameworkRelocationReason.TARGET_UNAVAILABLE,
                             "No eligible relocation target became Ready before the deadline"));
         }
+        //  Without a unit inventory owner no unit can be moved (retire preflight
+        //  blocks such a host when it owns one), so there is no target to find.
         CompletionStage<Void> attempt =
-                validateRelocationTargetPopulation(mode, targetVersion, deadline)
-                        .thenCompose(
-                                validated ->
-                                        spotRetire == null
-                                                ? beginRelocationAdmission()
-                                                        .thenRun(
-                                                                () -> relocationPublished.set(true))
-                                                : spotRetire.relocateAll(
-                                                        deadline,
-                                                        () -> activeTermination.get() != null,
-                                                        mode,
-                                                        targetVersion,
-                                                        () ->
-                                                                beginRelocationAdmission()
-                                                                        .thenRun(
-                                                                                () ->
-                                                                                        relocationPublished
-                                                                                                .set(
-                                                                                                        true)),
-                                                        cancellationSignal));
+                spotRetire == null
+                        ? beginRelocationAdmission().thenRun(() -> relocationPublished.set(true))
+                        : spotRetire.relocateAll(
+                                deadline,
+                                () -> activeTermination.get() != null,
+                                mode,
+                                targetVersion,
+                                () ->
+                                        validateRelocationTargetPopulation(
+                                                mode, targetVersion, deadline),
+                                () ->
+                                        beginRelocationAdmission()
+                                                .thenRun(() -> relocationPublished.set(true)),
+                                cancellationSignal);
         CompletionStage<Void> bounded = withinRelocationDeadline(attempt, deadline);
         bounded.whenComplete(
                 (ignored, failure) -> {
@@ -1304,10 +1315,19 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
         return result;
     }
 
-    private ZLinkFrameworkRelocationReason relocationFailureReason(
-            Throwable failure, boolean relocationPublished) {
+    private ZLinkFrameworkRelocationReason relocationReason(
+            Throwable failure,
+            boolean relocationPublished,
+            ZLinkFrameworkRelocationReason successReason) {
+        if (failure != null) {
+            Logger.getLogger(ZLinkFrameworkRuntime.class.getName())
+                    .log(java.util.logging.Level.WARNING, "Host relocation failed", failure);
+        }
         if (activeTermination.get() != null) {
             return ZLinkFrameworkRelocationReason.SHUTDOWN_REQUESTED;
+        }
+        if (failure == null) {
+            return successReason;
         }
         if (failure
                 instanceof
@@ -1516,6 +1536,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                                                     ZLinkFrameworkRelocationMode
                                                             .PLANNED_MAINTENANCE,
                                                     registration.applicationVersion(),
+                                                    () -> CompletableFuture.completedFuture(null),
                                                     () -> {
                                                         if (relocationShutdown
                                                                 .beginRelocationUnit()) {
@@ -1656,6 +1677,12 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                 || registration.meshNodes().stream().anyMatch(node -> !node.peers().isEmpty())) {
             return CompletableFuture.completedFuture(
                     ZLinkTerminationReason.MANUAL_TOPOLOGY_UNSUPPORTED);
+        }
+        //  Spec 30 §5.1: a host with no unit to move needs no target, so the
+        //  target readiness checks below apply only to a host that owns a unit.
+        if (!systems.zlink.framework.runtime.spots.ZLinkUserSpotRetireRuntime.hasRelocationUnits(
+                spots, actors)) {
+            return CompletableFuture.completedFuture(ZLinkTerminationReason.NONE);
         }
         return automaticRouteMeshRetirePreflight()
                 .thenCompose(
@@ -1809,8 +1836,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                                                                                 .ADMITTED));
     }
 
-    private systems.zlink.framework.monitoring.ZLinkFrameworkRuntimeStatus runtimeStatus(
-            long sequence) {
+    private systems.zlink.framework.monitoring.ZLinkFrameworkRuntimeStatus runtimeStatus() {
         ZLinkFrameworkRuntimeState state = runtimeState.get();
         return new systems.zlink.framework.monitoring.ZLinkFrameworkRuntimeStatus(
                 state,
@@ -1821,7 +1847,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                 Optional.ofNullable(lastTerminationResult.get()),
                 safeToShutdown(state),
                 capacityStatus(),
-                sequence,
+                0,
                 Instant.now());
     }
 
@@ -2027,8 +2053,11 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                                 return null;
                             });
         }
-        long sequence = terminationSequence.incrementAndGet();
-        var status = runtimeStatus(sequence);
+        signalRuntimeStatus(terminationFailure);
+    }
+
+    private void signalRuntimeStatus(Throwable terminationFailure) {
+        var status = status();
         if (eventDispatcher != null) {
             Throwable actual =
                     terminationFailure == null ? null : unwrapCompletionFailure(terminationFailure);
@@ -2039,9 +2068,11 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
             }
             eventDispatcher.publishHostStatus(status, stage, actual);
         }
-        runtimeStatusPublisher.signal();
+        runtimeStatusSource.signal(RUNTIME_STATUS_SOURCE);
         routeMeshRuntime.signalAll();
-        channels.signalTopologyStatus();
+        if (channels != null) {
+            channels.signalTopologyStatus();
+        }
     }
 
     private CompletionStage<Void> publishRuntimeStateAwaited(ZLinkFrameworkRuntimeState state) {
@@ -2051,17 +2082,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                         ? CompletableFuture.completedFuture(null)
                         : objectDescriptors.publish(state);
         return publication
-                .thenRun(
-                        () -> {
-                            long sequence = terminationSequence.incrementAndGet();
-                            var status = runtimeStatus(sequence);
-                            if (eventDispatcher != null) {
-                                eventDispatcher.publishHostStatus(status);
-                            }
-                            runtimeStatusPublisher.signal();
-                            routeMeshRuntime.signalAll();
-                            channels.signalTopologyStatus();
-                        })
+                .thenRun(() -> signalRuntimeStatus(null))
                 .exceptionallyCompose(
                         failure -> {
                             runtimeState.set(ZLinkFrameworkRuntimeState.SERVING);
@@ -2212,7 +2233,9 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                                                         failure));
                             }
                             if (failure != null) {
-                                publishRuntimeState(ZLinkFrameworkRuntimeState.ERROR);
+                                if (!drainStarted.get()) {
+                                    publishRuntimeState(ZLinkFrameworkRuntimeState.ERROR);
+                                }
                             } else if (!drainStarted.get()) {
                                 publishRuntimeState(ZLinkFrameworkRuntimeState.STOPPED);
                             } else if (activeTermination.get() == null) {
@@ -2560,7 +2583,16 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
     }
 
     private void completeForcedStop(InternalDrainForceReason reason, Throwable failure) {
-        drained.complete(new InternalForceStopped(reason, failure));
+        Throwable cause = unwrapCompletionFailure(failure);
+        if (cause instanceof ZLinkFrameworkShutdown.Failure staged) {
+            cause = unwrapCompletionFailure(staged.getCause());
+        }
+        drained.complete(
+                new InternalForceStopped(
+                        cause instanceof TimeoutException
+                                ? InternalDrainForceReason.DEADLINE_EXCEEDED
+                                : reason,
+                        failure));
     }
 
     private void closeHandlerExecutor() {

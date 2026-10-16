@@ -8,6 +8,7 @@ using Zlink.Framework.Runtime.Dispatch;
 using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Handlers;
 using Zlink.Framework.Runtime.Host;
+using Zlink.Framework.Runtime.Identifiers;
 using Zlink.Framework.Runtime.Locations;
 using Zlink.Framework.Runtime.Spots;
 using Zlink.Framework.Runtime.Streams;
@@ -16,6 +17,71 @@ namespace Zlink.Framework.UnitTests;
 
 public sealed class SharedAsyncDisposalTests
 {
+    [Fact]
+    public async Task FrameworkRuntimeState_Joins_Listener_Before_Closing_Server_Socket()
+    {
+        await using var services = new ServiceCollection().BuildServiceProvider();
+        var context = DispatchProxy.Create<IZLinkBackendRuntimeContext, BlockingContextProxy>();
+        ((BlockingContextProxy)(object)context).Release.TrySetResult();
+        using var errors = new ZLinkRuntimeErrorSink();
+        var reported = new List<Exception>();
+        errors.UnhandledCallbackException += reported.Add;
+        var state = new ZLinkFrameworkComponentState(
+            context,
+            new ZLinkFrameworkRegistration(),
+            services,
+            errors,
+            new object(),
+            ZLinkApplicationJobQueueCapacityResolver.Resolve(
+                ZLinkApplicationJobQueueProfile.Balanced,
+                8,
+                1
+            ),
+            new ZLinkListenerRecords()
+        );
+        var listenerFailure = new InvalidOperationException("receive loop failed");
+        var listenerEnded = false;
+        var socket = new BlockingSocket();
+        using var nativeContext = Systems.Zlink.Zlink.CreateContext();
+        using var router = nativeContext.CreateRouterSocket();
+        var listener = DispatchProxy.Create<IRouterSocket, BlockingListenerSocketProxy>();
+        var listenerProxy = (BlockingListenerSocketProxy)(object)listener;
+        listenerProxy.Router = router;
+        listenerProxy.Close = socket;
+        var bundle = new ZLinkChannelRuntimeBundle(listener);
+        bundle.StartReceiveLoop(
+            state.TaskRunner,
+            "test-listener",
+            token =>
+            {
+                token.WaitHandle.WaitOne();
+                listenerEnded = true;
+                throw listenerFailure;
+            }
+        );
+        state.ClientServerServerBundles.Add(
+            ZLinkChannelName.FromBoundary("work", "channelName"),
+            bundle
+        );
+        var disposal = state.DisposeAsync().AsTask();
+        bool listenerJoinedBeforeClose;
+        try
+        {
+            await socket.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            listenerJoinedBeforeClose = listenerEnded;
+        }
+        finally
+        {
+            socket.Release.TrySetResult();
+        }
+        await disposal;
+        Assert.Contains(listenerFailure, reported);
+        Assert.True(
+            listenerJoinedBeforeClose,
+            "The listener must be joined before its socket closes."
+        );
+    }
+
     [Fact]
     public async Task FrameworkRuntimeState_Reports_Close_Failure_And_Retains_Context()
     {
@@ -494,6 +560,20 @@ public sealed class SharedAsyncDisposalTests
             ObservedUsableStore = store.DisposeCount == 0;
             return ValueTask.CompletedTask;
         }
+    }
+
+    public class BlockingListenerSocketProxy : DispatchProxy
+    {
+        internal IRouterSocket Router { get; set; } = null!;
+        internal IAsyncDisposable Close { get; set; } = null!;
+
+        protected override object? Invoke(MethodInfo? targetMethod, object?[]? args) =>
+            targetMethod?.Name switch
+            {
+                "get_Options" => Router.Options,
+                nameof(IAsyncDisposable.DisposeAsync) => Close.DisposeAsync(),
+                _ => throw new NotSupportedException(targetMethod?.Name),
+            };
     }
 
     private sealed class BlockingSocket : IAsyncDisposable

@@ -1156,49 +1156,65 @@ stateful_object_runtime_t::try_seal_relocation_aggregate (
         co_return result_t<aggregate_relocation_seal_attempt_t>::success (
           {stateful_error_t::invalid, {}});
 
-    auto plan =
-      _lane
-        .run ([&, this] {
-            seal_plan_t plan;
-            if (_next_relocation_token == 0)
-                return plan;
-            plan.keys.reserve (participants.size ());
-            plan.sources.reserve (participants.size ());
-            for (const auto &participant : participants) {
-                const auto key = key_for (participant);
-                if (std::find (plan.keys.begin (), plan.keys.end (), key) != plan.keys.end ()) {
-                    plan.error = stateful_error_t::invalid;
-                    return plan;
-                }
-                stateful_error_t error = stateful_error_t::none;
-                auto *object = find_record_locked (participant, error);
-                if (object == nullptr || object->state != object_state_t::ready) {
-                    plan.error = object == nullptr ? error : stateful_error_t::moving;
-                    return plan;
-                }
-                plan.keys.push_back (key);
-                plan.sources.push_back (object->reference);
-            }
-            plan.token = _next_relocation_token++;
-            try {
-                relocation_seal_state_t seal{plan.keys, plan.sources, {}};
-                seal.boundary_application.resize (plan.keys.size ());
-                _relocation_seals.emplace (plan.token, std::move (seal));
-            }
-            catch (...) {
-                plan.token = 0;
-                return plan;
-            }
-            for (const auto &key : plan.keys) {
-                auto &object = _objects.find (key)->second;
-                object.state = object_state_t::moving;
-                object.barrier_generation = plan.token;
-            }
-            plan.capture = _relocation_state_capture;
-            plan.error = stateful_error_t::none;
-            return plan;
-        })
-        .get ();
+    // Keep the submitted participants owned across the Session wait. Reuse
+    // this one source buffer when the owner lane validates the seal below.
+    seal_plan_t plan;
+    plan.sources = participants;
+
+    // Relocation flow §4.1: the Session owner seals its binding before the
+    // source stops application dispatch. Keep serving while that seal is pending.
+    if (before_capture) {
+        bool fenced = false;
+        try {
+            fenced = co_await before_capture ();
+        }
+        catch (...) {
+        }
+        if (!fenced) {
+            co_return result_t<aggregate_relocation_seal_attempt_t>::success (
+              {stateful_error_t::conflict, {}});
+        }
+    }
+
+    _lane
+      .run ([&, this] {
+          if (_next_relocation_token == 0)
+              return;
+          plan.keys.reserve (plan.sources.size ());
+          for (auto &participant : plan.sources) {
+              const auto key = key_for (participant);
+              if (std::find (plan.keys.begin (), plan.keys.end (), key) != plan.keys.end ()) {
+                  plan.error = stateful_error_t::invalid;
+                  return;
+              }
+              stateful_error_t error = stateful_error_t::none;
+              auto *object = find_record_locked (participant, error);
+              if (object == nullptr || object->state != object_state_t::ready) {
+                  plan.error = object == nullptr ? error : stateful_error_t::moving;
+                  return;
+              }
+              plan.keys.push_back (key);
+              participant = object->reference;
+          }
+          plan.token = _next_relocation_token++;
+          try {
+              relocation_seal_state_t seal{plan.keys, plan.sources, {}};
+              seal.boundary_application.resize (plan.keys.size ());
+              _relocation_seals.emplace (plan.token, std::move (seal));
+          }
+          catch (...) {
+              plan.token = 0;
+              return;
+          }
+          for (const auto &key : plan.keys) {
+              auto &object = _objects.find (key)->second;
+              object.state = object_state_t::moving;
+              object.barrier_generation = plan.token;
+          }
+          plan.capture = _relocation_state_capture;
+          plan.error = stateful_error_t::none;
+      })
+      .get ();
     if (plan.error != stateful_error_t::none)
         co_return result_t<aggregate_relocation_seal_attempt_t>::success ({plan.error, {}});
 
@@ -1230,20 +1246,6 @@ stateful_object_runtime_t::try_seal_relocation_aggregate (
         if (quiescent.second)
             break;
         wait_for_quiescence_change (observed);
-    }
-
-    if (before_capture) {
-        bool fenced = false;
-        try {
-            fenced = co_await before_capture ();
-        }
-        catch (...) {
-        }
-        if (!fenced) {
-            release ();
-            co_return result_t<aggregate_relocation_seal_attempt_t>::success (
-              {stateful_error_t::conflict, {}});
-        }
     }
 
     std::vector<std::vector<std::uint8_t>> application_states (plan.sources.size ());
@@ -1507,7 +1509,7 @@ stateful_object_runtime_t::restore_relocation (frozen_object_state_t frozen,
                     || frozen.owner.key != target.key
                     || frozen.owner.object_generation != target.object_generation
                     || frozen.owner.mesh_name != target.mesh_name
-                    || target.authority_owner_generation <= frozen.owner.authority_owner_generation
+                    || target.authority_owner_generation < frozen.owner.authority_owner_generation
                     || !valid_text (target.mesh_name) || !valid_text (target.node_id)
                     || identity.reference.empty ()
                     || frozen.application_state.size () > max_application_state_bytes
@@ -1946,7 +1948,7 @@ stateful_object_runtime_t::restore_relocation_aggregate (std::vector<frozen_obje
                         || source.owner.object_generation != target.object_generation
                         || source.owner.mesh_name != target.mesh_name
                         || target.authority_owner_generation
-                             <= source.owner.authority_owner_generation
+                             < source.owner.authority_owner_generation
                         || !valid_text (target.mesh_name) || !valid_text (target.node_id)
                         || source.application_state.size () > max_application_state_bytes
                         || source.timers.size () > max_restored_timers

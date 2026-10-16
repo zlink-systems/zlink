@@ -405,7 +405,7 @@ Payload: 5A 46 01 01
 
 The public encoding and validation rules for the `framework-json-v1` profile used by default
 typed application messages are owned exclusively by
-[Message Model §2.3](../00-foundation/05-message-model.en.md#5-the-framework-json-v1-typed-payload-profile). The runtime validates
+[Message Model §5](../00-foundation/05-message-model.en.md#5-the-framework-json-v1-typed-payload-profile). The runtime validates
 the payload and converts it to a typed value under that profile. This document defines no second rule
 set; parser choice, buffer reuse, and transport delivery of the original UTF-8 bytes remain internal
 implementation details.
@@ -631,7 +631,10 @@ receiver MUST NOT require a bound Session to admit a canonical `actorJoin`(28).
 ### Session Seal and Source Relay
 
 - Before stopping source application dispatch, the relocation coordinator seals a bound
-  Session binding with command 42. Command 43 reports the seal result.
+  Session binding with command 42. Command 42 also carries the relocation target node
+  (`targetNodeRid`, `targetNodeGeneration`); the Session owner requests route preparation to the target
+  only from these values ([Session and Actor Binding §8.1](../04-session/02-session-actor-binding.en.md#81-seal-held-messages-and-route-switchover)).
+  Command 43 reports the seal result (`sealResult`: `sealed` or `bindingAbsent`).
 - The Session owner validates only current Session identity, binding generation,
   ActorId/ObjectGeneration, and relocation identity. It doesn't create a numeric
   high-water or re-read Actor authority.
@@ -645,8 +648,11 @@ receiver MUST NOT require a bound Session to admit a canonical `actorJoin`(28).
 
 - Source sends command 40, `relocationPrepare`, as `[request]` to request temporary-queue
   installation and declare the payload manifest for the transfer that follows. Its body
-  carries the object identity, source node RID/generation, and `payloadTotalLength`,
-  `payloadChunkCount`, and `payloadChecksumCrc32c` describing the payload. No
+  carries the object identity, source node RID/generation, `payloadTotalLength`,
+  `payloadChunkCount`, and `payloadChecksumCrc32c` describing the payload, and
+  `deadlineUnixMs`, the absolute deadline of the source operation that started the relocation.
+  The target ends its wait for being ready to receive relay with this value
+  ([relocation §4.3](../05-location-relocation/04-relocation-flow.en.md#43-restore-the-target-without-running-it)). No
   relocation-root pointer or Relocation Store lookup key is
   carried; Prepare fully describes the direct transfer that follows, sourced from source
   memory. Target sends command 30, `relocationReady`, as `[reply]` only after
@@ -784,6 +790,10 @@ owns the relay-completeness condition before target queue opening.
   binding.
 - Command 42 seals the current binding; command 43 returns only the seal-install
   result. Command 43 carries no Session-message sequence or high-water.
+- The last body field of command 43, `sealResult` (u8), is `sealed` (1) or `bindingAbsent` (2). If the exact
+  binding is already cleaned up, the Session owner returns `bindingAbsent` without a seal, and the coordinator
+  leaves that Session out of the envelope and command 44
+  ([Session and Actor Binding §8.3](../04-session/02-session-actor-binding.en.md#83-sealing-an-already-cleaned-binding)).
 - Command 44 is sent by the target runtime for the session-route update and by the source coordinator for an abort
   before relay-ready is accepted. The route update carries relocation identity, current binding generation,
   ActorId/ObjectGeneration, and target route. The Session owner doesn't re-read the

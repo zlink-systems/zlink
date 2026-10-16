@@ -195,8 +195,8 @@ public final class ZLinkUserSpotRetireRuntime {
                                                             request.targetOwnerId(),
                                                             request.targetOwnerLeaseGeneration()),
                                                     () -> false)
-                                            .thenRun(
-                                                    () ->
+                                            .thenCompose(
+                                                    ignored ->
                                                             restoreBoundSessions(
                                                                     actors, node, request)),
                             spots,
@@ -279,10 +279,11 @@ public final class ZLinkUserSpotRetireRuntime {
         }
     }
 
-    private static void restoreBoundSessions(
+    private static CompletionStage<Void> restoreBoundSessions(
             ZLinkActorRuntime actors,
             ZLinkInternalMeshNode node,
             ZLinkSpotRetireControl.StageRequest request) {
+        List<CompletableFuture<Long>> restored = new ArrayList<>();
         for (ZLinkSpotRetireControl.SessionRouteFence route : request.sessionRoutes()) {
             ZLinkActor actor =
                     actors.localActor(route.actorId())
@@ -292,13 +293,17 @@ public final class ZLinkUserSpotRetireRuntime {
                                                     "relocated Actor is unavailable while restoring"
                                                             + " its bound Session: "
                                                             + route.actorId()));
-            actors.bindNativeSession(
-                    actor,
-                    node.spotNode(),
-                    actors.currentRef(actor),
-                    route.sessionOwnerNodeRid(),
-                    route.sessionRid());
+            restored.add(
+                    actors.bindNativeSession(
+                                    actor,
+                                    node.spotNode(),
+                                    actors.currentRef(actor),
+                                    route.sessionOwnerNodeRid(),
+                                    route.sessionRid(),
+                                    route.bindingGeneration())
+                            .toCompletableFuture());
         }
+        return CompletableFuture.allOf(restored.toArray(CompletableFuture[]::new));
     }
 
     /**
@@ -309,6 +314,10 @@ public final class ZLinkUserSpotRetireRuntime {
     public boolean relocationSourceQuiescent() {
         return stateMachines.stream()
                 .allMatch(ZLinkCanonicalRelocationStateMachine::sourceQuiescent);
+    }
+
+    public void onSourceQuiescenceChanged(Runnable listener) {
+        stateMachines.forEach(machine -> machine.onSourceQuiescenceChanged(listener));
     }
 
     public CompletionStage<Void> sealAcceptedTargetRelocations() {
@@ -349,11 +358,13 @@ public final class ZLinkUserSpotRetireRuntime {
             BooleanSupplier stopBeforeNextUnit,
             ZLinkFrameworkRelocationMode mode,
             long targetApplicationVersion,
+            Supplier<CompletionStage<Void>> targetPopulationPreflight,
             Supplier<CompletionStage<Void>> onPreflightPassed,
             CompletionStage<?> cancellationSignal) {
         Objects.requireNonNull(deadline, "deadline");
         Objects.requireNonNull(cancellationSignal, "cancellationSignal");
         Objects.requireNonNull(stopBeforeNextUnit, "stopBeforeNextUnit");
+        Objects.requireNonNull(targetPopulationPreflight, "targetPopulationPreflight");
         Objects.requireNonNull(onPreflightPassed, "onPreflightPassed");
         var targetPolicy =
                 new ZLinkRelocationTargetPolicy(
@@ -372,23 +383,50 @@ public final class ZLinkUserSpotRetireRuntime {
         }
         actorIds.sort(String::compareTo);
         var plan = new RelocationPlan(spotIds, List.copyOf(actorIds));
-        return executePlan(
-                plan,
-                spotId -> preflightSpot(spotId, cancellation, targetPolicy),
-                actorId -> preflightActor(actorId, cancellation, targetPolicy),
-                () -> {
-                    if (!plan.equals(snapshotPlan())) {
-                        throw new RelocationBlockedException(
-                                ZLinkFrameworkRelocationReason.OPERATION_IN_PROGRESS,
-                                "Relocation workload changed during host preflight");
-                    }
-                    return onPreflightPassed.get();
-                },
-                stopBeforeNextUnit,
-                spotId ->
-                        relocateOne(
-                                spotId, deadline, cancellation, targetPolicy, cancellationSignal),
-                actorId -> relocateActor(actorId, deadline, cancellation, targetPolicy));
+        //  Spec 30 §5.1: with no unit to move the host finishes Relocated/None
+        //  without target discovery, so the host-wide target population is
+        //  required only when this inventory holds a unit.
+        CompletionStage<Void> targetPopulation =
+                hasRelocationUnits(spots, actors)
+                        ? Objects.requireNonNull(
+                                targetPopulationPreflight.get(), "targetPopulationPreflight result")
+                        : CompletableFuture.completedFuture(null);
+        return targetPopulation.thenCompose(
+                populated ->
+                        executePlan(
+                                plan,
+                                spotId -> preflightSpot(spotId, cancellation, targetPolicy),
+                                actorId -> preflightActor(actorId, cancellation, targetPolicy),
+                                () -> {
+                                    if (!plan.equals(snapshotPlan())) {
+                                        throw new RelocationBlockedException(
+                                                ZLinkFrameworkRelocationReason
+                                                        .OPERATION_IN_PROGRESS,
+                                                "Relocation workload changed during host preflight");
+                                    }
+                                    return onPreflightPassed.get();
+                                },
+                                stopBeforeNextUnit,
+                                spotId ->
+                                        relocateOne(
+                                                spotId,
+                                                deadline,
+                                                cancellation,
+                                                targetPolicy,
+                                                cancellationSignal),
+                                actorId ->
+                                        relocateActor(
+                                                actorId, deadline, cancellation, targetPolicy)));
+    }
+
+    /**
+     * Whether this process owns a relocation unit of spec 30 §7: an Actor, a User Spot or an
+     * Instance Spot. Without one, host relocation has nothing to move and needs no target (§5.1).
+     */
+    public static boolean hasRelocationUnits(ZLinkSpotRuntime spots, ZLinkActorRuntime actors) {
+        return (spots != null
+                        && (spots.activeUserSpotCount() > 0 || spots.activeInstanceSpotCount() > 0))
+                || (actors != null && !actors.activeActorIds().isEmpty());
     }
 
     private RelocationPlan snapshotPlan() {

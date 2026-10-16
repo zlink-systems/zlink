@@ -36,7 +36,16 @@ internal sealed class ZLinkMessageFlowTracer
         _logger = logger ?? NullLogger.Instance;
     }
 
-    public bool CaptureEnabled => _options.Diagnostics.EffectiveLevel != ZLinkDiagnosticsLevel.Off;
+    // Flow-correlation §4: message-flow tracing, and with it every flow ID
+    // creation, validation, capture and propagation, is on only at Normal and
+    // Detailed. This is the one place that decides it.
+    public bool CaptureEnabled =>
+        _options.Diagnostics.EffectiveLevel >= ZLinkDiagnosticsLevel.Normal;
+
+    // Dispatch error, backpressure and drop records are written at every level
+    // but Off (message-flow tracing §4 level table).
+    internal bool DispatchErrorsEnabled =>
+        _options.Diagnostics.EffectiveLevel != ZLinkDiagnosticsLevel.Off;
 
     internal bool DetailedEnabled =>
         _options.Diagnostics.EffectiveLevel >= ZLinkDiagnosticsLevel.Detailed;
@@ -104,7 +113,7 @@ internal sealed class ZLinkMessageFlowTracer
 
     public void TraceDispatchError(ZLinkDispatchFailure error)
     {
-        if (_options.Diagnostics.EffectiveLevel == ZLinkDiagnosticsLevel.Off)
+        if (!DispatchErrorsEnabled)
             return;
 
         var flowId = error.FlowId;
@@ -287,11 +296,12 @@ internal static class ZLinkTraceFormat
     internal const string MessageSizeBytesField = "message_size_bytes";
     internal const string DurationSecondsField = "duration_seconds";
     internal const string ErrorTypeField = "error_type";
+    internal const string DetailField = "detail";
     internal const string ErrorMessageField = "error_message";
     internal const string MessageFlowEventName = "zlink.message_flow";
     internal const string DispatchErrorEventName = "zlink.dispatch_error";
 
-    private const int MessageFlowFieldCapacity = 23;
+    private const int MessageFlowFieldCapacity = 26;
     private const int DispatchErrorFieldCapacity = 21;
     internal const int ErrorMessageMaxLength = 512;
     private static readonly (Regex Pattern, string Replacement)[] CredentialPatterns =
@@ -484,6 +494,9 @@ internal static class ZLinkTraceFormat
         Add(fields, OutcomeField, ResultKey(flow));
         Add(fields, ReasonField, MessageReasonKey(flow.Reason));
         Add(fields, SizeField, size);
+        Add(fields, DetailField, flow.Detail);
+        Add(fields, ErrorTypeField, flow.ErrorType);
+        Add(fields, ErrorMessageField, flow.ErrorMessage);
         return fields;
     }
 

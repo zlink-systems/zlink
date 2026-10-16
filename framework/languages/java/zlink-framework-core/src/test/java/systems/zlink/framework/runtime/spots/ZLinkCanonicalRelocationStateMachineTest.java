@@ -13,9 +13,7 @@ import org.junit.jupiter.api.Test;
 
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.errors.ZlinkRequestException;
-import systems.zlink.contracts.errors.ZlinkSubmitException;
 import systems.zlink.contracts.sockets.RequestResult;
-import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.locations.ZLinkActivationConcurrency;
@@ -71,6 +69,40 @@ import java.util.function.IntConsumer;
 
 final class ZLinkCanonicalRelocationStateMachineTest {
     private static final ZLinkStoreCancellation OPEN = () -> false;
+
+    @Test
+    void targetDrainWaitsForAdmissionResourceCleanup() throws Exception {
+        var cleanupEntered = new CompletableFuture<Void>();
+        var cleanup = new CompletableFuture<Void>();
+        CountingEndpoint endpoint =
+                new CountingEndpoint() {
+                    @Override
+                    public CompletionStage<Void> endPrepare(UUID relocationId) {
+                        cleanupEntered.complete(null);
+                        return cleanup;
+                    }
+                };
+        Fixture fixture = fixture(null, endpoint);
+        var request = fixture.request(new byte[] {1});
+        fixture.source
+                .stage(fixture.targetRid, request, Duration.ofSeconds(2))
+                .toCompletableFuture()
+                .join();
+        var publishing =
+                fixture.source.publish(fixture.targetRid, request.fence(), Duration.ofSeconds(2));
+        cleanupEntered.get(2, java.util.concurrent.TimeUnit.SECONDS);
+        var drain = fixture.target.awaitAcceptedTargetRelocations().toCompletableFuture();
+        try {
+            assertThrows(
+                    java.util.concurrent.TimeoutException.class,
+                    () -> drain.get(100, java.util.concurrent.TimeUnit.MILLISECONDS),
+                    "the target owns its resources until terminal cleanup finishes");
+        } finally {
+            cleanup.complete(null);
+        }
+        drain.get(2, java.util.concurrent.TimeUnit.SECONDS);
+        publishing.toCompletableFuture().get(2, java.util.concurrent.TimeUnit.SECONDS);
+    }
 
     @Test
     void targetDrainWaitsForAcceptedPublication() {
@@ -697,15 +729,6 @@ final class ZLinkCanonicalRelocationStateMachineTest {
                 1,
                 fixture.endpoint.staged.get(),
                 "the retried exact PREPARE must retain one target stage");
-        assertTrue(
-                ZLinkCanonicalRelocationStateMachine.isRetryablePrepareRequestFailure(
-                        new ZlinkRequestException(RequestResult.NOT_CONNECTED)));
-        assertTrue(
-                ZLinkCanonicalRelocationStateMachine.isRetryablePrepareRequestFailure(
-                        new ZlinkSubmitException(SubmitResult.NOT_CONNECTED)));
-        assertFalse(
-                ZLinkCanonicalRelocationStateMachine.isRetryablePrepareRequestFailure(
-                        new ZlinkSubmitException(SubmitResult.BACKPRESSURED)));
     }
 
     @Test
@@ -1313,6 +1336,13 @@ final class ZLinkCanonicalRelocationStateMachineTest {
                         new Class<?>[] {ZLinkInternalMeshNode.class},
                         (proxy, method, args) ->
                                 switch (method.getName()) {
+                                    case "observePeerRoute" ->
+                                            new ZLinkInternalMeshNode.PeerRouteObservation(1, true);
+                                    case "targetLifecycleEnded" -> false;
+                                    case "onStateChanged" -> {
+                                        ((Runnable) args[0]).run();
+                                        yield (AutoCloseable) () -> {};
+                                    }
                                     case "status" ->
                                             new MeshNodeStatus(
                                                     state.get(),
@@ -1379,6 +1409,13 @@ final class ZLinkCanonicalRelocationStateMachineTest {
                         },
                         (proxy, method, args) ->
                                 switch (method.getName()) {
+                                    case "observePeerRoute" ->
+                                            new ZLinkInternalMeshNode.PeerRouteObservation(1, true);
+                                    case "targetLifecycleEnded" -> false;
+                                    case "onStateChanged" -> {
+                                        ((Runnable) args[0]).run();
+                                        yield (AutoCloseable) () -> {};
+                                    }
                                     case "status" -> status;
                                     case "requestCanonicalRelocationPrepare" -> {
                                         byte[] encoded = (byte[]) args[1];

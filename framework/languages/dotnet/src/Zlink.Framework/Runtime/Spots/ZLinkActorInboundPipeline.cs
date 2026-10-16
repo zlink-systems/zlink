@@ -499,11 +499,13 @@ internal sealed class ZLinkActorInboundPipeline(
             throw;
         }
         catch (ZLinkFrameworkException exception)
-            when (allowCapture
-                && exception.Kind == ZLinkFrameworkErrorKind.NotFound
-                && state.Handoff.BlocksLocalDispatch
-            )
+            when (allowCapture && IsUnitSealRefusal(exception, state))
         {
+            // The frame passed the arrival capture check before its unit
+            // sealed, then its turn was refused by the Actor handoff
+            // (NotFound) or by the sealed Spot (Rejected). Both are the same
+            // unit seal: hold the frame for the handoff when capture accepts
+            // it, otherwise end it at the moving boundary.
             ZLinkActorHandoffCaptureResult retryCapture;
             try
             {
@@ -523,20 +525,6 @@ internal sealed class ZLinkActorInboundPipeline(
             // A bound-session frame cannot be made durable because it has no
             // owner lease fence. Requests receive an observable retry terminal;
             // one-way sends have no reply contract and stop at this boundary.
-            await CompleteMovingBoundaryAsync(frame, acknowledgeHandledFrame, cancellationToken)
-                .ConfigureAwait(false);
-        }
-        catch (ZLinkFrameworkException exception)
-            when (allowCapture
-                && exception.Kind == ZLinkFrameworkErrorKind.Rejected
-                && IsRelocationAdmissionRejection(state)
-            )
-        {
-            // The frame won the inbound handoff race, but its actor turn
-            // reached the Spot admission barrier after relocation sealed the
-            // application queue. It still owns a reply route; letting this
-            // rejection escape would leave the session's accepted frame
-            // pending until timeout and block the route seal.
             await CompleteMovingBoundaryAsync(frame, acknowledgeHandledFrame, cancellationToken)
                 .ConfigureAwait(false);
         }
@@ -631,8 +619,17 @@ internal sealed class ZLinkActorInboundPipeline(
             frame.DirectReply
         );
 
-    private static bool IsRelocationAdmissionRejection(ZLinkActorRuntimeState state) =>
-        state.Handoff.BlocksLocalDispatch || state.LiveActivation?.HasRelocationBarrier == true;
+    private static bool IsUnitSealRefusal(
+        ZLinkFrameworkException exception,
+        ZLinkActorRuntimeState state
+    ) =>
+        exception.Kind switch
+        {
+            ZLinkFrameworkErrorKind.NotFound => state.Handoff.BlocksLocalDispatch,
+            ZLinkFrameworkErrorKind.Rejected => state.Handoff.BlocksLocalDispatch
+                || state.LiveActivation?.HasRelocationBarrier == true,
+            _ => false,
+        };
 
     private async ValueTask<bool> RouteAwayFromCurrentActorAsync(
         ZLinkActorRuntimeState state,
@@ -687,6 +684,67 @@ internal sealed class ZLinkActorInboundPipeline(
         return true;
     }
 
+    private async ValueTask<ZLinkActorReply?> DispatchDisconnectedAsync(
+        IZLinkActor actor,
+        ZLinkActorRuntimeState state,
+        ZLinkSpotActorFrame frame,
+        CancellationToken cancellationToken
+    )
+    {
+        Exception? failure = null;
+        if (
+            ZLinkActorBoundSessionRelay.TryValidateDisconnectedBinding(
+                state,
+                frame.SourceNodeRid,
+                frame.SourceSessionRid,
+                frame.Body,
+                out var bindingToken
+            )
+        )
+        {
+            try
+            {
+                await endpoint
+                    .NotifyDisconnectedAsync(actor.Context.ActorId, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception exception) when (frame.Header.Kind == ZlinkStreamMessageKind.Request)
+            {
+                runtime.ErrorSink.ReportHandlerException(exception);
+                failure = exception;
+            }
+            finally
+            {
+                runtime.RemoveActorSessionBinding(actor.Context.ActorId, bindingToken);
+            }
+        }
+        else if (runtime.Flow.CaptureEnabled)
+            runtime.Flow.TraceDispatchError(
+                new ZLinkDispatchFailure(
+                    ZLinkDispatchErrorSurface.StreamSession,
+                    ZLinkDispatchMessageKind.Send,
+                    ZLinkDispatchErrorReason.InvalidFrame,
+                    ZLinkDispatchErrorAction.Drop,
+                    null,
+                    ActorId: actor.Context.ActorId,
+                    StreamSessionId: frame.SourceSessionRid.IsEmpty
+                        ? null
+                        : frame.SourceSessionRid.ToHex()
+                )
+            );
+        if (frame.Header.Kind != ZlinkStreamMessageKind.Request)
+            return null;
+        return failure is not null
+            ? ZLinkActorReply.FromError(failure)
+            : new ZLinkActorReply(
+                ZlinkStreamMessageKind.Response,
+                ZlinkStreamCodec.Json,
+                ZLinkFrameworkJsonPayloadCodec.Serialize(true),
+                ZlinkStreamHeaderFlags.None,
+                ZlinkStreamMetadata.Empty
+            );
+    }
+
     private async ValueTask DispatchCurrentActorAsync(
         IZLinkActor actor,
         ZLinkActorRuntimeState state,
@@ -702,48 +760,21 @@ internal sealed class ZLinkActorInboundPipeline(
         CancellationToken cancellationToken
     )
     {
-        //  Between the relay dispatch and this branch there is no record of
-        //  what arrived, so a frame that is not recognised as a disconnect
-        //  simply continues as ordinary traffic.
-        if (ZLinkActorBoundSessionRelay.IsSessionDisconnectedPacket(frame.Header))
+        var disconnected = ZLinkActorBoundSessionRelay.IsSessionDisconnectedPacket(frame.Header);
+        if (disconnected && frame.Header.Kind != ZlinkStreamMessageKind.Request)
         {
-            if (
-                !ZLinkActorBoundSessionRelay.TryValidateDisconnectedBinding(
-                    state,
-                    frame.SourceNodeRid,
-                    frame.SourceSessionRid,
-                    frame.Body,
-                    out var bindingToken
-                )
-            )
-            {
-                if (runtime.Flow.CaptureEnabled)
-                    runtime.Flow.TraceDispatchError(
-                        new ZLinkDispatchFailure(
-                            ZLinkDispatchErrorSurface.StreamSession,
-                            ZLinkDispatchMessageKind.Send,
-                            ZLinkDispatchErrorReason.InvalidFrame,
-                            ZLinkDispatchErrorAction.Drop,
-                            null,
-                            ActorId: actor.Context.ActorId,
-                            StreamSessionId: frame.SourceSessionRid.IsEmpty
-                                ? null
-                                : frame.SourceSessionRid.ToHex()
-                        )
-                    );
-                acknowledgeHandledFrame?.Invoke();
-                return;
-            }
             try
             {
-                await endpoint
-                    .NotifyDisconnectedAsync(actor.Context.ActorId, cancellationToken)
+                await DispatchDisconnectedAsync(actor, state, frame, cancellationToken)
                     .ConfigureAwait(false);
             }
             finally
             {
-                runtime.RemoveActorSessionBinding(actor.Context.ActorId, bindingToken);
-                acknowledgeHandledFrame?.Invoke();
+                if (completeCanonicalReplay is not null)
+                    await completeCanonicalReplay(frame, null, cancellationToken)
+                        .ConfigureAwait(false);
+                else
+                    acknowledgeHandledFrame?.Invoke();
             }
             return;
         }
@@ -781,21 +812,24 @@ internal sealed class ZLinkActorInboundPipeline(
                 && frame.Header.RequestSeq is not null
             )
             {
-                var reply = await endpoint
-                    .DispatchForReplyAsync(
-                        actor,
-                        state,
-                        frame.Header,
-                        frame.Body,
-                        frame.SourceSessionRid,
-                        relocationReplay: relocationReplay
-                            ?? (
-                                acknowledgeHandledFrame is not null
-                                || completeCanonicalReplay is not null
-                            ),
-                        cancellationToken
-                    )
-                    .ConfigureAwait(false);
+                var reply = disconnected
+                    ? await DispatchDisconnectedAsync(actor, state, frame, cancellationToken)
+                        .ConfigureAwait(false)
+                    : await endpoint
+                        .DispatchForReplyAsync(
+                            actor,
+                            state,
+                            frame.Header,
+                            frame.Body,
+                            frame.SourceSessionRid,
+                            relocationReplay: relocationReplay
+                                ?? (
+                                    acknowledgeHandledFrame is not null
+                                    || completeCanonicalReplay is not null
+                                ),
+                            cancellationToken
+                        )
+                        .ConfigureAwait(false);
                 ZLinkFrameworkDebugLog.SpotDiscovery(
                     $"actor_dispatch_reply actor={actor.Context.ActorId} request_id={frame.RequestId} reply={reply is not null} activation={state.LiveActivation?.SpotId ?? ZLinkFrameworkDebugLog.EntryPlaceholder}"
                 );

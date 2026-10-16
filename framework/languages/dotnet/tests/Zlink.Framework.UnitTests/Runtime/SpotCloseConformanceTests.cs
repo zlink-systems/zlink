@@ -171,6 +171,13 @@ public sealed class SpotCloseConformanceTests(Xunit.Abstractions.ITestOutputHelp
         bool request
     )
     {
+        var flowPath = Path.Combine(
+            Zlink.Framework.Tests.Common.FrameworkTestEnvironment.CreateTestLogDirectory(
+                "instance-factory-failure"
+            ),
+            "messages.flow"
+        );
+        using var flow = new TestHostMessageFlowListener(flowPath);
         await using var host = await SpotCloseHost.StartAsync();
         await host.RequestInstanceAsync($"factory-warm-{Guid.NewGuid():N}");
         await using var source = await StartPeerAsync(host, registerInstanceFactory: false);
@@ -677,6 +684,65 @@ public sealed class SpotCloseConformanceTests(Xunit.Abstractions.ITestOutputHelp
         {
             release.TrySetResult();
         }
+    }
+
+    [Fact]
+    public async Task Close_reincarnates_an_intent_delivered_while_another_ingress_holds_the_state_lane()
+    {
+        await using var host = await SpotCloseHost.StartAsync();
+        var spotId = $"close-late-admit-{Guid.NewGuid():N}";
+        await host.RequestInstanceAsync(spotId);
+        host.State.HoldOnClosing = true;
+        host.State.HandlerMode = "closeAndReturn";
+        await host.RequestInstanceAsync(spotId);
+        var closed = host.State.ContextCloseTask!;
+        await host.State.OnClosingEntered.Task.WaitAsync(Wait);
+        host.State.HandlerMode = null;
+        var store = host.Runtime.Registration.Locations.ResolveStore()!;
+        var authority = Assert
+            .IsType<ZLinkAuthorityReadResult.Found>(
+                await store.ReadAuthorityAsync(
+                    ZLinkUserSpotAuthorityPayloadCodec.AuthorityKey(spotId)
+                )
+            )
+            .Snapshot;
+        var activation = await host
+            .Runtime.GetSpotNodeRuntime(SpotCloseHost.MeshName)
+            .Catalog.TryGetInstanceActivationAsync(
+                spotId,
+                SpotCloseHost.InstanceType,
+                authority.ObjectGeneration
+            );
+        Assert.NotNull(activation);
+
+        // Another ingress turn of this Spot holds the state lane while the
+        // intent is delivered and Close continues to step 3.
+        var laneEntered = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var laneRelease = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var busyIngress = activation
+            ._serial.RunIngressAsync(async () =>
+            {
+                laneEntered.TrySetResult();
+                await laneRelease.Task;
+            })
+            .AsTask();
+        await laneEntered.Task.WaitAsync(Wait);
+        var pending = QueueRetainedIntent(host, activation, authority, spotId, "pending-late");
+        host.State.ReleaseOnClosing.TrySetResult();
+        laneRelease.TrySetResult();
+        await busyIngress.WaitAsync(Wait);
+
+        // Spot messaging §7 steps 1 and 3: the intent reached this node before
+        // the step 3 decision, so it stays behind Close and runs on the next
+        // incarnation.
+        Assert.Equal(RequestResult.Ok, (await pending.WaitAsync(Wait)).Result);
+        Assert.True(await closed.WaitAsync(Wait));
+        Assert.Contains("pending-late", host.State.InstanceHandlerMarkers);
+        Assert.Equal(2, host.State.InitializedGenerations.Count);
     }
 
     [Fact]
@@ -1246,33 +1312,20 @@ public sealed class SpotCloseConformanceTests(Xunit.Abstractions.ITestOutputHelp
     )
     {
         var source = await SpotCloseHost.StartAsync(host.Store, registerInstanceFactory);
-        using (var peerDeadline = new CancellationTokenSource(Wait))
+        try
         {
-            while (true)
-            {
-                peerDeadline.Token.ThrowIfCancellationRequested();
-                try
-                {
-                    source.Runtime.EnsureKnownRouteMeshPeer(
-                        SpotCloseHost.MeshName,
-                        host.Runtime.GetSpotNodeRuntime(SpotCloseHost.MeshName).Node.RoutingId,
-                        "Instance Spot test peer"
-                    );
-                    host.Runtime.EnsureKnownRouteMeshPeer(
-                        SpotCloseHost.MeshName,
-                        source.Runtime.GetSpotNodeRuntime(SpotCloseHost.MeshName).Node.RoutingId,
-                        "Instance Spot test peer"
-                    );
-                    break;
-                }
-                catch (ZLinkFrameworkException error)
-                    when (error.Kind == ZLinkFrameworkErrorKind.Unavailable)
-                {
-                    await Task.Yield();
-                }
-            }
+            using var peerDeadline = new CancellationTokenSource(Wait);
+            await Task.WhenAll(
+                source.WaitForPeerAsync(host, peerDeadline.Token),
+                host.WaitForPeerAsync(source, peerDeadline.Token)
+            );
+            return source;
         }
-        return source;
+        catch
+        {
+            await source.DisposeAsync();
+            throw;
+        }
     }
 
     private static async Task RunReadyRouteCaseAsync(JsonElement routeCase, bool instanceIntent)
@@ -2002,6 +2055,27 @@ internal sealed class SpotCloseHost : IAsyncDisposable
     internal IZLinkSpotManager Manager { get; }
     internal SpotCloseFaultStore Store { get; }
     internal SpotCloseProbeState State { get; }
+
+    internal async Task WaitForPeerAsync(SpotCloseHost peer, CancellationToken cancellationToken)
+    {
+        var targetRid = peer.Runtime.GetSpotNodeRuntime(MeshName).Node.RoutingId;
+        await foreach (
+            var observed in _provider
+                .GetRequiredService<IZLinkRouteMeshRuntime>()
+                .ObserveAsync(MeshName, cancellationToken)
+        )
+        {
+            if (
+                observed.Status.Peers.Any(status =>
+                    status.NodeRid == targetRid && status.State == ZLinkPeerState.Ready
+                )
+            )
+                return;
+        }
+        throw new InvalidOperationException(
+            "RouteMesh observation ended before the test peer was ready."
+        );
+    }
 
     internal static async Task<SpotCloseHost> StartAsync(
         SpotCloseFaultStore? sharedStore = null,

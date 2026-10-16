@@ -359,6 +359,7 @@ test('commands 42, 43, and 44 match the shared Session golden vectors', () => {
     session
   };
   const sealed: ServiceSessionRelocationSealed = {
+    sealResult: 'sealed',
     ...sessionBase,
     actor: seal.actor,
     session
@@ -388,7 +389,7 @@ test('commands 42, 43, and 44 match the shared Session golden vectors', () => {
 
   assert.deepEqual(
     entries.map((entry) => entry.command),
-    [42, 43, 44, 44]
+    [42, 43, 43, 44, 44]
   );
   assertGoldenRoundTrip(
     entries[0]!,
@@ -404,18 +405,24 @@ test('commands 42, 43, and 44 match the shared Session golden vectors', () => {
   );
   assertGoldenRoundTrip(
     entries[2]!,
+    { ...sealed, sealResult: 'bindingAbsent' },
+    encodeSessionRelocationSealed,
+    decodeSessionRelocationSealed
+  );
+  assertGoldenRoundTrip(
+    entries[3]!,
     commit,
     encodeSessionRelocationRoute,
     decodeSessionRelocationRoute
   );
   assertGoldenRoundTrip(
-    entries[3]!,
+    entries[4]!,
     abort,
     encodeSessionRelocationRoute,
     decodeSessionRelocationRoute
   );
 
-  const reserved = Buffer.from(entries[2]!.hex, 'hex');
+  const reserved = Buffer.from(entries[3]!.hex, 'hex');
   reserved[3] = 45;
   assert.throws(() => decodeSessionRelocationRoute(reserved));
   assert.throws(
@@ -470,7 +477,7 @@ test('batch-3 Session barrier hand/generated codecs are byte-equal and reject th
   }
 });
 
-test('Session relocation retain identity excludes coordinator fence fields', () => {
+test('Session relocation result key contains only relocation identity and ActorId', () => {
   const base: ServiceSessionRelocationSeal = {
     relocation: { high: 7n, low: 9n },
     coordinator: {
@@ -500,7 +507,9 @@ test('Session relocation retain identity excludes coordinator fence fields', () 
   const changedIdentity = [
     { ...base, relocation: { ...base.relocation, high: 8n } },
     { ...base, relocation: { ...base.relocation, low: 10n } },
-    { ...base, actor: { ...base.actor, actor: { ...base.actor.actor, actorId: 'actor-2' } } },
+    { ...base, actor: { ...base.actor, actor: { ...base.actor.actor, actorId: 'actor-2' } } }
+  ];
+  const changedRequestFields = [
     { ...base, actor: { ...base.actor, actor: { ...base.actor.actor, generation: 6n } } },
     { ...base, session: { ...base.session, sessionRid: 'other-session' } },
     { ...base, session: { ...base.session, bindingGeneration: 7n } }
@@ -516,12 +525,14 @@ test('Session relocation retain identity excludes coordinator fence fields', () 
   for (const identity of changedIdentity) {
     assert.notEqual(serviceSessionRelocationIdentityKey(identity), key);
   }
-  for (const coordinatorFence of changedCoordinator) {
-    // Session owner validation is limited to the binding and relocation identity (spec 20 §8.1).
-    assert.equal(
-      serviceSessionRelocationIdentityKey({ ...base, coordinator: coordinatorFence }),
-      key
-    );
+  // §8.3: field changes select the same result record. The Session owner
+  // compares the original bytes and rejects these changes as protocol errors.
+  for (const request of [
+    ...changedRequestFields,
+    ...changedCoordinator.map((coordinator) => ({ ...base, coordinator }))
+  ]) {
+    assert.equal(serviceSessionRelocationIdentityKey(request), key);
+    assert.notDeepEqual(encodeSessionRelocationSeal(request), encodeSessionRelocationSeal(base));
   }
 });
 
@@ -728,4 +739,17 @@ test('restoreRelocationAdapterState restores through the adapter and returns the
   );
   assert.equal(resolved, instance);
   assert.deepEqual(events, ['restore:7:payload-bytes']);
+});
+
+test('command 43 rejects the shared malformed sealResult bytes', () => {
+  const fixture = JSON.parse(
+    readFileSync('../../runtime/protocol/golden/session-relocation-barrier-v1.json', 'utf8')
+  ) as {
+    readonly malformed: readonly { readonly name: string; readonly hex: string }[];
+  };
+  for (const entry of fixture.malformed) {
+    const bytes = Buffer.from(entry.hex, 'hex');
+    assert.throws(() => decodeSessionRelocationSealed43(bytes), Error, entry.name);
+    assert.throws(() => decodeSessionRelocationSealed(bytes), Error, entry.name);
+  }
 });

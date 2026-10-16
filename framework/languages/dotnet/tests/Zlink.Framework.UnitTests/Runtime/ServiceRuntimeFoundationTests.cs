@@ -738,6 +738,106 @@ public sealed class ServiceRuntimeFoundationTests
         Assert.Equal((byte)ZLinkMeshNodeObjectRole.Client, admission.ObjectRole);
     }
 
+    [Theory]
+    [InlineData(
+        (byte)ServiceWireConstants.Command.Hello,
+        24UL,
+        (byte)1,
+        false,
+        (byte)ZLinkServiceAdmissionDecision.Reject
+    )]
+    [InlineData(
+        (byte)ServiceWireConstants.Command.Admit,
+        24UL,
+        (byte)1,
+        false,
+        (byte)ZLinkServiceAdmissionDecision.Reject
+    )]
+    [InlineData(
+        (byte)ServiceWireConstants.Command.Update,
+        24UL,
+        (byte)1,
+        false,
+        (byte)ZLinkServiceAdmissionDecision.Accept
+    )]
+    [InlineData(
+        (byte)ServiceWireConstants.Command.Hello,
+        23UL,
+        (byte)0,
+        false,
+        (byte)ZLinkServiceAdmissionDecision.Idempotent
+    )]
+    [InlineData(
+        (byte)ServiceWireConstants.Command.Hello,
+        22UL,
+        (byte)1,
+        false,
+        (byte)ZLinkServiceAdmissionDecision.Reject
+    )]
+    [InlineData(
+        (byte)ServiceWireConstants.Command.Hello,
+        23UL,
+        (byte)1,
+        false,
+        (byte)ZLinkServiceAdmissionDecision.Reject
+    )]
+    [InlineData(
+        (byte)ServiceWireConstants.Command.Hello,
+        24UL,
+        (byte)1,
+        true,
+        (byte)ZLinkServiceAdmissionDecision.Reject
+    )]
+    [InlineData(
+        (byte)ServiceWireConstants.Command.Update,
+        24UL,
+        (byte)1,
+        true,
+        (byte)ZLinkServiceAdmissionDecision.Reject
+    )]
+    public void AdmissionGuard_SameLifecycleRevisionIsUpdatedOnlyByUpdate(
+        byte command,
+        ulong revision,
+        byte runtimeState,
+        bool changeEndpoint,
+        byte expected
+    )
+    {
+        ZLinkServiceWireCodec.AdmissionRecord Descriptor(
+            ulong value,
+            byte state,
+            string endpoint
+        ) =>
+            DecodeAdmission(
+                ZLinkServiceWireCodec.EncodeRouteAdmission(
+                    ServiceWireConstants.Command.Hello,
+                    "orders",
+                    endpoint,
+                    17,
+                    value,
+                    new Dictionary<string, uint> { ["worker"] = 75 },
+                    runtimeState: state
+                )
+            );
+
+        const string Endpoint = "tcp://127.0.0.1:7070";
+        var current = Descriptor(23, 0, Endpoint);
+        var incoming = Descriptor(
+            revision,
+            runtimeState,
+            changeEndpoint ? "tcp://127.0.0.1:7071" : Endpoint
+        );
+
+        Assert.Equal(
+            (ZLinkServiceAdmissionDecision)expected,
+            ZLinkServiceAdmissionGuard.Evaluate(
+                current,
+                (ServiceWireConstants.Command)command,
+                incoming
+            )
+        );
+    }
+
     [Fact]
     public void AdmissionGuard_ValidatesRevisionAndImmutableFieldsBeforeMutation()
     {
@@ -1938,7 +2038,10 @@ public sealed class ServiceRuntimeFoundationTests
                 System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic
             )!
             .GetAddMethod(nonPublic: true)!;
-        addListener.Invoke(node, [new Action<RoutingId>(ended.Add)]);
+        addListener.Invoke(
+            node,
+            [new Func<RoutingId, Action?>(removed => () => ended.Add(removed))]
+        );
 
         node.RemovePeerConnection(first);
         Assert.Empty(ended);
@@ -3055,13 +3158,13 @@ public sealed class ServiceRuntimeFoundationTests
                     lifecycleGeneration: 1,
                     descriptorRevision: 1,
                     new Dictionary<string, uint>(StringComparer.Ordinal),
-                    objectRole: (byte)ZLinkMeshNodeObjectRole.Client
+                    objectRole: (byte)ZLinkMeshNodeObjectRole.Server
                 )
             )
         )
             await source.Send().Message(hello).Async(CancellationToken.None).Admitted;
 
-        await WaitUntilAsync(() => target.Peers().Length == 1);
+        await WaitUntilAsync(() => target.Status().AdmittedPeerCount == 1);
         await WaitUntilAsync(() => applicationJobQueue.GetStatus().PermitsInUse == 0);
         var controlStatus = applicationJobQueue.GetStatus();
         Assert.Equal(1UL, controlStatus.PeakPermitsInUse);
@@ -3189,6 +3292,117 @@ public sealed class ServiceRuntimeFoundationTests
 
         await WaitUntilAsync(() => applicationJobQueue.GetStatus().PermitsInUse == 0);
         Assert.Equal(2, Volatile.Read(ref deliveries));
+    }
+
+    [Fact]
+    public async Task Managed_mesh_logical_multicast_posts_each_child_with_its_own_receive_permit()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        using var applicationJobQueue = new ZLinkApplicationJobQueue(
+            new ZLinkApplicationJobQueueCapacity(
+                ZLinkApplicationJobQueueProfile.Balanced,
+                ConfiguredManualMax: 1,
+                EffectiveProcessorCount: 8,
+                EffectiveMaxQueuedApplicationJobs: 1
+            )
+        );
+        await using var source = new ZLinkManagedMeshNode(context, "events");
+        await using var target = new ZLinkManagedMeshNode(
+            context,
+            "events",
+            applicationJobQueue: applicationJobQueue
+        );
+        var suffix = Guid.NewGuid().ToString("N");
+        var sourceEndpoint = $"inproc://events-fanout-source-{suffix}";
+        var targetEndpoint = $"inproc://events-fanout-target-{suffix}";
+        var targetRid = RoutingId.From("events-fanout-target");
+        const string channelName = "events";
+        const string topic = "created";
+        const int children = 3;
+
+        source.SetRoutingId(RoutingId.From("events-fanout-source"));
+        source.SetBind(sourceEndpoint);
+        source.ConnectPeer(targetEndpoint, targetRid);
+        target.SetRoutingId(targetRid);
+        target.SetBind(targetEndpoint);
+        target.AddChannel(channelName);
+        for (var index = 0; index < children; index++)
+            (
+                (ZLinkManagedSpot)target.GetOrCreateSpot($"events-fanout-{index}-{suffix}", out _)
+            ).SetSubscription(channelName, topic);
+
+        // The test is the mailbox consumer, so each claim shows exactly which
+        // children the receive source has posted and with which permits.
+        using var ready = new SemaphoreSlim(0);
+        target.SetReadyHandler(domains =>
+        {
+            ready.Release();
+            return domains;
+        });
+        target.Start();
+        source.Start();
+        await WaitUntilAsync(() =>
+            source.Status().AdmittedPeerCount == 1 && target.Status().AdmittedPeerCount == 1
+        );
+
+        using var payload = Message.From(new byte[] { 7, 8, 9 });
+        source.EntrySpot().Publish(channelName, topic, [payload]);
+
+        // Spec 04 application job queue: the receive permit moves into the owner
+        // mailbox with the record, a 1:N fanout posts no more children than the
+        // permits it holds, and its source keeps one waiter for the next permit.
+        for (var child = 0; child < children; child++)
+        {
+            using var admitted = await ClaimOnlyMulticastChildAsync(target, ready);
+            if (child < children - 1)
+                await WaitUntilAsync(() => applicationJobQueue.GetStatus().CapacityWaiters == 1);
+            else
+                // After the last child the source receives again, so a later
+                // record such as a heartbeat may wait with the same one waiter.
+                Assert.True(applicationJobQueue.GetStatus().CapacityWaiters <= 1);
+            Assert.Equal(1UL, applicationJobQueue.GetStatus().PermitsInUse);
+        }
+        await WaitUntilAsync(() => applicationJobQueue.GetStatus().PermitsInUse == 0);
+        Assert.Equal(0UL, applicationJobQueue.GetStatus().CapacityWaiters);
+    }
+
+    private static async Task<IDisposable> ClaimOnlyMulticastChildAsync(
+        ZLinkManagedMeshNode node,
+        SemaphoreSlim ready
+    )
+    {
+        using var readyBatch = new MeshReadyBatch();
+        using var receiveBatch = new MeshReceiveBatch();
+        while (true)
+        {
+            Assert.True(
+                await ready.WaitAsync(TimeSpan.FromSeconds(3)),
+                "No multicast child reached an owner mailbox."
+            );
+            readyBatch.Reset();
+            await node.DrainReadyAsync(
+                MeshReadyDomains.Application,
+                readyBatch,
+                RecvFlags.DontWait
+            );
+            IDisposable? child = null;
+            for (var index = 0; index < readyBatch.Count; index++)
+            {
+                receiveBatch.Reset();
+                await readyBatch.TakeClaim(index).ReceiveAsync(receiveBatch, RecvFlags.DontWait);
+                for (var record = 0; record < receiveBatch.Count; record++)
+                {
+                    if (receiveBatch[record].Kind != MeshRecordKind.SpotMulticast)
+                        continue;
+                    Assert.Null(child);
+                    Assert.NotNull(receiveBatch.GetApplicationJobAdmission(record));
+                    child = receiveBatch.TakePayloadOwner(record);
+                }
+            }
+            receiveBatch.Reset();
+            if (child is not null)
+                return child;
+        }
     }
 
     [Fact]

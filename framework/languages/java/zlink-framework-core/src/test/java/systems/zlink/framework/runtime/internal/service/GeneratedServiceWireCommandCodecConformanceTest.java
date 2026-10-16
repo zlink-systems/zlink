@@ -98,6 +98,7 @@ final class GeneratedServiceWireCommandCodecConformanceTest {
     @Test
     void batch3RuntimeAndGeneratedCodecsRejectTheSameMalformedBytes() throws Exception {
         List<byte[]> malformed = new ArrayList<>(array("relocation-control-v1.json", "malformed"));
+        malformed.addAll(array("session-relocation-barrier-v1.json", "malformed"));
         for (byte[] bytes : canonicalArray("reply-relay-v1.json")) {
             malformed.addAll(mutations(bytes));
         }
@@ -250,7 +251,7 @@ final class GeneratedServiceWireCommandCodecConformanceTest {
         assertEquals(11, canonicalCount);
         assertEquals(12, malformedCount);
         JsonNode operationCases = fixtureIndex().path("operationCases");
-        assertEquals(93, operationCases.size());
+        assertEquals(98, operationCases.size());
         Map<String, Set<String>> boundaryPairs = new HashMap<>();
         for (JsonNode operationCase : operationCases) {
             String operation = operationCase.path("operation").asText();

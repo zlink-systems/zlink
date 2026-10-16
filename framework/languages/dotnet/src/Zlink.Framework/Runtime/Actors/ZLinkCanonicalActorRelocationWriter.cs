@@ -10,6 +10,10 @@ namespace Zlink.Framework.Runtime.Actors;
 /// </summary>
 internal static class ZLinkCanonicalActorRelocationWriter
 {
+    // A standalone Actor relocation envelope has one participant. Its
+    // participantId is that inventory index plus one (relocation-flow §4.2).
+    internal const ulong ParticipantId = 1;
+
     internal static ZLinkRelocationEnvelope CreateInitial(
         ZLinkRelocationEnvelope inventory,
         long applicationVersion
@@ -71,7 +75,7 @@ internal static class ZLinkCanonicalActorRelocationWriter
                 );
             savedWork.Add(
                 new ServiceWirePilotCodec.RelocationSavedWork(
-                    ParticipantId: 1,
+                    ParticipantId: ParticipantId,
                     job.AcceptedSequence,
                     job.Payload.ToArray()
                 )
@@ -90,14 +94,17 @@ internal static class ZLinkCanonicalActorRelocationWriter
                 applicationVersion,
                 [
                     new ServiceWirePilotCodec.RelocationApplicationState(
-                        ParticipantId: 1,
+                        ParticipantId: ParticipantId,
                         HasState: true,
                         participant.ApplicationState.ToArray()
                     ),
                 ],
                 savedWork,
                 [],
-                []
+                [],
+                participant.SessionBinding is { } binding
+                    ? [binding with { ParticipantId = ParticipantId }]
+                    : []
             )
         );
         using var stream = new MemoryStream(encoded, writable: false);

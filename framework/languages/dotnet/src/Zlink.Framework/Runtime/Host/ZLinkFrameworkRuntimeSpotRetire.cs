@@ -61,14 +61,14 @@ internal sealed partial class ZLinkFrameworkRuntime
                 "The inbound SPOT relocation target does not match its envelope."
             );
 
-        var targetOwnerGeneration = await ResolveInboundTargetAuthorityOwnerGenerationAsync(
-                spotParticipant,
-                stagedBeforeCutover
-                    ? checked(spotParticipant.AuthorityOwnerGeneration + 1)
-                    : reservedTargetAuthorityOwnerGeneration,
-                cancellationToken
-            )
-            .ConfigureAwait(false);
+        var targetOwnerGeneration = stagedBeforeCutover
+            ? spotParticipant.AuthorityOwnerGeneration
+            : await ResolveInboundTargetAuthorityOwnerGenerationAsync(
+                    spotParticipant,
+                    reservedTargetAuthorityOwnerGeneration,
+                    cancellationToken
+                )
+                .ConfigureAwait(false);
         async ValueTask<PreparedReservedSpot> PrepareTargetSpotAsync()
         {
             if (request.InstanceSpot)
@@ -80,7 +80,8 @@ internal sealed partial class ZLinkFrameworkRuntime
                         spotParticipant.ObjectGeneration,
                         targetOwnerGeneration,
                         cancellationToken,
-                        restoreLogicalTimers: true
+                        restoreLogicalTimers: true,
+                        logicalTimers: spotParticipant.LogicalTimers
                     )
                     .ConfigureAwait(false);
             }
@@ -103,7 +104,8 @@ internal sealed partial class ZLinkFrameworkRuntime
                     targetOwnerGeneration,
                     ZLinkMessage.Empty,
                     cancellationToken,
-                    invokeCreate: false
+                    invokeCreate: false,
+                    logicalTimers: spotParticipant.LogicalTimers
                 )
                 .ConfigureAwait(false);
         }
@@ -154,9 +156,6 @@ internal sealed partial class ZLinkFrameworkRuntime
                     $"Target SPOT '{request.SpotId}' could not seal staging admission.",
                     ZLinkRetryAdvice.RetryAfterBackoff
                 );
-            await preparedSpot
-                .Activation.RestoreLogicalTimersAsync(spotParticipant.LogicalTimers)
-                .ConfigureAwait(false);
             return new TargetStage(
                 node,
                 preparedSpot,
@@ -315,15 +314,18 @@ internal sealed partial class ZLinkFrameworkRuntime
                             );
                         }
 
-                        var actorTargetAuthorityOwnerGeneration =
-                            await ResolveInboundTargetAuthorityOwnerGenerationAsync(
+                        var actorTargetAuthorityOwnerGeneration = stagedBeforeCutover
+                            ? participant.AuthorityOwnerGeneration
+                            : await ResolveInboundTargetAuthorityOwnerGenerationAsync(
                                     participant,
-                                    stagedBeforeCutover
-                                        ? checked(participant.AuthorityOwnerGeneration + 1)
-                                        : 0,
+                                    0,
                                     cancellationToken
                                 )
                                 .ConfigureAwait(false);
+                        var actorState = GetOrCreateActorState(authority.ActorId);
+                        await _actorSessionManager
+                            .PrepareForTransferredActivationAsync(actorState, cancellationToken)
+                            .ConfigureAwait(false);
                         var creation = await _actorSessionManager
                             .RelocateAndBindActorAsync(
                                 authority.ActorId,
@@ -342,36 +344,23 @@ internal sealed partial class ZLinkFrameworkRuntime
                             nameof(authority.ActorId)
                         );
                         boundActorIds.TryAdd(actorKey, 0);
-                        var actorState = GetOrCreateActorState(authority.ActorId);
                         stagedActorStates.TryAdd(actorKey, actorState);
-                        var boundRoute = hasRelocation
-                            ? relocationAuthority.BoundSessionRoute
-                            : default;
-                        var wireContext = default(ZLinkSessionRelocationContext);
-                        if (boundRoute.IsBound)
-                        {
-                            if (
-                                ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(
-                                    descriptor.AuthorityPayload,
-                                    out var canonical
-                                )
+                        var boundRoute = ZLinkSessionRelocationWire.RestoreBinding(
+                            participant,
+                            request.MeshName,
+                            request.SourceNodeLifecycleGeneration,
+                            request.SourceOwnerLeaseGeneration
+                        );
+                        var wireContext = boundRoute.IsBound
+                            ? ZLinkSessionRelocationContext.Create(
+                                envelope.AggregateId,
+                                request.SourceOwnerId,
+                                request.SourceOwnerLeaseGeneration,
+                                RoutingId.FromHex(request.SourceNodeRid),
+                                request.SourceNodeLifecycleGeneration,
+                                request.CoordinatorExpectedAuthorityStoreVersion
                             )
-                            {
-                                wireContext = new ZLinkSessionRelocationContext(
-                                    new ZLinkServiceWireCodec.RelocationWireId(
-                                        canonical.RelocationHigh,
-                                        canonical.RelocationLow
-                                    ),
-                                    new ZLinkServiceWireCodec.RelocationCoordinatorFence(
-                                        canonical.State.CoordinatorOwnerId,
-                                        canonical.State.CoordinatorLeaseGeneration,
-                                        RoutingId.FromHex(canonical.State.CoordinatorNodeRid),
-                                        canonical.State.CoordinatorNodeGeneration,
-                                        canonical.State.CoordinatorExpectedAuthorityStoreVersion
-                                    )
-                                );
-                            }
-                        }
+                            : default;
                         actorState.StageRelocationSessionRoute(
                             envelope.AggregateId.ToString("N"),
                             boundRoute,
@@ -467,24 +456,6 @@ internal sealed partial class ZLinkFrameworkRuntime
         };
     }
 
-    internal async ValueTask PublishInboundSpotAggregateAsync(
-        TargetStage stage,
-        Func<CancellationToken, ValueTask>? normalizeAuthority,
-        CancellationToken cancellationToken
-    )
-    {
-        await stage.PublishGate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
-        {
-            await PublishInboundSpotAggregateCoreAsync(stage, normalizeAuthority, cancellationToken)
-                .ConfigureAwait(false);
-        }
-        finally
-        {
-            stage.PublishGate.Release();
-        }
-    }
-
     // The caller owns the stage publish gate through CAS settlement and publication.
     internal async ValueTask PublishInboundSpotAggregateCoreAsync(
         TargetStage stage,
@@ -495,8 +466,10 @@ internal sealed partial class ZLinkFrameworkRuntime
         var spotParticipant = stage.SpotParticipant;
         if (Volatile.Read(ref stage.Published) == 0)
         {
-            await PrepareInboundSpotAggregateCoreAsync(stage, spotParticipant, cancellationToken)
-                .ConfigureAwait(false);
+            // The target commit is confirmed before this point. Each member
+            // Actor's bound Session projection follows that commit before the
+            // ordered backlog runs (relocation 04 §4.6, §7), so a backlog
+            // handler pushes with the committed target binding.
             var handoffId = stage.Envelope.AggregateId.ToString("N");
             foreach (var actorState in stage.ActorStates)
             {
@@ -515,6 +488,8 @@ internal sealed partial class ZLinkFrameworkRuntime
                     stage.TargetOwnerLeaseGeneration
                 );
             }
+            await PrepareInboundSpotAggregateCoreAsync(stage, spotParticipant, cancellationToken)
+                .ConfigureAwait(false);
 
             if (Volatile.Read(ref stage.RelocationReadyDelivered) == 0)
             {
@@ -585,12 +560,6 @@ internal sealed partial class ZLinkFrameworkRuntime
         Volatile.Write(ref stage.AdmissionOpened, 1);
     }
 
-    private const int SessionRouteConvergenceAttempts = 5;
-
-    private static readonly TimeSpan SessionRouteConvergenceRetryDelay = TimeSpan.FromMilliseconds(
-        50
-    );
-
     internal void ScheduleRelocationSessionRouteConvergence(TargetStage stage)
     {
         if (
@@ -625,33 +594,8 @@ internal sealed partial class ZLinkFrameworkRuntime
             var handoffId = stage.Envelope.AggregateId.ToString("N");
             foreach (var actorState in stage.ActorStates)
             {
-                for (var attempt = 1; ; attempt++)
-                {
-                    try
-                    {
-                        await ConvergeRelocationSessionRouteAsync(
-                                actorState,
-                                handoffId,
-                                cancellationToken
-                            )
-                            .ConfigureAwait(false);
-                        break;
-                    }
-                    catch (Exception exception)
-                        when (exception is not OperationCanceledException
-                            && attempt < SessionRouteConvergenceAttempts
-                        )
-                    {
-                        ZLinkFrameworkDebugLog.SpotDiscovery(
-                            $"relocation_session_route_retry actor={actorState.ActorId} handoff={handoffId} attempt={attempt}"
-                        );
-                        await Task.Delay(
-                                SessionRouteConvergenceRetryDelay * attempt,
-                                cancellationToken
-                            )
-                            .ConfigureAwait(false);
-                    }
-                }
+                await ConvergeRelocationSessionRouteAsync(actorState, handoffId, cancellationToken)
+                    .ConfigureAwait(false);
             }
             Volatile.Write(ref stage.SessionRoutesConverged, 1);
         }
@@ -709,40 +653,12 @@ internal sealed partial class ZLinkFrameworkRuntime
             await normalizeAuthority().ConfigureAwait(false);
     }
 
-    internal async ValueTask PrepareInboundSpotAggregateAsync(
-        TargetStage stage,
-        CancellationToken cancellationToken
-    )
-    {
-        await stage.PublishGate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
-        {
-            if (Volatile.Read(ref stage.Published) != 0)
-                return;
-            var spotParticipant = stage.SpotParticipant;
-            await PrepareInboundSpotAggregateCoreAsync(stage, spotParticipant, cancellationToken)
-                .ConfigureAwait(false);
-        }
-        finally
-        {
-            stage.PublishGate.Release();
-        }
-    }
-
     private async ValueTask PrepareInboundSpotAggregateCoreAsync(
         TargetStage stage,
         ZLinkRelocationParticipantEnvelope spotParticipant,
         CancellationToken cancellationToken
     )
     {
-        foreach (var actorState in stage.ActorStates)
-            await stage
-                .Spot.Activation.CompleteTransferredActorJoinSealedAsync(
-                    actorState,
-                    stage.TargetAdmissionSeal,
-                    cancellationToken
-                )
-                .ConfigureAwait(false);
         await stage
             .Node.Catalog.ValidateRelocatedReservedAsync(
                 stage.Spot,
@@ -905,8 +821,8 @@ internal sealed partial class ZLinkFrameworkRuntime
             {
                 turn.Dispose();
             }
-
             await Task.WhenAll(queued).ConfigureAwait(false);
+
             // Authority publication can make new-owner ingress arrive before
             // the previous owner has delivered its Message Follow backlog.
             // Capture stays closed only until the publish path finishes the
@@ -1008,11 +924,8 @@ internal sealed partial class ZLinkFrameworkRuntime
             }
             finally
             {
-                // Direct new-owner ingress can append only after every
-                // previous-owner frame owns its target queue position.
                 turn.Dispose();
             }
-
             await Task.WhenAll(queued).ConfigureAwait(false);
         }
     }
@@ -1079,6 +992,7 @@ internal sealed partial class ZLinkFrameworkRuntime
                                     ?? throw new ZLinkRelocationDataLostException(
                                         $"Actor '{actorState.ActorId}' target reference is missing."
                                     );
+                                var barrier = actorState.ReserveHandoffRestoreBarrier();
                                 var queued =
                                     actorState.Handoff.ReserveCanonicalMaintenanceTrailingAndOpenAdmission(
                                         handoffId,
@@ -1132,7 +1046,8 @@ internal sealed partial class ZLinkFrameworkRuntime
                                     actorState,
                                     handoffId,
                                     queued,
-                                    drainStart.Task
+                                    drainStart.Task,
+                                    barrier
                                 );
                                 actorState.Handoff.RegisterCanonicalMaintenanceDrain(
                                     handoffId,
@@ -1157,10 +1072,12 @@ internal sealed partial class ZLinkFrameworkRuntime
         ZLinkActorRuntimeState actorState,
         string handoffId,
         IReadOnlyCollection<Task> queued,
-        Task drainStart
+        Task drainStart,
+        ZLinkActorSerialExecutor.BarrierReservation barrier
     )
     {
         await drainStart.ConfigureAwait(false);
+        using var turn = await barrier.ClaimAsync().ConfigureAwait(false);
         await Task.WhenAll(queued).ConfigureAwait(false);
         if (!actorState.Handoff.TryCompleteCanonicalMaintenanceReplay(handoffId))
             throw new ZLinkRelocationDataLostException(

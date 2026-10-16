@@ -70,7 +70,8 @@ import {
 import {
   addSpotTimerRegistrations,
   ZLinkSpotTimerRegistry,
-  type ZLinkTimerClock
+  type ZLinkTimerClock,
+  type ZLinkTimerRelocationState
 } from './spot-timer';
 import { ZLinkSpotSerialTurnExecutor } from './spot-serial-turn-executor';
 import { ZLinkSpotSerialExecutor } from './spot-serial-executor';
@@ -101,6 +102,7 @@ export interface ZLinkSpotActivationLifecycleOptions {
   readonly nodeRid?: RoutingId;
   readonly nodeRidProvider?: (meshName: string) => RoutingId | undefined;
   readonly actorCountProvider?: (spotId: RoutingId) => number;
+  readonly releaseActorMembers?: (meshName: string, spotId: RoutingId) => Promise<void>;
   readonly userSpotExecutionMode?: (
     meshName: string,
     spotType: Type<ZLinkSpot>
@@ -200,6 +202,7 @@ export class ZLinkSpotActivationLifecycle {
     spotId: RoutingId,
     objectGeneration: bigint,
     authorityOwnerGeneration: bigint,
+    restoredTimers: readonly ZLinkTimerRelocationState[],
     signal?: AbortSignal
   ): Promise<ZLinkSpotActivation> {
     const executionMode =
@@ -240,6 +243,9 @@ export class ZLinkSpotActivationLifecycle {
       (name) => serialExecutor.isTimerExecuting(name),
       this.options.timerClock
     );
+    // Spot timer §1: the source schedule exists before Configure so its
+    // registrations reattach to the restored keys.
+    timers.stageRelocation(restoredTimers);
     const outbound = new DefaultZLinkSpotOutbound({
       serial,
       channelClient: this.options.channelClient,
@@ -304,20 +310,33 @@ export class ZLinkSpotActivationLifecycle {
         enumerable: false,
         value: context
       });
-      await instance.configure?.();
-      await addSpotTimerRegistrations(
-        timers,
-        implementation as unknown as Type<ZLinkSpot>,
-        spotId,
-        instance as unknown as ZLinkSpot,
-        serial,
-        { timerHandlers: this.options.spotTimerHandlers },
-        {
-          providerResolver: this.options.providerResolver,
-          runtimeEventPublisher: this.options.runtimeEventPublisher,
-          signal
-        }
-      );
+      const configured = instance;
+      await timers.runRelocationInitialization(async () => {
+        await configured.configure?.();
+        await addSpotTimerRegistrations(
+          timers,
+          implementation as unknown as Type<ZLinkSpot>,
+          spotId,
+          configured as unknown as ZLinkSpot,
+          serial,
+          { timerHandlers: this.options.spotTimerHandlers },
+          {
+            providerResolver: this.options.providerResolver,
+            runtimeEventPublisher: this.options.runtimeEventPublisher,
+            signal
+          }
+        );
+        // Node timer relocation: restored handlers resolve by name among the
+        // constructors announced in Configure (addTimer or addTimerHandler).
+        await timers.resolveRelocationHandlers(
+          handlers
+            .snapshot()
+            .filter((entry) => entry.kind === 'timer')
+            .map((entry) => entry.handlerType),
+          (name, periodMs, handlerType) =>
+            context.addTimer(name, periodMs, handlerType as never, undefined, signal)
+        );
+      });
       activation = new ZLinkSpotActivation({
         meshName,
         spotId,
@@ -1058,10 +1077,12 @@ export class ZLinkSpotActivationLifecycle {
       } catch (error) {
         // An OnClosing failure is diagnostic and cleanup continues. It is
         // returned so host shutdown can classify its teardown outcome.
-        this.options.closeErrorSink?.reportRuntimeTaskException(
-          `spot ${String(activation.spotId)} onClosing`,
-          error
-        );
+        if (reason !== ZLinkSpotCloseReason.HostShutdown) {
+          this.options.closeErrorSink?.reportRuntimeTaskException(
+            `spot ${String(activation.spotId)} onClosing`,
+            error
+          );
+        }
         closingFailure = error;
       }
     }
@@ -1102,7 +1123,12 @@ export class ZLinkSpotActivationLifecycle {
     }
     if (!state.nativeDisposed) {
       await cleanup(
-        () => activation.nativeSpot?.dispose(),
+        async () => {
+          if (reason === ZLinkSpotCloseReason.HostShutdown) {
+            await this.options.releaseActorMembers?.(locationMeshName, activation.spotId);
+          }
+          await activation.nativeSpot?.dispose();
+        },
         () => {
           state.nativeDisposed = true;
         }
@@ -1130,8 +1156,9 @@ export class ZLinkSpotActivationLifecycle {
         }
       );
     }
-    if (errors.length === 1) throw errors[0];
-    if (errors.length > 1) {
+    if (errors.length > 0) {
+      if (closingFailure !== undefined) errors.unshift(closingFailure);
+      if (errors.length === 1) throw errors[0];
       throw new AggregateError(errors, `Spot '${activation.spotId}' cleanup failed.`);
     }
     return closingFailure;

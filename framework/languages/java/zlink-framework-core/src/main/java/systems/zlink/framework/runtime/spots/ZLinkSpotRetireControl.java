@@ -326,6 +326,16 @@ final class ZLinkSpotRetireControl {
     }
 
     interface TargetEndpoint {
+        /** Transfers admission lifetime to the accepted canonical target attempt. */
+        default CompletionStage<Void> beginPrepare(
+                UUID relocationId, CompletionStage<Void> terminal, Runnable superseded) {
+            return CompletableFuture.completedFuture(null);
+        }
+
+        default CompletionStage<Void> endPrepare(UUID relocationId) {
+            return CompletableFuture.completedFuture(null);
+        }
+
         /** Applies an admitted target-only profile before authority prepare. */
         default TargetProfile applyTargetProfile(
                 StageRequest request, long defaultActorSpotGeneration) {
@@ -603,6 +613,19 @@ final class ZLinkSpotRetireControl {
             long sessionOwnerLeaseGeneration,
             RoutingId sessionRid,
             long bindingGeneration) {
+        systems.zlink.framework.runtime.protocol.ServiceWirePilotCodec.RelocationSessionBinding
+                binding(long participantId) {
+            return new systems.zlink.framework.runtime.protocol.ServiceWirePilotCodec
+                    .RelocationSessionBinding(
+                    participantId,
+                    sessionOwnerNodeRid.toBytes(),
+                    sessionOwnerNodeGeneration,
+                    sessionOwnerId,
+                    sessionOwnerLeaseGeneration,
+                    sessionRid.toBytes(),
+                    bindingGeneration);
+        }
+
         SessionRouteFence {
             requireText(actorId, "actorId");
             requireText(sourceAuthorityStoreVersion, "sourceAuthorityStoreVersion");

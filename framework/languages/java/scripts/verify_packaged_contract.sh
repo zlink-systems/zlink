@@ -44,7 +44,7 @@ for artifact in "${artifacts[@]}"; do
     publish_tasks+=(":$artifact:publishAllPublicationsToReleaseRepoRepository")
 done
 MAVEN_REPOSITORY_URL="file://$maven_dir" \
-    "$root_dir/gradlew" --no-daemon -p "$root_dir" "${publish_tasks[@]}"
+    "$root_dir/gradlew" --no-daemon --max-workers=2 -p "$root_dir" "${publish_tasks[@]}"
 
 mapfile -t published < <(
     find "$maven_dir/systems/zlink" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort
@@ -96,6 +96,8 @@ import systems.zlink.framework.actors.ZLinkActorJoinCall;
 import systems.zlink.framework.configuration.ZLinkFrameworkOptions;
 import systems.zlink.framework.locationprovider.ZLinkLocationStore;
 import systems.zlink.framework.spots.SpotHandle;
+import systems.zlink.framework.spots.ZLinkSpotHandlerRegistry;
+import systems.zlink.framework.handlers.ZLinkSpotSubscription;
 import systems.zlink.framework.streams.ZLinkSession;
 import systems.zlink.httpclient.ZLinkHttpClient;
 import systems.zlink.stream.connector.ZLinkStreamConnector;
@@ -106,7 +108,18 @@ import systems.zlink.stream.connector.ZLinkStreamMessage;
 import systems.zlink.stream.connector.ZLinkStreamReplyReceivedContext;
 
 public final class PackagedContractConsumer {
-    public static void main(String[] args) {
+    @ZLinkSpotSubscription(spotNodeName = "game", channelName = "events", topic = "orders")
+    public static final class SubscriptionProbe {}
+
+    static void register(ZLinkSpotHandlerRegistry registry, Class<?> handlerType,
+            String channelName, String topic) {
+        registry.addSubscribe(handlerType, channelName, topic);
+    }
+
+    public static void main(String[] args) throws ReflectiveOperationException {
+        ZLinkSpotHandlerRegistry.class.getMethod("addSubscribe", Class.class, String.class, String.class);
+        if (!SubscriptionProbe.class.getAnnotation(ZLinkSpotSubscription.class).channelName().equals("events"))
+            throw new AssertionError("subscription channel");
         Class<?>[] contract = {
             ZLinkFrameworkOptions.class,
             ZLinkActorJoinCall.class,
@@ -148,6 +161,8 @@ EOF
     cat > "$consumer_dir/src/main/kotlin/contract/PackagedContractConsumer.kt" <<'EOF'
 package contract
 
+import systems.zlink.framework.spots.ZLinkSpotHandlerRegistry
+import systems.zlink.framework.handlers.ZLinkSpotSubscription
 import systems.zlink.framework.kotlin.ZLinkSuspendingActorFactory
 import systems.zlink.framework.kotlin.ZLinkSuspendingSession
 import systems.zlink.framework.kotlin.await
@@ -159,7 +174,16 @@ import systems.zlink.stream.connector.ZLinkStreamMessage
 import systems.zlink.stream.connector.ZLinkStreamReplyReceivedContext
 import java.util.concurrent.CompletableFuture
 
+@ZLinkSpotSubscription(spotNodeName = "game", channelName = "events", topic = "orders")
+class SubscriptionProbe
+
+fun register(registry: ZLinkSpotHandlerRegistry, handlerType: Class<*>, channelName: String, topic: String) {
+    registry.addSubscribe(handlerType, channelName, topic)
+}
+
 fun main() {
+    ZLinkSpotHandlerRegistry::class.java.getMethod("addSubscribe", Class::class.java, String::class.java, String::class.java)
+    check(SubscriptionProbe::class.java.getAnnotation(ZLinkSpotSubscription::class.java).channelName == "events")
     check(CompletableFuture.completedFuture("ok").toCompletableFuture().join() == "ok")
     check(ZLinkSuspendingActorFactory::class.java.name.isNotBlank())
     check(ZLinkSuspendingSession::class.java.name.isNotBlank())
@@ -180,6 +204,6 @@ sed -i \
     -e "s/HTTP_CLIENT_VERSION/$http_client_version/g" \
     "$consumer_dir/build.gradle.kts"
 
-"$root_dir/gradlew" --no-daemon -p "$consumer_dir" clean run
+"$root_dir/gradlew" --no-daemon --max-workers=2 -p "$consumer_dir" clean run
 "$root_dir/scripts/verify_api_snapshot.sh" "$language"
 echo "$language packaged contract verification passed"

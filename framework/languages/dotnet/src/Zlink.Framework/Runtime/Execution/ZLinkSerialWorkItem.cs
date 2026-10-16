@@ -1,8 +1,11 @@
+using Zlink.Framework.Runtime.Host;
+
 namespace Zlink.Framework.Runtime.Execution;
 
 internal sealed class ZLinkSerialWorkItem
 {
     private readonly Func<CancellationToken, ValueTask> _callback;
+    private readonly ZLinkFrameworkRuntime.ZLinkRuntimeOperationLease? _operation;
     private readonly Action? _relocationRelease;
     private readonly Func<ReadOnlyMemory<byte>>? _acceptedPayloadFactory;
     private readonly object? _acceptedPayloadGate;
@@ -27,6 +30,7 @@ internal sealed class ZLinkSerialWorkItem
     {
         _completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
         _callback = callback;
+        _operation = ZLinkFrameworkRuntime.CurrentOperation;
         _relocationRelease = relocationRelease;
         PreviousOwnerMessageFollow = previousOwnerMessageFollow;
         Lane = lane;
@@ -158,7 +162,7 @@ internal sealed class ZLinkSerialWorkItem
         Task? callbackTask = null;
         try
         {
-            using var turnScope = ZLinkSerialTurn.Push(turn);
+            using var ambient = new AmbientScope(turn, _operation);
             var operation = _callback(cancellationToken);
             if (operation.IsCompletedSuccessfully)
             {
@@ -205,6 +209,37 @@ internal sealed class ZLinkSerialWorkItem
             _ = _completion!.Task.Exception;
             onUnhandledException(ex);
             return ZLinkSerialWorkItemResult.Completed;
+        }
+    }
+
+    // Installs the turn and the accepted operation for one item and restores the
+    // caller's execution context once, instead of rebuilding it per ambient value.
+    private readonly struct AmbientScope : IDisposable
+    {
+        private readonly ExecutionContext? _context;
+        private readonly ZLinkSerialTurn.Scope _turn;
+        private readonly ZLinkFrameworkRuntime.ZLinkRuntimeOperationScope _operation;
+
+        internal AmbientScope(
+            ZLinkSerialTurn turn,
+            ZLinkFrameworkRuntime.ZLinkRuntimeOperationLease? operation
+        )
+        {
+            _context = ExecutionContext.Capture();
+            _turn = ZLinkSerialTurn.Push(turn);
+            _operation = ZLinkFrameworkRuntime.EnterAcceptedOperation(operation);
+        }
+
+        public void Dispose()
+        {
+            if (_context is not null)
+            {
+                ExecutionContext.Restore(_context);
+                return;
+            }
+            // A suppressed flow has no context to restore; undo each value.
+            _operation.Dispose();
+            _turn.Dispose();
         }
     }
 

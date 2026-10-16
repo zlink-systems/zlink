@@ -17,6 +17,8 @@
 #include "runtime/streams/stream_host_service.hpp"
 #include "runtime/diagnostics/listener_status_registry.hpp"
 #include "runtime/streams/stream_runtime.hpp"
+#include "runtime/actors/actor_gateway_runtime.hpp"
+#include "runtime/actors/actor_ref_access.hpp"
 #include "../support/loopback_tcp_endpoint.hpp"
 
 #include <zlink/framework/contracts/configuration/zlink_builder.hpp>
@@ -715,8 +717,11 @@ void verify_local_join_timeout_releases_membership ()
       .dispatch_ready ([&] (const host::ready_record_t &, const host::receive_record_t &record,
                             std::vector<zlink::message_t>) {
           if (record.kind == host::record_kind_t::spot_control)
-              replied = host::actor_join_reply (record.reply_token,
-                                                host::actor_join_result_t::accepted, {});
+              replied = host::actor_join_reply (
+                record.reply_token,
+                zlink::framework::result_t<host::actor_join_result_t>::success (
+                  host::actor_join_result_t::accepted),
+                {});
       })
       .result ()
       .value ();
@@ -1711,6 +1716,67 @@ void verify_public_runtime_surface ()
     node->stop ();
 }
 
+void verify_automatic_intent_respects_manual_peer ()
+{
+    auto local_state = make_node ("tcp://127.0.0.1:0", "A-auto-local");
+    auto remote_state = make_node ("tcp://127.0.0.1:0", "Z-auto-remote");
+    zlink::framework::detail::mesh_node_runtime_t local (local_state), remote (remote_state);
+    remote.start ();
+    const auto rid = remote.status ().routing_id ();
+    local_state->peer_connections.push_back ({1, rid, "tcp://127.0.0.1:1"});
+    local.start ();
+    // A manual intent at another endpoint owns the direction even before admission.
+    assert (
+      !local.native_node ().connect_peer (remote.listen_endpoint (), rid, 0, "default", true));
+    local.disconnect_peer (rid, remote.listen_endpoint (), true);
+    local.disconnect_peer (rid, "tcp://127.0.0.1:1", true);
+    assert (
+      !local.native_node ().connect_peer (remote.listen_endpoint (), rid, 0, "default", true));
+    local_state->lane.run ([&] { local_state->peer_connections.clear (); }).get ();
+    local.disconnect_peer (rid, "tcp://127.0.0.1:1");
+    // Removing the manual intent permits the existing RID-order discovery direction.
+    assert (local.native_node ().connect_peer (remote.listen_endpoint (), rid, 0, "default", true));
+    local.stop ();
+    remote.stop ();
+
+    auto inbound_state = make_node ("tcp://127.0.0.1:0", "A-auto-inbound");
+    auto outbound_state = make_node ("tcp://127.0.0.1:0", "Z-auto-outbound");
+    zlink::framework::detail::mesh_node_runtime_t inbound (inbound_state),
+      outbound (outbound_state);
+    inbound.start ();
+    outbound.start ();
+    const auto outbound_rid = outbound.status ().routing_id ();
+    assert (outbound.native_node ().connect_peer (inbound.listen_endpoint (),
+                                                  inbound.status ().routing_id ()));
+    const auto deadline = std::chrono::steady_clock::now () + 2s;
+    std::size_t observed = 0;
+    while (!observed && std::chrono::steady_clock::now () < deadline)
+        observed += inbound.native_node ().transport ().observe_routes ();
+    assert (observed != 0);
+    // An inbound Core route suffices before its Framework admission completes.
+    assert (!inbound.native_node ().connect_peer (outbound.listen_endpoint (), outbound_rid, 0,
+                                                  "default", true));
+    auto &inbound_transport = inbound.native_node ().transport ();
+    auto &outbound_transport = outbound.native_node ().transport ();
+    const auto inbound_rid = inbound.status ().routing_id ();
+    const auto both_ready = [&] {
+        return inbound_transport.peer_route (outbound_rid.to_bytes ()).second
+               && outbound_transport.peer_route (inbound_rid.to_bytes ()).second;
+    };
+    while (!both_ready () && std::chrono::steady_clock::now () < deadline) {
+        const auto now = std::chrono::steady_clock::now ();
+        (void) inbound_transport.pump_one (now).result ().value ();
+        (void) outbound_transport.pump_one (now).result ().value ();
+        (void) inbound_transport.tick_liveness (now).result ().value ();
+        (void) outbound_transport.tick_liveness (now).result ().value ();
+    }
+    assert (both_ready ());
+    inbound.disconnect_peer (outbound_rid, outbound.listen_endpoint (), true);
+    assert (both_ready ());
+    inbound.stop ();
+    outbound.stop ();
+}
+
 void verify_manual_peer_public_status ()
 {
     auto local_registration = make_node ("tcp://127.0.0.1:0", "manual-status-local");
@@ -2076,6 +2142,64 @@ void verify_fixed_drain_callback_barrier ()
     completion.join ();
     assert (node->pending_application_callbacks () == 0);
     assert (node->active_application_callbacks () == 0);
+}
+
+void verify_accepted_handler_push_after_host_seal (bool shutdown)
+{
+    using namespace zlink::framework;
+    auto registration = make_named_node ("accepted-send-mesh", "accepted-send-node");
+    serializer_registry_t serializers;
+    service_collection_t services;
+    auto owned_store = std::make_unique<runtime::in_memory_location_repository_t> ();
+    auto &store = *owned_store;
+    services.add_singleton<location_repository_t> (
+      std::unique_ptr<location_repository_t> (owned_store.release ()));
+    services.add_singleton<runtime::location_runtime_t> (
+      std::make_unique<runtime::location_runtime_t> (store));
+    register_mesh_location_resolvers (services);
+    auto provider = services.build_provider ();
+    auto &locations = provider.get_required<runtime::location_runtime_t> ();
+    locations.start (*registration->routing_id);
+    runtime::mesh_node_host_service_t service (
+      std::make_shared<runtime::runtime_failure_collector_t> (), {registration}, serializers);
+    service.start (provider);
+    const auto node = service.nodes ().front ();
+    auto gateway_state = std::make_shared<detail::actor_gateway_state_t> ();
+    detail::actor_gateway_runtime_t gateway (gateway_state);
+    const auto actor = detail::actor_ref_access_t::make (
+      node_rid_t::from_string ("accepted-send-node"), "player", "accepted-handler", 1);
+    std::atomic_int sends{0};
+    gateway.bind_session_sink (actor,
+                               [&sends] (std::string, stream_codec_t, const zlink::message_t &) {
+                                   ++sends;
+                                   return task_t<void> (result_t<void>::success ());
+                               });
+    std::promise<void> started;
+    std::promise<void> release;
+    auto latch = release.get_future ().share ();
+    node->application_work_enqueued ();
+    auto handler = std::async (std::launch::async, [&] {
+        node->application_work_started ();
+        started.set_value ();
+        latch.wait ();
+        const auto submitted = gateway.dispatch_bound_session_send (
+          actor, "AcceptedPush", stream_codec_t::raw, zlink::message_t::from ("push"));
+        node->application_work_finished ();
+        return submitted;
+    });
+    assert (started.get_future ().wait_for (1s) == std::future_status::ready);
+    assert (service.publish_descriptor_state (shutdown ? framework_runtime_state_t::draining
+                                                       : framework_runtime_state_t::relocating));
+    service.seal_application_dispatch ();
+    assert (service.submit_local_node_send (node, {}) == zlink::submit_result_t::terminated);
+    assert (!service.wait_for_accepted_callbacks_until (std::chrono::steady_clock::now ()));
+    release.set_value ();
+    assert (handler.wait_for (1s) == std::future_status::ready);
+    assert (handler.get ());
+    assert (sends.load () == 1);
+    assert (service.wait_for_accepted_callbacks_until (std::chrono::steady_clock::now () + 1s));
+    service.stop ();
+    locations.stop ();
 }
 
 void verify_local_and_wire_application_owner_keys_match ()
@@ -2687,6 +2811,16 @@ int run_cross_process_delivery ()
 
 int main (int argc, char **argv)
 {
+    if ((argc == 2 || argc == 3) && std::string_view (argv[1]) == "--automatic-intent") {
+        const int repetitions = argc == 3 ? std::stoi (argv[2]) : 1;
+        if (repetitions <= 0)
+            return 2;
+        for (int i = 0; i < repetitions; ++i) {
+            verify_automatic_intent_respects_manual_peer ();
+            std::fprintf (stderr, "automatic %d/%d passed\n", i + 1, repetitions);
+        }
+        return 0;
+    }
     if (argc == 2 && std::string_view (argv[1]) == "--manual-peer-status") {
         verify_manual_peer_public_status ();
         return 0;
@@ -2716,12 +2850,15 @@ int main (int argc, char **argv)
     verify_automatic_identity_and_port_builder ();
     verify_observation_starts_with_weight_changed_before_subscription ();
     verify_public_runtime_surface ();
+    verify_automatic_intent_respects_manual_peer ();
     verify_manual_peer_public_status ();
     verify_location_store_blocks_placement ();
     verify_slow_observer_does_not_block_stop ();
     verify_object_client_registration_boundary ();
     verify_host_shutdown_seal_reaches_raw_mesh ();
     verify_fixed_drain_callback_barrier ();
+    verify_accepted_handler_push_after_host_seal (false);
+    verify_accepted_handler_push_after_host_seal (true);
     verify_local_and_wire_application_owner_keys_match ();
     verify_owner_drain_continuation_during_executor_shutdown ();
     verify_deferred_application_terminal_ownership ();

@@ -110,6 +110,11 @@ public interface ZLinkSpotRelocationAdapter<TSpot> {
  TSpot spot, byte[] state, ZLinkRelocationCancellation cancellation);
 }
 
+public interface ZLinkSpotHandlerRegistry {
+ void addHandler(Class<?> handlerType);
+ void addSubscribe(Class<?> handlerType, String channelName, String topic);
+}
+
 public interface ZLinkSpotContext {
  String meshName();
  String spotId();
@@ -169,6 +174,8 @@ public interface ZLinkSpotManager {
 }
 
 ```
+
+`addSubscribe(handlerType, channelName, topic)`은 [Spot messaging §5.1](../../../03-spot-actor/02-spot-messaging.ko.md#51-subscription-등록-값과-검사-시점)의 `ChannelName`·`topic` 쌍을 실행 중 등록한다. 등록 값은 메서드 인자가 정하며 `handlerType`에 `@ZLinkSpotSubscription`이 없어도 된다. `@ZLinkSpotSubscription`은 .NET `ZLinkSpotSubscriptionAttribute`와 같이 `spotNodeName`·`channelName`·`topic`을 선언하고, annotation 등록의 `ChannelName`은 `channelName()`이다. 같은 handler에 annotation이 있으면 annotation이 선언한 등록과 이 호출의 등록은 별개 subscription이다. 중복 판정과 검사 시점은 §5.1을 따른다. Kotlin은 같은 Java 메서드를 호출한다.
 
 Java runtime은 Spot packet·request·subscription·timer handler를 Spot activation마다
 한 번 만들고 재사용한다. Actor send·request handler는 Actor activation마다 한 번
@@ -253,7 +260,7 @@ Send는 상속한 `submit()`으로 `CompletionStage<Void>`를 반환하며, requ
 
 User·Instance Spot relocation에서는 Framework가 `addTimer(...)`로 만든 logical timer registration, 마지막 완료
 tick sequence, 다음 예정 시각과 아직 실행하지 않은 pending tick을 relocation payload에 포함한다. Target은
-logical timer registration을 복원하므로 application이 timer를 다시 등록하지 않는다. 현재 실행 중인 timer callback만 source에서
+logical timer registration을 복원하므로 application이 restore에서 timer를 다시 등록하지 않는다. Target의 `Configure`·Ready 전 `onInitialize`가 복원된 key를 등록하면 [Spot timer §1](../../../03-spot-actor/10-spot-timer.ko.md#1-timer-generation과-cancel) 예외대로 복원된 registration에 다시 연결된다. 현재 실행 중인 timer callback만 source에서
 완료하고, target Ready 전에는 복원한 tick을 application handler에 제출하지 않는다.
 
 User Spot의 `close()`는 active Actor membership이 있으면 `false`를 반환한다. Spot state, admission과 authority는
@@ -481,6 +488,7 @@ public final class systems.zlink.framework.spots.ZLinkSpotCreateState extends ja
 }
 public interface systems.zlink.framework.spots.ZLinkSpotHandlerRegistry {
  public abstract void addHandler(java.lang.Class<?>);
+ public abstract void addSubscribe(java.lang.Class<?>, java.lang.String, java.lang.String);
 }
 public final class systems.zlink.framework.spots.ZLinkSpotKind extends java.lang.Enum<systems.zlink.framework.spots.ZLinkSpotKind> {
  public static final systems.zlink.framework.spots.ZLinkSpotKind INVALID;

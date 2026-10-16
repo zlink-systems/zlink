@@ -25,6 +25,8 @@ function sessionFixture(disconnectFailure, nativeSocket, routingId = zlink.Routi
   const fence = { actor, targetNodeGeneration: 3n, authorityOwnerGeneration: 9n, ownerLeaseGeneration: 10n };
   let ingress;
   const stateful = new ServiceStatefulRuntime({
+    observePeerRoute: () => ({ generation: 1n, ready: true }),
+    observePeerRouteChanged: () => () => {},
     observePeerConnectionIntentRemoved() { return () => {}; },
     setServiceIngress(handler) { ingress = handler; },
     async requestService(_target, parts) {
@@ -99,7 +101,7 @@ function sessionFixture(disconnectFailure, nativeSocket, routingId = zlink.Routi
     drop() { dropped = true; },
     async bind() {
       await session.context.actors.bind({ ...actor, objectGeneration: actor.generation, meshName: 'play' });
-      assert.equal(await bindingOwner.actorSlot(actor.actorId, String(routingId)), 1);
+      assert.equal(await bindingOwner.actorSlot(actor.actorId, routingId), 1);
     },
     async bindNext() {
       const stream = new framework.ZLinkManagedStream(

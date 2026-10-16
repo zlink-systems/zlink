@@ -392,8 +392,9 @@ The formal source of the verification items is owned by
 [Channel Messaging §9](../../02-channel-transport/02-channel-messaging.en.md#10-verification-requirements)
 and [Spot Messaging §8](../../03-spot-actor/02-spot-messaging.en.md).
 
-**Node throws every violation as a startup-time configuration
-exception.** Surfacing configuration mistakes immediately is the
+**Node throws every violation in registrations decided by host configuration as a startup-time
+configuration exception.** The check timing of registrations decided in a Spot's `Configure()` is
+defined by [Common API "23"](../../00-foundation/06-framework-api.en.md#23-startup-validation). Surfacing configuration mistakes immediately is the
 default rule.
 
 ## 12. Regression Tests

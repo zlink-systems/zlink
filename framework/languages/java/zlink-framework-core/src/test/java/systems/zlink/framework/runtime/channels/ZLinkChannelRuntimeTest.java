@@ -3177,10 +3177,6 @@ final class ZLinkChannelRuntimeTest {
         }
 
         @Override
-        public void bindRemoteActorBoundSession(
-                ZLinkBackendActorRef actor, RoutingId sourceNodeRid, RoutingId sourceSessionRid) {}
-
-        @Override
         public void closeActorBoundSession(ZLinkBackendActorRef actor, Duration timeout) {}
 
         @Override
@@ -3222,7 +3218,7 @@ final class ZLinkChannelRuntimeTest {
         public void setRoutingId(String spotId) {}
 
         @Override
-        public void setSubscription(String topic) {}
+        public void setSubscription(String channelName, String topic) {}
 
         @Override
         public ZLinkBackendTopicMessage subscribe(ZLinkBackendRecvMode mode) {

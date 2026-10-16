@@ -45,6 +45,8 @@ import java.util.stream.Stream;
  * and exact Location authority snapshots.
  */
 final class ZLinkUserSpotRetireSourceBuilder {
+    private static final java.util.logging.Logger LOGGER =
+            java.util.logging.Logger.getLogger(ZLinkUserSpotRetireSourceBuilder.class.getName());
     private static final int MAX_DESCRIPTORS = 65_536;
     private final String meshName;
     private final RoutingId localNodeRid;
@@ -289,12 +291,19 @@ final class ZLinkUserSpotRetireSourceBuilder {
                                                             + " unresolved: "
                                                             + context.spotId()));
                                 }
-                                return abortSessionRoutes(
-                                                sessionSealer, context.sealedSessionRoutes())
+                                //  §8.1: restore the source before command 44 abort.
+                                return context.barrier()
+                                        .abortAsync(context.seal())
                                         .thenCompose(
-                                                discarded ->
-                                                        context.barrier()
-                                                                .abortAsync(context.seal()))
+                                                aborted ->
+                                                        aborted
+                                                                ? abortSessionRoutes(
+                                                                                sessionSealer,
+                                                                                context
+                                                                                        .sealedSessionRoutes())
+                                                                        .thenApply(sent -> true)
+                                                                : CompletableFuture.completedFuture(
+                                                                        false))
                                         .thenAccept(
                                                 aborted -> {
                                                     if (!aborted) {
@@ -403,6 +412,27 @@ final class ZLinkUserSpotRetireSourceBuilder {
                                                                         .toList());
                                                 List<ZLinkSpotRetireControl.ParticipantFence>
                                                         inventory = participantFences(exact);
+                                                var bindings =
+                                                        new java.util.ArrayList<
+                                                                systems.zlink.framework.runtime
+                                                                        .protocol
+                                                                        .ServiceWirePilotCodec
+                                                                        .RelocationSessionBinding>();
+                                                for (int index = 0;
+                                                        index < inventory.size();
+                                                        index++) {
+                                                    var participant = inventory.get(index);
+                                                    for (var route : exact.sessionRoutes()) {
+                                                        if (participant.objectKind()
+                                                                        == ZLinkPlacementObjectKind
+                                                                                .ACTOR
+                                                                                .value()
+                                                                && participant
+                                                                        .objectId()
+                                                                        .equals(route.actorId()))
+                                                            bindings.add(route.binding(index + 1L));
+                                                    }
+                                                }
                                                 byte[] root =
                                                         ZLinkCanonicalUserSpotRelocationEnvelope
                                                                 .encode(
@@ -412,7 +442,8 @@ final class ZLinkUserSpotRetireSourceBuilder {
                                                                                 .spot()
                                                                                 .snapshot()
                                                                                 .authorityOwnerGeneration(),
-                                                                        inventory);
+                                                                        inventory,
+                                                                        bindings);
                                                 //  The aggregate payload lives only in source
                                                 //  memory and travels directly with the stage
                                                 //  request (spec 28 §4.2).
@@ -453,9 +484,9 @@ final class ZLinkUserSpotRetireSourceBuilder {
                                                 false));
                                 return failed(cause);
                             }
+                            //  §8.1: restore the source before command 44 abort.
                             CompletionStage<Void> release =
-                                    abortSessionRoutes(sessionSealer, sealedSessions.get())
-                                            .thenCompose(ignored -> barrier.abortAsync(seal))
+                                    barrier.abortAsync(seal)
                                             .thenAccept(
                                                     aborted -> {
                                                         if (!aborted) {
@@ -463,7 +494,12 @@ final class ZLinkUserSpotRetireSourceBuilder {
                                                                     "source relocation barrier was"
                                                                             + " lost during abort");
                                                         }
-                                                    });
+                                                    })
+                                            .thenCompose(
+                                                    ignored ->
+                                                            abortSessionRoutes(
+                                                                    sessionSealer,
+                                                                    sealedSessions.get()));
                             return release.handle((ignored, releaseFailure) -> releaseFailure)
                                     .thenCompose(
                                             releaseFailure -> {
@@ -718,10 +754,15 @@ final class ZLinkUserSpotRetireSourceBuilder {
                             ignored -> {
                                 ZLinkServiceM6BWireCodec.SessionRelocationSeal command =
                                         sessionSeal(captured, actor, route, aggregateId);
+                                //  §8.3: a bindingAbsent participant moves without a
+                                //  Session binding: no envelope binding and no command 44.
                                 return sessionSealer
                                         .sealRouteUntilAck(command, sessionRelocationSealTimeout)
                                         .thenAcceptAsync(
                                                 acknowledgement -> {
+                                                    if (!acknowledgement.sealed()) {
+                                                        return;
+                                                    }
                                                     sealedResult.add(
                                                             new SealedSessionRoute(route, command));
                                                     observed.set(List.copyOf(sealedResult));
@@ -763,6 +804,12 @@ final class ZLinkUserSpotRetireSourceBuilder {
                         route.bindingGeneration()));
     }
 
+    /**
+     * Submits command 44 abort once per sealed participant after the source restore. Command 44 is
+     * one-way and never retransmitted; a Session owner that does not receive it closes the binding
+     * at its seal timeout (Session-Actor binding §8.1·§8.2), so a submit failure is recorded and
+     * does not change the relocation result.
+     */
     private static CompletionStage<Void> abortSessionRoutes(
             ZLinkSessionRelocationPeerClient sessionSealer, List<SealedSessionRoute> contexts) {
         if (contexts.isEmpty()) {
@@ -772,7 +819,6 @@ final class ZLinkUserSpotRetireSourceBuilder {
             return failed(
                     new IllegalStateException("Session relocation abort sender is unavailable"));
         }
-        AtomicReference<Throwable> firstFailure = new AtomicReference<>();
         CompletionStage<Void> chain = CompletableFuture.completedFuture(null);
         for (SealedSessionRoute context : List.copyOf(contexts)) {
             chain =
@@ -782,23 +828,18 @@ final class ZLinkUserSpotRetireSourceBuilder {
                                             .handle(
                                                     (aborted, failure) -> {
                                                         if (failure != null) {
-                                                            Throwable cause = unwrap(failure);
-                                                            Throwable first = firstFailure.get();
-                                                            if (first == null
-                                                                    && firstFailure.compareAndSet(
-                                                                            null, cause)) {
-                                                                return null;
-                                                            }
-                                                            firstFailure.get().addSuppressed(cause);
+                                                            LOGGER.log(
+                                                                    java.util.logging.Level.WARNING,
+                                                                    "session-route-abort-submit-failed"
+                                                                            + " actor="
+                                                                            + context.route()
+                                                                                    .actorId(),
+                                                                    unwrap(failure));
                                                         }
                                                         return null;
                                                     }));
         }
-        return chain.thenCompose(
-                ignored ->
-                        firstFailure.get() == null
-                                ? CompletableFuture.completedFuture(null)
-                                : failed(firstFailure.get()));
+        return chain;
     }
 
     private static CompletionStage<Void> abortSessionRoute(
@@ -1131,6 +1172,7 @@ final class ZLinkUserSpotRetireSourceBuilder {
             byte[] relocationPayload,
             ZLinkMeshNodeDescriptor target) {
         ZLinkAuthoritySnapshot source = captured.inventory().spot().snapshot();
+        var inventory = participantFences(captured);
         return new ZLinkSpotRetireControl.StageRequest(
                 new ZLinkSpotRetireControl.Fence(aggregateId, 1),
                 localNodeRid,
@@ -1347,8 +1389,7 @@ final class ZLinkUserSpotRetireSourceBuilder {
             Map<String, Long> targetOwnerGenerations = new LinkedHashMap<>();
             for (var participant : stageRequest.participants()) {
                 targetOwnerGenerations.put(
-                        participant.authorityKey(),
-                        Math.addExact(participant.sourceAuthorityOwnerGeneration(), 1));
+                        participant.authorityKey(), participant.sourceAuthorityOwnerGeneration());
             }
             installRelocationForwards(targetOwnerGenerations);
             bindCommittedReplies(targetOwnerGenerations);
@@ -1440,23 +1481,19 @@ final class ZLinkUserSpotRetireSourceBuilder {
                                             "source relocation barrier is not durably committed");
                                 }
                                 sourceCommitted = true;
-                                Map<String, Long> targetOwnerGenerations = new LinkedHashMap<>();
-                                for (var participant : stageRequest.participants()) {
-                                    targetOwnerGenerations.put(
-                                            participant.authorityKey(),
-                                            Math.addExact(
-                                                    participant.sourceAuthorityOwnerGeneration(),
-                                                    1));
-                                }
-                                for (Owned actor : captured.inventory().actors()) {
-                                    actors.commitRelocationMessageFollow(
-                                            actorRoute(actor, false, targetOwnerGenerations));
-                                }
                                 return relocationCommit;
                             });
             // CompletableFuture dependents may run inline, so complete only
             // after the lane turn has released its ownership marker.
-            return retained.complete();
+            CompletionStage<Void> confirmed = CompletableFuture.completedFuture(null);
+            for (Owned actor : captured.inventory().actors()) {
+                confirmed =
+                        confirmed.thenCompose(
+                                ignored ->
+                                        actors.confirmRelocationMessageFollow(
+                                                actorRoute(actor, false, Map.of())));
+            }
+            return confirmed.thenCompose(ignored -> retained.complete());
         }
 
         boolean relayBoundaryCommitted() {
@@ -1478,30 +1515,12 @@ final class ZLinkUserSpotRetireSourceBuilder {
             }
             //  Contract order: Aborted record, staged payload discard, queue
             //  restore, then terminal progress removal while the lanes are
-            //  still paused. Lane resume is the last observable step.
-            return abortSessionRoutes(sessionSealer, sealedSessionRoutes)
-                    .exceptionallyCompose(
-                            failure -> {
-                                rememberUnresolved(
-                                        unresolved,
-                                        new UnresolvedPreparation(
-                                                captured.inventory().spot().id(),
-                                                barrier,
-                                                seal,
-                                                sealedSessionRoutes,
-                                                true));
-                                return failed(unwrap(failure));
-                            })
+            //  still paused. Lane resume is the last observable step. Command 44
+            //  abort follows the source restore (Session-Actor binding §8.1).
+            return CompletableFuture.<Void>completedFuture(null)
                     .thenCompose(
                             ignored -> {
-                                Map<String, Long> targetOwnerGenerations = new LinkedHashMap<>();
-                                for (var participant : stageRequest.participants()) {
-                                    targetOwnerGenerations.put(
-                                            participant.authorityKey(),
-                                            Math.addExact(
-                                                    participant.sourceAuthorityOwnerGeneration(),
-                                                    1));
-                                }
+                                Map<String, Long> targetOwnerGenerations = Map.of();
                                 for (Owned actor : captured.inventory().actors()) {
                                     actors.abortRelocationMessageFollow(
                                             actorRoute(actor, false, targetOwnerGenerations));
@@ -1560,7 +1579,8 @@ final class ZLinkUserSpotRetireSourceBuilder {
                                                                                 ::resumeActorTimersAfterRelocationAbort);
                                                     }
                                                 });
-                            });
+                            })
+                    .thenCompose(ignored -> abortSessionRoutes(sessionSealer, sealedSessionRoutes));
         }
 
         CompletionStage<Void> discardInitialAfterCommit() {
@@ -1605,8 +1625,7 @@ final class ZLinkUserSpotRetireSourceBuilder {
             Map<String, Long> targetOwnerGenerations = new LinkedHashMap<>();
             for (var participant : stageRequest.participants()) {
                 targetOwnerGenerations.put(
-                        participant.authorityKey(),
-                        Math.addExact(participant.sourceAuthorityOwnerGeneration(), 1));
+                        participant.authorityKey(), participant.sourceAuthorityOwnerGeneration());
             }
             for (Owned actor : captured.inventory().actors()) {
                 actors.abortRelocationMessageFollow(

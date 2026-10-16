@@ -275,7 +275,7 @@ capture하여 target Actor에 복원한다. `RecreateOnRelocation`은 target에�
 만들지만 application state를 복원하지 않는다. 대신 Framework가 소유한 실행 전
 queue와 timer 정보는 이동 후에도 유지한다. 두 policy 모두 같은 logical Actor의
 이동이므로 `ObjectGeneration`을 바꾸지 않는다. Cross-node 이동에서 owner가 바뀌면,
-같은 object incarnation에서 authority owner가 바뀐 순서를 나타내는 provider 발급
+같은 object incarnation에서 authority owner가 바뀐 순서를 나타내는
 값인 [`AuthorityOwnerGeneration`](../00-foundation/02-glossary.ko.md#authorityownergeneration)만
 증가한다.
 
@@ -410,11 +410,20 @@ ZLinkActorCreateResult result = await actorManager
 Framework는 다음 순서로 target 후보를 검사한다.
 
 1. Object role을 확인한다.
-2. 요청한 stable type이 등록되어 있는지 확인한다.
+2. 요청한 stable type이 등록되어 있는지 확인한다. 새 Actor를 만드는 Create·GetOrCreate는 이 가운데
+   그 Actor stable type을 받는 Entry Spot type을 등록한 Object Server(descriptor capability의 `entryAccepted`가
+   `true`인 node)만 남긴다.
 3. Active·pending capacity가 남아 있는지 확인한다.
 4. 남은 후보에 node-wide placement weight를 적용한다.
 
 Caller는 target node나 endpoint를 선택하지 않는다.
+
+새 Actor의 initial Entry Spot membership은 생성 node에서 그 Actor stable type을 받는 Entry Spot이 `OnCreateActor`로
+승인한다([Spot model §3.2](01-spot-model.ko.md#32-spot-종류별-lifecycle-callback)). 따라서 Actor factory만 등록하고 그 type을 받는 Entry Spot type이 없는
+node는 새 Actor를 만들지 않는다. 그런 node도 이미 있는 Actor의 join·relocation target은 될 수 있다. 선택한 target에
+그런 Entry Spot type이 없으면 target은 callback 전 Framework 처리 실패(`Unavailable`, [오류 모델 §2.1](../00-foundation/07-framework-error-model.ko.md#21-wire-failure-code와-errorkind)의 wire 대표 code)로 그 생성을 끝낸다. 이 결과는 application
+`Rejected`가 아니므로, Framework는 [Location runtime §7](../05-location-relocation/01-location-runtime.ko.md#7-actor와-user-spot을-만든다)의
+`Reserve` 실패와 같이 그 host 실행 세대를 제외하고 deadline까지 다른 후보를 고른다.
 
 ### 6.4 Creation request와 factory 실행
 
@@ -546,11 +555,14 @@ control transaction은 deadline까지 진행한다.
   lifecycle operation뿐이다.** Application request의 재제출 경계는
   [Submit과 완료 §5](../01-execution/01-submit-and-completion.ko.md#5-backpressure와-오류-분류)가 정의한다. Core socket 계약의 "Caller는 handover 뒤 다시 보낸다"는 application request에서는
   application, durable operation에서는 Framework를 뜻한다.
-- **Replay 조건은 terminal envelope를 받지 못한 typed transient transport 실패(route 부재, handover에
-  따른 1회 timeout, reply 유실, 단절)뿐이다.** Protocol error, encode·configuration 실패, typed
+- **Replay 조건은 terminal envelope를 받지 못한 typed transient transport 실패(route 부재, 제출할 때
+  ready였던 route generation과 다른 그 peer의 선택 route를 제출 뒤 관찰함, reply 유실, 단절)뿐이다.** Protocol error, encode·configuration 실패, typed
   non-replayable terminal은 그 실패로 즉시 끝난다 — 같은 입력을 다시 보내도 결과가 달라지지 않기
   때문이다. Terminal envelope(`Created`·`Existing`·`Rejected`·`Failed` 등)를 받은 operation은 다시
   보내지 않는다.
+- **Replay는 재전송이 필요하다는 사실과 target peer가 현재 route에서 ready라는 사실이 함께 성립할 때
+  제출한다.** 실패를 처리할 때 이미 ready이면 바로 제출하고, 아니면 ready가 되는 전이에서 제출한다.
+  별도 재시도 timer나 주기적 확인을 두지 않는다.
 - **각 attempt는 남은 deadline 전부를 사용하고 횟수 제한이 없다.** Deadline 소진의 종류는 원인이 정한다:
   한 번도 admission되지 못한 채 소진되면 [오류 모델](../00-foundation/07-framework-error-model.ko.md)의
   `Unavailable`, admission된 request의 reply를 받지 못한 채 소진되면 `DeadlineExceeded`다. 중복
@@ -626,8 +638,8 @@ Gate·Yield·Actor claim과 self-request의 관찰은
   5분 안에서는 처음과 같은 semantic 결과(`Created`·`Rejected`·`Failed`와 optional reply)를 받고,
   그 뒤 Ready authority가 없으면 새 reservation으로 다시 생성된다.
 - `Rejected`·`Failed` 뒤에는 `Find`가 Actor를 찾지 못하고 reserved capacity가 반환된다.
-- Durable lifecycle operation(Actor create·join, session bind)은 route 부재·handover에 따른 1회
-  timeout·reply 유실 뒤에도 같은 `OperationId`로 이어져 deadline 안에 원래 terminal을 받고,
+- Durable lifecycle operation(Actor create·join, session bind)은 route 부재·제출 뒤 선택 route
+  변경·reply 유실 뒤에도 같은 `OperationId`로 이어져 deadline 안에 원래 terminal을 받고,
   application request의 재제출은 [Submit과 완료 §5](../01-execution/01-submit-and-completion.ko.md#5-backpressure와-오류-분류)를 따른다.
 - Durable operation이 deadline까지 한 번도 admission되지 못하면 `Unavailable`, admission된 뒤 reply
   없이 deadline이 지나면 `DeadlineExceeded`로 끝나며, protocol error·encode 실패 같은 typed
