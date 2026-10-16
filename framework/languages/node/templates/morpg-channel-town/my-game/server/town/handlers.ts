@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { zlinkEntrySpotActorSendHandler, zlinkSpotActorSendHandler } from '@zlink-systems/nestjs';
+import { zlinkSpotActorSendHandler } from '@zlink-systems/nestjs';
 import type { ZLinkMessageContext } from '@zlink-systems/framework';
 import { PacketNames, townId } from '../shared/constants';
 import {
@@ -12,26 +12,7 @@ import {
   restorePush
 } from '../shared/messages';
 import { Player } from '../shared/player';
-import { Entry, Town } from './town';
-@Injectable()
-@zlinkEntrySpotActorSendHandler({
-  entrySpot: () => Entry,
-  actor: () => Player,
-  packetName: PacketNames.joinTownRequest
-})
-export class EnterTown {
-  async handle(
-    _spot: Entry,
-    actor: Player,
-    _context: ZLinkMessageContext,
-    request: JoinTownRequest
-  ): Promise<void> {
-    actor.assertIdentity(request.playerId);
-    actor.context
-      .joinSpot(townId(request.channel), new JoinTownRequest(request.playerId, request.channel))
-      .defer();
-  }
-}
+import { Town } from './town';
 @Injectable()
 @zlinkSpotActorSendHandler({
   spot: () => Town,

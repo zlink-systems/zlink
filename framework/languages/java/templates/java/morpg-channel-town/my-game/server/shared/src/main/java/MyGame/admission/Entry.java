@@ -1,4 +1,4 @@
-package MyGame.town;
+package MyGame.admission;
 
 import MyGame.*;
 

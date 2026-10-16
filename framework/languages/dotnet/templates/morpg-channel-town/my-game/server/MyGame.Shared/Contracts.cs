@@ -67,6 +67,13 @@ public sealed record SessionInfo(string SessionId, string ActorId, ulong ObjectG
 
 public sealed record NodeReady(string Id, string MeshEndpoint, string? StreamEndpoint);
 
+public static class LifecycleLimits
+{
+    public static readonly TimeSpan MessageFollow = TimeSpan.FromSeconds(30);
+    public static readonly TimeSpan Relocation = TimeSpan.FromSeconds(30);
+    public static readonly TimeSpan Safe = MessageFollow + Relocation;
+}
+
 public static class NodeProtocol
 {
     public const string ReadyPrefix = "READY ";

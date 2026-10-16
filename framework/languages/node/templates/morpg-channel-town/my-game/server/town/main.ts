@@ -7,9 +7,9 @@ import { ZLINK_SPOT_MANAGER } from '@zlink-systems/nestjs';
 import { runHost, failHost } from '../shared/hosting';
 import { Names } from '../shared/constants';
 import { PlayerFactory, PlayerRelocation } from '../shared/player';
-import { Entry, Town, TownRelocation } from './town';
+import { Town, TownRelocation } from './town';
+import { Entry, EnterTown } from '../shared/entry';
 import {
-  EnterTown,
   TownQuery,
   TownReconnect,
   ChangeChannel,

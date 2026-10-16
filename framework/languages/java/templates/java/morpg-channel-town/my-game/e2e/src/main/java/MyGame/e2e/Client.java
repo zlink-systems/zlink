@@ -75,10 +75,23 @@ public final class Client implements AutoCloseable {
         send(new JoinTownRequest(playerId, Names.CHANNEL_COUNT));
     }
 
-    DungeonView view() throws Exception {
+    static boolean sameDungeonState(DungeonView a, DungeonView b) {
+        return a.dungeonId().equals(b.dungeonId())
+                && a.partyId().equals(b.partyId())
+                && a.members().equals(b.members())
+                && a.stage() == b.stage();
+    }
+
+    DungeonView view(DungeonView expected, boolean moved) throws Exception {
         clear();
         send(new ViewRequest());
-        return next(DungeonView.class);
+        return next(
+                DungeonView.class,
+                v ->
+                        sameDungeonState(expected, v)
+                                && (moved
+                                        ? !v.nodeId().equals(expected.nodeId())
+                                        : v.nodeId().equals(expected.nodeId())));
     }
 
     SessionInfo sessionInfo() {

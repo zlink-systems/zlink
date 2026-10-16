@@ -140,6 +140,8 @@ internal static class StructureCheck
         );
         var spotIds = new HashSet<string>(StringComparer.Ordinal);
         var logicalIds = new HashSet<string>(StringComparer.Ordinal);
+        var entries = new HashSet<string>(StringComparer.Ordinal);
+        var dungeons = new HashSet<string>(StringComparer.Ordinal);
         var towns = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
         foreach (var spot in Array(document, "spots"))
         {
@@ -149,7 +151,10 @@ internal static class StructureCheck
             var kind = Text(spot, "kind");
             if (kind == "entry")
             {
-                Require(roles[owner] == "town", "Entry owner must host the Town Entry factory.");
+                Require(
+                    roles[owner] is "town" or "instance" && entries.Add(owner),
+                    "Object Server must declare one Entry."
+                );
                 Require(
                     spot!["type"] is null && spot["logicalId"] is null && spot["dynamic"] is null,
                     "Entry must not claim a stable type, logical ID or dynamic family."
@@ -177,6 +182,11 @@ internal static class StructureCheck
                 Require(spot["logicalId"] is null, "Dynamic Spot family must omit logicalId.");
             else
                 Require(logicalIds.Add(Text(spot, "logicalId")), "Duplicate logical Spot ID.");
+            if (type == GameNames.DungeonType)
+                Require(
+                    dynamic && dungeons.Add(owner),
+                    "Instance must declare one dynamic Dungeon factory."
+                );
             if (type == GameNames.TownType)
             {
                 Require(!dynamic, "Configured Town Spots must have fixed logical IDs.");
@@ -187,6 +197,13 @@ internal static class StructureCheck
         }
         foreach (var (id, configured) in settings)
         {
+            if (roles[id] is "town" or "instance")
+                Require(entries.Contains(id), "Object Server is missing its Entry.");
+            if (roles[id] == "instance")
+                Require(
+                    dungeons.Contains(id) && configured.DungeonCapacity == 1,
+                    "Instance requires its Dungeon factory and capacity one for replacement placement."
+                );
             var expected = configured.TownIds ?? System.Array.Empty<string>();
             Require(
                 expected.All(town => !string.IsNullOrWhiteSpace(town))

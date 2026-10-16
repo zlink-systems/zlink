@@ -4,8 +4,6 @@ import {
   ZLinkSpotCreateState,
   type ZLinkActorClient,
   type ZLinkSpotManager,
-  type ZLinkEntrySpot,
-  type ZLinkEntrySpotContext,
   type ZLinkSpot,
   type ZLinkSpotContext,
   type ZLinkMessage,
@@ -23,12 +21,6 @@ import {
   JoinDungeon
 } from '../shared/messages';
 import { Player } from '../shared/player';
-@Injectable({ scope: Scope.TRANSIENT })
-export class Entry implements ZLinkEntrySpot<Player> {
-  readonly context!: ZLinkEntrySpotContext<Player, Entry>;
-  async onJoinedActor(_actor: Player): Promise<void> {}
-  async onLeaveActor(_actor: Player): Promise<void> {}
-}
 interface TownState {
   players: string[];
   parties: [string, string[]][];

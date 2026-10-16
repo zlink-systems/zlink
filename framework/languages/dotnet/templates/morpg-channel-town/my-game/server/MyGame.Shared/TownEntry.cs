@@ -1,9 +1,8 @@
-using MyGame.Shared;
 using Zlink.Framework.Contracts.Handlers;
 using Zlink.Framework.Contracts.Messaging;
 using Zlink.Framework.Contracts.Spots;
 
-namespace MyGame.Town;
+namespace MyGame.Shared;
 
 public sealed class TownEntry(IZLinkEntrySpotContext context) : IZLinkEntrySpot<PlayerActor>
 {

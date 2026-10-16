@@ -18,3 +18,5 @@ Use typed messages and the default Framework JSON serializer. Reply to the reque
 ## Changes and verification
 
 Keep channel, dungeon, reconnect and update scenarios and their order. Run the structure check and e2e runner after changes. Inspect `.logs/run-<id>/` node stderr, including message-flow diagnostics. A single intermittent failure is a defect. Cleanup errors must fail the run. Keep public dependency versions centralized in build.gradle.kts. README and AGENTS are English; code comments are English. The final README section provides brief Korean execution instructions.
+
+Every Object Server that registers Player must register the shared Entry and first-admission handler. Keep Entry and dynamic Dungeon declarations complete for every owning node. Preserve one Dungeon slot per Instance in the e2e configuration; it makes replacement placement deterministic. Keep the Message Follow duration and derived SafeToShutdown observation budget under their shared lifecycle constants.

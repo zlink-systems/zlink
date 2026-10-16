@@ -8,12 +8,6 @@ import systems.zlink.framework.kotlin.*
 import systems.zlink.framework.messaging.ZLinkMessage
 import systems.zlink.framework.spots.*
 
-class Entry(override val context: ZLinkEntrySpotContext) : ZLinkSuspendingEntrySpot<Player>() {
-    override suspend fun onJoinedActorSuspending(actor: Player) {}
-
-    override suspend fun onLeaveActorSuspending(actor: Player) {}
-}
-
 data class TownState(
     val players: MutableSet<String> = linkedSetOf(),
     val parties: MutableMap<String, MutableList<String>> = linkedMapOf(),

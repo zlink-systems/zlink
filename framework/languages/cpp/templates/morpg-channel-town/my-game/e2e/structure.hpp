@@ -114,13 +114,14 @@ inline void check_structure (const std::filesystem::path &root)
                 require ((role == "town") == configurations[id].contains ("TownIds"),
                          "TownIds must belong to Town");
                 if (role == "instance")
-                    require (configurations[id].value ("DungeonCapacity", 0) > 0,
-                             "Instance requires positive DungeonCapacity");
+                    require (configurations[id].value ("DungeonCapacity", 0) == 1,
+                             "Instance requires DungeonCapacity one for replacement placement");
             }
         }
     }
     require (j.at ("channels").empty (), "This application registers no multicast channels");
     std::map<std::string, std::set<std::string>> towns;
+    std::set<std::string> entries, dungeons;
     for (const auto &spot : j.at ("spots")) {
         require (spot_ids.insert (nonempty (spot, "id")).second, "Duplicate composition Spot ID");
         const auto owner = nonempty (spot, "owner"), kind = nonempty (spot, "kind");
@@ -129,7 +130,9 @@ inline void check_structure (const std::filesystem::path &root)
             require (spot.at ("type").is_null () && !spot.contains ("logicalId")
                        && !spot.contains ("dynamic"),
                      "Entry Spot cannot declare type or logical ID");
-            require (roles.at (owner) == "town", "Entry owner must register TownEntry");
+            require ((roles.at (owner) == "town" || roles.at (owner) == "instance")
+                       && entries.insert (owner).second,
+                     "Object Server must declare one Entry");
             continue;
         }
         require (kind == "user", "Unknown application Spot kind");
@@ -148,9 +151,15 @@ inline void check_structure (const std::filesystem::path &root)
         if (type == Names::town)
             require (roles.at (owner) == "town", "Town owner must register Town");
         else
-            require (roles.at (owner) == "instance", "Dungeon owner must register Dungeon");
+            require (roles.at (owner) == "instance" && spot.value ("dynamic", false)
+                       && dungeons.insert (owner).second,
+                     "Instance must declare one dynamic Dungeon factory");
     }
     for (const auto &[id, config] : configurations) {
+        if (roles.at (id) == "town" || roles.at (id) == "instance")
+            require (entries.contains (id), "Object Server is missing its Entry");
+        if (roles.at (id) == "instance")
+            require (dungeons.contains (id), "Instance is missing its Dungeon factory");
         if (!config.contains ("TownIds"))
             continue;
         const auto ids = config.at ("TownIds").get<std::vector<std::string>> ();

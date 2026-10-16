@@ -93,7 +93,7 @@ fun checkStructure(root: Path) {
         when (text(spot, "kind")) {
             "entry" ->
                 check(
-                    role == "town" &&
+                    role in listOf("town", "instance") &&
                         spot["type"]?.isNull == true &&
                         !spot.has("logicalId") &&
                         !spot.has("dynamic")
@@ -116,6 +116,21 @@ fun checkStructure(root: Path) {
     unique(logicalIds)
     val declaredTowns = spots.filter { it["type"]?.asText() == Names.TOWN }.groupBy { owner(it) }
     for ((id, config) in configs) {
+        if (roles[id] in listOf("town", "instance"))
+            check(spots.count { owner(it) == id && it["kind"].asText() == "entry" } == 1) {
+                "Object Server must declare one Entry"
+            }
+        if (roles[id] == "instance")
+            check(
+                spots.count {
+                    owner(it) == id &&
+                        it["type"]?.asText() == Names.DUNGEON &&
+                        it["dynamic"]?.asBoolean() == true
+                } == 1
+            ) {
+                "Instance must declare one dynamic Dungeon factory"
+            }
+
         when (roles[id]) {
             "town" -> {
                 check(config.townCapacity > 0 && config.townIds.isNotEmpty())
@@ -135,9 +150,8 @@ fun checkStructure(root: Path) {
                 ) {
                     "Fixed Town declarations differ from bootstrap: $id"
                 }
-                check(spots.any { owner(it) == id && it["kind"].asText() == "entry" })
             }
-            "instance" -> check(config.dungeonCapacity > 0 && config.townIds.isEmpty())
+            "instance" -> check(config.dungeonCapacity == 1 && config.townIds.isEmpty())
             "session" -> check(config.streamEndpoint != null && config.townIds.isEmpty())
             else -> error("Unregistered node role: ${roles[id]}")
         }

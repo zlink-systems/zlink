@@ -17,6 +17,7 @@ GameHosting.Configure(
             .Listen(settings.MeshEndpoint)
             .Objects()
             .Server()
+            .AddEntrySpot<TownEntry>()
             .AddActorFactory<PlayerActor, PlayerFactory>(
                 GameNames.PlayerType,
                 factory => factory.PreserveStateWith<PlayerRelocation>()

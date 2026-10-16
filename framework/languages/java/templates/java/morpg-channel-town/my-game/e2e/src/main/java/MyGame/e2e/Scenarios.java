@@ -12,10 +12,7 @@ public final class Scenarios {
     }
 
     private static void sameState(DungeonView a, DungeonView b) {
-        equal(a.dungeonId(), b.dungeonId());
-        equal(a.partyId(), b.partyId());
-        equal(a.members(), b.members());
-        equal(a.stage(), b.stage());
+        Structure.require(Client.sameDungeonState(a, b), "Dungeon state changed");
     }
 
     private static DungeonView enter(Client a, Client b, String party) throws Exception {
@@ -38,8 +35,8 @@ public final class Scenarios {
         equal(party, dungeon.partyId());
         equal(List.of(a.playerId, b.playerId), dungeon.members());
         equal(0, dungeon.stage());
-        sameState(dungeon, a.view());
-        sameState(dungeon, b.view());
+        sameState(dungeon, a.view(dungeon, false));
+        sameState(dungeon, b.view(dungeon, false));
         return dungeon;
     }
 
@@ -108,8 +105,8 @@ public final class Scenarios {
                     nodes.drain(before.nodeId());
                     equal(sa, a.sessionInfo());
                     equal(sb, b.sessionInfo());
-                    var after = a.view();
-                    equal(after, b.view());
+                    var after = a.view(before, true);
+                    equal(after, b.view(before, true));
                     sameState(before, after);
                     Structure.require(
                             !before.nodeId().equals(after.nodeId()), "Dungeon did not relocate");

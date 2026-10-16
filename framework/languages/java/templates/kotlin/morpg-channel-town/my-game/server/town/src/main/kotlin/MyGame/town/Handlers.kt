@@ -8,17 +8,6 @@ import systems.zlink.framework.kotlin.*
 @ZLinkHandlerGroup(Names.PLAYER)
 class Actions {
     @ZLinkSpotActorSend
-    suspend fun join(
-        entry: Entry,
-        actor: Player,
-        dispatch: ZLinkMessageContext,
-        request: JoinTownRequest,
-    ) {
-        require(request.playerId == actor.context.actorId()) { "Player identity mismatch" }
-        actor.context.joinSpot(Names.townId(request.channel), request).defer()
-    }
-
-    @ZLinkSpotActorSend
     suspend fun reconnect(
         spot: Town,
         actor: Player,

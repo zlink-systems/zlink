@@ -45,7 +45,12 @@ private class Node(val id: String, module: String, config: Path, root: Path, log
     }
 
     fun waitFor(prefix: String): String {
-        val expires = System.nanoTime() + TimeUnit.SECONDS.toNanos(Control.PROCESS_SECONDS)
+        val expires =
+            System.nanoTime() +
+                TimeUnit.SECONDS.toNanos(
+                    if (prefix == Control.SAFE_TO_SHUTDOWN) Control.SAFE_DEADLINE.toSeconds()
+                    else Control.PROCESS_SECONDS
+                )
         while (true) {
             val line =
                 output.poll((expires - System.nanoTime()).coerceAtLeast(0), TimeUnit.NANOSECONDS)

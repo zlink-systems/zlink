@@ -22,6 +22,7 @@ public static class GameHosting
         builder.Services.AddSingleton(settings);
         builder.Services.AddZLinkFramework(options =>
         {
+            options.ConfigureLocations().MessageFollowDuration = LifecycleLimits.MessageFollow;
             options.AddLocationStore(
                 new ZLinkRedisLocationStore(redis =>
                 {
@@ -37,6 +38,7 @@ public static class GameHosting
                 })
             );
             options.ConfigureDispatch().Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
+            options.AddHandlersFromAssemblyOf<TownEntry>();
             configure(options);
         });
     }

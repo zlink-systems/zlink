@@ -24,3 +24,5 @@ Use public APIs only. Do not introduce internal APIs, reflection, raw frames, ma
 Preserve the `channel`, `dungeon`, `reconnect`, `update` scenario order and the structure checker. Build and run on Windows and Linux. An intermittent failure is a defect even if a later execution passes. Every successful environment requires three complete e2e runs. Logs and per-run configurations remain under `.logs/run-<id>/`.
 
 Run formatting only inside this template directory. The runner owns only the processes it starts and the uniquely named Compose project it creates. Cleanup failures must produce a nonzero exit code.
+
+Every Object Server that registers Player must register the shared Entry and first-admission handler. Keep Entry and dynamic Dungeon declarations complete for every owning node. Preserve one Dungeon slot per Instance in the e2e configuration; it makes replacement placement deterministic. Keep the Message Follow duration and derived SafeToShutdown observation budget under their shared lifecycle constants.

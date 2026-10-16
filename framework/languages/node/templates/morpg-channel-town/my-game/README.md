@@ -57,6 +57,10 @@ Start Redis, then townA and townB in order so each creates its configured fixed 
 
 Write `drain` to a node's stdin to request PlannedMaintenance. Wait for `RELOCATION_REQUESTED`, `RELOCATED`, and `SAFE_TO_SHUTDOWN`. Write `shutdown`, verify `STOPPED` with a successful outcome and process exit, then start the replacement using the same configuration. Fixed Town replacements must set `bootstrap` to false because Location Store already owns their logical identity.
 
+All Object Servers that register Player factories also register the shared Entry and first-admission handler, including both Instance nodes. Entry admission joins the requested fixed Town channel. Each Instance declares its dynamic Dungeon factory in `zlink.structure.json`.
+
+The e2e configuration uses one Dungeon slot per Instance. After drain, the surviving Instance is full, so only the replacement can accept the fresh Dungeon. The structure checker enforces this configuration. Message Follow remains 30 seconds; the SafeToShutdown observation budget is derived from that duration plus the existing relocation operation budget.
+
 ## 한국어 실행 안내
 
 Node.js 22 이상과 Docker Compose v2를 준비한 뒤 이 디렉터리에서 `npm install`, `npm run build`를 실행합니다. Linux에서는 `./run-e2e.sh`, Windows PowerShell 7에서는 `./run-e2e.ps1`로 전체 시나리오를 실행합니다. 시나리오 선택 명령은 위 Local e2e 절에 있습니다.

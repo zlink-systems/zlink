@@ -21,3 +21,5 @@ Town owns players and parties. Dungeon owns members and stage. Player has no app
 ## Changes and verification
 
 Keep channel, dungeon, reconnect and update scenarios and their order. Update contracts, structure and configuration together when changing composition. Run build, typecheck, lint, format checks and e2e on Windows and Linux. A single intermittent failure is a defect. Preserve first-failure message-flow logs in `.logs/run-<id>/`; do not weaken assertions. Cleanup only the runner's own processes and Compose project.
+
+Every Object Server that registers Player must register the shared Entry and first-admission handler. Keep Entry and dynamic Dungeon declarations complete for every owning node. Preserve one Dungeon slot per Instance in the e2e configuration; it makes replacement placement deterministic. Keep the Message Follow duration and derived SafeToShutdown observation budget under their shared lifecycle constants.

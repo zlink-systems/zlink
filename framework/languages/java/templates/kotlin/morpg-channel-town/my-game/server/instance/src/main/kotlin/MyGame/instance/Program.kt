@@ -1,6 +1,7 @@
 package MyGame.instance
 
 import MyGame.*
+import MyGame.admission.*
 import org.springframework.boot.autoconfigure.SpringBootApplication
 import org.springframework.context.annotation.Bean
 import systems.zlink.framework.configuration.ZLinkUserSpotExecutionMode
@@ -20,12 +21,14 @@ class Program {
         require(config.dungeonCapacity > 0)
         configure(options, locations, relocations)
         options.addHandlersFromPackageOf<Program>()
+        options.addHandlersFromPackageOf<EntryActions>()
         options
             .addRouteMesh(Names.MESH)
             .listen(config.meshEndpoint)
             .setRoutingIdPrefix(config.id)
             .objects()
             .server()
+            .addEntrySpot<Entry>()
             .addSpotFactory<Dungeon>(Names.DUNGEON) {
                 stableTypeLimit(config.dungeonCapacity)
                 executionMode(ZLinkUserSpotExecutionMode.SPOT_WIDE)

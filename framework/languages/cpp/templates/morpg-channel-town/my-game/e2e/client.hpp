@@ -16,6 +16,11 @@ inline void checked (sc::result_t<void> result)
     require (static_cast<bool> (result),
              result.error () ? result.error ()->message : "Connector operation failed");
 }
+inline bool same_dungeon_state (const DungeonView &a, const DungeonView &b)
+{
+    return a.dungeonId == b.dungeonId && a.partyId == b.partyId && a.members == b.members
+           && a.stage == b.stage;
+}
 class Client
 {
     std::mutex error_mutex_;
@@ -70,12 +75,21 @@ class Client
     TownView join (int channel)
     {
         return exchange<TownView> (
-          JoinTownRequest{player_id, channel},
-          [channel] (const auto &view) { return view.townId == Names::town_id (channel); });
+          JoinTownRequest{player_id, channel}, [this, channel] (const auto &view) {
+              return view.townId == Names::town_id (channel)
+                     && std::find (view.players.begin (), view.players.end (), player_id)
+                          != view.players.end ();
+          });
     }
     DungeonView reconnect () { return exchange<DungeonView> (JoinTownRequest{player_id, 2}); }
     SessionInfo info () { return exchange<SessionInfo> (SessionInfoRequest{}); }
-    DungeonView dungeon () { return exchange<DungeonView> (ViewRequest{}); }
+    DungeonView dungeon (const DungeonView &expected, bool moved = false)
+    {
+        return exchange<DungeonView> (ViewRequest{}, [&] (const auto &view) {
+            return same_dungeon_state (view, expected)
+                   && (moved ? view.nodeId != expected.nodeId : view.nodeId == expected.nodeId);
+        });
+    }
     void close ()
     {
         healthy ();

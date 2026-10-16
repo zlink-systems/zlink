@@ -98,6 +98,25 @@
       "type": "Dungeon",
       "owner": "instanceA",
       "dynamic": true
+    },
+    {
+      "id": "entry-instanceA",
+      "kind": "entry",
+      "type": null,
+      "owner": "instanceA"
+    },
+    {
+      "id": "entry-instanceB",
+      "kind": "entry",
+      "type": null,
+      "owner": "instanceB"
+    },
+    {
+      "id": "dungeon-instanceB",
+      "kind": "user",
+      "type": "Dungeon",
+      "owner": "instanceB",
+      "dynamic": true
     }
   ],
   "edges": [

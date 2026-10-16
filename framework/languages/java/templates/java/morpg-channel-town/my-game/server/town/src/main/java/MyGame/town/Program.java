@@ -1,6 +1,7 @@
 package MyGame.town;
 
 import MyGame.*;
+import MyGame.admission.Entry;
 
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.Bean;
@@ -22,6 +23,7 @@ public class Program {
                 throw new IllegalArgumentException("Town capacity must be positive");
             Hosting.configure(options, locations, relocations);
             options.addHandlersFromPackageOf(Program.class);
+            options.addHandlersFromPackageOf(MyGame.admission.EntryActions.class);
             options.addRouteMesh(Names.MESH)
                     .listen(config.meshEndpoint())
                     .setRoutingIdPrefix(config.id())

@@ -11,9 +11,7 @@ inline void same_actor (const SessionInfo &before, const SessionInfo &after)
 }
 inline void same_dungeon (const DungeonView &before, const DungeonView &after)
 {
-    require (before.dungeonId == after.dungeonId && before.partyId == after.partyId
-               && before.members == after.members && before.stage == after.stage,
-             "Dungeon state changed");
+    require (same_dungeon_state (before, after), "Dungeon state changed");
 }
 inline void channel (const std::string &endpoint)
 {
@@ -60,8 +58,8 @@ inline DungeonView enter (Client &leader, Client &member, const std::string &par
                && first.stage == 0,
              "Party did not enter the same fresh dungeon");
     // Current-Spot replies confirm both deferred joins completed before advancing.
-    same_dungeon (first, leader.dungeon ());
-    same_dungeon (second, member.dungeon ());
+    same_dungeon (first, leader.dungeon (first));
+    same_dungeon (second, member.dungeon (second));
     return first;
 }
 class PartyRun
@@ -109,8 +107,9 @@ class PartyRun
         source.command (Control::drain);
         source.wait_line (Control::requested, Limits::relocation);
         source.wait_line (Control::relocated, Limits::relocation);
-        source.wait_line (Control::safe, Limits::relocation);
-        const auto relocated = leader_->dungeon (), other = member_->dungeon ();
+        source.wait_line (Control::safe, Limits::safe);
+        const auto relocated = leader_->dungeon (advanced_, true),
+                   other = member_->dungeon (advanced_, true);
         same_dungeon (advanced_, relocated);
         same_dungeon (relocated, other);
         require (relocated.nodeId != advanced_.nodeId && relocated.nodeId == other.nodeId
@@ -127,8 +126,8 @@ class PartyRun
         const auto fresh = enter (fresh1, fresh2, "fresh-party-" + unique_id ());
         require (fresh.nodeId == advanced_.nodeId,
                  "Replacement instance did not accept fresh dungeon");
-        same_dungeon (relocated, leader_->dungeon ());
-        same_dungeon (relocated, member_->dungeon ());
+        same_dungeon (relocated, leader_->dungeon (relocated));
+        same_dungeon (relocated, member_->dungeon (relocated));
         require (identity1 == leader_->info () && identity2 == member_->info (),
                  "Replacement interrupted Session");
         fresh1.close ();

@@ -30,8 +30,8 @@ private suspend fun enter(a: Client, b: Client, partyId: String): DungeonView {
             dungeon.members == listOf(a.playerId, b.playerId)
     )
     // Current-Spot replies confirm both deferred joins completed before Advance.
-    sameDungeon(dungeon, a.view())
-    sameDungeon(dungeon, b.view())
+    sameDungeon(dungeon, a.view { it == dungeon })
+    sameDungeon(dungeon, b.view { it == dungeon })
     return dungeon
 }
 

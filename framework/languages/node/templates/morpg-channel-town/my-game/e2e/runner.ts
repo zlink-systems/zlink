@@ -111,7 +111,7 @@ class NodeProcess {
     this.child.stdin!.write(Control.drain + '\n');
     await this.wait(Control.requested, Limits.messageMs);
     await this.wait(Control.relocated, Limits.relocationMs);
-    await this.wait(Control.safe, Limits.relocationMs);
+    await this.wait(Control.safe, Limits.safeMs);
   }
   async stop(): Promise<void> {
     if (!this.exited) this.child.stdin!.end(Control.shutdown + '\n');

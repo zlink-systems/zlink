@@ -18,6 +18,7 @@ int main (int argc, char **argv)
           });
         mesh.objects ()
           .server ()
+          .add_entry_spot<MyGame::TownEntry> ()
           .add_spot_factory<MyGame::Dungeon, MyGame::NodeConfig, MyGame::fx::actor_client_t> (
             MyGame::Names::dungeon)
           .set_stable_type_limit (config.DungeonCapacity)

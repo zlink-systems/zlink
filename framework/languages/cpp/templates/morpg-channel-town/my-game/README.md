@@ -74,6 +74,10 @@ Start Redis, townA (town-1), townB (town-2), instanceA, instanceB, then Session.
 
 For maintenance, send `drain` on the selected process's stdin. Wait for `RELOCATION_REQUESTED`, `RELOCATED` and `SAFE_TO_SHUTDOWN`, then send `shutdown` and require `STOPPED` plus exit code 0. Start the replacement with the same configuration and wait for `READY` before assigning new work. A failed lifecycle operation must stop the deployment sequence.
 
+All Object Servers that register Player factories also register the shared Entry and first-admission handler, including both Instance nodes. Entry admission joins the requested fixed Town channel. Each Instance declares its dynamic Dungeon factory in `zlink.structure.json`.
+
+The e2e configuration uses one Dungeon slot per Instance. After drain, the surviving Instance is full, so only the replacement can accept the fresh Dungeon. The structure checker enforces this configuration. Message Follow remains 30 seconds; the SafeToShutdown observation budget is derived from that duration plus the existing relocation operation budget.
+
 ## 한국어 실행 안내
 
 Framework 0.30.1 태그의 공식 vcpkg overlay port와 C++20 빌드 환경을 준비한 뒤, 이 디렉터리에서 `cmake --preset default`, `cmake --build --preset default`를 실행합니다. Docker 데몬을 기동하고 Linux에서는 `./run-e2e.sh`, Windows에서는 `pwsh -NoProfile -File ./run-e2e.ps1`을 실행합니다.

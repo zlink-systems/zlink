@@ -1,6 +1,7 @@
 package MyGame.town
 
 import MyGame.*
+import MyGame.admission.*
 import org.springframework.boot.autoconfigure.SpringBootApplication
 import org.springframework.context.annotation.Bean
 import systems.zlink.framework.configuration.ZLinkUserSpotExecutionMode
@@ -20,6 +21,7 @@ class Program {
         require(config.townCapacity > 0)
         configure(options, locations, relocations)
         options.addHandlersFromPackageOf<Program>()
+        options.addHandlersFromPackageOf<EntryActions>()
         options
             .addRouteMesh(Names.MESH)
             .listen(config.meshEndpoint)

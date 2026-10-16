@@ -102,7 +102,7 @@ public final class Structure {
                 var config = Json.MAPPER.readTree(configPath(root, text(node, "config")).toFile());
                 require(
                         config.path("dungeonCapacity").isIntegralNumber()
-                                && config.path("dungeonCapacity").asInt() > 0,
+                                && config.path("dungeonCapacity").asInt() == 1,
                         "Invalid dungeon capacity");
             }
         var channels = array(s, "channels");
@@ -117,7 +117,7 @@ public final class Structure {
             switch (text(spot, "kind")) {
                 case "entry" ->
                         require(
-                                role == NodeRole.TOWN
+                                (role == NodeRole.TOWN || role == NodeRole.INSTANCE)
                                         && spot.has("type")
                                         && spot.path("type").isNull()
                                         && !spot.has("logicalId")
@@ -171,14 +171,38 @@ public final class Structure {
         }
         require(dynamic.equals(Set.of(Names.DUNGEON)), "Missing dynamic Spot family");
         for (var node : nodes)
-            if (roles.get(text(node, "id")) == NodeRole.TOWN)
+            if (roles.get(text(node, "id")) == NodeRole.TOWN
+                    || roles.get(text(node, "id")) == NodeRole.INSTANCE)
                 require(
                         spots.stream()
-                                .anyMatch(
-                                        p ->
-                                                p.path("owner").asText().equals(text(node, "id"))
-                                                        && p.path("kind").asText().equals("entry")),
+                                        .filter(
+                                                p ->
+                                                        p.path("owner")
+                                                                        .asText()
+                                                                        .equals(text(node, "id"))
+                                                                && p.path("kind")
+                                                                        .asText()
+                                                                        .equals("entry"))
+                                        .count()
+                                == 1,
                         "Town node lacks Entry Spot");
+        for (var node : nodes) {
+            if (roles.get(text(node, "id")) != NodeRole.INSTANCE) continue;
+            require(
+                    spots.stream()
+                                    .filter(
+                                            p ->
+                                                    p.path("owner")
+                                                                    .asText()
+                                                                    .equals(text(node, "id"))
+                                                            && p.path("type")
+                                                                    .asText()
+                                                                    .equals(Names.DUNGEON)
+                                                            && p.path("dynamic").asBoolean())
+                                    .count()
+                            == 1,
+                    "Instance must declare one dynamic Dungeon factory");
+        }
         for (var edge : array(s, "edges")) {
             require(
                     ids.contains(text(edge, "from")) && ids.contains(text(edge, "to")),

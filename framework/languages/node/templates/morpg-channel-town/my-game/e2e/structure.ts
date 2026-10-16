@@ -87,7 +87,10 @@ export function checkStructure(path = 'zlink.structure.json'): void {
     assert(['town', 'instance'].includes(text(host.role)));
     assert(['entry', 'user', 'instance'].includes(text(spot.kind)), 'Unknown Spot kind');
     if (spot.kind === 'entry') {
-      assert.equal(host.role, 'town', 'Entry Spot owner must host Town runtime');
+      assert(
+        ['town', 'instance'].includes(text(host.role)),
+        'Entry owner must host Player factory'
+      );
       assert.equal(spot.type, null);
       assert(!('dynamic' in spot) && !('logicalId' in spot));
     } else {
@@ -101,6 +104,18 @@ export function checkStructure(path = 'zlink.structure.json'): void {
     }
   }
   unique(logical, 'logical Spot ID');
+  for (const node of nodes.filter((n) => n.role === 'town' || n.role === 'instance')) {
+    assert.equal(
+      spots.filter((s) => s.owner === node.id && s.kind === 'entry').length,
+      1,
+      'Object Server must declare one Entry'
+    );
+    if (node.role === 'instance') {
+      const registered = spots.filter((s) => s.owner === node.id && s.type === Names.dungeon);
+      assert.equal(registered.length, 1, 'Instance must declare its Dungeon factory');
+      assert.equal(registered[0].dynamic, true, 'Dungeon factory must be dynamic');
+    }
+  }
   assert(
     spots.some((s) => s.kind === 'entry'),
     'Missing Entry Spot'
@@ -123,7 +138,7 @@ export function checkStructure(path = 'zlink.structure.json'): void {
   for (const node of nodes.filter((n) => n.role === 'instance')) {
     const cfg = object(JSON.parse(readFileSync(resolve(root, text(node.config)), 'utf8')));
     assert(
-      Number.isInteger(cfg.dungeonCapacity) && Number(cfg.dungeonCapacity) > 0,
+      Number.isInteger(cfg.dungeonCapacity) && Number(cfg.dungeonCapacity) === 1,
       'Invalid Dungeon capacity'
     );
   }
