@@ -16,6 +16,7 @@
 #include "runtime/spots/spot_runtime.hpp"
 #include "runtime/spots/spot_route_packets.hpp"
 #include "runtime/timers/timer_runtime.hpp"
+#include "runtime/timers/async_delay.hpp"
 #include "runtime/actors/actor_gateway_runtime.hpp"
 #include "runtime/diagnostics/dispatch_options_access.hpp"
 
@@ -918,6 +919,9 @@ void test_remote_actor_leave_commits_before_source_callback (test_context_t &tes
       !failed && failed.error_kind () == zlink::framework::framework_error_kind_t::internal_failure
         && failure_retained_source && callbacks.load () == 0,
       "failed remote entry commit must retain source membership and skip leave callback");
+    source->serial_queue->close ();
+    source->serial_queue->drain ();
+    source->serial_executor->drain ();
 }
 
 void test_actor_leave_after_relocation_defer_runs_lifecycle_callbacks (test_context_t &test)
@@ -2061,6 +2065,8 @@ class target_preflight_t final : public target_preflight_port_t
                .target_owner = {"owner-b", 1},
                .encoded_upper_bound = 1024 * 1024,
                .inventory_digest = digest_with (static_cast<std::uint8_t> (index + 10))});
+            if (configure_unit)
+                configure_unit (result.units.back ());
         }
         return result;
     }
@@ -2068,6 +2074,7 @@ class target_preflight_t final : public target_preflight_port_t
     std::mutex mutex;
     std::vector<relocation_unit_t> observed_units;
     std::function<void ()> on_preflight;
+    std::function<void (eligible_relocation_unit_t &)> configure_unit;
     target_preflight_status_t status = target_preflight_status_t::eligible;
     int calls = 0;
 };
@@ -2955,8 +2962,11 @@ void test_host_preflight_is_all_or_none (test_context_t &test)
     auto aggregates = std::make_shared<memory_aggregate_authority_t> (authority);
     auto targets = std::make_shared<target_preflight_t> ();
     targets->status = target_preflight_status_t::target_unavailable;
+    std::mutex delay_mutex;
+    zlink::framework::detail::delay_owner_t delays (delay_mutex);
     maintenance_runtime_t relocation (
       objects, maintenance_provider_set_t{authority, aggregates, roots, targets});
+    relocation.bind_delay_owner (delays);
     stream_session_registry_t sessions (
       [&] (const std::string &key) { return objects.find (object_kind_t::actor, key); });
     host_maintenance_runtime_t host (objects, sessions, relocation, targets);
@@ -3003,8 +3013,11 @@ void test_shutdown_wins_during_retire_preflight (test_context_t &test)
         changed.notify_all ();
         changed.wait (lock, [&] { return release; });
     };
+    std::mutex delay_mutex;
+    zlink::framework::detail::delay_owner_t delays (delay_mutex);
     maintenance_runtime_t relocation (
       objects, maintenance_provider_set_t{authority, aggregates, roots, targets});
+    relocation.bind_delay_owner (delays);
     stream_session_registry_t sessions (
       [&] (const std::string &key) { return objects.find (object_kind_t::actor, key); });
     int observations = 0;
@@ -3041,6 +3054,66 @@ void test_shutdown_wins_during_retire_preflight (test_context_t &test)
                   "winning Shutdown must not start continuity relocation");
     test.require (observations == 1,
                   "first-intent shared operation must emit one terminal observation");
+}
+
+void test_retire_delay_shutdown_completes_termination (test_context_t &test)
+{
+    using namespace std::chrono_literals;
+    namespace protocol = zlink::framework::runtime::protocol;
+    stateful_object_runtime_t objects;
+    objects.configure_relocation_state (
+      [] (const object_ref_t &, const std::string &, std::stop_token) {
+          return std::vector<std::uint8_t> (16, 0x5a);
+      },
+      [] (const frozen_object_state_t &, const object_ref_t &, std::stop_token) { return true; });
+    (void) create_actor (objects, "retire-delay-actor");
+    auto roots = std::make_shared<memory_relocation_repository_t> ();
+    auto authority = std::make_shared<memory_authority_store_t> ();
+    auto aggregates = std::make_shared<memory_aggregate_authority_t> (authority);
+    auto targets = std::make_shared<target_preflight_t> ();
+    std::mutex delay_mutex;
+    zlink::framework::detail::delay_owner_t delays (delay_mutex);
+    targets->configure_unit = [&] (eligible_relocation_unit_t &eligible) {
+        eligible.canonical_wire = eligible_relocation_unit_t::canonical_wire_context_t{
+          .relocation = {0x61, 0x62},
+          .target_attempt_generation = 7,
+          .coordinator = {"source-owner", 1, {'s', 'r', 'c'}, 3, "authority-v1"},
+          .target_node_routing_id = {'d', 's', 't'},
+          .target_node_generation = 7,
+          .application_version = 1,
+          .prepare_target = [] (const std::vector<frozen_object_state_t> &,
+                                const relocation_payload_manifest_t &)
+            -> zlink::framework::task_t<relocation_reason_t> {
+              co_return relocation_reason_t::none;
+          },
+          .send_state_chunk = [] (const protocol::relocation_state_t &)
+            -> zlink::framework::task_t<bool> { co_return true; },
+          .send_relocation_data = [] (const std::vector<protocol::relocation_data_t> &,
+                                      const relocation_ingress_batch_t &)
+            -> zlink::framework::task_t<bool> { co_return true; },
+          .send_application = [] (const object_ref_t &, const turn_record_t &) {},
+          .send_cutover =
+            [&] (const protocol::relocation_cutover_t &) -> zlink::framework::task_t<bool> {
+              delays.request_stop ();
+              co_return true;
+          },
+          .restore_deadline = std::chrono::steady_clock::now () + 10s,
+          .source_stopped = [] { return false; },
+          .target_route = [] { return std::pair{std::uint64_t{1}, true}; },
+          .abort_target_before_cutover = [] { return true; }};
+    };
+    maintenance_runtime_t relocation (
+      objects, maintenance_provider_set_t{authority, aggregates, roots, targets});
+    relocation.bind_delay_owner (delays);
+    stream_session_registry_t sessions (
+      [&] (const std::string &key) { return objects.find (object_kind_t::actor, key); });
+    host_maintenance_runtime_t host (objects, sessions, relocation, targets);
+    host.mark_serving ();
+    const auto result = await_task (host.terminate (termination_intent_t::retire));
+    const termination_result_t expected{termination_intent_t::shutdown,
+                                        termination_outcome_t::stopped, termination_reason_t::none};
+    test.require (result == expected && host.terminal_result () == expected,
+                  "interrupted source settlement must complete the shared host termination");
 }
 
 void test_public_relocation_store_adapter (test_context_t &test)
@@ -3806,7 +3879,10 @@ void test_source_relocation_failure_stops_state_chunks_and_unseals (test_context
     const auto actor = create_actor (objects, "live-failure-actor");
     auto roots = std::make_shared<memory_relocation_repository_t> ();
     auto authority = std::make_shared<memory_authority_store_t> ();
+    std::mutex delay_mutex;
+    zlink::framework::detail::delay_owner_t delays (delay_mutex);
     maintenance_runtime_t relocation (objects, authority, roots);
+    relocation.bind_delay_owner (delays);
 
     auto target_terminal =
       std::make_shared<framework::task_completion_source_t<relocation_reason_t>> ();
@@ -4220,7 +4296,10 @@ void test_cutover_replays_over_selected_network_route (test_context_t &test)
     auto roots = std::make_shared<memory_relocation_repository_t> ();
     auto authority = std::make_shared<settlement_authority_t> ();
     authority->preserved_authority = relocation_authority_t::source_preserved;
+    std::mutex delay_mutex;
+    zlink::framework::detail::delay_owner_t delays (delay_mutex);
     maintenance_runtime_t relocation (objects, authority, roots);
+    relocation.bind_delay_owner (delays);
     int data_sends = 0;
     int cutover_sends = 0;
     std::atomic<bool> stop{false};
@@ -4383,7 +4462,10 @@ void test_source_relocation_settles_by_authority (test_context_t &test)
         settle (*authority);
         if (stop_source)
             authority->settle_after_observes = 3;
+        std::mutex delay_mutex;
+        zlink::framework::detail::delay_owner_t delays (delay_mutex);
         maintenance_runtime_t relocation (objects, authority, roots);
+        relocation.bind_delay_owner (delays);
         outcome_t outcome;
         relocation.attach_unavailable_terminal (
           [&outcome] (const object_ref_t &owner) { outcome.unavailable.push_back (owner); });
@@ -4637,9 +4719,14 @@ void test_application_relocation_remote_production_path (test_context_t &test,
           if (event.surface == framework::dispatch_error_surface_t::actor_relocation)
               resolver_failures.push_back (event);
       });
+    std::mutex delay_mutex;
+    detail::delay_owner_t delays (delay_mutex);
     detail::mesh_node_runtime_t source (source_state);
     detail::mesh_node_runtime_t target (make_state ("production-target"));
     detail::mesh_node_runtime_t session_owner (make_state ("production-session-owner"));
+    source.bind_delay_owner (delays);
+    target.bind_delay_owner (delays);
+    session_owner.bind_delay_owner (delays);
     source.configure_relocation_runtime (authority, roots);
     target.configure_relocation_runtime (authority, roots);
     std::optional<detail::bound_session_relocation_route_t> bound_session_route;
@@ -5184,8 +5271,12 @@ void test_application_user_spot_aggregate_remote_production_path (test_context_t
     auto aggregates = std::make_shared<memory_aggregate_authority_t> (authority);
     const auto source_state = make_state ("production-aggregate-source");
     const auto target_state = make_state ("production-aggregate-target");
+    std::mutex delay_mutex;
+    detail::delay_owner_t delays (delay_mutex);
     detail::mesh_node_runtime_t source (source_state);
     detail::mesh_node_runtime_t target (target_state);
+    source.bind_delay_owner (delays);
+    target.bind_delay_owner (delays);
     source.configure_relocation_runtime (authority, roots, aggregates);
     target.configure_relocation_runtime (authority, roots, aggregates);
     source.configure_session_route_owner (
@@ -7143,6 +7234,7 @@ int main (int argc, char **argv)
     test_pending_restore_holds_ingress_before_rollback (test);
     test_host_preflight_is_all_or_none (test);
     test_shutdown_wins_during_retire_preflight (test);
+    test_retire_delay_shutdown_completes_termination (test);
     test_public_relocation_store_adapter (test);
     test_public_authority_store_adapter (test);
     test_source_relocation_failure_stops_state_chunks_and_unseals (test);

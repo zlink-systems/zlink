@@ -788,6 +788,8 @@ void mesh_node_runtime_t::start ()
       })
       .get ();
     auto node = std::make_shared<host::public_host_runtime_t> (std::move (node_options));
+    if (_delay_owner)
+        node->set_delay_owner (*_delay_owner);
     /* flow-correlation §4: thread the flow-capture provider so the host's
      * cold decode paths skip flow validation/materialization at level Off. */
     node->set_flow_capture_provider (
@@ -3823,7 +3825,7 @@ mesh_node_runtime_t::wait_for_application_actor_route_change (
         const auto candidate = co_await resolve_application_actor_route (actor);
         if (candidate && changed (*candidate))
             co_return candidate;
-        co_await detail::delay (std::chrono::milliseconds (1));
+        co_await detail::delay (_delay_owner, std::chrono::milliseconds (1));
     } while (std::chrono::steady_clock::now () < deadline);
     const auto candidate = co_await resolve_application_actor_route (actor);
     co_return candidate &&changed (*candidate) ? candidate

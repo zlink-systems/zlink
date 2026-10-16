@@ -427,6 +427,7 @@ export class RawServiceMeshRuntime {
   }
 
   announcePeer(nodeRoutingId: string): Promise<boolean> {
+    if (this.closed) return Promise.resolve(false);
     const generation = this.selectedRoutes.get(nodeRoutingId);
     if (generation === undefined) return Promise.resolve(false);
     const current = () => {
@@ -1607,16 +1608,19 @@ export class RawServiceMeshRuntime {
       () => {},
       (error) => {
         completeSend();
-        if (this.infrastructureTaskRunner === undefined) this.reportInfrastructureFailure(error);
+        this.reportInfrastructureFailure(error);
       }
     );
-    this.infrastructureTaskRunner?.runDetached('RouteMesh control SEND', async () => {
-      await task;
-    });
     return true;
   }
 
-  private reportInfrastructureFailure(error: unknown): void {
+  reportInfrastructureFailure(error: unknown): void {
+    if (this.infrastructureTaskRunner !== undefined) {
+      this.infrastructureTaskRunner.runDetached('RouteMesh infrastructure', async () => {
+        throw error;
+      });
+      return;
+    }
     this.infrastructureFailure = {
       error:
         this.infrastructureFailure === undefined

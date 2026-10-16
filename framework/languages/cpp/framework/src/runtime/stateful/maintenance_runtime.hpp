@@ -29,6 +29,11 @@
 #include <utility>
 #include <vector>
 
+namespace zlink::framework::detail
+{
+class delay_owner_t;
+}
+
 namespace zlink::framework::runtime::stateful
 {
 
@@ -522,6 +527,7 @@ class maintenance_runtime_t
       std::uint64_t advertised_receive_chunk_limit_bytes = 0);
 
     void attach_relocation_wire (raw_relocation_replay_coordinator_t &wire) noexcept;
+    void bind_delay_owner (detail::delay_owner_t &owner) noexcept { _delay_owner = &owner; }
     /* Expired-owner terminal (28 §4.4): replies Unavailable once to each
      * pending request of the object and drops its accepted records. */
     void attach_unavailable_terminal (std::function<void (const object_ref_t &)> terminal) noexcept;
@@ -650,6 +656,7 @@ class maintenance_runtime_t
     std::shared_ptr<relocation_store_port_t> _relocations;
     relocation_limits_t _limits;
     observer_t _observer;
+    detail::delay_owner_t *_delay_owner = nullptr;
     mutable std::mutex _gate_mutex;
     relocation_gate_snapshot_t _gate;
     raw_relocation_replay_coordinator_t *_relocation_wire = nullptr;

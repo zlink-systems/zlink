@@ -512,33 +512,13 @@ internal sealed class ZLinkActorBoundSessionCoordinator
     public ZLinkSessionBindingEntry? GetSessionBinding(string actorId, string bindingToken) =>
         AwaitStateLane(_sessionBindings.GetBindingAsync(actorId, bindingToken));
 
-    public ValueTask<ZLinkSessionBindingRoute?> GetSessionRouteAsync(
-        string actorId,
-        string bindingToken,
-        ZLinkSessionActor actorRef
-    ) => _sessionBindings.GetRouteAsync(actorId, bindingToken, actorRef);
+    public ValueTask<ZLinkSessionBindingRoute?> GetSessionRouteAsync(ZLinkSessionActor actorRef) =>
+        _sessionBindings.GetRouteAsync(actorRef);
 
-    public ZLinkSessionBindingEntry? GetSessionBindingByActorId(string actorId) =>
-        AwaitStateLane(_sessionBindings.GetEntryByActorIdAsync(actorId));
-
-    public ZLinkSessionBindingEntry? GetExactRetiredSessionBinding(
+    public ZLinkSessionBindingEntry? GetSessionBindingForSession(
         string actorId,
-        RoutingId sessionOwnerNodeRid,
-        RoutingId sessionRid,
-        ulong sessionOwnerNodeGeneration,
-        string sessionOwnerId,
-        ulong sessionOwnerLeaseGeneration,
-        ulong bindingGeneration
-    ) =>
-        GetExactRetiredSessionBinding(
-            ZLinkActorId.FromBoundary(actorId, nameof(actorId)),
-            sessionOwnerNodeRid,
-            sessionRid,
-            sessionOwnerNodeGeneration,
-            sessionOwnerId,
-            sessionOwnerLeaseGeneration,
-            bindingGeneration
-        );
+        ZLinkSessionContext context
+    ) => AwaitStateLane(_sessionBindings.GetEntryForSessionAsync(actorId, context));
 
     internal ZLinkSessionBindingEntry? GetExactRetiredSessionBinding(
         ZLinkActorId actorId,
@@ -586,9 +566,6 @@ internal sealed class ZLinkActorBoundSessionCoordinator
         string actorId,
         string bindingToken
     ) => _sessionBindings.GetContextAsync(actorId, bindingToken);
-
-    public ZLinkSessionContext? GetSessionActorContext(string actorId) =>
-        AwaitStateLane(_sessionBindings.GetContextByActorIdAsync(actorId));
 
     public ZLinkActorBoundSession? BindActorSession(
         string actorId,
@@ -809,7 +786,10 @@ internal sealed class ZLinkActorBoundSessionCoordinator
             Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
                 $"bound_session_send actor={actorId} session_node={session.SessionNodeRid} session_rid={session.SessionRid} binding={session.BindingToken} parts={parts.Count}"
             );
-            if (GetSessionActorContext(actorId, session.BindingToken) is not null)
+            if (
+                AwaitStateLane(_sessionBindings.GetContextAsync(OutboundTenure(actorId, session)))
+                is not null
+            )
             {
                 if (parts.Count != 1)
                     throw new InvalidOperationException(
@@ -914,7 +894,9 @@ internal sealed class ZLinkActorBoundSessionCoordinator
             $"bound_session_send_async actor={actorId} session_node={session.SessionNodeRid} session_rid={session.SessionRid} binding={session.BindingToken} binding_gen={session.BindingGeneration} parts={parts.Count}"
         );
         if (
-            await GetSessionActorContextAsync(actorId, session.BindingToken).ConfigureAwait(false)
+            await _sessionBindings
+                .GetContextAsync(OutboundTenure(actorId, session))
+                .ConfigureAwait(false)
             is not null
         )
         {
@@ -1052,29 +1034,25 @@ internal sealed class ZLinkActorBoundSessionCoordinator
             && !actorRef.NodeRid.Equals(frameLocalNode.RoutingId)
         )
         {
-            // Locally relayed frames carry no session identity; the actor's
-            // bound-session state (or the local session-side binding registry
-            // after a source-side migration cleared the actor-side state)
-            // names the session this frame belongs to.
+            // Preserve the accepted frame's physical Session through Message
+            // Follow. Native frames without handoff metadata use their Actor
+            // owner's bound-session route.
             if (!routeContext.IsDirectRoute && sourceSessionRid.IsEmpty)
             {
                 if (
-                    _getState(actorRef.ActorId).TryGetBoundSession(out var forwardSession)
-                    && !forwardSession.SessionRid.IsEmpty
+                    ZLinkActorBoundSessionHandoffMetadata.TryDecode(
+                        applicationMetadata.Span,
+                        out var forwardedBinding
+                    )
                 )
+                {
+                    sourceSessionRid = forwardedBinding.SessionRid;
+                }
+                else if (_getState(actorRef.ActorId).TryGetBoundSession(out var forwardSession))
                 {
                     sourceSessionRid = forwardSession.SessionRid;
                     if (sourceNodeRid.IsEmpty && forwardSession.SessionNodeRid is { } forwardNode)
                         sourceNodeRid = forwardNode;
-                }
-                else if (
-                    await _sessionBindings
-                        .GetContextByActorIdAsync(actorRef.ActorId)
-                        .ConfigureAwait(false) is
-                    { RoutingId: { } forwardRid }
-                )
-                {
-                    sourceSessionRid = forwardRid;
                 }
             }
 

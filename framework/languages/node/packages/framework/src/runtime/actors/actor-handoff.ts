@@ -1,6 +1,7 @@
 import { type ActorRef, type RoutingId, ZLinkFrameworkException } from '../../contracts';
 
 import type { Message } from '../../contracts/Common/Message';
+import { DEFAULT_REQUEST_TIMEOUT_MS } from '../../contracts/Configuration/Registration';
 import { zlinkDefaultLocationOptions } from '../../contracts/Locations/Options';
 import { releaseApplicationJobPermitForDurableHandoff } from '../application-jobs/application-job-queue-scope';
 import type { ApplicationJobOrigin } from '../application-jobs/contracts';
@@ -15,6 +16,7 @@ import {
   internalFrameworkErrorKind,
   ZLinkFrameworkInternalErrorKind
 } from '../framework-errors-internal';
+import { waitRequestReply } from '../messaging/request-deadline';
 import { encodeRoutingIdStorageHex, routingIdsEqual } from '../routing-id';
 import type { ZLinkSpotRouteTarget } from '../spots/spot-routing-internal';
 import { decodeActorRequestDeadlineUnixMs, decodeStreamHeader } from '../streams/protocol';
@@ -810,6 +812,10 @@ export class ZLinkActorHandoffCoordinator {
         );
       try {
         this.validateContext(actorId, context, parts, returnResponse, fallbackActorRef);
+        // Accepted handoff retains its original deadline; Message Follow uses a local relay window.
+        if (context.deadlineUnixMs !== undefined && Date.now() >= context.deadlineUnixMs) {
+          throw actorDeadlineExceeded(actorId);
+        }
       } catch (error) {
         return Promise.reject(error);
       }
@@ -1385,9 +1391,6 @@ export class ZLinkActorHandoffCoordinator {
     if (context.objectGeneration === '0' || context.request !== request) {
       throw actorLocationStale(actorId);
     }
-    if (context.deadlineUnixMs !== undefined && Date.now() >= context.deadlineUnixMs) {
-      throw actorDeadlineExceeded(actorId);
-    }
     verifyActorMessageFollowPayload(context, parts);
   }
 
@@ -1526,15 +1529,16 @@ export class ZLinkActorHandoffCoordinator {
       await this.messageFollowRelayed(actorId, entry, packet, advanced);
       return undefined;
     }
-    const remainingMs = remainingRequestTime(actorId, packet.messageFollowContext.deadlineUnixMs);
+    const timeoutMs = this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+    const relayDeadlineMs = performance.now() + timeoutMs;
     if (this.options.routedTransport.requestRawToSpot === undefined) {
-      const reply = await awaitBeforeDeadline(
+      const reply = await waitRequestReply(
         this.options.routedTransport.requestToSpot<Record<string, unknown>>(target, payload, {
           packetName: ZLINK_REMOTE_ACTOR_PACKET_RELAY_PACKET,
-          timeoutMs: remainingMs ?? this.options.requestTimeoutMs
+          timeoutMs
         }),
         actorId,
-        remainingMs
+        relayDeadlineMs
       );
       if (reply.ok === false) {
         throw actorRelayError(actorId, reply.errorKind, reply.error);
@@ -1542,12 +1546,12 @@ export class ZLinkActorHandoffCoordinator {
       await this.messageFollowRelayed(actorId, entry, packet, advanced);
       return reply.response;
     }
-    const response = await awaitBeforeDeadline(
+    const response = await waitRequestReply(
       requestRoutedJsonReply(
         this.options.routedTransport,
         target,
         payload,
-        { timeoutMs: remainingMs ?? this.options.requestTimeoutMs },
+        { timeoutMs },
         `Actor Message Follow raw request is not available for '${actorId}'.`,
         (parts) => {
           if (parts.length === 0) {
@@ -1566,7 +1570,7 @@ export class ZLinkActorHandoffCoordinator {
         }
       ),
       actorId,
-      remainingMs
+      relayDeadlineMs
     );
     await this.messageFollowRelayed(actorId, entry, packet, advanced);
     return response;
@@ -1772,35 +1776,6 @@ function packetDeadlineUnixMs(parts: readonly Message[]): number | undefined {
     return decodeActorRequestDeadlineUnixMs(parts[0].data());
   } catch {
     return undefined;
-  }
-}
-
-function remainingRequestTime(
-  actorId: string,
-  deadlineUnixMs: number | undefined
-): number | undefined {
-  if (deadlineUnixMs === undefined) return undefined;
-  const remaining = deadlineUnixMs - Date.now();
-  if (remaining <= 0) throw actorDeadlineExceeded(actorId);
-  return Math.max(1, Math.ceil(remaining));
-}
-
-async function awaitBeforeDeadline<T>(
-  operation: Promise<T>,
-  actorId: string,
-  remainingMs: number | undefined
-): Promise<T> {
-  if (remainingMs === undefined) return await operation;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      operation,
-      new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(() => reject(actorDeadlineExceeded(actorId)), remainingMs);
-      })
-    ]);
-  } finally {
-    if (timer !== undefined) clearTimeout(timer);
   }
 }
 

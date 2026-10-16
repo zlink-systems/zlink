@@ -32,6 +32,7 @@
 #include "runtime/stateful/public_store_adapters.hpp"
 #include "runtime/streams/session_serial_executor.hpp"
 #include "runtime/timers/core_timer_drain_loop.hpp"
+#include "runtime/timers/async_delay.hpp"
 #include "runtime/timers/timer_runtime.hpp"
 
 #include <zlink/framework/contracts/spots/spot.hpp>
@@ -6976,8 +6977,12 @@ bool verify_remote_actor_cutover_completion_is_target_owned ()
       std::make_shared<stateful::public_relocation_store_adapter_t> (relocation_repository);
     auto source_state = make_state ("actor-cutover-source", false);
     auto target_state = make_state ("actor-cutover-target", true);
+    std::mutex delay_mutex;
+    delay_owner_t delays (delay_mutex);
     mesh_node_runtime_t source (source_state);
     mesh_node_runtime_t target (target_state);
+    source.bind_delay_owner (delays);
+    target.bind_delay_owner (delays);
     struct spot_route_fixture_t
     {
         zlink::routing_id_t node = zlink::routing_id_t::from (std::uint32_t{0});

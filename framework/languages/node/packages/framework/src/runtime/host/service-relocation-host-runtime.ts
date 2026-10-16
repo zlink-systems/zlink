@@ -283,6 +283,7 @@ interface LocalStage {
   finalize?: Promise<void>;
   /** The Restore's activation admission (MeshNode §5.1); held until target commit or abort. */
   readonly releaseActivation: () => void;
+  readonly releaseJoinAdmission: () => void;
 }
 
 interface TargetPayloadAssembly {
@@ -2905,18 +2906,24 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       throw new ServiceRelocationDataLostError(String(message));
     }
     const envelope = decodeServiceRelocationEnvelope(payload, request.targetAttemptGeneration);
-    const inventoryEnvelope = attachCanonicalBoundSessions(
-      await this.resolveTargetParticipantInventory(meshName, request, envelope, signal),
-      request,
-      meshName
-    );
-    validatePrepareEnvelope(request, inventoryEnvelope);
-    const releaseActivation =
-      (await this.options.activationAdmission?.acquire(meshName, signal)) ?? (() => undefined);
+    const recovery = canonicalActorJoinRecovery(envelope.participants);
+    const releaseJoinAdmission =
+      recovery === undefined
+        ? () => undefined
+        : this.options.spotManager()!.beginActorJoinRelocation(recovery.request.handoffId);
     let materialized:
       (Pick<LocalStage, 'owner' | 'staging'> & { readonly target: LocalTargetPort }) | undefined;
     let reservation: TargetRelocationReservation | undefined;
+    let releaseActivation: () => void = () => undefined;
     try {
+      const inventoryEnvelope = attachCanonicalBoundSessions(
+        await this.resolveTargetParticipantInventory(meshName, request, envelope, signal),
+        request,
+        meshName
+      );
+      validatePrepareEnvelope(request, inventoryEnvelope);
+      releaseActivation =
+        (await this.options.activationAdmission?.acquire(meshName, signal)) ?? (() => undefined);
       // Deferred Join completion publishes into the source authority's
       // canonical relocation slot. Do that while the row is still CAS-able;
       // the aggregate marker installed by reserveTargetForPrepare deliberately
@@ -2943,10 +2950,12 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         lane: Promise.resolve(),
         cutoverReceived: false,
         boundaryRelay: [],
-        releaseActivation
+        releaseActivation,
+        releaseJoinAdmission
       };
       this.targetStages.set(stagingId, stage);
     } catch (error) {
+      releaseJoinAdmission();
       releaseActivation();
       if (reservation !== undefined) {
         await this.abortTargetReservation(reservation, signal).catch(() => undefined);
@@ -3169,6 +3178,8 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         throw new ServiceRelocationPostCommitError(authority, stage.staging, error);
       }
       throw error;
+    } finally {
+      stage.releaseJoinAdmission();
     }
   }
 
@@ -3939,6 +3950,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       failures.push(error);
     }
     stage.phase = 'failed';
+    stage.releaseJoinAdmission();
     if (failures.length === 1) throw failures[0];
     if (failures.length > 1) {
       throw new AggregateError(failures, 'Relocation target rollback was incomplete.');
