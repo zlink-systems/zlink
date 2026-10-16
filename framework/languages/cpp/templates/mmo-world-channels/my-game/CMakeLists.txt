@@ -1,11 +1,8 @@
 cmake_minimum_required(VERSION 3.24)
-if(DEFINED ENV{VCPKG_OVERLAY_PORTS})
-  file(TO_CMAKE_PATH "$ENV{VCPKG_OVERLAY_PORTS}" VCPKG_OVERLAY_PORTS)
-endif()
 project(MyGame LANGUAGES CXX)
-file(READ "${CMAKE_CURRENT_SOURCE_DIR}/vcpkg.json" manifest)
-string(JSON framework_version GET "${manifest}" overrides 0 version)
-find_package(zlink_framework ${framework_version} EXACT CONFIG REQUIRED)
+# bootstrap.cmake installs the pinned framework prebuilt, which also carries
+# Boost and nlohmann_json; CMakePresets.json puts its prefix on the search path.
+find_package(zlink_framework CONFIG REQUIRED)
 find_package(Boost CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(Threads REQUIRED)

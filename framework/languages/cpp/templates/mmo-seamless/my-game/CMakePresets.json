@@ -1,5 +1,5 @@
 {
-  "version": 6,
+  "version": 4,
   "configurePresets": [
     {
       "name": "default",
@@ -7,7 +7,7 @@
       "binaryDir": "${sourceDir}/build",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
-        "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
+        "CMAKE_PREFIX_PATH": "${sourceDir}/.zlink/install"
       }
     }
   ],
