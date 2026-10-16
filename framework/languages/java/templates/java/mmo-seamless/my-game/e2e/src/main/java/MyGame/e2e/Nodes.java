@@ -82,7 +82,11 @@ public final class Nodes implements AutoCloseable {
                             declared.meshEndpoint(),
                             declared.streamEndpoint(),
                             declared.zoneIds(),
-                            declared.zoneCapacity(),
+                            role.equals(Roles.ZONE)
+                                            && !declared.zoneIds()
+                                                    .contains(Rules.zoneId(Control.REPLACEMENT_X))
+                                    ? Rules.ZONE_COUNT - 1
+                                    : declared.zoneCapacity(),
                             declared.bootstrap());
             var path = logs.resolve(id + ".json");
             Json.MAPPER.writeValue(path.toFile(), config);
@@ -101,6 +105,8 @@ public final class Nodes implements AutoCloseable {
 
     void drain(String id) throws Exception {
         var node = Objects.requireNonNull(nodes.get(id));
+        node.command(Control.VACATE_ZONE);
+        node.waitFor(Control.ZONE_VACATED);
         node.command(Control.DRAIN);
         for (var stage :
                 List.of(Control.RELOCATION_REQUESTED, Control.RELOCATED, Control.SAFE_TO_SHUTDOWN))

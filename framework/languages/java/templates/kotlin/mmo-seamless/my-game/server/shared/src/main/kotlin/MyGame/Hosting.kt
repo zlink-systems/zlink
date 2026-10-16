@@ -156,6 +156,19 @@ fun runNode(application: Class<*>, args: Array<String>) = runBlocking {
         System.`in`.bufferedReader().useLines { commands ->
             for (command in commands) {
                 when (command) {
+                    Control.VACATE_ZONE -> {
+                        val spots = app.getBean(ZLinkSpotManager::class.java)
+                        val spot =
+                            spots
+                                .find(Rules.zoneId(Control.REPLACEMENT_X))
+                                .toCompletableFuture()
+                                .join()
+                                .orElseThrow()
+                        check(spots.close(spot).toCompletableFuture().join()) {
+                            "Idle Zone close failed"
+                        }
+                        println(Control.ZONE_VACATED)
+                    }
                     Control.DRAIN -> {
                         println(Control.RELOCATION_REQUESTED)
                         val result = runBlocking {

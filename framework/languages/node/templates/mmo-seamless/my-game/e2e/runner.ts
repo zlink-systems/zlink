@@ -7,6 +7,8 @@ import { EventEmitter } from 'node:events';
 import { finished } from 'node:stream/promises';
 import { checkStructure } from './structure';
 import {
+  Game,
+  zoneId,
   Limits,
   Scenarios,
   Control,
@@ -96,6 +98,8 @@ class NodeProcess {
     };
   }
   async drain(): Promise<void> {
+    this.child.stdin!.write(Control.vacateZone + '\n');
+    await this.wait(Control.zoneVacated, Limits.messageMs);
     this.child.stdin!.write(Control.drain + '\n');
     await this.wait(Control.requested, Limits.messageMs);
     await this.wait(Control.relocated, Limits.relocationMs);
@@ -181,6 +185,8 @@ async function main(): Promise<void> {
       if (node.role !== 'session' && node.role !== 'zone' && node.role !== 'instance') continue;
       assert(node.config);
       const cfg = JSON.parse(readFileSync(node.config, 'utf8')) as NodeConfig;
+      if (node.role === 'zone' && !cfg.zoneIds!.includes(zoneId(Control.replacementX)))
+        cfg.zoneCapacity = Game.zoneCount - 1;
       cfg.redisEndpoint = redis;
       cfg.keyPrefix = `my-game:${runId}:`;
       cfg.meshEndpoint = 'tcp://127.0.0.1:0';

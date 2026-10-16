@@ -14,6 +14,7 @@ import {
   ZLinkModule,
   ZLINK_FRAMEWORK_RUNTIME,
   ZLINK_ROUTE_MESH_RUNTIME,
+  ZLINK_SPOT_MANAGER,
   type ZLinkNestMeshNodeBuilder
 } from '@zlink-systems/nestjs';
 import {
@@ -23,9 +24,10 @@ import {
   ZLinkFrameworkTerminationReason,
   type ZLinkFrameworkRuntime,
   type ZLinkRouteMeshRuntime,
+  type ZLinkSpotManager,
   type ZLinkRouteMeshStatus
 } from '@zlink-systems/framework';
-import { Names, Limits, Control } from './constants';
+import { Names, Limits, Control, zoneId } from './constants';
 import { NODE_CONFIG, readConfig, type NodeConfig } from './config';
 interface HostComposition {
   providers: Type[];
@@ -117,7 +119,12 @@ export async function runHost(
         })
     );
     for await (const line of input) {
-      if (line === Control.drain) {
+      if (line === Control.vacateZone) {
+        const spots = app.get<ZLinkSpotManager>(ZLINK_SPOT_MANAGER);
+        const spot = await spots.find(zoneId(Control.replacementX));
+        if (!spot || !(await spots.close(spot))) throw new Error('Idle Zone close failed');
+        console.log(Control.zoneVacated);
+      } else if (line === Control.drain) {
         console.log(Control.requested);
         const result = await runtime.relocate({
           mode: ZLinkFrameworkRelocationMode.PlannedMaintenance,

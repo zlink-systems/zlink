@@ -89,6 +89,8 @@ inline void update (const std::string &endpoint, World &world)
     const auto identity = client.info ();
     require (before.nodeId == "zoneA", "Update must start on Zone node A");
     client.move (298, 1);
+    world.zone_a ().command (Control::vacate_zone);
+    world.zone_a ().wait_line (Control::zone_vacated, Limits::packet);
     auto safe = std::async (std::launch::async, [&] {
         world.zone_a ().wait_line (Control::requested, Limits::relocation);
         world.zone_a ().wait_line (Control::relocated, Limits::relocation);
@@ -121,14 +123,14 @@ inline void update (const std::string &endpoint, World &world)
              "Replacement interrupted relocated player");
     require (client.dungeon ("after-update-" + unique_id ()).nodeId == "instance",
              "Dungeon access failed after replacement");
-    // Actor placement remains a Framework decision; the fresh player enters the relocated Zone.
+    // B is full after drain; the vacated Zone must be recreated at the replacement.
     Client fresh (endpoint, "replacement-" + unique_id ());
-    const auto placed = fresh.join (299);
-    require (placed.zoneId == "zone-3" && placed.nodeId == "zoneB",
-             "New Actor could not access relocated Zone after replacement");
+    const auto placed = fresh.join (Control::replacement_x);
+    require (placed.zoneId == Names::zone_id (Control::replacement_x) && placed.nodeId == "zoneA",
+             "Replacement did not accept the new Zone");
     const auto fresh_identity = fresh.info ();
-    const auto moved = fresh.move (300, 1);
-    require (moved.zoneId == "zone-4" && moved.nodeId == "zoneB" && moved.sequence == 1,
+    const auto moved = fresh.move (Control::replacement_x + 1, 1);
+    require (moved.zoneId == placed.zoneId && moved.nodeId == "zoneA" && moved.sequence == 1,
              "New Actor movement failed after replacement");
     same_actor (fresh_identity, fresh.info ());
     fresh.close ();

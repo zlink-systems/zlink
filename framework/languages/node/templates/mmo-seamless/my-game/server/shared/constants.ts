@@ -38,6 +38,9 @@ export const PacketNames = {
   dungeonOpened: 'DungeonOpened'
 } as const;
 export const Control = {
+  replacementX: 0,
+  vacateZone: 'vacate-zone',
+  zoneVacated: 'ZONE_VACATED',
   ready: 'READY ',
   drain: 'drain',
   shutdown: 'shutdown',

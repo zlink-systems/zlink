@@ -66,6 +66,8 @@ Message Follow is explicitly configured to 30 seconds in shared hosting. The wai
 
 Each process is started with `node dist/server/<role>/main.js server/config/<node>.json`. Use deployment listener endpoints in those configuration files. The e2e runner overrides Redis and listener endpoints for its isolated run.
 
+Fixed Zones are bootstrapped serially: Zone A fills its three-Spot capacity before Zone B starts. This makes the declared initial owners deterministic through public stable-type capacity. During e2e, Zone B has capacity for all but one world Zone. Before update drains Zone A, `vacate-zone` closes the unused first Zone through the public Spot manager. The remaining Zones fill Zone B; a fresh player then recreates the first Zone at the replacement Zone A and verifies its host and continued movement. Existing relocated players remain on Zone B.
+
 ## 한국어 실행 안내
 
 Node.js 22 이상과 Docker Compose v2를 설치한 뒤 위 Build 명령으로 빌드합니다. 공개 package 0.30.1이 게시되어 있어야 설치할 수 있습니다. Windows에서는 PowerShell 7로 `run-e2e.ps1`을 실행하고, Linux에서는 `run-e2e.sh`를 실행합니다.

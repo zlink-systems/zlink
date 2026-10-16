@@ -5,6 +5,8 @@ import java.time.Duration;
 public final class Control {
     private Control() {}
 
+    public static final int REPLACEMENT_X = 0;
+    public static final String VACATE_ZONE = "vacate-zone", ZONE_VACATED = "ZONE_VACATED";
     public static final String DRAIN = "drain",
             SHUTDOWN = "shutdown",
             READY = "READY ",

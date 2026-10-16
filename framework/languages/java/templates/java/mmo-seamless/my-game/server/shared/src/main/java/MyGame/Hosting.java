@@ -117,6 +117,17 @@ public final class Hosting {
                 var input = new BufferedReader(new InputStreamReader(System.in));
                 for (String command; (command = input.readLine()) != null; ) {
                     switch (command) {
+                        case Control.VACATE_ZONE -> {
+                            var spots = app.getBean(ZLinkSpotManager.class);
+                            var spot =
+                                    spots.find(Rules.zoneId(Control.REPLACEMENT_X))
+                                            .toCompletableFuture()
+                                            .join()
+                                            .orElseThrow();
+                            if (!spots.close(spot).toCompletableFuture().join())
+                                throw new IllegalStateException("Idle Zone close failed");
+                            System.out.println(Control.ZONE_VACATED);
+                        }
                         case Control.DRAIN -> {
                             System.out.println(Control.RELOCATION_REQUESTED);
                             var result =

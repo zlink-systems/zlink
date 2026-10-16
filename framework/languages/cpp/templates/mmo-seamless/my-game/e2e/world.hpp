@@ -45,6 +45,8 @@ class World
     start_node (const std::string &name, const std::string &role, bool bootstrap = true)
     {
         auto config = read_json (root_ / "server/config" / (name + ".json"));
+        if (role == "zone" && name == "zone-b")
+            config["ZoneCapacity"] = Names::zone_count - 1;
         config["RedisEndpoint"] = redis_;
         config["KeyPrefix"] = project_ + ":";
         config["MeshEndpoint"] = "tcp://127.0.0.1:0";

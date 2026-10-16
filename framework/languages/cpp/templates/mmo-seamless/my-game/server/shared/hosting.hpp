@@ -73,11 +73,18 @@ class NodeControl final : public fx::hosted_service_t
                 runtime.listener_status (fx::listener_kind_t::stream, Names::stream).endpoint)
             : nlohmann::json (nullptr);
         std::cout << Control::ready << output.dump () << std::endl;
-        control_ = std::thread ([this, &runtime] {
+        auto &spots = services.get_required<fx::spot_manager_t> ();
+        control_ = std::thread ([this, &runtime, &spots] {
             try {
                 std::string command;
                 while (std::getline (std::cin, command)) {
-                    if (command == Control::drain) {
+                    if (command == Control::vacate_zone) {
+                        const auto spot = await_host (
+                          spots.find (Names::zone_id (Control::replacement_x)), Limits::packet);
+                        if (!spot || !await_host (spots.close (*spot), Limits::packet))
+                            throw std::runtime_error ("Idle Zone close failed");
+                        std::cout << Control::zone_vacated << std::endl;
+                    } else if (command == Control::drain) {
                         std::cout << Control::requested << std::endl;
                         fx::relocation_options_t options;
                         options.mode = fx::relocation_mode_t::planned_maintenance;

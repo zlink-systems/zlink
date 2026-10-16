@@ -99,9 +99,9 @@ suspend fun scenario(name: String, nodes: Nodes) = coroutineScope {
                     )
                     check(client.dungeon("after-update-${UUID.randomUUID()}").nodeId == "instance")
                     val replacement = create()
-                    check(replacement.join(299).nodeId == "zoneB")
+                    check(replacement.join(Control.REPLACEMENT_X).nodeId == before.nodeId)
                     val fresh = replacement.sessionInfo()
-                    check(replacement.move(300, 1).nodeId == "zoneB")
+                    check(replacement.move(Control.REPLACEMENT_X + 1, 1).nodeId == before.nodeId)
                     sameActor(fresh, replacement.sessionInfo())
                     check(replacement.disconnects == 0)
                 }

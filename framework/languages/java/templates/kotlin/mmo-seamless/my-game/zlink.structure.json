@@ -51,7 +51,7 @@
     {
       "id": "instance",
       "role": "instance",
-      "title": "Instance node 횞N",
+      "title": "Instance node \ud69eN",
       "config": "server/config/instance.json"
     },
     {
@@ -134,12 +134,6 @@
       "type": "Dungeon",
       "owner": "instance",
       "dynamic": true
-    },
-    {
-      "id": "instance-entry",
-      "kind": "entry",
-      "owner": "instance",
-      "type": null
     }
   ],
   "edges": [

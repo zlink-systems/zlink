@@ -3,6 +3,9 @@ package MyGame
 import java.time.Duration
 
 object Control {
+    const val REPLACEMENT_X = 0
+    const val VACATE_ZONE = "vacate-zone"
+    const val ZONE_VACATED = "ZONE_VACATED"
     const val DRAIN = "drain"
     const val SHUTDOWN = "shutdown"
     const val READY = "READY "

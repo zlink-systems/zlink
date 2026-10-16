@@ -7,7 +7,7 @@ import {
   ZlinkStreamDispatchMode,
   type ZlinkStreamConnector
 } from '@zlink-systems/stream-connector';
-import { Limits, PacketNames } from '../server/shared/constants.js';
+import { Control, Limits, PacketNames } from '../server/shared/constants.js';
 import {
   JoinWorldRequest,
   MoveRequest,
@@ -247,11 +247,11 @@ export async function scenario(
         assert.equal((await client.dungeon(`after-update-${runId}`)).nodeId, 'instance');
         // Exercise fresh Actor creation and movement after the replacement is ready.
         const replacement = create('replacement');
-        const fresh = await replacement.join(`replacement-${runId}`, 299);
-        assert.equal(fresh.nodeId, 'zoneB');
+        const fresh = await replacement.join(`replacement-${runId}`, Control.replacementX);
+        assert.equal(fresh.nodeId, before.nodeId, 'Replacement did not accept the new Zone');
         const freshSession = await replacement.sessionInfo();
-        const moved = await replacement.move(300, 1);
-        assert.equal(moved.nodeId, 'zoneB');
+        const moved = await replacement.move(Control.replacementX + 1, 1);
+        assert.equal(moved.nodeId, before.nodeId);
         sameActor(freshSession, await replacement.sessionInfo());
         assert.equal(replacement.disconnects, 0);
       } else throw new Error(`Unknown scenario ${name}`);

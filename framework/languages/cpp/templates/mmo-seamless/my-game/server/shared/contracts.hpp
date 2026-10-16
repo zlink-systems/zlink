@@ -55,6 +55,9 @@ struct Limits
 };
 struct Control
 {
+    static constexpr int replacement_x = 0;
+    static constexpr auto vacate_zone = "vacate-zone";
+    static constexpr auto zone_vacated = "ZONE_VACATED";
     static constexpr auto ready = "READY ";
     static constexpr auto drain = "drain";
     static constexpr auto shutdown = "shutdown";

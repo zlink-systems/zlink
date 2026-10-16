@@ -181,8 +181,8 @@ public final class Structure {
                                                                     .asText()
                                                                     .equals("entry"))
                                     .count()
-                            == 1,
-                    "Object Server must declare exactly one Entry: " + id);
+                            == (role.equals(Roles.ZONE) ? 1 : 0),
+                    "Entry registrations differ from application: " + id);
             if (role.equals(Roles.INSTANCE))
                 require(
                         spots.stream()

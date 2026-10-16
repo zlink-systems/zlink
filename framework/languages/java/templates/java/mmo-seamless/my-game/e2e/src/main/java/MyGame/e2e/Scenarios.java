@@ -132,11 +132,13 @@ public final class Scenarios {
                                 "Dungeon unavailable after replacement");
                         var fresh = create(nodes, clients, "replacement-" + UUID.randomUUID());
                         require(
-                                fresh.join(299).nodeId().equals("zoneB"),
+                                fresh.join(Control.REPLACEMENT_X).nodeId().equals(before.nodeId()),
                                 "Replacement admission failed");
                         var identity = fresh.sessionInfo();
                         require(
-                                fresh.move(300, 1).nodeId().equals("zoneB"),
+                                fresh.move(Control.REPLACEMENT_X + 1, 1)
+                                        .nodeId()
+                                        .equals(before.nodeId()),
                                 "Replacement movement failed");
                         sameActor(identity, fresh.sessionInfo());
                         require(fresh.disconnects.get() == 0, "Replacement client disconnected");

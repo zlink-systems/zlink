@@ -126,8 +126,11 @@ fun checkStructure(root: Path) {
     }
     for (node in nodes.filter { roles[it["id"].asText()] in listOf("zone", "instance") }) {
         val id = text(node, "id")
-        check(spots.count { it["owner"].asText() == id && it["kind"].asText() == "entry" } == 1) {
-            "Object Server must declare exactly one Entry: $id"
+        check(
+            spots.count { it["owner"].asText() == id && it["kind"].asText() == "entry" } ==
+                if (roles[id] == "zone") 1 else 0
+        ) {
+            "Entry registrations differ from application: $id"
         }
         if (roles[id] == "instance")
             check(

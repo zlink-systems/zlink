@@ -140,7 +140,17 @@ class Nodes(private val root: Path) : AutoCloseable {
                     root.resolve(node["config"].asText()).toFile(),
                     NodeConfig::class.java,
                 )
-            val config = source.copy(redisEndpoint = redis, keyPrefix = "my-game:$runId:")
+            val config =
+                source.copy(
+                    redisEndpoint = redis,
+                    keyPrefix = "my-game:$runId:",
+                    zoneCapacity =
+                        if (
+                            role == "zone" && Rules.zoneId(Control.REPLACEMENT_X) !in source.zoneIds
+                        )
+                            Rules.ZONE_COUNT - 1
+                        else source.zoneCapacity,
+                )
             val path = logs.resolve("$id.json")
             Json.mapper.writeValue(path.toFile(), config)
             configs[id] = path
@@ -161,6 +171,8 @@ class Nodes(private val root: Path) : AutoCloseable {
 
     fun drain(id: String) {
         val node = requireNotNull(nodes[id])
+        node.command(Control.VACATE_ZONE)
+        node.waitFor(Control.ZONE_VACATED)
         node.command(Control.DRAIN)
         for (stage in
             listOf(Control.RELOCATION_REQUESTED, Control.RELOCATED, Control.SAFE_TO_SHUTDOWN)) node
