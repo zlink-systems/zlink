@@ -10,6 +10,8 @@ import java.util.*;
 public final class Structure {
     private Structure() {}
 
+    private record Edge(String from, String to, String label, String semantic) {}
+
     static void require(boolean value, String message) {
         if (!value) throw new IllegalStateException(message);
     }
@@ -190,13 +192,27 @@ public final class Structure {
                             == 1,
                     "Application Entry registration must declare one Entry: " + id);
         }
+        var declaredEdges = new HashSet<Edge>();
         for (var edge : array(s, "edges")) {
             require(
                     ids.contains(text(edge, "from")) && ids.contains(text(edge, "to")),
                     "Unknown edge endpoint");
-            text(edge, "label");
-            if (edge.has("semantic")) text(edge, "semantic");
+            declaredEdges.add(
+                    new Edge(
+                            text(edge, "from"),
+                            text(edge, "to"),
+                            text(edge, "label"),
+                            edge.has("semantic") ? text(edge, "semantic") : ""));
         }
+        for (var required :
+                Set.of(
+                        new Edge("players", "session", "STREAM", ""),
+                        new Edge("session", "fieldA", "relay", ""),
+                        new Edge("fieldA", "fieldB", "relocation", ""),
+                        new Edge("fieldB", "fieldA", "border pub/sub", "border-updates"),
+                        new Edge("fieldB", "instanceA", "GetOrCreate", ""),
+                        new Edge("fieldB", "location", "Location / lease", "location-authority")))
+            require(declaredEdges.contains(required), "Missing required edge: " + required);
         System.out.println("Structure: valid");
     }
 
