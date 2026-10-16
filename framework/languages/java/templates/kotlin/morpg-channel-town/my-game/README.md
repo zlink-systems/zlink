@@ -13,23 +13,27 @@ flowchart LR
 
 ## Prerequisites
 
-JDK 25, Docker Compose v2 with a running Docker daemon, and Bash or PowerShell 7. The included Gradle wrapper downloads Gradle. Public Framework 0.30.1 and binding 1.19.0 versions are pinned in `build.gradle.kts`. No repository checkout is required.
+Docker with Compose v2 and Linux containers, network access to Maven Central and the Gradle Plugin Portal, and PowerShell 7 on Windows. JDK 25 is required only for local process debugging. The Gradle wrapper is included; public package versions are pinned in `build.gradle.kts`.
 
 ## Build
 
 Bash:
 
 ```sh
-./gradlew --no-daemon build
+./run-e2e.sh --build-only
 ```
 
 PowerShell:
 
 ```powershell
-./gradlew.bat --no-daemon build
+pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
 ```
 
-## Local e2e
+## Docker e2e
+
+Docker builds a shared node image for all roles and a runner image. The pinned Eclipse Temurin JDK/JRE bases are defined by the Dockerfile ARGs. The runner uses the Docker socket to create sibling nodes sharing its network namespace, preserving loopback listeners and stdin/stdout control. Each invocation removes its containers, network and image tags; cleanup errors return exit 1. Logs remain in `.logs/`.
+
+For local process debugging, run `./run-e2e.sh --local` or `pwsh -NoProfile -File ./run-e2e.ps1 -Local`. Local mode uses JDK 25 and Compose Redis. Scenario and structure options work in both modes.
 
 ```sh
 ./run-e2e.sh
@@ -37,8 +41,8 @@ PowerShell:
 ```
 
 ```powershell
-./run-e2e.ps1
-./run-e2e.ps1 -Scenario channel,dungeon,reconnect,update
+pwsh -NoProfile -File ./run-e2e.ps1
+pwsh -NoProfile -File ./run-e2e.ps1 -Scenario channel,dungeon,reconnect,update
 ```
 
 The runner checks the structure, starts a unique Compose project with Redis on an OS-assigned loopback port, starts the application processes, and removes its resources. Run-specific configurations and stdout, stderr, and message-flow records are in `.logs/run-<id>/`. Use `--check-structure` or `-CheckStructure` for structure validation only.
@@ -71,6 +75,6 @@ The e2e configuration uses one Dungeon slot per Instance. After drain, the survi
 
 ## 한국어 실행 안내
 
-JDK 25와 Docker Compose를 준비한 뒤 위 Build 명령을 템플릿 디렉터리에서 실행합니다. Local e2e 명령은 구조 검사, Redis와 노드 기동, 시나리오 실행, 해당 실행의 자원 정리를 수행합니다. 실행별 설정과 message-flow 기록은 `.logs/run-<id>/`에 보존합니다.
+기본 e2e는 Docker에서 실행합니다. 로컬 process 디버깅은 JDK 25를 준비하고 `--local` 또는 `-Local`로 실행합니다. Docker Compose를 준비한 뒤 위 Build 명령을 템플릿 디렉터리에서 실행합니다. Docker e2e 명령은 구조 검사, Redis와 노드 기동, 시나리오 실행, 해당 실행의 자원 정리를 수행합니다. 실행별 설정과 message-flow 기록은 `.logs/run-<id>/`에 보존합니다.
 
 마을 채널 변경, 파티 던전 입장과 진행도, 재접속, instance 교체를 실제 응답으로 확인합니다. 운영 시에는 배포별 Redis key prefix와 네트워크에 맞는 listener 주소를 지정합니다. 노드 교체는 drain 관찰이 완료된 뒤 shutdown하고 같은 설정으로 대체 프로세스를 기동합니다.

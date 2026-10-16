@@ -20,6 +20,8 @@ Use public GetOrCreate, deferred Actor joins, host relocation, runtime observati
 
 ## Changes and verification
 
+Run `./run-e2e.sh` or `pwsh -NoProfile -File ./run-e2e.ps1` for Docker e2e. Use `--local` or `-Local` for JDK 25 process debugging. Build images with `--build-only` or `-BuildOnly`. Preserve the Docker socket control path and remove only resources owned by the current run.
+
 Keep `zlink.structure.json`, configuration, server registrations and the ordered channel, dungeon, reconnect, update scenarios consistent. Run the build and e2e on Windows and Linux. Any intermittent failure is a defect; preserve the first failure and investigate message-flow records in `.logs/run-<id>/`. Structure validation examines real files. Preserve cleanup errors and fail the run when cleanup fails. Keep README and this file in English, with a short Korean section only at the end of README; write code comments in English.
 
 Town and Instance register the shared application Entry and first-admission handler. Declare one Entry for each of these nodes and none for roles without application Entry registration; Framework default Entries are not part of the structure. Keep dynamic Dungeon declarations complete for every owning Instance. Preserve one Dungeon slot per Instance in the e2e configuration; it makes replacement placement deterministic. Keep the Message Follow duration and derived SafeToShutdown observation budget under their shared lifecycle constants.

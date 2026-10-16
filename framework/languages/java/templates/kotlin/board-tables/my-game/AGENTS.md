@@ -23,6 +23,8 @@ Use only the public Framework and binding packages. Keep the default typed JSON 
 
 ## Verification
 
-Run `./run-e2e.sh` or `pwsh -NoProfile -File ./run-e2e.ps1`. The default scenarios are `table`, `reconnect`, and `update`. Judge by responses and runtime observations, and do not add fixed waits. The structure check validates the actual files at the start of every run. Verify on a temporary copy during development that bad structure input is rejected, and do not leave self-test code in the template.
+Run `./run-e2e.sh` or `pwsh -NoProfile -File ./run-e2e.ps1` for Docker e2e. Use `--local` or `-Local` for JDK 25 process debugging. Build images with `--build-only` or `-BuildOnly`. Preserve the Docker socket control path and remove only resources owned by the current run.
+
+The default scenarios are `table`, `reconnect`, and `update`. Judge by responses and runtime observations, and do not add fixed waits. The structure check validates the actual files at the start of every run. Verify on a temporary copy during development that bad structure input is rejected, and do not leave self-test code in the template.
 
 Keep failure logs and the first message flow error. Do not cover an intermittent failure with a successful rerun. Limit cleanup to the processes and Compose project the run created. For a defect in a public package, report the reproduction, the first failure log, and the relevant source location, and do not work around it in the template. Write code comments in English and technical reports in formal Korean.

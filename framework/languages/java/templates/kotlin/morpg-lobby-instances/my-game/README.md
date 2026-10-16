@@ -15,21 +15,23 @@ The Lobby and Instance roles (`lobby`, `instanceA`, and `instanceB`) explicitly 
 
 ## Prerequisites
 
-- JDK 25, Docker with Compose, and PowerShell 7 on Windows or Bash on Linux.
-- Maven Central access for Framework 0.30.1 and binding 1.19.0. Versions are pinned in `build.gradle.kts`.
-- A valid `zlink.license` when required by the installed binding. Keep license files outside version control.
+Docker with Compose v2 and Linux containers, network access to Maven Central and the Gradle Plugin Portal, and PowerShell 7 on Windows. JDK 25 is required only for local process debugging. The Gradle wrapper is included; public package versions are pinned in `build.gradle.kts`.
 
 ## Build
 
 ```sh
-./gradlew --no-daemon installDist
+./run-e2e.sh --build-only
 ```
 
 ```powershell
-./gradlew.bat --no-daemon installDist
+pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
 ```
 
-## Local e2e
+## Docker e2e
+
+Docker builds a shared node image for all roles and a runner image. The pinned Eclipse Temurin JDK/JRE bases are defined by the Dockerfile ARGs. The runner uses the Docker socket to create sibling nodes sharing its network namespace, preserving loopback listeners and stdin/stdout control. Each invocation removes its containers, network and image tags; cleanup errors return exit 1. Logs remain in `.logs/`.
+
+For local process debugging, run `./run-e2e.sh --local` or `pwsh -NoProfile -File ./run-e2e.ps1 -Local`. Local mode uses JDK 25 and Compose Redis. Scenario and structure options work in both modes.
 
 ```sh
 ./run-e2e.sh
@@ -66,6 +68,6 @@ Instance capacity is one Dungeon per process to make replacement placement obser
 
 ## 한국어 실행 안내
 
-JDK 25와 Docker Compose를 준비한 뒤 위 Build 명령으로 배포 파일을 생성합니다. Windows에서는 PowerShell 7을 사용합니다. Local e2e 명령은 구조 검사, Redis와 노드 기동, 시나리오 판정, 자원 정리를 수행하며 실행 기록은 `.logs/run-<id>/`에 남깁니다.
+기본 e2e는 Docker에서 실행합니다. 로컬 process 디버깅은 JDK 25를 준비하고 `--local` 또는 `-Local`로 실행합니다. Docker Compose를 준비한 뒤 위 Build 명령으로 배포 파일을 생성합니다. Windows에서는 PowerShell 7을 사용합니다. Docker e2e 명령은 구조 검사, Redis와 노드 기동, 시나리오 판정, 자원 정리를 수행하며 실행 기록은 `.logs/run-<id>/`에 남깁니다.
 
 파티 구성과 준비 상태는 Party User Spot이 소유하고 던전 진행 상태는 Dungeon User Spot이 소유합니다. 인스턴스 교체 시에는 `drain` 뒤 `SAFE_TO_SHUTDOWN`을 확인하고 `shutdown`을 보낸 다음 같은 설정으로 대체 프로세스를 기동합니다. 공개 패키지 결함으로 실패하면 우회하지 않고 최초 오류와 message-flow 기록을 보존합니다.

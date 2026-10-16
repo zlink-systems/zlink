@@ -13,23 +13,27 @@ flowchart LR
 
 ## Prerequisites
 
-Install JDK 25, Docker with Compose v2, and PowerShell 7 on Windows. Gradle is included. Maven Central supplies Framework 0.30.1 and binding 1.19.0, pinned centrally in `build.gradle.kts`. The candidate Framework release must be published before the pinned build can resolve it.
+Docker with Compose v2 and Linux containers, network access to Maven Central and the Gradle Plugin Portal, and PowerShell 7 on Windows. JDK 25 is required only for local process debugging. The Gradle wrapper is included; public package versions are pinned in `build.gradle.kts`.
 
 ## Build
 
 From this directory on Linux:
 
 ```sh
-./gradlew --no-daemon installDist
+./run-e2e.sh --build-only
 ```
 
 On Windows:
 
 ```powershell
-./gradlew.bat --no-daemon installDist
+pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
 ```
 
-## Local e2e
+## Docker e2e
+
+Docker builds a shared node image for all roles and a runner image. The pinned Eclipse Temurin JDK/JRE bases are defined by the Dockerfile ARGs. The runner uses the Docker socket to create sibling nodes sharing its network namespace, preserving loopback listeners and stdin/stdout control. Each invocation removes its containers, network and image tags; cleanup errors return exit 1. Logs remain in `.logs/`.
+
+For local process debugging, run `./run-e2e.sh --local` or `pwsh -NoProfile -File ./run-e2e.ps1 -Local`. Local mode uses JDK 25 and Compose Redis. Scenario and structure options work in both modes.
 
 ```sh
 ./run-e2e.sh
@@ -68,6 +72,6 @@ Message Follow is explicitly set to 30 seconds. The `SAFE_TO_SHUTDOWN` observati
 
 ## 한국어 실행 안내
 
-JDK 25와 Docker Compose를 설치한 뒤 이 디렉터리에서 위 Build 명령을 실행합니다. Linux에서는 `./run-e2e.sh`, Windows에서는 `pwsh -NoProfile -File ./run-e2e.ps1`로 전체 시나리오를 검증합니다. 공개 Framework 0.30.1이 게시되어 있어야 기본 버전의 의존성을 받을 수 있습니다.
+기본 e2e는 Docker에서 실행합니다. 로컬 process 디버깅은 JDK 25를 준비하고 `--local` 또는 `-Local`로 실행합니다. Docker Compose를 설치한 뒤 이 디렉터리에서 위 Build 명령을 실행합니다. Linux에서는 `./run-e2e.sh`, Windows에서는 `pwsh -NoProfile -File ./run-e2e.ps1`로 전체 시나리오를 검증합니다. 공개 Framework 0.30.1이 게시되어 있어야 기본 버전의 의존성을 받을 수 있습니다.
 
 실행별 설정과 node 로그는 `.logs/run-<id>/`에 보존됩니다. Region process에 `drain`을 보내고 `SAFE_TO_SHUTDOWN`을 확인한 뒤 `shutdown`을 보냅니다. process 종료 후 같은 설정으로 대체 process를 시작합니다.

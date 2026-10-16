@@ -13,18 +13,21 @@ private const val RUN_ROOM_CAPACITY = 1
 private class Node(val id: String, module: String, config: Path, root: Path, logs: Path) {
     private val output = LinkedBlockingQueue<String>()
     val process =
-        ProcessBuilder(
-                Path.of(
-                        System.getProperty("java.home"),
-                        "bin",
-                        if (isWindows()) "java.exe" else "java",
-                    )
-                    .toString(),
-                "--enable-native-access=ALL-UNNAMED",
-                "-cp",
-                (root.resolve("server/$module/build/install/$module/lib").toString() + "/*"),
-                "MyGame.$module.ProgramKt",
-                config.toString(),
+        DockerRuntime.process(
+                listOf(
+                    Path.of(
+                            System.getProperty("java.home"),
+                            "bin",
+                            if (isWindows()) "java.exe" else "java",
+                        )
+                        .toString(),
+                    "--enable-native-access=ALL-UNNAMED",
+                    "-cp",
+                    (root.resolve("server/$module/build/install/$module/lib").toString() + "/*"),
+                    "MyGame.$module.ProgramKt",
+                    config.toString(),
+                ),
+                config,
             )
             .directory(root.toFile())
             .redirectError(logs.resolve("$id-stderr.log").toFile())
@@ -130,9 +133,11 @@ class Nodes(private val root: Path) : AutoCloseable {
     }
 
     fun start() {
-        composeStarted = true
-        compose("up", "-d", "--wait")
-        val redis = compose("port", "redis", "6379")
+        if (!DockerRuntime.enabled) {
+            composeStarted = true
+            compose("up", "-d", "--wait")
+        }
+        val redis = if (DockerRuntime.enabled) "redis:6379" else compose("port", "redis", "6379")
         val structure = Json.mapper.readTree(root.resolve("zlink.structure.json").toFile())
         val startupOrder = listOf(Roles.MATCH, Roles.SESSION, Roles.LOBBY)
         val applicationNodes =

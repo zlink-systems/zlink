@@ -21,6 +21,8 @@ Lobby and Instance register the shared application Entry and first-admission han
 
 ## Changes and verification
 
+Run `./run-e2e.sh` or `pwsh -NoProfile -File ./run-e2e.ps1` for Docker e2e. Use `--local` or `-Local` for JDK 25 process debugging. Build images with `--build-only` or `-BuildOnly`. Preserve the Docker socket control path and remove only resources owned by the current run.
+
 Keep `party`, `reconnect`, and `update` in that order in the runner and structure file. Preserve the shutdown and replacement assertions. Validate the structure before starting nodes. Run the relevant domain tests and e2e on Windows and Linux. A single intermittent failure is a defect; retain its first message-flow and node logs in `.logs/run-<id>/`.
 
 Change only resources belonging to this project. The runner owns its unique Compose project and node processes; never stop unrelated resources. Do not commit `.logs/`, build output, package caches, or `zlink.license`.
