@@ -3021,67 +3021,84 @@ bool verify_cancellable_serial_submission_lifecycle ()
         }
     }
 
-    // Relocation admission fence: while an Actor handoff barrier is reserved,
-    // an opted-in ordinary ingress post is refused under the same mutex that
-    // orders the barrier's own enqueue, so it can never land behind the barrier
-    // and run on the old owner after capture (spot-actor membership :903).
-    // Work that does not opt in -- relocation's own replay, join and commit --
-    // still enters the queue.
+    // A reservation between projection and queue preparation must retain the
+    // packet. Once the move closes, the still-active barrier orders new work.
     {
         offload_executor_t executor (1);
         serial_execution_queue_t queue (executor);
-        std::atomic_int fenced_runs{0};
-        std::atomic_int unfenced_runs{0};
-
-        bool refused_before_reservation = false;
-        serial_work_options_t probe_options;
-        probe_options.refuse_when_actor_handoff_fenced = true;
-        probe_options.actor_handoff_fence_refused = &refused_before_reservation;
-        if (!queue.try_post (
-              "ingress-before-barrier", [&] { ++unfenced_runs; }, probe_options)
-            || refused_before_reservation) {
-            queue.cancel_pending ();
+        zlink::framework::detail::actor_transfer_coordinator_t transfers;
+        using namespace zlink::framework::detail;
+        const std::string key = "player:atomic-admission";
+        handoff_packet_t packet;
+        packet.packet_name = "AtomicProbe";
+        packet.is_request = true;
+        packet.metadata.emplace ("__zlink.actorRequestId", "atomic-request");
+        auto initial = transfers.admit_dispatch_packet (key, nullptr, true, packet);
+        if (initial.append_result != handoff_append_result_t::not_moving || !initial.released_packet
+            || initial.queue_submission)
             return false;
-        }
-
-        auto handoff_barrier = queue.reserve_handoff_barrier ("relocation-admission-fence");
-        if (!handoff_barrier) {
-            queue.cancel_pending ();
+        if (!transfers.try_reserve_source (key, "atomic-transfer"))
             return false;
-        }
-        bool refused_after_reservation = false;
-        serial_work_options_t fenced_options;
-        fenced_options.refuse_when_actor_handoff_fenced = true;
-        fenced_options.actor_handoff_fence_refused = &refused_after_reservation;
-        const bool late_ingress_posted =
-          queue.try_post ("ingress-after-barrier", [&] { ++fenced_runs; }, fenced_options);
-        // Relocation-owned work never opts in and must still be accepted.
-        const bool relocation_work_posted =
-          queue.try_post ("relocation-owned", [&] { ++unfenced_runs; }, {});
-        if (late_ingress_posted || !refused_after_reservation || !relocation_work_posted) {
-            handoff_barrier.value ()->cancel ();
-            queue.cancel_pending ();
+        auto barrier = queue.reserve_handoff_barrier ("atomic-admission");
+        if (!barrier)
             return false;
-        }
-
-        // Cancelling the reservation lowers the fence immediately -- the
-        // coordinator source reservation is rolled back right after it, so the
-        // queue must not stay fenced while ordinary ingress is servable again.
-        handoff_barrier.value ()->cancel ();
-        bool refused_after_cancel = false;
-        serial_work_options_t resumed_options;
-        resumed_options.refuse_when_actor_handoff_fenced = true;
-        resumed_options.actor_handoff_fence_refused = &refused_after_cancel;
-        if (!queue.try_post (
-              "ingress-after-cancel", [&] { ++unfenced_runs; }, resumed_options)
-            || refused_after_cancel) {
-            queue.cancel_pending ();
-            return false;
-        }
+        std::atomic_int calls{0};
+        std::atomic_int runs{0};
+        auto submit = [&] {
+            ++calls;
+            return queue.try_post ("ordinary-ingress", [&] { ++runs; });
+        };
+        const auto parked = transfers.admit_dispatch_packet (
+          key, nullptr, true, std::move (*initial.released_packet), submit);
+        const auto duplicate = transfers.admit_dispatch_packet (key, nullptr, true, packet, submit);
+        auto backlog = transfers.cancel_move (key);
+        const auto admitted = transfers.admit_dispatch_packet (key, nullptr, true, packet, submit);
+        // One worker executes this sentinel after the barrier's queue job.
+        // The active barrier still prevents its ordinary follower from running.
+        std::promise<void> worker_reached_barrier;
+        auto reached = worker_reached_barrier.get_future ();
+        executor.submit ([&] { worker_reached_barrier.set_value (); });
+        reached.get ();
+        const bool ordered = calls == 1 && runs == 0;
+        barrier.value ()->cancel ();
         queue.drain ();
-        if (fenced_runs.load () != 0 || unfenced_runs.load () != 3) {
+        queue.close ();
+        const auto closed = transfers.admit_dispatch_packet (key, nullptr, true, packet, submit);
+        const runtime::protocol::actor_route_fence_t source_fence{
+          "atomic-admission", 1, zlink::routing_id_t::from ("source").to_bytes (), 1, 1, 1};
+        auto target_fence = source_fence;
+        target_fence.target_node_routing_id = zlink::routing_id_t::from ("target").to_bytes ();
+        target_fence.authority_owner_generation = 2;
+        const auto target_actor = actor_ref_access_t::make (node_rid_t::from_string ("target"),
+                                                            "player", "atomic-admission", 1);
+        transfers.activate_message_follow (
+          key, source_fence, target_actor,
+          spot_route_t{node_rid_t::from_string ("target"), spot_id_t ("target-spot"), "game"},
+          target_fence, std::chrono::steady_clock::now () + std::chrono::seconds (30),
+          "atomic-transfer");
+        // A successful commit that already closed the move must forward the
+        // original operation rather than submitting to the prepared old queue.
+        const auto followed =
+          transfers.admit_dispatch_packet (key, nullptr, true, packet, submit, &source_fence);
+        const auto fresh_followed = transfers.admit_dispatch_packet (
+          key, nullptr, true, packet, submit, nullptr, source_fence.object_generation);
+        const auto returned = transfers.admit_dispatch_packet (
+          key, nullptr, true, packet, submit, &target_fence, target_fence.object_generation);
+
+        if (parked.append_result != handoff_append_result_t::appended || parked.queue_submission
+            || parked.released_packet
+            || duplicate.append_result != handoff_append_result_t::duplicate_request
+            || duplicate.queue_submission || backlog.size () != 1
+            || admitted.queue_submission != std::optional<bool>{true} || admitted.released_packet
+            || !ordered || runs != 1 || closed.queue_submission != std::optional<bool>{false}
+            || calls != 3 || followed.queue_submission
+            || followed.message_follow_source != source_fence || !followed.released_packet
+            || followed.released_packet->metadata != packet.metadata
+            || fresh_followed.queue_submission
+            || fresh_followed.message_follow_source != source_fence
+            || returned.message_follow_source
+            || returned.queue_submission != std::optional<bool>{false})
             return false;
-        }
     }
 
     // Completing and then throwing reports the late exception without a

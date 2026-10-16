@@ -3248,7 +3248,7 @@ int reconcile_deadline_adopts_target_when_store_shows_committed ()
 // `configure_instance` is invoked after the coordinator admission and before
 // the Actor FIFO post, so reserving the barrier there reproduces the window
 // deterministically instead of relying on timing.
-int relocation_barrier_fences_late_actor_fifo_admission ()
+int relocation_barrier_fences_late_actor_fifo_admission (bool commit_before_post = false)
 {
     using namespace zlink::framework;
     using namespace zlink::framework::detail;
@@ -3279,6 +3279,25 @@ int relocation_barrier_fences_late_actor_fifo_admission ()
     const auto key = std::string ("player:fence-actor");
     spot_node_runtime_t spots (node);
 
+    const runtime::protocol::actor_route_fence_t source_fence{
+      "fence-actor", 1, zlink::routing_id_t::from ("actor-a").to_bytes (), 1, 1, 1};
+    auto target_fence = source_fence;
+    target_fence.target_node_routing_id = zlink::routing_id_t::from ("actor-b").to_bytes ();
+    target_fence.authority_owner_generation = 2;
+    std::atomic_int follow_calls{0};
+    spots.on_actor_message_follow (
+      [&] (const actor_ref_t &, const runtime::messaging::envelope_header_t &header,
+           const zlink::message_t &payload, std::chrono::milliseconds, const zlink::routing_id_t &,
+           const runtime::protocol::actor_route_fence_t &fence, std::uint8_t,
+           runtime::protocol::wire_operation_id_t,
+           std::uint64_t) -> task_t<std::optional<zlink::message_t>> {
+          ++follow_calls;
+          if (fence != source_fence || header.message_name != "FencedProbe"
+              || header.metadata.at ("sequence") != "LATE" || payload.to_string () != "late")
+              co_return result_t<std::optional<zlink::message_t>>::failure (
+                framework_error_kind_t::internal_failure, "late packet follow arguments changed");
+          co_return result_t<std::optional<zlink::message_t>>::success (zlink::message_t{});
+      });
     std::atomic_int configure_calls{0};
     std::shared_ptr<deferred_barrier_t> barrier;
     std::atomic_bool barrier_reserved{false};
@@ -3295,6 +3314,14 @@ int relocation_barrier_fences_late_actor_fifo_admission ()
             return;
         barrier = std::move (reserved.value ());
         barrier_reserved.store (true, std::memory_order_release);
+        if (commit_before_post) {
+            node->actor_transfer_coordinator.activate_message_follow (
+              key, source_fence, test_actor_ref ("actor-b", "player", "fence-actor", 1),
+              spot_route_t{node_rid_t::from_string ("actor-b"), spot_id_t ("target"), "game"},
+              target_fence, std::chrono::steady_clock::now () + std::chrono::seconds (30),
+              "commit-before-post");
+            node->actor_transfer_coordinator.cancel_move (key);
+        }
     };
     node->actor_factories.emplace ("player", std::move (factory));
 
@@ -3303,6 +3330,8 @@ int relocation_barrier_fences_late_actor_fifo_admission ()
     node->actor_generations.emplace (key, 1);
 
     std::atomic_int source_handler_runs{0};
+    std::atomic_int admission_notifications{0};
+    std::atomic_int owner_transfers{0};
     spot->handlers.push_back (
       spot_handler_descriptor_t{spot_handler_kind_t::actor_send, "FencedProbe", "",
                                 std::type_index (typeid (int)), std::type_index (typeid (void)),
@@ -3321,10 +3350,11 @@ int relocation_barrier_fences_late_actor_fifo_admission ()
 
     spot_inbound_message_t metadata;
     metadata.values.emplace ("sequence", "LATE");
-    auto sent =
-      spots.relay_actor_packet (actor, gateway.actor_context (actor), stream_message_kind_t::send,
-                                "FencedProbe", zlink::message_t::from (std::string ("late")),
-                                provider, serializers, std::move (metadata), nullptr);
+    auto sent = spots.relay_actor_packet (
+      actor, gateway.actor_context (actor), stream_message_kind_t::send, "FencedProbe",
+      zlink::message_t::from (std::string ("late")), provider, serializers, std::move (metadata),
+      nullptr, {}, [&] { ++admission_notifications; }, zlink::routing_id_t::from (std::uint32_t{0}),
+      {}, 0, std::nullopt, [&] { ++owner_transfers; });
     const auto sent_result = finite_task_result (std::move (sent));
 
     const auto cleanup = [&] {
@@ -3346,10 +3376,16 @@ int relocation_barrier_fences_late_actor_fifo_admission ()
         return 2;
     }
     // The contract, not just the symptom: the old owner must never run it.
-    std::this_thread::sleep_for (std::chrono::milliseconds (50));
-    if (source_handler_runs.load (std::memory_order_acquire) != 0) {
+    if (source_handler_runs.load (std::memory_order_acquire) != 0 || admission_notifications != 1
+        || owner_transfers != 0) {
         cleanup ();
         return 3;
+    }
+    if (commit_before_post) {
+        const bool forwarded =
+          follow_calls == 1 && node->actor_transfer_coordinator.take_backlog (key).empty ();
+        cleanup ();
+        return forwarded ? 0 : 9;
     }
     if (!node->actor_transfer_coordinator.blocks_dispatch (key)) {
         cleanup ();
@@ -3374,10 +3410,12 @@ int relocation_barrier_fences_late_actor_fifo_admission ()
     barrier.reset ();
     node->actor_transfer_coordinator.cancel_move (key);
     spot_inbound_message_t resumed_metadata;
-    auto resumed =
-      spots.relay_actor_packet (actor, gateway.actor_context (actor), stream_message_kind_t::send,
-                                "FencedProbe", zlink::message_t::from (std::string ("resumed")),
-                                provider, serializers, std::move (resumed_metadata), nullptr);
+    auto resumed = spots.relay_actor_packet (
+      actor, gateway.actor_context (actor), stream_message_kind_t::send, "FencedProbe",
+      zlink::message_t::from (std::string ("resumed")), provider, serializers,
+      std::move (resumed_metadata), nullptr, {}, [&] { ++admission_notifications; },
+      zlink::routing_id_t::from (std::uint32_t{0}), {}, 0, std::nullopt,
+      [&] { ++owner_transfers; });
     const auto resumed_result = finite_task_result (std::move (resumed));
     const auto resumed_deadline = std::chrono::steady_clock::now () + std::chrono::seconds (2);
     while (source_handler_runs.load (std::memory_order_acquire) == 0
@@ -3388,7 +3426,7 @@ int relocation_barrier_fences_late_actor_fifo_admission ()
     cleanup ();
     if (!resumed_result || !*resumed_result)
         return 7;
-    if (resumed_runs != 1)
+    if (resumed_runs != 1 || admission_notifications != 2 || owner_transfers != 1)
         return 8;
     return 0;
 }
@@ -3448,6 +3486,8 @@ int relocation_barrier_fences_late_actor_request_without_deadlock ()
     node->actor_generations.emplace (key, 1);
 
     std::atomic_int source_handler_runs{0};
+    std::atomic_int admission_notifications{0};
+    std::atomic_int owner_transfers{0};
     spot->handlers.push_back (
       spot_handler_descriptor_t{spot_handler_kind_t::actor_request, "FencedAsk", "",
                                 std::type_index (typeid (int)), std::type_index (typeid (void)),
@@ -3466,10 +3506,11 @@ int relocation_barrier_fences_late_actor_request_without_deadlock ()
 
     spot_inbound_message_t metadata;
     metadata.values.emplace ("__zlink.actorRequestId", "fence-request-1");
-    auto asked = spots.relay_actor_packet (actor, gateway.actor_context (actor),
-                                           stream_message_kind_t::request, "FencedAsk",
-                                           zlink::message_t::from (std::string ("ask")), provider,
-                                           serializers, std::move (metadata), nullptr);
+    auto asked = spots.relay_actor_packet (
+      actor, gateway.actor_context (actor), stream_message_kind_t::request, "FencedAsk",
+      zlink::message_t::from (std::string ("ask")), provider, serializers, std::move (metadata),
+      nullptr, {}, [&] { ++admission_notifications; }, zlink::routing_id_t::from (std::uint32_t{0}),
+      {}, 0, std::nullopt, [&] { ++owner_transfers; });
     // A preserved request must terminate here, not block behind the barrier.
     const auto asked_result = finite_task_result (std::move (asked));
 
@@ -3491,8 +3532,8 @@ int relocation_barrier_fences_late_actor_request_without_deadlock ()
         cleanup ();
         return 2;
     }
-    std::this_thread::sleep_for (std::chrono::milliseconds (50));
-    if (source_handler_runs.load (std::memory_order_acquire) != 0) {
+    if (source_handler_runs.load (std::memory_order_acquire) != 0 || admission_notifications != 1
+        || owner_transfers != 0) {
         cleanup ();
         return 3;
     }
@@ -6271,6 +6312,9 @@ int main (int argc, char **argv)
         handoff_fence != 0) {
         return 400 + handoff_fence;
     }
+    if (const auto completed_commit = relocation_barrier_fences_late_actor_fifo_admission (true);
+        completed_commit != 0)
+        return 470 + completed_commit;
     if (const auto handoff_fence_request =
           relocation_barrier_fences_late_actor_request_without_deadlock ();
         handoff_fence_request != 0) {
