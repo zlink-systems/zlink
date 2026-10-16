@@ -793,10 +793,13 @@ internal sealed partial class ZLinkProviderLocationRepository
             }
             catch (InvalidDataException)
             {
-                var observed = await ReadAuthorityRecordAsync(current.Key, cancellationToken)
-                    .ConfigureAwait(false);
-                if (observed is null || observed.Version != current.Version)
-                    return StaleAuthorityReclaimResult.Conflict;
+                foreach (var authority in members.Prepend(current))
+                {
+                    var observed = await ReadAuthorityRecordAsync(authority.Key, cancellationToken)
+                        .ConfigureAwait(false);
+                    if (observed is null || observed.Version != authority.Version)
+                        return StaleAuthorityReclaimResult.Conflict;
+                }
                 throw;
             }
         }
