@@ -1465,6 +1465,15 @@ public sealed partial class RelocationBehaviorConformanceTests
             await trace.WaitAsync("publicJoinCompleted");
             await target.Runtime.WaitForAcceptedActorHandoffsAsync(CancellationToken.None);
             Assert.False(transport.SessionRouteStarted.Task.IsCompleted);
+            // The source learns the target commit by polling the authority
+            // (location runtime §10), so the target Join terminal above does
+            // not order the source relocation terminal. The source releases
+            // its Deferred Join barrier only after that terminal's finally.
+            var deferredJoinPending = typeof(ZLinkActorRuntimeState).GetField(
+                "_deferredJoinPending",
+                BindingFlags.Instance | BindingFlags.NonPublic
+            )!;
+            await WaitUntilAsync(() => (int)deferredJoinPending.GetValue(sourceState)! == 0);
             var node = (
                 (ZLinkBackendSpotNodeWrapper)
                     source.Runtime.GetMeshNodeRuntime(RelocationBehaviorHost.MeshName).Node
