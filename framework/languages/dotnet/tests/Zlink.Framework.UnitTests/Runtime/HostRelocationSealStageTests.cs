@@ -82,8 +82,15 @@ public sealed class HostRelocationSealStageTests
         );
     }
 
-    [Fact]
-    public async Task Three_nodes_relocate_bound_actor_during_handler_and_stop_cleanly()
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task Three_nodes_relocate_bound_actor_during_handler_and_stop_cleanly(
+        bool bindBeforeJoin,
+        bool reuseTerminalMailbox
+    )
     {
         using var debug = new SealStageDebugCapture();
         using var flow = Environment.GetEnvironmentVariable("ZLINK_RELOCATION_TEST_FLOW_PATH")
@@ -117,11 +124,14 @@ public sealed class HostRelocationSealStageTests
             .InMesh(RelocationBehaviorHost.MeshName)
             .Request(new BehaviorCreate(7))
             .Async();
-        _ = await source
-            .Services.GetRequiredService<IZLinkActorClient>()
-            .RequestToActor(actorId, new BeginBehaviorJoin("zone-2"))
-            .Async<BehaviorAck>();
-        await trace.WaitAsync("publicJoinCompleted");
+        if (!bindBeforeJoin)
+        {
+            _ = await source
+                .Services.GetRequiredService<IZLinkActorClient>()
+                .RequestToActor(actorId, new BeginBehaviorJoin("zone-2"))
+                .Async<BehaviorAck>();
+            await trace.WaitAsync("publicJoinCompleted");
+        }
         await using var target = await RelocationBehaviorHost.StartAsync(
             "target",
             trace,
@@ -130,6 +140,18 @@ public sealed class HostRelocationSealStageTests
             true,
             relocateSpots: true
         );
+        if (reuseTerminalMailbox)
+        {
+            var previous = target.Runtime.GetOrCreateActorState(actorId);
+            var retired = previous.BeginHandlerActivationCompletion(
+                previous.ClearAfterDestroyOnLane
+            );
+            _ = await retired.Completion;
+            var failure = Assert.Throws<ZLinkFrameworkException>(() =>
+                previous.ReserveHandoffRestoreBarrier()
+            );
+            Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, failure.Kind);
+        }
         var builder = Host.CreateApplicationBuilder();
         var handler = new SealStageHandler();
         builder.Services.AddSingleton(handler);
@@ -178,9 +200,17 @@ public sealed class HostRelocationSealStageTests
             }
         );
         await connector.Connect.Async();
-        var pushed = connector.WaitFor<BehaviorAck>().Timeout(TimeSpan.FromSeconds(5)).Async();
         await connector.Send(new SealStageBind(actorId)).Async();
         await handler.Bound.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        if (bindBeforeJoin)
+        {
+            await connector.Request(new BeginBehaviorJoin("zone-2")).Async<BehaviorAck>();
+            await trace.WaitAsync("publicJoinCompleted");
+        }
+        var before = await connector
+            .Request(new SealStageSessionInfoRequest())
+            .Async<SealStageSessionInfo>();
+        var pushed = connector.WaitFor<BehaviorAck>().Timeout(TimeSpan.FromSeconds(5)).Async();
         await connector.Send(new SealStageWork("relocation-overlap")).Async();
         await trace.WaitAsync("overlapHandlerStarted");
         var relocation = source
@@ -209,6 +239,7 @@ public sealed class HostRelocationSealStageTests
                 ZLinkFrameworkRelocationOutcome.Relocated,
                 (await relocation.WaitAsync(TimeSpan.FromSeconds(15))).Outcome
             );
+            Assert.Equal(1, trace.TargetLifecycleAttemptCount);
             if (flow is not null)
             {
                 var stages = flow.ReadLines()
@@ -252,6 +283,10 @@ public sealed class HostRelocationSealStageTests
                         stage.Dispose();
                 }
             }
+            var after = await connector
+                .Request(new SealStageSessionInfoRequest())
+                .Async<SealStageSessionInfo>();
+            Assert.Equal(before, after);
             await connector.Send(new SealStageWork("after-relocation")).Async();
             await trace.WaitAsync("afterRelocationPush");
             Assert.False(handler.Disconnected.Task.IsCompleted);
@@ -304,6 +339,10 @@ public sealed class HostRelocationSealStageTests
 }
 
 internal sealed record SealStageBind(string ActorId);
+
+internal sealed record SealStageSessionInfoRequest;
+
+internal sealed record SealStageSessionInfo(string SessionId, string ActorId, ulong Generation);
 
 internal sealed record SealStageWork(string Marker);
 
@@ -391,6 +430,20 @@ internal sealed class SealStageSession(
             var actor = Assert.IsType<ZLinkActorCreateResult.Existing>(result).Actor;
             await Context.Actors.BindOrGetAsync(actor, cancellationToken);
             handler.Bound.TrySetResult();
+            return;
+        }
+        if (dispatch.PacketName == nameof(SealStageSessionInfoRequest))
+        {
+            var actor = Context.Actors.Bound.Single().Ref;
+            await Context
+                .Client.Reply(
+                    new SealStageSessionInfo(
+                        Context.SessionId,
+                        actor.ActorId,
+                        actor.ObjectGeneration
+                    )
+                )
+                .Async();
             return;
         }
         await Context.Actors.Bound.Single().RelayAsync(payload);

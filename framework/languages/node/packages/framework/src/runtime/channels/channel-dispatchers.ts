@@ -40,7 +40,8 @@ import {
 import { codecsForFrameworkPacket } from './channel-framework-packets';
 import {
   ZLinkChannelDispatchPipeline,
-  type ZLinkChannelDispatchFields
+  type ZLinkChannelDispatchFields,
+  type ZLinkRequestDispatch
 } from './channel-dispatch-pipeline';
 
 export interface ZLinkChannelRequestDispatcherOptions {
@@ -238,7 +239,7 @@ export class ZLinkChannelRequestDispatcher {
     });
   }
 
-  dispatchMesh(record: ReceiveRecord, signal?: AbortSignal): Promise<void> {
+  dispatchMesh(record: ReceiveRecord, signal?: AbortSignal): void | Promise<void> {
     if (record.parts.length === 0 || record.parts[0].data().length === 0) {
       return completedChannelReply;
     }
@@ -295,25 +296,19 @@ export class ZLinkChannelRequestDispatcher {
       flowId: envelope.header.flowId,
       flowOrigin: envelope.header.flowOrigin
     };
-    return this.pipeline.dispatchRequest({
-      fields,
-      envelope,
-      codecs: this.options.codecs,
-      handler: this.options.handlers.get(packetName),
-      context: this.createMeshContext(envelope, record.sourceNodeRid),
-      signal,
-      missingHandlerMessage: `No channel request handler is registered for '${this.options.channelName}:${packetName}'.`,
-      writeReply: (reply) => {
-        requireMeshReplyAccepted(
-          record.reply(encodeChannelReplyParts(envelope.header, reply, this.options.codecs))
-        );
-      },
-      writeError: (error) => {
-        requireMeshReplyAccepted(
-          record.reply(encodeChannelErrorReplyParts(envelope.header, error))
-        );
-      }
-    });
+    return this.pipeline.dispatchRequest(
+      new ZLinkMeshRequestDispatch(
+        fields,
+        envelope,
+        this.options.codecs,
+        this.options.handlers.get(packetName),
+        this.createMeshContext(envelope, record.sourceNodeRid),
+        signal,
+        record,
+        'channel',
+        this.options.channelName
+      )
+    );
   }
 
   private submitReply(
@@ -347,6 +342,43 @@ export class ZLinkChannelRequestDispatcher {
       meshName: this.options.meshName!,
       sourceNodeRid: String(sourceNodeRid ?? '')
     } as ZLinkRouteMessageContext;
+  }
+}
+
+/**
+ * One mesh request handed to the dispatch pipeline. The reply writers are
+ * methods over the received record instead of per-message closures, and the
+ * missing-handler text is built only when no handler exists.
+ */
+class ZLinkMeshRequestDispatch<
+  TContext extends ZLinkMessageContext
+> implements ZLinkRequestDispatch<TContext> {
+  constructor(
+    readonly fields: ZLinkChannelDispatchFields,
+    readonly envelope: ReturnType<typeof decodeChannelEnvelope>,
+    readonly codecs: ZLinkChannelEnvelopeCodecRegistry | undefined,
+    readonly handler: ZLinkRequestDispatch<TContext>['handler'],
+    readonly context: TContext,
+    readonly signal: AbortSignal | undefined,
+    private readonly record: ReceiveRecord,
+    private readonly handlerSurface: 'channel' | 'routed',
+    private readonly channelName: string
+  ) {}
+
+  get missingHandlerMessage(): string {
+    return `No ${this.handlerSurface} request handler is registered for '${this.channelName}:${this.fields.packetName}'.`;
+  }
+
+  writeReply(reply: unknown): void {
+    requireMeshReplyAccepted(
+      this.record.reply(encodeChannelReplyParts(this.envelope.header, reply, this.codecs))
+    );
+  }
+
+  writeError(error: unknown): void {
+    requireMeshReplyAccepted(
+      this.record.reply(encodeChannelErrorReplyParts(this.envelope.header, error))
+    );
   }
 }
 
@@ -685,7 +717,7 @@ export class ZLinkRoutePacketDispatcher {
     });
   }
 
-  dispatchMesh(record: ReceiveRecord, signal?: AbortSignal): Promise<void> {
+  dispatchMesh(record: ReceiveRecord, signal?: AbortSignal): void | Promise<void> {
     if (record.parts.length === 0 || record.parts[0].data().length === 0) {
       return completedChannelReply;
     }
@@ -737,26 +769,19 @@ export class ZLinkRoutePacketDispatcher {
       flowId: envelope.header.flowId,
       flowOrigin: envelope.header.flowOrigin
     };
-    const codecs = codecsForFrameworkPacket(packetName, this.codecs);
-    return this.pipeline.dispatchRequest({
-      fields,
-      envelope,
-      codecs,
-      handler: this.requestHandlers.get(packetName),
-      context: this.createRouteContext(envelope, record.sourceNodeRid),
-      signal,
-      missingHandlerMessage: `No routed request handler is registered for '${this.routerChannelId}:${packetName}'.`,
-      writeReply: (reply) => {
-        requireMeshReplyAccepted(
-          record.reply(encodeChannelReplyParts(envelope.header, reply, codecs))
-        );
-      },
-      writeError: (error) => {
-        requireMeshReplyAccepted(
-          record.reply(encodeChannelErrorReplyParts(envelope.header, error))
-        );
-      }
-    });
+    return this.pipeline.dispatchRequest(
+      new ZLinkMeshRequestDispatch(
+        fields,
+        envelope,
+        codecsForFrameworkPacket(packetName, this.codecs),
+        this.requestHandlers.get(packetName),
+        this.createRouteContext(envelope, record.sourceNodeRid),
+        signal,
+        record,
+        'routed',
+        this.routerChannelId
+      )
+    );
   }
 
   async dispatchLocalCommand(
@@ -802,7 +827,7 @@ export class ZLinkRoutePacketDispatcher {
     sourceRid: string,
     sourceNodeRid: unknown,
     signal?: AbortSignal
-  ): Promise<void> {
+  ): void | Promise<void> {
     return this.pipeline.dispatchOneWay({
       fields: {
         messageKind: ZLinkDispatchMessageKind.Send,

@@ -577,6 +577,23 @@ test('public encoded payload keeps defensive input and output copies', () => {
   assert.equal(Buffer.from(payload.toBytes()).toString(), 'stable');
 });
 
+test('public encoded payload retains an owned view and exposes it without copying', () => {
+  const backing = Uint8Array.from([0, 10, 20, 30, 40]);
+  const input = backing.subarray(1, 4);
+  const payload = framework.ZLinkEncodedPayload.fromOwned(input);
+  const view = payload.view();
+
+  assert.equal(view.buffer, input.buffer);
+  assert.equal(view.byteOffset, input.byteOffset);
+  assert.equal(view.byteLength, input.byteLength);
+  assert.deepEqual([...view], [10, 20, 30]);
+  backing[2] = 21;
+  assert.deepEqual([...payload.view()], [10, 21, 30]);
+  const copied = payload.data();
+  copied[0] = 99;
+  assert.equal(payload.view()[0], 10);
+});
+
 test('selective application serializer leaves framework payload encoding on JSON', () => {
   class FrameworkPayload {}
   class ApplicationPayload {}
