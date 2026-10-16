@@ -3642,7 +3642,10 @@ test('fanout builder and subscriber handle share the manual endpoint set', () =>
 
 test('ZLinkModule route client uses runtime host route transport after bootstrap', async () => {
   const builder = nestjs.zlinkFramework();
-  const mesh = builder.addRouteMesh('mesh').listen(ANY_LOOPBACK_PORT).routingId('node-a');
+  if (process.env.ZLINK_NODE_BOOTSTRAP_FLOW_DIR !== undefined) {
+    builder.configureDispatch().messageFlow('normal');
+  }
+  builder.addRouteMesh('mesh').listen(ANY_LOOPBACK_PORT).routingId('node-a');
   const module = nestjs.ZLinkModule.forRoot(builder.build());
   const container = await resolveModuleProviders(module, [
     nestjs.ZLINK_FRAMEWORK_RUNTIME,
@@ -3650,7 +3653,6 @@ test('ZLinkModule route client uses runtime host route transport after bootstrap
     nestjs.ZLINK_ROUTE_CLIENT
   ]);
   const runtime = container.get(nestjs.ZLINK_FRAMEWORK_RUNTIME);
-  const routeMeshRuntime = container.get(nestjs.ZLINK_ROUTE_MESH_RUNTIME);
   const routeClient = container.get(nestjs.ZLINK_ROUTE_CLIENT);
   let remote;
 
@@ -3661,7 +3663,7 @@ test('ZLinkModule route client uses runtime host route transport after bootstrap
       ANY_LOOPBACK_PORT,
       boundMeshEndpoint(runtime)
     );
-    await waitUntil(() => routeMeshRuntime.isReady('mesh'), 10_000);
+    await waitForRouteMeshPeerReady(runtime, 'mesh', 'node-b');
     const reply = await routeClient
       .requestToNode('mesh', 'node-b', typedPacket('RoutePing', { value: 'ping' }))
       .timeout(1000)

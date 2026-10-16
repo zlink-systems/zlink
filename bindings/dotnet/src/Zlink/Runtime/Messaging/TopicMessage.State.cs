@@ -209,16 +209,12 @@ public sealed partial class TopicMessage
         if (reopen)
             EnsureOpen();
 
-        var retainedSinglePart = reopen && _parts == null
-            && _reusableSinglePart == null ? _singlePart : null;
         if (_parts != null)
             _parts.Dispose();
-        else if (!ReferenceEquals(_singlePart, retainedSinglePart))
+        else
             _singlePart?.Dispose();
         _parts = null;
         _singlePart = null;
-        if (retainedSinglePart != null)
-            _reusableSinglePart = retainedSinglePart;
         if (!reopen)
         {
             _reusableSinglePart?.Dispose();
@@ -244,18 +240,16 @@ public sealed partial class TopicMessage
         var candidate = _reusableSinglePart;
         if (_parts != null)
             _parts.Dispose();
-        else if (!ReferenceEquals(singlePart, candidate)
-                 && !ReferenceEquals(previousSinglePart, singlePart))
+        else if (!ReferenceEquals(previousSinglePart, singlePart))
             previousSinglePart?.Dispose();
         _parts = null;
         _singlePart = null;
 
         if (ReferenceEquals(singlePart, candidate))
         {
-            // The incoming wrapper was private until native receive succeeded.
-            // Keep the prior public wrapper as the next private candidate;
-            // callers may not retain it after this result is overwritten.
-            _reusableSinglePart = previousSinglePart;
+            // A successful receive transfers the private candidate to the
+            // public result. Released public wrappers are reused by the pool.
+            _reusableSinglePart = null;
         }
         _routingId = null;
         _routingIdSnapshot = default;

@@ -6103,6 +6103,7 @@ test('raw backend dispatches Spot requests and Actor sends through M6B owners', 
     hostApplicationJobQueue()
   );
   backend.setBind(endpoint);
+  backend.addChannelName('events');
   backend.start();
   const instanceRoute = {
     targetNodeRid: 'm6b-node',
@@ -6373,17 +6374,17 @@ test('raw backend dispatches Spot requests and Actor sends through M6B owners', 
     assert.equal(staleCompletion.failureErrno, 21);
   } finally {
     await authorityRoutes.stop();
-    backend.close();
+    await backend.close();
   }
 });
 
-test('closed raw backend accepts a completed Instance Close notification', () => {
+test('closed raw backend accepts a completed Instance Close notification', async () => {
   const backend = new ZLinkNodeRawMeshBackend(
     'm6b-mesh',
     'm6b-node',
     new ZLinkNodeRawBindingPort()
   );
-  backend.close();
+  await backend.close();
   assert.doesNotThrow(() => backend.completeClosedInstance('tenant:closed', 8n));
 });
 

@@ -579,6 +579,8 @@ void raw_mesh_node_owner_t::send_descriptor_update_on_lane (
   const service_node_descriptor_t &descriptor, const std::vector<admitted_peer_t> &peers)
 {
     for (const auto &peer : peers) {
+        if (!peer.ready)
+            continue;
         (void) submit_header_only_on_lane (
           peer.descriptor.node_routing_id,
           protocol::encode_route_mesh_admission (protocol::command::update, descriptor));
@@ -594,6 +596,7 @@ void raw_mesh_node_owner_t::close ()
                 _receive_flow_registration.close ();
                 _mailbox.close ();
                 _operations->shutdown ();
+                _routes.clear ();
             }
             return std::tuple{std::move (_port), std::move (_ingress_poller), std::move (_router)};
         })
@@ -2774,27 +2777,45 @@ raw_mesh_node_owner_t::receive_next (service_liveness_registry_t::clock_t::time_
                     peer_admission_result_t result;
                     {
                         std::lock_guard lifecycle_lock (_lifecycle_mutex);
-                        result = expectation.expected_descriptor
-                                   ? _topology.admit (descriptor, connection_id,
-                                                      *expectation.expected_descriptor, now,
-                                                      header.kind == protocol::command::admit)
-                                   : _topology.admit (descriptor, connection_id, now,
-                                                      header.kind == protocol::command::admit);
+                        result =
+                          expectation.expected_descriptor
+                            ? _topology.admit (descriptor, connection_id,
+                                               *expectation.expected_descriptor, now, header.kind)
+                            : _topology.admit (descriptor, connection_id, now, header.kind);
                         trace_admission_phase (received->source_routing_id,
                                                descriptor.lifecycle_generation, header.kind,
                                                result);
                     }
                     refresh_admission_due_on_lane ();
-                    // The ADMIT carries the local descriptor read in this owner
-                    // turn, ordered with every descriptor publication.
-                    if (header.kind == protocol::command::hello
-                        && (result == peer_admission_result_t::not_required
-                            || result == peer_admission_result_t::admitted
-                            || result == peer_admission_result_t::duplicate_connection)) {
-                        (void) submit_header_only_on_lane (
-                          received->source_routing_id,
-                          protocol::encode_route_mesh_admission (protocol::command::admit,
-                                                                 _topology.local_descriptor ()));
+                    if (result == peer_admission_result_t::not_required
+                        || result == peer_admission_result_t::admitted
+                        || result == peer_admission_result_t::duplicate_connection) {
+                        if (header.kind == protocol::command::hello) {
+                            auto local = _topology.local_descriptor ();
+                            const auto route = _routes.find (received->source_routing_id);
+                            // The exchange owns the descriptor until the remote ADMIT;
+                            // its catch-up publication sends later revisions as UPDATE.
+                            if (route != _routes.end () && !route->second.hello.empty ())
+                                local = protocol::decode_route_mesh_admission (
+                                  route->second.hello, protocol::command::hello,
+                                  local.node_routing_id);
+                            (void) submit_header_only_on_lane (
+                              received->source_routing_id, protocol::encode_route_mesh_admission (
+                                                             protocol::command::admit, local));
+                        } else if (header.kind == protocol::command::admit) {
+                            const auto route = _routes.find (received->source_routing_id);
+                            if (route != _routes.end () && !route->second.hello.empty ()) {
+                                auto hello = std::exchange (route->second.hello, {});
+                                const auto local = _topology.local_descriptor ();
+                                if (hello
+                                    != protocol::encode_route_mesh_admission (
+                                      protocol::command::hello, local)) {
+                                    const auto peer = _topology.peer (received->source_routing_id);
+                                    if (peer)
+                                        send_descriptor_update_on_lane (local, {*peer});
+                                }
+                            }
+                        }
                     }
                     return result;
                 })
@@ -3512,7 +3533,7 @@ bool raw_mesh_node_owner_t::route_current_locked (const std::vector<std::uint8_t
                                                   std::uint64_t route_generation) const
 {
     const auto route = _routes.find (node_routing_id);
-    return route != _routes.end () && route->second == route_generation;
+    return route != _routes.end () && route->second.generation == route_generation;
 }
 
 raw_mesh_node_owner_t::node_target_t raw_mesh_node_owner_t::classify_node_target (
@@ -3541,12 +3562,12 @@ raw_mesh_node_owner_t::peer_route (const std::vector<std::uint8_t> &rid,
           if (selected == _routes.end ())
               return std::pair<std::uint64_t, bool>{0, false};
           const auto peer = _topology.peer (rid);
-          return std::pair{
-            selected->second,
-            peer && peer->ready
-              && (!lifecycle_generation
-                  || peer->descriptor.lifecycle_generation == *lifecycle_generation)
-              && detail::backend::is_route_connection (peer->connection_id, selected->second)};
+          return std::pair{selected->second.generation,
+                           peer && peer->ready
+                             && (!lifecycle_generation
+                                 || peer->descriptor.lifecycle_generation == *lifecycle_generation)
+                             && detail::backend::is_route_connection (peer->connection_id,
+                                                                      selected->second.generation)};
       })
       .get ();
 }
@@ -3584,16 +3605,23 @@ std::size_t raw_mesh_node_owner_t::apply_route_snapshot (zlink::poll_event_flag_
                   snapshot = _router->routes_snapshot ();
               }
               decltype (_routes) observed;
-              for (const auto &route : snapshot)
-                  observed.emplace (route.routing_id.to_bytes (), route.route_generation);
+              for (const auto &route : snapshot) {
+                  const auto rid = route.routing_id.to_bytes ();
+                  auto previous = _routes.find (rid);
+                  observed.emplace (rid,
+                                    previous != _routes.end ()
+                                        && previous->second.generation == route.route_generation
+                                      ? std::move (previous->second)
+                                      : selected_route_t{route.route_generation, {}});
+              }
               // A route that ended or was replaced loses its admission and
               // liveness; a new route admits only through a new handshake.
-              for (const auto &[node_routing_id, generation] : _routes) {
+              for (const auto &[node_routing_id, route] : _routes) {
                   const auto still = observed.find (node_routing_id);
-                  if (still != observed.end () && still->second == generation)
+                  if (still != observed.end () && still->second.generation == route.generation)
                       continue;
                   ++changes;
-                  const auto connection_id = route_connection_id (generation);
+                  const auto connection_id = route_connection_id (route.generation);
                   trace_mesh ("route-ended routing=" + owner_key (node_routing_id)
                               + " connection=" + owner_key (connection_id));
                   const auto removed = _topology.disconnect (node_routing_id, connection_id);
@@ -3601,13 +3629,14 @@ std::size_t raw_mesh_node_owner_t::apply_route_snapshot (zlink::poll_event_flag_
                   if (removed)
                       end_peer_operations_if_disconnected_locked (node_routing_id);
               }
-              for (const auto &[node_routing_id, generation] : observed) {
-                  if (route_current_locked (node_routing_id, generation))
+              for (const auto &[node_routing_id, route] : observed) {
+                  if (route_current_locked (node_routing_id, route.generation))
                       continue;
                   if (!_routes.contains (node_routing_id))
                       ++changes;
                   trace_mesh ("route-selected routing=" + owner_key (node_routing_id)
-                              + " connection=" + owner_key (route_connection_id (generation)));
+                              + " connection="
+                              + owner_key (route_connection_id (route.generation)));
               }
               _routes = std::move (observed);
           }
@@ -3633,22 +3662,23 @@ void raw_mesh_node_owner_t::refresh_admission_due_on_lane ()
 {
     _liveness.set_admission_pending (
       std::any_of (_routes.begin (), _routes.end (), [this] (const auto &route) {
-          return route_needs_hello_on_lane (route.first, route.second);
+          return route_needs_hello_on_lane (route.first, route.second.generation);
       }));
 }
 
 void raw_mesh_node_owner_t::submit_pending_hellos_on_lane ()
 {
-    std::optional<std::vector<std::uint8_t>> hello;
-    for (const auto &[rid, generation] : _routes) {
-        if (!route_needs_hello_on_lane (rid, generation))
+    bool pending = false;
+    for (auto &[rid, route] : _routes) {
+        if (!route_needs_hello_on_lane (rid, route.generation))
             continue;
-        if (!hello)
-            hello = protocol::encode_route_mesh_admission (protocol::command::hello,
-                                                           _topology.local_descriptor ());
-        (void) submit_header_only_on_lane (rid, *hello);
+        pending = true;
+        if (route.hello.empty ())
+            route.hello = protocol::encode_route_mesh_admission (protocol::command::hello,
+                                                                 _topology.local_descriptor ());
+        (void) submit_header_only_on_lane (rid, route.hello);
     }
-    _liveness.set_admission_pending (hello.has_value ());
+    _liveness.set_admission_pending (pending);
 }
 
 task_t<service_liveness_tick_t>

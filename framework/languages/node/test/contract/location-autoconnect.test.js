@@ -1376,11 +1376,11 @@ test('a manual intent survives loss of its selected route until its owner remove
     const intent = await source.connectPeer({ endpoint, expectedRid: 'target' });
     assert.equal(source.hasPeerRouteOrConnectionIntent('target', endpoint), true);
     await until(() => source.isPeerRouteReady('target'));
-    target.close();
+    await target.close();
     await until(() => source.observePeerRoute('target').generation === undefined);
     assert.equal(source.hasPeerRouteOrConnectionIntent('target', endpoint), true,
       'transport loss does not remove the application manual intent');
     source.removePeerConnection(intent);
     assert.equal(source.hasPeerRouteOrConnectionIntent('target', endpoint), false);
-  } finally { source.close(); target.close(); }
+  } finally { await source.close(); await target.close(); }
 });

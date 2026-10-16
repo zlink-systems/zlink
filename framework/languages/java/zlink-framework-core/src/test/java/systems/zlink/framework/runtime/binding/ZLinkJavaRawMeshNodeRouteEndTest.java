@@ -11,6 +11,7 @@ import systems.zlink.contracts.core.Zlink;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceLivenessRegistry;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceNodeDescriptor;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceTopologyRegistry;
+import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 
 import java.util.List;
 import java.util.Map;
@@ -34,7 +35,10 @@ final class ZLinkJavaRawMeshNodeRouteEndTest {
                 setField(node, "topology", topology);
                 assertEquals(
                         ZLinkServiceTopologyRegistry.AdmissionResult.ADMITTED,
-                        topology.admit(descriptor(peerRid), connectionId));
+                        topology.admit(
+                                descriptor(peerRid),
+                                connectionId,
+                                ServiceWireConstants.COMMAND_HELLO));
                 var liveness = (ZLinkServiceLivenessRegistry) field(node, "liveness");
                 liveness.admit(peerRid, connectionId, 0);
                 long probeId = liveness.tick(0).probes().getFirst().probeId();
@@ -43,7 +47,8 @@ final class ZLinkJavaRawMeshNodeRouteEndTest {
                 ready.put(peerRid, connectionId);
                 Map<RoutingId, ZLinkJavaRawMeshNode.HelloExchange> announced =
                         mapField(node, "helloExchanges");
-                var exchange = new ZLinkJavaRawMeshNode.HelloExchange(admittedGeneration, null);
+                var exchange =
+                        new ZLinkJavaRawMeshNode.HelloExchange(admittedGeneration, null, null);
                 announced.put(peerRid, exchange);
                 setField(node, "selectedRoutes", Map.of(peerRid, endedGeneration));
 

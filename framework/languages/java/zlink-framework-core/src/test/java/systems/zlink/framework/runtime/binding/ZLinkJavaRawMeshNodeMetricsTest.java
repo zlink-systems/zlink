@@ -31,6 +31,7 @@ import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6AWireCodec
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceNodeDescriptor;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceTopologyRegistry;
+import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 
 import java.lang.reflect.Field;
 import java.time.Duration;
@@ -694,16 +695,17 @@ final class ZLinkJavaRawMeshNodeMetricsTest {
             RoutingId peer = RoutingId.from("selection-peer");
             for (String reason : List.of("no_member", "not_ready", "draining")) {
                 if (!reason.equals("no_member")) {
+                    boolean preparing = reason.equals("not_ready");
                     var current = topology.localDescriptor();
                     var descriptor =
                             new ZLinkServiceNodeDescriptor(
                                     "mesh",
                                     peer,
                                     1,
-                                    reason.equals("not_ready") ? 1 : 2,
+                                    preparing ? 1 : 2,
                                     "inproc://selection-peer",
                                     List.of(new ZLinkServiceNodeDescriptor.Channel("orders", 100)),
-                                    reason.equals("not_ready")
+                                    preparing
                                             ? ZLinkServiceNodeDescriptor.State.PREPARING
                                             : ZLinkServiceNodeDescriptor.State.DRAINING,
                                     current.securityIdentity(),
@@ -717,7 +719,12 @@ final class ZLinkJavaRawMeshNodeMetricsTest {
                                     0);
                     assertEquals(
                             ZLinkServiceTopologyRegistry.AdmissionResult.ADMITTED,
-                            topology.admit(descriptor, "connection"));
+                            topology.admit(
+                                    descriptor,
+                                    "connection",
+                                    preparing
+                                            ? ServiceWireConstants.COMMAND_HELLO
+                                            : ServiceWireConstants.COMMAND_UPDATE));
                 }
                 try (Message packet = Message.from("Packet");
                         Message body = Message.from("body")) {

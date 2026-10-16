@@ -8,7 +8,10 @@ import {
 } from '../../contracts/Configuration/RegistrationBuilderPolicy';
 import { descriptorConnectionNotRequired } from './route-mesh-connection-policy';
 import { SmoothWeightedSelection } from './service-weighted-selection';
-import { SERVICE_WIRE_REQUIRED_CAPABILITY } from './service-wire-constants.generated';
+import {
+  SERVICE_WIRE_REQUIRED_CAPABILITY,
+  ServiceWireCommand
+} from './service-wire-constants.generated';
 
 export type ServiceNodeState =
   'preparing' | 'serving' | 'retiring' | 'draining' | 'stopped' | 'error';
@@ -42,6 +45,7 @@ export interface ServiceNodeDescriptor {
 
 interface ServiceRouteAdmission {
   readonly descriptor: ServiceNodeDescriptor;
+  readonly descriptorBytes?: Uint8Array;
   readonly connectionId?: string | bigint;
   readonly remoteAdmitReceived?: boolean;
 }
@@ -113,7 +117,8 @@ export class ServiceTopologyRegistry {
     connectionId: string | bigint,
     expected?: ServicePeerAdmissionExpectation,
     admitLiveness?: () => ServiceLivenessConnection,
-    remoteAdmitReceived = false
+    command: number = ServiceWireCommand.hello,
+    descriptorBytes?: Uint8Array
   ): PeerAdmissionResult {
     try {
       validateDescriptor(descriptor);
@@ -136,44 +141,51 @@ export class ServiceTopologyRegistry {
     const current = this.peersByRid.get(descriptor.nodeRoutingId);
     const previous = current ?? this.notRequiredByRid.get(descriptor.nodeRoutingId);
     const receivedAdmit =
-      remoteAdmitReceived ||
+      command === ServiceWireCommand.admit ||
       (previous?.connectionId === connectionId && previous.remoteAdmitReceived === true);
+    if (
+      previous !== undefined &&
+      previous.descriptor.lifecycleGeneration === descriptor.lifecycleGeneration
+    ) {
+      const existing = previous.descriptor;
+      if (
+        descriptor.descriptorRevision < existing.descriptorRevision ||
+        (descriptor.descriptorRevision === existing.descriptorRevision &&
+          !(previous.descriptorBytes !== undefined && descriptorBytes !== undefined
+            ? Buffer.compare(previous.descriptorBytes, descriptorBytes) === 0
+            : sameServiceNodeDescriptor(existing, descriptor))) ||
+        (descriptor.descriptorRevision > existing.descriptorRevision &&
+          command !== ServiceWireCommand.update)
+      )
+        return 'staleDescriptor';
+      if (
+        descriptor.descriptorRevision > existing.descriptorRevision &&
+        !sameImmutableDescriptor(existing, descriptor)
+      )
+        return 'invalidDescriptor';
+    } else if (command === ServiceWireCommand.update) {
+      return 'staleDescriptor';
+    }
+    const admission: ServiceRouteAdmission = {
+      descriptor: cloneDescriptor(descriptor),
+      ...(descriptorBytes === undefined ? {} : { descriptorBytes: Buffer.from(descriptorBytes) }),
+      connectionId,
+      remoteAdmitReceived: receivedAdmit
+    };
     if (descriptorConnectionNotRequired(this.local, descriptor)) {
       this.peersByRid.delete(descriptor.nodeRoutingId);
       this.remember(descriptor);
-      this.notRequiredByRid.set(descriptor.nodeRoutingId, {
-        descriptor: cloneDescriptor(descriptor),
-        connectionId,
-        remoteAdmitReceived: receivedAdmit
-      });
+      this.notRequiredByRid.set(descriptor.nodeRoutingId, admission);
       this.rebuildSelections();
       return 'notRequired';
     }
     this.notRequiredByRid.delete(descriptor.nodeRoutingId);
 
-    if (
-      current !== undefined &&
-      current.descriptor.lifecycleGeneration === descriptor.lifecycleGeneration &&
-      descriptor.descriptorRevision > current.descriptor.descriptorRevision &&
-      !sameImmutableDescriptor(current.descriptor, descriptor)
-    ) {
-      return 'invalidDescriptor';
-    }
-    if (
-      current !== undefined &&
-      current.descriptor.lifecycleGeneration === descriptor.lifecycleGeneration &&
-      (current.descriptor.descriptorRevision > descriptor.descriptorRevision ||
-        (current.descriptor.descriptorRevision === descriptor.descriptorRevision &&
-          !sameServiceNodeDescriptor(current.descriptor, descriptor)))
-    ) {
-      return 'staleDescriptor';
-    }
     // Core selects the one route per RID (Core ROUTER §10.1); an admission on
     // that route replaces the admission of a route it replaced.
     this.peersByRid.set(descriptor.nodeRoutingId, {
-      descriptor: cloneDescriptor(descriptor),
+      ...admission,
       connectionId,
-      remoteAdmitReceived: receivedAdmit,
       liveness: admitLiveness?.() ?? current?.liveness
     });
     this.remember(descriptor);

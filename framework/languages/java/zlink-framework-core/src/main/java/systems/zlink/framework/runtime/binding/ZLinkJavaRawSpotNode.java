@@ -1858,9 +1858,19 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                 () -> {
                     StreamBinding current = streamBindings.get(actor.actorId());
                     if (current != null
-                            && current.bindingGeneration() >= binding.bindingGeneration()
-                            && !current.equals(binding)) {
-                        throw new IllegalStateException("Actor has a newer STREAM session binding");
+                            && (current.bindingGeneration() > binding.bindingGeneration()
+                                    || current.bindingGeneration() == binding.bindingGeneration()
+                                            && (!current.sessionRid().equals(binding.sessionRid())
+                                                    || !current.actor()
+                                                            .actorId()
+                                                            .equals(binding.actor().actorId())
+                                                    || current.actor().generation()
+                                                            != binding.actor().generation()
+                                                    || current.actorSlot() != binding.actorSlot()
+                                                    || current.stream() != binding.stream()))) {
+                        throw new IllegalStateException(
+                                "STREAM session binding publication has a stale generation or"
+                                        + " conflicting identity");
                     }
                     if (!binding.equals(current)) {
                         streamBindings.put(actor.actorId(), binding);

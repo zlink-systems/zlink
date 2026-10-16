@@ -246,7 +246,10 @@ test('RouteMesh admission preserves an optional maintenance wave across updates'
         descriptorRevision: 2n,
         maintenanceWave: 'rolling-b'
       },
-      'connection-a'
+      'connection-a',
+      undefined,
+      undefined,
+      M6aServiceWireCommand.update
     ),
     'admitted'
   );
@@ -342,7 +345,7 @@ test('RouteMesh hello advertises the configured host instead of the bind host', 
       'tcp://127.0.0.1:28730'
     );
   } finally {
-    backend.close();
+    await backend.close();
   }
 });
 
@@ -432,7 +435,10 @@ test('topology snapshots fence reconnect and exclude retiring placement targets'
   const conflicting = { ...peer, state: 'retiring' as const };
   assert.equal(topology.admit(conflicting, 'connection-b'), 'staleDescriptor');
   const retiring = { ...conflicting, descriptorRevision: 2n };
-  assert.equal(topology.admit(retiring, 'connection-b'), 'admitted');
+  assert.equal(
+    topology.admit(retiring, 'connection-b', undefined, undefined, M6aServiceWireCommand.update),
+    'admitted'
+  );
   assert.equal(topology.disconnect('peer', 'connection-a'), false);
   assert.equal(topology.selectChannel('alpha'), undefined);
   assert.equal(topology.selectPlacement(), undefined);
@@ -618,7 +624,10 @@ test('topology admission fences expected identity, immutable revisions, duplicat
         descriptorRevision: 2n,
         channels: [{ name: 'different', weight: 100 }]
       },
-      'pipe-z'
+      'pipe-z',
+      undefined,
+      undefined,
+      M6aServiceWireCommand.update
     ),
     'invalidDescriptor'
   );
@@ -629,7 +638,10 @@ test('topology admission fences expected identity, immutable revisions, duplicat
         descriptorRevision: 2n,
         objectRole: 'client'
       },
-      'pipe-z'
+      'pipe-z',
+      undefined,
+      undefined,
+      M6aServiceWireCommand.update
     ),
     'invalidDescriptor'
   );
@@ -656,7 +668,10 @@ test('topology admission fences expected identity, immutable revisions, duplicat
     }
   ];
   for (const revision of immutableRevisions) {
-    assert.equal(topology.admit(revision, 'pipe-z'), 'invalidDescriptor');
+    assert.equal(
+      topology.admit(revision, 'pipe-z', undefined, undefined, M6aServiceWireCommand.update),
+      'invalidDescriptor'
+    );
   }
 
   // Core selects the one route per RID. An admission on the route that
@@ -857,9 +872,19 @@ test('Object Client pairs are NotRequired only when neither side has a RouteMesh
 
   const weightZeroServerMembership = {
     ...remoteClient,
+    lifecycleGeneration: remoteClient.lifecycleGeneration + 1n,
     descriptorRevision: 2n,
     channels: [{ name: 'control', weight: 0 }]
   };
+  // ChannelName membership is immutable within a lifecycle (MeshNode §7.1).
+  assert.equal(
+    topology.admit(
+      { ...weightZeroServerMembership, lifecycleGeneration: remoteClient.lifecycleGeneration },
+      'client-pair'
+    ),
+    'staleDescriptor'
+  );
+  assert.equal(topology.notRequiredPeers()[0]?.descriptorRevision, remoteClient.descriptorRevision);
   assert.equal(topology.admit(weightZeroServerMembership, 'weight-zero-server'), 'admitted');
   assert.equal(topology.notRequiredPeers().length, 0);
   assert.equal(topology.peer('remote-client')?.connectionId, 'weight-zero-server');
@@ -956,7 +981,10 @@ test('public weights preserve boundaries, descriptor revisions, ratios, and capa
     channels: [{ name: 'alpha', weight: 0 }],
     placementWeight: 0
   };
-  assert.equal(topology.admit(disabledHigh, 'high-1'), 'admitted');
+  assert.equal(
+    topology.admit(disabledHigh, 'high-1', undefined, undefined, M6aServiceWireCommand.update),
+    'admitted'
+  );
   assert.equal(topology.selectChannel('alpha')?.descriptor.nodeRoutingId, 'low');
   assert.equal(topology.selectPlacement()?.descriptor.nodeRoutingId, 'low');
   assert.throws(
@@ -1502,7 +1530,7 @@ test('raw admission keeps Object Client-only pairs out of liveness and records N
       ]
     );
   } finally {
-    backend.close();
+    await backend.close();
   }
 });
 
@@ -1621,7 +1649,7 @@ test('raw runtime admits peers and completes node/channel requests once', async 
     await publisher.publishAsync('alpha', 'topic', [Buffer.from('event')]);
     publisher.close();
   } finally {
-    backend.close();
+    await backend.close();
   }
 });
 
