@@ -2888,9 +2888,9 @@ void app_t::_apply_zlink_framework ()
       _state->monitoring->runtime_failures, _state->zlink.message_bus (), channel_snapshot,
       _state->handlers, _state->serializers, options.runtime_client_server_advertise_hosts (),
       options.runtime_fanout_advertise_hosts (), options.route_mesh_client_channels (), mesh_nodes,
-      [mesh_node_service] {
+      [mesh_node_service] (location_write_intent_t intent) {
           return mesh_node_service == nullptr
-                 || mesh_node_service->republish_after_store_recovery ();
+                 || mesh_node_service->republish_after_store_recovery (intent);
       },
       std::move (client_server_runtime), std::move (fanout_runtime), _state->listener_statuses);
     _state->startup_publication = [service = auto_connect_service.get ()] {

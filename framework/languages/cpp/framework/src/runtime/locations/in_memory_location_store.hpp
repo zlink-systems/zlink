@@ -65,9 +65,16 @@ class in_memory_location_repository_t : public location_repository_t
                     location_write_result_t{location_write_status_t::ignored_stale, 0, {}});
 
               if (intent == location_write_intent_t::new_claim) {
-                  if (found != _mesh_nodes.end ())
+                  if (found != _mesh_nodes.end ()
+                      && owner_token_is_live (
+                        {found->second.owner_id, found->second.lease_generation}, now))
                       return completed (
-                        location_write_result_t{location_write_status_t::rejected_conflict, 0, {}});
+                        same_mesh_node_descriptor (found->second, descriptor)
+                          ? location_write_result_t::stored (
+                              static_cast<std::int64_t> (found->second.descriptor_revision),
+                              found->second.updated_at)
+                          : location_write_result_t{
+                              location_write_status_t::rejected_conflict, 0, {}});
               } else if (intent == location_write_intent_t::renew) {
                   if (found == _mesh_nodes.end () || found->second.owner_id != descriptor.owner_id
                       || found->second.lease_generation != descriptor.lease_generation
@@ -172,7 +179,12 @@ class in_memory_location_repository_t : public location_repository_t
                       && owner_token_is_live (
                         {found->second.owner_id, found->second.lease_generation}, now))
                       return completed (
-                        location_write_result_t{location_write_status_t::rejected_conflict, 0, {}});
+                        same_client_server_descriptor (found->second, descriptor)
+                          ? location_write_result_t::stored (
+                              static_cast<std::int64_t> (found->second.descriptor_revision),
+                              found->second.updated_at)
+                          : location_write_result_t{
+                              location_write_status_t::rejected_conflict, 0, {}});
               } else if (intent == location_write_intent_t::renew) {
                   if (found == _client_servers.end ()
                       || found->second.owner_id != descriptor.owner_id
@@ -271,10 +283,16 @@ class in_memory_location_repository_t : public location_repository_t
                   if (found != _fanout_publishers.end ()
                       && owner_token_is_live (
                         {found->second.owner_id, found->second.lease_generation}, now)
-                      && (found->second.owner_id != descriptor.owner_id
+                      && (intent == location_write_intent_t::new_claim
+                          || found->second.owner_id != descriptor.owner_id
                           || found->second.lease_generation != descriptor.lease_generation))
                       return completed (
-                        location_write_result_t{location_write_status_t::rejected_conflict, 0, {}});
+                        same_fanout_descriptor (found->second, descriptor)
+                          ? location_write_result_t::stored (
+                              static_cast<std::int64_t> (found->second.descriptor_revision),
+                              found->second.updated_at)
+                          : location_write_result_t{
+                              location_write_status_t::rejected_conflict, 0, {}});
               } else if (intent != location_write_intent_t::renew) {
                   return completed (
                     location_write_result_t{location_write_status_t::rejected_conflict, 0, {}});

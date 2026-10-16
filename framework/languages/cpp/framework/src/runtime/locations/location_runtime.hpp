@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #pragma once
 
+#include "runtime/execution/task_result.hpp"
+
 #include "runtime/diagnostics/runtime_metrics.hpp"
 #include "runtime/execution/state_lane.hpp"
 #include "runtime/execution/infrastructure_wait_guard.hpp"
@@ -218,8 +220,9 @@ class location_runtime_t
             _started.store (false, std::memory_order_release);
             throw;
         }
-        _heartbeat_state = std::make_shared<heartbeat_owner_t> ();
-        _heartbeat = std::thread ([this, heartbeat = _heartbeat_state, operation_started_at] {
+        auto heartbeat = std::make_shared<heartbeat_owner_t> ();
+        std::atomic_store_explicit (&_heartbeat_state, heartbeat, std::memory_order_release);
+        _heartbeat = std::thread ([this, heartbeat = std::move (heartbeat), operation_started_at] {
 #ifndef NDEBUG
             runtime::infrastructure_wait_guard::infrastructure_scope_t scope (this);
 #endif
@@ -300,6 +303,65 @@ class location_runtime_t
     void record_runtime_failure (std::string message) const
     {
         record_failure (std::move (message));
+    }
+
+    // Location runtime §5: provider failures leave publication unknown. Only a
+    // confirmed conflicting claim is a startup error. The repository owns §10 reads.
+    task_t<bool> descriptor_write_confirmed (task_t<location_write_result_t> pending) const
+    {
+        const auto result = co_await await_result (std::move (pending));
+        if (!result) {
+            if (result.error () == nullptr)
+                std::rethrow_exception (result.exception ());
+            record_store_error ();
+            co_await _lane.run_task (
+              [this, message = std::string (result.error ()->what ())] () mutable {
+                  record_failure_on_lane (std::move (message));
+              });
+            co_return false;
+        }
+        if (result.value ().status == location_write_status_t::rejected_conflict)
+            throw framework_exception_t (framework_error_kind_t::not_configured,
+                                         "Location descriptor is held by another claim");
+        co_return result.value ().status == location_write_status_t::stored;
+    }
+
+    // This is the existing lease admission deadline, used as the renewal observation.
+    // Observers do not create a retry clock or a second lease state.
+    auto owner_lease_observation () const
+    {
+        return std::atomic_load_explicit (&_owner_lease, std::memory_order_acquire)
+          ->admission_deadline;
+    }
+
+    void wake_owner_lease_observers () const
+    {
+        if (auto heartbeat =
+              std::atomic_load_explicit (&_heartbeat_state, std::memory_order_acquire)) {
+            std::lock_guard lock (heartbeat->gate);
+            heartbeat->wake.notify_all ();
+        }
+    }
+
+    void wait_for_owner_lease_change (std::optional<std::chrono::steady_clock::time_point> observed,
+                                      const task_t<void> &stopped,
+                                      std::chrono::milliseconds polling_interval) const
+    {
+        constexpr auto *wait_site = "location/discovery-input";
+        if (auto heartbeat =
+              std::atomic_load_explicit (&_heartbeat_state, std::memory_order_acquire);
+            heartbeat && !heartbeat->stop.load (std::memory_order_acquire)) {
+            std::unique_lock lock (heartbeat->gate);
+            runtime::infrastructure_wait_guard::condition_wait_for (
+              heartbeat->wake, lock, polling_interval,
+              [&] {
+                  return stopped.await_ready () || heartbeat->stop.load (std::memory_order_acquire)
+                         || owner_lease_observation () != observed;
+              },
+              wait_site, runtime::infrastructure_wait_guard::wait_relation_t::own_input);
+        } else {
+            (void) detail::observe_task_result_for (stopped, polling_interval, std::stop_token{});
+        }
     }
 
     /* Discovered peer total observed on the auto-connect polling tick
@@ -452,6 +514,7 @@ class location_runtime_t
             runtime->_last_error.reset ();
             return true;
         });
+        runtime->wake_owner_lease_observers ();
     }
 
     static task_t<void> heartbeat_failure (std::shared_ptr<heartbeat_attempt_t> attempt,
@@ -724,11 +787,14 @@ class location_runtime_t
 
     void stop_heartbeat () noexcept
     {
-        auto heartbeat = _heartbeat_state;
+        auto heartbeat = std::atomic_load_explicit (&_heartbeat_state, std::memory_order_acquire);
         if (!heartbeat)
             return;
-        heartbeat->stop.store (true, std::memory_order_release);
-        heartbeat->wake.notify_all ();
+        {
+            std::lock_guard lock (heartbeat->gate);
+            heartbeat->stop.store (true, std::memory_order_release);
+            heartbeat->wake.notify_all ();
+        }
         if (_heartbeat.joinable ())
             runtime::infrastructure_wait_guard::join (_heartbeat, "location/heartbeat");
         std::shared_ptr<heartbeat_attempt_t> attempt;
@@ -745,7 +811,8 @@ class location_runtime_t
             if (attempt->task)
                 static_cast<void> (attempt->task->result ());
         }
-        _heartbeat_state.reset ();
+        std::atomic_store_explicit (&_heartbeat_state, std::shared_ptr<heartbeat_owner_t>{},
+                                    std::memory_order_release);
     }
 
     void heartbeat_loop (std::shared_ptr<heartbeat_owner_t> heartbeat,

@@ -2482,15 +2482,13 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                   });
             }
             if (owner) {
-                const auto written =
-                  _location_store->update_mesh_node (descriptor, location_write_intent_t::new_claim)
-                    .result ()
-                    .value ();
-                if (written.status != location_write_status_t::stored)
-                    throw framework_exception_t (
-                      framework_error_kind_t::not_configured,
-                      "MeshNode Location descriptor publication was fenced");
-                _published_mesh_nodes.push_back ({descriptor.mesh_name, descriptor.rid});
+                const auto written = infrastructure_result ([&] {
+                                         return _location_runtime->descriptor_write_confirmed (
+                                           _location_store->update_mesh_node (
+                                             descriptor, location_write_intent_t::new_claim));
+                                     }).value ();
+                if (written)
+                    _published_mesh_nodes.push_back ({descriptor.mesh_name, descriptor.rid});
             }
             _published_mesh_descriptors.push_back (descriptor);
             node->bind_descriptor_publisher (
@@ -2943,7 +2941,7 @@ bool mesh_node_host_service_t::publish_descriptor_state (framework_runtime_state
     }
 }
 
-bool mesh_node_host_service_t::republish_after_store_recovery ()
+bool mesh_node_host_service_t::republish_after_store_recovery (location_write_intent_t intent)
 {
     std::lock_guard lock (_descriptor_publish_mutex);
     const auto owner = current_location_owner ();
@@ -2961,6 +2959,8 @@ bool mesh_node_host_service_t::republish_after_store_recovery ()
         if (!first_publication && descriptor.owner_id == owner->owner_id
             && descriptor.lease_generation == owner->lease_generation)
             continue;
+        if (intent == location_write_intent_t::renew)
+            return false;
         descriptor.owner_id = owner->owner_id;
         descriptor.lease_generation = owner->lease_generation;
         if (!first_publication
@@ -2971,11 +2971,12 @@ bool mesh_node_host_service_t::republish_after_store_recovery ()
             ++descriptor.descriptor_revision;
         const auto written =
           infrastructure_result ([&] {
-              return _location_store->update_mesh_node (
-                descriptor, first_publication ? location_write_intent_t::new_claim
-                                              : location_write_intent_t::renew);
+              return _location_runtime->descriptor_write_confirmed (
+                _location_store->update_mesh_node (
+                  descriptor, first_publication ? location_write_intent_t::new_claim
+                                                : location_write_intent_t::renew));
           }).value ();
-        if (written.status != location_write_status_t::stored)
+        if (!written)
             return false;
         _published_mesh_descriptors[index] = std::move (descriptor);
         if (first_publication)

@@ -2814,10 +2814,29 @@ class provider_location_repository_t final : public location_repository_t
             const auto stored_owner = record_owner_id (stored);
             const auto stored_lease = record_lease_generation (stored);
             const auto previous_owner = co_await _store.read (key_owner (stored_owner));
-            const auto previous_owner_live = std::holds_alternative<store_found_t> (previous_owner);
-            if (intent == location_write_intent_t::new_claim && previous_owner_live)
-                co_return location_write_result_t{
-                  location_write_status_t::rejected_conflict, 0, {}};
+            const auto *previous_lease = std::get_if<store_found_t> (&previous_owner);
+            const auto previous_owner_live =
+              previous_lease && previous_lease->value.expires_at
+              && *previous_lease->value.expires_at > previous_lease->value.store_now
+              && owner_generation (previous_lease->value.bytes) == stored_lease;
+            if (intent == location_write_intent_t::new_claim && previous_owner_live) {
+                auto previous = stored;
+                auto requested = record;
+                previous.at (location_record_fields::descriptor)
+                  .erase (location_record_fields::updatedAt);
+                previous.at (location_record_fields::descriptor)
+                  .erase (location_record_fields::updatedAtEpochMs);
+                requested.at (location_record_fields::descriptor)
+                  .erase (location_record_fields::updatedAt);
+                requested.at (location_record_fields::descriptor)
+                  .erase (location_record_fields::updatedAtEpochMs);
+                co_return previous == requested
+                  ? location_write_result_t::stored (
+                      static_cast<std::int64_t> (provider_generation_known ? provider_generation
+                                                                           : 1),
+                      found->value.store_now)
+                  : location_write_result_t{location_write_status_t::rejected_conflict, 0, {}};
+            }
             if (intent == location_write_intent_t::takeover && previous_owner_live)
                 co_return location_write_result_t{location_write_status_t::ignored_stale, 0, {}};
             if (intent == location_write_intent_t::renew) {

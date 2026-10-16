@@ -4110,3 +4110,225 @@ TEST (CppFrameworkOpaqueLocationStore, MissingRecordVersionFailsClosed)
 }
 
 } // namespace
+
+namespace
+{
+class lost_descriptor_reply_store_t final : public location_store_t
+{
+  public:
+    in_memory_location_store_t inner;
+    bool lose_reply = false;
+    bool lose_confirmation = false;
+    bool hide_confirmation_on_loss = false;
+    int descriptor_reads = 0;
+    int descriptor_writes = 0;
+    task_t<store_read_result_t> read (store_key_t key) override
+    {
+        if (key.value.starts_with (std::string ("mesh-node") + '\0')) {
+            ++descriptor_reads;
+            if (lose_confirmation) {
+                lose_confirmation = false;
+                co_return result_t<store_read_result_t>::failure (
+                  framework_error_kind_t::internal_failure, "injected confirmation read failure");
+            }
+        }
+        co_return co_await inner.read (std::move (key));
+    }
+    task_t<store_scan_result_t> scan (store_scan_request_t request) override
+    {
+        return inner.scan (std::move (request));
+    }
+    task_t<store_write_result_t> write (store_write_request_t request) override
+    {
+        for (const auto &mutation : request.mutations) {
+            if (std::visit (
+                  [] (const auto &value) {
+                      return value.key.value.starts_with (std::string ("mesh-node") + '\0');
+                  },
+                  mutation))
+                ++descriptor_writes;
+        }
+        auto result = co_await inner.write (std::move (request));
+        if (lose_reply) {
+            lose_reply = false;
+            lose_confirmation = hide_confirmation_on_loss;
+            co_return result_t<store_write_result_t>::failure (
+              framework_error_kind_t::internal_failure, "injected lost descriptor reply");
+        }
+        co_return result;
+    }
+};
+}
+
+TEST (ZLinkFrameworkOpaqueStoreProviders, DescriptorLostReplyIsConfirmedBySameKeyRead)
+{
+    lost_descriptor_reply_store_t store;
+    provider_location_repository_t repository (store);
+    const auto owner = std::get<owner_lease_claimed_t> (
+                         repository.claim_owner_lease ("lost-reply-owner", 30s).result ().value ())
+                         .token;
+    mesh_node_descriptor_t descriptor;
+    descriptor.mesh_name = "lost-reply-mesh";
+    descriptor.rid = zlink::routing_id_t::from ("lost-reply-node");
+    descriptor.lifecycle_generation = 1;
+    descriptor.descriptor_revision = 1;
+    descriptor.endpoint = "tcp://127.0.0.1:7001";
+    descriptor.owner_id = owner.owner_id;
+    descriptor.lease_generation = owner.lease_generation;
+    store.lose_reply = true;
+    const auto result = repository.update_mesh_node (descriptor, location_write_intent_t::new_claim)
+                          .result ()
+                          .value ();
+    EXPECT_EQ (location_write_status_t::stored, result.status);
+    EXPECT_EQ (3, store.descriptor_reads); // capacity read, fence read, lost-reply confirmation
+    descriptor.updated_at += 1ms;
+    EXPECT_EQ (location_write_status_t::stored,
+               repository.update_mesh_node (descriptor, location_write_intent_t::new_claim)
+                 .result ()
+                 .value ()
+                 .status);
+    EXPECT_EQ (1, store.descriptor_writes);
+    descriptor.endpoint = "tcp://127.0.0.1:7002";
+    EXPECT_EQ (location_write_status_t::rejected_conflict,
+               repository.update_mesh_node (descriptor, location_write_intent_t::new_claim)
+                 .result ()
+                 .value ()
+                 .status);
+}
+
+TEST (ZLinkFrameworkOpaqueStoreProviders, NewClaimLostReplyAndReadFailureIsIdempotent)
+{
+    lost_descriptor_reply_store_t store;
+    provider_location_repository_t repository (store);
+    const auto owner = std::get<owner_lease_claimed_t> (
+                         repository.claim_owner_lease ("lost-claim-owner", 30s).result ().value ())
+                         .token;
+    mesh_node_descriptor_t descriptor;
+    descriptor.mesh_name = "lost-claim-mesh";
+    descriptor.rid = zlink::routing_id_t::from ("lost-claim-node");
+    descriptor.lifecycle_generation = 1;
+    descriptor.descriptor_revision = 1;
+    descriptor.endpoint = "tcp://127.0.0.1:7001";
+    descriptor.owner_id = owner.owner_id;
+    descriptor.lease_generation = owner.lease_generation;
+    store.lose_reply = true;
+    store.hide_confirmation_on_loss = true;
+    EXPECT_FALSE (
+      repository.update_mesh_node (descriptor, location_write_intent_t::new_claim).result ());
+    descriptor.updated_at += 1ms;
+    EXPECT_EQ (location_write_status_t::stored,
+               repository.update_mesh_node (descriptor, location_write_intent_t::new_claim)
+                 .result ()
+                 .value ()
+                 .status);
+    EXPECT_EQ (1, store.descriptor_writes);
+    descriptor.lease_generation += 1;
+    EXPECT_EQ (location_write_status_t::ignored_stale,
+               repository.update_mesh_node (descriptor, location_write_intent_t::new_claim)
+                 .result ()
+                 .value ()
+                 .status);
+}
+
+TEST (ZLinkFrameworkOpaqueStoreProviders, NewClaimReplayPreservesDescriptorAcrossRepositories)
+{
+    in_memory_location_store_t provider;
+    provider_location_repository_t provider_repository (provider);
+    in_memory_location_repository_t memory_repository;
+    for (location_repository_t *repository :
+         {static_cast<location_repository_t *> (&provider_repository),
+          static_cast<location_repository_t *> (&memory_repository)}) {
+        SCOPED_TRACE (repository == &provider_repository ? "provider" : "in-memory");
+        const auto owner = std::get<owner_lease_claimed_t> (
+                             repository->claim_owner_lease ("replay-owner", 30s).result ().value ())
+                             .token;
+        const auto other = std::get<owner_lease_claimed_t> (
+                             repository->claim_owner_lease ("replay-other", 30s).result ().value ())
+                             .token;
+        auto verify = [&] (auto descriptor, auto update) {
+            descriptor.owner_id = owner.owner_id;
+            descriptor.lease_generation = owner.lease_generation;
+            descriptor.lifecycle_generation = 1;
+            descriptor.descriptor_revision = 1;
+            descriptor.endpoint = "tcp://127.0.0.1:7001";
+            descriptor.security_identity = "default";
+            EXPECT_EQ (location_write_status_t::stored,
+                       update (descriptor).result ().value ().status);
+            descriptor.updated_at += 1ms;
+            EXPECT_EQ (location_write_status_t::stored,
+                       update (descriptor).result ().value ().status);
+            descriptor.endpoint = "tcp://127.0.0.1:7002";
+            EXPECT_EQ (location_write_status_t::rejected_conflict,
+                       update (descriptor).result ().value ().status);
+            descriptor.endpoint = "tcp://127.0.0.1:7001";
+            descriptor.owner_id = other.owner_id;
+            descriptor.lease_generation = other.lease_generation;
+            EXPECT_EQ (location_write_status_t::rejected_conflict,
+                       update (descriptor).result ().value ().status);
+        };
+        mesh_node_descriptor_t mesh;
+        mesh.mesh_name = "replay-mesh";
+        mesh.rid = zlink::routing_id_t::from ("replay-node");
+        verify (mesh, [&] (auto descriptor) {
+            return repository->update_mesh_node (std::move (descriptor),
+                                                 location_write_intent_t::new_claim);
+        });
+        client_server_server_descriptor_t server;
+        server.channel_name = "replay-server";
+        server.server_rid = zlink::routing_id_t::from ("replay-server");
+        verify (server, [&] (auto descriptor) {
+            return repository->update_client_server (std::move (descriptor),
+                                                     location_write_intent_t::new_claim);
+        });
+        fanout_publisher_descriptor_t fanout;
+        fanout.channel_name = "replay-fanout";
+        fanout.publisher_rid = zlink::routing_id_t::from ("replay-publisher");
+        verify (fanout, [&] (auto descriptor) {
+            return repository->update_fanout_publisher (std::move (descriptor),
+                                                        location_write_intent_t::new_claim);
+        });
+    }
+}
+
+TEST (ZLinkFrameworkOpaqueStoreProviders, NewClaimIgnoresPreviousOwnerLeaseGeneration)
+{
+    in_memory_location_store_t provider;
+    provider_location_repository_t provider_repository (provider);
+    in_memory_location_repository_t memory_repository;
+    for (location_repository_t *repository :
+         {static_cast<location_repository_t *> (&provider_repository),
+          static_cast<location_repository_t *> (&memory_repository)}) {
+        SCOPED_TRACE (repository == &provider_repository ? "provider" : "in-memory");
+        const auto first = std::get<owner_lease_claimed_t> (
+                             repository->claim_owner_lease ("reused-owner", 30s).result ().value ())
+                             .token;
+        mesh_node_descriptor_t descriptor;
+        descriptor.mesh_name = "reused-owner-mesh";
+        descriptor.rid = zlink::routing_id_t::from ("reused-owner-node");
+        descriptor.lifecycle_generation = 1;
+        descriptor.descriptor_revision = 1;
+        descriptor.endpoint = "tcp://127.0.0.1:7001";
+        descriptor.security_identity = "default";
+        descriptor.owner_id = first.owner_id;
+        descriptor.lease_generation = first.lease_generation;
+        ASSERT_EQ (location_write_status_t::stored,
+                   repository->update_mesh_node (descriptor, location_write_intent_t::new_claim)
+                     .result ()
+                     .value ()
+                     .status);
+        ASSERT_TRUE (std::holds_alternative<owner_lease_released_t> (
+          repository->release_owner_lease (first).result ().value ()));
+        const auto replacement =
+          std::get<owner_lease_claimed_t> (
+            repository->claim_owner_lease (first.owner_id, 30s).result ().value ())
+            .token;
+        ASSERT_GT (replacement.lease_generation, first.lease_generation);
+        descriptor.lease_generation = replacement.lease_generation;
+        descriptor.lifecycle_generation = 2;
+        EXPECT_EQ (location_write_status_t::stored,
+                   repository->update_mesh_node (descriptor, location_write_intent_t::new_claim)
+                     .result ()
+                     .value ()
+                     .status);
+    }
+}

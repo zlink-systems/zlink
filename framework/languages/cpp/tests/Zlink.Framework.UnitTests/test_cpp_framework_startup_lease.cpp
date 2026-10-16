@@ -3,6 +3,7 @@
 #include <zlink/framework.hpp>
 #include "runtime/locations/in_memory_location_store.hpp"
 #include "runtime/fanout/fanout_location_runtime.hpp"
+#include "runtime/locations/location_runtime.hpp"
 #include <opentelemetry/metrics/noop.h>
 #include <opentelemetry/metrics/provider.h>
 #include <gtest/gtest.h>
@@ -20,6 +21,15 @@ namespace
 using namespace zlink::framework;
 namespace metrics = opentelemetry::metrics;
 namespace nostd = opentelemetry::nostd;
+
+struct startup_message_t
+{
+};
+struct startup_handler_t
+{
+    using message_type = startup_message_t;
+    void handle (const startup_message_t &) {}
+};
 
 // The host creates this gauge after every hosted service has completed start().
 // Observing its creation gives the test a startup barrier without polling or sleeps.
@@ -128,6 +138,8 @@ class held_lease_repository_t final : public runtime::in_memory_location_reposit
     };
     explicit held_lease_repository_t (mode_t mode) : _mode (mode) {}
     task_completion_source_t<void> release_claim;
+    task_completion_source_t<void> release_renew;
+    bool hold_renewals = false;
     task_completion_source_t<void> release_descriptor;
     task_completion_source_t<void> release_fanout;
     std::promise<void> fanout_requested;
@@ -135,6 +147,17 @@ class held_lease_repository_t final : public runtime::in_memory_location_reposit
     std::promise<void> fanout_rejected;
     std::atomic_bool reject_fanout{false};
     std::atomic_int fanout_claims{0};
+    std::atomic_int fail_mesh_writes{0};
+    std::atomic_int fail_client_writes{0};
+    std::atomic_int fail_fanout_writes{0};
+    std::atomic_int client_attempts{0};
+    task_completion_source_t<void> release_client;
+    std::promise<void> client_requested;
+    std::atomic_int mesh_attempts{0};
+    location_write_status_t mesh_status = location_write_status_t::stored;
+    location_write_status_t client_status = location_write_status_t::stored;
+    location_write_status_t fanout_status = location_write_status_t::stored;
+    bool cancel_mesh_write = false;
     std::promise<void> descriptor_requested;
     std::promise<void> descriptor_stored;
 
@@ -151,9 +174,37 @@ class held_lease_repository_t final : public runtime::in_memory_location_reposit
         co_return co_await in_memory_location_repository_t::claim_owner_lease (std::move (owner),
                                                                                ttl);
     }
+    task_t<owner_lease_renew_result_t> renew_owner_lease (location_owner_token_t token,
+                                                          std::chrono::milliseconds ttl) override
+    {
+        if (hold_renewals)
+            co_await release_renew.task ();
+        co_return co_await in_memory_location_repository_t::renew_owner_lease (std::move (token),
+                                                                               ttl);
+    }
+    task_t<owner_lease_read_result_t> read_owner_lease (std::string owner_id) override
+    {
+        // A timed-out background renewal must not confirm itself before the test
+        // releases the renewal input. Discovery can report this error without blocking startup.
+        if (hold_renewals && !release_renew.task ().await_ready ())
+            co_return result_t<owner_lease_read_result_t>::failure (
+              framework_error_kind_t::unavailable, "renewal confirmation held by test");
+        co_return co_await in_memory_location_repository_t::read_owner_lease (std::move (owner_id));
+    }
     task_t<location_write_result_t> update_mesh_node (mesh_node_descriptor_t descriptor,
                                                       location_write_intent_t intent) override
     {
+        ++mesh_attempts;
+        if (cancel_mesh_write)
+            std::rethrow_exception (
+              detail::make_cancellation_exception ("injected startup cancellation"));
+        if (fail_mesh_writes.load () > 0) {
+            --fail_mesh_writes;
+            co_return result_t<location_write_result_t>::failure (
+              framework_error_kind_t::internal_failure, "injected unknown descriptor write");
+        }
+        if (mesh_status != location_write_status_t::stored)
+            co_return location_write_result_t{mesh_status, 0, {}};
         const auto first = intent == location_write_intent_t::new_claim;
         if (first) {
             std::call_once (_requested, [&] { descriptor_requested.set_value (); });
@@ -171,6 +222,13 @@ class held_lease_repository_t final : public runtime::in_memory_location_reposit
     {
         if (intent == location_write_intent_t::new_claim) {
             ++fanout_claims;
+            if (fanout_status != location_write_status_t::stored)
+                co_return location_write_result_t{fanout_status, 0, {}};
+            if (fail_fanout_writes.load () > 0) {
+                --fail_fanout_writes;
+                co_return result_t<location_write_result_t>::failure (
+                  framework_error_kind_t::internal_failure, "injected unknown Fanout write");
+            }
             std::call_once (_fanout_requested, [&] { fanout_requested.set_value (); });
             co_await release_fanout.task ();
         }
@@ -184,12 +242,33 @@ class held_lease_repository_t final : public runtime::in_memory_location_reposit
             std::call_once (_fanout_stored, [&] { fanout_stored.set_value (); });
         co_return result;
     }
+    task_t<location_write_result_t>
+    update_client_server (client_server_server_descriptor_t descriptor,
+                          location_write_intent_t intent) override
+    {
+        ++client_attempts;
+        if (client_status != location_write_status_t::stored)
+            co_return location_write_result_t{client_status, 0, {}};
+        if (fail_client_writes.load () > 0) {
+            --fail_client_writes;
+            co_return result_t<location_write_result_t>::failure (
+              framework_error_kind_t::internal_failure, "injected unknown ClientServer write");
+        }
+        if (intent == location_write_intent_t::new_claim) {
+            std::call_once (_client_requested, [&] { client_requested.set_value (); });
+            co_await release_client.task ();
+        }
+        co_return co_await in_memory_location_repository_t::update_client_server (
+          std::move (descriptor), intent);
+    }
     void release ()
     {
         reject_fanout.store (false);
         release_claim.complete (result_t<void>::success ());
+        release_renew.complete (result_t<void>::success ());
         release_descriptor.complete (result_t<void>::success ());
         release_fanout.complete (result_t<void>::success ());
+        release_client.complete (result_t<void>::success ());
     }
 
   private:
@@ -199,6 +278,7 @@ class held_lease_repository_t final : public runtime::in_memory_location_reposit
     std::once_flag _fanout_requested;
     std::once_flag _fanout_stored;
     std::once_flag _fanout_rejected;
+    std::once_flag _client_requested;
 };
 
 class runtime_probe_t final : public hosted_service_t
@@ -206,9 +286,11 @@ class runtime_probe_t final : public hosted_service_t
   public:
     std::promise<framework_runtime_t *> framework_runtime;
     std::promise<runtime::fanout::fanout_location_runtime_t *> fanout;
+    std::promise<runtime::location_runtime_t *> location;
     task_t<void> start (service_provider_t &services) override
     {
         framework_runtime.set_value (&services.get_required<framework_runtime_t> ());
+        location.set_value (&services.get_required<runtime::location_runtime_t> ());
         auto value = services.get<fanout_runtime_t> ();
         fanout.set_value (
           value ? dynamic_cast<runtime::fanout::fanout_location_runtime_t *> (&value->get ())
@@ -394,3 +476,148 @@ TEST (ZLinkFrameworkStartupLease, DefinitiveClaimRejectionFailsStartup)
     }
 }
 } // namespace
+
+TEST (ZLinkFrameworkStartupLease, UnknownDescriptorPublicationRetriesAfterRenewal)
+{
+    for (const auto kind : {"MeshNode", "ClientServer", "Fanout"}) {
+        SCOPED_TRACE (kind);
+        startup_metrics_t metrics;
+        auto started = metrics.meter->started.get_future ();
+        auto store =
+          std::make_shared<held_lease_repository_t> (held_lease_repository_t::mode_t::held);
+        store->release_claim.complete (result_t<void>::success ());
+        store->hold_renewals = true;
+        auto app = app_t::create ();
+        configure (app, store);
+        std::future<void> requested;
+        task_completion_source_t<void> *release = nullptr;
+        std::atomic_int *attempts = nullptr;
+        if (std::string_view (kind) == "MeshNode") {
+            store->fail_mesh_writes.store (1);
+            requested = store->descriptor_requested.get_future ();
+            release = &store->release_descriptor;
+            attempts = &store->mesh_attempts;
+        } else {
+            store->release_descriptor.complete (result_t<void>::success ());
+            if (std::string_view (kind) == "ClientServer") {
+                app.add_zlink_framework ()
+                  .add_client_server_channel ("startup-client")
+                  .server ()
+                  .listen (0)
+                  .add_send_handler<startup_handler_t, startup_message_t> ();
+                store->fail_client_writes.store (1);
+                requested = store->client_requested.get_future ();
+                release = &store->release_client;
+                attempts = &store->client_attempts;
+            } else {
+                app.add_zlink_framework ()
+                  .add_fanout_channel ("startup-fanout")
+                  .enable_publisher (0)
+                  .set_routing_id (zlink::routing_id_t::from ("startup-fanout"));
+                store->fail_fanout_writes.store (1);
+                requested = store->fanout_requested.get_future ();
+                release = &store->release_fanout;
+                attempts = &store->fanout_claims;
+            }
+        }
+        auto probe = std::make_unique<runtime_probe_t> ();
+        auto location = probe->location.get_future ();
+        auto runtime = probe->framework_runtime.get_future ();
+        app.add_hosted_service (std::move (probe));
+        running_host_t host (app, store, *metrics.meter);
+        started.wait ();
+        EXPECT_EQ (-1, host.exit_code.load ());
+        if (host.exit_code.load () != -1)
+            continue;
+        EXPECT_EQ (framework_runtime_state_t::preparing, app.runtime_state ());
+        EXPECT_FALSE (app.is_ready ());
+        EXPECT_EQ (1, attempts->load ());
+        std::promise<void> serving;
+        auto ready = serving.get_future ();
+        std::once_flag observed;
+        auto observation = runtime.get ()->observe (16, [&] (const auto &status) {
+            if (status.status.state == framework_runtime_state_t::serving)
+                std::call_once (observed, [&] { serving.set_value (); });
+        });
+        store->release_renew.complete (result_t<void>::success ());
+        location.get ()->renew_owner_lease_once ();
+        requested.wait ();
+        EXPECT_EQ (framework_runtime_state_t::preparing, app.runtime_state ());
+        EXPECT_FALSE (app.is_ready ());
+        release->complete (result_t<void>::success ());
+        ready.wait ();
+        EXPECT_TRUE (app.is_ready ());
+    }
+}
+
+TEST (ZLinkFrameworkStartupLease, ConfirmedDescriptorConflictFailsStartup)
+{
+    for (const auto kind : {"MeshNode", "ClientServer", "Fanout"}) {
+        SCOPED_TRACE (kind);
+        startup_metrics_t metrics;
+        auto store =
+          std::make_shared<held_lease_repository_t> (held_lease_repository_t::mode_t::held);
+        store->release ();
+        auto app = app_t::create ();
+        configure (app, store);
+        if (std::string_view (kind) == "MeshNode") {
+            store->mesh_status = location_write_status_t::rejected_conflict;
+        } else if (std::string_view (kind) == "ClientServer") {
+            app.add_zlink_framework ()
+              .add_client_server_channel ("startup-client")
+              .server ()
+              .listen (0)
+              .add_send_handler<startup_handler_t, startup_message_t> ();
+            store->client_status = location_write_status_t::rejected_conflict;
+        } else {
+            app.add_zlink_framework ()
+              .add_fanout_channel ("startup-fanout")
+              .enable_publisher (0)
+              .set_routing_id (zlink::routing_id_t::from ("startup-fanout"));
+            store->fanout_status = location_write_status_t::rejected_conflict;
+        }
+        char program[] = "startup-conflict";
+        char *argv[] = {program};
+        EXPECT_NE (0, app.run (1, argv));
+        if (std::string_view (kind) == "MeshNode")
+            EXPECT_EQ (1, store->mesh_attempts.load ());
+        else if (std::string_view (kind) == "ClientServer")
+            EXPECT_EQ (1, store->client_attempts.load ());
+        else
+            EXPECT_EQ (1, store->fanout_claims.load ());
+        EXPECT_EQ (framework_runtime_state_t::error, app.runtime_state ());
+        EXPECT_FALSE (app.is_ready ());
+    }
+}
+
+TEST (ZLinkFrameworkStartupLease, AcquiredLeaseStorePendingKeepsPreparing)
+{
+    startup_metrics_t metrics;
+    auto started = metrics.meter->started.get_future ();
+    auto store = std::make_shared<held_lease_repository_t> (held_lease_repository_t::mode_t::held);
+    store->release_claim.complete (result_t<void>::success ());
+    auto requested = store->descriptor_requested.get_future ();
+    auto app = app_t::create ();
+    configure (app, store);
+    running_host_t host (app, store, *metrics.meter);
+    requested.wait ();
+    EXPECT_EQ (framework_runtime_state_t::preparing, app.runtime_state ());
+    EXPECT_FALSE (app.is_ready ());
+    store->release_descriptor.complete (result_t<void>::success ());
+    started.wait ();
+}
+
+TEST (ZLinkFrameworkStartupLease, DescriptorCancellationFailsStartup)
+{
+    startup_metrics_t metrics;
+    auto store = std::make_shared<held_lease_repository_t> (held_lease_repository_t::mode_t::held);
+    store->release ();
+    store->cancel_mesh_write = true;
+    auto app = app_t::create ();
+    configure (app, store);
+    char program[] = "startup-cancelled";
+    char *argv[] = {program};
+    EXPECT_NE (0, app.run (1, argv));
+    EXPECT_EQ (framework_runtime_state_t::error, app.runtime_state ());
+    EXPECT_FALSE (app.is_ready ());
+}

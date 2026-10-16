@@ -100,7 +100,8 @@ class mesh_node_host_service_t final : public hosted_service_t, public hosted_se
     void visit_relocation_nodes (
       const std::function<void (const std::shared_ptr<detail::mesh_node_runtime_t> &)> &visitor)
       const override;
-    bool republish_after_store_recovery ();
+    bool republish_after_store_recovery (
+      location_write_intent_t intent = location_write_intent_t::new_claim);
 
   private:
     struct actor_destroy_callback_gate_t;

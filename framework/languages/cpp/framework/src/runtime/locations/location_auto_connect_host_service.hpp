@@ -66,7 +66,7 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
       std::map<std::string, std::string> fanout_publisher_advertise_hosts = {},
       std::set<std::string> route_mesh_client_channels = {},
       std::vector<std::shared_ptr<detail::mesh_node_runtime_t>> mesh_nodes = {},
-      std::function<bool ()> republish_after_store_recovery = {},
+      std::function<bool (location_write_intent_t)> republish_after_store_recovery = {},
       std::shared_ptr<client_server::client_server_location_runtime_t> client_server_runtime =
         nullptr,
       std::shared_ptr<fanout::fanout_location_runtime_t> fanout_runtime = nullptr,
@@ -242,7 +242,8 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
         for (auto &loop : _loops) {
             loop.recovering_from_store_failure = !_runtime->owner_lease_usable ();
         }
-        _thread = std::thread ([this] { run_loop (); });
+        const auto observed = _runtime->owner_lease_observation ();
+        _thread = std::thread ([this, observed] { run_loop (observed); });
         return task_t<void> (result_t<void>::success ());
     }
 
@@ -251,6 +252,8 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
         _runtime_failures->capture ([&] { _stop_requested.complete (result_t<void>::success ()); });
         _runtime_failures->capture (
           [&] { _startup_publication.complete (result_t<bool>::success (false)); });
+        if (_runtime)
+            _runtime->wake_owner_lease_observers ();
         if (_thread.joinable ())
             _runtime_failures->capture ([&] { _thread.join (); });
         if (_client_server && _runtime_failures->capture ([&] { _client_server->stop (); })) {
@@ -338,7 +341,7 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
         _loops.push_back (std::move (loop));
     }
 
-    void run_loop ()
+    void run_loop (std::optional<std::chrono::steady_clock::time_point> observed)
     {
         auto stopped = _stop_requested.task ();
         std::vector<std::pair<loop_t *, std::vector<mesh_node_descriptor_t>>> snapshots;
@@ -355,7 +358,11 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
                     handle_loop_failure (loop, "tick", "unknown exception");
                 }
             }
-            const bool published = republish_after_store_recovery ();
+            const auto current = _runtime->owner_lease_observation ();
+            const auto intent = current != observed ? location_write_intent_t::new_claim
+                                                    : location_write_intent_t::renew;
+            observed = current;
+            const bool published = republish_after_store_recovery (intent);
             for (auto &[loop, descriptors] : snapshots) {
                 try {
                     reconcile (*loop, descriptors, published);
@@ -368,8 +375,8 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
                 }
             }
             snapshots.clear ();
-            (void) detail::observe_task_result_for (stopped, _runtime->options ().polling_interval,
-                                                    std::stop_token{});
+            _runtime->wait_for_owner_lease_change (observed, stopped,
+                                                   _runtime->options ().polling_interval);
         }
     }
 
@@ -409,21 +416,19 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
         return descriptors;
     }
 
-    bool republish_after_store_recovery () noexcept
+    bool republish_after_store_recovery (location_write_intent_t intent) noexcept
     {
         try {
             if (!_runtime->owner_lease_usable ())
                 return false;
             bool published = true;
             if (_republish_after_store_recovery)
-                published = _republish_after_store_recovery () && published;
+                published = _republish_after_store_recovery (intent) && published;
             if (_client_server && _client_server_started)
-                published = _client_server->republish_after_store_recovery () && published;
+                published = _client_server->republish_after_store_recovery (intent) && published;
             if (_fanout)
-                published = _fanout->republish_after_store_recovery () && published;
-            if (!published)
-                _runtime->record_runtime_failure ("Location descriptor publication was rejected");
-            else
+                published = _fanout->republish_after_store_recovery (intent) && published;
+            if (published)
                 _startup_publication.complete (result_t<bool>::success (true));
             return published;
         }
@@ -641,7 +646,7 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
     bool _client_server_started = false;
     std::shared_ptr<fanout::fanout_location_runtime_t> _fanout;
     std::shared_ptr<listener_status_registry_t> _listener_statuses;
-    std::function<bool ()> _republish_after_store_recovery;
+    std::function<bool (location_write_intent_t)> _republish_after_store_recovery;
 };
 
 } // namespace zlink::framework::runtime
