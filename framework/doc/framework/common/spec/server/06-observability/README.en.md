@@ -80,7 +80,8 @@ existing log.
 | Target | How to turn it on |
 |---|---|
 | Message flow (full-span tracking including `flow`, `corr`) | The runtime diagnostics' message flow mode |
-| C++ / .NET spot discovery trace | `ZLINK_DEBUG_FRAMEWORK_SPOT_DISCOVERY` |
+| .NET spot discovery trace | `ZLINK_DEBUG_FRAMEWORK_SPOT_DISCOVERY` |
+| C++ mesh·auto-connect trace | `ZLINK_CPP_MESH_TRACE=1`, `ZLINK_CPP_AUTO_CONNECT_TRACE=1` |
 | Java / Kotlin stream trace | `ZLINK_JAVA_STREAM_TRACE=1` |
 | Preserving sample server logs | .NET `ZLINK_SAMPLE_EVIDENCE_DIR`, JVM `ZLINK_SAMPLE_KEEP_RUN_DIR=1`, Node is automatic on failure |
 

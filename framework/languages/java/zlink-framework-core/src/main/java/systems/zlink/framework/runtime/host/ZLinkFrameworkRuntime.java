@@ -1185,27 +1185,23 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                             ZLinkFrameworkRelocationReason.TARGET_UNAVAILABLE,
                             "No eligible relocation target became Ready before the deadline"));
         }
+        //  Without a unit inventory owner no unit can be moved (retire preflight
+        //  blocks such a host when it owns one), so there is no target to find.
         CompletionStage<Void> attempt =
-                validateRelocationTargetPopulation(mode, targetVersion, deadline)
-                        .thenCompose(
-                                validated ->
-                                        spotRetire == null
-                                                ? beginRelocationAdmission()
-                                                        .thenRun(
-                                                                () -> relocationPublished.set(true))
-                                                : spotRetire.relocateAll(
-                                                        deadline,
-                                                        () -> activeTermination.get() != null,
-                                                        mode,
-                                                        targetVersion,
-                                                        () ->
-                                                                beginRelocationAdmission()
-                                                                        .thenRun(
-                                                                                () ->
-                                                                                        relocationPublished
-                                                                                                .set(
-                                                                                                        true)),
-                                                        cancellationSignal));
+                spotRetire == null
+                        ? beginRelocationAdmission().thenRun(() -> relocationPublished.set(true))
+                        : spotRetire.relocateAll(
+                                deadline,
+                                () -> activeTermination.get() != null,
+                                mode,
+                                targetVersion,
+                                () ->
+                                        validateRelocationTargetPopulation(
+                                                mode, targetVersion, deadline),
+                                () ->
+                                        beginRelocationAdmission()
+                                                .thenRun(() -> relocationPublished.set(true)),
+                                cancellationSignal);
         CompletionStage<Void> bounded = withinRelocationDeadline(attempt, deadline);
         bounded.whenComplete(
                 (ignored, failure) -> {
@@ -1535,6 +1531,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                                                     ZLinkFrameworkRelocationMode
                                                             .PLANNED_MAINTENANCE,
                                                     registration.applicationVersion(),
+                                                    () -> CompletableFuture.completedFuture(null),
                                                     () -> {
                                                         if (relocationShutdown
                                                                 .beginRelocationUnit()) {
@@ -1648,6 +1645,12 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                 || registration.meshNodes().stream().anyMatch(node -> !node.peers().isEmpty())) {
             return CompletableFuture.completedFuture(
                     ZLinkTerminationReason.MANUAL_TOPOLOGY_UNSUPPORTED);
+        }
+        //  Spec 30 §5.1: a host with no unit to move needs no target, so the
+        //  target readiness checks below apply only to a host that owns a unit.
+        if (!systems.zlink.framework.runtime.spots.ZLinkUserSpotRetireRuntime.hasRelocationUnits(
+                spots, actors)) {
+            return CompletableFuture.completedFuture(ZLinkTerminationReason.NONE);
         }
         return automaticRouteMeshRetirePreflight()
                 .thenCompose(

@@ -5,10 +5,14 @@ import static org.junit.jupiter.api.Assertions.*;
 import org.junit.jupiter.api.Test;
 
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.locationprovider.ZLinkLocationStore;
+import systems.zlink.framework.runtime.InMemoryRelocationStore;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
 import systems.zlink.framework.runtime.spots.ZLinkUserSpotRetireRuntime;
+import systems.zlink.framework.spots.ZLinkSpot;
+import systems.zlink.framework.spots.ZLinkSpotContext;
 
 import java.io.IOException;
 import java.lang.reflect.InvocationTargetException;
@@ -17,6 +21,7 @@ import java.time.Duration;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -74,11 +79,13 @@ final class ZLinkRelocationPreflightFailureTest {
                                 });
         var options = new DefaultZLinkFrameworkOptions();
         options.addLocationStore(store);
+        options.addRelocationStore(new InMemoryRelocationStore());
         options.addRouteMesh("preflight")
                 .listen("inproc://preflight-" + UUID.randomUUID())
                 .setRoutingId(RoutingId.from("preflight-source"))
                 .objects()
-                .server();
+                .server()
+                .addSpotFactory("room", Room.class, f -> f.recreateOnRelocation());
         var failures = new CopyOnWriteArrayList<LogRecord>();
         var logger = Logger.getLogger(ZLinkFrameworkRuntime.class.getName());
         var listener =
@@ -100,6 +107,13 @@ final class ZLinkRelocationPreflightFailureTest {
                     .toCompletableFuture()
                     .get(5, TimeUnit.SECONDS);
             assertTrue(runtime.isReady());
+            // An empty host ends Relocated/None without a target search (spec 05 §5.1), so the
+            // host owns one User Spot to make the store preflight run.
+            runtime.spotManager()
+                    .getOrCreate("room", "room")
+                    .submit()
+                    .toCompletableFuture()
+                    .get(5, TimeUnit.SECONDS);
             java.util.concurrent.CompletionStage<ZLinkFrameworkRelocationResult> operation;
             inject.set(true);
             try {
@@ -132,5 +146,20 @@ final class ZLinkRelocationPreflightFailureTest {
             barrier.completeExceptionally(cause);
             logger.removeHandler(listener);
         }
+    }
+
+    public record Room(ZLinkSpotContext context) implements ZLinkSpot<ZLinkActor> {
+        @Override
+        public CompletionStage<Void> onJoinedActor(ZLinkActor actor) {
+            return CompletableFuture.completedFuture(null);
+        }
+
+        @Override
+        public CompletionStage<Void> onLeaveActor(ZLinkActor actor) {
+            return CompletableFuture.completedFuture(null);
+        }
+
+        @Override
+        public void configure() {}
     }
 }
