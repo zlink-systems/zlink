@@ -689,7 +689,8 @@ final class ZLinkJavaRawMeshNodeM6ATest {
                     peerRid,
                     peerEndpoint,
                     peer.status().lifecycleGeneration(),
-                    ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY);
+                    ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY,
+                    ZLinkMeshNodeObjectRole.NONE);
             long intent = local.connectPeer(peerEndpoint, peerRid);
             awaitState(local, MeshPeerState.ADMITTED);
             assertTrue(local.classifyChannelTarget("game.api").isEmpty());
@@ -803,7 +804,8 @@ final class ZLinkJavaRawMeshNodeM6ATest {
                     peerRid,
                     peerEndpoint,
                     peer.status().lifecycleGeneration(),
-                    ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY);
+                    ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY,
+                    ZLinkMeshNodeObjectRole.NONE);
             peer.connectPeer(localEndpoint, localRid);
 
             awaitState(local, MeshPeerState.ADMITTED);
@@ -857,7 +859,8 @@ final class ZLinkJavaRawMeshNodeM6ATest {
                     peerRid,
                     expectedEndpoint,
                     peer.status().lifecycleGeneration(),
-                    ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY);
+                    ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY,
+                    ZLinkMeshNodeObjectRole.NONE);
 
             peer.connectPeer(localEndpoint, localRid);
             long deadline = System.nanoTime() + Duration.ofSeconds(2).toNanos();
