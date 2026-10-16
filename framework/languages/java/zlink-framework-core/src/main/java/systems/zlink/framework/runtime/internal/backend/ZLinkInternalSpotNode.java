@@ -246,6 +246,12 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
         rememberActorAuthority(actor, authorityOwnerGeneration);
     }
 
+    /** Observes a route for outbound use; it does not publish a local native Actor stay. */
+    default void observeActorAuthority(
+            ZLinkBackendActorRef actor, long authorityOwnerGeneration, long ownerLeaseGeneration) {
+        rememberActorAuthority(actor, authorityOwnerGeneration, ownerLeaseGeneration);
+    }
+
     CompletionStage<ZLinkBackendActorJoinResult> joinActor(
             ZLinkBackendActorRef actor,
             RoutingId targetNodeRid,
@@ -267,6 +273,12 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
             ZLinkBackendActorRef actor, RoutingId targetNodeRid, Message request, Duration timeout);
 
     CompletionStage<Void> destroyActor(ZLinkBackendActorRef actor, Duration timeout);
+
+    /** Destroys only the native stay with this authority generation. */
+    default CompletionStage<Void> destroyActor(
+            ZLinkBackendActorRef actor, long authorityOwnerGeneration, Duration timeout) {
+        return destroyActor(actor, timeout);
+    }
 
     default PrepareActorTransferResult prepareActorTransfer(
             ActorTransferPrepare prepare, Duration timeout) {
@@ -292,6 +304,17 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
     default void registerTransferredActor(
             ZLinkBackendActorRef actor, String spotId, long membershipEpoch) {
         throw new UnsupportedOperationException("Core actor transfer is unavailable");
+    }
+
+    /** Publishes one target native Actor stay, including its authority fence. */
+    default void registerTransferredActor(
+            ZLinkBackendActorRef actor,
+            String spotId,
+            long membershipEpoch,
+            long authorityOwnerGeneration,
+            long ownerLeaseGeneration) {
+        registerTransferredActor(actor, spotId, membershipEpoch);
+        rememberActorAuthority(actor, authorityOwnerGeneration, ownerLeaseGeneration);
     }
 
     boolean sendActorBoundSession(ZLinkBackendActorRef actor, List<Message> parts, SendFlags flags);
@@ -401,6 +424,24 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
     }
 
     void closeActorBoundSession(ZLinkBackendActorRef actor, Duration timeout);
+
+    /** Closes only the binding of the supplied source stay and, when supplied, Session. */
+    default void closeActorBoundSession(
+            ZLinkBackendActorRef actor,
+            RoutingId sessionRid,
+            long authorityOwnerGeneration,
+            Duration timeout) {
+        closeActorBoundSession(actor, timeout);
+    }
+
+    /**
+     * A committed relocation moved the Actor away: retires exactly the binding record of the stay
+     * that ended, matched on the Actor, its Session and that stay's authority owner generation.
+     */
+    default CompletionStage<Void> retireDepartedActorBinding(
+            ZLinkBackendActorRef actor, RoutingId sessionRid, long authorityOwnerGeneration) {
+        return CompletableFuture.completedFuture(null);
+    }
 
     /**
      * Completes when every Instance activation this node accepted has reached its terminal,

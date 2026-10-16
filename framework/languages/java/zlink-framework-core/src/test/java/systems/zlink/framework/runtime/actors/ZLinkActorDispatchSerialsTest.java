@@ -29,6 +29,67 @@ import java.util.concurrent.atomic.AtomicReference;
 
 final class ZLinkActorDispatchSerialsTest {
     @Test
+    void failedLogicalRetirementStillObservesFailedDisposalOnce() {
+        ZLinkActorDispatchSerials dispatches = dispatches(new AtomicReference<>(actorTarget()));
+        dispatches.prepareAsync("actor-1").toCompletableFuture().join();
+        AtomicInteger reports = new AtomicInteger();
+        var logicalFailure = new IllegalStateException("logical retirement failed");
+        var disposalFailure = new IllegalStateException("scope disposal failed");
+        var registration =
+                dispatches
+                        .registerTeardown(
+                                "actor-1",
+                                () -> CompletableFuture.failedFuture(logicalFailure),
+                                () -> CompletableFuture.failedFuture(disposalFailure))
+                        .thenCompose(
+                                terminal ->
+                                        terminal.whenComplete(
+                                                (ignored, failure) -> reports.incrementAndGet()));
+        var failure =
+                assertThrows(
+                        CompletionException.class, () -> registration.toCompletableFuture().join());
+        assertSame(logicalFailure, failure.getCause());
+        assertEquals(
+                List.of(disposalFailure), java.util.Arrays.asList(logicalFailure.getSuppressed()));
+        assertEquals(
+                1,
+                reports.get(),
+                "failed disposal must be observed even when logical retirement fails");
+    }
+
+    @Test
+    void idleSourceRegistersTeardownBeforeLogicalRetirementAndDisposesAfterIt() {
+        ZLinkActorDispatchSerials dispatches = dispatches(new AtomicReference<>(actorTarget()));
+        dispatches.prepareAsync("actor-1").toCompletableFuture().join();
+        CompletableFuture<Void> logicalRetirement = new CompletableFuture<>();
+        AtomicInteger disposed = new AtomicInteger();
+        var registration =
+                dispatches
+                        .registerTeardown(
+                                "actor-1",
+                                () -> logicalRetirement,
+                                () -> {
+                                    disposed.incrementAndGet();
+                                    return CompletableFuture.completedFuture(null);
+                                })
+                        .toCompletableFuture();
+        var terminal = dispatches.awaitTeardown("actor-1").toCompletableFuture();
+        try {
+            assertFalse(registration.isDone());
+            assertFalse(terminal.isDone());
+            assertEquals(
+                    0,
+                    disposed.get(),
+                    "disposal must follow bounded logical retirement even on an idle activation");
+        } finally {
+            logicalRetirement.complete(null);
+            registration.join().toCompletableFuture().join();
+            terminal.join();
+        }
+        assertEquals(1, disposed.get());
+    }
+
+    @Test
     void relocationLaneUsesCapturedActivationAfterQueueRemoval() {
         ZLinkActorDispatchTarget owner = actorTarget();
         ZLinkActorDispatchSerials dispatches = dispatches(new AtomicReference<>(owner));

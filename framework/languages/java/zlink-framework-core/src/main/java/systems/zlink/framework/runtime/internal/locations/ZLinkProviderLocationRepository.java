@@ -314,7 +314,8 @@ public final class ZLinkProviderLocationRepository implements ZLinkLocationRepos
                 systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
             while ((error instanceof CompletionException || error instanceof ExecutionException)
                     && error.getCause() != null) error = error.getCause();
-            if (error instanceof ZLinkFrameworkException
+            if ((error instanceof ZLinkFrameworkException typed
+                            && typed.kind() != ZLinkFrameworkErrorKind.UNAVAILABLE)
                     || error instanceof IllegalArgumentException
                     || (cancellation != null && cancellation.isCancellationRequested())) {
                 return error instanceof RuntimeException runtime
@@ -322,10 +323,7 @@ public final class ZLinkProviderLocationRepository implements ZLinkLocationRepos
                         : new CompletionException(error);
             }
             if (error instanceof Error fatal) throw fatal;
-            return new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.UNAVAILABLE,
-                    "Location Store provider is unavailable.",
-                    error);
+            return new ZLinkLocationStoreFailureException(error);
         }
     }
 }

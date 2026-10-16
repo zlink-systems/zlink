@@ -1117,6 +1117,7 @@ final class ZLinkSessionActorBindingContractTest {
                                                             ((ZLinkBackendActorRef) arguments[0])
                                                                     .nodeRid())
                                                     .ownerLeaseGeneration();
+                                    case "observeActorAuthority" -> null;
                                     case "rememberActorAuthority" ->
                                             throw new AssertionError(
                                                     "route commit must not overwrite the live"

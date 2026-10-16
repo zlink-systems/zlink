@@ -4477,7 +4477,14 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
     }
 
     CompletionStage<Void> notifySourceActorLeftForRemoteMove(ZLinkActor actor) {
-        Object spotSurface = localActorSpotSurface(actor);
+        return notifySourceActorLeft(localActorSpotSurface(actor), actor);
+    }
+
+    /**
+     * Delivers the source Spot OnLeaveActor to the surface resolved while the Actor was still its
+     * member; a committed cross-node Join leaves the membership before the one-way notice.
+     */
+    CompletionStage<Void> notifySourceActorLeft(Object spotSurface, ZLinkActor actor) {
         if (spotSurface == null) {
             return CompletableFuture.completedFuture(null);
         }

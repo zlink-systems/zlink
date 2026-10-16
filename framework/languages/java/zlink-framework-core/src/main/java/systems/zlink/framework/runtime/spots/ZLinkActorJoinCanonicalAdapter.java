@@ -98,8 +98,14 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
             Instant restoreDeadline,
             ZLinkStandaloneActorRelocationSourceBuilder.PreparedSource prepared) {
         SourceAttempt attempt = new SourceAttempt(goal, prepared);
-        SourceAttempt previous = sources.putIfAbsent(goal.sourceActor().actorId(), attempt);
-        if (previous != null) {
+        SourceAttempt claimed =
+                sources.compute(
+                        goal.sourceActor().actorId(),
+                        (actorId, current) ->
+                                current == null || current.committed().isDone()
+                                        ? attempt
+                                        : current);
+        if (claimed != attempt) {
             return prepared.abort()
                     .thenCompose(
                             ignored ->
@@ -122,6 +128,14 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
                 .thenCompose(outcome -> outcome);
     }
 
+    @Override
+    public CompletionStage<Void> awaitSourceCleanup(String actorId, long objectGeneration) {
+        SourceAttempt source = sources.get(actorId);
+        return source == null || source.goal().sourceActor().generation() != objectGeneration
+                ? CompletableFuture.completedFuture(null)
+                : source.committed().thenApply(ignored -> null);
+    }
+
     /** Applies the settled authority of the Join unit (spec 28 §4.4). */
     private CompletionStage<Submission> settleSource(
             SourceAttempt attempt, ZLinkRelocationTransitionClient.Settlement settlement) {
@@ -130,9 +144,10 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
         return switch (settlement) {
             case TARGET_COMMITTED -> {
                 yield prepared.completeSourceQueueCommit()
+                        .thenCompose(ignored -> leaveSourceMembership(attempt))
                         .thenApply(
-                                ignored -> {
-                                    attempt.committed().complete(null);
+                                leave -> {
+                                    attempt.committed().complete(leave);
                                     armAuthorityLossCleanup(attempt);
                                     return new Submission(
                                             new ZLinkBackendActorRef(
@@ -169,6 +184,22 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
         };
     }
 
+    /**
+     * The confirmed target commit ends the source membership (spec 30 §7, spec 15 §4.1): the
+     * committed Actor leaves the source registry and inventory here, as host relocation does. Only
+     * the one-way source OnLeaveActor still waits for ActorLeft or the retention cleanup, so it
+     * keeps the Spot surface resolved while the Actor was a member.
+     */
+    private CompletionStage<SourceLeave> leaveSourceMembership(SourceAttempt attempt) {
+        ZLinkStandaloneActorRelocationSourceBuilder.PreparedSource prepared = attempt.prepared();
+        ZLinkActor actor = prepared.actor();
+        SourceLeave leave =
+                new SourceLeave(actor, actor == null ? null : spots.localActorSpotSurface(actor));
+        return ZLinkRelocationHandOff.completeSourceCleanup(
+                        List.of(prepared::cleanupLocal, prepared::discardInitialAfterCommit))
+                .thenApply(ignored -> leave);
+    }
+
     /** Restores the source: a failure before relay readiness or a won Preserve fence. */
     private CompletionStage<Submission> abortSource(SourceAttempt attempt, Throwable cause) {
         sources.remove(attempt.goal().sourceActor().actorId(), attempt);
@@ -189,19 +220,8 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
                 Instant.now().plus(spots.relocationForwardRetention()),
                 () -> {
                     sources.remove(attempt.goal().sourceActor().actorId(), attempt);
-                    attempt.prepared()
-                            .committedTargetAuthorityOwnerGeneration()
-                            .thenCompose(
-                                    generation ->
-                                            generation.isPresent()
-                                                            && attempt.leaveClaimed()
-                                                                    .compareAndSet(false, true)
-                                                    ? completeSourceLeave(
-                                                            attempt,
-                                                            actorLeft(
-                                                                    attempt,
-                                                                    generation.orElseThrow()))
-                                                    : CompletableFuture.completedFuture(null))
+                    attempt.committed()
+                            .thenCompose(leave -> notifySourceLeft(attempt, leave, () -> {}))
                             .exceptionally(
                                     failure -> {
                                         LOGGER.log(
@@ -624,42 +644,34 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
         }
         return attempt.committed()
                 .thenCompose(
-                        ignored -> {
-                            if (!attempt.leaveClaimed().compareAndSet(false, true)) {
-                                return CompletableFuture.completedFuture(null);
-                            }
-                            attempt.prepared()
-                                    .acceptTargetAuthorityOwnerGeneration(
-                                            left.currentAuthorityOwnerGeneration());
-                            return completeSourceLeave(attempt, left);
-                        });
+                        leave ->
+                                notifySourceLeft(
+                                        attempt,
+                                        leave,
+                                        () ->
+                                                attempt.prepared()
+                                                        .acceptTargetAuthorityOwnerGeneration(
+                                                                left
+                                                                        .currentAuthorityOwnerGeneration())));
     }
 
-    private CompletionStage<Void> completeSourceLeave(
-            SourceAttempt attempt, ZLinkServiceM6BWireCodec.ActorLeft left) {
-        attempt.leaveClaimed().set(true);
-        ZLinkActor actor = attempt.prepared().actor();
-        return ZLinkHandlerStages.completeAll(
-                        List.of(
-                                () ->
-                                        actor == null
-                                                ? CompletableFuture.completedFuture(null)
-                                                : spots.notifySourceActorLeftForRemoteMove(actor),
-                                () -> attempt.prepared().cleanupLocal(),
-                                () -> attempt.prepared().discardInitialAfterCommit()))
+    /** Delivers the one-way source OnLeaveActor; membership already ended at the commit. */
+    private CompletionStage<Void> notifySourceLeft(
+            SourceAttempt attempt, SourceLeave leave, Runnable onClaim) {
+        if (!attempt.leaveClaimed().compareAndSet(false, true)) {
+            return CompletableFuture.completedFuture(null);
+        }
+        return ZLinkHandlerStages.fromStageSupplier(
+                        () -> {
+                            onClaim.run();
+                            return leave.actor() == null
+                                    ? CompletableFuture.completedFuture(null)
+                                    : spots.notifySourceActorLeft(
+                                            leave.spotSurface(), leave.actor());
+                        })
                 .whenComplete(
-                        (ignored, failure) -> sources.remove(left.actor().actorId(), attempt));
-    }
-
-    private static ZLinkServiceM6BWireCodec.ActorLeft actorLeft(
-            SourceAttempt attempt, long targetAuthorityOwnerGeneration) {
-        return new ZLinkServiceM6BWireCodec.ActorLeft(
-                new ZLinkServiceM6BWireCodec.ActorIdentity(
-                        attempt.goal().sourceActor().actorId(),
-                        attempt.goal().sourceActor().generation()),
-                attempt.prepared().sourceSpotId(),
-                attempt.prepared().sourceSpotGeneration(),
-                targetAuthorityOwnerGeneration);
+                        (ignored, failure) ->
+                                sources.remove(attempt.goal().sourceActor().actorId(), attempt));
     }
 
     private static ZLinkActorRuntime.PreparedTransferredActor prepared(
@@ -700,10 +712,13 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
         }
     }
 
+    /** The source member that the committed Join left, kept for its one-way OnLeaveActor. */
+    private record SourceLeave(ZLinkActor actor, Object spotSurface) {}
+
     private record SourceAttempt(
             Goal goal,
             ZLinkStandaloneActorRelocationSourceBuilder.PreparedSource prepared,
-            CompletableFuture<Void> committed,
+            CompletableFuture<SourceLeave> committed,
             AtomicBoolean leaveClaimed) {
         private SourceAttempt(
                 Goal goal, ZLinkStandaloneActorRelocationSourceBuilder.PreparedSource prepared) {

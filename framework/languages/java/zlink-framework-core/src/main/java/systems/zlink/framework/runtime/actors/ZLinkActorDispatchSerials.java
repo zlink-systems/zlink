@@ -4,6 +4,7 @@ import systems.zlink.framework.configuration.ZLinkUserSpotExecutionMode;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.execution.ZLinkExecutionLanePolicy;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
+import systems.zlink.framework.runtime.handlers.ZLinkHandlerStages;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.relocation.ZLinkRetainedSerialQueueCommit;
 import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorOrigin;
@@ -396,6 +397,14 @@ final class ZLinkActorDispatchSerials {
 
     CompletionStage<Void> beginTeardown(String actorId, Supplier<CompletionStage<Void>> cleanup) {
         boolean current = isCurrent(actorId);
+        return registerTeardown(actorId, () -> COMPLETED, cleanup)
+                .thenCompose(terminal -> current ? COMPLETED : terminal);
+    }
+
+    CompletionStage<CompletionStage<Void>> registerTeardown(
+            String actorId,
+            Supplier<CompletionStage<Void>> beforeStart,
+            Supplier<CompletionStage<Void>> cleanup) {
         return trackedTurnAsync(actorId)
                 .thenCompose(
                         resolved ->
@@ -421,9 +430,28 @@ final class ZLinkActorDispatchSerials {
                                         }))
                 .thenCompose(
                         setup -> {
+                            if (!setup.created())
+                                return CompletableFuture.completedFuture(setup.teardown());
                             if (setup.barrier() != null) setup.barrier().complete(null);
-                            if (setup.created()) startTeardown(actorId, setup, cleanup);
-                            return current ? COMPLETED : setup.teardown();
+                            return ZLinkHandlerStages.fromStageSupplier(beforeStart)
+                                    .handle(
+                                            (ignored, failure) -> {
+                                                startTeardown(
+                                                        actorId,
+                                                        setup,
+                                                        failure == null
+                                                                ? cleanup
+                                                                : () ->
+                                                                        ZLinkHandlerStages
+                                                                                .completeAll(
+                                                                                        List.of(
+                                                                                                () ->
+                                                                                                        CompletableFuture
+                                                                                                                .failedFuture(
+                                                                                                                        failure),
+                                                                                                cleanup)));
+                                                return setup.teardown();
+                                            });
                         });
     }
 

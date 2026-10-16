@@ -63,11 +63,9 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
     private final ZLinkJavaRawMeshNode owner;
     private final ZLinkStateLane stateLane = new ZLinkStateLane();
     private final Map<String, ZLinkJavaRawSpot> spots = new ConcurrentHashMap<>();
-    private final Map<String, ZLinkBackendActorRef> actors = new ConcurrentHashMap<>();
-    private final Map<String, String> actorSpots = new ConcurrentHashMap<>();
-    private final Map<String, Long> actorMembershipEpochs = new ConcurrentHashMap<>();
+    private final Map<String, NativeActorStay> actors = new ConcurrentHashMap<>();
     private final Map<SpotAuthorityKey, AuthorityFence> spotAuthorities = new ConcurrentHashMap<>();
-    private final Map<ActorAuthorityKey, AuthorityFence> actorAuthorities =
+    private final Map<ZLinkBackendActorRef, AuthorityFence> actorAuthorities =
             new ConcurrentHashMap<>();
     private final AtomicLong nextGeneration = new AtomicLong(1);
     private final AtomicLong nextRequestSequence = new AtomicLong(1);
@@ -426,19 +424,19 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
         }
         ZLinkBackendActorRef created =
                 new ZLinkBackendActorRef(routingId(), actorId, objectGeneration);
-        if (actors.putIfAbsent(actorId, created) != null) {
+        AuthorityFence authority =
+                new AuthorityFence(created.generation(), owner.localAuthorityLeaseGeneration());
+        NativeActorStay stay = new NativeActorStay(created, entrySpot().spotId(), 1L, authority);
+        if (actors.putIfAbsent(actorId, stay) != null) {
             throw new IllegalStateException("actor already exists: " + actorId);
         }
-        actorSpots.put(actorId, entrySpot().spotId());
-        actorMembershipEpochs.put(actorId, 1L);
-        rememberActorAuthority(
-                created, created.generation(), owner.localAuthorityLeaseGeneration());
         return created;
     }
 
     @Override
     public ZLinkBackendActorRef actorLookup(String actorId) {
-        return actors.get(actorId);
+        NativeActorStay stay = actors.get(actorId);
+        return stay == null ? null : stay.actor();
     }
 
     @Override
@@ -465,17 +463,76 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
     @Override
     public void rememberActorAuthority(
             ZLinkBackendActorRef actor, long authorityOwnerGeneration, long ownerLeaseGeneration) {
+        requireActorAuthority(actor, authorityOwnerGeneration, ownerLeaseGeneration);
+        AuthorityFence authority =
+                new AuthorityFence(authorityOwnerGeneration, ownerLeaseGeneration);
+        if (routingId().equals(actor.nodeRid())) {
+            actors.computeIfPresent(
+                    actor.actorId(),
+                    (id, current) ->
+                            current.actor().equals(actor)
+                                    ? current.withAuthority(authority)
+                                    : current);
+        } else {
+            observeActorAuthority(actor, authorityOwnerGeneration, ownerLeaseGeneration);
+        }
+    }
+
+    @Override
+    public void observeActorAuthority(
+            ZLinkBackendActorRef actor, long authorityOwnerGeneration, long ownerLeaseGeneration) {
+        requireActorAuthority(actor, authorityOwnerGeneration, ownerLeaseGeneration);
+        if (routingId().equals(actor.nodeRid())) {
+            return;
+        }
+        if (!authorityAdvanced(actorAuthorities.get(actor), authorityOwnerGeneration)) {
+            return;
+        }
+        actorAuthorities.compute(
+                actor,
+                (key, current) ->
+                        authorityAdvanced(current, authorityOwnerGeneration)
+                                ? new AuthorityFence(authorityOwnerGeneration, ownerLeaseGeneration)
+                                : current);
+    }
+
+    private static boolean authorityAdvanced(AuthorityFence current, long observedGeneration) {
+        return current == null || current.authorityOwnerGeneration() < observedGeneration;
+    }
+
+    private static void requireActorAuthority(
+            ZLinkBackendActorRef actor, long authorityOwnerGeneration, long ownerLeaseGeneration) {
         if (actor == null || authorityOwnerGeneration <= 0 || ownerLeaseGeneration <= 0) {
             throw new IllegalArgumentException("Actor authority generations must be positive");
         }
-        actorAuthorities.put(
-                new ActorAuthorityKey(actor.nodeRid(), actor.actorId(), actor.generation()),
-                new AuthorityFence(authorityOwnerGeneration, ownerLeaseGeneration));
     }
 
     @Override
     public void registerTransferredActor(
             ZLinkBackendActorRef actor, String spotId, long membershipEpoch) {
+        registerTransferredActor(actor, spotId, membershipEpoch, null);
+    }
+
+    @Override
+    public void registerTransferredActor(
+            ZLinkBackendActorRef actor,
+            String spotId,
+            long membershipEpoch,
+            long authorityOwnerGeneration,
+            long ownerLeaseGeneration) {
+        requireActorAuthority(actor, authorityOwnerGeneration, ownerLeaseGeneration);
+        registerTransferredActor(
+                actor,
+                spotId,
+                membershipEpoch,
+                new AuthorityFence(authorityOwnerGeneration, ownerLeaseGeneration));
+    }
+
+    private void registerTransferredActor(
+            ZLinkBackendActorRef actor,
+            String spotId,
+            long membershipEpoch,
+            AuthorityFence publishedAuthority) {
         Objects.requireNonNull(actor, "actor");
         if (!routingId().equals(actor.nodeRid())
                 || actor.generation() <= 0
@@ -486,13 +543,20 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                     "transferred Actor route requires the local node, exact "
                             + "generation, SpotId, and positive membership epoch");
         }
-        ZLinkBackendActorRef current = actors.putIfAbsent(actor.actorId(), actor);
-        if (current != null && !current.equals(actor)) {
-            throw new IllegalStateException(
-                    "actor generation already exists on target: " + actor.actorId());
-        }
-        actorSpots.put(actor.actorId(), spotId);
-        actorMembershipEpochs.put(actor.actorId(), membershipEpoch);
+        actors.compute(
+                actor.actorId(),
+                (id, current) -> {
+                    if (current != null && !current.actor().equals(actor)) {
+                        throw new IllegalStateException(
+                                "transferred Actor generation conflicts: " + actor.actorId());
+                    }
+                    AuthorityFence authority =
+                            publishedAuthority != null
+                                    ? publishedAuthority
+                                    : Objects.requireNonNull(current, "existing native Actor stay")
+                                            .authority();
+                    return new NativeActorStay(actor, spotId, membershipEpoch, authority);
+                });
     }
 
     @Override
@@ -519,7 +583,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                         1,
                         actor,
                         targetSpotId,
-                        actorMembershipEpochs.getOrDefault(actor.actorId(), 0L),
+                        actorMembershipEpoch(actor),
                         0,
                         List.of()));
     }
@@ -537,19 +601,28 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                         actor,
                         targetNodeRid,
                         entrySpot().spotId(),
-                        actorMembershipEpochs.getOrDefault(actor.actorId(), 0L),
+                        actorMembershipEpoch(actor),
                         0,
                         List.of()));
     }
 
     @Override
     public CompletionStage<Void> destroyActor(ZLinkBackendActorRef actor, Duration timeout) {
-        actors.remove(actor.actorId());
-        actorSpots.remove(actor.actorId());
-        actorMembershipEpochs.remove(actor.actorId());
-        actorAuthorities.remove(
-                new ActorAuthorityKey(actor.nodeRid(), actor.actorId(), actor.generation()));
-        return retireStreamRoute(actor).thenCombine(retireActorBinding(actor), (a, b) -> null);
+        return destroyActor(actor, actorAuthorityOwnerGeneration(actor), timeout);
+    }
+
+    @Override
+    public CompletionStage<Void> destroyActor(
+            ZLinkBackendActorRef actor, long authorityOwnerGeneration, Duration timeout) {
+        NativeActorStay departed = nativeActor(actor);
+        if (departed == null
+                || departed.authority().authorityOwnerGeneration() != authorityOwnerGeneration
+                || !actors.remove(actor.actorId(), departed)) {
+            return CompletableFuture.completedFuture(null);
+        }
+        return retireStreamRoute(actor, null, authorityOwnerGeneration)
+                .thenCombine(
+                        retireActorBinding(actor, null, authorityOwnerGeneration), (a, b) -> null);
     }
 
     @Override
@@ -1080,13 +1153,24 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
 
     @Override
     public void closeActorBoundSession(ZLinkBackendActorRef actor, Duration timeout) {
+        closeActorBoundSession(actor, null, actorAuthorityOwnerGeneration(actor), timeout);
+    }
+
+    @Override
+    public void closeActorBoundSession(
+            ZLinkBackendActorRef actor,
+            RoutingId sessionRid,
+            long authorityOwnerGeneration,
+            Duration timeout) {
         if (!isCurrentActor(actor)) {
             throw new IllegalStateException("actor is not local");
         }
         // The interface completes nothing, so a failed retirement is reported where this node
         // reports its other unobserved failures.
-        retireStreamRoute(actor)
-                .thenCombine(retireActorBinding(actor), (route, record) -> null)
+        retireStreamRoute(actor, sessionRid, authorityOwnerGeneration)
+                .thenCombine(
+                        retireActorBinding(actor, sessionRid, authorityOwnerGeneration),
+                        (route, record) -> null)
                 .whenComplete(
                         (ignored, failure) -> {
                             if (failure != null) {
@@ -1098,15 +1182,47 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                         });
     }
 
-    /** Removes the Actor's current binding record in the binding owner's turn. */
-    private CompletionStage<Boolean> retireActorBinding(ZLinkBackendActorRef actor) {
+    @Override
+    public CompletionStage<Void> retireDepartedActorBinding(
+            ZLinkBackendActorRef actor, RoutingId sessionRid, long authorityOwnerGeneration) {
+        Objects.requireNonNull(sessionRid, "sessionRid");
+        return retireActorBinding(actor, sessionRid, authorityOwnerGeneration)
+                .thenApply(ignored -> null);
+    }
+
+    /**
+     * Removes the binding record of one Actor stay in the binding owner's turn. The stay is the
+     * ActorRef with its authority owner generation, so a late cleanup of an earlier stay never
+     * removes the record of the Actor's current stay; a non-null Session must match too.
+     */
+    private CompletionStage<Boolean> retireActorBinding(
+            ZLinkBackendActorRef actor, RoutingId sessionRid, long authorityOwnerGeneration) {
         return remoteSessionBindingOwner.apply(
-                this, actor, applied -> actorBindings.remove(actor.actorId()) != null);
+                this,
+                actor,
+                applied -> {
+                    BindingEntry current = actorBindings.get(actor.actorId());
+                    return current != null
+                            && current.binding().actor().equals(actor)
+                            && current.binding().authorityOwnerGeneration()
+                                    == authorityOwnerGeneration
+                            && (sessionRid == null
+                                    || current.binding().sessionRid().equals(sessionRid))
+                            && actorBindings.remove(actor.actorId(), current);
+                });
     }
 
     /** Removes the Session owner's published route for the Actor in this node's lane. */
-    private CompletionStage<Void> retireStreamRoute(ZLinkBackendActorRef actor) {
-        return inSessionOwnerTurn(() -> streamBindings.remove(actor.actorId()));
+    private CompletionStage<Void> retireStreamRoute(
+            ZLinkBackendActorRef actor, RoutingId sessionRid, long authorityOwnerGeneration) {
+        StreamBinding departing = streamBindings.get(actor.actorId());
+        if (departing == null
+                || !departing.actor().equals(actor)
+                || departing.authorityOwnerGeneration() != authorityOwnerGeneration
+                || (sessionRid != null && !departing.sessionRid().equals(sessionRid))) {
+            return CompletableFuture.completedFuture(null);
+        }
+        return inSessionOwnerTurn(() -> streamBindings.remove(actor.actorId(), departing));
     }
 
     /** Runs a Session owner change in this node's lane without waiting for a busy turn. */
@@ -1123,8 +1239,6 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
         spots.values().forEach(ZLinkJavaRawSpot::close);
         spots.clear();
         actors.clear();
-        actorSpots.clear();
-        actorMembershipEpochs.clear();
         actorRequests
                 .values()
                 .forEach(
@@ -1227,20 +1341,32 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
 
     @Override
     public long actorAuthorityOwnerGeneration(ZLinkBackendActorRef actor) {
-        AuthorityFence fence =
-                actorAuthorities.get(
-                        new ActorAuthorityKey(
-                                actor.nodeRid(), actor.actorId(), actor.generation()));
+        AuthorityFence fence = actorAuthority(actor);
         return fence == null ? 0L : fence.authorityOwnerGeneration();
     }
 
     @Override
     public long actorAuthorityOwnerLeaseGeneration(ZLinkBackendActorRef actor) {
-        AuthorityFence fence =
-                actorAuthorities.get(
-                        new ActorAuthorityKey(
-                                actor.nodeRid(), actor.actorId(), actor.generation()));
+        AuthorityFence fence = actorAuthority(actor);
         return fence == null ? 0L : fence.ownerLeaseGeneration();
+    }
+
+    private AuthorityFence actorAuthority(ZLinkBackendActorRef actor) {
+        if (routingId().equals(actor.nodeRid())) {
+            NativeActorStay stay = nativeActor(actor);
+            return stay == null ? null : stay.authority();
+        }
+        return actorAuthorities.get(actor);
+    }
+
+    private NativeActorStay nativeActor(ZLinkBackendActorRef actor) {
+        NativeActorStay stay = actor == null ? null : actors.get(actor.actorId());
+        return stay != null && stay.actor().equals(actor) ? stay : null;
+    }
+
+    private long actorMembershipEpoch(ZLinkBackendActorRef actor) {
+        NativeActorStay stay = nativeActor(actor);
+        return stay == null ? 0L : stay.membershipEpoch();
     }
 
     boolean enqueueRemoteSpot(
@@ -1617,12 +1743,13 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                 return true;
             }
         }
-        ZLinkBackendActorRef currentActor = actor == null ? null : actors.get(actor.actorId());
-        if (currentActor == null) {
+        NativeActorStay nativeStay = actor == null ? null : actors.get(actor.actorId());
+        if (nativeStay == null) {
             return false;
         }
-        long currentAuthority = actorAuthorityOwnerGeneration(currentActor);
-        long currentOwnerLease = actorAuthorityOwnerLeaseGeneration(currentActor);
+        ZLinkBackendActorRef currentActor = nativeStay.actor();
+        long currentAuthority = nativeStay.authority().authorityOwnerGeneration();
+        long currentOwnerLease = nativeStay.authority().ownerLeaseGeneration();
         if (currentAuthority != header.target().authorityOwnerGeneration()
                 || currentOwnerLease != header.target().ownerLeaseGeneration()) {
             return false;
@@ -1641,7 +1768,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                 return false;
             }
         }
-        String targetSpotId = actorSpots.get(actor.actorId());
+        String targetSpotId = nativeStay.spotId();
         ZLinkJavaRawSpot target = spots.get(targetSpotId);
         if (target == null) {
             return false;
@@ -2081,8 +2208,10 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
             }
             return true;
         }
-        if (!isCurrentActor(actor)
-                || actorAuthorityOwnerGeneration(actor) != route.authorityOwnerGeneration()) {
+        NativeActorStay stay = nativeActor(actor);
+        if (stay == null
+                || stay.authority().authorityOwnerGeneration()
+                        != route.authorityOwnerGeneration()) {
             return false;
         }
         if (current != null
@@ -2729,11 +2858,12 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
             long sourceBindingGeneration,
             long sourceSessionSequence,
             CompletableFuture<Void> requestAdmission) {
-        ZLinkBackendActorRef currentActor = actor == null ? null : actors.get(actor.actorId());
-        if (currentActor == null) {
+        NativeActorStay current = actor == null ? null : actors.get(actor.actorId());
+        if (current == null) {
             return null;
         }
-        String targetSpotId = actorSpots.get(actor.actorId());
+        ZLinkBackendActorRef currentActor = current.actor();
+        String targetSpotId = current.spotId();
         ZLinkJavaRawSpot target = spots.get(targetSpotId);
         if (target == null) {
             return null;
@@ -2768,7 +2898,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
     }
 
     private boolean isCurrentActor(ZLinkBackendActorRef actor) {
-        return actor != null && actor.equals(actors.get(actor.actorId()));
+        return nativeActor(actor) != null;
     }
 
     boolean isCurrentBoundActor(ZLinkBackendActorRef actor) {
@@ -2847,8 +2977,6 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
     }
 
     private record SpotAuthorityKey(RoutingId nodeRid, String spotId, long objectGeneration) {}
-
-    private record ActorAuthorityKey(RoutingId nodeRid, String actorId, long objectGeneration) {}
 
     void requireSubscriptionChannel(String channelName) {
         if (!owner.channelWeights().containsKey(channelName)) {
@@ -3169,4 +3297,14 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
     }
 
     private record AuthorityFence(long authorityOwnerGeneration, long ownerLeaseGeneration) {}
+
+    private record NativeActorStay(
+            ZLinkBackendActorRef actor,
+            String spotId,
+            long membershipEpoch,
+            AuthorityFence authority) {
+        NativeActorStay withAuthority(AuthorityFence next) {
+            return new NativeActorStay(actor, spotId, membershipEpoch, next);
+        }
+    }
 }

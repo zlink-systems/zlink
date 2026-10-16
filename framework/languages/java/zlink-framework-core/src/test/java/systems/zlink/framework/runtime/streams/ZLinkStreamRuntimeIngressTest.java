@@ -1460,7 +1460,9 @@ final class ZLinkStreamRuntimeIngressTest {
                                                         7);
                                             }
                                             case "localAuthorityLeaseGeneration" -> 11L;
-                                            case "rememberActorAuthority" -> null;
+                                            case "rememberActorAuthority",
+                                                    "observeActorAuthority" ->
+                                                    null;
                                             default -> defaultValue(method.getReturnType());
                                         });
         ZLinkActorRuntime actors =

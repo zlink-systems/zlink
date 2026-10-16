@@ -885,6 +885,16 @@ final class ZLinkActorClientRuntimeTest {
         }
 
         @Override
+        public void observeActorAuthority(
+                ZLinkBackendActorRef actor,
+                long authorityOwnerGeneration,
+                long ownerLeaseGeneration) {
+            if (knownAuthorityOwnerGeneration < authorityOwnerGeneration) {
+                rememberActorAuthority(actor, authorityOwnerGeneration, ownerLeaseGeneration);
+            }
+        }
+
+        @Override
         public void setAdmissionReadyHandler(
                 Consumer<systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdmissionKey>
                         handler) {

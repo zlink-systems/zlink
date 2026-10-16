@@ -44,7 +44,10 @@ public final class ZLinkObjectServerDescriptorPublisher {
             owner = runtime.currentOwnerToken();
         } catch (IllegalStateException ownerAdmissionClosed) {
             // Location runtime §5: an expired owner does not publish a descriptor.
-            return CompletableFuture.failedFuture(ownerAdmissionClosed);
+            return CompletableFuture.failedFuture(
+                    new ZLinkLocationStoreFailureException(
+                            "MeshNode descriptor owner lease admission is closed.",
+                            ownerAdmissionClosed));
         }
         long currentLeaseGeneration = owner.leaseGeneration();
         long previousLeaseGeneration = lastPublishedLeaseGeneration.get();
@@ -63,14 +66,14 @@ public final class ZLinkObjectServerDescriptorPublisher {
                             .thenAccept(
                                     result -> {
                                         if (result.status() != ZLinkLocationWriteStatus.STORED) {
-                                            throw new systems.zlink.framework.errors
-                                                    .ZLinkConfigurationException(
+                                            throw new ZLinkLocationStoreFailureException(
                                                     "MeshNode descriptor publication failed"
                                                             + " [mesh="
                                                             + configured.meshName()
                                                             + ", status="
                                                             + result.status()
-                                                            + "]");
+                                                            + "]",
+                                                    null);
                                         }
                                     }));
         }

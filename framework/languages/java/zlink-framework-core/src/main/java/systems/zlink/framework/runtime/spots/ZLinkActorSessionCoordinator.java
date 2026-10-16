@@ -257,6 +257,10 @@ final class ZLinkActorSessionCoordinator {
         return ZLinkHandlerStages.completeAll(cleanups);
     }
 
+    CompletionStage<Void> retireCommittedRelocationSource(String actorId) {
+        return requireActors().retireCommittedRelocationSource(actorId);
+    }
+
     boolean isActorMember(String spotId, String actorId) {
         if (actors == null) {
             return false;
