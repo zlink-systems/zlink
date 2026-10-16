@@ -64,7 +64,7 @@ class Zone final : public fx::spot_t<Player>
     }
     fx::task_t<void> earn (Player &actor, fx::message_context_t &, const EarnRequest &request)
     {
-        actor.earn (request.amount);
+        co_await actor.earn (context_, request.amount);
         co_await show (actor);
     }
     fx::task_t<void> read (Player &actor, fx::message_context_t &, const ViewRequest &)

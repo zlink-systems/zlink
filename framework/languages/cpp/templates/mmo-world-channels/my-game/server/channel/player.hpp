@@ -9,20 +9,26 @@ namespace fx = zlink::framework;
 class Player final : public fx::actor_t
 {
     fx::actor_context_t context_;
-    const PlayerData &data_;
+    PlayerData &data_;
 
   public:
     GoldBalance gold;
-    Player (fx::actor_context_t context, const PlayerData &data, std::int64_t initial) :
+    Player (fx::actor_context_t context, PlayerData &data, std::int64_t initial) :
         context_ (std::move (context)), data_ (data), gold (initial)
     {
     }
     fx::actor_context_t &context () noexcept override { return context_; }
     const fx::actor_context_t &context () const noexcept override { return context_; }
-    void earn (std::int64_t amount)
+    // The world database write runs on an I/O worker of the Spot turn that handles the
+    // request; the turn stays held, and gold changes only after the write is stored.
+    fx::task_t<void> earn (fx::spot_context_t &spot, std::int64_t amount)
     {
         const auto next = gold.after_earning (amount);
-        data_.save (context_.actor_id ().value (), next);
+        co_await spot
+          .run_io_worker ([&data = data_, id = std::string (context_.actor_id ().value ()), next] {
+              return data.save (id, next);
+          })
+          .async ();
         gold.restore (next);
     }
     fx::task_t<void> on_join_completed (const fx::actor_join_completion_t &completion) override
@@ -48,7 +54,8 @@ class PlayerFactory final : public fx::actor_factory_t<Player>
                                                 std::stop_token) override
     {
         const auto id = std::string (context.actor_id ().value ());
-        auto player = std::make_shared<Player> (std::move (context), data_, data_.load (id));
+        const auto gold = co_await data_.load (id);
+        auto player = std::make_shared<Player> (std::move (context), data_, gold);
         std::cout << Control::player_created
                   << nlohmann::json{{"actorId", id}, {"nodeId", config_.Id}}.dump () << std::endl;
         co_return player;
