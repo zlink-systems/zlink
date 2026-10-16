@@ -562,7 +562,8 @@ internal sealed class ZLinkInstanceSpotActivationTarget(
                 $"Instance Spot type '{operation.Target.StableType}' is not registered."
             );
 
-        var requestSource = await ZLinkRequestSourceFenceResolver.ResolveAsync(
+        var requestSource = await ZLinkRequestSourceFenceResolver
+            .ResolveAsync(
                 node,
                 authorityStore,
                 operation.Target.MeshName,
@@ -799,7 +800,8 @@ internal sealed class ZLinkInstanceSpotActivationTarget(
                     prepared,
                     readySnapshot.ObjectGeneration,
                     readySnapshot.AuthorityOwnerGeneration,
-                    cancellationToken
+                    cancellationToken,
+                    readyPayload.ActivationRecovery
                 )
                 .ConfigureAwait(false);
             published = true;
@@ -979,7 +981,8 @@ internal sealed class ZLinkInstanceSpotActivationTarget(
                 "The activation recovery root does not match its authority."
             );
         var sourceNodeRid = RoutingId.From(record.SourceNodeRid.Value);
-        var requestSource = await ZLinkRequestSourceFenceResolver.ResolveAsync(
+        var requestSource = await ZLinkRequestSourceFenceResolver
+            .ResolveAsync(
                 node,
                 authorityStore,
                 authority.MeshName,
@@ -1087,7 +1090,8 @@ internal sealed class ZLinkInstanceSpotActivationTarget(
                         prepared,
                         snapshot.ObjectGeneration,
                         snapshot.AuthorityOwnerGeneration,
-                        cancellationToken
+                        cancellationToken,
+                        authority.ActivationRecovery
                     )
                     .ConfigureAwait(false);
             }

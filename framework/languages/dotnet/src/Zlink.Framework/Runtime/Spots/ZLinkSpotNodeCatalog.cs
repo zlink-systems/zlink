@@ -44,15 +44,18 @@ internal sealed class ZLinkSpotNodeCatalog(
     private Task? _idleEvictionTask;
     private ZLinkSpotId? _idleEvictionCursor;
     private int _idleEvictionStopped;
-    private readonly ZLinkSpotActivationFactory _activationFactory = new(
-        services,
-        runtime,
-        frameworkRegistration,
-        registration,
-        node,
-        ZLinkChannelName.FromBoundary(spotChannelName, nameof(spotChannelName)).Value,
-        timerScheduler
-    );
+    private ZLinkSpotActivationFactory? _activationFactory;
+    private ZLinkSpotActivationFactory ActivationFactory =>
+        _activationFactory ??= new(
+            services,
+            runtime,
+            frameworkRegistration,
+            registration,
+            node,
+            ZLinkChannelName.FromBoundary(spotChannelName, nameof(spotChannelName)).Value,
+            timerScheduler,
+            IsPublished
+        );
     private readonly ZLinkActivationConcurrencyAdmission _activationAdmission =
         activationAdmission ?? new(registration.ActivationConcurrencyLimit);
     private readonly ZLinkSpotRetireScheduler? _retireScheduler = CreateRetireScheduler(
@@ -746,7 +749,7 @@ internal sealed class ZLinkSpotNodeCatalog(
                     ZLinkFrameworkErrorKind.AlreadyExists,
                     $"Generated User Spot ID '{spotId}' is already active."
                 );
-            var creation = await _activationFactory.CreateAsync(
+            var creation = await ActivationFactory.CreateAsync(
                 spotType,
                 nativeSpot,
                 spotId,
@@ -776,6 +779,7 @@ internal sealed class ZLinkSpotNodeCatalog(
                 })
                 .ConfigureAwait(false);
             ZLinkRuntimeMetrics.RecordSpotCreated(registration.SpotNodeName, "user");
+            await activation._serial.FinishActivationPreparation().ConfigureAwait(false);
 
             return new ZLinkSpotCreateResult(
                 Reference(activation),
@@ -912,7 +916,7 @@ internal sealed class ZLinkSpotNodeCatalog(
             }
 
             factoryOwnsNativeSpot = true;
-            var creation = await _activationFactory.CreateAsync(
+            var creation = await ActivationFactory.CreateAsync(
                 spotType,
                 nativeSpot,
                 requestedSpotId,
@@ -958,6 +962,7 @@ internal sealed class ZLinkSpotNodeCatalog(
                 })
                 .ConfigureAwait(false);
             ZLinkRuntimeMetrics.RecordSpotCreated(registration.SpotNodeName, "user");
+            await activation._serial.FinishActivationPreparation().ConfigureAwait(false);
         }
         catch (Exception error)
         {
@@ -1053,7 +1058,7 @@ internal sealed class ZLinkSpotNodeCatalog(
             ZLinkSpotCreateResponse? response;
             if (invokeCreate)
             {
-                var creation = await _activationFactory
+                var creation = await ActivationFactory
                     .CreateAsync(spotType, nativeSpot, requestedSpotId, request, cancellationToken)
                     .ConfigureAwait(false);
                 activation = creation.Activation;
@@ -1061,7 +1066,7 @@ internal sealed class ZLinkSpotNodeCatalog(
             }
             else
             {
-                activation = await _activationFactory
+                activation = await ActivationFactory
                     .CreateForRelocationAsync(
                         spotType,
                         nativeSpot,
@@ -1109,7 +1114,8 @@ internal sealed class ZLinkSpotNodeCatalog(
         ulong authorityOwnerGeneration,
         CancellationToken cancellationToken,
         bool restoreLogicalTimers = false,
-        IReadOnlyList<ZLinkRelocationLogicalTimer>? logicalTimers = null
+        IReadOnlyList<ZLinkRelocationLogicalTimer>? logicalTimers = null,
+        bool relocationTarget = false
     )
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -1166,14 +1172,15 @@ internal sealed class ZLinkSpotNodeCatalog(
                     ZLinkFrameworkErrorKind.Unavailable,
                     $"Instance Spot '{requestedSpotId}' is already materialized."
                 );
-            activation = await _activationFactory
+            activation = await ActivationFactory
                 .CreateInstanceAsync(
                     factory.SpotType,
                     nativeSpot,
                     requestedSpotId,
                     cancellationToken,
                     restoreLogicalTimers,
-                    logicalTimers
+                    logicalTimers,
+                    relocationTarget
                 )
                 .ConfigureAwait(false);
             await _lane
@@ -1263,6 +1270,7 @@ internal sealed class ZLinkSpotNodeCatalog(
             })
             .ConfigureAwait(false);
         ZLinkRuntimeMetrics.RecordSpotCreated(registration.SpotNodeName, "user");
+        await prepared.Activation._serial.FinishActivationPreparation().ConfigureAwait(false);
     }
 
     internal ValueTask ValidateRelocatedReservedAsync(
@@ -1354,6 +1362,7 @@ internal sealed class ZLinkSpotNodeCatalog(
             registration.SpotNodeName,
             prepared.Activation.KindName
         );
+        await prepared.Activation._serial.FinishActivationPreparation().ConfigureAwait(false);
     }
 
     //  The remaining relocation coordinator is outside this conversion's allowed
@@ -1366,7 +1375,8 @@ internal sealed class ZLinkSpotNodeCatalog(
         PreparedReservedSpot prepared,
         ulong objectGeneration,
         ulong authorityOwnerGeneration,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        ZLinkInstanceSpotActivationRecoveryPointer? recovery = null
     )
     {
         try
@@ -1378,6 +1388,10 @@ internal sealed class ZLinkSpotNodeCatalog(
                     cancellationToken
                 )
                 .ConfigureAwait(false);
+            if (recovery is null)
+                await prepared
+                    .Activation._serial.FinishActivationPreparation()
+                    .ConfigureAwait(false);
         }
         finally
         {
@@ -1522,6 +1536,14 @@ internal sealed class ZLinkSpotNodeCatalog(
                 ? ReservedSpotCloseReadiness.Ready
                 : ReservedSpotCloseReadiness.HasActors;
         });
+
+    private bool IsPublished(ZLinkSpotActivation activation) =>
+        AwaitStateLane(
+            _lane.RunAsync(() =>
+                _spots.TryGetValue(activation.SpotId, out var current)
+                && ReferenceEquals(current, activation)
+            )
+        );
 
     private static SpotRef Reference(ZLinkSpotActivation activation) =>
         new(
@@ -2024,6 +2046,10 @@ internal sealed class ZLinkSpotNodeCatalog(
                             })
                     )
                     .ConfigureAwait(false);
+                if (outcome.Successor is { } publishedSuccessor)
+                    await publishedSuccessor
+                        ._serial.FinishActivationPreparation()
+                        .ConfigureAwait(false);
             }
         }
         catch (Exception exception)
@@ -2400,7 +2426,7 @@ internal sealed class ZLinkSpotNodeCatalog(
                             ZLinkFrameworkErrorKind.Unavailable,
                             "Reincarnate backend incarnation already exists."
                         );
-                    successor = await _activationFactory
+                    successor = await ActivationFactory
                         .CreateInstanceAsync(
                             activation.Spot.GetType(),
                             nativeSpot,

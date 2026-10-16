@@ -210,6 +210,7 @@
         <Compile Include="Runtime/StreamRequestRoundTripLatencyTests.cs"/>
         <Compile Include="Runtime/SessionJobQueueLoadTests.cs"/>
         <Compile Include="Runtime/TimerLifecycleTests.cs"/>
+        <Compile Include="Runtime/ActivationReadyTests.cs"/>
         <Compile Include="Runtime/SpotHandlerInvokerTests.cs"/>
         <Compile Include="Runtime/SpotIdValidationTests.cs"/>
         <Compile Include="Runtime/SpotLifecycleKindTests.cs"/>
