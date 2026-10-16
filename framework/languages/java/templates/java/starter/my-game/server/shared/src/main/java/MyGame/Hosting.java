@@ -89,6 +89,10 @@ public final class Hosting {
                 var endpoints = new LinkedHashMap<String, Object>();
                 endpoints.put("id", config.id());
                 endpoints.put(
+                        "meshEndpoint",
+                        runtime.listenerStatus(ZLinkListenerKind.ROUTE_MESH, Names.MESH)
+                                .endpoint());
+                endpoints.put(
                         "streamEndpoint",
                         runtime.listenerStatus(ZLinkListenerKind.STREAM, Names.STREAM).endpoint());
                 System.out.println(Control.READY + Json.MAPPER.writeValueAsString(endpoints));

@@ -72,7 +72,12 @@ public final class Nodes implements AutoCloseable {
                             NodeConfig.class);
             String id = declared.id();
             var config =
-                    new NodeConfig(id, redis, "my-game:" + runId + ":", declared.streamEndpoint());
+                    new NodeConfig(
+                            id,
+                            redis,
+                            "my-game:" + runId + ":",
+                            declared.meshEndpoint(),
+                            declared.streamEndpoint());
             var path = logs.resolve(id + ".json");
             Json.MAPPER.writeValue(path.toFile(), config);
             configs.put(id, path);

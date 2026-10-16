@@ -18,8 +18,10 @@ public class Program {
             ZLinkRedisRelocationStore relocations) {
         return options -> {
             Hosting.configure(options, locations, relocations);
-            // A RouteMesh registration makes drain wait for a live peer in the same mesh, so add
-            // it together with the application objects that need other nodes.
+            // The mesh listener is the starting point for adding nodes; no objects are registered.
+            options.addRouteMesh(Names.MESH)
+                    .listen(config.meshEndpoint())
+                    .setRoutingIdPrefix(config.id());
             options.addStreamNode(Names.STREAM)
                     .bind(config.streamEndpoint())
                     .registerSession(PlayerSession.class);

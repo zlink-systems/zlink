@@ -6,7 +6,7 @@ This Java 25 starter provides one Session node, Redis hosting, diagnostics, stdi
 
 | Module | Responsibility and extension point |
 | --- | --- |
-| `server/session/src/main/java/MyGame/session/Program.java` | Register the STREAM node and its Session; add registrations when introducing application objects |
+| `server/session/src/main/java/MyGame/session/Program.java` | Register STREAM and the mesh listener; add registrations when introducing application objects |
 | `server/session/src/main/java/MyGame/session/PlayerSession.java` | Connection callbacks; add authentication and application packet handling |
 | `server/shared/` | Settings, hosting, and the single `Control` marker definition |
 | `e2e/src/main/java/MyGame/e2e/Scenarios.java` | Observable scenarios; add new scenario IDs to `Scenario` and the descriptor together |

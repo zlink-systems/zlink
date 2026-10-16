@@ -6,7 +6,7 @@
 
 | 모듈 | 책임과 확장 위치 |
 | --- | --- |
-| `server/session/src/main/java/MyGame/session/Program.java` | STREAM node와 Session 등록, application 객체 도입 시 등록 추가 |
+| `server/session/src/main/java/MyGame/session/Program.java` | STREAM과 mesh listener 등록, application 객체 도입 시 등록 추가 |
 | `server/session/src/main/java/MyGame/session/PlayerSession.java` | 연결 callback, 인증과 application 패킷 처리 추가 |
 | `server/shared/` | 설정, hosting, 단일 `Control` 마커 정의 |
 | `e2e/src/main/java/MyGame/e2e/Scenarios.java` | 관찰 가능한 시나리오, `Scenario`와 구조 선언에 시나리오 ID 함께 추가 |

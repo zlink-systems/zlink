@@ -64,11 +64,15 @@ pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
 
 Changes to registrations, settings, structure, and scenarios must be made together; see [the development guide](AGENTS.md).
 
+## Known issues
+
+On Framework 0.30.x for Java, a node that registers a RouteMesh listener cannot finish `drain` while no other live node is in that mesh. The `connect` scenario's drain stops with `BLOCKED/DEADLINE_EXCEEDED` after the 30-second host deadline and the runner exits with code 1 (#1947, https://github.com/zlink-systems/zlink/issues/1947). The .NET starter passes the same scenario. The setup keeps the mesh listener and does not work around the failure; validate the scenario with a Framework release that fixes #1947 before deployment.
+
 ## Deployment sequence
 
 Start Redis, set `redisEndpoint` and a deployment-specific `keyPrefix` in `server/config/session.json`, then start `server/session/build/install/session/bin/session server/config/session.json` (`session.bat` on Windows). Keep stdin open. Publish STREAM on a reachable interface when clients run outside the node's network namespace.
 
-Wait for `READY <json>` before admitting clients. It contains the node ID and the STREAM endpoint actually bound by Framework. This starter registers neither a RouteMesh listener nor an object server or game Entry. Add gameplay and the mesh from a separately downloaded sample before using it as a game server; a registered mesh needs another live node in it before `drain` can finish.
+Wait for `READY <json>` before admitting clients. It contains the node ID and the mesh and STREAM endpoints actually bound by Framework. This starter registers a RouteMesh listener for future node composition but registers no object server or game Entry. Add gameplay from a separately downloaded sample before using it as a game server.
 
 After clients disconnect, write `drain` to stdin. Wait for `RELOCATION_REQUESTED`, `RELOCATED`, and `SAFE_TO_SHUTDOWN`, then write `shutdown`, wait for `STOPPED`, and verify exit code zero. `Control` owns these markers. The starter checks an empty host drain; it does not demonstrate moving connected clients or game state to another node.
 
