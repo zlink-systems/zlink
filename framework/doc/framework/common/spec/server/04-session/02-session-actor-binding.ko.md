@@ -316,7 +316,7 @@ binding을 해제하지만 Actor를 destroy하거나 Spot membership을 바꾸�
 | 36 | `boundSessionSend` | Actor owner → Session owner: Actor→session push | send |
 | 51 | `boundSessionReplaced` | Actor owner → 이전 Session owner: binding 교체 통지 | one-way, 최대 1회 |
 | 42 | `sessionRelocationSeal` | Relocation coordinator → Session owner: 이동 대상 binding에 seal 설치 요청 | request |
-| 43 | `sessionRelocationSealed` | Session owner → Relocation coordinator: seal 설치 결과 | reply |
+| 43 | `sessionRelocationSealed` | Session owner → Relocation coordinator: seal 설치 결과 또는 exact binding 부재(`sealResult`, §8.3) | reply |
 | 44 | `sessionRelocationRoute` | Target runtime 또는 relocation coordinator → Session owner: route 적용 또는 abort | one-way(send), 응답 없음 |
 | 45 | (reserved) | Reserved | 보내지도 수락하지도 않는다 |
 
@@ -526,7 +526,7 @@ message를 source route로 다시 제출하며 reply를 만들지 않는다. Rel
 
 ### 8.2 Control message 42·43·44
 
-Command 42와 43은 Session seal의 설치 request와 reply를 전달한다. Command 43은 seal 설치 결과만 전달하며 Session message sequence나 high-water는 포함하지 않는다.
+Command 42와 43은 Session seal의 설치 request와 reply를 전달한다. Command 43은 seal 설치 결과(`sealResult`)만 전달하며 Session message sequence나 high-water는 포함하지 않는다. `sealResult`는 `sealed`(1) 또는 `bindingAbsent`(2)이고, `bindingAbsent`의 판정과 처리는 §8.3이 소유한다.
 
 Command 44는 target runtime의 commit 또는 relocation coordinator의 relay-ready accepted
 전 abort를 전달하는 one-way control이다. **Command 44는 response 없이 한 번만 제출하고
@@ -554,6 +554,89 @@ Command들은 relocation을 조정하기 위한 내부 message이며 Location St
 Store CAS가 결정했으므로 Session owner가 Store나 Actor authority mirror를 다시
 조회하지 않는다. Reserved command 45는 보내지 않으며 수락하지도 않는다. 각 command의
 방향·용도·완료 방식은 §5의 command 표에 있다.
+
+### 8.3 이미 정리된 binding에 대한 seal
+
+§7의 disconnect 통지나 logical notification으로 binding이 이미 정리된 뒤 command 42가 도착할 수
+있다. Session owner는 command 42를 아래 순서로 한 번 판정한다. 판정은 §8.1의 Session owner 한
+곳에서만 하며, 조회 범위는 그 Session owner가 소유한 모든 Session이다.
+
+1. **같은 relocation identity와 같은 `ActorId`의 결과 기록**이 있으면 아래 결과 기록 규칙으로
+   처리한다. Current binding을 다시 판정하지 않는다. 같은 relocation의 다른 Actor participant는 각자의
+   기록을 가진다.
+2. Session owner 안에서 command 42의 `ActorId`에 대한 **current binding을 찾는다.** SessionRid나
+   binding generation으로 먼저 좁히지 않는다.
+   - Current binding이 없으면 **exact binding 부재**다.
+   - Current binding이 있고 Session identity·SessionRid, binding generation,
+     `ObjectGeneration`이 command 42와 모두 같으면 **seal 설치**다. 그 binding에 다른 relocation
+     identity의 seal이 이미 있으면 불일치다.
+   - Current binding이 있으나 위 값 중 하나라도 다르면 **불일치**다. Command 42의
+     `expectedOwnerLeaseGeneration`이 current binding route에 보관한 `OwnerLeaseGeneration`(§8.2)보다
+     작으면 이미 끝난 relocation의 요청이므로 역시 불일치다.
+
+| 판정 | Session owner 처리 |
+|---|---|
+| Seal 설치 | §8.1대로 seal을 설치하고 command 43을 `sealResult = sealed`로 반환한다. |
+| Exact binding 부재 | Seal, held message, seal timeout을 만들지 않고 command 43을 `sealResult = bindingAbsent`로 반환한다. |
+| 불일치 | 기존대로 거부한다. 부재로 바꿔 반환하지 않는다. |
+
+`bindingAbsent`는 seal을 설치했다는 뜻이 아니라 seal할 current binding이 없다는 뜻이다. 이 결과는
+Session binding과 seal에 관한 결과만 나타내며, disconnect callback의 진행 상태를 알려 주지 않는다.
+
+**결과 기록과 수명.** Session owner는 relocation identity와 `ActorId`를 키로 결과를 기록한다. 이 기록은
+binding이나 seal이 아니며 1단계 조회에만 쓴다. 같은 키의 command 42는 원 요청의 모든 field가 같아야
+하며, 다르면 protocol error로 거부한다.
+
+- `sealed` 기록은 seal이 열려 있는 동안 같은 command 42에 `sealed`를 다시 반환한다. Seal이 command 44
+  적용, abort 또는 seal timeout으로 끝나면 기록은 **닫힌 기록**이 되어 그 binding에 남는다. 한 binding은
+  마지막 닫힌 기록 하나만 보관하며, 다음 seal이 설치되거나 binding이 제거되면 함께 지운다. 닫힌 기록과
+  같은 command 42는 reply 없이 `late_session_relocation_seal` Warning만 남기고 무시한다. 이미 끝난
+  relocation의 seal을 다시 설치하지 않는다.
+- `bindingAbsent` 기록은 판정 시점부터 `SessionRelocationSealTimeout` 동안 유지한다. 기록이 사라진 뒤
+  같은 command 42가 도착하면 2단계부터 다시 판정한다. 그 사이 생긴 binding은 더 큰 binding
+  generation을 가지므로 command 42와 일치하지 않고, 재판정 결과는 부재 또는 불일치만 될 수 있다. Seal은
+  설치되지 않는다.
+- Binding이 제거되면 그 binding의 닫힌 기록도 사라진다. 그 뒤 같은 command 42는 2단계부터 다시
+  판정한다. Current binding이 없으면 부재, 같은 Actor에 다른 binding이 있으면 불일치다.
+
+**이전 relocation의 지연 요청.** 닫힌 기록을 다음 seal 설치 때 지울 수 있는 근거는 command 42의 전달
+순서다. Relocation coordinator는 relocation이 terminal에 도달한 뒤 그 relocation의 command 42를 다시
+보내지 않으며, 같은 Actor의 다음 relocation은 이전 relocation의 terminal 뒤에만 시작한다. 같은 source
+node가 보낸 command 42가 Session owner에 도착하는 경우는 둘이다.
+
+- 같은 pipe로 오면 보낸 순서대로 도착한다. 이전 relocation의 요청은 다음 relocation의 요청보다 먼저
+  도착한다.
+- 다음 relocation의 요청이 새로 선택된 pipe로 오면, Session owner의 ROUTER는 그 pipe를 선택할 때 이전
+  pipe에 남은 DATA·REQUEST를 버린다([Core ROUTER §10.1](../../../../../../../core/doc/spec/core/socket/07-router.ko.md)).
+  다음 relocation의 요청은 선택된 뒤에만 반환되므로, 그 뒤 이전 pipe의 요청이 반환되지 않는다.
+
+따라서 다음 relocation의 command 42가 도착한 뒤에는 같은 source node의 이전 relocation 요청이 도착하지
+않는다. 다른 node가 보낸 이전 relocation 요청은
+owner가 바뀌었으므로 위 `OwnerLeaseGeneration` fence로 불일치가 된다.
+
+별도 message ACK journal이나 두 번째 binding registry를 두지 않는다.
+
+**Coordinator 처리.** Relocation coordinator는 participant마다 처음 받은 command 43만 사용하고, 같은
+relocation identity의 이후 command 43은 무시한다. `bindingAbsent`를 받은 participant는 bind되지 않은
+participant와 같이 다룬다. Relocation envelope의 `sessionBindings`에 넣지 않고, target은 그 Session에
+command 44를 보내지 않으며, relocation은 계속 진행한다. Participant의 Actor와 Spot membership은
+그대로 envelope에 들어간다. 부재 판정은 Session owner만 소유한다. Coordinator와 Actor owner는 자신이
+보관한 binding 정보로 seal을 생략하거나 부재를 추측하지 않는다. `bindingAbsent` 기록에 대해 늦게
+도착한 command 44는 §8.1의 `late_session_route_update` Warning만 남기고 무시한다. 이 command 44는
+이후 생긴 binding이나 다른 relocation의 seal을 바꾸지 않는다.
+
+**진행 중인 disconnect 통지.** `bindingAbsent` 시점에 그 binding의 disconnect 통지가 아직 Actor에
+도착하지 않았을 수 있다. 통지의 중복 제거와 callback 최대 1회 실행은 §7의 Session owner가 binding
+identity 단위로 계속 소유한다. 통지는 일반 Actor message와 같이 처리한다. Source가 capture 전에
+수락했으면 saved work로 target에 옮겨지고, capture 뒤에 도착하면 Message Follow로 target에 전달된다.
+Actor owner는 통지의 binding identity와 다른 current binding이 있으면 통지를 버리고, current binding이
+없으면 callback을 실행한다. Coordinator는 disconnect 통지를 새로 만들거나 다시 제출하지 않는다.
+
+**실패.** Command 42가 불일치로 거부되거나 seal 대기 deadline에 도달하면 relocation은 실패한다.
+복원 대상은 이미 시작한 모든 participant의 capture와, 이미 `sealed`로 확인한 participant의 seal이다.
+복원 순서는 §8.1의 abort 순서를 따른다. Durable abort와 source queue 복원을 먼저 확정한 뒤 matching
+command 44 abort를 보낸다
+([Relocation §9](../05-location-relocation/04-relocation-flow.ko.md#9-timeout-failure와-cancellation)).
 
 ## 9. 재접속과 이동의 구분
 
@@ -788,6 +871,8 @@ lane 정책 타입, 검증 지점 하나)은 [§10](#10-실행과-수명)·[§11
 - Relay-ready 전에 target이 명시적으로 실패하면 held message가 source route로 처리되고 connection은
   유지된다.
 - Relay-ready 뒤 source route 재개는 공통 relocation §4.4의 source `Preserve` fence 결과를 따른다. Fence 판정 중 seal timeout은 기존대로 처리한다.
+- Disconnect로 이미 정리된 binding을 seal하려 하면 command 43이 `bindingAbsent`로 끝나고, relocation은
+  그 Session 없이 진행된다. Session owner는 seal을 설치하지 않는다.
 - Wire에서 command 43에는 sequence·high-water가 없고, command 44에는 응답이 없으며, command 45는
   오가지 않는다.
 
