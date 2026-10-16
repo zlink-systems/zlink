@@ -741,7 +741,7 @@ export class ZLinkActorTransferRuntime {
     commit(
       target: ZLinkSpotRouteTarget,
       targetActorRef: ActorRef,
-      targetOwnerFence: ZLinkActorMessageFollowOwnerFence
+      targetOwnerFence: ZLinkActorMessageFollowOwnerFence | null
     ): Promise<void>;
     rollback(): Promise<void>;
     discard(reason: unknown): void;
