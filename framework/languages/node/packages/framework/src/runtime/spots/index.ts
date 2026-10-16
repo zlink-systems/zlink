@@ -2869,11 +2869,7 @@ export class DefaultZLinkSpotManager {
           control.previousMembershipEpoch
         );
       };
-      if (this.options.actorTransferRuntime === undefined) {
-        await callback();
-      } else {
-        await this.options.actorTransferRuntime.notifyCoreSourceLeave(actor, callback);
-      }
+      await callback();
       return;
     }
     if (spotId === null) {
@@ -3037,9 +3033,7 @@ export class DefaultZLinkSpotManager {
           if (sourceJoinedActor === undefined && pendingTransfer === undefined) {
             return;
           }
-          await this.options.actorTransferRuntime.notifyCoreSourceLeave(actor, () =>
-            activation.spot.onLeaveActor(actor)
-          );
+          await activation.spot.onLeaveActor(actor);
         }
         activation.commitActorDeparture(actor.context.actorId);
         return;
