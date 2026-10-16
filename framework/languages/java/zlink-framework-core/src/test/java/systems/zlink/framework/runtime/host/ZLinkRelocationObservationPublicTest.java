@@ -11,19 +11,283 @@ import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.monitoring.*;
 import systems.zlink.framework.runtime.InMemoryRelocationStore;
+import systems.zlink.framework.runtime.actors.ZLinkSessionActorsRuntime;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
+import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
+import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
 import systems.zlink.framework.spots.*;
+import systems.zlink.framework.streams.ZLinkSession;
+import systems.zlink.framework.streams.ZLinkSessionContext;
+import systems.zlink.framework.streams.ZLinkStreamError;
 
+import java.net.Socket;
+import java.net.URI;
 import java.time.Duration;
+import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.*;
 import java.util.function.Predicate;
 
 /** Public inputs for the source observation and current membership contracts (#1740). */
 final class ZLinkRelocationObservationPublicTest {
     private static final String MESH = "observation";
+    private static final String RELOCATION_FLOW = "01900000-0000-7000-8000-000000001882";
     private static final Duration WAIT = Duration.ofSeconds(15);
     private static CompletableFuture<ZLinkActorJoinCompletion> joined;
+    private static CompletableFuture<ZLinkSessionContext> connected;
+    private static CompletableFuture<String> relayed;
+
+    @Test
+    void boundSessionRelaySurvivesActualUserSpotRelocation() throws Exception {
+        joined = new CompletableFuture<>();
+        connected = new CompletableFuture<>();
+        relayed = new CompletableFuture<>();
+        var locations = new ZLinkInMemoryLocationStore();
+        var relocations = new InMemoryRelocationStore();
+        try (var publicationExecutor = Executors.newVirtualThreadPerTaskExecutor();
+                var source =
+                        ZLinkFrameworkRuntimeTestAccess.start(
+                                options("source-bound", locations, relocations, null))) {
+            source.spotManager()
+                    .getOrCreate("room", "room")
+                    .submit()
+                    .toCompletableFuture()
+                    .get(WAIT.toSeconds(), TimeUnit.SECONDS);
+            var actor =
+                    assertInstanceOf(
+                                    ZLinkActorCreateResult.Created.class,
+                                    source.actorManager()
+                                            .create("player-bound", "player")
+                                            .submit()
+                                            .toCompletableFuture()
+                                            .get(WAIT.toSeconds(), TimeUnit.SECONDS))
+                            .actor();
+            source.actorClient()
+                    .requestToActor(actor.actorId(), new Join("room"))
+                    .timeout(WAIT)
+                    .submit(String.class)
+                    .toCompletableFuture()
+                    .get(WAIT.toSeconds(), TimeUnit.SECONDS);
+            assertInstanceOf(
+                    ZLinkActorJoinCompletion.Accepted.class,
+                    joined.get(WAIT.toSeconds(), TimeUnit.SECONDS));
+            var endpoint = source.listenerStatus(ZLinkListenerKind.ROUTE_MESH, MESH).endpoint();
+            var gatewayOptions = new DefaultZLinkFrameworkOptions();
+            gatewayOptions.addLocationStore(locations);
+            gatewayOptions.addRelocationStore(relocations);
+            gatewayOptions.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL);
+            var gatewayMesh =
+                    gatewayOptions
+                            .addRouteMesh(MESH)
+                            .listen("tcp://127.0.0.1:0")
+                            .setRoutingId(RoutingId.from("gateway-bound"));
+            gatewayMesh.objects().client();
+            gatewayMesh.peerConnections().connect(endpoint);
+            var streamOptions = gatewayOptions.addStreamNode("gateway");
+            streamOptions.bind("tcp://127.0.0.1:0");
+            streamOptions.enableActorDispatch();
+            streamOptions.registerSession(BoundSession.class);
+            try (var target =
+                            ZLinkFrameworkRuntimeTestAccess.start(
+                                    options("target-bound", locations, relocations, endpoint));
+                    var gateway = ZLinkFrameworkRuntimeTestAccess.start(gatewayOptions);
+                    var targetReady =
+                            observe(
+                                    target.routeMeshRuntime().observe(MESH, 8),
+                                    s -> s.isReady() && s.readyPeerCount() > 0)) {
+                targetReady.result.get(WAIT.toSeconds(), TimeUnit.SECONDS);
+                var address =
+                        URI.create(
+                                gateway.listenerStatus(ZLinkListenerKind.STREAM, "gateway")
+                                        .endpoint());
+                try (var client = new Socket(address.getHost(), address.getPort())) {
+                    var session = connected.get(WAIT.toSeconds(), TimeUnit.SECONDS);
+                    var sessionActors = (ZLinkSessionActorsRuntime) session.actors();
+                    var binding =
+                            sessionActors
+                                    .bind(actor)
+                                    .toCompletableFuture()
+                                    .get(WAIT.toSeconds(), TimeUnit.SECONDS);
+                    var publicationEntered = new CompletableFuture<Void>();
+                    var publicationRelease = new CompletableFuture<Void>();
+                    var spotField = sessionActors.getClass().getDeclaredField("spotNode");
+                    spotField.setAccessible(true);
+                    var backendSpot = spotField.get(sessionActors);
+                    var laneField = backendSpot.getClass().getDeclaredField("stateLane");
+                    laneField.setAccessible(true);
+                    var publicationLane =
+                            new ZLinkStateLane(
+                                    task ->
+                                            publicationExecutor.execute(
+                                                    () -> {
+                                                        publicationEntered.complete(null);
+                                                        publicationRelease.join();
+                                                        task.run();
+                                                    }));
+                    laneField.set(backendSpot, publicationLane);
+                    CompletableFuture<Void> submitted;
+                    try {
+                        var result =
+                                source.relocate(
+                                                new ZLinkFrameworkRelocationOptions(
+                                                        ZLinkFrameworkRelocationMode
+                                                                .PLANNED_MAINTENANCE,
+                                                        null,
+                                                        WAIT))
+                                        .toCompletableFuture()
+                                        .get(WAIT.toSeconds(), TimeUnit.SECONDS);
+                        assertEquals(ZLinkFrameworkRelocationOutcome.RELOCATED, result.outcome());
+                        publicationEntered.get(WAIT.toSeconds(), TimeUnit.SECONDS);
+                        sessionActors.enterRelayDispatch(
+                                new ZLinkStreamHeader(
+                                                Probe.class.getSimpleName(),
+                                                Map.of(),
+                                                Optional.empty())
+                                        .withFlow(RELOCATION_FLOW, ZLinkFlowOrigin.INBOUND));
+                        try {
+                            submitted =
+                                    binding.relay(ZLinkMessage.of(new Probe("after-relocation")))
+                                            .toCompletableFuture();
+                        } finally {
+                            sessionActors.exitRelayDispatch();
+                        }
+                        assertFalse(
+                                submitted.isDone(),
+                                "relay remains sealed while native publication is held");
+                        var terminalsField =
+                                sessionActors.getClass().getDeclaredField("sealTerminals");
+                        terminalsField.setAccessible(true);
+                        var terminal =
+                                ((Map<?, ?>) terminalsField.get(sessionActors))
+                                        .values()
+                                        .iterator()
+                                        .next();
+                        var expire =
+                                sessionActors
+                                        .getClass()
+                                        .getDeclaredMethod(
+                                                "expireRelocationSeal", terminal.getClass());
+                        expire.setAccessible(true);
+                        expire.invoke(sessionActors, terminal);
+                        assertTrue(
+                                sessionActors.bound().contains(binding),
+                                "accepted command 44 keeps the physical Session binding live while"
+                                        + " native publication waits on its owner");
+                    } finally {
+                        publicationRelease.complete(null);
+                    }
+                    submitted.get(WAIT.toSeconds(), TimeUnit.SECONDS);
+                    assertEquals(
+                            "after-relocation", relayed.get(WAIT.toSeconds(), TimeUnit.SECONDS));
+                }
+            }
+        }
+    }
+
+    @Test
+    void vacatingIdleSpotBeforeRelocationKeepsTheRemainingWorkloadRelocatable() throws Exception {
+        joined = new CompletableFuture<>();
+        var locations = new ZLinkInMemoryLocationStore();
+        var relocations = new InMemoryRelocationStore();
+        var sourceOptions = options("vacate-source", locations, relocations, null);
+        sourceOptions.registration().meshNodes().getFirst().setSpotCapacity(3);
+        try (var source = ZLinkFrameworkRuntimeTestAccess.start(sourceOptions)) {
+            for (String room : java.util.List.of("room-1", "room-2", "room-3")) {
+                source.spotManager()
+                        .getOrCreate(room, "room")
+                        .submit()
+                        .toCompletableFuture()
+                        .get(WAIT.toSeconds(), TimeUnit.SECONDS);
+            }
+            var actor =
+                    assertInstanceOf(
+                                    ZLinkActorCreateResult.Created.class,
+                                    source.actorManager()
+                                            .create("vacate-player", "player")
+                                            .submit()
+                                            .toCompletableFuture()
+                                            .get(WAIT.toSeconds(), TimeUnit.SECONDS))
+                            .actor();
+            source.actorClient()
+                    .requestToActor(actor.actorId(), new Join("room-3"))
+                    .timeout(WAIT)
+                    .submit(String.class)
+                    .toCompletableFuture()
+                    .get(WAIT.toSeconds(), TimeUnit.SECONDS);
+            assertInstanceOf(
+                    ZLinkActorJoinCompletion.Accepted.class,
+                    joined.get(WAIT.toSeconds(), TimeUnit.SECONDS));
+            var endpoint = source.listenerStatus(ZLinkListenerKind.ROUTE_MESH, MESH).endpoint();
+            var targetOptions = options("vacate-target", locations, relocations, endpoint);
+            targetOptions.registration().meshNodes().getFirst().setSpotCapacity(5);
+            try (var target = ZLinkFrameworkRuntimeTestAccess.start(targetOptions);
+                    var ready =
+                            observe(
+                                    target.routeMeshRuntime().observe(MESH, 8),
+                                    status -> status.isReady() && status.readyPeerCount() > 0)) {
+                ready.result.get(WAIT.toSeconds(), TimeUnit.SECONDS);
+                for (String room : java.util.List.of("room-4", "room-5", "room-6")) {
+                    target.spotManager()
+                            .getOrCreate(room, "room")
+                            .submit()
+                            .toCompletableFuture()
+                            .get(WAIT.toSeconds(), TimeUnit.SECONDS);
+                }
+                var idle =
+                        source.spotManager()
+                                .find("room-1")
+                                .toCompletableFuture()
+                                .join()
+                                .orElseThrow();
+                assertTrue(source.spotManager().close(idle).toCompletableFuture().join());
+                var result =
+                        source.relocate(
+                                        new ZLinkFrameworkRelocationOptions(
+                                                ZLinkFrameworkRelocationMode.PLANNED_MAINTENANCE,
+                                                null,
+                                                WAIT))
+                                .toCompletableFuture()
+                                .get(WAIT.toSeconds(), TimeUnit.SECONDS);
+                assertEquals(
+                        ZLinkFrameworkRelocationOutcome.RELOCATED,
+                        result.outcome(),
+                        result.toString());
+            }
+        }
+    }
+
+    public record Probe(String value) {}
+
+    public record BoundSession(ZLinkSessionContext context) implements ZLinkSession {
+        @Override
+        public CompletionStage<Void> onConnected() {
+            connected.complete(context);
+            return CompletableFuture.completedFuture(null);
+        }
+
+        @Override
+        public CompletionStage<Void> onDisconnected() {
+            relayed.completeExceptionally(
+                    new IllegalStateException("physical Session disconnected"));
+            return CompletableFuture.completedFuture(null);
+        }
+
+        @Override
+        public CompletionStage<Void> onError(ZLinkStreamError error) {
+            return CompletableFuture.completedFuture(null);
+        }
+    }
+
+    public static final class ProbeHandler
+            implements ZLinkSpotActorSendHandler<Room, Player, Probe> {
+        @Override
+        public CompletionStage<Void> handle(
+                Room room, Player actor, ZLinkMessageContext context, Probe message) {
+            relayed.complete(message.value());
+            return CompletableFuture.completedFuture(null);
+        }
+    }
 
     @Test
     void existingObserverReceivesSourceQuiescenceAfterRelocated() throws Exception {
@@ -307,6 +571,7 @@ final class ZLinkRelocationObservationPublicTest {
         @Override
         public void configure() {
             context.handlers().addHandler(LeaveHandler.class);
+            context.handlers().addHandler(ProbeHandler.class);
         }
 
         @Override
