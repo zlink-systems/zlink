@@ -288,7 +288,19 @@ internal sealed class ZLinkSessionActorBindingTable
             "late_session_route_update actor={ActorId} relocation={RelocationId}"
         );
     private readonly ZLinkStateLane _lane = new();
-    private readonly Dictionary<ZLinkActorId, ZLinkSessionBindingEntry> _entries = new();
+
+    private readonly record struct PhysicalSessionBindingKey(
+        ZLinkActorId ActorId,
+        RoutingId SessionRid,
+        ulong SessionOwnerNodeGeneration
+    );
+
+    private readonly Dictionary<PhysicalSessionBindingKey, ZLinkSessionBindingEntry> _entries =
+        new();
+
+    // The confirmed local route indexes the owning physical entry. Retired
+    // entries remain available for replacement notification and cleanup.
+    private readonly Dictionary<ZLinkActorId, ZLinkSessionBindingEntry> _currentBindings = new();
     private readonly Dictionary<ZLinkSessionBindingKey, ZLinkSessionBindingTombstone> _tombstones =
         new();
     private readonly Dictionary<ZLinkSessionBindingKey, Queue<ZLinkHeldSessionRelay>> _heldRelays =
@@ -445,22 +457,21 @@ internal sealed class ZLinkSessionActorBindingTable
                     )
                     {
                         AddTimedOutCanonicalSeal(timeout.Seal);
-                        var sessionKeys = _entries
-                            .Where(candidate =>
-                                ReferenceEquals(candidate.Value.Context, entry.Context)
+                        var sessionEntries = _entries
+                            .Values.Where(candidate =>
+                                ReferenceEquals(candidate.Context, entry.Context)
                             )
-                            .Select(static candidate => new ZLinkSessionBindingKey(
-                                candidate.Key,
-                                candidate.Value.BindingToken
-                            ))
                             .ToArray();
-                        foreach (var sessionKey in sessionKeys)
+                        foreach (var sessionEntry in sessionEntries)
                         {
-                            var sessionEntry = _entries[sessionKey.ActorId];
+                            var sessionKey = ZLinkSessionBindingKey.FromBoundary(
+                                sessionEntry.ActorRef.ActorId,
+                                sessionEntry.BindingToken
+                            );
                             if (sessionEntry.CanonicalRelocationSeal is { } seal)
                                 AddTimedOutCanonicalSeal(seal);
                             CancelCanonicalSealTimeout(sessionKey);
-                            _entries.Remove(sessionKey.ActorId);
+                            RemoveEntry(sessionKey, sessionEntry);
                             DropHeldRelays(sessionKey, ZLinkMessageFlowReason.TargetClosed);
                             timedOut.Add(sessionEntry);
                         }
@@ -494,9 +505,52 @@ internal sealed class ZLinkSessionActorBindingTable
         }
     }
 
+    private bool TryGetCurrentEntry(ZLinkActorId actorId, out ZLinkSessionBindingEntry entry) =>
+        _currentBindings.TryGetValue(actorId, out entry!);
+
     private bool TryGetEntry(ZLinkSessionBindingKey key, out ZLinkSessionBindingEntry entry) =>
-        _entries.TryGetValue(key.ActorId, out entry!)
+        TryGetCurrentEntry(key.ActorId, out entry)
         && StringComparer.Ordinal.Equals(entry.BindingToken, key.BindingToken);
+
+    private void StoreEntry(ZLinkSessionBindingKey key, ZLinkSessionBindingEntry entry)
+    {
+        var identity = new PhysicalSessionBindingKey(
+            key.ActorId,
+            entry.ActorRef.SessionRid,
+            entry.SessionOwnerNodeGeneration
+        );
+        _entries.TryGetValue(identity, out var previous);
+        _entries[identity] = entry;
+        UpdateCurrentEntry(key.ActorId, previous, entry);
+    }
+
+    private void RemoveEntry(ZLinkSessionBindingKey key, ZLinkSessionBindingEntry entry)
+    {
+        var identity = new PhysicalSessionBindingKey(
+            key.ActorId,
+            entry.ActorRef.SessionRid,
+            entry.SessionOwnerNodeGeneration
+        );
+        _entries.Remove(identity);
+        UpdateCurrentEntry(key.ActorId, entry, null);
+    }
+
+    private void UpdateCurrentEntry(
+        ZLinkActorId actorId,
+        ZLinkSessionBindingEntry? previous,
+        ZLinkSessionBindingEntry? replacement
+    )
+    {
+        if (
+            !_currentBindings.TryGetValue(actorId, out var current)
+            || !ReferenceEquals(current, previous)
+        )
+            return;
+        if (replacement is null)
+            _currentBindings.Remove(actorId);
+        else
+            _currentBindings[actorId] = replacement;
+    }
 
     internal ValueTask<ZLinkSessionOutboundAdmission> AdmitOutboundAsync(
         ZLinkSessionOutboundTenure tenure,
@@ -507,7 +561,7 @@ internal sealed class ZLinkSessionActorBindingTable
         return _lane.RunAsync(() =>
         {
             var actorId = ZLinkActorId.FromBoundary(tenure.ActorId, nameof(tenure.ActorId));
-            if (!_entries.TryGetValue(actorId, out var entry))
+            if (!TryGetCurrentEntry(actorId, out var entry))
                 return new ZLinkSessionOutboundAdmission(
                     ZLinkSessionOutboundAdmissionKind.NoBinding
                 );
@@ -537,7 +591,7 @@ internal sealed class ZLinkSessionActorBindingTable
             var key = ZLinkSessionBindingKey.FromBoundary(actorId, expected.BindingToken);
             if (!TryGetEntry(key, out var entry))
                 return new ZLinkSessionOutboundAdmission(
-                    _entries.ContainsKey(key.ActorId)
+                    _currentBindings.ContainsKey(key.ActorId)
                         ? ZLinkSessionOutboundAdmissionKind.WrongSession
                         : ZLinkSessionOutboundAdmissionKind.NoBinding
                 );
@@ -609,22 +663,22 @@ internal sealed class ZLinkSessionActorBindingTable
                     ZLinkRetryAdvice.DoNotRetry
                 );
             }
-            var replaced = _entries
-                .Where(entry => entry.Key == key.ActorId)
-                .Select(entry => entry.Value)
-                .ToArray();
+            ZLinkSessionBindingEntry[] replaced = TryGetCurrentEntry(actorId, out var previous)
+                ? [previous]
+                : [];
             preparePublish?.Invoke(replaced);
             foreach (var entry in replaced)
             {
                 var replacedKey = new ZLinkSessionBindingKey(actorId, entry.BindingToken);
                 CancelCanonicalSealTimeout(replacedKey);
-                _entries.Remove(replacedKey.ActorId);
+                if (ReferenceEquals(entry.Context, context))
+                    RemoveEntry(replacedKey, entry);
                 DropHeldRelays(replacedKey, ZLinkMessageFlowReason.StaleTarget);
                 entry.DrainSignal?.TrySetResult();
                 entry.RouteAvailableSignal?.TrySetResult();
             }
 
-            _entries[key.ActorId] = new ZLinkSessionBindingEntry(
+            var boundEntry = new ZLinkSessionBindingEntry(
                 context,
                 bindingToken,
                 actorRef,
@@ -644,6 +698,8 @@ internal sealed class ZLinkSessionActorBindingTable
                     ? sessionOwnerNodeGeneration
                     : sessionOwnerLeaseGeneration
             );
+            StoreEntry(key, boundEntry);
+            _currentBindings[actorId] = boundEntry;
             afterPublish?.Invoke(replaced);
             return replaced;
         });
@@ -661,8 +717,18 @@ internal sealed class ZLinkSessionActorBindingTable
         {
             PurgeExpiredTombstones();
             var key = ZLinkSessionBindingKey.FromBoundary(actorId, bindingToken);
+            _entries.TryGetValue(
+                new PhysicalSessionBindingKey(key.ActorId, sessionRid, sessionOwnerNodeGeneration),
+                out var stored
+            );
+            var current =
+                TryGetEntry(key, out var active) ? active
+                : stored is not null
+                && StringComparer.Ordinal.Equals(stored.BindingToken, bindingToken)
+                    ? stored
+                : null;
             if (
-                TryGetEntry(key, out var current)
+                current is not null
                 && (
                     current.ActorRef.SessionRid != sessionRid
                     || current.BindingGeneration != bindingGeneration
@@ -703,13 +769,13 @@ internal sealed class ZLinkSessionActorBindingTable
                 actorRoute,
                 _timeProvider.GetElapsedTime(0, _timeProvider.GetTimestamp()) + _tombstoneRetention
             );
-            if (TryGetEntry(key, out var entry))
+            if (current is not null)
             {
                 CancelCanonicalSealTimeout(key);
-                _entries.Remove(key.ActorId);
+                RemoveEntry(key, current);
                 DropHeldRelays(key, ZLinkMessageFlowReason.StaleTarget);
-                entry.DrainSignal?.TrySetResult();
-                entry.RouteAvailableSignal?.TrySetResult();
+                current.DrainSignal?.TrySetResult();
+                current.RouteAvailableSignal?.TrySetResult();
             }
         });
 
@@ -757,11 +823,14 @@ internal sealed class ZLinkSessionActorBindingTable
                 return new ZLinkSessionFrameAcceptance(false, entry.AcceptedHighWater);
             }
             var acceptedHighWater = checked(entry.AcceptedHighWater + 1);
-            _entries[key.ActorId] = entry with
-            {
-                AcceptedHighWater = acceptedHighWater,
-                ActiveFrames = checked(entry.ActiveFrames + 1),
-            };
+            StoreEntry(
+                key,
+                entry with
+                {
+                    AcceptedHighWater = acceptedHighWater,
+                    ActiveFrames = checked(entry.ActiveFrames + 1),
+                }
+            );
             return new ZLinkSessionFrameAcceptance(true, acceptedHighWater);
         });
 
@@ -785,15 +854,18 @@ internal sealed class ZLinkSessionActorBindingTable
                     _heldRelays.Add(key, queue);
                 }
                 queue.Enqueue(createHeld(sequence));
-                _entries[key.ActorId] = entry with { AcceptedHighWater = sequence };
+                StoreEntry(key, entry with { AcceptedHighWater = sequence });
                 return new ZLinkSessionOneWayAcceptance(true, true, sequence);
             }
 
-            _entries[key.ActorId] = entry with
-            {
-                AcceptedHighWater = sequence,
-                ActiveFrames = checked(entry.ActiveFrames + 1),
-            };
+            StoreEntry(
+                key,
+                entry with
+                {
+                    AcceptedHighWater = sequence,
+                    ActiveFrames = checked(entry.ActiveFrames + 1),
+                }
+            );
             return new ZLinkSessionOneWayAcceptance(true, false, sequence);
         });
 
@@ -813,19 +885,22 @@ internal sealed class ZLinkSessionActorBindingTable
     {
         if (_heldRelays.TryGetValue(key, out var held) && held.Count > 0)
         {
-            _entries[key.ActorId] = updatedEntry with { DrainSignal = null };
+            StoreEntry(key, updatedEntry with { DrainSignal = null });
             return entry.Context.Runtime;
         }
 
         _heldRelays.Remove(key);
-        _entries[key.ActorId] = updatedEntry with
-        {
-            CanonicalRelocationSeal = null,
-            CanonicalRelocationSealResult = null,
-            RelocationHandoffId = null,
-            DrainSignal = null,
-            RouteAvailableSignal = null,
-        };
+        StoreEntry(
+            key,
+            updatedEntry with
+            {
+                CanonicalRelocationSeal = null,
+                CanonicalRelocationSealResult = null,
+                RelocationHandoffId = null,
+                DrainSignal = null,
+                RouteAvailableSignal = null,
+            }
+        );
         entry.RouteAvailableSignal?.TrySetResult();
         return null;
     }
@@ -928,7 +1003,7 @@ internal sealed class ZLinkSessionActorBindingTable
                 var signal =
                     entry.RouteAvailableSignal
                     ?? new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-                _entries[key.ActorId] = entry with { RouteAvailableSignal = signal };
+                StoreEntry(key, entry with { RouteAvailableSignal = signal });
                 signalTask = signal.Task;
                 return WaitForRouteAvailableSignalAsync(signalTask, cancellationToken);
             })
@@ -952,7 +1027,7 @@ internal sealed class ZLinkSessionActorBindingTable
             if (!TryGetEntry(key, out var entry) || entry.ActiveFrames == 0)
                 return;
             var remaining = entry.ActiveFrames - 1;
-            _entries[key.ActorId] = entry with { ActiveFrames = remaining };
+            StoreEntry(key, entry with { ActiveFrames = remaining });
             if (remaining == 0)
                 entry.DrainSignal?.TrySetResult();
         });
@@ -996,7 +1071,7 @@ internal sealed class ZLinkSessionActorBindingTable
                     request.Actor,
                     request.Session
                 );
-                _entries[key.ActorId] = current with { CanonicalRelocationSealResult = result };
+                StoreEntry(key, current with { CanonicalRelocationSealResult = result });
                 return result;
             })
             .ConfigureAwait(false);
@@ -1037,12 +1112,15 @@ internal sealed class ZLinkSessionActorBindingTable
                 ? null
                 : entry.DrainSignal
                     ?? new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        _entries[key.ActorId] = entry with
-        {
-            CanonicalRelocationSeal = request,
-            AppliedCanonicalRelocationRoute = null,
-            DrainSignal = signal,
-        };
+        StoreEntry(
+            key,
+            entry with
+            {
+                CanonicalRelocationSeal = request,
+                AppliedCanonicalRelocationRoute = null,
+                DrainSignal = signal,
+            }
+        );
         ArmCanonicalSealTimeout(key, request);
         drain = signal?.Task;
         return null;
@@ -1165,28 +1243,26 @@ internal sealed class ZLinkSessionActorBindingTable
         out ZLinkSessionBindingEntry entry
     )
     {
-        foreach (var candidate in _entries)
+        var actorId = ZLinkActorId.FromBoundary(actor.ActorId, nameof(actor.ActorId));
+        var exact = GetExactRetiredBinding(
+            actorId,
+            session.SessionOwnerNodeRid,
+            session.SessionRid,
+            session.SessionOwnerNodeGeneration,
+            session.SessionOwnerId,
+            session.SessionOwnerLeaseGeneration,
+            session.BindingGeneration
+        );
+        if (
+            exact is not null
+            && exact.ObjectGeneration == actor.ObjectGeneration
+            && TryGetCurrentEntry(actorId, out var current)
+            && ReferenceEquals(exact, current)
+        )
         {
-            var value = candidate.Value;
-            if (
-                candidate.Key.Value == actor.ActorId
-                && value.ObjectGeneration == actor.ObjectGeneration
-                && value.ActorRef.SessionRid == session.SessionRid
-                && value.BindingGeneration == session.BindingGeneration
-                && value.SessionOwnerNodeRid == session.SessionOwnerNodeRid
-                && value.SessionOwnerNodeGeneration == session.SessionOwnerNodeGeneration
-                && string.Equals(
-                    value.SessionOwnerId,
-                    session.SessionOwnerId,
-                    StringComparison.Ordinal
-                )
-                && value.SessionOwnerLeaseGeneration == session.SessionOwnerLeaseGeneration
-            )
-            {
-                key = new ZLinkSessionBindingKey(candidate.Key, value.BindingToken);
-                entry = value;
-                return true;
-            }
+            key = new ZLinkSessionBindingKey(actorId, exact.BindingToken);
+            entry = exact;
+            return true;
         }
         key = default;
         entry = null!;
@@ -1301,11 +1377,14 @@ internal sealed class ZLinkSessionActorBindingTable
                 ? null
                 : entry.DrainSignal
                     ?? new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        _entries[key.ActorId] = entry with
-        {
-            RelocationHandoffId = request.HandoffId,
-            DrainSignal = signal,
-        };
+        StoreEntry(
+            key,
+            entry with
+            {
+                RelocationHandoffId = request.HandoffId,
+                DrainSignal = signal,
+            }
+        );
         drain = signal?.Task;
         acceptedHighWater = entry.AcceptedHighWater;
         //  A non-zero ActiveFrames makes the seal wait for a drain signal
@@ -1542,11 +1621,14 @@ internal sealed class ZLinkSessionActorBindingTable
                 return new ZLinkSessionRouteCommitResult(false, entry.AcceptedHighWater);
             }
 
-            _entries[key.ActorId] = entry with
-            {
-                Route = targetRoute,
-                CompletedRelocationHandoffId = request.HandoffId,
-            };
+            StoreEntry(
+                key,
+                entry with
+                {
+                    Route = targetRoute,
+                    CompletedRelocationHandoffId = request.HandoffId,
+                }
+            );
             Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
                 $"route_commit_accepted actor={request.ActorId} handoff={request.HandoffId} high_water={entry.AcceptedHighWater}"
             );
@@ -1567,18 +1649,16 @@ internal sealed class ZLinkSessionActorBindingTable
                 : null;
         });
 
-    public ValueTask<ZLinkSessionBindingRoute?> GetRouteAsync(
-        string actorId,
-        string bindingToken,
-        ZLinkSessionActor actorRef
-    ) =>
+    public ValueTask<ZLinkSessionBindingRoute?> GetRouteAsync(ZLinkSessionActor actorRef) =>
         _lane.RunAsync<ZLinkSessionBindingRoute?>(() =>
         {
             if (
-                TryGetEntry(
-                    ZLinkSessionBindingKey.FromBoundary(actorId, bindingToken),
-                    out var entry
-                ) && ReferenceEquals(entry.ActorRef, actorRef)
+                FindEntryForSession(
+                    ZLinkActorId.FromBoundary(actorRef.ActorId, nameof(actorRef.ActorId)),
+                    actorRef.Context
+                )
+                    is { } entry
+                && ReferenceEquals(entry.ActorRef, actorRef)
             )
             {
                 return entry.Route;
@@ -1594,14 +1674,14 @@ internal sealed class ZLinkSessionActorBindingTable
         _lane.RunAsync<ZLinkSessionBindingEntry?>(() =>
         {
             var key = ZLinkSessionBindingKey.FromBoundary(actorId, bindingToken);
+            var existing = FindEntryForSession(key.ActorId, context);
             if (
-                TryGetEntry(key, out var existing)
-                && ReferenceEquals(existing.Context, context)
+                existing is not null
                 && string.Equals(existing.BindingToken, bindingToken, StringComparison.Ordinal)
             )
             {
                 CancelCanonicalSealTimeout(key);
-                _entries.Remove(key.ActorId);
+                RemoveEntry(key, existing);
                 DropHeldRelays(key, ZLinkMessageFlowReason.StaleTarget);
                 existing.DrainSignal?.TrySetResult();
                 existing.RouteAvailableSignal?.TrySetResult();
@@ -1622,29 +1702,38 @@ internal sealed class ZLinkSessionActorBindingTable
             return null;
         });
 
-    public ValueTask<ZLinkSessionContext?> GetContextByActorIdAsync(string actorId) =>
-        _lane.RunAsync<ZLinkSessionContext?>(() =>
-        {
-            var actorKey = ZLinkActorId.FromBoundary(actorId, nameof(actorId));
-            foreach (var entry in _entries)
-                if (entry.Key == actorKey)
-                {
-                    return entry.Value.Context;
-                }
+    private ZLinkSessionBindingEntry? FindEntryForSession(
+        ZLinkActorId actorId,
+        ZLinkSessionContext context
+    )
+    {
+        if (
+            TryGetCurrentEntry(actorId, out var current)
+            && ReferenceEquals(current.Context, context)
+        )
+            return current;
+        foreach (var (identity, entry) in _entries)
+            if (identity.ActorId == actorId && ReferenceEquals(entry.Context, context))
+                return entry;
+        return null;
+    }
 
-            return null;
-        });
+    public ValueTask<ZLinkSessionBindingEntry?> GetEntryForSessionAsync(
+        string actorId,
+        ZLinkSessionContext context
+    ) =>
+        _lane.RunAsync(() =>
+            FindEntryForSession(ZLinkActorId.FromBoundary(actorId, nameof(actorId)), context)
+        );
 
-    public ValueTask<ZLinkSessionBindingEntry?> GetEntryByActorIdAsync(string actorId) =>
-        _lane.RunAsync<ZLinkSessionBindingEntry?>(() =>
+    public ValueTask<ZLinkSessionContext?> GetContextAsync(ZLinkSessionOutboundTenure tenure) =>
+        _lane.RunAsync(() =>
         {
-            var actorKey = ZLinkActorId.FromBoundary(actorId, nameof(actorId));
-            foreach (var candidate in _entries)
-                if (candidate.Key == actorKey)
-                {
-                    return candidate.Value;
-                }
-            return null;
+            var actorId = ZLinkActorId.FromBoundary(tenure.ActorId, nameof(tenure.ActorId));
+            return
+                TryGetCurrentEntry(actorId, out var entry) && MatchesPhysicalSession(entry, tenure)
+                ? entry.Context
+                : null;
         });
 
     public ValueTask<ZLinkSessionBindingEntry?> GetExactRetiredBindingAsync(
@@ -1699,22 +1788,18 @@ internal sealed class ZLinkSessionActorBindingTable
         ulong bindingGeneration
     )
     {
-        foreach (var candidate in _entries)
-        {
-            var value = candidate.Value;
-            if (
-                candidate.Key != actorId
-                || value.ActorRef.SessionRid != sessionRid
-                || value.BindingGeneration != bindingGeneration
-                || value.SessionOwnerNodeRid != sessionOwnerNodeRid
-                || value.SessionOwnerNodeGeneration != sessionOwnerNodeGeneration
-                || !string.Equals(value.SessionOwnerId, sessionOwnerId, StringComparison.Ordinal)
-                || value.SessionOwnerLeaseGeneration != sessionOwnerLeaseGeneration
+        if (
+            !_entries.TryGetValue(
+                new PhysicalSessionBindingKey(actorId, sessionRid, sessionOwnerNodeGeneration),
+                out var entry
             )
-                continue;
-            return value;
-        }
-        return null;
+            || entry.BindingGeneration != bindingGeneration
+            || entry.SessionOwnerNodeRid != sessionOwnerNodeRid
+            || !string.Equals(entry.SessionOwnerId, sessionOwnerId, StringComparison.Ordinal)
+            || entry.SessionOwnerLeaseGeneration != sessionOwnerLeaseGeneration
+        )
+            return null;
+        return entry;
     }
 
     public ValueTask<IReadOnlyCollection<IZLinkSessionActor>> SnapshotActorsAsync(
@@ -1734,12 +1819,12 @@ internal sealed class ZLinkSessionActorBindingTable
     ) =>
         _lane.RunAsync(() =>
         {
-            return _entries
-                .Values.Where(entry => ReferenceEquals(entry.Context, context))
-                .FirstOrDefault(entry =>
-                    string.Equals(entry.ActorRef.ActorId, actorId, StringComparison.Ordinal)
-                )
-                ?.ActorRef;
+            var actorKey = ZLinkActorId.FromBoundary(actorId, nameof(actorId));
+            return
+                TryGetCurrentEntry(actorKey, out var entry)
+                && ReferenceEquals(entry.Context, context)
+                ? entry.ActorRef
+                : null;
         });
 
     public ValueTask ResetGenerationAsync() =>
@@ -1758,6 +1843,7 @@ internal sealed class ZLinkSessionActorBindingTable
             foreach (var key in _heldRelays.Keys.ToArray())
                 DropHeldRelays(key, ZLinkMessageFlowReason.Shutdown);
             _entries.Clear();
+            _currentBindings.Clear();
             _tombstones.Clear();
         });
 }

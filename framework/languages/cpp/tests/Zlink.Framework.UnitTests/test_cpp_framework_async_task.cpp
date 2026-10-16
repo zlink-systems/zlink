@@ -347,9 +347,11 @@ zlink::framework::task_t<int> await_timeout ()
     co_return co_await task;
 }
 
-zlink::framework::task_t<int> await_async_delay (std::chrono::milliseconds duration, int value)
+zlink::framework::task_t<int> await_async_delay (zlink::framework::detail::delay_owner_t &owner,
+                                                 std::chrono::milliseconds duration,
+                                                 int value)
 {
-    co_await zlink::framework::detail::delay (duration);
+    co_await zlink::framework::detail::delay (owner, duration);
     co_return value;
 }
 
@@ -1709,7 +1711,9 @@ int main (int argc, char **argv)
      * executing thread, and (b) still resume the coroutine, with the
      * correct value, once the duration has actually elapsed. */
     const auto delay_call_start = std::chrono::steady_clock::now ();
-    auto delayed_retry = await_async_delay (std::chrono::milliseconds (150), 77);
+    std::mutex delay_mutex;
+    zlink::framework::detail::delay_owner_t delays (delay_mutex);
+    auto delayed_retry = await_async_delay (delays, std::chrono::milliseconds (150), 77);
     const auto delay_call_returned = std::chrono::steady_clock::now ();
     if (delay_call_returned - delay_call_start >= std::chrono::milliseconds (100)) {
         return 19;

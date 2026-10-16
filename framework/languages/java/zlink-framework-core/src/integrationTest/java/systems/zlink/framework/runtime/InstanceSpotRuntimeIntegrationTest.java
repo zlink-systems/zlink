@@ -220,6 +220,12 @@ final class InstanceSpotRuntimeIntegrationTest {
     }
 
     @Test
+    void creatingIntentCrossingClosePendingCutRetainsPayloadUntilSuccessorCompletes()
+            throws Exception {
+        verifyCloseFailure("creating-retained");
+    }
+
+    @Test
     void secondAuthorityReleaseFailureResumesOnSameOwnerReentry() throws Exception {
         verifyCloseFailure("double-release");
     }
@@ -235,6 +241,8 @@ final class InstanceSpotRuntimeIntegrationTest {
     }
 
     private void verifyCloseFailure(String failureStage) throws Exception {
+        boolean creating = failureStage.startsWith("creating");
+        boolean retainedBoundary = failureStage.equals("creating-retained");
         boolean failRelease =
                 failureStage.equals("release") || failureStage.equals("double-release");
         boolean failCommit = failureStage.equals("commit");
@@ -255,7 +263,7 @@ final class InstanceSpotRuntimeIntegrationTest {
                 || failureStage.equals("window")
                 || failureStage.equals("cas-window")
                 || failureStage.equals("missing")
-                || failureStage.equals("creating")) {
+                || creating) {
             SourceEntrySpot.probeStart = new CompletableFuture<>();
             SourceEntrySpot.probeFailure = new CompletableFuture<>();
             SourceEntrySpot.probeDirect = true;
@@ -272,9 +280,12 @@ final class InstanceSpotRuntimeIntegrationTest {
                         spotId,
                         failureStage.equals("double-release") ? 2 : failRelease ? 1 : 0,
                         failureStage.equals("window"),
-                        failureStage.equals("creating"));
+                        creating);
         if (!failureStage.equals("window")) {
             store.releaseDelete.complete(null);
+        }
+        if (retainedBoundary) {
+            EchoInstanceSpot.retainedCalls.clear();
         }
         CompletableFuture<String> diagnostic = new CompletableFuture<>();
         java.util.logging.Logger diagnosticLogger =
@@ -345,8 +356,8 @@ final class InstanceSpotRuntimeIntegrationTest {
                     "release-failure-target-" + suffix);
             SourceEntrySpot.start.complete(null);
             try {
-                if (failureStage.equals("creating") || failureStage.equals("missing")) {
-                    if (failureStage.equals("creating")) {
+                if (creating || failureStage.equals("missing")) {
+                    if (creating) {
                         store.readyPending.get(5, TimeUnit.SECONDS);
                     } else {
                         store.deleteApplied.get(5, TimeUnit.SECONDS);
@@ -362,13 +373,40 @@ final class InstanceSpotRuntimeIntegrationTest {
                     // refused by its owner fence (spot-close-v1.json
                     // stale-released-ready-owner-fence-request).
                     assertProbeKind(
-                            failureStage.equals("creating")
+                            creating
                                     ? ZLinkFrameworkErrorKind.NOT_FOUND
                                     : ZLinkFrameworkErrorKind.UNAVAILABLE,
                             probe);
                     store.releaseReady.complete(null);
                     SourceEntrySpot.afterCloseStart.complete(null);
-                    if (failureStage.equals("creating")) {
+                    if (retainedBoundary) {
+                        SourceEntrySpot.beforeClose.get(5, TimeUnit.SECONDS);
+                        try (var boundary = new RetainedAdmissionBoundary(target, spotId)) {
+                            boundary.start.complete(null);
+                            boundary.beforeAdmission.get(5, TimeUnit.SECONDS);
+                            SourceEntrySpot.closeStart.complete(null);
+                            boundary.afterPendingCut.get(5, TimeUnit.SECONDS);
+                            assertEquals(0, boundary.releases.get());
+                            boundary.resumeAdmission.complete(null);
+                            boundary.admitted.get(5, TimeUnit.SECONDS);
+                            assertEquals(0, boundary.releases.get());
+                            boundary.resumeClose.complete(null);
+                            assertEquals("echo:retained", boundary.reply.get(5, TimeUnit.SECONDS));
+                            assertEquals(
+                                    "echo:hello|echo:again|echo:after-close",
+                                    SourceEntrySpot.reply.get(5, TimeUnit.SECONDS));
+                            assertEquals(
+                                    List.of(EchoInstanceSpot.generations.getLast()),
+                                    EchoInstanceSpot.retainedCalls);
+                            assertNotEquals(
+                                    EchoInstanceSpot.generations.getFirst(),
+                                    EchoInstanceSpot.retainedCalls.getFirst());
+                            boundary.released.get(5, TimeUnit.SECONDS);
+                            assertEquals(1, boundary.releases.get());
+                        }
+                        return;
+                    }
+                    if (creating) {
                         SourceEntrySpot.closeStart.complete(null);
                     }
                     assertEquals(
@@ -528,6 +566,169 @@ final class InstanceSpotRuntimeIntegrationTest {
                 EchoInstanceSpot.closingFailure = null;
                 diagnosticLogger.removeHandler(diagnosticHandler);
             }
+        }
+    }
+
+    /** Controls the existing receive/admission and backend-close execution boundaries. */
+    private static final class RetainedAdmissionBoundary implements AutoCloseable {
+        final CompletableFuture<Void> start = new CompletableFuture<>();
+        final CompletableFuture<String> reply = new CompletableFuture<>();
+        final CompletableFuture<Void> beforeAdmission = new CompletableFuture<>();
+        final CompletableFuture<Void> resumeAdmission = new CompletableFuture<>();
+        final CompletableFuture<Void> afterPendingCut = new CompletableFuture<>();
+        final CompletableFuture<Void> resumeClose = new CompletableFuture<>();
+        final CompletableFuture<Void> admitted = new CompletableFuture<>();
+        final CompletableFuture<Void> released = new CompletableFuture<>();
+        final AtomicInteger releases = new AtomicInteger();
+        final java.util.concurrent.ExecutorService executor =
+                java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor();
+
+        RetainedAdmissionBoundary(ZLinkFrameworkRuntime runtime, String spotId) throws Exception {
+            var spotsField = ZLinkFrameworkRuntime.class.getDeclaredField("spots");
+            spotsField.setAccessible(true);
+            Object spots = spotsField.get(runtime);
+            var activations = spots.getClass().getDeclaredField("instanceSpotActivations");
+            activations.setAccessible(true);
+            Object activation = ((java.util.Map<?, ?>) activations.get(spots)).get(spotId);
+            var base = activation.getClass().getSuperclass();
+            var backendField = base.getDeclaredField("backendSpot");
+            backendField.setAccessible(true);
+            Object backend = backendField.get(activation);
+            var route =
+                    new systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
+                            .InstanceColdActivation(
+                            RoutingId.from("retained-fixture"),
+                            1,
+                            spotId,
+                            "game",
+                            "EchoInstance",
+                            "descriptor",
+                            java.time.Instant.now().plusSeconds(5).toEpochMilli());
+            var originals =
+                    List.of(
+                            systems.zlink.contracts.messaging.Message.from(
+                                    systems.zlink.framework.runtime.messaging.ZLinkPacketNames
+                                            .resolve(String.class)),
+                            systems.zlink.contracts.messaging.Message.from("\"retained\""));
+            var parts =
+                    new java.util.AbstractList<systems.zlink.contracts.messaging.Message>() {
+                        @Override
+                        public int size() {
+                            return originals.size();
+                        }
+
+                        @Override
+                        public systems.zlink.contracts.messaging.Message get(int index) {
+                            if (!beforeAdmission.isDone()) {
+                                beforeAdmission.complete(null);
+                                resumeAdmission.orTimeout(5, TimeUnit.SECONDS).join();
+                            }
+                            return originals.get(index);
+                        }
+                    };
+            var received =
+                    new systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived(
+                            systems.zlink.framework.runtime.internal.backend
+                                    .ZLinkBackendRequestResult.OK,
+                            java.util.Optional.empty(),
+                            java.util.Optional.of(spotId),
+                            java.util.Optional.of(1L),
+                            new byte[0],
+                            new byte[0],
+                            parts,
+                            replyParts -> {
+                                try {
+                                    reply.complete(
+                                            new com.fasterxml.jackson.databind.ObjectMapper()
+                                                    .readValue(
+                                                            replyParts.getLast().toByteArray(),
+                                                            String.class));
+                                } catch (java.io.IOException failure) {
+                                    reply.completeExceptionally(failure);
+                                } finally {
+                                    replyParts.forEach(
+                                            systems.zlink.contracts.messaging.Message::close);
+                                }
+                            },
+                            () -> {
+                                releases.incrementAndGet();
+                                released.complete(null);
+                            },
+                            "application/json");
+            received.retainActivationMessage(
+                    new systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
+                            .InstanceSpotMessage(
+                            0,
+                            route,
+                            true,
+                            route.targetNodeGeneration(),
+                            route.targetNodeRid(),
+                            "source",
+                            true,
+                            1,
+                            1,
+                            null));
+            var admit =
+                    activation
+                            .getClass()
+                            .getDeclaredMethod(
+                                    "admitRoute",
+                                    systems.zlink.framework.runtime.internal.backend
+                                            .ZLinkBackendReceived.class,
+                                    CompletableFuture.class);
+            admit.setAccessible(true);
+            executor.submit(
+                    () -> {
+                        try {
+                            start.get(5, TimeUnit.SECONDS);
+                            var completion =
+                                    (CompletionStage<?>)
+                                            admit.invoke(activation, received, admitted);
+                            completion.whenComplete(
+                                    (value, failure) -> {
+                                        if (failure != null) reply.completeExceptionally(failure);
+                                    });
+                        } catch (ReflectiveOperationException
+                                | java.util.concurrent.ExecutionException
+                                | java.util.concurrent.TimeoutException failure) {
+                            admitted.completeExceptionally(failure);
+                        } catch (InterruptedException failure) {
+                            Thread.currentThread().interrupt();
+                            admitted.completeExceptionally(failure);
+                        }
+                    });
+            Object proxy =
+                    java.lang.reflect.Proxy.newProxyInstance(
+                            backend.getClass().getClassLoader(),
+                            new Class<?>[] {
+                                systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpot
+                                        .class
+                            },
+                            (ignored, method, args) -> {
+                                if (method.getName().equals("close")) {
+                                    afterPendingCut.complete(null);
+                                    resumeClose.get(5, TimeUnit.SECONDS);
+                                }
+                                try {
+                                    return method.invoke(backend, args);
+                                } catch (java.lang.reflect.InvocationTargetException failure) {
+                                    throw failure.getCause();
+                                }
+                            });
+            backendField.set(activation, proxy);
+            var contextField = base.getDeclaredField("context");
+            contextField.setAccessible(true);
+            Object context = contextField.get(activation);
+            var contextBackend = context.getClass().getDeclaredField("backendSpot");
+            contextBackend.setAccessible(true);
+            contextBackend.set(context, proxy);
+        }
+
+        @Override
+        public void close() {
+            resumeAdmission.complete(null);
+            resumeClose.complete(null);
+            executor.close();
         }
     }
 
@@ -1367,6 +1568,7 @@ final class InstanceSpotRuntimeIntegrationTest {
     }
 
     public static final class EchoInstanceSpot implements ZLinkInstanceSpot {
+        static final List<Long> retainedCalls = new CopyOnWriteArrayList<>();
         static final AtomicInteger initializations = new AtomicInteger();
         static final List<Long> generations = new CopyOnWriteArrayList<>();
         static final AtomicInteger warmups = new AtomicInteger();
@@ -1422,6 +1624,9 @@ final class InstanceSpotRuntimeIntegrationTest {
             implements ZLinkSpotRequestHandler<EchoInstanceSpot, String, String> {
         @Override
         public CompletionStage<String> handle(EchoInstanceSpot spot, String request) {
+            if (request.equals("retained")) {
+                EchoInstanceSpot.retainedCalls.add(spot.context().objectGeneration());
+            }
             return CompletableFuture.completedFuture("echo:" + request);
         }
     }

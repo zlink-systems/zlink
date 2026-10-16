@@ -94,10 +94,11 @@ final class DefaultInstanceSpotContext implements ZLinkInstanceSpotContext, Spot
 
     void closeRegistration(Class<?> spotType) {
         handlers.closeRegistration(
-                configured ->
+                (configured, subscriptions) ->
                         handlerLoader.load(
                                 spotType,
                                 configured,
+                                subscriptions,
                                 (name, period, handlerType, options) ->
                                         timers.add(name, period, handlerType, options)));
     }

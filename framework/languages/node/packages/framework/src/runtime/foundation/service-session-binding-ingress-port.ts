@@ -1,5 +1,6 @@
+import type { RoutingId } from '../../contracts';
 export interface ServiceSessionBindingIngressPort {
-  actorSlot(actorId: string, sessionRid: string): Promise<number | undefined>;
+  actorSlot(actorId: string, sessionRid: RoutingId): Promise<number | undefined>;
 }
 
 const ports = new WeakMap<object, ServiceSessionBindingIngressPort>();

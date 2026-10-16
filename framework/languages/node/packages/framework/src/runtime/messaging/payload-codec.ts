@@ -434,11 +434,17 @@ function toRuntimeMessage(payload: ZLinkEncodedPayload): Message {
     : RuntimeMessage.fromOwned(owned);
 }
 
-function encodedPayloadFromOwned(bytes: Uint8Array): ZLinkEncodedPayload {
+/**
+ * Wraps received bytes for a serializer without copying them. Binding receive
+ * Buffers keep their storage after the message closes and nothing writes to
+ * them, so the payload may adopt them; the public from() and data() still copy.
+ */
+export function encodedPayloadFromOwned(bytes: Uint8Array): ZLinkEncodedPayload {
   if (!Buffer.isBuffer(bytes)) {
     return ZLinkEncodedPayload.from(bytes);
   }
-  const payload = ZLinkEncodedPayload.from(Buffer.alloc(0));
+  // The private constructor only stores a copy; adopting skips that copy.
+  const payload = Object.create(ZLinkEncodedPayload.prototype) as ZLinkEncodedPayload;
   adoptEncodedPayload(payload, bytes);
   return payload;
 }
