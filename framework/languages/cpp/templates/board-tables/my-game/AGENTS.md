@@ -17,7 +17,7 @@ Use typed messages and the default JSON serializer. Request handlers reply throu
 
 TableState is the only owner of seats, chips, deck, cards, turn, hand number and pot. Player holds no game-state copy. Relocation adapters serialize application state only. Framework owns membership, routes, leases, queues, physical placement and connection replacement.
 
-Do not use internal APIs, reflection, raw frames, custom message codecs, sleep, retries, extended deadlines or weakened assertions to bypass Framework failures. Compare public samples first and report package defects with reproduction, node message-flow logs and relevant Framework source locations. Keep public versions pinned centrally in vcpkg.json.
+Do not use internal APIs, reflection, raw frames, custom message codecs, sleep, retries, extended deadlines or weakened assertions to bypass Framework failures. Compare public samples first and report package defects with reproduction, node message-flow logs and relevant Framework source locations. Keep the public Framework version pinned only in bootstrap.cmake.
 
 ## Changes and verification
 

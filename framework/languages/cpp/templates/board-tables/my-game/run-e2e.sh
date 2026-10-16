@@ -18,7 +18,7 @@ done
 mkdir -p "$ROOT/.logs"
 if $local_mode; then
   if ! $no_build; then
-    if ! { cmake --preset default && cmake --build --preset default; } >"$ROOT/.logs/build.log" 2>&1; then
+    if ! { cmake -P bootstrap.cmake && cmake --preset default && cmake --build --preset default; } >"$ROOT/.logs/build.log" 2>&1; then
       tail -n 20 "$ROOT/.logs/build.log" >&2
       exit 1
     fi
