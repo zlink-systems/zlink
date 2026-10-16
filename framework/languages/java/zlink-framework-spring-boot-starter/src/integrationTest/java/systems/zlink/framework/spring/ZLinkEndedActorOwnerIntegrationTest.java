@@ -17,7 +17,9 @@ import systems.zlink.framework.locationprovider.ZLinkStoreReadFound;
 import systems.zlink.framework.locationprovider.ZLinkStoreScanPageResult;
 import systems.zlink.framework.locationprovider.ZLinkStoreScanRequest;
 import systems.zlink.framework.locations.redis.*;
+import systems.zlink.framework.monitoring.ZLinkFrameworkRuntimeStatus;
 import systems.zlink.framework.monitoring.ZLinkListenerKind;
+import systems.zlink.framework.monitoring.ZLinkObservedStatus;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
 import systems.zlink.framework.spots.*;
 
@@ -217,10 +219,43 @@ public class ZLinkEndedActorOwnerIntegrationTest {
     public static void main(String[] args) throws Exception {
         try (var app =
                 new SpringApplicationBuilder(Config.class).web(WebApplicationType.NONE).run()) {
+            var runtime = app.getBean(ZLinkFrameworkRuntime.class);
+            // Startup can return with owner admission closed until lease recovery finishes.
+            var ready = new CompletableFuture<Void>();
+            runtime.observe()
+                    .subscribe(
+                            new Flow.Subscriber<
+                                    ZLinkObservedStatus<ZLinkFrameworkRuntimeStatus>>() {
+                                private Flow.Subscription subscription;
+
+                                public void onSubscribe(Flow.Subscription value) {
+                                    subscription = value;
+                                    value.request(Long.MAX_VALUE);
+                                }
+
+                                public void onNext(
+                                        ZLinkObservedStatus<ZLinkFrameworkRuntimeStatus> value) {
+                                    if (value.status().isReady()) {
+                                        ready.complete(null);
+                                        subscription.cancel();
+                                    }
+                                }
+
+                                public void onError(Throwable failure) {
+                                    ready.completeExceptionally(failure);
+                                }
+
+                                public void onComplete() {
+                                    ready.completeExceptionally(
+                                            new IllegalStateException(
+                                                    "Host observation completed before READY"));
+                                }
+                            });
+            ready.get();
+            Assertions.assertTrue(runtime.isReady());
             System.out.println(
                     "LISTEN_ENDPOINT="
-                            + app.getBean(ZLinkFrameworkRuntime.class)
-                                    .listenerStatus(ZLinkListenerKind.ROUTE_MESH, "probe")
+                            + runtime.listenerStatus(ZLinkListenerKind.ROUTE_MESH, "probe")
                                     .endpoint());
             var actors = app.getBean(ZLinkActorManager.class);
             var result =
