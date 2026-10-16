@@ -862,18 +862,29 @@ initial activation aren't eligible merely because their allocation is `Active`; 
 own lifecycle or recovery procedures. The node that `Reserve`s is the node that requested
 creation for an Actor or User Spot, and the target that received the activation envelope for an
 Instance Spot. If the type isn't registered on that node, the policy isn't treated as `Disabled`. A
-User Spot is released only when the Location Store holds no Actor membership for that SpotId and
-`ObjectGeneration`. The repository starts a new membership snapshot only after an exact read
-confirms that the owner lease recorded in the old Spot authority is invalid, and reads it to the
-end. Membership-addition commit conditions follow [Spot and Actor membership §1](../03-spot-actor/05-spot-actor-membership.en.md#1-identity-and-authority),
+User Spot is released only when every Actor membership remaining for that SpotId and
+`ObjectGeneration` belongs to an **ended-owner member**; no membership at all satisfies this. An
+ended-owner member is an Actor whose authority is a steady `Ready` record pointing at the same
+SpotId and `ObjectGeneration`, and whose recorded owner lease is absent, has a different
+`LeaseGeneration`, or has expired. If any member has a valid owner lease, carries relocation progress
+or belongs to an aggregate, or hasn't finished its first activation, nothing changes — so that an
+Actor of a live owner never points at a missing Spot and an in-flight move isn't cut. The repository
+starts a new membership snapshot only after an exact read confirms that the owner lease recorded in
+the old Spot authority is invalid, reads it to the end, and reads each member's Actor authority from
+the same snapshot. Membership-addition commit conditions follow [Spot and Actor membership §1](../03-spot-actor/05-spot-actor-membership.en.md#1-identity-and-authority),
 so no membership commits to that incarnation once its lease is invalid. An expired snapshot
 discards prior pages and is read again; Store failure or an incomplete scan isn't treated as empty
-membership, and neither is a process-local list. If any member remains, nothing changes. A record that carries relocation progress
+membership, and neither is a process-local list. A record that carries relocation progress
 or belongs to an aggregate, and an Instance Spot that still has an activation recovery pointer,
 aren't subject to this release and follow their own recovery procedures. The release checks, in
 one batch, the same conditions as the reservation release above (authority `StoreVersion`, owner
 lease state, descriptor state, and capacity record), removes the authority together with that
-incarnation's membership, and returns the active capacity. Only after the release commits is a new
+incarnation's membership, and returns the active capacity. If ended-owner members exist, the same
+batch also conditions on each member Actor authority's `StoreVersion` and invalid owner lease, and
+releases that Actor authority and its capacity the same way. A released member Actor becomes
+`Missing`, and a later creation of the same ActorId starts a new incarnation. If this batch exceeds
+the provider's single-batch bound, nothing is removed partially; nothing changes and `Unavailable`
+is returned. Only after the release commits is a new
 incarnation created from `Missing` — the previous incarnation's state, accepted operations, and
 recovery information aren't carried over. Whether the kind and stable type match is checked before
 the release decision (a different type keeps the existing `TypeMismatch`). If the owner lease is
@@ -1688,14 +1699,16 @@ store record golden fixture. Each item maps to one test.
 - Even concurrent requests for the same ID create only one `Creating`, and only one
   target runs the factory.
 - The [§6.1](#61-read-and-cas) ended-owner release applies the same inputs to the provider and in-memory
-  repositories in all four implementations. Released inputs (a Disabled Actor, a User Spot with no
-  members, a new Instance intent for a steady `Ready` Instance Spot) verify a new `ObjectGeneration`,
+  repositories in all four implementations. Released inputs (a Disabled Actor, a User Spot with no members or only
+  ended-owner members, a new Instance intent for a steady `Ready` Instance Spot) verify a new `ObjectGeneration`,
   return of the old allocation's capacity, and one factory execution. Inputs that break one release
-  condition each (a valid lease, a type that isn't `Disabled` or isn't registered, a User Spot with
-  remaining members, a recovery pointer, `Closing`, aggregate or relocation progress, an ordinary
+  condition each (a valid lease, a type that isn't `Disabled` or isn't registered, a User Spot with a
+  member whose owner lease is valid or that is moving, members exceeding the provider's single-batch bound, a recovery pointer, `Closing`, aggregate or relocation progress, an ordinary
   message or `Find`) verify that authority, membership, capacity, and factory execution count don't
   change. Inputs whose registered policies differ between the requesting node and the factory
-  target (for an Instance, the source and the receiving target) verify the policy source.
+  target (for an Instance, the source and the receiving target) verify the policy source. Releasing a User
+  Spot with only ended-owner members verifies that those member Actor authorities and capacity are released in the same
+  batch and that a later creation of the same ActorId starts a new incarnation.
 - A scan with a member after the first page, snapshot expiry, and Store failure aren't treated as
   empty membership. Racing old-Spot lease invalidation with a late Join commit, and racing two
   re-creation requests, verify that an old version doesn't delete new authority and capacity isn't
