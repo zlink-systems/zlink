@@ -1,5 +1,6 @@
 using System.Text;
 using Systems.Zlink.Framework.Runtime.Protocol;
+using Zlink.Framework.Internal;
 using Zlink.Framework.Runtime.Actors;
 using Zlink.Framework.Runtime.Configuration;
 using Zlink.Framework.Runtime.Spots;
@@ -712,6 +713,7 @@ internal sealed partial class ZLinkInMemoryLocationStore
             && descriptor.LifecycleGeneration == current.Allocation.DescriptorLifecycleGeneration
         )
             return false;
+        List<KeyValuePair<string, ZLinkAuthoritySnapshot>> members = [];
         if (active)
         {
             if (current.Allocation.ObjectKind == ZLinkPlacementObjectKind.UserSpot)
@@ -722,20 +724,12 @@ internal sealed partial class ZLinkInMemoryLocationStore
                         out var spot
                     )
                     || spot.State != ZLinkUserSpotAuthorityState.Ready
-                    || _authorities.Values.Any(authority =>
-                        ZLinkActorAuthorityPayloadCodec.TryDecodeRelocating(
-                            authority.Payload.Span,
-                            out var member
-                        )
-                        && member.CurrentSpotKind == ZLinkSpotKind.User
-                        && member.CurrentSpotId == spot.SpotId
-                        && member.CurrentSpotGeneration == current.ObjectGeneration
-                    )
                 )
                     throw new ZLinkFrameworkException(
                         ZLinkFrameworkErrorKind.Unavailable,
-                        "User Spot is not steady Ready or still has members."
+                        "User Spot is not steady Ready."
                     );
+                members = EndedUserSpotMembers(key, current, spot.SpotId, now);
             }
             else if (
                 current.Allocation.ObjectKind == ZLinkPlacementObjectKind.InstanceSpot
@@ -759,6 +753,11 @@ internal sealed partial class ZLinkInMemoryLocationStore
             -1
         );
         _authorities.Remove(key.Value);
+        foreach (var (memberKey, member) in members)
+        {
+            AdjustAllocationCapacity(_activePlacementCapacity, member.Allocation, -1);
+            _authorities.Remove(memberKey);
+        }
         if (
             !active
             && _authorityReservations.TryGetValue(
@@ -768,6 +767,77 @@ internal sealed partial class ZLinkInMemoryLocationStore
         )
             state.Status = ReservationStatus.Aborted;
         return true;
+    }
+
+    // §6.1: every Actor membership of the old User Spot incarnation must be an
+    // ended-owner member: steady Ready, not in an aggregate, activated, and
+    // its owner lease invalid. The release must fit one provider batch; the
+    // key set mirrors the provider repository batch (authority, owner,
+    // descriptor and capacity records).
+    private List<KeyValuePair<string, ZLinkAuthoritySnapshot>> EndedUserSpotMembers(
+        ZLinkAuthorityKey spotKey,
+        ZLinkAuthoritySnapshot spot,
+        string spotId,
+        DateTimeOffset now
+    )
+    {
+        var members = new List<KeyValuePair<string, ZLinkAuthoritySnapshot>>();
+        var batchKeys = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "authority:" + spotKey.Value,
+            "owner:" + spot.OwnerId,
+            "descriptor:" + ZLinkLocationKeyCodec.EncodeMeshNodeKey(spot.Allocation.Descriptor),
+            "capacity:" + ZLinkLocationKeyCodec.EncodeMeshNodeKey(spot.Allocation.Descriptor),
+        };
+        foreach (var entry in _authorities)
+        {
+            var authority = entry.Value;
+            if (
+                !ZLinkActorAuthorityPayloadCodec.TryDecodeRelocating(
+                    authority.Payload.Span,
+                    out var member
+                )
+                || member.CurrentSpotKind != ZLinkSpotKind.User
+                || member.CurrentSpotId != spotId
+                || member.CurrentSpotGeneration != spot.ObjectGeneration
+            )
+                continue;
+            if (
+                authority.Allocation.State != ZLinkPlacementAllocationState.Active
+                || IsAuthorityInPreparedAggregate(new ZLinkAuthorityKey(entry.Key))
+                || !ZLinkActorAuthorityPayloadCodec.IsSteadyReady(authority.Payload.Span)
+            )
+                throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.Unavailable,
+                    "User Spot still has a relocating or unactivated member.",
+                    ZLinkRetryAdvice.RetryAfterStateChange
+                );
+            if (
+                MatchesLiveOwnerLease(
+                    new ZLinkLocationOwnerToken(authority.OwnerId, authority.OwnerLeaseGeneration),
+                    now
+                )
+            )
+                throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.Unavailable,
+                    "User Spot still has a member with a live owner lease.",
+                    ZLinkRetryAdvice.RetryAfterStateChange
+                );
+            members.Add(entry);
+            batchKeys.Add("authority:" + entry.Key);
+            batchKeys.Add("owner:" + authority.OwnerId);
+            batchKeys.Add(
+                "capacity:"
+                    + ZLinkLocationKeyCodec.EncodeMeshNodeKey(authority.Allocation.Descriptor)
+            );
+        }
+        if (batchKeys.Count > ZLinkLocationStoreLimits.MaximumUniqueKeys)
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.Unavailable,
+                "User Spot member release exceeds one Location Store batch.",
+                ZLinkRetryAdvice.RetryAfterStateChange
+            );
+        return members;
     }
 
     public ValueTask<ZLinkObjectAbortResult> AbortAsync(

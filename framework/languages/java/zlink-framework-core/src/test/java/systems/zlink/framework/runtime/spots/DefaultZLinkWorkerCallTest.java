@@ -197,6 +197,38 @@ class DefaultZLinkWorkerCallTest {
     }
 
     @Test
+    void outsideLaneWorkerResultResumesInDispatcherTurnNotOnTheOffloadWorker() throws Exception {
+        pool = new ZLinkWorkerPool(0, 1, Duration.ofSeconds(30));
+        AtomicReference<Thread> worker = new AtomicReference<>();
+        CountDownLatch release = new CountDownLatch(1);
+
+        var submitted =
+                new DefaultZLinkWorkerCall<>(
+                                pool,
+                                cancellation -> {
+                                    worker.set(Thread.currentThread());
+                                    release.await();
+                                    return 7;
+                                })
+                        .submit();
+        AtomicReference<Thread> resumedOn = new AtomicReference<>();
+        CountDownLatch observed = new CountDownLatch(1);
+        var resumed =
+                submitted.thenApply(
+                        value -> {
+                            resumedOn.set(Thread.currentThread());
+                            observed.countDown();
+                            return value;
+                        });
+        release.countDown();
+
+        assertTrue(observed.await(5, TimeUnit.SECONDS));
+        assertEquals(7, resumed.toCompletableFuture().join());
+        assertNotEquals(worker.get(), resumedOn.get());
+        assertTrue(resumedOn.get() instanceof java.util.concurrent.ForkJoinWorkerThread);
+    }
+
+    @Test
     void ioWorkerDoesNotOccupyCpuPool() throws Exception {
         pool = new ZLinkWorkerPool(0, 1, Duration.ofSeconds(30));
         CompletableFuture<Integer> pending = new CompletableFuture<>();
@@ -261,6 +293,8 @@ class DefaultZLinkWorkerCallTest {
         assertTrue(started.await(5, TimeUnit.SECONDS));
         pool.close();
         assertTrue(observed.get(5, TimeUnit.SECONDS));
+        // Worker cancellation is immediate; caller cancellation is delivered in its own turn.
+        assertThrows(java.util.concurrent.CancellationException.class, result::join);
         assertTrue(result.isCancelled());
         pool = null;
     }
