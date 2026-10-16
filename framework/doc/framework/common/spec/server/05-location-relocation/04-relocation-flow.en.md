@@ -226,11 +226,11 @@ owner is a node other than the target, the target checks whether a
 [ready](../00-foundation/02-glossary.en.md#ready) route to that Session owner node exists. A Session
 owner on the target node itself needs no route. If not, it asks its auto-connect owner to reconcile that peer immediately
 ([MeshNode §7.1](../03-spot-actor/03-mesh-node.en.md#71-peer-connection)) and doesn't send ready to
-receive relay until the route is ready. This wait happens only within the existing deadline of the
-operation that started the relocation and creates no new timer or retry. It waits in the target
-attempt's continuation without occupying an infrastructure receive loop or an application handler
-turn. If the deadline or target shutdown ends the wait, the target sends an explicit failure reply
-instead of ready to receive relay. The source is still owner, so it restores the source queue and the
+receive relay until the route is ready. The time limit of this wait is the source operation deadline
+(`deadlineUnixMs`) that command 40 carries, and the target creates no new timer or retry. It waits in
+the target attempt's continuation without occupying an infrastructure receive loop or an application
+handler turn. If that deadline or target shutdown ends the wait, the target sends an explicit failure
+reply instead of ready to receive relay and removes the staging it was assembling. The source is still owner, so it restores the source queue and the
 matching Session seal as for §9's explicit failure. Because the target finishes this preparation
 before commit, the first Actor→Session push after commit doesn't fail for a missing route.
 
