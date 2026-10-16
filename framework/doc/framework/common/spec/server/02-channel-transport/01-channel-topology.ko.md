@@ -447,10 +447,15 @@ Automatic RouteMesh의 두 MeshNode는 서로를 발견해도 양쪽이 동시�
 두 MeshNode가 RID의 canonical byte order를 같은 방식으로 비교하고, RID가 더 작은 MeshNode만
 상대 endpoint로 연결을 시작한다.
 
-Automatic discovery는 먼저 local과 remote descriptor를 확인한다. 양쪽이 모두 Object Client이고
-어느 쪽에도 RouteMesh Channel Server membership(weight `0` 포함)이 없을 때만 connection intent를
-만들지 않는다([§13 Peer 연결](#13-검증-요구)이 이 판정을 소유한다). 그 밖의 pair에는 RID 순서를
+Automatic discovery는 먼저 local과 remote descriptor를 확인한다. Object role 판정으로는 양쪽이 모두 Object Client이고
+어느 쪽에도 RouteMesh Channel Server membership(weight `0` 포함)이 없을 때만 connection이 필요 없다고
+본다([§13 Peer 연결](#13-검증-요구)이 이 판정을 소유한다). 그 밖의 pair에는 RID 순서를
 적용하므로 connect initiator가 하나다.
+
+Automatic discovery는 상대 RID에 이미 선택 route가 있거나(어느 쪽이 연결했든) 같은 상대를 가리키는
+manual connection intent가 있으면 그 상대에 connection intent를 만들지 않는다. Manual 연결의 방향은
+바꾸지 않으며, 같은 상대에 반대 방향 pipe를 하나 더 만들지 않는 것만 정한다. 그 route가 사라지고
+manual intent도 없으면 위 RID 순서 규칙대로 intent를 만든다.
 
 Manual topology에서는 application이 한쪽 endpoint만 등록하거나 양쪽 endpoint를 모두 등록할
 수 있다. 양쪽이 동시에 연결을 시작해 같은 RID의 pipe가 둘 생기면 어느 pipe를 쓸지는 Core의
@@ -458,7 +463,8 @@ RID 중복 정책이 정한다. Framework는 Core가 선택한 route([Core ROUTE
 받은 handshake만 검증해 논리 peer 하나를 ready 상태로 유지하며, 물리 pipe를 고르지 않는다.
 
 Manual endpoint만으로는 connect 전에 remote Object role을 알 수 없을 수 있다. Framework는
-handshake에서 양쪽 Object role이 모두 `Client`임을 확인하면 connection이 필요하지 않다는
+handshake에서 양쪽이 모두 Object Client이고 RouteMesh Channel Server membership도 없음을 확인하면
+connection이 필요하지 않다는
 terminal admission 결과를 기록하고 ready 전에 socket을 닫는다. 같은 endpoint와 configuration
 generation에는 background reconnect를 반복하지 않는다. Endpoint, expected RID 또는
 configuration generation이 바뀌면 새 intent로 한 번 다시 확인할 수 있다.

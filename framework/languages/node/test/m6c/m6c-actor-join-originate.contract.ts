@@ -70,6 +70,8 @@ test('canonical Actor Join uses the current authority fence when a previous-owne
         return true;
       }
     },
+    observePeerRoute: () => ({ generation: 1n, ready: true }),
+    observePeerRouteChanged: () => () => {},
     observePeerConnectionIntentRemoved() {
       return () => {};
     },
@@ -132,6 +134,8 @@ test('canonical Actor Join uses the current authority fence when a previous-owne
             }
           : undefined
     },
+    observePeerRoute: () => ({ generation: 1n, ready: true }),
+    observePeerRouteChanged: () => () => {},
     observePeerConnectionIntentRemoved() {
       return () => {};
     },
@@ -256,6 +260,8 @@ test('canonical actorJoin never falls back when the admitted peer capability lis
     topology: {
       peer: () => ({ descriptor: { lifecycleGeneration: 11n, protocolCapabilities: [] } })
     },
+    observePeerRoute: () => ({ generation: 1n, ready: true }),
+    observePeerRouteChanged: () => () => {},
     observePeerConnectionIntentRemoved() {
       return () => {};
     },
@@ -322,6 +328,8 @@ test('command 28 accepts only canonical flags-zero records', async () => {
           return true;
         }
       },
+      observePeerRoute: () => ({ generation: 1n, ready: true }),
+      observePeerRouteChanged: () => () => {},
       observePeerConnectionIntentRemoved() {
         return () => {};
       },

@@ -13,15 +13,10 @@ import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 import systems.zlink.framework.runtime.messaging.ZLinkPayloadEncoding;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
-import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderFlag;
 import systems.zlink.framework.streams.ZLinkStreamCodec;
-import systems.zlink.framework.streams.ZLinkStreamMessageKind;
 
 import java.time.Duration;
-import java.util.EnumSet;
 import java.util.List;
-import java.util.Map;
-import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -29,8 +24,6 @@ import java.util.function.Consumer;
 
 final class ZLinkBoundSessionRuntime implements ZLinkBoundSession {
     private static final Duration DEFAULT_TIMEOUT = Duration.ofSeconds(30);
-    static final String REMOTE_BOUND_SESSION_BIND_PACKET_NAME =
-            "zlink.framework.actor.bound_session.bind";
     private final ZLinkBackendStreamSocket stream;
     private final ZLinkInternalSpotNode spotNode;
     private final RoutingId sessionRid;
@@ -104,33 +97,8 @@ final class ZLinkBoundSessionRuntime implements ZLinkBoundSession {
                                     + targetActor.generation()
                                     + "; a new actor incarnation requires an explicit bind"));
         }
-        ZLinkStreamHeader header =
-                new ZLinkStreamHeader(
-                        ZLinkStreamMessageKind.SEND,
-                        ZLinkStreamCodec.RAW,
-                        EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
-                        Optional.empty(),
-                        REMOTE_BOUND_SESSION_BIND_PACKET_NAME,
-                        Map.of());
-        return ignoreMissingBinding(stream.unbindActor(sessionRid, actorId).submit(timeout))
-                .thenCompose(
-                        ignored ->
-                                bindActorWithRetry(
-                                        stream, sessionRid, targetActor, actorSlot, timeout))
-                .thenCompose(ignored -> relayBoundSessionBind(header))
+        return bindActorWithRetry(stream, sessionRid, targetActor, actorSlot, timeout)
                 .thenRun(() -> rebindListener.accept(targetActor));
-    }
-
-    private CompletionStage<Void> relayBoundSessionBind(ZLinkStreamHeader header) {
-        Message body = Message.from(new byte[0]);
-        CompletionStage<Void> submission;
-        try {
-            submission = stream.relayBoundActorAsync(sessionRid, actorId, header, List.of(body));
-        } catch (RuntimeException failure) {
-            body.close();
-            return CompletableFuture.failedFuture(failure);
-        }
-        return submission.whenComplete((ignored, failure) -> body.close());
     }
 
     static CompletionStage<Void> bindActorWithRetry(
@@ -186,11 +154,8 @@ final class ZLinkBoundSessionRuntime implements ZLinkBoundSession {
     public CompletionStage<Void> disconnect() {
         return stream.unbindActor(sessionRid, actorId)
                 .submit(DEFAULT_TIMEOUT)
-                .thenRun(
-                        () -> {
-                            actorRuntime.clearSessionBinding(actor, bindingToken);
-                            unbindListener.run();
-                        });
+                .thenCompose(ignored -> actorRuntime.clearSessionBinding(actor, bindingToken))
+                .thenRun(() -> unbindListener.run());
     }
 
     private record SendCall(

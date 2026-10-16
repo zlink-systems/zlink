@@ -78,7 +78,7 @@ test('RouteMesh observes routes only on route readiness and idle maintenance nev
     await delay(10);
     assert.equal(f.state.routeObservations, 1);
     assert.equal(f.state.receives, 0);
-  } finally { f.backend.close(); }
+  } finally { await f.backend.close(); }
 });
 
 test('one readiness notification drains beyond a batch to no-data with the host permit', async () => {
@@ -96,7 +96,7 @@ test('one readiness notification drains beyond a batch to no-data with the host 
     await delay(10);
     assert.equal(f.state.receives, receives, 'no-data ends receive work until another notification');
     assert.equal(f.state.routeObservations, 0, 'receive readiness does not observe routes');
-  } finally { f.backend.close(); }
+  } finally { await f.backend.close(); }
 });
 
 test('readiness during a capacity wait coalesces into one drain and resumes without another event', async () => {
@@ -116,7 +116,7 @@ test('readiness during a capacity wait coalesces into one drain and resumes with
     await nextTurn();
     assert.equal(f.state.released, 11);
     assert.equal(f.queue.snapshot().permitsInUse, 0n);
-  } finally { f.backend.close(); }
+  } finally { await f.backend.close(); }
 });
 
 for (const handoff of [false, true]) test(`close ends readiness admission across permit handoff=${handoff}`, async () => {
@@ -127,7 +127,7 @@ for (const handoff of [false, true]) test(`close ends readiness admission across
   await nextTurn();
   assert.equal(f.queue.snapshot().capacityWaiters, 1n);
   if (handoff) occupied.releaseAfterInternalProcessing();
-  f.backend.close();
+  await f.backend.close();
   f.notify(1);
   await nextTurn();
   assert.equal(f.state.receives, 0);

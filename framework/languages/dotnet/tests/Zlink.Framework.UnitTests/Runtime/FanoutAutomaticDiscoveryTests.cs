@@ -469,6 +469,7 @@ public sealed class FanoutAutomaticDiscoveryTests : RegistrationValidationSuppor
             new ZLinkChannelReceiveLoop(null!, null!),
             monitoring,
             failureSink,
+            new ZLinkRuntimeTaskRunner(failureSink, CancellationToken.None),
             CancellationToken.None
         );
         var first = Descriptor("publisher-a", 1, "tcp://127.0.0.1:7001");

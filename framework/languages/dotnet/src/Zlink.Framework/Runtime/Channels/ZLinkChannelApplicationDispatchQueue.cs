@@ -74,16 +74,18 @@ internal sealed class ZLinkChannelApplicationDispatchQueue<TWork> : IAsyncDispos
         if (Interlocked.Exchange(ref _stopped, 1) != 0)
             return;
 
-        await ReplyGate.CloseAsync().ConfigureAwait(false);
         _queue.Writer.TryComplete();
         await _stop.CancelAsync().ConfigureAwait(false);
 
+        // Accepted handlers deliver their replies until the host deadline; the reply path
+        // closes after them (client-server channel section 6, steps 3 and 4).
         try
         {
             await _worker.WaitAsync(_disposeDeadline).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (_disposeDeadline.IsCancellationRequested)
         {
+            await ReplyGate.CloseAsync().ConfigureAwait(false);
             // The host deadline expired while a handler ignores cancellation. The worker is
             // observed late, and its stop source is released only after it completes.
             ZLinkUnawaitedSubmit.Observe(
@@ -101,6 +103,7 @@ internal sealed class ZLinkChannelApplicationDispatchQueue<TWork> : IAsyncDispos
             return;
         }
 
+        await ReplyGate.CloseAsync().ConfigureAwait(false);
         _stop.Dispose();
     }
 

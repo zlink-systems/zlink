@@ -4683,10 +4683,8 @@ internal sealed partial class ZLinkFrameworkRuntime
     ) => _actorBoundSessionCoordinator.GetSessionActorContextAsync(actorId, bindingToken);
 
     internal ValueTask<ZLinkSessionBindingRoute?> GetSessionActorRouteAsync(
-        string actorId,
-        string bindingToken,
         ZLinkSessionActor actorRef
-    ) => _actorBoundSessionCoordinator.GetSessionRouteAsync(actorId, bindingToken, actorRef);
+    ) => _actorBoundSessionCoordinator.GetSessionRouteAsync(actorRef);
 
     internal bool TryGetSessionActorContext(
         string actorId,
@@ -4695,13 +4693,6 @@ internal sealed partial class ZLinkFrameworkRuntime
     )
     {
         var found = _actorBoundSessionCoordinator.GetSessionActorContext(actorId, bindingToken);
-        context = found!;
-        return found is not null;
-    }
-
-    internal bool TryGetSessionActorContext(string actorId, out ZLinkSessionContext context)
-    {
-        var found = _actorBoundSessionCoordinator.GetSessionActorContext(actorId);
         context = found!;
         return found is not null;
     }
@@ -4717,9 +4708,13 @@ internal sealed partial class ZLinkFrameworkRuntime
         return found is not null;
     }
 
-    internal bool TryGetSessionActorBinding(string actorId, out ZLinkSessionBindingEntry entry)
+    internal bool TryGetSessionActorBinding(
+        string actorId,
+        ZLinkSessionContext context,
+        out ZLinkSessionBindingEntry entry
+    )
     {
-        var found = _actorBoundSessionCoordinator.GetSessionBindingByActorId(actorId);
+        var found = _actorBoundSessionCoordinator.GetSessionBindingForSession(actorId, context);
         entry = found!;
         return found is not null;
     }

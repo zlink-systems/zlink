@@ -44,9 +44,7 @@ internal sealed class ZLinkSessionActor : IZLinkSessionActor
 
     internal async ValueTask<ZLinkSessionBindingRoute> GetRouteAsync()
     {
-        var route = await Context
-            .Runtime.GetSessionActorRouteAsync(ActorId, BindingToken, this)
-            .ConfigureAwait(false);
+        var route = await Context.Runtime.GetSessionActorRouteAsync(this).ConfigureAwait(false);
         return route
             ?? throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.InvalidOperation,

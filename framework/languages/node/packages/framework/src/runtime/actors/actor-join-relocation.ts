@@ -30,6 +30,7 @@ export interface ZLinkActorJoinRelocation {
     };
     /** Target's advertised relocation state chunk cap from the accepted admission reply. */
     readonly advertisedReceiveChunkLimitBytes?: number;
+    readonly deadlineAtMs?: number;
     readonly signal?: AbortSignal;
   }): Promise<{
     readonly actorRef: ZLinkBackendActorRef;

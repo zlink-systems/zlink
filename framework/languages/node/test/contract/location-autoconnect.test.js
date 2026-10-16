@@ -1312,3 +1312,75 @@ function meshDescriptor(owner, nodeRid, endpoint, lifecycleGeneration) {
 function rid(value) {
   return zlink.RoutingId.from(value);
 }
+
+test('automatic intent skips selected routes and manual intents per peer, then resumes after removal', async () => {
+  let connected = 0;
+  let existing = true;
+  const node = {
+    status: () => ({ routingId: rid('a'), localEndpoint: 'tcp://local' }),
+    peers: () => [],
+    hasPeerRouteOrConnectionIntent: () => existing,
+    connectPeer: async () => { connected++; return 1n; },
+    removePeerConnection() {}
+  };
+  const capability = spotNodeAutoConnect.spotNodeAutoConnectCapability('mesh',
+    { router: { bind: 'tcp://local' } }, node);
+  const target = { targetKey: 'z', nodeRid: rid('z'), lifecycleGeneration: 1n,
+    endpoint: 'tcp://remote', role: internal.ZLinkLocationRole.Router };
+  assert.equal(await capability.executor.connect(target), false);
+  assert.equal(connected, 0);
+  existing = false;
+  assert.equal(await capability.executor.connect(target), true);
+  assert.equal(connected, 1);
+  existing = true;
+  assert.equal(await capability.executor.connect(target), true);
+  assert.equal(connected, 1);
+});
+
+test('manual intent for one peer does not suppress automatic discovery of another peer', async () => {
+  let connected = 0;
+  const node = {
+    status: () => ({ routingId: rid('a'), localEndpoint: 'tcp://local' }),
+    peers: () => [],
+    hasPeerRouteOrConnectionIntent: target => String(target) === 'manual',
+    connectPeer: async () => { connected++; return 1n; },
+    removePeerConnection() {}
+  };
+  const capability = spotNodeAutoConnect.spotNodeAutoConnectCapability('mesh',
+    { router: { bind: 'tcp://local', manualPeerConnections: [{ endpoint: 'tcp://manual', peerRid: rid('manual') }] } }, node);
+  assert.equal(await capability.executor.connect({ targetKey: 'z', nodeRid: rid('z'),
+    lifecycleGeneration: 1n, endpoint: 'tcp://remote', role: internal.ZLinkLocationRole.Router }), true);
+  assert.equal(connected, 1);
+});
+
+test('a manual intent survives loss of its selected route until its owner removes it', async () => {
+  const { ZLinkNodeRawMeshBackend } = require('../../packages/framework/dist/runtime/backend/node/node-raw-mesh-backend');
+  const { ZLinkNodeRawBindingPort } = require('../../packages/framework/dist/runtime/backend/node/node-raw-binding-port');
+  const { ApplicationJobQueue, resolveApplicationJobQueueConfiguration } = require('../../packages/framework/dist/runtime/host/application-job-queue');
+  const create = name => {
+    const backend = new ZLinkNodeRawMeshBackend('manual-intent', name, new ZLinkNodeRawBindingPort(),
+      new ApplicationJobQueue(resolveApplicationJobQueueConfiguration()));
+    backend.setBind('tcp://127.0.0.1:0');
+    backend.start();
+    return backend;
+  };
+  const source = create('source');
+  const target = create('target');
+  const endpoint = target.status().localEndpoint;
+  const until = async predicate => {
+    const deadline = performance.now() + 1000;
+    while (!predicate() && performance.now() < deadline) await new Promise(resolve => setImmediate(resolve));
+    assert(predicate());
+  };
+  try {
+    const intent = await source.connectPeer({ endpoint, expectedRid: 'target' });
+    assert.equal(source.hasPeerRouteOrConnectionIntent('target', endpoint), true);
+    await until(() => source.isPeerRouteReady('target'));
+    await target.close();
+    await until(() => source.observePeerRoute('target').generation === undefined);
+    assert.equal(source.hasPeerRouteOrConnectionIntent('target', endpoint), true,
+      'transport loss does not remove the application manual intent');
+    source.removePeerConnection(intent);
+    assert.equal(source.hasPeerRouteOrConnectionIntent('target', endpoint), false);
+  } finally { await source.close(); await target.close(); }
+});

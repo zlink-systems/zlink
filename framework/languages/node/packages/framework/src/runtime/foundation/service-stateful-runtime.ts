@@ -10,7 +10,7 @@ import {
   ZLinkDispatchMessageKind,
   ZLinkRuntimeMessageFlowOutcome as ZLinkMessageFlowOutcome
 } from '../../contracts/Dispatch/ZLinkDispatchOptions';
-import { awaitWithAbort } from '../abort';
+import { requestDurableService } from './durable-service-request';
 import { shouldCompactBackingArray } from '../admission';
 import { RequestResult, SubmitResult, isZLinkBackendResultError } from '../backend/runtime-values';
 import type { ZLinkDispatchErrorReporter } from '../channels/dispatch-error-reporter';
@@ -112,7 +112,6 @@ import {
   encodeApplicationPayload,
   type ServiceApplicationPayload
 } from './service-wire-m6a-codec';
-const STATEFUL_OPERATION_RETRY_TICK_MS = 20;
 
 const MAX_NODE_TIMER_DELAY_MS = 2_147_483_647;
 
@@ -4211,64 +4210,15 @@ export class ServiceStatefulRuntime {
     operationKind: 'userSpotCreate' | 'userSpotClose' | 'actorCreate' | 'streamBind' | 'actorJoin',
     deadlineMs: number
   ): Promise<readonly Buffer[]> {
-    const stop = new AbortController();
-    const unobserve = this.raw.observePeerConnectionIntentRemoved((nodeRoutingId) => {
-      if (nodeRoutingId === targetNodeRid) {
-        stop.abort(
-          createInternalFrameworkException(
-            ZLinkFrameworkInternalErrorKind.RouteNotConnected,
-            `${operationKind} target node lifecycle ended.`,
-            true
-          )
-        );
-      }
-    });
-    let wasAdmitted = false;
-    try {
-      // Only durable lifecycle operations replay these frozen frames. Received
-      // envelopes leave this loop before decoding, including failure terminals.
-      for (;;) {
-        this.requireOpen();
-        stop.signal.throwIfAborted();
-        const remainingMs = Math.ceil(deadlineMs - performance.now());
-        if (remainingMs <= 0) throw durableOperationExhausted(operationKind, wasAdmitted);
-        try {
-          return await awaitWithAbort(
-            targetNodeRid === this.nodeRid
-              ? this.requestLocalInfrastructure(parts[0]!, correlation, remainingMs)
-              : this.raw.requestService(targetNodeRid, parts, remainingMs),
-            stop.signal
-          );
-        } catch (error) {
-          stop.signal.throwIfAborted();
-          if (!durableRequestCanReplay(error)) throw error;
-          if (durableRequestWasAdmitted(error)) wasAdmitted = true;
-          const retryDelayMs = Math.min(
-            STATEFUL_OPERATION_RETRY_TICK_MS,
-            deadlineMs - performance.now()
-          );
-          if (retryDelayMs <= 0) {
-            throw durableOperationExhausted(operationKind, wasAdmitted, error);
-          }
-          let timer: ReturnType<typeof setTimeout> | undefined;
-          try {
-            await awaitWithAbort(
-              new Promise<void>((resolve) => {
-                timer = setTimeout(resolve, retryDelayMs);
-              }),
-              stop.signal
-            );
-          } finally {
-            if (timer !== undefined) clearTimeout(timer);
-          }
-        }
-      }
-    } catch (error) {
-      stop.signal.throwIfAborted();
-      throw error;
-    } finally {
-      unobserve();
+    this.requireOpen();
+    if (targetNodeRid === this.nodeRid) {
+      return this.requestLocalInfrastructure(
+        parts[0]!,
+        correlation,
+        Math.ceil(deadlineMs - performance.now())
+      );
     }
+    return requestDurableService(this.raw, targetNodeRid, parts, deadlineMs, operationKind);
   }
 
   private requestLocalInfrastructure(
@@ -5413,37 +5363,6 @@ function operationDeadline(deadlineUnixMs: bigint): {
 
 function operationReplayExpired(replayExpiresAtMs: number): boolean {
   return performance.now() > replayExpiresAtMs;
-}
-
-function durableRequestWasAdmitted(error: unknown): boolean {
-  // Request NotConnected includes Core handover of an admitted request. The
-  // submit/request phase, rather than the result number, owns this distinction.
-  return isZLinkBackendResultError(error) && error.operation === 'request';
-}
-
-function durableOperationExhausted(
-  operationKind: 'userSpotCreate' | 'userSpotClose' | 'actorCreate' | 'streamBind' | 'actorJoin',
-  wasAdmitted: boolean,
-  cause?: unknown
-): ZLinkFrameworkException {
-  return createInternalFrameworkException(
-    wasAdmitted
-      ? ZLinkFrameworkInternalErrorKind.DeadlineExceeded
-      : ZLinkFrameworkInternalErrorKind.RouteNotConnected,
-    `${operationKind} exhausted its end-to-end deadline.`,
-    true,
-    cause
-  );
-}
-
-function durableRequestCanReplay(error: unknown): boolean {
-  if (!isZLinkBackendResultError(error)) return false;
-  return error.operation === 'request'
-    ? error.result === RequestResult.NotConnected || error.result === RequestResult.TimedOut
-    : error.result === SubmitResult.NotConnected ||
-        error.result === SubmitResult.NotFound ||
-        error.result === SubmitResult.NotAdmitted ||
-        error.result === SubmitResult.Backpressured;
 }
 
 function remainingDeadlineMs(deadlineUnixMs: bigint): number {

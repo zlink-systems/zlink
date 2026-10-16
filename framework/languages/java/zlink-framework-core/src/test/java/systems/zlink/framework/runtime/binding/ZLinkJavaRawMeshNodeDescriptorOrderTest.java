@@ -9,9 +9,11 @@ import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.core.Zlink;
 import systems.zlink.framework.locations.ZLinkMeshNodeObjectRole;
 import systems.zlink.framework.runtime.internal.binding.spot.MeshPeerState;
+import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 
 import java.lang.reflect.Field;
+import java.util.Map;
 import java.util.Queue;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -39,6 +41,7 @@ class ZLinkJavaRawMeshNodeDescriptorOrderTest {
             target.setBind(endpoint);
             target.setObjectRole(ZLinkMeshNodeObjectRole.SERVER);
             target.addChannel("orders");
+            source.addChannel("responses");
             target.setChannelWeight("orders", 100);
             target.deferServiceReadyPublication();
             source.setRoutingId(RoutingId.from("descriptor-order-source"));
@@ -62,8 +65,17 @@ class ZLinkJavaRawMeshNodeDescriptorOrderTest {
             await(() -> pendingTurns.size() == 1);
 
             source.connectPeer(endpoint, targetRid);
-            // Both the SERVING publication and the HELLO's ADMIT are queued behind the held turn.
-            await(() -> pendingTurns.size() == 2);
+            // Observe the peer HELLO's validation, rather than an incidental number of
+            // queued control turns. Both HELLO and ADMIT respect the pending publication.
+            await(() -> target.configuredPeerIds().contains(source.routingId()));
+            Field channelsField = ZLinkJavaRawMeshNode.class.getDeclaredField("knownPeerChannels");
+            channelsField.setAccessible(true);
+            var knownChannels = (Map<?, ?>) channelsField.get(target);
+            await(() -> knownChannels.containsKey(source.routingId()));
+            assertEquals(
+                    ZLinkOneWayCalls.ROUTE_NOT_CONNECTED,
+                    target.classifyChannelTarget("responses").orElseThrow(),
+                    "an admitted descriptor cannot make an unready channel selectable");
             assertTrue(
                     source.peers().stream().noneMatch(p -> p.state() == MeshPeerState.ADMITTED),
                     "admission response left before the pending descriptor publication");

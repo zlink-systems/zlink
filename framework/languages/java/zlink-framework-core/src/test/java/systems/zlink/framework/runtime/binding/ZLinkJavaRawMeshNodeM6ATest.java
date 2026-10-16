@@ -64,6 +64,44 @@ import java.util.stream.IntStream;
 
 final class ZLinkJavaRawMeshNodeM6ATest {
     @Test
+    void localActorJournalHasNoRecordWithoutBindingIdentityOrAuthority() {
+        // The encoder does not classify; the dispatch caller classifies the empty record.
+        try (Context context = Zlink.createContext();
+                ZLinkJavaRawMeshNode node = new ZLinkJavaRawMeshNode(context, "mesh")) {
+            node.setRoutingId(RoutingId.from("actor-owner"));
+            RoutingId owner = node.routingId();
+            RoutingId session = RoutingId.from("session-a");
+            ZLinkBackendActorRef actor = new ZLinkBackendActorRef(owner, "actor-a", 7);
+            assertEquals(
+                    0,
+                    node.encodeLocalActorAccepted(
+                                    actor,
+                                    owner,
+                                    session,
+                                    0,
+                                    0,
+                                    0,
+                                    "Send",
+                                    java.util.Map.of(),
+                                    new byte[0])
+                            .length);
+            assertEquals(
+                    0,
+                    node.encodeLocalActorAccepted(
+                                    actor,
+                                    owner,
+                                    session,
+                                    1,
+                                    1,
+                                    0,
+                                    "Send",
+                                    java.util.Map.of(),
+                                    new byte[0])
+                            .length);
+        }
+    }
+
+    @Test
     void oneWayAdapterClassifiesNativeSubmitRejection() {
         for (var rejected :
                 List.of(
@@ -146,18 +184,16 @@ final class ZLinkJavaRawMeshNodeM6ATest {
         try (var context = Zlink.createContext();
                 var node = meshNode(context)) {
             var topology = new ZLinkServiceTopologyRegistry(descriptor(RoutingId.from("local")));
-            topology.admit(descriptor(peerRid), "pair");
+            topology.admit(descriptor(peerRid), "pair", ServiceWireConstants.COMMAND_HELLO);
             var topologyField = ZLinkJavaRawMeshNode.class.getDeclaredField("topology");
             topologyField.setAccessible(true);
             topologyField.set(node, topology);
             var readyField =
                     ZLinkJavaRawMeshNode.class.getDeclaredField("admissionControlReadyConnections");
             readyField.setAccessible(true);
+            assertEquals(MeshPeerState.CONNECTING, node.peers().getFirst().state());
             ((java.util.Map<RoutingId, String>) readyField.get(node)).put(peerRid, "pair");
-            Method isReady =
-                    ZLinkJavaRawMeshNode.class.getDeclaredMethod("isReadyPeer", RoutingId.class);
-            isReady.setAccessible(true);
-            assertEquals(true, isReady.invoke(node, peerRid));
+            assertEquals(MeshPeerState.ADMITTED, node.peers().getFirst().state());
         }
     }
 
@@ -374,7 +410,7 @@ final class ZLinkJavaRawMeshNodeM6ATest {
                                             descriptor(peerRid))))
                     .toCompletableFuture()
                     .get(2, TimeUnit.SECONDS);
-            try (var admitted = receiveServiceControl(port, peer)) {
+            try (var admitted = receiveServiceControl(port, peer, descriptor(peerRid))) {
                 assertEquals(
                         ServiceWireConstants.COMMAND_ADMIT,
                         codec.decodeHeader(admitted.frames().getFirst()).command());
@@ -446,7 +482,7 @@ final class ZLinkJavaRawMeshNodeM6ATest {
                                             ServiceWireConstants.COMMAND_HELLO, peerDescriptor)))
                     .toCompletableFuture()
                     .get(2, TimeUnit.SECONDS);
-            try (var response = receiveServiceControl(port, peer)) {
+            try (var response = receiveServiceControl(port, peer, peerDescriptor)) {
                 assertEquals(
                         ServiceWireConstants.COMMAND_ADMIT,
                         codec.decodeHeader(response.frames().getFirst()).command());
@@ -462,13 +498,27 @@ final class ZLinkJavaRawMeshNodeM6ATest {
     }
 
     private static ZLinkJavaRawServicePort.Inbound receiveServiceControl(
-            ZLinkJavaRawServicePort port, RouterSocket router) {
+            ZLinkJavaRawServicePort port,
+            RouterSocket router,
+            ZLinkServiceNodeDescriptor localDescriptor) {
         long deadline = System.nanoTime() + Duration.ofSeconds(2).toNanos();
         while (System.nanoTime() < deadline) {
             assertTrue(
                     port.waitForReadable(router, Duration.ofNanos(deadline - System.nanoTime())));
             var received = port.receive(router).orElseThrow();
             if (received.frames().size() != 1 || received.frames().getFirst().length != 0) {
+                var codec = new ZLinkServiceM6AWireCodec();
+                if (codec.decodeHeader(received.frames().getFirst()).command()
+                        == ServiceWireConstants.COMMAND_HELLO) {
+                    port.send(
+                            router,
+                            received.source(),
+                            List.of(
+                                    codec.encodeAdmission(
+                                            ServiceWireConstants.COMMAND_ADMIT, localDescriptor)));
+                    received.close();
+                    continue;
+                }
                 return received;
             }
             // Core 연결 알림은 빈 frame을 전달하며 runtime도 이 알림을 제외한다.

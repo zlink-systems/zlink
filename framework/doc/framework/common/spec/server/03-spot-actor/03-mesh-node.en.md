@@ -292,6 +292,13 @@ If `MeshName` differs or the trust profiles differ, it isn't admitted. When more
 exists for the same RID, Core selects one ([Core ROUTER §10.1](../../../../../../../core/doc/spec/core/socket/07-router.en.md#101-observing-the-selected-route)), and the framework
 admits only the handshake received on the selected route.
 
+**A node that has not yet received the peer's admission acceptance (ADMIT) on the selected route
+sends HELLO on that route again at each existing liveness management interval.** When the selection
+changes, Core discards the pending records of the standby pipe right before promoting it
+([Core ROUTER §10.1](../../../../../../../core/doc/spec/core/socket/07-router.en.md#101-observing-the-selected-route)), so a HELLO sent first on the new route may never reach
+the peer. HELLO is idempotent for the same identity. No separate timer is added for this, and HELLO
+is not sent again once ADMIT has been received.
+
 **Until admission is confirmed by a handshake on the selected route, records other than the
 handshake received on that route are discarded without processing, and no response is sent.** The
 same applies to records the peer sent before the handshake of a new route after the selected route

@@ -738,6 +738,106 @@ public sealed class ServiceRuntimeFoundationTests
         Assert.Equal((byte)ZLinkMeshNodeObjectRole.Client, admission.ObjectRole);
     }
 
+    [Theory]
+    [InlineData(
+        (byte)ServiceWireConstants.Command.Hello,
+        24UL,
+        (byte)1,
+        false,
+        (byte)ZLinkServiceAdmissionDecision.Reject
+    )]
+    [InlineData(
+        (byte)ServiceWireConstants.Command.Admit,
+        24UL,
+        (byte)1,
+        false,
+        (byte)ZLinkServiceAdmissionDecision.Reject
+    )]
+    [InlineData(
+        (byte)ServiceWireConstants.Command.Update,
+        24UL,
+        (byte)1,
+        false,
+        (byte)ZLinkServiceAdmissionDecision.Accept
+    )]
+    [InlineData(
+        (byte)ServiceWireConstants.Command.Hello,
+        23UL,
+        (byte)0,
+        false,
+        (byte)ZLinkServiceAdmissionDecision.Idempotent
+    )]
+    [InlineData(
+        (byte)ServiceWireConstants.Command.Hello,
+        22UL,
+        (byte)1,
+        false,
+        (byte)ZLinkServiceAdmissionDecision.Reject
+    )]
+    [InlineData(
+        (byte)ServiceWireConstants.Command.Hello,
+        23UL,
+        (byte)1,
+        false,
+        (byte)ZLinkServiceAdmissionDecision.Reject
+    )]
+    [InlineData(
+        (byte)ServiceWireConstants.Command.Hello,
+        24UL,
+        (byte)1,
+        true,
+        (byte)ZLinkServiceAdmissionDecision.Reject
+    )]
+    [InlineData(
+        (byte)ServiceWireConstants.Command.Update,
+        24UL,
+        (byte)1,
+        true,
+        (byte)ZLinkServiceAdmissionDecision.Reject
+    )]
+    public void AdmissionGuard_SameLifecycleRevisionIsUpdatedOnlyByUpdate(
+        byte command,
+        ulong revision,
+        byte runtimeState,
+        bool changeEndpoint,
+        byte expected
+    )
+    {
+        ZLinkServiceWireCodec.AdmissionRecord Descriptor(
+            ulong value,
+            byte state,
+            string endpoint
+        ) =>
+            DecodeAdmission(
+                ZLinkServiceWireCodec.EncodeRouteAdmission(
+                    ServiceWireConstants.Command.Hello,
+                    "orders",
+                    endpoint,
+                    17,
+                    value,
+                    new Dictionary<string, uint> { ["worker"] = 75 },
+                    runtimeState: state
+                )
+            );
+
+        const string Endpoint = "tcp://127.0.0.1:7070";
+        var current = Descriptor(23, 0, Endpoint);
+        var incoming = Descriptor(
+            revision,
+            runtimeState,
+            changeEndpoint ? "tcp://127.0.0.1:7071" : Endpoint
+        );
+
+        Assert.Equal(
+            (ZLinkServiceAdmissionDecision)expected,
+            ZLinkServiceAdmissionGuard.Evaluate(
+                current,
+                (ServiceWireConstants.Command)command,
+                incoming
+            )
+        );
+    }
+
     [Fact]
     public void AdmissionGuard_ValidatesRevisionAndImmutableFieldsBeforeMutation()
     {
@@ -1938,7 +2038,10 @@ public sealed class ServiceRuntimeFoundationTests
                 System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic
             )!
             .GetAddMethod(nonPublic: true)!;
-        addListener.Invoke(node, [new Action<RoutingId>(ended.Add)]);
+        addListener.Invoke(
+            node,
+            [new Func<RoutingId, Action?>(removed => () => ended.Add(removed))]
+        );
 
         node.RemovePeerConnection(first);
         Assert.Empty(ended);
@@ -3055,13 +3158,13 @@ public sealed class ServiceRuntimeFoundationTests
                     lifecycleGeneration: 1,
                     descriptorRevision: 1,
                     new Dictionary<string, uint>(StringComparer.Ordinal),
-                    objectRole: (byte)ZLinkMeshNodeObjectRole.Client
+                    objectRole: (byte)ZLinkMeshNodeObjectRole.Server
                 )
             )
         )
             await source.Send().Message(hello).Async(CancellationToken.None).Admitted;
 
-        await WaitUntilAsync(() => target.Peers().Length == 1);
+        await WaitUntilAsync(() => target.Status().AdmittedPeerCount == 1);
         await WaitUntilAsync(() => applicationJobQueue.GetStatus().PermitsInUse == 0);
         var controlStatus = applicationJobQueue.GetStatus();
         Assert.Equal(1UL, controlStatus.PeakPermitsInUse);

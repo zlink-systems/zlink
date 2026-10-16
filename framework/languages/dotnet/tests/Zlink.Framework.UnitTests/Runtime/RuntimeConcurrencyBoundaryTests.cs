@@ -81,8 +81,16 @@ public sealed class RuntimeConcurrencyBoundaryTests
                 (ambient.Value, runner.IsCurrentExecution, ZLinkStateLane.Current is null)
             );
         }
+        void Loop(CancellationToken token)
+        {
+            entered.TrySetResult();
+            release.Task.GetAwaiter().GetResult();
+            observed.TrySetResult(
+                (ambient.Value, runner.IsCurrentExecution, ZLinkStateLane.Current is null)
+            );
+        }
         var execution = longRunning
-            ? runner.RunLongRunning("context", Callback)
+            ? runner.RunLongRunning("context", Loop)
             : runner.Run("context", Callback);
         await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
         var stop = runner.StopAsync().AsTask();

@@ -963,12 +963,19 @@ final class ZLinkUserSpotRetireTargetEndpoint
                             //  closed queue and lost.
                             actorJoin.releasePrewarm(request.fence().aggregateId());
                             actorStaging.publishDirectJoinHidden(replay, targetOwnerGeneration);
-                            actorStaging.prepareDirectJoinBoundSession(
-                                    replay, target.request(), targetOwnerGeneration);
-                            target.published().set(true);
                             return ZLinkSerialExecutionQueue.yieldCurrent(
-                                            actorJoin.notifyTargetJoined(
-                                                    target.directAdmission(), target.staged()))
+                                            actorStaging.prepareDirectJoinBoundSession(
+                                                    replay,
+                                                    target.request(),
+                                                    targetOwnerGeneration))
+                                    .thenCompose(
+                                            prepared -> {
+                                                target.published().set(true);
+                                                return ZLinkSerialExecutionQueue.yieldCurrent(
+                                                        actorJoin.notifyTargetJoined(
+                                                                target.directAdmission(),
+                                                                target.staged()));
+                                            })
                                     .handle((ignored, failure) -> failure)
                                     .thenCompose(
                                             failure -> {

@@ -191,6 +191,17 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
         return false;
     }
 
+    /** Core selection and logical admission, observed without controlling physical routes. */
+    record PeerRouteObservation(long selectedGeneration, boolean ready) {}
+
+    default PeerRouteObservation observePeerRoute(RoutingId peerRid) {
+        return new PeerRouteObservation(0, false);
+    }
+
+    default boolean targetLifecycleEnded(RoutingId peerRid) {
+        return false;
+    }
+
     /** Returns peers that currently satisfy this backend's ready predicate. */
     default long readyPeerCount() {
         return peers().stream()
@@ -371,6 +382,18 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
         return CompletableFuture.failedFuture(
                 new UnsupportedOperationException(
                         "Canonical relocation prepare request is unavailable"));
+    }
+
+    default CompletionStage<byte[]> requestCanonicalRelocationPrepare(
+            RoutingId targetNodeRid,
+            byte[] command,
+            Duration timeout,
+            java.util.concurrent.CompletableFuture<Void> admission) {
+        return requestCanonicalRelocationPrepare(targetNodeRid, command, timeout)
+                .whenComplete(
+                        (reply, failure) -> {
+                            if (failure == null) admission.complete(null);
+                        });
     }
 
     default void setActorLeftHandler(ActorLeftHandler handler) {

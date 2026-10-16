@@ -372,7 +372,8 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                     token =>
                         SubmitBoundaryAsync(boundaryCanonical, target.Rid, data, cutover, token),
                     registration.Locations.Options.PollingInterval,
-                    cancellationToken
+                    cancellationToken,
+                    () => sourceNode.Node.ObservePeerRoute(target.Rid)
                 )
                 .ConfigureAwait(false);
             if (settlement.Outcome != ZLinkSourceSettlement.TargetCommitted)
@@ -401,7 +402,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                             : ZLinkFrameworkErrorKind.Unavailable,
                         preserved
                             ? $"Actor '{actorState.ActorId}' target commit was not confirmed before the Restore deadline; the source Preserve fence won."
-                            : $"Actor '{actorState.ActorId}' source owner lease expired before the Preserve fence."
+                            : $"Actor '{actorState.ActorId}' source owner lease expired or its authority is Missing."
                     )
                 );
             }
@@ -619,10 +620,10 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
     /// From the Restore deadline on, with the target commit unconfirmed, the
     /// source runs its <c>Preserve</c> fence on the version the target CAS
     /// expects → <see cref="ZLinkSourceSettlement.SourcePreserved"/>; its own
-    /// lease already ended → <see cref="ZLinkSourceSettlement.SourceLeaseExpired"/>.
+    /// lease already ended or authority Missing → <see cref="ZLinkSourceSettlement.SourceLeaseExpired"/>.
     /// A Store failure or a lost Preserve race is not an answer: the source
-    /// keeps every copy and reads again. A boundary batch whose submission
-    /// failed is submitted again (whole batch, then the cutover).
+    /// keeps every copy and reads again. A different selected route makes
+    /// the whole boundary batch and cutover eligible for retransmission.
     /// </summary>
     internal static async ValueTask<ZLinkSourceSettlementResult> SettleSourceAsync(
         IZLinkLocationRepository authorityStore,
@@ -634,13 +635,14 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
         ulong targetAttemptGeneration,
         TimeSpan restoreDeadline,
         Func<bool> isSourceLeaseValid,
-        Func<CancellationToken, ValueTask<bool>> submitBoundary,
+        Func<CancellationToken, ValueTask> submitBoundary,
         TimeSpan pollingInterval,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        Func<ZLinkPeerRouteObservation> observeRoute
     )
     {
         var precommit = new ZLinkStandaloneActorRelocationPrecommitCoordinator(authorityStore);
-        var boundarySubmitted = await submitBoundary(cancellationToken).ConfigureAwait(false);
+        ulong submittedGeneration = 0;
         while (true)
         {
             //  The Restore deadline is reached by time or by the caller's
@@ -675,30 +677,29 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                 )
             )
                 return new(ZLinkSourceSettlement.TargetCommitted, found.Snapshot);
+            if (read is ZLinkAuthorityReadResult.Missing || settleNow && !isSourceLeaseValid())
+                return new(ZLinkSourceSettlement.SourceLeaseExpired, null);
             if (
-                read is ZLinkAuthorityReadResult.Missing
-                || read is ZLinkAuthorityReadResult.Found moved
-                    && !ZLinkStandaloneActorRelocationPrecommitCoordinator.IsSourcePrecommit(
-                        moved.Snapshot,
-                        relocationId
-                    )
-                    && !IsExactCommittedTargetAuthority(
-                        read,
-                        source,
-                        root,
-                        relocationId,
-                        target,
-                        targetAttemptGeneration,
-                        requireActivated: false
-                    )
+                read is ZLinkAuthorityReadResult.Found moved
+                && !ZLinkStandaloneActorRelocationPrecommitCoordinator.IsSourcePrecommit(
+                    moved.Snapshot,
+                    relocationId
+                )
+                && !IsExactCommittedTargetAuthority(
+                    read,
+                    source,
+                    root,
+                    relocationId,
+                    target,
+                    targetAttemptGeneration,
+                    requireActivated: false
+                )
             )
                 throw DataLost(
                     "Standalone Actor authority changed to an unrelated owner during relocation."
                 );
             if (settleNow)
             {
-                if (!isSourceLeaseValid())
-                    return new(ZLinkSourceSettlement.SourceLeaseExpired, null);
                 if (
                     read is ZLinkAuthorityReadResult.Found captured
                     && ZLinkStandaloneActorRelocationPrecommitCoordinator.IsSourcePrecommit(
@@ -730,26 +731,24 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                 await Task.Delay(pollingInterval, CancellationToken.None).ConfigureAwait(false);
                 continue;
             }
-            if (!boundarySubmitted)
-                boundarySubmitted = await submitBoundary(cancellationToken).ConfigureAwait(false);
-            try
+            var route = observeRoute();
+            if (route.ReadyGeneration != 0 && route.SelectedGeneration != submittedGeneration)
             {
-                await Task.Delay(pollingInterval, cancellationToken).ConfigureAwait(false);
+                submittedGeneration = route.ReadyGeneration;
+                await submitBoundary(cancellationToken).ConfigureAwait(false);
             }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                //  Cancellation brings the Restore deadline forward.
-            }
+            var poll = Task.Delay(pollingInterval, cancellationToken);
+            await Task.WhenAny(poll, route.Changed).ConfigureAwait(false);
         }
     }
 
     /// <summary>
     /// Relocation flow §4.4: submits the whole pre-boundary relay batch, then
     /// the cutover, on the ordered connection. The submit terminal is neither
-    /// success nor failure of the relocation; <c>false</c> only tells the
-    /// settlement to submit the whole batch again while it waits.
+    /// success nor failure of the relocation. Only a new selected route
+    /// makes the settlement submit the whole batch again.
     /// </summary>
-    internal static async ValueTask<bool> SubmitBoundaryAsync(
+    internal static async ValueTask SubmitBoundaryAsync(
         IZLinkBackendCanonicalRelocation canonical,
         RoutingId targetRid,
         IReadOnlyList<ZLinkServiceWireCodec.RelocationDataRecord> data,
@@ -766,16 +765,15 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
             await canonical
                 .SendCanonicalRelocationCutoverAsync(targetRid, cutover, cancellationToken)
                 .ConfigureAwait(false);
-            return true;
         }
         catch (ZLinkFrameworkException exception)
             when (exception.Kind == ZLinkFrameworkErrorKind.Unavailable)
         {
-            return false;
+            // The selected-route observer owns the retransmission trigger.
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            return false;
+            // Cancellation brings settlement's Restore deadline forward.
         }
     }
 
