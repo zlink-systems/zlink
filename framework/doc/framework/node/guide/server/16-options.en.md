@@ -103,7 +103,7 @@ jobs per processor.
 
 | Option | What it sets | Default |
 | --- | --- | --- |
-| Recording level | `off` · `errors` · `Normal` · `Detailed` | `errors` |
+| Recording level | `off` · `errors` · `normal` · `Detailed` | `errors` |
 | `TraceSampleRate` | Share of normal flows recorded, ranging over `0.0..1.0` | 1.0 |
 | `includeMessageSizes` | Whether payload byte sizes are recorded too | Not recorded |
 
