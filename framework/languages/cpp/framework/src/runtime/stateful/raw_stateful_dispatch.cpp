@@ -315,12 +315,14 @@ stateful_error_t raw_stateful_dispatch_t::commit_accepted_ingress (const object_
     return stateful_error_t::none;
 }
 
-task_t<bool> raw_stateful_dispatch_t::forward_accepted (object_ref_t owner,
-                                                        turn_record_t turn,
-                                                        std::vector<std::uint8_t> target_routing_id,
-                                                        std::uint64_t target_generation,
-                                                        std::uint64_t target_lease_generation,
-                                                        std::chrono::milliseconds window)
+task_t<bool>
+raw_stateful_dispatch_t::forward_accepted (object_ref_t owner,
+                                           turn_record_t turn,
+                                           std::vector<std::uint8_t> target_routing_id,
+                                           std::uint64_t target_generation,
+                                           std::uint64_t target_lease_generation,
+                                           std::chrono::milliseconds window,
+                                           std::optional<std::uint64_t> target_authority_generation)
 {
     const auto application =
       turn.application_record
@@ -330,6 +332,23 @@ task_t<bool> raw_stateful_dispatch_t::forward_accepted (object_ref_t owner,
     if (!application.application)
         co_return false;
     const auto sequence = turn.sequence;
+    if (!target_authority_generation) {
+        if (!application.reply_route_id) {
+            co_return discard_pending (owner, sequence) == stateful_error_t::none;
+        }
+        const protocol::reply_relay_t relay{
+          application.operation,
+          *application.reply_route_id,
+          {},
+          0,
+          {},
+          0,
+          sequence,
+          static_cast<std::uint32_t> (protocol::request_terminal_result::conflict),
+          protocol::framework_error_code::none};
+        co_return co_await complete_relocated_source_async (owner, sequence, relay, std::nullopt);
+    }
+
     auto complete = [this, owner, sequence, operation = application.operation,
                      reply_route = application.reply_route_id] (
                       foundation::operation_terminal_t terminal, std::vector<std::uint8_t> bytes) {
@@ -353,8 +372,8 @@ task_t<bool> raw_stateful_dispatch_t::forward_accepted (object_ref_t owner,
     };
     bool sent = false;
     if (owner.kind == object_kind_t::actor) {
-        protocol::actor_route_fence_t target{owner.key, owner.object_generation,          {},
-                                             0,         owner.authority_owner_generation, 0};
+        protocol::actor_route_fence_t target{owner.key, owner.object_generation,      {},
+                                             0,         *target_authority_generation, 0};
         target.target_node_routing_id = target_routing_id;
         target.target_node_generation = target_generation;
         target.owner_lease_generation = target_lease_generation;
@@ -372,8 +391,8 @@ task_t<bool> raw_stateful_dispatch_t::forward_accepted (object_ref_t owner,
                                                        target, *application.application, session,
                                                        application.operation);
     } else {
-        protocol::spot_route_fence_t target{owner.key, owner.object_generation,          {},
-                                            0,         owner.authority_owner_generation, 0};
+        protocol::spot_route_fence_t target{owner.key, owner.object_generation,      {},
+                                            0,         *target_authority_generation, 0};
         target.target_node_routing_id = target_routing_id;
         target.target_node_generation = target_generation;
         target.owner_lease_generation = target_lease_generation;

@@ -1213,7 +1213,10 @@ void test_actor_return_to_entry_spot_skips_admission_and_runs_lifecycle_callback
                 .source_spot_id = source_id,
                 .source_spot_generation = source->object_generation,
                 .target_spot_id = target_id,
-                .target_fence = target_fence,
+                .target_identity = {target_fence.target_node_routing_id,
+                                    target_fence.target_node_generation,
+                                    {},
+                                    target_fence.owner_lease_generation},
                 .not_before = cleanup_boundary,
                 .leave_deadline = cleanup_boundary + node->message_follow_duration});
             std::optional<runtime::serial_execution_queue_t::async_completion_t> blocker;
@@ -1690,9 +1693,25 @@ class public_memory_authority_store_t final
     : public zlink::framework::runtime::in_memory_location_repository_t
 {
   public:
+    zlink::framework::task_t<zlink::framework::owner_lease_read_result_t>
+    read_owner_lease (std::string owner_id) override
+    {
+        if (fail_owner_lease_read)
+            throw std::runtime_error ("scripted lease read failure");
+        if (owner_lease_read)
+            return completed (*owner_lease_read);
+        return zlink::framework::runtime::in_memory_location_repository_t::read_owner_lease (
+          std::move (owner_id));
+    }
+
     zlink::framework::task_t<zlink::framework::authority_read_result_t>
     read_authority (zlink::framework::authority_key_t key, std::stop_token) override
     {
+        if (!authority_rows.empty ()) {
+            const auto current = authority_rows.find (key.value);
+            if (current != authority_rows.end ())
+                return completed (zlink::framework::authority_read_result_t{current->second});
+        }
         observed_keys.push_back (std::move (key.value));
         if (!snapshot)
             return completed (zlink::framework::authority_read_result_t{
@@ -1718,6 +1737,12 @@ class public_memory_authority_store_t final
                       zlink::framework::authority_missing_t{std::chrono::system_clock::now ()}}}});
         if (remaining_authority_conflicts != 0) {
             --remaining_authority_conflicts;
+            if (conflict_snapshot) {
+                snapshot = conflict_snapshot;
+                return completed (zlink::framework::authority_compare_exchange_result_t{
+                  zlink::framework::authority_conflict_t{
+                    zlink::framework::authority_read_result_t{*snapshot}}});
+            }
             snapshot->store_version = std::to_string (std::stoull (snapshot->store_version) + 1);
             snapshot->store_now = std::chrono::system_clock::now ();
             return completed (zlink::framework::authority_compare_exchange_result_t{
@@ -1749,6 +1774,10 @@ class public_memory_authority_store_t final
           zlink::framework::authority_scan_result_t{zlink::framework::authority_page_t{}});
     }
 
+    std::optional<zlink::framework::owner_lease_read_result_t> owner_lease_read;
+    bool fail_owner_lease_read = false;
+    std::map<std::string, zlink::framework::authority_snapshot_t> authority_rows;
+    std::optional<zlink::framework::authority_snapshot_t> conflict_snapshot;
     std::optional<zlink::framework::authority_snapshot_t> snapshot;
     std::optional<zlink::framework::location_owner_token_t> observed_target_owner;
     std::optional<zlink::framework::object_creation_target_t> observed_target_placement;
@@ -1882,6 +1911,25 @@ class memory_relocation_repository_t final : public relocation_store_port_t
 class memory_authority_store_t final : public authority_relocation_port_t
 {
   public:
+    zlink::framework::runtime::stateful::source_relocation_settlement_t settle_source_relocation (
+      const zlink::framework::runtime::stateful::relocation_authority_fence_t &fence,
+      const std::vector<zlink::framework::runtime::stateful::object_ref_t> &participants,
+      bool preserve) override
+    {
+        namespace sf = zlink::framework::runtime::stateful;
+        (void) preserve;
+        sf::source_relocation_settlement_t settled{observe_relocation (fence), {}};
+        if (settled.outcome == sf::relocation_authority_t::target_committed) {
+            for (const auto &participant : participants) {
+                if (const auto current = read (participant.kind, participant.key))
+                    settled.follow_generations.emplace (
+                      std::pair{participant.kind, participant.key},
+                      current->target.authority_owner_generation);
+            }
+        }
+        return settled;
+    }
+
     authority_publish_result_t publish (const object_ref_t &source,
                                         const object_ref_t &target,
                                         zlink::framework::location_owner_token_t target_owner,
@@ -3091,7 +3139,8 @@ void test_retire_delay_shutdown_completes_termination (test_context_t &test)
           .send_relocation_data = [] (const std::vector<protocol::relocation_data_t> &,
                                       const relocation_ingress_batch_t &)
             -> zlink::framework::task_t<bool> { co_return true; },
-          .send_application = [] (const object_ref_t &, const turn_record_t &) {},
+          .send_application = [] (const object_ref_t &, const turn_record_t &,
+                                  std::optional<std::uint64_t>) {},
           .send_cutover =
             [&] (const protocol::relocation_cutover_t &) -> zlink::framework::task_t<bool> {
               delays.request_stop ();
@@ -3327,7 +3376,7 @@ void test_public_authority_store_adapter (test_context_t &test)
     test.require (adapter.observe_relocation (captured_fence)
                     == relocation_authority_t::source_lease_expired,
                   "target commit then authority removal must end the source as expired owner");
-    test.require (adapter.preserve_relocation (captured_fence)
+    test.require (adapter.settle_source_relocation (captured_fence, {read->source}, true).outcome
                     == relocation_authority_t::source_lease_expired,
                   "Missing must never attempt source Preserve");
 
@@ -3930,9 +3979,236 @@ void test_source_relocation_failure_stops_state_chunks_and_unseals (test_context
 }
 
 /* Scripted Location Store reading of one relocation unit (01 §6.1, §10). */
+void test_source_settlement_preserve_and_members (test_context_t &test)
+{
+    namespace framework = zlink::framework;
+    using outcome = relocation_authority_t;
+    const auto now = std::chrono::system_clock::time_point{std::chrono::seconds{100}};
+    const object_ref_t actor{object_kind_t::actor, "settlement-actor", 7, 11, "mesh", "a"};
+    const relocation_authority_fence_t fence{actor.kind,          actor.key,           "1",
+                                             {"source-owner", 1}, {"target-owner", 2}, {0x1878, 2}};
+    public_memory_authority_store_t store;
+    public_authority_store_adapter_t adapter (store);
+    store.snapshot = framework::authority_snapshot_t{"2", {}, 7, 11, {"source-owner", 1}, now};
+    store.owner_lease_read =
+      framework::owner_lease_found_t{{"source-owner", 1}, now + std::chrono::seconds{1}, now};
+    test.require (adapter.settle_source_relocation (fence, {actor}, false).outcome
+                    == outcome::source_preserved,
+                  "changed source StoreVersion requires a live lease before resuming");
+    store.owner_lease_read = framework::owner_lease_missing_t{};
+    test.require (adapter.settle_source_relocation (fence, {actor}, false).outcome
+                    == outcome::source_lease_expired,
+                  "changed source StoreVersion cannot reopen an expired source");
+    store.fail_owner_lease_read = true;
+    test.require (adapter.settle_source_relocation (fence, {actor}, false).outcome
+                    == outcome::unsettled,
+                  "indeterminate source lease must keep dispatch sealed");
+    store.fail_owner_lease_read = false;
+    store.owner_lease_read =
+      framework::owner_lease_found_t{{"source-owner", 1}, now + std::chrono::seconds{1}, now};
+    store.snapshot->store_version = "1";
+    store.remaining_authority_conflicts = 1;
+    store.conflict_snapshot =
+      framework::authority_snapshot_t{"3", {}, 7, 29, {"next-owner", 3}, now};
+    const auto conflict = adapter.settle_source_relocation (fence, {actor}, true);
+    test.require (
+      conflict.outcome == outcome::target_committed && conflict.follow_generations.empty (),
+      "Preserve conflict must confirm a later owner without inventing first-target Follow");
+    const object_ref_t spot{object_kind_t::user_spot, "settlement-spot", 9, 13, "mesh", "a"};
+    const relocation_authority_fence_t whole{
+      spot.kind, spot.key, "1", {"source-owner", 1}, {"target-owner", 2}, {0x1878, 3}};
+    store.authority_rows.emplace (
+      framework::runtime::spot_authority_key (spot.key).value,
+      framework::authority_snapshot_t{"4", {}, 9, 31, {"target-owner", 2}, now});
+    store.authority_rows.emplace (
+      framework::runtime::actor_authority_key (actor.key).value,
+      framework::authority_snapshot_t{"5", {}, 7, 37, {"next-owner", 3}, now});
+    const auto aggregate = adapter.settle_source_relocation (whole, {actor, spot}, false);
+    test.require (aggregate.outcome == outcome::target_committed
+                    && aggregate.follow_generations.size () == 1
+                    && aggregate.follow_generations.at ({spot.kind, spot.key}) == 31,
+                  "whole-unit primary confirms commit while each member retains only its own "
+                  "current first-target Follow");
+}
+
+void test_source_settlement_after_subsequent_moves (test_context_t &test)
+{
+    namespace framework = zlink::framework;
+    namespace protocol = framework::runtime::protocol;
+    for (const std::string_view scenario :
+         {"target", "target-normalized", "chain", "chain-normalized", "return-target",
+          "source-restarted", "target-restarted", "different-object", "same-generation",
+          "lower-generation", "source-owner", "target-same-generation",
+          "target-different-object"}) {
+        const bool target_current =
+          scenario == "target" || scenario == "target-normalized" || scenario == "return-target";
+        const bool invalid = scenario == "different-object" || scenario == "same-generation"
+                             || scenario == "lower-generation" || scenario == "source-owner"
+                             || scenario == "target-same-generation"
+                             || scenario == "target-different-object";
+        stateful_object_runtime_t objects;
+        objects.configure_relocation_state (
+          [] (const object_ref_t &, const std::string &, std::stop_token) {
+              return std::vector<std::uint8_t>{0x41};
+          },
+          [] (const frozen_object_state_t &, const object_ref_t &, std::stop_token) {
+              return true;
+          });
+        const auto actor = create_actor (objects, "chain-actor");
+        public_memory_authority_store_t store;
+        store.snapshot = framework::authority_snapshot_t{"1",
+                                                         {},
+                                                         actor.object_generation,
+                                                         actor.authority_owner_generation,
+                                                         {"source-owner", 1},
+                                                         std::chrono::system_clock::now ()};
+        store.retarget_authority_generation_advance = 9;
+        auto authority = std::make_shared<public_authority_store_adapter_t> (store);
+        auto roots = std::make_shared<memory_relocation_repository_t> ();
+        std::mutex delay_mutex;
+        framework::detail::delay_owner_t delays (delay_mutex);
+        maintenance_runtime_t relocation (objects, authority, roots);
+        relocation.bind_delay_owner (delays);
+        int committed = 0;
+        int unavailable = 0;
+        int cutover_calls = 0;
+        std::vector<std::uint64_t> forwarded_generations;
+        relocation.attach_committed_terminal ([&] (const object_ref_t &) { ++committed; });
+        relocation.attach_unavailable_terminal ([&] (const object_ref_t &) { ++unavailable; });
+        eligible_relocation_unit_t::canonical_wire_context_t wire{
+          .relocation = {0x1878, 1},
+          .target_attempt_generation = 1,
+          .coordinator = {"source-owner", 1, {'s'}, 1, "1"},
+          .target_node_routing_id = {'b'},
+          .target_node_generation = 1,
+          .application_version = 1,
+          .prepare_target = [] (const std::vector<frozen_object_state_t> &,
+                                const relocation_payload_manifest_t &)
+            -> framework::task_t<relocation_reason_t> { co_return relocation_reason_t::none; },
+          .send_state_chunk = [] (const protocol::relocation_state_t &) -> framework::task_t<bool> {
+              co_return true;
+          },
+          .send_relocation_data =
+            [] (const std::vector<protocol::relocation_data_t> &,
+                const relocation_ingress_batch_t &) -> framework::task_t<bool> { co_return true; },
+          .send_application =
+            [&] (const object_ref_t &, const turn_record_t &,
+                 std::optional<std::uint64_t> generation) {
+                if (generation)
+                    forwarded_generations.push_back (*generation);
+            },
+          .send_cutover = [&] (const protocol::relocation_cutover_t &) -> framework::task_t<bool> {
+              ++cutover_calls;
+              // Complete A->B->C before the source's first authority read.
+              // Provider CAS terminals, rather than elapsed time, establish the order.
+              std::vector<framework::location_owner_token_t> owners{{"target-owner", 2}};
+              if (!target_current || scenario == "return-target")
+                  owners.push_back (scenario == "source-restarted"
+                                      ? framework::location_owner_token_t{"source-owner", 4}
+                                    : scenario == "target-restarted"
+                                      ? framework::location_owner_token_t{"target-owner", 4}
+                                      : framework::location_owner_token_t{"next-owner", 3});
+              if (scenario == "return-target")
+                  owners.push_back ({"target-owner", 2});
+              for (const auto &owner : owners) {
+                  const auto exchanged = await_task (store.compare_exchange_authority (
+                    framework::runtime::actor_authority_key (actor.key),
+                    store.snapshot->store_version,
+                    framework::authority_retarget_t{
+                      {}, {"mesh", framework::node_rid_t::from_string (owner.owner_id), 1, owner}},
+                    {}));
+                  test.require (std::holds_alternative<framework::authority_stored_t> (exchanged),
+                                "chain fixture must commit each owner transition");
+              }
+              if (scenario == "target-normalized" || scenario == "chain-normalized") {
+                  const auto normalized = await_task (store.compare_exchange_authority (
+                    framework::runtime::actor_authority_key (actor.key),
+                    store.snapshot->store_version, framework::authority_put_t{{}}, {}));
+                  test.require (std::holds_alternative<framework::authority_stored_t> (normalized),
+                                "chain fixture must normalize authority before source read");
+              }
+              if (scenario == "different-object")
+                  ++store.snapshot->object_generation;
+              if (scenario == "same-generation")
+                  store.snapshot->authority_owner_generation = actor.authority_owner_generation;
+              if (scenario == "lower-generation")
+                  store.snapshot->authority_owner_generation = 0;
+              if (scenario == "source-owner")
+                  store.snapshot->owner = {"source-owner", 1};
+              if (scenario == "target-same-generation" || scenario == "target-different-object") {
+                  store.snapshot->owner = {"target-owner", 2};
+                  if (scenario == "target-same-generation")
+                      store.snapshot->authority_owner_generation = actor.authority_owner_generation;
+                  else
+                      ++store.snapshot->object_generation;
+              }
+              co_return true;
+          },
+          .restore_deadline = std::chrono::steady_clock::time_point::max (),
+          .abort_target_before_cutover = [] { return true; }};
+        const auto result = await_task (relocation.relocate (
+          actor, "target-owner", {"target-owner", 2}, 1024 * 1024, digest_with (0x41), wire));
+        std::cerr << "source-settlement " << scenario
+                  << " terminal=" << static_cast<int> (result.terminal)
+                  << " committed=" << committed << " unavailable=" << unavailable
+                  << " cutovers=" << cutover_calls
+                  << " observed-owner=" << store.snapshot->owner.owner_id << '/'
+                  << store.snapshot->owner.lease_generation
+                  << " object-generation=" << store.snapshot->object_generation
+                  << " source-authority=" << actor.authority_owner_generation
+                  << " observed-authority=" << store.snapshot->authority_owner_generation << '\n';
+        test.require (cutover_calls == 1 && store.snapshot->store_version != "1",
+                      "source settlement fixture must reach the completed target CAS chain");
+        test.require (
+          result.terminal
+            == (invalid ? relocation_terminal_t::data_lost : relocation_terminal_t::completed),
+          "source settlement must confirm a chain and reject an invalid tenure");
+        test.require (committed == (invalid ? 0 : 1) && unavailable == (invalid ? 1 : 0),
+                      "source settlement must apply exactly one committed or failed cleanup");
+        (void) objects.enqueue (actor, turn_domain_t::application, {1, {0x42}});
+        const auto claim = objects.try_claim (actor, turn_domain_t::application);
+        test.require (claim.first != stateful_error_t::none || !claim.second,
+                      "a subsequent owner move must never reopen source dispatch");
+        if (claim.second)
+            (void) objects.complete_claim (actor, turn_domain_t::application);
+        if (!invalid) {
+            test.require (forwarded_generations.size () == (target_current ? 1u : 0u),
+                          "only the first target's current owner tenure may receive Follow");
+            if (target_current && !forwarded_generations.empty ())
+                test.require (forwarded_generations.front ()
+                                == store.snapshot->authority_owner_generation,
+                              "Follow must use the observed current target generation");
+        }
+        delays.stop_and_join ();
+    }
+}
+
 class settlement_authority_t final : public authority_relocation_port_t
 {
   public:
+    source_relocation_settlement_t
+    settle_source_relocation (const relocation_authority_fence_t &fence,
+                              const std::vector<object_ref_t> &participants,
+                              bool preserve) override
+    {
+        std::lock_guard lock (mutex);
+        observed = fence;
+        relocation_authority_t outcome;
+        if (preserve) {
+            ++preserve_calls;
+            outcome = preserved_authority;
+        } else if (settle_after_observes != 0 && ++observe_calls < settle_after_observes)
+            outcome = relocation_authority_t::unsettled;
+        else
+            outcome = observed_authority;
+        source_relocation_settlement_t settled{outcome, {}};
+        if (outcome == relocation_authority_t::target_committed)
+            for (const auto &participant : participants)
+                settled.follow_generations.emplace (std::pair{participant.kind, participant.key},
+                                                    participant.authority_owner_generation);
+        return settled;
+    }
+
     authority_publish_result_t publish (const object_ref_t &,
                                         const object_ref_t &,
                                         zlink::framework::location_owner_token_t,
@@ -3963,12 +4239,6 @@ class settlement_authority_t final : public authority_relocation_port_t
         return observed_authority;
     }
 
-    relocation_authority_t preserve_relocation (const relocation_authority_fence_t &) override
-    {
-        std::lock_guard lock (mutex);
-        ++preserve_calls;
-        return preserved_authority;
-    }
 
     std::mutex mutex;
     std::optional<relocation_authority_fence_t> observed;
@@ -3979,7 +4249,8 @@ class settlement_authority_t final : public authority_relocation_port_t
     int settle_after_observes = 0;
 };
 
-void test_boundary_application_preserves_original_reply (test_context_t &test)
+void test_boundary_application_preserves_original_reply (test_context_t &test,
+                                                         bool no_follow = false)
 {
     using namespace std::chrono_literals;
     namespace framework = zlink::framework;
@@ -4040,6 +4311,7 @@ void test_boundary_application_preserves_original_reply (test_context_t &test)
     const auto actor = create_actor (objects, "late-reply", "late-source");
     auto relocated = actor;
     relocated.node_id = "late-target";
+    relocated.authority_owner_generation += 8;
     // Relocation-flow §4.3: the temporary queue is fenced by the captured source.
     const auto resolver = [] (const accepted_record_authority_query_t &query)
       -> std::optional<accepted_record_authority_t> {
@@ -4072,7 +4344,8 @@ void test_boundary_application_preserves_original_reply (test_context_t &test)
                               == turn.application_record->operation.low,
                             "accepted ingress must retain its original reply route");
           submissions.push_back (ingress.forward_accepted (owner, turn, dst.node_routing_id,
-                                                           dst.lifecycle_generation, 1, 5s));
+                                                           dst.lifecycle_generation, 1, 5s,
+                                                           relocated.authority_owner_generation));
       });
     test.require (boundary.first == stateful_error_t::none, "late ingress boundary must open");
     std::atomic<int> completed{0};
@@ -4096,7 +4369,14 @@ void test_boundary_application_preserves_original_reply (test_context_t &test)
              actor.authority_owner_generation, 1},
             {"ActorPacket", "application/json", {static_cast<std::uint8_t> (id)}}, 5s,
             [&, id] (foundation::operation_terminal_t terminal, std::vector<std::uint8_t> bytes) {
-                if (id == 91) {
+                if (id == 92) {
+                    reply_matches =
+                      reply_matches
+                      && terminal == foundation::operation_terminal_t::transport_failed
+                      && protocol::decode_reply_header (bytes).terminal_result
+                           == static_cast<std::uint32_t> (
+                             protocol::request_terminal_result::conflict);
+                } else if (id == 91) {
                     reply_matches =
                       reply_matches
                       && terminal == foundation::operation_terminal_t::transport_failed
@@ -4119,6 +4399,8 @@ void test_boundary_application_preserves_original_reply (test_context_t &test)
             return false;
         test.require (await_task (std::move (submissions.back ())),
                       "accepted ingress must use the application transport");
+        if (id == 92)
+            return true;
         const auto delivered = pump_ingress (destination, relocated);
         test.require (delivered, "forwarded application must retain the target fence");
         return delivered;
@@ -4159,11 +4441,33 @@ void test_boundary_application_preserves_original_reply (test_context_t &test)
     test.require (restored.try_claim (relocated, turn_domain_t::application).first
                     == stateful_error_t::moving,
                   "late ingress before owner commit must remain gated");
-    test.require (restored.commit_relocation_restore (relocated, identity) == stateful_error_t::none
-                    && objects.finalize_relocation_cutover (sealed.seal.token)
-                         == stateful_error_t::none,
-                  "owner commit must release the target queue and source retained copy");
+    test.require (
+      restored.commit_relocation_restore (relocated, identity) == stateful_error_t::none
+        && objects.finalize_relocation_cutover (
+             sealed.seal.token,
+             [&, no_follow] (const object_ref_t &owner, const turn_record_t &turn) {
+                 submissions.push_back (ingress.forward_accepted (
+                   owner, turn, dst.node_routing_id, dst.lifecycle_generation, 1, 5s,
+                   no_follow ? std::nullopt
+                             : std::optional<std::uint64_t>{relocated.authority_owner_generation}));
+             })
+             == stateful_error_t::none,
+      "owner commit must release the target queue and source retained copy");
     ingress.release_relocated_payloads (actor);
+    if (no_follow) {
+        test.require (request (92) && pump_until ([&] { return completed.load () == 1; }),
+                      "late noFollow request must receive Unavailable before the earlier target "
+                      "request completes");
+        test.require (await_task (target.send_to_actor (
+                        src.node_routing_id, std::nullopt,
+                        {actor.key, actor.object_generation, src.node_routing_id,
+                         src.lifecycle_generation, actor.authority_owner_generation, 1},
+                        {"ActorPacket", "application/json", {93}}, std::nullopt,
+                        protocol::wire_operation_id_t{0x1087, 93}))
+                        && pump_ingress (ingress, actor)
+                        && await_task (std::move (submissions.back ())),
+                      "late noFollow send must discard only its own accepted record");
+    }
     for (std::uint64_t id : {1u, 2u}) {
         const auto [error, delivery] = destination.try_claim (relocated);
         test.require (error == stateful_error_t::none && delivery
@@ -4173,6 +4477,8 @@ void test_boundary_application_preserves_original_reply (test_context_t &test)
             (void) await_task (destination.complete_async (*delivery));
     }
     for (std::uint64_t id : {77u, 80u, 90u, 91u}) {
+        if (no_follow && id >= 90)
+            break;
         if ((id == 90 || id == 91) && !request (id))
             return;
         const auto [error, delivery] = destination.try_claim (relocated);
@@ -4194,13 +4500,13 @@ void test_boundary_application_preserves_original_reply (test_context_t &test)
               "target reply must complete");
         test.require (pump_until ([&] {
                           return completed.load ()
-                                 == static_cast<int> ((id == 77 || id == 80) ? 1
+                                 == static_cast<int> ((id == 77 || id == 80) ? (no_follow ? 2 : 1)
                                                       : id == 90             ? 2
                                                                              : 3);
                       }),
                       "forwarded reply must complete the original requester once");
     }
-    test.require (reply_matches && completed == 3
+    test.require (reply_matches && completed == (no_follow ? 2 : 3)
                     && objects.pending (actor, turn_domain_t::application) == 0,
                   "original reply payloads must survive forwarding without retained source work");
     (void) source.unregister_local_operation (occupied);
@@ -4344,7 +4650,7 @@ void test_cutover_replays_over_selected_network_route (test_context_t &test)
           co_return true;
       },
       .send_application =
-        [] (const object_ref_t &, const turn_record_t &) {
+        [] (const object_ref_t &, const turn_record_t &, std::optional<std::uint64_t>) {
             assert (false && "network fixture submits no post-boundary application record");
         },
       .send_cutover =
@@ -4490,7 +4796,8 @@ void test_source_relocation_settles_by_authority (test_context_t &test)
               co_return true;
           },
           .send_application =
-            [&outcome] (const object_ref_t &, const turn_record_t &record) {
+            [&outcome] (const object_ref_t &, const turn_record_t &record,
+                        std::optional<std::uint64_t>) {
                 if (record.application_record
                     && record.application_record->operation
                          == protocol::wire_operation_id_t{0x1087, 0x44}
@@ -6079,7 +6386,12 @@ void test_return_actor_relocation_replaces_departed_spot_instance (
           source_actor, returned_source,
           zlink::framework::spot_route_t{zlink::framework::node_rid_t::from_string ("node-b"),
                                          zlink::framework::spot_id_t ("spot-b"), "entry"},
-          source_fence, target_fence, "return-a-b");
+          source_fence,
+          {target_fence.target_node_routing_id,
+           target_fence.target_node_generation,
+           {},
+           target_fence.owner_lease_generation},
+          target_fence.authority_owner_generation, "return-a-b");
         source_completion.result ().value ();
     }
     const auto returned = returning.result ().value ();
@@ -7160,6 +7472,12 @@ int main (int argc, char **argv)
         }
     } executor_shutdown;
     test_context_t test;
+    if (argc == 2 && std::string_view (argv[1]) == "--source-settlement-chain") {
+        test_source_settlement_after_subsequent_moves (test);
+        test_source_settlement_preserve_and_members (test);
+        std::cerr << "Source settlement chain cases=18 failures=" << test.failures << '\n';
+        return test.failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
     if (argc == 2 && std::string_view (argv[1]) == "--queue-lifetime") {
         test_pending_actor_turn_survives_queue_removal (test);
         test_pending_actor_turn_survives_queue_removal (test, true);
@@ -7239,9 +7557,12 @@ int main (int argc, char **argv)
     test_public_authority_store_adapter (test);
     test_source_relocation_failure_stops_state_chunks_and_unseals (test);
     test_boundary_application_preserves_original_reply (test);
+    test_boundary_application_preserves_original_reply (test, true);
     test_boundary_preserve_restores_acceptance_order (test);
     test_cutover_replays_over_selected_network_route (test);
     test_source_relocation_settles_by_authority (test);
+    test_source_settlement_after_subsequent_moves (test);
+    test_source_settlement_preserve_and_members (test);
     test_relocation_target_cutover_and_authority_settlement (test);
     test_source_completion_wait_scope (test);
     test_pending_actor_turn_survives_queue_removal (test);
