@@ -111,6 +111,12 @@ public sealed class ActivationAdmissionRelocationRestoreTests
                     Assert.Equal(ZLinkFrameworkErrorKind.InvalidOperation, failure.Kind);
                     Assert.Contains("handler type", failure.Message, StringComparison.Ordinal);
                     Assert.False(((InitializingTimerSpot)activation.Spot).Initialized);
+                    await Assert.ThrowsAsync<ZLinkConfigurationException>(async () =>
+                        await activation.AddTimer<InitializingTimerHandler>(
+                            "pulse",
+                            TimeSpan.FromHours(1)
+                        )
+                    );
                     return;
                 }
                 await activation.InitializeRelocatedUserSpotAsync(seal, CancellationToken.None);

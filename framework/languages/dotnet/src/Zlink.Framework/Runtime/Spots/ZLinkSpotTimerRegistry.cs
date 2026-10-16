@@ -83,13 +83,12 @@ internal sealed class ZLinkSpotTimerRegistry(
         CancellationToken cancellationToken
     )
     {
-        var initializing = RelocatedInitializationScope.IsActiveFor(this);
         return _lane.RunAsync(() =>
         {
             ObjectDisposedException.ThrowIf(_closed, this);
             cancellationToken.ThrowIfCancellationRequested();
             var initializingTarget =
-                _relocationInitialization == RelocationInitialization.Restored && initializing;
+                _relocationInitialization == RelocationInitialization.Initializing;
             if (
                 _frozen
                 && _relocationInitialization != RelocationInitialization.AwaitingSnapshot
@@ -346,14 +345,27 @@ internal sealed class ZLinkSpotTimerRegistry(
         );
     }
 
-    internal IDisposable? EnterRelocatedInitialization() =>
+    internal void BeginRelocatedInitialization()
+    {
         AwaitStateLane(
             _lane.RunAsync(() =>
-                _relocationInitialization == RelocationInitialization.Restored && _frozen
-            )
-        )
-            ? new RelocatedInitializationScope(this)
-            : null;
+            {
+                if (_relocationInitialization == RelocationInitialization.Restored)
+                    _relocationInitialization = RelocationInitialization.Initializing;
+            })
+        );
+    }
+
+    internal void EndRelocatedInitialization()
+    {
+        AwaitStateLane(
+            _lane.RunAsync(() =>
+            {
+                if (_relocationInitialization == RelocationInitialization.Initializing)
+                    _relocationInitialization = RelocationInitialization.Restored;
+            })
+        );
+    }
 
     internal void Resume()
     {
@@ -462,31 +474,6 @@ internal sealed class ZLinkSpotTimerRegistry(
         None,
         AwaitingSnapshot,
         Restored,
-    }
-
-    private sealed class RelocatedInitializationScope : IDisposable
-    {
-        private static readonly AsyncLocal<RelocatedInitializationScope?> Current = new();
-        private readonly ZLinkSpotTimerRegistry _registry;
-        private readonly RelocatedInitializationScope? _previous;
-        private int _active = 1;
-
-        internal RelocatedInitializationScope(ZLinkSpotTimerRegistry registry)
-        {
-            _registry = registry;
-            _previous = Current.Value;
-            Current.Value = this;
-        }
-
-        internal static bool IsActiveFor(ZLinkSpotTimerRegistry registry) =>
-            Current.Value is { } scope
-            && Volatile.Read(ref scope._active) != 0
-            && ReferenceEquals(scope._registry, registry);
-
-        public void Dispose()
-        {
-            Interlocked.Exchange(ref _active, 0);
-            Current.Value = _previous;
-        }
+        Initializing,
     }
 }

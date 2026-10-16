@@ -618,7 +618,7 @@ public sealed class TimerLifecycleTests
             static (_, _, _, _, _) => ValueTask.CompletedTask
         );
 
-        using var initialization = target.EnterRelocatedInitialization();
+        target.BeginRelocatedInitialization();
         var configured = await target.AddAsync(
             "configured",
             TimeSpan.FromHours(differentRegistrationSettings ? 2 : 1),
@@ -650,6 +650,7 @@ public sealed class TimerLifecycleTests
         Assert.Equal(expected["configured"].Timer, restored["configured"].Timer);
         Assert.Equal(expected["dynamic-source-only"].Timer, restored["dynamic-source-only"].Timer);
 
+        target.EndRelocatedInitialization();
         source.Resume();
         target.Resume();
         await source.DisposeAsync();
@@ -697,10 +698,11 @@ public sealed class TimerLifecycleTests
             restorePending: true
         );
         var first = await AddTimerAsync(registry, "local");
-        using var initialization = registry.EnterRelocatedInitialization();
-        Assert.Null(initialization);
+        registry.BeginRelocatedInitialization();
         var second = await AddTimerAsync(registry, "local");
+        registry.EndRelocatedInitialization();
         Assert.NotSame(first, second);
+        Assert.Equal(2, registry.FreezeRelocation().Count);
     }
 
     private static ValueTask<IZLinkTimer> AddTimerAsync(

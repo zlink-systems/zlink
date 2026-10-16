@@ -374,8 +374,15 @@ internal abstract partial class ZLinkSpotActivation
             admissionSeal.QueueSeal,
             static async (activation, ct) =>
             {
-                using var timers = activation._timers.EnterRelocatedInitialization();
-                await activation.UserSpot.OnInitializeAsync(ct).ConfigureAwait(false);
+                activation._timers.BeginRelocatedInitialization();
+                try
+                {
+                    await activation.UserSpot.OnInitializeAsync(ct).ConfigureAwait(false);
+                }
+                finally
+                {
+                    activation._timers.EndRelocatedInitialization();
+                }
             },
             cancellationToken
         );
@@ -590,8 +597,15 @@ internal abstract partial class ZLinkSpotActivation
         return ExecuteSerializedAsync(
             static async (activation, state, ct) =>
             {
-                using var timers = activation._timers.EnterRelocatedInitialization();
-                await state.OnInitializeAsync(ct).ConfigureAwait(false);
+                activation._timers.BeginRelocatedInitialization();
+                try
+                {
+                    await state.OnInitializeAsync(ct).ConfigureAwait(false);
+                }
+                finally
+                {
+                    activation._timers.EndRelocatedInitialization();
+                }
             },
             InstanceSpot,
             cancellationToken

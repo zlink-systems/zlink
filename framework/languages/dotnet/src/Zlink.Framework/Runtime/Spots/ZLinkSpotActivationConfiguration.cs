@@ -13,10 +13,17 @@ internal abstract partial class ZLinkSpotActivation
     {
         if (logicalTimers is not null)
             await RestoreLogicalTimersAsync(logicalTimers).ConfigureAwait(false);
-        using var timers = _timers.EnterRelocatedInitialization();
-        foreach (var handler in handlers)
-            await ApplyScannedHandlerAsync(handler, cancellationToken).ConfigureAwait(false);
-        configure();
+        _timers.BeginRelocatedInitialization();
+        try
+        {
+            foreach (var handler in handlers)
+                await ApplyScannedHandlerAsync(handler, cancellationToken).ConfigureAwait(false);
+            configure();
+        }
+        finally
+        {
+            _timers.EndRelocatedInitialization();
+        }
     }
 
     protected void AddPacketCore<THandler>()
