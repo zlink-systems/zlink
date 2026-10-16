@@ -63,6 +63,8 @@ Use `./run-e2e.sh --check-structure` or `pwsh -NoProfile -File ./run-e2e.ps1 -Ch
 
 Public Framework 0.30.0 can fail cross-node deferred Actor join with `DATA_LOST` (`target rejected canonical relocation: 35`, #1729). Host relocation has also returned `BLOCKED/RELOCATION_FAILED` during the `update` scenario; WSL has also observed `RELOCATED` with `safeToShutdown=false` until the control wait expired. The underlying relocation causes remain unconfirmed. These failures prevent full e2e acceptance on 0.30.0. The template pins 0.30.1; validate all scenarios with that package before deployment.
 
+Message Follow is explicitly configured for 30 seconds. The `SAFE_TO_SHUTDOWN` observation budget is that period plus the existing relocation budget. Update waits for replacement `READY`, then completes a hand at a new table; normal placement may select either live Table node.
+
 ## Deployment sequence
 
 1. Provision Redis and use one shared, deployment-specific key prefix in the node configuration files. Set mesh endpoints reachable by all nodes and a client-reachable Session stream endpoint.

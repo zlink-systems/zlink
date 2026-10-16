@@ -181,7 +181,11 @@ public final class Nodes implements AutoCloseable {
         }
 
         String waitFor(String prefix) throws Exception {
-            long expires = System.nanoTime() + TimeUnit.SECONDS.toNanos(Control.PROCESS_SECONDS);
+            long expires =
+                    System.nanoTime()
+                            + (prefix.equals(Control.SAFE_TO_SHUTDOWN)
+                                    ? Control.SAFE_DEADLINE.toNanos()
+                                    : TimeUnit.SECONDS.toNanos(Control.PROCESS_SECONDS));
             while (true) {
                 var line =
                         output.poll(Math.max(0, expires - System.nanoTime()), TimeUnit.NANOSECONDS);

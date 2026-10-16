@@ -60,6 +60,8 @@ For a structure-only check, run `build/bin/my-game-e2e --check-structure`. The c
 
 Version 0.30.1 is the required release version. Windows and WSL builds against public 0.30.0 succeed, but runtime acceptance is blocked. After a deferred join to the Table completes, the first TableView pushed from `on_actor_joined` never reaches the client and no error is recorded ([#1786](https://github.com/zlink-systems/zlink/issues/1786)). Node shutdown reports TeardownFailed, and the C++ lifecycle status has no `SafeToShutdown` field ([#1740](https://github.com/zlink-systems/zlink/issues/1740)). A C++ Session cannot yet send a typed reply it creates, so `SessionInfoRequest` is answered with a push ([#1785](https://github.com/zlink-systems/zlink/issues/1785)). The template does not compensate for these Framework failures.
 
+Message Follow is explicitly configured for 30 seconds. The `SAFE_TO_SHUTDOWN` observation budget is that period plus the existing relocation budget. Update waits for replacement `READY`, then completes a hand at a new table; normal placement may select either live Table node.
+
 ## Deployment sequence
 
 Start Redis, Table A, Table B, then Session. Set deployment-specific Redis endpoints and a unique key prefix in all configurations. Both Table processes register Entry, Player and Table factories in `my-game-tables`; Session hosts only the `players` STREAM listener and mesh object client.

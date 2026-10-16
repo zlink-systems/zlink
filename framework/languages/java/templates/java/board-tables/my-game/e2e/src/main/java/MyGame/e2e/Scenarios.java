@@ -101,10 +101,6 @@ public final class Scenarios {
     }
 
     static void run(Scenario id, Nodes nodes) throws Exception {
-        run(id, nodes, null);
-    }
-
-    private static void run(Scenario id, Nodes nodes, String expectedNode) throws Exception {
         String suffix = UUID.randomUUID().toString(), tableId = "table-" + suffix;
         var p1 = new Client(nodes.endpoint, "p1-" + suffix, tableId);
         var p2 = new Client(nodes.endpoint, "p2-" + suffix, tableId);
@@ -112,10 +108,6 @@ public final class Scenarios {
         try {
             var first = p1.connect();
             var second = p2.connect();
-            if (expectedNode != null)
-                check(
-                        first.nodeId().equals(expectedNode) && second.nodeId().equals(expectedNode),
-                        "New work was not hosted by the replacement node");
             check(
                     first.yourSeat() == 0
                             && first.seats().size() == 1
@@ -214,7 +206,7 @@ public final class Scenarios {
             result(result1, List.of(cards1.cards(), cards2.cards()), List.of(bet1, SECOND_BET));
             if (id == Scenario.UPDATE) {
                 nodes.replace(before1.nodeId());
-                run(Scenario.TABLE, nodes, before1.nodeId());
+                run(Scenario.TABLE, nodes);
             }
         } catch (Exception failure) {
             primary = failure;

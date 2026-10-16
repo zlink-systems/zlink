@@ -32,6 +32,8 @@ struct Limits
     static constexpr auto packet = std::chrono::seconds (10);
     static constexpr auto startup = std::chrono::seconds (30);
     static constexpr auto relocation = std::chrono::seconds (30);
+    static constexpr auto message_follow = std::chrono::seconds (30);
+    static constexpr auto safe = message_follow + relocation;
     static constexpr auto shutdown = std::chrono::seconds (30);
     static constexpr std::size_t observation_capacity = 128;
 };
@@ -58,16 +60,14 @@ struct StartHandRequest
     static constexpr auto packet_name = "StartHandRequest";
 };
 template <class T>
-    requires (std::is_same_v<T, SessionInfoRequest> || std::is_same_v<T, TableViewRequest>
-              || std::is_same_v<T, StartHandRequest>)
-void to_json (nlohmann::json &j, const T &)
+requires (std::is_same_v<T, SessionInfoRequest> || std::is_same_v<T, TableViewRequest>
+          || std::is_same_v<T, StartHandRequest>) void to_json (nlohmann::json &j, const T &)
 {
     j = nlohmann::json::object ();
 }
 template <class T>
-    requires (std::is_same_v<T, SessionInfoRequest> || std::is_same_v<T, TableViewRequest>
-              || std::is_same_v<T, StartHandRequest>)
-void from_json (const nlohmann::json &, T &)
+requires (std::is_same_v<T, SessionInfoRequest> || std::is_same_v<T, TableViewRequest>
+          || std::is_same_v<T, StartHandRequest>) void from_json (const nlohmann::json &, T &)
 {
 }
 struct SessionInfo

@@ -1,5 +1,6 @@
 #pragma once
 #include "server/shared/config.hpp"
+#include <algorithm>
 #include <set>
 #include <array>
 
@@ -121,6 +122,20 @@ inline void check_structure (const std::filesystem::path &root)
         }
         require (roles.at (owner) == "table", "Table owner cannot be a Session process");
     }
+    const auto &spots = j.at ("spots");
+    require (std::any_of (spots.begin (), spots.end (),
+                          [] (const auto &spot) {
+                              return spot.at ("kind") == "user" && spot.at ("type") == Names::table
+                                     && spot.value ("dynamic", false);
+                          }),
+             "Missing dynamic Table family");
+    for (const auto &[id, role] : roles)
+        if (role == "table")
+            require (std::any_of (spots.begin (), spots.end (),
+                                  [&id] (const auto &spot) {
+                                      return spot.at ("kind") == "entry" && spot.at ("owner") == id;
+                                  }),
+                     "Table node lacks Entry Spot: " + id);
     for (const auto &edge : j.at ("edges")) {
         require (nodes.contains (nonempty (edge, "from")) && nodes.contains (nonempty (edge, "to")),
                  "Unknown edge endpoint");

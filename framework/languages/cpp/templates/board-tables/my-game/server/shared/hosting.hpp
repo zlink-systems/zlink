@@ -92,7 +92,7 @@ class NodeControl final : public fx::hosted_service_t
                               else if (safe_to_shutdown (observed.status))
                                   safe->complete (fx::result_t<void>::success ());
                           });
-                        await_host (safe->task (), Limits::relocation);
+                        await_host (safe->task (), Limits::safe);
                         observation->close ();
                         std::cout << Control::safe << std::endl;
                     } else if (command == Control::shutdown) {
@@ -137,6 +137,7 @@ inline fx::zlink_framework_options_t &configure_host (fx::app_t &app, const Node
       });
     auto &options = app.add_zlink_framework ();
     options.services ().add_singleton (std::make_unique<NodeConfig> (config));
+    options.set_message_follow_duration (Limits::message_follow);
     options.configure_dispatch ().message_flow (fx::message_flow_log_mode_t::normal);
     options.add_location_store<fx::redis::redis_location_store_t> ()
       .set_connection_string (config.RedisEndpoint)

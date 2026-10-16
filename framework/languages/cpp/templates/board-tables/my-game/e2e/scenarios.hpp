@@ -154,7 +154,7 @@ inline void update (const std::string &endpoint, World &world)
     source.command (Control::drain);
     source.wait_line (Control::requested, Limits::relocation);
     source.wait_line (Control::relocated, Limits::relocation);
-    source.wait_line (Control::safe, Limits::relocation);
+    source.wait_line (Control::safe, Limits::safe);
     require (a.info () == ai && b.info () == bi, "Drain changed client identity");
     a.clear ();
     b.clear ();
