@@ -266,7 +266,7 @@ TEST (CppFrameworkMeshSelectedRoute, UpdateRequiresAdmittedLifecycle)
                        topology.admit (incoming, {2}, incoming, now, command));
             const auto peer = topology.peer (incoming.node_routing_id);
             if (command == protocol::command::update) {
-                EXPECT_EQ (has_current, peer.has_value ());
+                EXPECT_EQ (has_current, peer != nullptr);
                 if (has_current && peer) {
                     EXPECT_EQ (baseline, peer->descriptor);
                     EXPECT_EQ (std::vector<std::uint8_t> ({1}), peer->connection_id);
