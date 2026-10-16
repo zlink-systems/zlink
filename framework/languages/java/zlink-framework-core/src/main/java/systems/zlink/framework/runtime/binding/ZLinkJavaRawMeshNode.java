@@ -1058,10 +1058,15 @@ final class ZLinkJavaRawMeshNode
 
     @Override
     public void observePeerAdmissionExpectation(
-            RoutingId peerRid, String endpoint, long lifecycleGeneration, String securityIdentity) {
+            RoutingId peerRid,
+            String endpoint,
+            long lifecycleGeneration,
+            String securityIdentity,
+            ZLinkMeshNodeObjectRole objectRole) {
         peerAdmissionExpectations.put(
                 Objects.requireNonNull(peerRid, "peerRid"),
-                new PeerAdmissionExpectation(endpoint, lifecycleGeneration, securityIdentity));
+                new PeerAdmissionExpectation(
+                        endpoint, lifecycleGeneration, securityIdentity, objectRole));
     }
 
     @Override
@@ -7677,9 +7682,15 @@ final class ZLinkJavaRawMeshNode
                                 peer.descriptor().objectRole()
                                         == ZLinkServiceNodeDescriptor.ObjectRole.CLIENT)
                 .orElseGet(
-                        () ->
-                                notRequiredPeers.contains(target)
-                                        || automaticNotRequiredPeers.containsKey(target));
+                        () -> {
+                            PeerAdmissionExpectation observed =
+                                    peerAdmissionExpectations.get(target);
+                            return notRequiredPeers.contains(target)
+                                    || automaticNotRequiredPeers.containsKey(target)
+                                    || (observed != null
+                                            && observed.objectRole()
+                                                    == ZLinkMeshNodeObjectRole.CLIENT);
+                        });
     }
 
     private static long positiveRandomLong() {
@@ -7948,8 +7959,12 @@ final class ZLinkJavaRawMeshNode
             long createdAtMs) {}
 
     private record PeerAdmissionExpectation(
-            String endpoint, long lifecycleGeneration, String securityIdentity) {
+            String endpoint,
+            long lifecycleGeneration,
+            String securityIdentity,
+            ZLinkMeshNodeObjectRole objectRole) {
         private PeerAdmissionExpectation {
+            Objects.requireNonNull(objectRole, "objectRole");
             //  lifecycleGeneration is an opaque equality token: only zero
             //  (absent) is invalid, not a negative long (spec 13 §7.1).
             if (endpoint == null
