@@ -74,6 +74,8 @@ There are four seats, and each player starts with 1000 chips. With two or more p
 
 Extend the protocol and constants in `MyGame.Shared/Contracts.cs`, and game state and decisions in `MyGame.Table/TableSpot.cs`. The Player Actor holds no copy of the game state. Add authentication before the Session binds the Actor.
 
+Message Follow is explicitly configured for 30 seconds. The `SAFE_TO_SHUTDOWN` observation budget is that period plus the existing relocation budget. Update waits for replacement `READY`, then completes a hand at a new table; normal placement may select either live Table node.
+
 ## Deployment sequence
 
 Set the Redis address and the shared key prefix in `server/config/` for each environment. Set mesh addresses reachable between nodes and STREAM addresses reachable by clients.

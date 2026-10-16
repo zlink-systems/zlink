@@ -86,7 +86,9 @@ internal sealed class ManagedProcess : IAsyncDisposable
     public async Task<string> WaitLineAsync(string prefix, CancellationToken ct)
     {
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        deadline.CancelAfter(TimeSpan.FromSeconds(30));
+        deadline.CancelAfter(
+            prefix == NodeProtocol.SafeToShutdown ? HostTiming.Safe : HostTiming.Relocation
+        );
         try
         {
             await foreach (var line in lines.Reader.ReadAllAsync(deadline.Token))

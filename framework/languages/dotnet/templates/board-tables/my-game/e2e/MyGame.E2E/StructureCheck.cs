@@ -95,7 +95,6 @@ internal static class StructureCheck
         );
         ValidateRun(document);
         var ids = new HashSet<string>(StringComparer.Ordinal);
-        var settings = new Dictionary<string, NodeSettings>(StringComparer.Ordinal);
         var prefix =
             Path.GetFullPath(root)
                 .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
@@ -130,17 +129,21 @@ internal static class StructureCheck
                 continue;
             var loaded = NodeSettings.Load(new[] { "--config", config });
             Require(loaded.Id == id, "Configuration ID differs from structure ID.");
-            settings.Add(id, loaded);
         }
         Require(Array(document, "channels").Count == 0, "This server registers no channels.");
         var spotIds = new HashSet<string>(StringComparer.Ordinal);
         var logicalIds = new HashSet<string>(StringComparer.Ordinal);
 
-        foreach (var spot in Array(document, "spots"))
+        var spots = Array(document, "spots");
+        var tableNodes = Array(document, "nodes")
+            .Where(node => Text(node, "role") == "table")
+            .Select(node => Text(node, "id"))
+            .ToHashSet(StringComparer.Ordinal);
+        foreach (var spot in spots)
         {
             Require(spotIds.Add(Text(spot, "id")), "Duplicate Spot ID.");
             var owner = Text(spot, "owner");
-            Require(settings.ContainsKey(owner), "Spot owner must reference an application node.");
+            Require(tableNodes.Contains(owner), "Spot owner must host the Table runtime.");
             var kind = Text(spot, "kind");
             if (kind == "entry")
             {
@@ -168,6 +171,21 @@ internal static class StructureCheck
             else
                 Require(logicalIds.Add(Text(spot, "logicalId")), "Duplicate logical Spot ID.");
         }
+        Require(
+            spots.Any(spot =>
+                Text(spot, "kind") == "user"
+                && Text(spot, "type") == GameNames.TableType
+                && spot!["dynamic"]?.GetValue<bool>() == true
+            ),
+            "Missing dynamic Table family."
+        );
+        foreach (var tableNode in tableNodes)
+            Require(
+                spots.Any(spot =>
+                    Text(spot, "kind") == "entry" && Text(spot, "owner") == tableNode
+                ),
+                $"Table node lacks Entry Spot: {tableNode}."
+            );
         foreach (var edge in Array(document, "edges"))
         {
             Require(
