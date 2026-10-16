@@ -11,15 +11,92 @@ const {
 const { SubmitResult } = require('../../packages/framework/dist/runtime/backend/runtime-values');
 const { encodeRoutingIdStorageHex } = require('../../packages/framework/dist/runtime/routing-id');
 const wire = require('../../packages/framework/dist/runtime/foundation/service-stateful-wire-codec');
+const {
+  ZLinkNodeRawMeshBackend
+} = require('../../packages/framework/dist/runtime/backend/node/node-raw-mesh-backend');
+const {
+  ServiceStatefulRuntime
+} = require('../../packages/framework/dist/runtime/foundation/service-stateful-runtime');
+const {
+  ZLinkMeshCompletionTable
+} = require('../../packages/framework/dist/runtime/backend/mesh-completion-table');
+const { RequestResult } = require('../../packages/framework/dist/runtime/backend/runtime-values');
+const {
+  OperationKind
+} = require('../../packages/framework/dist/runtime/foundation/service-runtime-contracts');
 
-async function relocationHarness(ids) {
+async function relocationHarness(ids, nativeBinding = false) {
   const host = new framework.ZLinkFrameworkRuntimeHost({
     registration: framework.createFrameworkRegistration()
   });
+  let backend;
+  let sessionService;
+  let stateful;
+  let bindWireSession;
+  const completions = new ZLinkMeshCompletionTable();
+  if (nativeBinding) {
+    stateful = new ServiceStatefulRuntime(
+      {
+        observePeerRoute: () => ({ generation: 2n, ready: true }),
+        observePeerRouteChanged: () => () => {},
+        observePeerConnectionIntentRemoved: () => () => {},
+        setServiceIngress() {},
+        async requestService(_target, parts) {
+          const command = wire.decodeStatefulHeader(parts[0]);
+          if (command.kind === 'boundSessionBind') {
+            bindWireSession = command.sessionRid;
+            return [
+              wire.encodeStatefulReply(
+                command.correlation,
+                RequestResult.Ok,
+                0,
+                command.binding.state === 'active'
+                  ? { kind: 'streamBind', bindingGeneration: 6n, authorityOwnerGeneration: 11n }
+                  : undefined
+              )
+            ];
+          }
+          throw new Error('unexpected Session binding command');
+        }
+      },
+      ids.owner,
+      4n
+    );
+    stateful.rememberActorRoute({
+      actor: { nodeRid: ids.source, actorId: 'opaque-relocation-actor', generation: 5n },
+      targetNodeGeneration: 2n,
+      authorityOwnerGeneration: 11n,
+      ownerLeaseGeneration: 13n
+    });
+    backend = new ZLinkNodeRawMeshBackend('mesh', ids.owner, {});
+    backend.stateful = stateful;
+    backend.setCompletionHandler((terminal, materialize) =>
+      completions.complete(terminal, materialize)
+    );
+    sessionService = backend.createStreamSessionService({});
+    sessionService.start();
+  }
   const stream = new framework.ZLinkManagedStream(
     { async bindActor() {}, async unbindActor() {} },
-    ids.session
+    ids.session,
+    undefined,
+    sessionService,
+    nativeBinding ? completions : undefined
   );
+  if (nativeBinding) {
+    sessionService.lookupActor = (_node, actorId) =>
+      backend.observeStateful(OperationKind.ActorLookup, {
+        id: 100n,
+        promise: Promise.resolve({
+          terminalResult: RequestResult.Ok,
+          failureCode: 0,
+          kindData: {
+            kind: 'actorLookupCompletion',
+            location: { actor: { actorId, generation: 5n, nodeRid: ids.source } }
+          }
+        })
+      });
+  }
   const context = host.streamBindingRuntime.createSessionContext(stream);
   const actorId = 'opaque-relocation-actor';
   await context.actors.bindOrGet({
@@ -118,8 +195,11 @@ async function relocationHarness(ids) {
       bindingGeneration: 6n
     }
   };
+  if (nativeBinding)
+    state.boundSession.sessionRid = sessionService.bindings(ids.session)[0].sessionRid;
   return {
     host,
+    bindWireSession,
     actor,
     state,
     transfer,
@@ -142,6 +222,8 @@ async function relocationHarness(ids) {
       await sourceRuntime.dispose();
       await sessionRuntime.dispose();
       await Promise.allSettled(tasks);
+      sessionService?.close();
+      await backend?.close();
     }
   };
 }
@@ -248,3 +330,23 @@ for (const mismatch of ['session', 'binding', 'actor']) {
     }
   });
 }
+
+test('native Session bind preserves RID 00000001 through command 38 and relocation command 42', async () => {
+  const ids = {
+    source: 'source',
+    owner: 'session-owner',
+    target: 'target',
+    session: RoutingId.fromHex('00000001')
+  };
+  const h = await relocationHarness(ids, true);
+  try {
+    const [outcome] = await Promise.allSettled([h.seal()]);
+    const decoded = wire.decodeSessionRelocationSeal(wire.encodeSessionRelocationSeal(h.sent[0]));
+    assert.equal(encodeRoutingIdStorageHex(decoded.session.sessionRid), '00000001');
+    assert.equal(encodeRoutingIdStorageHex(h.bindWireSession), '00000001');
+    assert.equal(outcome.status, 'fulfilled', outcome.reason?.stack);
+    await h.transfer.abortBoundSessionRouteSeal(h.actor, h.state, outcome.value);
+  } finally {
+    await h.close();
+  }
+});
