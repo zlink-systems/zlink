@@ -18,4 +18,6 @@ Use only public Framework and connector APIs and the default typed JSON serializ
 
 ## Changes and verification
 
+Use `./run-e2e.sh` or `pwsh -NoProfile -File ./run-e2e.ps1` for the default Docker build and e2e. Build-only uses `--build-only` or `-BuildOnly`. For local process debugging, use `--local` or `-Local`; add `--no-build` or `-NoBuild` to reuse a local build. Preserve stdin/stdout lifecycle control in both modes. Keep Docker build and cleanup logs in `.logs/docker-<project>/` and node logs in `.logs/run-<id>/`. Cleanup must remove only this run's containers, network and image tags, and must fail the run on errors.
+
 Keep ordered scenarios `lobby`, `hit`, `reconnect`, `update` consistent with the structure file and README commands. Validate structure before services start and test malformed input separately during development. Run build and e2e on Windows and Linux. A single intermittent failure is a defect. Preserve the first failure and Normal message-flow logs under `.logs/run-<id>/`. Cleanup only the runner's own child processes and uniquely named Compose project; cleanup failures must fail the run. Keep package versions centralized in `vcpkg.json`. Keep README and these instructions in English, with a short Korean section only at the end of README; code comments use English.

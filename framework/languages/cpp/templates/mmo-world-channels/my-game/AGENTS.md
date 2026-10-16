@@ -19,6 +19,8 @@ Use Framework's default typed JSON serializer. Do not introduce internal APIs, r
 
 ## Changes and verification
 
+Use `./run-e2e.sh` or `pwsh -NoProfile -File ./run-e2e.ps1` for the default Docker build and e2e. Build-only uses `--build-only` or `-BuildOnly`. For local process debugging, use `--local` or `-Local`; add `--no-build` or `-NoBuild` to reuse a local build. Preserve stdin/stdout lifecycle control in both modes. Keep Docker build and cleanup logs in `.logs/docker-<project>/` and node logs in `.logs/run-<id>/`. Cleanup must remove only this run's containers, network and image tags, and must fail the run on errors.
+
 Keep `worlds`, `channel`, `reconnect`, and `update` in canonical order. Maintain both runners, the structure declaration, and README commands together. Run builds and e2e on Windows and Linux/WSL. A single intermittent failure is a defect. Check actual messages and lifecycle observations; do not infer successful relocation or safe shutdown from command acceptance.
 
 Keep configurations and logs in `.logs/run-<id>/`. Preserve the first error and message-flow diagnostics. Stop only processes and Compose projects owned by the current run. Cleanup failures must fail the run. Keep source comments in English.

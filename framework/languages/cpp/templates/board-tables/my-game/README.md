@@ -1,6 +1,6 @@
 # MyGame board tables
 
-This C++ template hosts four-seat card tables on two Table node processes. The Session node binds each player to a persistent Player Actor and relays typed packets. Each Table User Spot owns its seats, chips, shuffled deck, private hands, turn and pot.
+This C++ template hosts four-seat card tables on two Table node containers. The Session node binds each player to a persistent Player Actor and relays typed packets. Each Table User Spot owns its seats, chips, shuffled deck, private hands, turn and pot.
 
 ```mermaid
 flowchart LR
@@ -11,24 +11,29 @@ flowchart LR
 
 ## Prerequisites
 
-- C++20 compiler, CMake 3.24 or later, Ninja, Git and vcpkg. On Windows, use a Visual Studio 2022 developer shell and PowerShell 7.
-- Docker with Compose v2 and a running daemon; Bash on Linux.
-- Public Framework 0.30.1 and zlink / zlink-cpp 1.19.0, pinned in `vcpkg.json`. Provide a license according to the public package's licensing rules.
+Docker with Compose v2 and a running Linux-container daemon is required. Use Bash on Linux or PowerShell 7 on Windows. The Docker build installs the C++ toolchain, CMake and vcpkg; the host does not need them for the default run.
 
-Clone the zlink repository at tag `framework-cpp/v0.30.1`. Set `VCPKG_ROOT` to your vcpkg checkout and `VCPKG_OVERLAY_PORTS` to the tagged checkout's `vcpkg/ports` directory. The official overlay supplies the zlink packages; they are not in the default vcpkg registry. This directory is otherwise standalone.
+Public Framework 0.30.1 and its binding dependencies are pinned in `vcpkg.json`. The Docker build obtains the official overlay from the corresponding `framework-cpp/v0.30.1` tag. That tag and package must be published before the pinned build can complete. Follow the public package licensing requirements.
 
 ## Build
 
-Run these commands from this directory on Linux or in a Windows developer shell:
+Build the node and runner images from this directory:
 
 ```sh
-cmake --preset default
-cmake --build --preset default
+./run-e2e.sh --build-only
 ```
 
-The executables are `build/bin/my-game-session`, `my-game-table` and `my-game-e2e` (with `.exe` on Windows). Each server accepts one configuration file argument. The two Table processes share an executable and use distinct configuration files. Listeners bind port zero; `READY` reports the endpoints published by Framework.
+The script removes its unique image tags after checking the build. Docker retains build layers for subsequent runs.
 
-## Local e2e
+On Windows, use PowerShell 7:
+
+```powershell
+pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
+```
+
+`Dockerfile` defines the Ubuntu 24.04 build and runtime base once in `UBUNTU_IMAGE`. All node roles share the multi-stage image. The runner adds Docker CLI 28.5.1 to the same runtime. These base arguments can be replaced when the deployment base image becomes available.
+
+## Docker e2e
 
 Linux:
 
@@ -44,6 +49,10 @@ pwsh -NoProfile -File ./run-e2e.ps1
 pwsh -NoProfile -File ./run-e2e.ps1 -Scenario table,reconnect,update
 ```
 
+The runner and nodes execute in containers. The script checks structure before Redis startup, then uses a unique Compose network, project, container names and Redis key prefixes. Nodes share the runner's network namespace, preserving loopback listeners and OS-assigned ports. Configuration is copied into each node before attaching stdin and stdout; `drain`, `shutdown` and lifecycle output retain their existing protocol.
+
+The runner removes its node containers. The script removes remaining containers carrying this run's label, its Compose resources and its image tags. Cleanup failures return exit code 1. Build and orchestration logs remain in `.logs/docker-<project>/`; node logs and generated configurations remain in `.logs/run-<id>/`. Unix runners use the caller UID and Docker socket group so those files remain caller-owned.
+
 The C++ runner validates actual structure files, starts an isolated Redis Compose project with an ephemeral loopback port, starts Table A, Table B and Session, and runs the selected scenarios in canonical order. Generated configurations and node logs, including message flow, remain in `.logs/run-<id>/`. Scenario and cleanup failures return exit code 1. Windows child processes have no console window.
 
 | Scenario | Assertions |
@@ -54,7 +63,27 @@ The C++ runner validates actual structure files, starts an isolated Redis Compos
 
 The fresh-table check requires both new players to observe the replacement node ID before completing a hand. The runner constrains placement through the public Table stable-type capacity.
 
-For a structure-only check, run `build/bin/my-game-e2e --check-structure`. The checker accepts valid composition extensions and reordered edges and rejects inconsistent references, configuration paths, stable types and scenario order.
+For a structure-only check, run `./run-e2e.sh --check-structure`. The checker accepts valid composition extensions and reordered edges and rejects inconsistent references, configuration paths, stable types and scenario order.
+
+## Local debugging
+
+Local processes remain available for debugging. Install a C++20 compiler, CMake 3.24+, Ninja, Git and vcpkg. Windows requires a Visual Studio 2022 developer shell. Set `VCPKG_ROOT` to vcpkg and `VCPKG_OVERLAY_PORTS` to `vcpkg/ports` in the ZLink checkout at tag `framework-cpp/v0.30.1`.
+
+Build and run local processes from this directory:
+
+```sh
+./run-e2e.sh --local
+```
+
+The script runs `cmake --preset default` and `cmake --build --preset default` before executing `build/bin/my-game-e2e`. Redis still runs in an isolated Compose project.
+
+On Windows, run:
+
+```powershell
+pwsh -NoProfile -File ./run-e2e.ps1 -Local
+```
+
+Use `--no-build` or `-NoBuild` with local mode to reuse a debugger build. Scenario selection works in both modes. Local build-only uses `--local --build-only` or `-Local -BuildOnly`.
 
 ## Known issues
 
@@ -74,6 +103,6 @@ The e2e runner sets each node's optional `TableCapacity` to the number of select
 
 ## 한국어 실행 안내
 
-C++20 compiler, CMake, Ninja, vcpkg와 Docker Compose를 준비합니다. `framework-cpp/v0.30.1` 태그 저장소의 `vcpkg/ports`를 `VCPKG_OVERLAY_PORTS`로 지정하고 `VCPKG_ROOT`를 설정한 뒤, 이 디렉터리에서 Build 명령을 실행합니다.
+Docker Compose v2와 Linux 컨테이너 데몬을 준비한다. 템플릿 디렉터리에서 Linux는 `./run-e2e.sh`, Windows는 `pwsh -NoProfile -File ./run-e2e.ps1`을 실행한다. 기본 실행은 이미지 빌드부터 runner·node 컨테이너 기동과 정리까지 수행한다. Framework 0.30.1 공개 패키지와 태그가 있어야 고정 버전 빌드를 완료할 수 있다.
 
-Linux에서는 `./run-e2e.sh`, Windows에서는 `pwsh -NoProfile -File ./run-e2e.ps1`을 실행합니다. 로그는 `.logs/run-<id>/`에 보존됩니다. 공개 0.30.0 실행에서 확인된 join·응답 전달·종료 차단 사항과 대체 node 배치 검증의 한계는 Known issues와 Local e2e에 기록되어 있습니다. 0.30.1 후보의 양쪽 환경 검증은 남아 있습니다.
+로컬 디버깅은 C++ 도구와 공식 vcpkg overlay를 설정한 뒤 `./run-e2e.sh --local` 또는 `pwsh -NoProfile -File ./run-e2e.ps1 -Local`로 실행한다. node 로그와 설정은 `.logs/run-<id>/`, Docker 빌드·정리 로그는 `.logs/docker-<project>/`에 남는다. 공개 패키지에서 확인된 차단 사항은 Known issues를 따른다.

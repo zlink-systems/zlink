@@ -14,24 +14,29 @@ flowchart LR
 
 ## Prerequisites
 
-- C++20 compiler, CMake 3.24 or later, Ninja, Git and vcpkg. Windows requires a Visual Studio 2022 developer shell.
-- Docker with Compose v2 and a running daemon; PowerShell 7 on Windows or Bash on Linux.
-- Public Framework 0.30.1 with zlink / zlink-cpp 1.19.0, pinned centrally in `vcpkg.json`. Provide a Framework license according to the public package licensing rules.
+Docker with Compose v2 and a running Linux-container daemon is required. Use Bash on Linux or PowerShell 7 on Windows. The Docker build installs the C++ toolchain, CMake and vcpkg; the host does not need them for the default run.
 
-Clone the zlink repository at tag `framework-cpp/v0.30.1`. Set `VCPKG_ROOT` to your vcpkg checkout and `VCPKG_OVERLAY_PORTS` to that tagged checkout's `vcpkg/ports` directory. These official overlay ports supply the zlink packages, which are not in the default vcpkg registry. No repository path is embedded in this template.
+Public Framework 0.30.1 and its binding dependencies are pinned in `vcpkg.json`. The Docker build obtains the official overlay from the corresponding `framework-cpp/v0.30.1` tag. That tag and package must be published before the pinned build can complete. Follow the public package licensing requirements.
 
 ## Build
 
-Run from this directory in Bash or a Windows developer shell:
+Build the node and runner images from this directory:
 
 ```sh
-cmake --preset default
-cmake --build --preset default
+./run-e2e.sh --build-only
 ```
 
-Executables are written to `build/bin/`: `my-game-session`, `my-game-town`, `my-game-instance`, and `my-game-e2e`. Each server accepts its JSON configuration path as its only argument. Node roles have separate entrypoints; the two Town processes and two Instance processes share their role's executable.
+The script removes its unique image tags after checking the build. Docker retains build layers for subsequent runs.
 
-## Local e2e
+On Windows, use PowerShell 7:
+
+```powershell
+pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
+```
+
+`Dockerfile` defines the Ubuntu 24.04 build and runtime base once in `UBUNTU_IMAGE`. All node roles share the multi-stage image. The runner adds Docker CLI 28.5.1 to the same runtime. These base arguments can be replaced when the deployment base image becomes available.
+
+## Docker e2e
 
 Linux:
 
@@ -47,7 +52,11 @@ pwsh -NoProfile -File ./run-e2e.ps1
 pwsh -NoProfile -File ./run-e2e.ps1 -Scenario channel,dungeon,reconnect,update
 ```
 
-The runner validates the actual structure files, starts Redis with an OS-assigned loopback port, starts five node processes, executes the selected scenarios and cleans up its own resources. Each run uses a unique Compose project and Redis key prefix. Configurations and stdout/stderr logs, including Normal message-flow diagnostics, remain in `.logs/run-<id>/`. Cleanup failure returns exit code 1.
+The runner and nodes execute in containers. The script checks structure before Redis startup, then uses a unique Compose network, project, container names and Redis key prefixes. Nodes share the runner's network namespace, preserving loopback listeners and OS-assigned ports. Configuration is copied into each node before attaching stdin and stdout; `drain`, `shutdown` and lifecycle output retain their existing protocol.
+
+The runner removes its node containers. The script removes remaining containers carrying this run's label, its Compose resources and its image tags. Cleanup failures return exit code 1. Build and orchestration logs remain in `.logs/docker-<project>/`; node logs and generated configurations remain in `.logs/run-<id>/`. Unix runners use the caller UID and Docker socket group so those files remain caller-owned.
+
+The runner validates the actual structure files, starts Redis with an OS-assigned loopback port, starts five node containers, executes the selected scenarios and cleans up its own resources. Each run uses a unique Compose project and Redis key prefix. Configurations and stdout/stderr logs, including Normal message-flow diagnostics, remain in `.logs/run-<id>/`. Cleanup failure returns exit code 1.
 
 | Scenario | Assertions |
 | --- | --- |
@@ -56,7 +65,27 @@ The runner validates the actual structure files, starts Redis with an OS-assigne
 | `reconnect` | Reconnect the second player with a new physical Session, retaining Actor identity, dungeon roster and stage. |
 | `update` | Drain the active Instance, observe relocation and SafeToShutdown, preserve both Sessions and dungeon state, stop and replace that Instance, then verify fresh dungeon placement there. |
 
-The three party scenarios share a fixture so each can run alone or in combination. Both Instance nodes have `DungeonCapacity: 1`; the occupied target leaves the replacement as the available owner for a fresh dungeon. Placement remains a Framework decision. `build/bin/my-game-e2e --check-structure` validates the actual files without starting Docker.
+The three party scenarios share a fixture so each can run alone or in combination. Both Instance nodes have `DungeonCapacity: 1`; the occupied target leaves the replacement as the available owner for a fresh dungeon. Placement remains a Framework decision. `./run-e2e.sh --check-structure` validates the actual files without starting Redis or game nodes.
+
+## Local debugging
+
+Local processes remain available for debugging. Install a C++20 compiler, CMake 3.24+, Ninja, Git and vcpkg. Windows requires a Visual Studio 2022 developer shell. Set `VCPKG_ROOT` to vcpkg and `VCPKG_OVERLAY_PORTS` to `vcpkg/ports` in the ZLink checkout at tag `framework-cpp/v0.30.1`.
+
+Build and run local processes from this directory:
+
+```sh
+./run-e2e.sh --local
+```
+
+The script runs `cmake --preset default` and `cmake --build --preset default` before executing `build/bin/my-game-e2e`. Redis still runs in an isolated Compose project.
+
+On Windows, run:
+
+```powershell
+pwsh -NoProfile -File ./run-e2e.ps1 -Local
+```
+
+Use `--no-build` or `-NoBuild` with local mode to reuse a debugger build. Scenario selection works in both modes. Local build-only uses `--local --build-only` or `-Local -BuildOnly`.
 
 ## Known issues
 
@@ -82,6 +111,6 @@ The e2e configuration uses one Dungeon slot per Instance. After drain, the survi
 
 ## 한국어 실행 안내
 
-Framework 0.30.1 태그의 공식 vcpkg overlay port와 C++20 빌드 환경을 준비한 뒤, 이 디렉터리에서 `cmake --preset default`, `cmake --build --preset default`를 실행합니다. Docker 데몬을 기동하고 Linux에서는 `./run-e2e.sh`, Windows에서는 `pwsh -NoProfile -File ./run-e2e.ps1`을 실행합니다.
+Docker Compose v2와 Linux 컨테이너 데몬을 준비한다. 템플릿 디렉터리에서 Linux는 `./run-e2e.sh`, Windows는 `pwsh -NoProfile -File ./run-e2e.ps1`을 실행한다. 기본 실행은 이미지 빌드부터 runner·node 컨테이너 기동과 정리까지 수행한다. Framework 0.30.1 공개 패키지와 태그가 있어야 고정 버전 빌드를 완료할 수 있다.
 
-검증은 채널 이동, 파티 던전 입장과 진행, 재접속, Instance 교체 순서로 실행됩니다. 실행별 설정과 message-flow 기록은 `.logs/run-<id>/`에 보존됩니다. 공개 패키지의 결함으로 실패하면 기록을 확인하고 수정 패키지로 검증해야 하며, 재시도나 판정 완화로 통과시키지 않습니다.
+로컬 디버깅은 C++ 도구와 공식 vcpkg overlay를 설정한 뒤 `./run-e2e.sh --local` 또는 `pwsh -NoProfile -File ./run-e2e.ps1 -Local`로 실행한다. node 로그와 설정은 `.logs/run-<id>/`, Docker 빌드·정리 로그는 `.logs/docker-<project>/`에 남는다. 공개 패키지에서 확인된 차단 사항은 Known issues를 따른다.
