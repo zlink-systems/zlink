@@ -26,7 +26,6 @@ data class NodeConfig(
     val streamEndpoint: String? = null,
     val zoneIds: List<String> = emptyList(),
     val zoneCapacity: Int = 0,
-    val bootstrap: Boolean = false,
 )
 
 object Json {
@@ -125,14 +124,11 @@ fun runNode(application: Class<*>, args: Array<String>) = runBlocking {
                     safe.complete(null)
             }
         ready.get(Control.HOST_DEADLINE.toSeconds(), java.util.concurrent.TimeUnit.SECONDS)
-        if (config.bootstrap) {
-            val spots = app.getBean(ZLinkSpotManager::class.java)
-            for (zoneId in config.zoneIds) {
-                val result =
-                    spots.kotlin().getOrCreate(zoneId, Names.ZONE).inMesh(Names.MESH).await()
-                check(result.state() != ZLinkSpotCreateState.REJECTED) {
-                    "Zone bootstrap rejected: $zoneId $result"
-                }
+        val spots = app.getBean(ZLinkSpotManager::class.java)
+        for (zoneId in config.zoneIds) {
+            val result = spots.kotlin().getOrCreate(zoneId, Names.ZONE).inMesh(Names.MESH).await()
+            check(result.state() != ZLinkSpotCreateState.REJECTED) {
+                "Zone bootstrap rejected: $zoneId $result"
             }
         }
         println(
@@ -157,7 +153,6 @@ fun runNode(application: Class<*>, args: Array<String>) = runBlocking {
             for (command in commands) {
                 when (command) {
                     Control.VACATE_ZONE -> {
-                        val spots = app.getBean(ZLinkSpotManager::class.java)
                         val spot =
                             spots
                                 .find(Rules.zoneId(Control.REPLACEMENT_X))

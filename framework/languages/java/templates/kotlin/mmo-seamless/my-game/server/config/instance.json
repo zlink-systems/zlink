@@ -5,6 +5,5 @@
   "meshEndpoint": "tcp://127.0.0.1:0",
   "streamEndpoint": null,
   "zoneIds": [],
-  "zoneCapacity": 0,
-  "bootstrap": false
+  "zoneCapacity": 0
 }
