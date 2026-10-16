@@ -16,6 +16,238 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
     private const string EphemeralTcpEndpoint = "tcp://127.0.0.1:0";
 
     [Fact]
+    public async Task OperationDeadline_ExpiresAtOccupiedTicksWithoutExpiringEarly()
+    {
+        var clock = new OperationDeadlineClock();
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = new ZLinkManagedMeshNode(
+            context,
+            MeshName,
+            deadlineTimeProvider: clock
+        );
+        const System.Reflection.BindingFlags flags =
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+        var begin = typeof(ZLinkManagedMeshNode)
+            .GetMethods(flags)
+            .Single(method =>
+                method.Name == "TryBeginOperation" && method.GetParameters().Length == 3
+            );
+        var expire = typeof(ZLinkManagedMeshNode).GetMethod("ExpireOperations", flags)!;
+        var operations = typeof(ZLinkManagedMeshNode)
+            .GetField("_operations", flags)!
+            .GetValue(node)!;
+        var count = operations.GetType().GetProperty("Count")!;
+        Assert.True(
+            (bool)
+                begin.Invoke(
+                    node,
+                    [MeshOperationKind.NodeRequest, TimeSpan.FromMilliseconds(20), null]
+                )!
+        );
+        Assert.True(
+            (bool)
+                begin.Invoke(
+                    node,
+                    [
+                        MeshOperationKind.NodeRequest,
+                        TimeSpan.FromMilliseconds(10) + TimeSpan.FromTicks(1),
+                        null,
+                    ]
+                )!
+        );
+
+        // Hot-path E3: a timer wheel rounds deadlines up to the next 1ms occupied tick.
+        var wait = typeof(ZLinkManagedMeshNode).GetMethod("OperationWaitBound", flags)!;
+        Assert.Equal(TimeSpan.FromMilliseconds(11), wait.Invoke(node, null));
+        clock.Timestamp = 9 * TimeSpan.TicksPerMillisecond;
+        expire.Invoke(node, null);
+        Assert.Equal(2, count.GetValue(operations));
+        clock.Timestamp = 10 * TimeSpan.TicksPerMillisecond;
+        expire.Invoke(node, null);
+        Assert.Equal(2, count.GetValue(operations));
+        clock.Timestamp = 11 * TimeSpan.TicksPerMillisecond;
+        expire.Invoke(node, null);
+        Assert.Equal(1, count.GetValue(operations));
+        clock.Timestamp = 20 * TimeSpan.TicksPerMillisecond;
+        expire.Invoke(node, null);
+        Assert.Equal(0, count.GetValue(operations));
+        expire.Invoke(node, null);
+        Assert.Equal(0, count.GetValue(operations));
+        Assert.Equal(TimeSpan.FromMilliseconds(100), wait.Invoke(node, null));
+    }
+
+    [Fact]
+    public async Task OperationDeadline_PreservesRoundsAndResumesABudgetedSlot()
+    {
+        var clock = new OperationDeadlineClock();
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = new ZLinkManagedMeshNode(
+            context,
+            MeshName,
+            deadlineTimeProvider: clock
+        );
+        const System.Reflection.BindingFlags flags =
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+        var type = typeof(ZLinkManagedMeshNode);
+        var begin = type.GetMethods(flags)
+            .Single(method =>
+                method.Name == "TryBeginOperation" && method.GetParameters().Length == 3
+            );
+        var expire = type.GetMethod("ExpireOperations", flags)!;
+        var operations = type.GetField("_operations", flags)!.GetValue(node)!;
+        var count = operations.GetType().GetProperty("Count")!;
+        object?[] longRegistration =
+        [
+            MeshOperationKind.NodeRequest,
+            TimeSpan.FromMilliseconds(513),
+            null,
+        ];
+        Assert.True((bool)begin.Invoke(node, longRegistration)!);
+        // Hot-path E3: occupied-slot visits cannot expire an entry with remaining rounds.
+        foreach (var tick in new[] { 1, 257, 512 })
+        {
+            clock.Timestamp = tick * TimeSpan.TicksPerMillisecond;
+            expire.Invoke(node, null);
+            Assert.Equal(1, count.GetValue(operations));
+        }
+        clock.Timestamp = 513 * TimeSpan.TicksPerMillisecond;
+        expire.Invoke(node, null);
+        Assert.Equal(0, count.GetValue(operations));
+        object?[] firstRegistration =
+        [
+            MeshOperationKind.NodeRequest,
+            TimeSpan.FromMilliseconds(1),
+            null,
+        ];
+        Assert.True((bool)begin.Invoke(node, firstRegistration)!);
+        var first = firstRegistration[2]!;
+        var token = (CancellationToken)
+            first.GetType().GetProperty("Token", flags)!.GetValue(first)!;
+        // The first terminal spends the whole management budget on the injected clock.
+        using var slowTerminal = token.Register(() =>
+            clock.Timestamp +=
+                Zlink.Framework.Runtime.Dispatch.ZLinkReceiveBatchBudget.MaximumMilliseconds
+                * TimeSpan.TicksPerMillisecond
+        );
+        for (var index = 0; index < 2; index++)
+            Assert.True(
+                (bool)
+                    begin.Invoke(
+                        node,
+                        [MeshOperationKind.NodeRequest, TimeSpan.FromMilliseconds(1), null]
+                    )!
+            );
+        clock.Timestamp = 514 * TimeSpan.TicksPerMillisecond;
+        expire.Invoke(node, null);
+        Assert.Equal(2, count.GetValue(operations));
+        expire.Invoke(node, null);
+        Assert.Equal(0, count.GetValue(operations));
+    }
+
+    [Fact]
+    public async Task OperationDeadline_RoundsOnlyVisitsYieldAtTheBudgetAndResumeFromTheCursor()
+    {
+        var clock = new OperationDeadlineClock();
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = new ZLinkManagedMeshNode(
+            context,
+            MeshName,
+            deadlineTimeProvider: clock
+        );
+        const System.Reflection.BindingFlags flags =
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+        var type = typeof(ZLinkManagedMeshNode);
+        var begin = type.GetMethods(flags)
+            .Single(method =>
+                method.Name == "TryBeginOperation" && method.GetParameters().Length == 3
+            );
+        var expire = type.GetMethod("ExpireOperations", flags)!;
+        var operations = type.GetField("_operations", flags)!.GetValue(node)!;
+        var count = operations.GetType().GetProperty("Count")!;
+        for (var index = 0; index < 8; index++)
+            Assert.True(
+                (bool)
+                    begin.Invoke(
+                        node,
+                        [MeshOperationKind.NodeRequest, TimeSpan.FromMilliseconds(257), null]
+                    )!
+            );
+        Assert.True(
+            (bool)
+                begin.Invoke(
+                    node,
+                    [MeshOperationKind.NodeRequest, TimeSpan.FromMilliseconds(1), null]
+                )!
+        );
+        // §4.2: every slot visit, a rounds-only one included, reads the management budget
+        // counted from entry; four reads exhaust it.
+        clock.Timestamp = TimeSpan.TicksPerMillisecond;
+        clock.Step = TimeSpan.TicksPerMillisecond / 4;
+        expire.Invoke(node, null);
+        Assert.Equal(9, count.GetValue(operations));
+        var turns = 1;
+        while ((int)count.GetValue(operations)! == 9)
+        {
+            Assert.True(++turns < 9);
+            expire.Invoke(node, null);
+        }
+        Assert.Equal(8, count.GetValue(operations));
+        clock.Step = 0;
+        clock.Timestamp = 257 * TimeSpan.TicksPerMillisecond;
+        expire.Invoke(node, null);
+        Assert.Equal(0, count.GetValue(operations));
+    }
+
+    private sealed class OperationDeadlineClock : TimeProvider
+    {
+        internal long Timestamp;
+        internal long Step;
+        public override long TimestampFrequency => TimeSpan.TicksPerSecond;
+
+        // Each read advances the clock by Step.
+        public override long GetTimestamp()
+        {
+            var timestamp = Timestamp;
+            Timestamp += Step;
+            return timestamp;
+        }
+
+        public override DateTimeOffset GetUtcNow() => DateTimeOffset.UnixEpoch;
+    }
+
+    [Fact]
+    public async Task OperationTerminal_OnlyTheAtomicTakeOwnerCancelsItsLifetime()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = new ZLinkManagedMeshNode(context, MeshName);
+        const System.Reflection.BindingFlags flags =
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+        var type = typeof(ZLinkManagedMeshNode);
+        var begin = type.GetMethods(flags)
+            .Single(method =>
+                method.Name == "TryBeginOperation" && method.GetParameters().Length == 3
+            );
+        object?[] registration = [MeshOperationKind.NodeRequest, TimeSpan.FromHours(1), null];
+        Assert.True((bool)begin.Invoke(node, registration)!);
+        var pending = registration[2]!;
+        var pendingType = pending.GetType();
+        var identity = (MeshOperationId)
+            pendingType.GetProperty("OperationId", flags)!.GetValue(pending)!;
+        var take = type.GetMethods(flags)
+            .Single(method =>
+                method.Name == "TryRemoveOperation"
+                && method.GetParameters()[0].ParameterType == typeof(ulong)
+            );
+        object?[] terminal = [identity.Low, null, false];
+        Assert.True((bool)take.Invoke(node, terminal)!);
+        type.GetMethod("RemoveManagedOperation", flags)!.Invoke(node, [pending]);
+        var token = (CancellationToken)pendingType.GetProperty("Token", flags)!.GetValue(pending)!;
+        Assert.False(token.IsCancellationRequested);
+        pendingType.GetMethod("Complete", flags)!.Invoke(pending, null);
+        Assert.True(token.IsCancellationRequested);
+    }
+
+    [Fact]
     public void DrainGate_SealedForShutdown_OnlyByTheShutdownOwner()
     {
         var gate = new ZLinkDrainAdmissionGate();
