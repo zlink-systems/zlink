@@ -175,7 +175,7 @@ public interface ZLinkSpotManager {
 
 ```
 
-`addSubscribe(handlerType, channelName, topic)`은 [Spot messaging §5.1](../../../03-spot-actor/02-spot-messaging.ko.md#51-subscription-등록-값과-검사-시점)의 `ChannelName`·`topic` 쌍을 실행 중 등록한다. 등록 값은 메서드 인자가 정하며 `handlerType`에 `@ZLinkSpotSubscription`이 없어도 된다. 같은 handler에 annotation이 있으면 annotation이 선언한 등록과 이 호출의 등록은 별개 subscription이다. 중복 판정과 검사 시점은 §5.1을 따른다. Kotlin은 같은 Java 메서드를 호출한다.
+`addSubscribe(handlerType, channelName, topic)`은 [Spot messaging §5.1](../../../03-spot-actor/02-spot-messaging.ko.md#51-subscription-등록-값과-검사-시점)의 `ChannelName`·`topic` 쌍을 실행 중 등록한다. 등록 값은 메서드 인자가 정하며 `handlerType`에 `@ZLinkSpotSubscription`이 없어도 된다. `@ZLinkSpotSubscription`은 .NET `ZLinkSpotSubscriptionAttribute`와 같이 `spotNodeName`·`channelName`·`topic`을 선언하고, annotation 등록의 `ChannelName`은 `channelName()`이다. 같은 handler에 annotation이 있으면 annotation이 선언한 등록과 이 호출의 등록은 별개 subscription이다. 중복 판정과 검사 시점은 §5.1을 따른다. Kotlin은 같은 Java 메서드를 호출한다.
 
 Java runtime은 Spot packet·request·subscription·timer handler를 Spot activation마다
 한 번 만들고 재사용한다. Actor send·request handler는 Actor activation마다 한 번
