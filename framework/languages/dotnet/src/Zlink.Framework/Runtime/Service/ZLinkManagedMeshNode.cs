@@ -434,7 +434,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 socketMonitor = null;
                 poller = null;
                 _stop = new CancellationTokenSource();
-                _state = MeshNodeState.Started;
+                TryTransitionStateUnderLock(MeshNodeState.Started);
                 Publish(MeshMonitorEventKind.StateChanged);
                 foreach (var intent in _peersByIntent.Values)
                     ConnectPeerCore(intent);
@@ -454,7 +454,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 _receiveFlowRegistration ??= receiveFlowRegistration;
                 _socketMonitor ??= socketMonitor;
                 _activeSocketGeneration = 0;
-                _state = MeshNodeState.Error;
+                TryTransitionStateUnderLock(MeshNodeState.Error);
                 cleanupFailure = async () =>
                 {
                     var failures = new ZLinkFailureCollector(error);
@@ -769,9 +769,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     {
         var peers = RunState(() =>
         {
-            if (_state == MeshNodeState.Draining)
+            if (!TryTransitionStateUnderLock(MeshNodeState.Draining))
                 return null;
-            _state = MeshNodeState.Draining;
             _descriptorRevision = checked(_descriptorRevision + 1);
             RebuildChannelSelectionPlansUnderLock();
             return _peersByRid.Values.ToArray();
@@ -3324,7 +3323,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         RunState(() =>
         {
             lock (_socketGate)
-                _state = MeshNodeState.Stopped;
+                TryTransitionStateUnderLock(MeshNodeState.Stopped);
         });
 
     public ValueTask DisposeAsync() =>
@@ -3352,7 +3351,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         CloseSubmissions();
         var receiveLoop = RunState(() =>
         {
-            _state = MeshNodeState.Stopped;
             _stop?.Cancel();
             SignalReceiveOwner();
             return _receiveLoop;
@@ -5487,7 +5485,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 }
                 catch (Exception)
                 {
-                    RunState(() => _state = MeshNodeState.Error);
+                    RunState(() => TryTransitionStateUnderLock(MeshNodeState.Error));
                     Publish(MeshMonitorEventKind.ProtocolError);
                 }
             }
@@ -9345,24 +9343,29 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         peer.Liveness ??= new ZLinkServiceLiveness(Stopwatch.GetTimestamp());
         peer.LastChangedMs = checked((ulong)Environment.TickCount64);
         SubmitAdmissionResponseUnderLock(peer, admissionResponse);
-        SetTopologyStateUnderLock(MeshNodeState.Ready);
+        TryTransitionStateUnderLock(MeshNodeState.Ready);
         RebuildChannelSelectionPlansUnderLock();
         Publish(MeshMonitorEventKind.PeerAdmitted, peerRid: peer.RoutingId);
         Publish(MeshMonitorEventKind.StateChanged);
     }
 
-    // Peer admission and peer loss derive the node's topology state, but a
-    // published Draining is owned by the drain (relocation or shutdown, spec
-    // 30 §14 step 1) and is never undone by remote admission traffic,
-    // transport disconnect, liveness expiry or a failed control send.
-    private void SetTopologyStateUnderLock(MeshNodeState next)
+    // The node lane owns every state transition. Stopped is terminal; peer
+    // traffic cannot undo Draining (host relocation §14). Receive failures
+    // and terminal close retain their existing transitions out of Draining.
+    private bool TryTransitionStateUnderLock(MeshNodeState next)
     {
-        if (_state != MeshNodeState.Draining)
-            _state = next;
+        if (
+            _state == MeshNodeState.Stopped
+            || _state == MeshNodeState.Draining
+                && next is not (MeshNodeState.Error or MeshNodeState.Stopped)
+        )
+            return false;
+        _state = next;
+        return true;
     }
 
     private void SetPeerLossStateUnderLock() =>
-        SetTopologyStateUnderLock(
+        TryTransitionStateUnderLock(
             _peersByRid.Values.Any(static peer => peer.Admitted)
                 ? MeshNodeState.PartialReady
                 : MeshNodeState.Started

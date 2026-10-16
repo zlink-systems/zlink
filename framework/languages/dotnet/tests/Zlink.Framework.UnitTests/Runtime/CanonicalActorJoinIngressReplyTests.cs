@@ -1215,8 +1215,12 @@ public sealed class CanonicalActorJoinIngressReplyTests
         Assert.Equal(1UL, runtime.Target.Status().AdmittedPeerCount);
     }
 
-    [Fact]
-    public async Task PumpCloseRejectsNewImmediateSendsBeforeNodeDisposal()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task PumpCloseRejectsNewImmediateSendsBeforeNodeDisposal(
+        bool publishDrainingAfterClose
+    )
     {
         await using var runtime = await ConnectedRuntime.CreateAsync(_ => SubmitResult.Ok);
         var pump = new Zlink.Framework.Runtime.Backend.DotNet.ZLinkMeshDispatchPump(
@@ -1224,6 +1228,9 @@ public sealed class CanonicalActorJoinIngressReplyTests
             runtime.Target.Completions
         );
         await pump.DisposeAsync();
+        if (publishDrainingAfterClose)
+            runtime.Target.PublishDraining();
+        Assert.Equal(MeshNodeState.Stopped, runtime.Target.Status().State);
         using var payload = Message.From(new byte[] { 1 });
         var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
             await runtime.Target.SendToNodeDirectAsync(

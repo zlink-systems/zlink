@@ -176,6 +176,7 @@
         <Compile Include="Runtime/MeshNodeRouteDispatcherTests.cs"/>
         <Compile Include="Runtime/MeshNodeRouteBatchAdmissionTests.cs"/>
         <Compile Include="Runtime/MeshNodeShutdownSealTests.cs"/>
+        <Compile Include="Runtime/MeshNodeLifecycleStateTests.cs"/>
         <Compile Include="Runtime/MeshNodeHelloSubmissionTests.cs"/>
         <Compile Include="Runtime/PublicContractSnapshotTests.cs"/>
         <Compile Include="Runtime/SerialExecutionQueueBenchmarkTests.cs"/>

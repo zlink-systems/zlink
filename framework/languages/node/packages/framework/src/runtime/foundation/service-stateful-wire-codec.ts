@@ -1,3 +1,4 @@
+import { encodeRoutingIdStorageHex } from '../routing-id';
 import { UINT64_MAX, ZlinkStreamContentType } from '@zlink-systems/stream-wire';
 import { RELOCATION_STATE_CHUNK_DATA_MAX_BYTES } from '../../contracts/Configuration/InternalDefaults';
 import { isCanonicalWireReplyTerminal } from '../framework-errors-internal';
@@ -379,7 +380,7 @@ export function serviceSessionRelocationIdentityKey(
     value.relocation.low.toString(),
     actor.actorId,
     actor.generation.toString(),
-    value.session.sessionRid,
+    encodeRoutingIdStorageHex(value.session.sessionRid),
     value.session.bindingGeneration.toString()
   ].join(':');
 }

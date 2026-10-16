@@ -1,3 +1,4 @@
+import { routingIdsEqual } from '../routing-id';
 import {
   AUTHORITY_ENVELOPE_MAX_BYTES,
   CREATION_INTENT_MAX_BYTES,
@@ -1204,7 +1205,7 @@ function sameCreationTarget(
 ): boolean {
   return (
     target.descriptor.meshName === actual.meshName &&
-    sameRid(target.descriptor.rid, actual.nodeRid) &&
+    routingIdsEqual(target.descriptor.rid, actual.nodeRid) &&
     target.lifecycleGeneration === actual.nodeLifecycleGeneration &&
     sameOwner(target.owner, actual.owner)
   );
@@ -1218,11 +1219,7 @@ function sameDescriptor(
   left: ZLinkMeshNodeDescriptorKey,
   right: ZLinkMeshNodeDescriptorKey
 ): boolean {
-  return left.meshName === right.meshName && sameRid(left.rid, right.rid);
-}
-
-function sameRid(left: unknown, right: unknown): boolean {
-  return String(left) === String(right);
+  return left.meshName === right.meshName && routingIdsEqual(left.rid, right.rid);
 }
 
 function capacityEntries(

@@ -24,9 +24,11 @@ class BrowserTestSession {
     }
     const request = payload.decode(Object);
     process.stdout.write(`${JSON.stringify({ event: 'dispatch', value: request.value })}\n`);
-    this.context.client.send(new EchoPush(request.value)).submit();
-    this.context.client.reply({ value: request.value }).submit();
-    process.stdout.write(`${JSON.stringify({ event: 'replied', value: request.value })}\n`);
+    await this.context.client.send(new EchoPush(request.value)).submit();
+    if (dispatch.canReply) {
+      await this.context.client.reply({ value: request.value }).submit();
+      process.stdout.write(`${JSON.stringify({ event: 'replied', value: request.value })}\n`);
+    }
   }
 }
 
@@ -62,7 +64,8 @@ async function main() {
     logger: false,
     abortOnError: true
   });
-  const boundEndpoint = app.get(ZLINK_FRAMEWORK_RUNTIME, { strict: false })
+  const boundEndpoint = app
+    .get(ZLINK_FRAMEWORK_RUNTIME, { strict: false })
     .getListenerStatus('stream', 'browser-test').endpoint;
   process.stdout.write(`${JSON.stringify({ event: 'ready', endpoint: boundEndpoint })}\n`);
   while (!stopping) await new Promise((resolve) => setTimeout(resolve, 25));
@@ -70,12 +73,22 @@ async function main() {
 }
 
 for (const signal of ['SIGINT', 'SIGTERM']) {
-  process.once(signal, () => { stopping = true; });
+  process.once(signal, () => {
+    stopping = true;
+  });
 }
+
+process.on('message', (message) => {
+  if (message?.type === 'shutdown') {
+    stopping = true;
+    process.disconnect();
+  }
+});
 
 main().catch((error) => {
   console.error(error);
   process.exitCode = 1;
+  if (process.connected) process.disconnect();
 });
 
 function optionalArgument(name) {
