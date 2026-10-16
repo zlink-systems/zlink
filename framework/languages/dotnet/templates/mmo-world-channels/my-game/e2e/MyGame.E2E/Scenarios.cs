@@ -154,6 +154,9 @@ internal static class Scenarios
             await a.ViewAsync(moved, ct) == moved && await a.SessionAsync(ct) == binding,
             "Replacement disturbed relocated state."
         );
+        var replacement = run.Channels["channelA1"];
+        await replacement.CommandAsync(NodeProtocol.CreateUpdateZone);
+        await replacement.WaitLineAsync(NodeProtocol.UpdateZoneCreated, ct);
         await using var newcomer = await GameClient.ConnectAsync(
             run.Endpoints["A"],
             "replacement-player",
@@ -165,7 +168,13 @@ internal static class Scenarios
             "Replacement deployment did not admit new player work."
         );
         Require(
-            (await newcomer.EarnAsync(EarnedGold, EarnedGold, ct)).Gold == EarnedGold,
+            await newcomer.ChangeAsync(GameNames.UpdateChannel, ct)
+                == new PlayerView("A", GameNames.UpdateChannel, "channelA1", 0),
+            "New Zone was not placed on the replacement."
+        );
+        Require(
+            await newcomer.EarnAsync(EarnedGold, EarnedGold, ct)
+                == new PlayerView("A", GameNames.UpdateChannel, "channelA1", EarnedGold),
             "New work after replacement failed."
         );
     }

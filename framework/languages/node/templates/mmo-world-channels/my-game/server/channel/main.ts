@@ -5,7 +5,7 @@ import {
 } from '@zlink-systems/framework';
 import { ZLINK_SPOT_MANAGER } from '@zlink-systems/nestjs';
 import { runHost, failHost } from '../shared/hosting';
-import { Names, meshName } from '../shared/constants';
+import { Names, Game, zoneId, meshName } from '../shared/constants';
 import { PlayerData } from './data';
 import { PlayerFactory, PlayerRelocation } from './player';
 import { Entry, Zone, ZoneRelocation } from './spots';
@@ -44,15 +44,19 @@ runHost((_builder, config, mesh) => {
     listener: { kind: 'routeMesh', name: meshName(config.worldId) },
     ready: (status) => status.placement.isAvailable,
     async initialize(app) {
-      for (const id of config.zoneIds) {
-        const result = await app
-          .get<ZLinkSpotManager>(ZLINK_SPOT_MANAGER)
-          .getOrCreate(id, Names.zone)
-          .inMesh(meshName(config.worldId))
-          .submit();
-        if (result.state === ZLinkSpotCreateState.Rejected)
-          throw new Error(`Zone bootstrap rejected: ${id}`);
-      }
+      for (const id of config.zoneIds)
+        await createZone(app.get<ZLinkSpotManager>(ZLINK_SPOT_MANAGER), id);
+    },
+    async createUpdateZone(app) {
+      await createZone(app.get<ZLinkSpotManager>(ZLINK_SPOT_MANAGER), zoneId(Game.updateChannel));
     }
   };
+  async function createZone(spots: ZLinkSpotManager, id: string): Promise<void> {
+    const result = await spots
+      .getOrCreate(id, Names.zone)
+      .inMesh(meshName(config.worldId))
+      .submit();
+    if (result.state === ZLinkSpotCreateState.Rejected)
+      throw new Error(`Zone creation rejected: ${id}`);
+  }
 }).catch(failHost);

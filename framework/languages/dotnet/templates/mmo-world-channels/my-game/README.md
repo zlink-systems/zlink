@@ -49,7 +49,7 @@ The runner validates `zlink.structure.json`, starts an isolated Compose project 
 | `worlds` | HTTP returns both published Session endpoints. The same player earns 10 gold in A and starts with 0 in B. |
 | `channel` | Channel 1 to 2 preserves connection, SessionInfo and gold; the new owner is channelA2. |
 | `reconnect` | A new connection binds the same Actor generation, channel and gold. |
-| `update` | channelA1 drains into channelA2, without affecting B. SessionInfo and gold remain unchanged. The source stops and a replacement starts with the same config, executes Zone lookup during bootstrap, and the deployment admits a new player. |
+| `update` | channelA1 drains into channelA2, without affecting B. SessionInfo and gold remain unchanged. The source stops and a replacement starts with the same config, executes Zone lookup during bootstrap, and a new Zone on the replacement processes Player work. |
 
 Use `--check-structure` through the runner arguments to validate without Docker. The structure declares a `mesh` on fixed Zones because `field@1` exists independently in both worlds. Logical identity is checked within its owning mesh. This differs from the current format document's composition-wide logical ID uniqueness requirement; the topology requires separate world namespaces.
 
@@ -60,7 +60,7 @@ Framework 0.30.1 is pending publication. Public 0.30.0 validation failed at init
 ## Deployment sequence
 
 1. Provision separate Redis instances for A and B. Configure distinct key prefixes and world IDs; Framework keys and `player:<id>` application keys share only their world's namespace.
-2. Start channelA1 (`field@1`), channelA2 (`field@2`) and channelB (`field@1`). World A channel capacity is two Zones per node so channelA2 can receive channelA1 during maintenance.
+2. Start channelA1 (`field@1`), channelA2 (`field@2`) and channelB (`field@1`). ChannelA1 has capacity one and channelA2 has capacity two so channelA2 can receive channelA1 during maintenance.
 3. Start sessionA and sessionB. Listener ports may be zero; use the actual endpoints from their `READY` JSON.
 4. Configure the accounts `Worlds` list with those Session endpoints, then start accounts. Its HTTP listener publishes the actual endpoint in `READY`.
 5. Send `drain` to channelA1. Wait for `RELOCATION_REQUESTED`, `RELOCATED`, and `SAFE_TO_SHUTDOWN`. Send `shutdown`, wait for `STOPPED` and exit, and start the replacement with the same configuration. Existing Zones remain at their relocated authoritative owner.
@@ -69,11 +69,15 @@ Player data writes use the Actor execution turn. Gold must be positive when earn
 
 This example trusts the supplied player ID and demonstrates server composition rather than account authentication. Production deployments must authenticate that identity before binding an Actor.
 
-After replacement, update verifies replacement readiness and new Player work in the
-live world. Actor factory placement is selected by Framework; the new Player enters
-the relocated `field@1` on `channelA2`. Message Follow is explicitly 30 seconds;
-the safe shutdown observation budget is derived from that duration and the existing
-operation budget.
+ChannelA1 has a one-Zone capacity and starts before channelA2, whose capacity is two.
+This places each fixed Zone on its declared initial owner and leaves room for drain.
+After replacement, update sends `create-update-zone` and waits for `UPDATE_ZONE_CREATED`.
+The command creates verification Zone `field@3` through the public Spot manager.
+ChannelA2 already holds two Zones, so the replacement must host the new Zone.
+A new Player joins it and earns gold; the test checks channelA1 in both responses.
+Existing Players remain in their relocated Zones. The replacement uses the same configuration.
+Message Follow is explicitly 30 seconds; the safe shutdown observation budget is
+derived from that duration and the existing operation budget.
 
 ## 한국어 실행 안내
 

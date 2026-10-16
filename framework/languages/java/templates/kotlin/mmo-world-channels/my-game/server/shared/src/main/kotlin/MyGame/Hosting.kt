@@ -12,6 +12,12 @@ import systems.zlink.framework.monitoring.*
 import systems.zlink.framework.runtime.host.*
 import systems.zlink.framework.spots.*
 
+private fun createZone(spots: ZLinkSpotManager, mesh: String, id: String) {
+    val result =
+        spots.getOrCreate(id, Names.ZONE).inMesh(mesh).submit().toCompletableFuture().join()
+    check(result.state() != ZLinkSpotCreateState.REJECTED) { "Zone creation rejected: $id" }
+}
+
 fun configure(
     options: ZLinkFrameworkOptions,
     locations: ZLinkRedisLocationStore,
@@ -75,16 +81,7 @@ fun runNode(application: Class<*>, args: Array<String>) {
                 if (config.zoneIds.isNotEmpty()) {
                     val spots = app.getBean(ZLinkSpotManager::class.java)
                     for (id in config.zoneIds) {
-                        val result =
-                            spots
-                                .getOrCreate(id, Names.ZONE)
-                                .inMesh(mesh)
-                                .submit()
-                                .toCompletableFuture()
-                                .join()
-                        check(result.state() != ZLinkSpotCreateState.REJECTED) {
-                            "Zone bootstrap rejected: $id"
-                        }
+                        createZone(spots, mesh, id)
                     }
                 }
                 val endpoints =
@@ -122,6 +119,14 @@ fun runNode(application: Class<*>, args: Array<String>) {
                             println(Control.RELOCATED)
                             safe.get(Control.SAFE_DEADLINE.toSeconds(), TimeUnit.SECONDS)
                             println(Control.SAFE_TO_SHUTDOWN)
+                        }
+                        Control.CREATE_UPDATE_ZONE -> {
+                            createZone(
+                                app.getBean(ZLinkSpotManager::class.java),
+                                mesh,
+                                Names.zone(Names.UPDATE_CHANNEL),
+                            )
+                            println(Control.UPDATE_ZONE_CREATED)
                         }
                         Control.SHUTDOWN -> {
                             runtime.shutdown().toCompletableFuture().join()

@@ -21,6 +21,7 @@ import {
 interface NodeControl {
   drain(id: string): Promise<void>;
   replace(id: string): Promise<void>;
+  createUpdateZone(id: string): Promise<void>;
 }
 class PlayerClient {
   readonly connector: ZlinkStreamConnector;
@@ -192,6 +193,7 @@ export async function scenario(
       await control.replace(before.nodeId);
       assert.deepEqual(await a.view(), moved);
       assert.deepEqual(await a.sessionInfo(), binding);
+      await control.createUpdateZone(before.nodeId);
       const newcomer = create('A', 'new', `${name}-${runId}-new`);
       const admitted = await newcomer.enter();
       assert.deepEqual(admitted, {
@@ -200,7 +202,17 @@ export async function scenario(
         nodeId: 'channelA2',
         gold: 0
       });
-      assert.equal((await newcomer.earn(Test.earnedGold)).gold, Test.earnedGold);
+      const replacementView = {
+        worldId: 'A',
+        channel: Game.updateChannel,
+        nodeId: before.nodeId,
+        gold: 0
+      };
+      assert.deepEqual(await newcomer.change(Game.updateChannel), replacementView);
+      assert.deepEqual(await newcomer.earn(Test.earnedGold), {
+        ...replacementView,
+        gold: Test.earnedGold
+      });
       assert.equal(newcomer.disconnects, 0);
       assert.equal(b.disconnects, 0);
     } else throw new Error(`Unknown scenario ${name}`);

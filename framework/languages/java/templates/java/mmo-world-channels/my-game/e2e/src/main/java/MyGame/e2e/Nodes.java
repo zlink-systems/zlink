@@ -131,6 +131,12 @@ public final class Nodes implements AutoCloseable {
             node.waitFor(stage);
     }
 
+    void createUpdateZone(String id) throws Exception {
+        var node = nodes.get(id);
+        node.command(Control.CREATE_UPDATE_ZONE);
+        node.waitFor(Control.UPDATE_ZONE_CREATED);
+    }
+
     void replace(String id) throws Exception {
         nodes.get(id).stop();
         startNode(id);

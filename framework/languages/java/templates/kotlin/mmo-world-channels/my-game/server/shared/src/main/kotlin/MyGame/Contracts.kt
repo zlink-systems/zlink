@@ -19,6 +19,7 @@ object Names {
     const val PLAYER_KEY = "player:"
     const val FIELD = "field@"
     const val FIRST_CHANNEL = 1
+    const val UPDATE_CHANNEL = 3
     val SCENARIOS = Scenario.entries.map { it.id }
 
     fun mesh(world: String) =

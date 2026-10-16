@@ -227,6 +227,12 @@ async function runScenario(name: string): Promise<boolean> {
         assert(node, `Unknown host ${id}`);
         await node.drain();
       },
+      async createUpdateZone(id: string): Promise<void> {
+        const node = nodes.get(id);
+        assert(node);
+        node.child.stdin!.write(Control.createUpdateZone + '\n');
+        await node.wait(Control.updateZoneCreated, Limits.messageMs);
+      },
       async replace(id: string): Promise<void> {
         const node = nodes.get(id);
         assert(node);

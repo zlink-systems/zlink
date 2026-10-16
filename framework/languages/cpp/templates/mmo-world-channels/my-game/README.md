@@ -53,7 +53,7 @@ The runner checks the project structure before starting its Redis containers and
 | `worlds` | Accounts lists both actual Session endpoints; one player earns 10 gold in A and has zero in B. |
 | `channel` | Channel 1 to 2 preserves gold, Actor identity, and physical Session; the target is channelA2. |
 | `reconnect` | A new physical connection binds the same Actor generation, channel, and gold. |
-| `update` | Draining channelA1 moves its Zone and Actors to channelA2, leaves B unchanged, and verifies replacement readiness plus new Player work in world A. |
+| `update` | Draining channelA1 moves its Zone and Actors to channelA2, leaves B unchanged, and verifies a new Zone and Player work on the replacement. |
 
 Run `build/bin/my-game-e2e --root . --check-structure` for an isolated structure check (`.exe` on Windows).
 
@@ -68,15 +68,19 @@ Run `build/bin/my-game-e2e --root . --check-structure` for an isolated structure
 1. Provision separate Redis databases for worlds A and B. Set each node's `RedisEndpoint`, `WorldId`, and world-specific `KeyPrefix` consistently. Retain player keys across process updates.
 2. Start channelA1, channelA2, and channelB with their corresponding `server/config/*.json` files. Each channel registers an Entry Spot and the Player factory. A1 owns `field@1`, A2 owns `field@2`, and B owns its independent `field@1`.
 3. Start sessionA and sessionB. Populate accounts' `Worlds` list with their published STREAM endpoints and start accounts. Clients select a world through `GET /worlds` and send `EnterWorldRequest` first.
-4. Send `drain` on channelA1's standard input. Wait for `RELOCATION_REQUESTED`, `RELOCATED`, and `SAFE_TO_SHUTDOWN`. Send `shutdown`, wait for `STOPPED` and exit zero, then start its replacement with the same configuration. The logical Zone remains on its relocation target; the deployment accepts new Player work.
+4. Send `drain` on channelA1's standard input. Wait for `RELOCATION_REQUESTED`, `RELOCATED`, and `SAFE_TO_SHUTDOWN`. Send `shutdown`, wait for `STOPPED` and exit zero, then start its replacement with the same configuration. The logical Zone remains on its relocation target; a new Zone on the replacement accepts Player work.
 
 Player gold persistence currently follows the public Bingo sample's synchronous Boost.Asio Redis boundary. It uses one short connection per load/save and runs no background application queue. Production storage can replace `server/channel/data.hpp` without changing Actor, Session, or relocation contracts.
 
-After replacement, update verifies replacement readiness and new Player work in the
-live world. Actor factory placement is selected by Framework; the new Player enters
-the relocated `field@1` on `channelA2`. Message Follow is explicitly 30 seconds;
-the safe shutdown observation budget is derived from that duration and the existing
-operation budget.
+ChannelA1 has a one-Zone capacity and starts before channelA2, whose capacity is two.
+This places each fixed Zone on its declared initial owner and leaves room for drain.
+After replacement, update sends `create-update-zone` and waits for `UPDATE_ZONE_CREATED`.
+The command creates verification Zone `field@3` through the public Spot manager.
+ChannelA2 already holds two Zones, so the replacement must host the new Zone.
+A new Player joins it and earns gold; the test checks channelA1 in both responses.
+Existing Players remain in their relocated Zones. The replacement uses the same configuration.
+Message Follow is explicitly 30 seconds; the safe shutdown observation budget is
+derived from that duration and the existing operation budget.
 
 ## 한국어 실행 안내
 

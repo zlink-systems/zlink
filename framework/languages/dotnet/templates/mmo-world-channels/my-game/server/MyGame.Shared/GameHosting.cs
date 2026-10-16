@@ -5,12 +5,25 @@ using Microsoft.Extensions.Logging;
 using Zlink.Framework.AspNetCore;
 using Zlink.Framework.Contracts.Configuration;
 using Zlink.Framework.Contracts.Dispatch;
+using Zlink.Framework.Contracts.Spots;
 using Zlink.Framework.Locations.Redis;
 
 namespace MyGame.Shared;
 
 public static class GameHosting
 {
+    public static async Task CreateZoneAsync(
+        IZLinkSpotManager spots,
+        string mesh,
+        string id,
+        CancellationToken ct
+    )
+    {
+        var result = await spots.GetOrCreate(id, GameNames.ZoneType).InMesh(mesh).Async(ct);
+        if (result.State == ZLinkSpotCreateState.Rejected)
+            throw new InvalidOperationException($"Zone creation rejected: {id}.");
+    }
+
     public static void Configure(
         HostApplicationBuilder builder,
         NodeSettings settings,

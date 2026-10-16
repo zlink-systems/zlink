@@ -32,6 +32,7 @@ interface HostComposition {
   listener: { kind: 'stream' | 'routeMesh'; name: string };
   ready: (status: ZLinkRouteMeshStatus) => boolean;
   initialize?: (app: INestApplicationContext) => Promise<void>;
+  createUpdateZone?: (app: INestApplicationContext) => Promise<void>;
 }
 export async function runHost(
   configure: (
@@ -128,6 +129,10 @@ export async function runHost(
         console.log(Control.relocated);
         await waitSafe();
         console.log(Control.safe);
+      } else if (line === Control.createUpdateZone) {
+        if (!composition.createUpdateZone) throw new Error('This node does not host Zones');
+        await composition.createUpdateZone(app);
+        console.log(Control.updateZoneCreated);
       } else if (line === Control.shutdown) break;
       else throw new Error(`Unknown control command: ${line}`);
     }

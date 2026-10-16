@@ -58,11 +58,15 @@ pwsh -NoProfile -File ./run-e2e.ps1 -Scenario worlds,channel,reconnect,update
 | reconnect | A new Session binds the original Actor with its saved channel and gold.                                       |
 | update    | Drain channelA1 into channelA2, preserve client state and world B, stop the source and start its replacement. |
 
-After replacement, update verifies replacement readiness and new Player work in the
-live world. Actor factory placement is selected by Framework; the new Player enters
-the relocated `field@1` on `channelA2`. Message Follow is explicitly 30 seconds;
-the safe shutdown observation budget is derived from that duration and the existing
-operation budget.
+ChannelA1 has a one-Zone capacity and starts before channelA2, whose capacity is two.
+This places each fixed Zone on its declared initial owner and leaves room for drain.
+After replacement, update sends `create-update-zone` and waits for `UPDATE_ZONE_CREATED`.
+The command creates verification Zone `field@3` through the public Spot manager.
+ChannelA2 already holds two Zones, so the replacement must host the new Zone.
+A new Player joins it and earns gold; the test checks channelA1 in both responses.
+Existing Players remain in their relocated Zones. The replacement uses the same configuration.
+Message Follow is explicitly 30 seconds; the safe shutdown observation budget is
+derived from that duration and the existing operation budget.
 
 The runner checks `zlink.structure.json` before creating its own Compose project.
 It preserves node stdout, stderr message-flow records, client events and Redis

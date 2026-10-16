@@ -15,6 +15,7 @@ public final class Names {
             PLAYER_KEY = "player:",
             FIELD = "field@";
     public static final int FIRST_CHANNEL = 1;
+    public static final int UPDATE_CHANNEL = 3;
     public static final long MAX_GOLD = 9_007_199_254_740_991L;
     public static final List<String> SCENARIOS =
             java.util.Arrays.stream(Scenario.values()).map(Scenario::id).toList();

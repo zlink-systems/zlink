@@ -9,6 +9,7 @@ public static class GameNames
     public const string RelocationKeyPrefix = "relocation:";
     private const string ZonePrefix = "field@";
     public const int FirstChannel = 1;
+    public const int UpdateChannel = 3;
 
     public static string Mesh(string worldId) => "my-game-world-" + worldId.ToLowerInvariant();
 
@@ -52,6 +53,8 @@ public static class NodeProtocol
     public static readonly TimeSpan SafeDeadline = MessageFollow + StartupDeadline;
     public const string ReadyPrefix = "READY ";
     public const string Drain = "drain";
+    public const string CreateUpdateZone = "create-update-zone";
+    public const string UpdateZoneCreated = "UPDATE_ZONE_CREATED";
     public const string Shutdown = "shutdown";
     public const string Stopped = "STOPPED";
     public const string RelocationRequested = "RELOCATION_REQUESTED";

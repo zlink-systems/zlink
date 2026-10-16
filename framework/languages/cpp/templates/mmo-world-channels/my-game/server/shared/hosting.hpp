@@ -30,6 +30,14 @@ class NodeControl final : public fx::hosted_service_t
     bool placement_;
     std::thread control_;
     bool failed_ = false;
+    fx::task_t<void> create_zone (fx::spot_manager_t &spots, const std::string &id)
+    {
+        const auto result = co_await spots.get_or_create (id, Names::zone)
+                              .in_mesh (Names::mesh (config_.WorldId))
+                              .async ();
+        if (result.state == fx::spot_create_state_t::rejected)
+            throw std::runtime_error ("Zone creation rejected: " + id);
+    }
 
   public:
     NodeControl (fx::app_t &app, const NodeConfig &config, bool placement) :
@@ -56,11 +64,7 @@ class NodeControl final : public fx::hosted_service_t
         if (!config_.ZoneIds.empty ()) {
             auto &spots = services.get_required<fx::spot_manager_t> ();
             for (const auto &id : config_.ZoneIds) {
-                const auto created = co_await spots.get_or_create (id, Names::zone)
-                                       .in_mesh (Names::mesh (config_.WorldId))
-                                       .async ();
-                if (created.state == fx::spot_create_state_t::rejected)
-                    throw std::runtime_error ("Zone bootstrap rejected: " + id);
+                co_await create_zone (spots, id);
             }
         }
         auto &runtime = services.get_required<fx::framework_runtime_t> ();
@@ -75,7 +79,7 @@ class NodeControl final : public fx::hosted_service_t
                 runtime.listener_status (fx::listener_kind_t::stream, Names::stream).endpoint)
             : nlohmann::json (nullptr);
         std::cout << Control::ready << output.dump () << std::endl;
-        control_ = std::thread ([this, &runtime] {
+        control_ = std::thread ([this, &runtime, &services] {
             try {
                 std::string command;
                 while (std::getline (std::cin, command)) {
@@ -106,6 +110,11 @@ class NodeControl final : public fx::hosted_service_t
                         await_host (safe->task (), Limits::safe);
                         observation->close ();
                         std::cout << Control::safe << std::endl;
+                    } else if (command == Control::create_update_zone) {
+                        await_host (create_zone (services.get_required<fx::spot_manager_t> (),
+                                                 Names::zone_id (Names::update_channel)),
+                                    Limits::packet);
+                        std::cout << Control::update_zone_created << std::endl;
                     } else if (command == Control::shutdown) {
                         const auto stopped =
                           await_host (app_.shutdown (Limits::shutdown), Limits::shutdown);

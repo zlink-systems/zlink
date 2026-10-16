@@ -152,11 +152,14 @@ public final class Scenarios {
             Structure.require(
                     ai.equals(a.sessionInfo()) && bi.equals(b.sessionInfo()),
                     "Replacement changed SessionInfo");
+            n.createUpdateZone(CHANNEL_A1);
             try (var fresh = new Client(n.endpoints.get(Names.WORLD_A), player())) {
                 view(fresh.connect(), Names.WORLD_A, Names.FIRST_CHANNEL, CHANNEL_A2, 0);
+                fresh.send(new ChangeChannelRequest(Names.UPDATE_CHANNEL));
+                view(fresh, Names.WORLD_A, Names.UPDATE_CHANNEL, CHANNEL_A1, 0);
                 connected(fresh);
                 fresh.send(new EarnRequest(EARNED_GOLD));
-                view(fresh, Names.WORLD_A, Names.FIRST_CHANNEL, CHANNEL_A2, EARNED_GOLD);
+                view(fresh, Names.WORLD_A, Names.UPDATE_CHANNEL, CHANNEL_A1, EARNED_GOLD);
             }
             connected(a);
             connected(b);

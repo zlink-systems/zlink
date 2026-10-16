@@ -46,12 +46,7 @@ await NodeControl.RunAsync(
         var spots = runningHost.Services.GetRequiredService<IZLinkSpotManager>();
         foreach (var id in settings.ZoneIds ?? [])
         {
-            var created = await spots
-                .GetOrCreate(id, GameNames.ZoneType)
-                .InMesh(settings.MeshName)
-                .Async(ct);
-            if (created.State == ZLinkSpotCreateState.Rejected)
-                throw new InvalidOperationException($"Zone bootstrap rejected: {id}.");
+            await GameHosting.CreateZoneAsync(spots, settings.MeshName, id, ct);
         }
     }
 );

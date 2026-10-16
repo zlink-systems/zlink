@@ -137,6 +137,11 @@ class World
         process.wait_line (Control::relocated, Limits::relocation);
         process.wait_line (Control::safe, Limits::safe);
     }
+    void create_update_zone ()
+    {
+        channel_a1_->process->command (Control::create_update_zone);
+        channel_a1_->process->wait_line (Control::update_zone_created, Limits::packet);
+    }
     void replace_channel_a1 ()
     {
         stop_node (*channel_a1_);

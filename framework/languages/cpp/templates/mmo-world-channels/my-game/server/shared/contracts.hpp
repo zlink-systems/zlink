@@ -13,6 +13,7 @@ struct Names
     static constexpr auto zone = "Zone", player = "Player", stream = "players";
     static constexpr auto zone_prefix = "field@", player_key = "player:", worlds_path = "/worlds";
     static constexpr int first_channel = 1;
+    static constexpr int update_channel = 3;
     static std::string mesh (const std::string &world)
     {
         if (world == "A")
@@ -53,6 +54,8 @@ struct Control
     static constexpr auto requested = "RELOCATION_REQUESTED", relocated = "RELOCATED";
     static constexpr auto safe = "SAFE_TO_SHUTDOWN", stopped = "STOPPED";
     static constexpr auto player_created = "PLAYER_CREATED ";
+    static constexpr auto create_update_zone = "create-update-zone";
+    static constexpr auto update_zone_created = "UPDATE_ZONE_CREATED";
 };
 struct EnterWorldRequest
 {

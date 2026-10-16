@@ -5,7 +5,9 @@ import java.time.Duration;
 public final class Control {
     private Control() {}
 
-    public static final String DRAIN = "drain",
+    public static final String CREATE_UPDATE_ZONE = "create-update-zone",
+            UPDATE_ZONE_CREATED = "UPDATE_ZONE_CREATED",
+            DRAIN = "drain",
             PLAYER_CREATED = "PLAYER_CREATED ",
             SHUTDOWN = "shutdown",
             READY = "READY ",

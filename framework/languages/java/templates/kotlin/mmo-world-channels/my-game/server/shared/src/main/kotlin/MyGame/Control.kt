@@ -3,6 +3,8 @@ package MyGame
 import java.time.Duration
 
 object Control {
+    const val CREATE_UPDATE_ZONE = "create-update-zone"
+    const val UPDATE_ZONE_CREATED = "UPDATE_ZONE_CREATED"
     const val DRAIN = "drain"
     const val SHUTDOWN = "shutdown"
     const val READY = "READY "

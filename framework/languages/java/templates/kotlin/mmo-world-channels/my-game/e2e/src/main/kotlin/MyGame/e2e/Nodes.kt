@@ -110,6 +110,12 @@ class Nodes(private val root: Path) : AutoCloseable {
         }
     }
 
+    fun createUpdateZone(id: String) {
+        val node = nodes.getValue(id)
+        node.command(Control.CREATE_UPDATE_ZONE)
+        node.waitFor(Control.UPDATE_ZONE_CREATED)
+    }
+
     fun replace(id: String) {
         nodes.getValue(id).stop()
         startNode(id)

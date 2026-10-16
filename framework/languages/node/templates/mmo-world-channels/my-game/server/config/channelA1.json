@@ -5,6 +5,6 @@
   "meshEndpoint": "tcp://127.0.0.1:0",
   "worldId": "A",
   "zoneIds": ["field@1"],
-  "zoneCapacity": 2,
+  "zoneCapacity": 1,
   "streamEndpoint": null
 }

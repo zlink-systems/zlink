@@ -75,6 +75,16 @@ public static class NodeControl
                     }
                     break;
                 }
+                case NodeProtocol.CreateUpdateZone:
+                    var settings = host.Services.GetRequiredService<NodeSettings>();
+                    await GameHosting.CreateZoneAsync(
+                        host.Services.GetRequiredService<Zlink.Framework.Contracts.Spots.IZLinkSpotManager>(),
+                        settings.MeshName,
+                        GameNames.ZoneId(GameNames.UpdateChannel),
+                        CancellationToken.None
+                    );
+                    Console.WriteLine(NodeProtocol.UpdateZoneCreated);
+                    break;
                 case NodeProtocol.Shutdown:
                     var stopped = await runtime.ShutdownAsync();
                     if (stopped.Outcome != ZLinkFrameworkTerminationOutcome.Stopped)

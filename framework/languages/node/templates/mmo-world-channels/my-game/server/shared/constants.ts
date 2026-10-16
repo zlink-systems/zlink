@@ -44,6 +44,8 @@ export const Control = {
   playerCreated: 'PLAYER_CREATED ',
   ready: 'READY ',
   drain: 'drain',
+  createUpdateZone: 'create-update-zone',
+  updateZoneCreated: 'UPDATE_ZONE_CREATED',
   shutdown: 'shutdown',
   requested: 'RELOCATION_REQUESTED',
   relocated: 'RELOCATED',
@@ -57,4 +59,4 @@ export const NodeEntrypoints = {
 } as const;
 export type NodeRole = keyof typeof NodeEntrypoints;
 
-export const Game = { firstChannel: 1 } as const;
+export const Game = { firstChannel: 1, updateChannel: 3 } as const;

@@ -49,7 +49,7 @@ The runner checks `zlink.structure.json`, starts its own two Redis containers an
 | worlds | HTTP world endpoints; equal player IDs have independent gold in A and B |
 | channel | Channel 1 to 2 preserves connection, SessionInfo, and gold |
 | reconnect | A new connection retains Actor identity, channel, and gold |
-| update | Drain channelA1; preserve both worlds; stop and replace it; verify replacement readiness and new Player work in world A |
+| update | Drain channelA1; preserve both worlds; stop and replace it; verify a new Zone and Player work on the replacement |
 
 ## Known issues
 
@@ -63,11 +63,15 @@ World A uses mesh `my-game-world-a` and dbA; world B uses `my-game-world-b` and 
 
 For a channel update, send `drain` on its stdin and wait for `RELOCATION_REQUESTED`, `RELOCATED`, and `SAFE_TO_SHUTDOWN`. Then send `shutdown`, require `STOPPED` and a successful process exit, and start its replacement with the same configuration. Channel servers register both Player and Zone relocation adapters. The replacement does not reclaim relocated Zones: existing Location Store authority remains authoritative.
 
-After replacement, update verifies replacement readiness and new Player work in the
-live world. Actor factory placement is selected by Framework; the new Player enters
-the relocated `field@1` on `channelA2`. Message Follow is explicitly 30 seconds;
-the safe shutdown observation budget is derived from that duration and the existing
-operation budget.
+ChannelA1 has a one-Zone capacity and starts before channelA2, whose capacity is two.
+This places each fixed Zone on its declared initial owner and leaves room for drain.
+After replacement, update sends `create-update-zone` and waits for `UPDATE_ZONE_CREATED`.
+The command creates verification Zone `field@3` through the public Spot manager.
+ChannelA2 already holds two Zones, so the replacement must host the new Zone.
+A new Player joins it and earns gold; the test checks channelA1 in both responses.
+Existing Players remain in their relocated Zones. The replacement uses the same configuration.
+Message Follow is explicitly 30 seconds; the safe shutdown observation budget is
+derived from that duration and the existing operation budget.
 
 ## 한국어 실행 안내
 

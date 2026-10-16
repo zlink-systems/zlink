@@ -49,6 +49,18 @@ public final class Hosting {
         return subscribed.join();
     }
 
+    private static void createZone(
+            systems.zlink.framework.spots.ZLinkSpotManager spots, String world, String id) {
+        var result =
+                spots.getOrCreate(id, Names.ZONE)
+                        .inMesh(Names.mesh(world))
+                        .submit()
+                        .toCompletableFuture()
+                        .join();
+        if (result.state() == systems.zlink.framework.spots.ZLinkSpotCreateState.REJECTED)
+            throw new IllegalStateException("Zone creation rejected: " + id);
+    }
+
     public static void run(Class<?> application, String[] args) throws Exception {
         if (args.length != 1)
             throw new IllegalArgumentException("Supply a node configuration path");
@@ -89,15 +101,7 @@ public final class Hosting {
                 if (config.zoneIds() != null && !config.zoneIds().isEmpty()) {
                     var spots = app.getBean(systems.zlink.framework.spots.ZLinkSpotManager.class);
                     for (var id : config.zoneIds()) {
-                        var result =
-                                spots.getOrCreate(id, Names.ZONE)
-                                        .inMesh(Names.mesh(config.worldId()))
-                                        .submit()
-                                        .toCompletableFuture()
-                                        .join();
-                        if (result.state()
-                                == systems.zlink.framework.spots.ZLinkSpotCreateState.REJECTED)
-                            throw new IllegalStateException("Zone bootstrap rejected: " + id);
+                        createZone(spots, config.worldId(), id);
                     }
                 }
                 var endpoints = new LinkedHashMap<String, Object>();
@@ -133,6 +137,14 @@ public final class Hosting {
                             System.out.println(Control.RELOCATED);
                             safe.get(Control.SAFE_DEADLINE.toSeconds(), TimeUnit.SECONDS);
                             System.out.println(Control.SAFE_TO_SHUTDOWN);
+                        }
+                        case Control.CREATE_UPDATE_ZONE -> {
+                            createZone(
+                                    app.getBean(
+                                            systems.zlink.framework.spots.ZLinkSpotManager.class),
+                                    config.worldId(),
+                                    Names.zone(Names.UPDATE_CHANNEL));
+                            System.out.println(Control.UPDATE_ZONE_CREATED);
                         }
                         case Control.SHUTDOWN -> {
                             runtime.shutdown().toCompletableFuture().join();

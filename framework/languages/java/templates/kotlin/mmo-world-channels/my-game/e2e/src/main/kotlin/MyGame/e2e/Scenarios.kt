@@ -141,11 +141,14 @@ object Scenarios {
                 check(ai == a.sessionInfo() && bi == b.sessionInfo()) {
                     "Replacement changed SessionInfo"
                 }
+                n.createUpdateZone(CHANNEL_A1)
                 withClient(n.endpoints.getValue(Names.WORLD_A), player()) { fresh ->
                     view(fresh.connect(), Names.WORLD_A, Names.FIRST_CHANNEL, CHANNEL_A2, 0)
+                    fresh.send(ChangeChannelRequest(Names.UPDATE_CHANNEL))
+                    view(fresh, Names.WORLD_A, Names.UPDATE_CHANNEL, CHANNEL_A1, 0)
                     connected(fresh)
                     fresh.send(EarnRequest(EARNED_GOLD))
-                    view(fresh, Names.WORLD_A, Names.FIRST_CHANNEL, CHANNEL_A2, EARNED_GOLD)
+                    view(fresh, Names.WORLD_A, Names.UPDATE_CHANNEL, CHANNEL_A1, EARNED_GOLD)
                 }
                 connected(a)
                 connected(b)

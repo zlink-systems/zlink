@@ -82,13 +82,18 @@ inline void scenario (Scenario name, World &world)
                 world.replace_channel_a1 ();
                 require (a.view (expected) == expected && a.info () == binding,
                          "Replacement interrupted player");
+                world.create_update_zone ();
                 auto &fresh = create ("A", id + "-replacement");
                 const auto admitted = fresh.enter ();
                 require (admitted == PlayerView{"A", Names::first_channel, "channelA2", 0},
                          "Fresh player did not enter relocated Zone");
-                require (fresh.earn (Test::earned_gold, Test::earned_gold).gold
-                           == Test::earned_gold,
-                         "Replacement did not accept new work");
+                require (fresh.change (Names::update_channel)
+                           == PlayerView{"A", Names::update_channel, "channelA1", 0},
+                         "New Zone was not placed on the replacement");
+                require (
+                  fresh.earn (Test::earned_gold, Test::earned_gold)
+                    == PlayerView{"A", Names::update_channel, "channelA1", Test::earned_gold},
+                  "Replacement did not accept new work");
             }
         }
         for (auto &client : clients)

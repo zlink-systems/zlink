@@ -7,6 +7,6 @@
   "zoneIds": [
     "field@1"
   ],
-  "zoneCapacity": 2,
+  "zoneCapacity": 1,
   "streamEndpoint": null
 }
