@@ -576,7 +576,7 @@ void verify_route_internal_packets_precede_application_dispatch ()
     context->handlers.push_back (spot_handler_descriptor_t{
       spot_handler_kind_t::subscription, "Rel358MulticastPayload", "rel-358-topic",
       std::type_index (typeid (int)), std::type_index (typeid (void)),
-      std::type_index (typeid (void)), std::type_index (typeid (void))});
+      std::type_index (typeid (void)), std::type_index (typeid (void)), "vertical-mesh"});
     context->handler_invokers.push_back (
       [multicast_received] (void *, void *, service_provider_t &, serializer_registry_t &,
                             const zlink::message_t &message,
@@ -1919,6 +1919,11 @@ void verify_automatic_identity_and_port_builder ()
       zlink::framework::detail::mesh_node_runtime_t::registrations (builder);
     assert (registrations.size () == 1);
     const auto &state = registrations.front ();
+    assert (!state->spot_state->snapshot.spot_route_channel_name);
+    assert (state->spot_state->snapshot.accepted_route_channels.empty ());
+    assert (zlink::framework::detail::spot_node_runtime_t (state->spot_state)
+              .actor_route_transport_name ()
+            == "automatic-builder-mesh");
     assert (state->listen_endpoint == "tcp://127.0.0.1:0");
     assert (state->routing_id);
     assert (std::regex_match (

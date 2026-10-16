@@ -80,7 +80,7 @@ class bingo_room_spot_t : public spot_t<player_actor_t>
         _context->handlers ().add_actor_request<&bingo_room_spot_t::observe_events> ();
         _context->handlers ().add_actor_request<&bingo_room_spot_t::stop_observing_events> ();
         _context->handlers ().add_subscribe<&bingo_room_spot_t::on_reward_acquired> (
-          sample_names_t::reward_topic);
+          sample_names_t::room_spot_mesh, sample_names_t::reward_topic);
     }
 
     task_t<spot_create_response_t> on_create (const message_t &request) override
