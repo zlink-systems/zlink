@@ -19,4 +19,6 @@ Lobby and Instance register the shared application Entry and first-admission han
 
 ## Changes and verification
 
+Run `./run-e2e.sh --build-only` (PowerShell: `pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly`) to build Docker images. The default `./run-e2e.sh` or `pwsh -NoProfile -File ./run-e2e.ps1` runs nodes and the e2e runner in Docker. Use `--local` or `-Local` for host process debugging with the .NET 8 SDK; only that mode accepts `--no-build` or `-NoBuild`. Pass `--check-structure` to check without starting nodes. Preserve stdin lifecycle control and inspect `.logs/docker-<project>/` and `.logs/run-<id>/`.
+
 Preserve `party,reconnect,update` and their order in the runner and structure manifest. Run the structure check before node startup and use the public STREAM client. A single intermittent failure is a defect. Run-specific configurations and node/message-flow logs are in `.logs/run-<id>/`. Cleanup failures return exit code 1. Verify Windows and Linux builds and e2e before deployment.

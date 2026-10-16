@@ -15,6 +15,10 @@ internal sealed class WorldRun(string root) : IAsyncDisposable
     );
     private readonly Dictionary<string, string> redis = [];
     private readonly Dictionary<string, string> configurations = [];
+    private readonly string? dockerProject = Environment.GetEnvironmentVariable(
+        "MY_GAME_DOCKER_PROJECT"
+    );
+    private readonly List<string> containers = [];
     private bool composeStarted;
     public Dictionary<string, ManagedProcess> Channels { get; } = [];
     public Dictionary<string, string> Endpoints { get; } = [];
@@ -31,23 +35,31 @@ internal sealed class WorldRun(string root) : IAsyncDisposable
     {
         Directory.CreateDirectory(runDirectory);
         Console.WriteLine($"Run logs: {runDirectory}");
-        composeStarted = true;
-        await Commands.RunAsync(
-            "docker",
-            Compose("up", "-d", "--wait", "--wait-timeout", "30"),
-            Path.Combine(runDirectory, "redis-start.log"),
-            ct
-        );
-        foreach (var world in new[] { "A", "B" })
-            redis.Add(
-                world,
-                await Commands.RunAsync(
-                    "docker",
-                    Compose("port", "db" + world, "6379"),
-                    Path.Combine(runDirectory, "db" + world + "-port.log"),
-                    ct
-                )
+        if (dockerProject is null)
+        {
+            composeStarted = true;
+            await Commands.RunAsync(
+                "docker",
+                Compose("up", "-d", "--wait", "--wait-timeout", "30"),
+                Path.Combine(runDirectory, "redis-start.log"),
+                ct
             );
+            foreach (var world in new[] { "A", "B" })
+                redis.Add(
+                    world,
+                    await Commands.RunAsync(
+                        "docker",
+                        Compose("port", "db" + world, "6379"),
+                        Path.Combine(runDirectory, "db" + world + "-port.log"),
+                        ct
+                    )
+                );
+        }
+        else
+        {
+            redis.Add("A", "dbA:6379");
+            redis.Add("B", "dbB:6379");
+        }
         foreach (var id in new[] { "channelA1", "channelA2", "channelB" })
             Channels.Add(id, (await StartNodeAsync(id, "MyGame.Channel", false, ct)).Process);
         foreach (var world in new[] { "A", "B" })
@@ -82,7 +94,7 @@ internal sealed class WorldRun(string root) : IAsyncDisposable
             settings = settings with
             {
                 RedisEndpoint = redis[settings.WorldId],
-                KeyPrefix = project + ":world:" + settings.WorldId + ":",
+                KeyPrefix = (dockerProject ?? project) + ":world:" + settings.WorldId + ":",
                 MeshEndpoint = "tcp://127.0.0.1:0",
                 StreamEndpoint = settings.StreamEndpoint is null ? null : "ws://127.0.0.1:0",
                 HttpEndpoint = settings.HttpEndpoint is null ? null : "http://127.0.0.1:0",
@@ -100,23 +112,74 @@ internal sealed class WorldRun(string root) : IAsyncDisposable
             await File.WriteAllTextAsync(config, JsonSerializer.Serialize(settings), ct);
             configurations.Add(id, config);
         }
-        var name = replacement ? id + "-replacement" : id;
-        var dll = Path.Combine(
-            root,
-            "server",
-            assembly,
-            "bin",
-            "Debug",
-            "net8.0",
-            assembly + ".dll"
-        );
-        var node = new ManagedProcess(
-            Outcome,
-            "dotnet",
-            [dll, "--config", config],
-            runDirectory,
-            name
-        );
+        var suffix = replacement ? id + "-replacement" : id;
+        ManagedProcess node;
+        if (dockerProject is not null)
+        {
+            var name = dockerProject + "-" + suffix;
+            var image =
+                Environment.GetEnvironmentVariable("MY_GAME_NODE_IMAGE")
+                ?? throw new InvalidOperationException("Missing node image.");
+            var runner =
+                Environment.GetEnvironmentVariable("MY_GAME_RUNNER_CONTAINER")
+                ?? throw new InvalidOperationException("Missing runner container name.");
+            await Commands.RunAsync(
+                "docker",
+                [
+                    "create",
+                    "-i",
+                    "--name",
+                    name,
+                    "--label",
+                    "my-game.e2e=" + dockerProject,
+                    "--network",
+                    "container:" + runner,
+                    image,
+                    "/app/"
+                        + assembly["MyGame.".Length..].ToLowerInvariant()
+                        + "/"
+                        + assembly
+                        + ".dll",
+                    "--config",
+                    "/app/node.json",
+                ],
+                Path.Combine(runDirectory, suffix + "-create.log"),
+                ct
+            );
+            containers.Add(name);
+            await Commands.RunAsync(
+                "docker",
+                ["cp", config, name + ":/app/node.json"],
+                Path.Combine(runDirectory, suffix + "-config.log"),
+                ct
+            );
+            node = new ManagedProcess(
+                Outcome,
+                "docker",
+                ["start", "-a", "-i", name],
+                runDirectory,
+                suffix
+            );
+        }
+        else
+        {
+            var dll = Path.Combine(
+                root,
+                "server",
+                assembly,
+                "bin",
+                "Debug",
+                "net8.0",
+                assembly + ".dll"
+            );
+            node = new ManagedProcess(
+                Outcome,
+                "dotnet",
+                [dll, "--config", config],
+                runDirectory,
+                suffix
+            );
+        }
         nodes.Add(node);
         var ready =
             JsonSerializer.Deserialize<NodeReady>(
@@ -146,6 +209,22 @@ internal sealed class WorldRun(string root) : IAsyncDisposable
         foreach (var node in Enumerable.Reverse(nodes))
         {
             await node.DisposeAsync();
+        }
+        foreach (var container in containers)
+        {
+            try
+            {
+                await Commands.RunAsync(
+                    "docker",
+                    ["rm", "-f", container],
+                    Path.Combine(runDirectory, container + "-remove.log"),
+                    CancellationToken.None
+                );
+            }
+            catch (Exception error)
+            {
+                Outcome.Record(error);
+            }
         }
         if (composeStarted)
         {

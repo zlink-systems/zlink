@@ -20,4 +20,6 @@ Relocation adapters serialize application state only. Framework owns identity, m
 
 ## Changes and verification
 
+Run `./run-e2e.sh --build-only` (PowerShell: `pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly`) to build Docker images. The default `./run-e2e.sh` or `pwsh -NoProfile -File ./run-e2e.ps1` runs nodes and the e2e runner in Docker. Use `--local` or `-Local` for host process debugging with the .NET 8 SDK; only that mode accepts `--no-build` or `-NoBuild`. Pass `--check-structure` to check without starting nodes. Preserve stdin lifecycle control and inspect `.logs/docker-<project>/` and `.logs/run-<id>/`.
+
 Maintain `region,dungeon,reconnect,update` in that order and keep the README commands identical to `zlink.structure.json`. Run both shell runners in their respective environments. Any intermittent failure is a defect. Preserve `.logs/run-<id>/`, including stderr message-flow records, and report the first failing transition. Test structural validation with valid files and temporary invalid copies outside the deliverable. Never commit logs, package caches, credentials or license files. Code comments are English.

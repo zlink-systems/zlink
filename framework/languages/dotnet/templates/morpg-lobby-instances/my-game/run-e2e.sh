@@ -2,13 +2,71 @@
 set -euo pipefail
 umask 077
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+local_mode=false
+no_build=false
+build_only=false
+arguments=()
+for argument in "$@"; do
+  case "$argument" in
+    --local) local_mode=true ;;
+    --no-build) no_build=true ;;
+    --build-only) build_only=true ;;
+    *) arguments+=("$argument") ;;
+  esac
+done
 mkdir -p "$ROOT/.logs"
-if [[ "${1:-}" == "--no-build" ]]; then
-  shift
-else
-  if ! dotnet build "$ROOT/server/MyGame.sln" --nologo --verbosity minimal >"$ROOT/.logs/build.log" 2>&1; then
-    tail -n 20 "$ROOT/.logs/build.log" >&2
-    exit 1
+if $local_mode; then
+  if ! $no_build; then
+    if ! dotnet build "$ROOT/server/MyGame.sln" --nologo --verbosity minimal >"$ROOT/.logs/build.log" 2>&1; then
+      tail -n 20 "$ROOT/.logs/build.log" >&2
+      exit 1
+    fi
   fi
+  $build_only && exit 0
+  exec dotnet "$ROOT/e2e/MyGame.E2E/bin/Debug/net8.0/MyGame.E2E.dll" --root "$ROOT" "${arguments[@]}"
 fi
-exec dotnet "$ROOT/e2e/MyGame.E2E/bin/Debug/net8.0/MyGame.E2E.dll" --root "$ROOT" "$@"
+if $no_build; then
+  echo '--no-build requires --local; Docker builds reuse the layer cache automatically.' >&2
+  exit 1
+fi
+if [[ -S /var/run/docker.sock ]]; then
+  export MY_GAME_RUNNER_USER="$(id -u):$(id -g)"
+  export MY_GAME_DOCKER_GID="$(stat -c '%g' /var/run/docker.sock 2>/dev/null || stat -f '%g' /var/run/docker.sock)"
+fi
+project="my-game-e2e-$(date +%s)-$$-$RANDOM"
+logs="$ROOT/.logs/docker-$project"
+mkdir -p "$logs"
+compose=(docker compose -f "$ROOT/docker-compose.yml" -p "$project" --profile docker)
+cleanup() {
+  local result=$?
+  trap - EXIT
+  local containers
+  containers=$(docker ps -aq --filter "label=my-game.e2e=$project") || result=1
+  if [[ -n "$containers" ]]; then
+    # IDs are Docker-generated hexadecimal tokens, one per line.
+    docker rm -f $containers >>"$logs/cleanup.log" 2>&1 || result=1
+  fi
+  "${compose[@]}" logs --no-color location >"$logs/redis.log" 2>&1 || result=1
+  "${compose[@]}" down --volumes >>"$logs/cleanup.log" 2>&1 || result=1
+  for image in "$project-node" "$project-runner"; do
+    if docker image inspect "$image" >/dev/null 2>&1; then
+      docker image rm "$image" >>"$logs/cleanup.log" 2>&1 || result=1
+    fi
+  done
+  exit "$result"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+echo "Docker logs: $logs"
+if ! "${compose[@]}" build >"$logs/build.log" 2>&1; then
+  tail -n 30 "$logs/build.log" >&2
+  exit 1
+fi
+$build_only && exit 0
+"${compose[@]}" run --rm --no-deps -T --name "$project-check" runner "${arguments[@]}" --check-structure
+for argument in "${arguments[@]}"; do
+  [[ "$argument" == "--check-structure" ]] && exit 0
+done
+"${compose[@]}" up -d --wait --wait-timeout 30 location >"$logs/redis-start.log" 2>&1
+"${compose[@]}" run --rm --no-deps -T --name "$project-control" runner "${arguments[@]}"
