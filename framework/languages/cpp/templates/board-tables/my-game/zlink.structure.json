@@ -6,14 +6,12 @@
   "run": {
     "commands": {
       "sh": [
-        "cmake --preset default",
-        "cmake --build --preset default",
+        "./run-e2e.sh --build-only",
         "./run-e2e.sh",
         "./run-e2e.sh --scenario table,reconnect,update"
       ],
       "powershell": [
-        "cmake --preset default",
-        "cmake --build --preset default",
+        "pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly",
         "pwsh -NoProfile -File ./run-e2e.ps1",
         "pwsh -NoProfile -File ./run-e2e.ps1 -Scenario table,reconnect,update"
       ]

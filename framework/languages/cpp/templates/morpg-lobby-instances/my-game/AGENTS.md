@@ -21,4 +21,6 @@ Lobby and Instance register the shared application Entry and first-admission han
 
 ## Changes and verification
 
+Use `./run-e2e.sh` or `pwsh -NoProfile -File ./run-e2e.ps1` for the default Docker build and e2e. Build-only uses `--build-only` or `-BuildOnly`. For local process debugging, use `--local` or `-Local`; add `--no-build` or `-NoBuild` to reuse a local build. Preserve stdin/stdout lifecycle control in both modes. Keep Docker build and cleanup logs in `.logs/docker-<project>/` and node logs in `.logs/run-<id>/`. Cleanup must remove only this run's containers, network and image tags, and must fail the run on errors.
+
 Keep the party, reconnect and update scenarios and structure checks. Build and run on Windows and Linux. Any intermittent failure is a defect. Logs and generated configurations are under `.logs/run-<id>/`. The runner owns only its child processes and its unique Compose project. Validate structure checks against both valid files and temporary invalid copies outside committed sources.

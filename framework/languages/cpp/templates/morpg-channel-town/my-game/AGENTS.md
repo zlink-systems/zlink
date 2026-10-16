@@ -21,6 +21,8 @@ Use public APIs only. Do not introduce internal APIs, reflection, raw frames, ma
 
 ## Changes and verification
 
+Use `./run-e2e.sh` or `pwsh -NoProfile -File ./run-e2e.ps1` for the default Docker build and e2e. Build-only uses `--build-only` or `-BuildOnly`. For local process debugging, use `--local` or `-Local`; add `--no-build` or `-NoBuild` to reuse a local build. Preserve stdin/stdout lifecycle control in both modes. Keep Docker build and cleanup logs in `.logs/docker-<project>/` and node logs in `.logs/run-<id>/`. Cleanup must remove only this run's containers, network and image tags, and must fail the run on errors.
+
 Preserve the `channel`, `dungeon`, `reconnect`, `update` scenario order and the structure checker. Build and run on Windows and Linux. An intermittent failure is a defect even if a later execution passes. Every successful environment requires three complete e2e runs. Logs and per-run configurations remain under `.logs/run-<id>/`.
 
 Run formatting only inside this template directory. The runner owns only the processes it starts and the uniquely named Compose project it creates. Cleanup failures must produce a nonzero exit code.

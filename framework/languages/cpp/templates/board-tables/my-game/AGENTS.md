@@ -21,6 +21,8 @@ Do not use internal APIs, reflection, raw frames, custom message codecs, sleep, 
 
 ## Changes and verification
 
+Use `./run-e2e.sh` or `pwsh -NoProfile -File ./run-e2e.ps1` for the default Docker build and e2e. Build-only uses `--build-only` or `-BuildOnly`. For local process debugging, use `--local` or `-Local`; add `--no-build` or `-NoBuild` to reuse a local build. Preserve stdin/stdout lifecycle control in both modes. Keep Docker build and cleanup logs in `.logs/docker-<project>/` and node logs in `.logs/run-<id>/`. Cleanup must remove only this run's containers, network and image tags, and must fail the run on errors.
+
 Preserve the table, reconnect and update scenarios and their ordered structure declarations. Build and run on Windows and Linux. Treat any intermittent failure as a defect; a later passing run does not invalidate it. Run structure validation before startup and retain logs under .logs/run-<id>/. Cleanup must affect only the runner's own processes and Compose project, and cleanup failure must fail the run.
 
 README commands must match zlink.structure.json. Keep this file and README in English, with only the final README section in Korean. Write code comments in English.

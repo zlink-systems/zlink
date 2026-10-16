@@ -1,0 +1,6 @@
+**/.git
+.logs
+.validation
+build
+vcpkg_installed
+**/zlink.license

@@ -21,6 +21,8 @@ This C++ template implements an action/FPS entry lobby with mode-based matchmaki
 
 ## Changes and verification
 
+Use `./run-e2e.sh` or `pwsh -NoProfile -File ./run-e2e.ps1` for the default Docker build and e2e. Build-only uses `--build-only` or `-BuildOnly`. For local process debugging, use `--local` or `-Local`; add `--no-build` or `-NoBuild` to reuse a local build. Preserve stdin/stdout lifecycle control in both modes. Keep Docker build and cleanup logs in `.logs/docker-<project>/` and node logs in `.logs/run-<id>/`. Cleanup must remove only this run's containers, network and image tags, and must fail the run on errors.
+
 Keep `hit`, `reconnect`, `update` in that order in the descriptor and runner. Keep README commands equal to `run.commands`. Run the domain tests and structure check before e2e, then validate on Windows and Linux. Any intermittent failure remains a defect; a subsequent pass does not cancel it. Preserve first-failure node message-flow and client logs in `.logs/run-<id>/`. Framework defects belong in the job report with reproduction, first log evidence and source locations; do not fix Framework from this template.
 
 Run formatters and installation commands only from this template directory. Preserve English prose here and in README, except README's final Korean section. Code comments are English.

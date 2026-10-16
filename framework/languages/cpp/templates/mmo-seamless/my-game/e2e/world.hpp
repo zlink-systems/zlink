@@ -2,6 +2,7 @@
 #include "process.hpp"
 #include <random>
 #include <iostream>
+#include <cstdlib>
 
 namespace MyGame::E2E
 {
@@ -21,6 +22,13 @@ class World
     };
     std::filesystem::path root_, bin_, logs_;
     std::string project_, redis_;
+    std::string docker_project_;
+    std::vector<std::string> containers_;
+    static std::string environment (const char *name)
+    {
+        const auto *value = std::getenv (name);
+        return value ? value : "";
+    }
     std::vector<std::unique_ptr<Node>> nodes_;
     Node *zone_a_ = nullptr;
     bool compose_started_ = false;
@@ -66,9 +74,22 @@ class World
 #ifdef _WIN32
         executable += ".exe";
 #endif
+        std::vector<std::string> arguments{executable.string (), config_path.string ()};
+        if (!docker_project_.empty ()) {
+            const auto container = docker_project_ + "-" + logs_.filename ().string () + "-" + suffix;
+            constexpr auto container_config = "/app/node.json";
+            const auto image = environment ("MY_GAME_NODE_IMAGE");
+            const auto runner = environment ("MY_GAME_RUNNER_CONTAINER");
+            require (!image.empty () && !runner.empty (), "Missing Docker runner settings");
+            run_command ({"docker", "create", "-i", "--name", container, "--label",
+                          "my-game.e2e=" + docker_project_, "--network", "container:" + runner,
+                          image, "/app/bin/my-game-" + role, container_config});
+            containers_.push_back (container);
+            run_command ({"docker", "cp", config_path.string (), container + ":" + container_config});
+            arguments = {"docker", "start", "-a", "-i", container};
+        }
         node->process = std::make_unique<Process> (
-          std::vector<std::string>{executable.string (), config_path.string ()},
-          logs_ / (suffix + ".out.log"), logs_ / (suffix + ".err.log"));
+          arguments, logs_ / (suffix + ".out.log"), logs_ / (suffix + ".err.log"));
         auto *result = node.get ();
         nodes_.push_back (std::move (node));
         const auto line = result->process->wait_line (Control::ready);
@@ -94,7 +115,8 @@ class World
     World (std::filesystem::path root, std::filesystem::path bin) :
         root_ (std::filesystem::canonical (root)),
         bin_ (std::filesystem::canonical (bin)),
-        project_ ("my-game-" + unique_id ())
+        project_ ("my-game-" + unique_id ()),
+        docker_project_ (environment ("MY_GAME_DOCKER_PROJECT"))
     {
         logs_ = root_ / ".logs" / ("run-" + project_);
         std::filesystem::create_directories (logs_);
@@ -102,13 +124,17 @@ class World
     }
     std::string start ()
     {
-        compose_started_ = true;
-        run_command (compose ({"up", "--detach", "--wait"}));
-        auto endpoint = run_command (compose ({"port", "redis", "6379"}));
-        endpoint.erase (endpoint.find_last_not_of ("\r\n ") + 1);
-        require (endpoint.starts_with ("127.0.0.1:") && !endpoint.ends_with (":0"),
-                 "Redis ephemeral endpoint missing");
-        redis_ = endpoint;
+        if (docker_project_.empty ()) {
+            compose_started_ = true;
+            run_command (compose ({"up", "--detach", "--wait", "redis"}));
+            auto endpoint = run_command (compose ({"port", "redis", "6379"}));
+            endpoint.erase (endpoint.find_last_not_of ("\r\n ") + 1);
+            require (endpoint.starts_with ("127.0.0.1:") && !endpoint.ends_with (":0"),
+                     "Redis ephemeral endpoint missing");
+            redis_ = endpoint;
+        } else {
+            redis_ = "redis:6379";
+        }
         zone_a_ = start_node ("zone-a", "zone").first;
         start_node ("zone-b", "zone");
         start_node ("instance", "instance");
@@ -137,6 +163,15 @@ class World
             }
         }
         nodes_.clear ();
+        for (const auto &container : containers_) {
+            try {
+                run_command ({"docker", "rm", "-f", container});
+            }
+            catch (const std::exception &error) {
+                failures.push_back (error.what ());
+            }
+        }
+        containers_.clear ();
         if (compose_started_) {
             try {
                 run_command (compose ({"logs", "--no-color"}));

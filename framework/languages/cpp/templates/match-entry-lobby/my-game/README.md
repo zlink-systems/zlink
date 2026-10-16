@@ -14,29 +14,29 @@ This source serves both `action-entry-lobby` and `fps-entry-lobby`. The structur
 
 ## Prerequisites
 
-- CMake 3.24+, Ninja and a C++20 compiler (MSVC 2022 on Windows; GCC on Linux).
-- PowerShell 7 on Windows, or Bash on Linux; Docker with Compose v2.
-- vcpkg, with `VCPKG_ROOT` pointing to its checkout.
-- The zlink overlay ports from the `framework-cpp/v0.30.1` tag of `https://github.com/zlink-systems/zlink`. Set `VCPKG_OVERLAY_PORTS` to that checkout's `vcpkg/ports` directory. The template does not reference repository source or a local package feed.
+Docker with Compose v2 and a running Linux-container daemon is required. Use Bash on Linux or PowerShell 7 on Windows. The Docker build installs the C++ toolchain, CMake and vcpkg; the host does not need them for the default run.
 
-The vcpkg manifest pins Framework 0.30.1 and its zlink/zlink-cpp 1.19.0 dependencies. Version 0.30.1 must be available before building this manifest. Use a developer shell on Windows so Ninja can find MSVC. Each node configuration uses port zero; the runner reads actual endpoints from Framework listener status and Docker Compose.
+Public Framework 0.30.1 and its binding dependencies are pinned in `vcpkg.json`. The Docker build obtains the official overlay from the corresponding `framework-cpp/v0.30.1` tag. That tag and package must be published before the pinned build can complete. Follow the public package licensing requirements.
 
 ## Build
 
-Run from this project directory, after setting `VCPKG_ROOT` and `VCPKG_OVERLAY_PORTS`:
+Build the node and runner images from this directory:
 
 ```sh
-cmake --preset default
-cmake --build --preset default
+./run-e2e.sh --build-only
 ```
 
-The same commands apply in PowerShell. Optional domain checks:
+The script removes its unique image tags after checking the build. Docker retains build layers for subsequent runs.
 
-```sh
-ctest --test-dir build --output-on-failure
+On Windows, use PowerShell 7:
+
+```powershell
+pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
 ```
 
-## Local e2e
+`Dockerfile` defines the Ubuntu 24.04 build and runtime base once in `UBUNTU_IMAGE`. All node roles share the multi-stage image. The runner adds Docker CLI 28.5.1 to the same runtime. These base arguments can be replaced when the deployment base image becomes available.
+
+## Docker e2e
 
 Bash:
 
@@ -52,7 +52,11 @@ pwsh -NoProfile -File ./run-e2e.ps1
 pwsh -NoProfile -File ./run-e2e.ps1 -Scenario hit,reconnect,update
 ```
 
-The runner checks `zlink.structure.json`, starts a uniquely named Redis Compose project on an ephemeral loopback port, starts Match A before Match B and Session, and saves configuration, stdout, stderr message-flow records and typed client observations in `.logs/run-<id>/`. It cleans up only its own processes and Compose project. Cleanup failures cause a failing exit code.
+The runner and nodes execute in containers. The script checks structure before Redis startup, then uses a unique Compose network, project, container names and Redis key prefixes. Nodes share the runner's network namespace, preserving loopback listeners and OS-assigned ports. Configuration is copied into each node before attaching stdin and stdout; `drain`, `shutdown` and lifecycle output retain their existing protocol.
+
+The runner removes its node containers. The script removes remaining containers carrying this run's label, its Compose resources and its image tags. Cleanup failures return exit code 1. Build and orchestration logs remain in `.logs/docker-<project>/`; node logs and generated configurations remain in `.logs/run-<id>/`. Unix runners use the caller UID and Docker socket group so those files remain caller-owned.
+
+The scripts and runner check `zlink.structure.json`, start a uniquely named Redis Compose project on an ephemeral loopback port, start Match A before Match B and Session, and save configuration, stdout, stderr message-flow records and typed client observations in `.logs/run-<id>/`. They clean up only their own processes and Compose project. Cleanup failures cause a failing exit code.
 
 | Scenario | Assertions |
 | --- | --- |
@@ -62,9 +66,29 @@ The runner checks `zlink.structure.json`, starts a uniquely named Redis Compose 
 
 The wire contracts are in `server/shared/contracts.hpp`. `SessionInfo` is a push in C++ (see #1785 below). `RoomViewRequest` asks the authoritative Room for its current view. Requests and pushes use the Framework default typed JSON serializer. The runner never retries a failed scenario.
 
-Each scenario uses isolated Redis and node processes, with Room capacity set to one per match host. After relocation fills the surviving host, only the replacement has capacity for a new Room. Deployment capacity is configured independently.
+Each scenario uses isolated Redis key prefixes and node containers, with Room capacity set to one per match host. After relocation fills the surviving host, only the replacement has capacity for a new Room. Deployment capacity is configured independently.
 
 Message Follow is configured explicitly to 30 seconds. After `RELOCATED`, the safe shutdown observation budget is the follow duration plus the existing relocation observation budget; the relocation operation deadline is unchanged.
+
+## Local debugging
+
+Local processes remain available for debugging. Install a C++20 compiler, CMake 3.24+, Ninja, Git and vcpkg. Windows requires a Visual Studio 2022 developer shell. Set `VCPKG_ROOT` to vcpkg and `VCPKG_OVERLAY_PORTS` to `vcpkg/ports` in the ZLink checkout at tag `framework-cpp/v0.30.1`.
+
+Build and run local processes from this directory:
+
+```sh
+./run-e2e.sh --local
+```
+
+The script runs `cmake --preset default` and `cmake --build --preset default` before executing `build/bin/my-game-e2e`. Redis still runs in an isolated Compose project.
+
+On Windows, run:
+
+```powershell
+pwsh -NoProfile -File ./run-e2e.ps1 -Local
+```
+
+Use `--no-build` or `-NoBuild` with local mode to reuse a debugger build. Scenario selection works in both modes. Local build-only uses `--local --build-only` or `-Local -BuildOnly`.
 
 ## Known issues
 
@@ -88,6 +112,6 @@ Room coordinates have no arena bounds. Shots have range 80 and deal 25 damage ag
 
 ## 한국어 실행 안내
 
-CMake·Ninja·C++20 compiler와 Docker Compose를 준비하고 `VCPKG_ROOT`, `VCPKG_OVERLAY_PORTS`를 설정합니다. overlay는 `framework-cpp/v0.30.1` 태그의 `vcpkg/ports`를 사용합니다. 이 디렉터리에서 위 Build 명령과 운영체제에 맞는 Local e2e 명령을 실행합니다.
+Docker Compose v2와 Linux 컨테이너 데몬을 준비한다. 템플릿 디렉터리에서 Linux는 `./run-e2e.sh`, Windows는 `pwsh -NoProfile -File ./run-e2e.ps1`을 실행한다. 기본 실행은 이미지 빌드부터 runner·node 컨테이너 기동과 정리까지 수행한다. Framework 0.30.1 공개 패키지와 태그가 있어야 고정 버전 빌드를 완료할 수 있다.
 
-실행 로그는 `.logs/run-<id>/`에 남습니다. `hit`는 명중과 거부 판정, `reconnect`는 Actor와 Room 상태 유지, `update`는 host relocation과 대체 process의 새 Room 수락을 검사합니다. 공개 0.30.0 검증에서 발견한 차단 사항과 C++ SessionInfo push 제한은 Known issues에 기록되어 있으며, 전체 e2e 통과를 의미하지 않습니다.
+로컬 디버깅은 C++ 도구와 공식 vcpkg overlay를 설정한 뒤 `./run-e2e.sh --local` 또는 `pwsh -NoProfile -File ./run-e2e.ps1 -Local`로 실행한다. node 로그와 설정은 `.logs/run-<id>/`, Docker 빌드·정리 로그는 `.logs/docker-<project>/`에 남는다. 공개 패키지에서 확인된 차단 사항은 Known issues를 따른다.
