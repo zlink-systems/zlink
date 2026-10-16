@@ -179,17 +179,26 @@ internal sealed class ZLinkFanoutDiscovery : IAsyncDisposable
             owner.LeaseGeneration,
             default
         );
-        var result = await _store
-            .UpdateFanoutPublisherAsync(descriptor, intent, cancellationToken)
+        var result = await ZLinkDescriptorPublicationUnconfirmedException
+            .WriteAsync(
+                token => _store.UpdateFanoutPublisherAsync(descriptor, intent, token),
+                _options.OwnerLeaseRenewTimeout,
+                cancellationToken
+            )
             .ConfigureAwait(false);
         if (
             result.Status == ZLinkLocationWriteStatus.RejectedConflict
             && intent == ZLinkLocationWriteIntent.NewClaim
         )
-            result = await _store
-                .UpdateFanoutPublisherAsync(
-                    descriptor,
-                    ZLinkLocationWriteIntent.Takeover,
+            result = await ZLinkDescriptorPublicationUnconfirmedException
+                .WriteAsync(
+                    token =>
+                        _store.UpdateFanoutPublisherAsync(
+                            descriptor,
+                            ZLinkLocationWriteIntent.Takeover,
+                            token
+                        ),
+                    _options.OwnerLeaseRenewTimeout,
                     cancellationToken
                 )
                 .ConfigureAwait(false);
