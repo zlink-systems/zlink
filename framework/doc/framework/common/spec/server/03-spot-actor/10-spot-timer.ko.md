@@ -168,6 +168,8 @@ batch로 처리한다.
   callback을 시작하지 않고, Ready 뒤 처음 실행한다. 그 callback에서 부른 context `Close`는 `true`로 끝난다.
   Instance Spot cold activation도 같다. `OnCreateAsync`가 거부하거나 `OnInitializeAsync`가 실패한
   생성에서는 등록한 timer의 callback이 한 번도 실행되지 않는다.
+- Instance Spot cold activation의 `OnInitializeAsync`가 요청한 context `Close`는 첫 업무 message handler가
+  끝나고 replay cursor 갱신과 recovery pointer 해제가 끝난 뒤에 시작한다([Spot address messaging §7](06-spot-address-messaging.ko.md#7-close와-generation-경계)).
 - Cancel 뒤에는 그 generation 이후의 tick이 callback을 시작하지 않지만, cancel 시점에 이미
   실행 중이던 callback은 끝까지 실행된다.
 - 같은 generation의 `cancel`을 동시에 여러 번 호출하면 모든 결과는 당시 실행 중이던 callback과

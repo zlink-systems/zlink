@@ -621,11 +621,17 @@ The close procedure proceeds in the following order.
 **A context Close requested before Ready starts after Ready.** Handlers and timer callbacks don't run
 before Ready ([Spot timer §1](10-spot-timer.en.md#1-timer-generation-and-cancel)), so such a request only comes from
 `Configure`, `OnCreateAsync` or `OnInitializeAsync`. The request enters the lifecycle lane as the single Close work
-item of step 1, starts after the Spot becomes Ready, and ends by the procedure above: `true` for the current
-incarnation this host created. The requesting callback doesn't wait for the Close to complete — the Close starts
-only after that callback returns and the Spot becomes Ready, so waiting inside it could never complete. If creation
-is rejected or fails, or the activation is discarded, before Ready, there is no incarnation to close and the Close
-ends with idempotent `false`.
+item of step 1 and starts after the Spot becomes Ready. For an Instance Spot cold activation, Ready isn't enough: it
+starts only after the first business message's handler completes and the replay-cursor update is durable, so the
+activation recovery pointer has been released ([§4.1](#41-procedure--from-resolve-to-activation) step 12) — moving authority to
+`Closing` earlier would leave a recovery pointer on `Closing` authority. Once started, the Close follows this section's
+membership check, owner and generation fences and completion rules; deferral doesn't guarantee `true`. For example, a
+Close requested during relocation target initialization ends `false` if the Spot has member Actors. The requesting
+callback doesn't wait for the Close to complete — the Close starts only after that callback returns and the Spot
+becomes Ready, so waiting inside it could never complete. If a new User Spot creation or an Instance Spot cold
+activation is rejected or fails before Ready, there is no incarnation to close and that Close ends with idempotent
+`false`. Relocation target initialization runs after the authority CAS, so it is outside this rule; its failure follows
+the [relocation rules](../05-location-relocation/04-relocation-flow.en.md#46-target-opens-the-queue-progressively-starting-with-existing-work).
 
 A message placed after the Close work item that has no Instance intent ends with the result of
 [§9](#9-failure-and-observability). If that incarnation no longer exists, idempotent `false`; if a
