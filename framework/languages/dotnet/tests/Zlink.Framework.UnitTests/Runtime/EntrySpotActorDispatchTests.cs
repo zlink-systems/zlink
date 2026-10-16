@@ -4625,7 +4625,10 @@ public sealed partial class EntrySpotActorDispatchTests
         await disposeStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.False(runtime.IsStarted);
         Assert.Null(runtime.Context);
-        Assert.Throws<InvalidOperationException>(() => runtime.GetSpotMonitoringSnapshot("entry"));
+        var refusal = Assert.Throws<ZLinkFrameworkException>(() =>
+            runtime.GetSpotMonitoringSnapshot("entry")
+        );
+        Assert.Equal(ZLinkFrameworkErrorKind.ShuttingDown, refusal.Kind);
         var restart = runtime.StartAsync(CancellationToken.None).AsTask();
         await Task.Delay(25);
         Assert.False(restart.IsCompleted);
@@ -4761,7 +4764,8 @@ public sealed partial class EntrySpotActorDispatchTests
             );
 
             Assert.NotNull(fence);
-            Assert.Throws<InvalidOperationException>(() => runtime.EnterOperation());
+            var refusal = Assert.Throws<ZLinkFrameworkException>(() => runtime.EnterOperation());
+            Assert.Equal(ZLinkFrameworkErrorKind.ShuttingDown, refusal.Kind);
             var firstFence = fence.Value;
             Assert.True(runtime.TryReopenRetireAdmissionsAfterRollback(firstFence));
 
@@ -8379,7 +8383,7 @@ public sealed partial class EntrySpotActorDispatchTests
             var reply = Assert.Single(node.NoBindReplies);
             var decoded = DecodeReplyFrame<ZLinkStreamWireError>(Assert.Single(reply.Parts));
             Assert.Equal(ZlinkStreamMessageKind.Error, decoded.Header.Kind);
-            Assert.Equal(nameof(InvalidOperationException), decoded.Payload.Code);
+            Assert.Equal("internal_failure", decoded.Payload.Code);
             Assert.Contains("boom", decoded.Payload.Message, StringComparison.Ordinal);
             Assert.Empty(node.BoundSessionReplies);
             Assert.False(runtime.TryGetActorBoundSession(actorRef.ActorId, out _));
@@ -8425,7 +8429,7 @@ public sealed partial class EntrySpotActorDispatchTests
             var reply = Assert.Single(node.NoBindReplies);
             var decoded = DecodeReplyFrame<ZLinkStreamWireError>(Assert.Single(reply.Parts));
             Assert.Equal(ZlinkStreamMessageKind.Error, decoded.Header.Kind);
-            Assert.Equal(nameof(JsonException), decoded.Payload.Code);
+            Assert.Equal("internal_failure", decoded.Payload.Code);
             Assert.Empty(node.BoundSessionReplies);
 
             var observed = await observer.WaitAsync("failed", TimeSpan.FromSeconds(2));

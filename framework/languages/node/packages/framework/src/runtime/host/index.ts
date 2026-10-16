@@ -67,6 +67,7 @@ import {
   ZLinkActorTransferRegistry
 } from '../actors';
 import { messageFollowOwnerNodeRid, ownerFence } from '../actors/actor-message-follow-context';
+import { ZLINK_REMOTE_ACTOR_SESSION_DISCONNECTED_PACKET } from '../actors/actor-packet-relay-wire';
 import {
   ZLINK_INTERNAL_ACTOR_TRANSPORT_DELIVERY_GATE,
   type ZLinkInternalActorTransportDeliveryGate
@@ -143,6 +144,7 @@ import {
 import {
   MeshPeerRuntimeState,
   OperationKind,
+  ReadyDomain,
   ReceiveKind,
   type ReadyRecord,
   type ReceiveRecord
@@ -226,6 +228,8 @@ import { ZLinkSpotNodeRuntimeOptionsFactory } from './spot-node-runtime-options-
 import { ZLinkSpotRuntimeOptionsFactory } from './spot-runtime-options-factory';
 import { ZLinkStatefulAuthorityRouteRuntime } from './stateful-authority-route-runtime';
 import { ZLinkUserSpotCreationCoordinator } from './user-spot-creation-coordinator';
+import { decodeRemoteActorPacketRelay } from '../spots/spot-remote-route-codec';
+import { decodeStreamHeader } from '../streams/protocol';
 
 const HOST_SHUTDOWN_POLL_INTERVAL_MS = 100;
 const HANDOFF_ACCEPTANCE_POLL_INTERVAL_MS = 10;
@@ -2944,13 +2948,13 @@ export class ZLinkFrameworkRuntimeHost
             'MeshNode channel dispatch requires the channel runtime.'
           );
         }
-        return this.admission.run(meshName, 'RouteMesh channel dispatch', () =>
+        return this.admitMeshDispatch(meshName, record, 'RouteMesh channel dispatch', () =>
           channelRuntime.dispatchMeshChannel(meshName, record, signal)
         );
       }
       case ReceiveKind.NodeSend:
       case ReceiveKind.NodeRequest: {
-        return this.admission.run(meshName, 'RouteMesh node dispatch', () =>
+        return this.admitMeshDispatch(meshName, record, 'RouteMesh node dispatch', () =>
           this.dispatchMeshNodeRecord(meshName, record, signal)
         );
       }
@@ -2958,7 +2962,7 @@ export class ZLinkFrameworkRuntimeHost
       case ReceiveKind.SpotSend:
       case ReceiveKind.SpotRequest:
       case ReceiveKind.SpotMulticast:
-        return this.admission.run(meshName, 'RouteMesh Spot dispatch', () =>
+        return this.admitMeshDispatch(meshName, record, 'RouteMesh Spot dispatch', () =>
           this.dispatchMeshSpotRecord(meshName, owner, record)
         );
       case ReceiveKind.InstanceSpotActivation:
@@ -2967,7 +2971,7 @@ export class ZLinkFrameworkRuntimeHost
             'MeshNode Instance Spot dispatch requires the Spot manager.'
           );
         }
-        return this.admission.run(meshName, 'RouteMesh Instance Spot dispatch', () =>
+        return this.admitMeshDispatch(meshName, record, 'RouteMesh Instance Spot dispatch', () =>
           this.spotManager!.dispatchMeshInstance(meshName, owner, record)
         );
       case ReceiveKind.SpotControl:
@@ -2984,7 +2988,7 @@ export class ZLinkFrameworkRuntimeHost
             'MeshNode Actor dispatch requires the Spot manager.'
           );
         }
-        return this.admission.run(meshName, 'RouteMesh Actor dispatch', () =>
+        return this.admitMeshDispatch(meshName, record, 'RouteMesh Actor dispatch', () =>
           this.spotManager!.dispatchMeshActor(applicationJobOrigin(), meshName, owner, record)
         );
       case ReceiveKind.SendReady:
@@ -2994,6 +2998,38 @@ export class ZLinkFrameworkRuntimeHost
           `MeshNode record kind '${record.kind}' does not yet have a registered framework consumer.`
         );
     }
+  }
+
+  private admitMeshDispatch(
+    meshName: string,
+    record: ReceiveRecord,
+    operation: string,
+    dispatch: () => void | Promise<void>
+  ): void | Promise<void> {
+    // Execution gate §13 and host relocation §14 keep control progress independent
+    // of new application admission. Disconnect callbacks still use their owner gate.
+    if (record.domain === ReadyDomain.Infrastructure) return dispatch();
+    if (
+      !this.admission.accepts(meshName) &&
+      (record.kind === ReceiveKind.NodeSend ||
+        record.kind === ReceiveKind.NodeRequest ||
+        record.kind === ReceiveKind.SpotSend ||
+        record.kind === ReceiveKind.SpotRequest)
+    ) {
+      const relay = decodeRemoteActorPacketRelay(
+        record.parts,
+        { serializers: this.options.registration.messageSerializers },
+        this.flowCreationEnabled()
+      );
+      if (
+        relay !== undefined &&
+        decodeStreamHeader(Buffer.from(relay.header, 'base64'), this.flowCreationEnabled()).name ===
+          ZLINK_REMOTE_ACTOR_SESSION_DISCONNECTED_PACKET
+      ) {
+        return dispatch();
+      }
+    }
+    return this.admission.run(meshName, operation, dispatch);
   }
 
   private async dispatchMeshActorBinding(
