@@ -158,7 +158,6 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
     private final ZLinkSpotPublisherRuntime publishers;
     private final ZLinkHandlerActivator handlerFactory;
     private final ZLinkDispatchErrorReporter dispatchErrors;
-    private final ZLinkRuntimeEventDispatcher eventDispatcher;
     private final Executor handlerExecutor;
     private final systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue
             applicationJobQueue;
@@ -433,7 +432,6 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         this.serializer = Objects.requireNonNull(serializer, "serializer");
         this.routeMessages = new ZLinkSpotRouteMessages(this.serializer);
         this.handlerFactory = handlerFactory;
-        this.eventDispatcher = eventDispatcher;
         this.handlerExecutor =
                 ZLinkFlowContext.propagating(
                         Objects.requireNonNull(registration.handlerExecutor(), "handlerExecutor"));
@@ -5241,7 +5239,6 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                 timerExecutor,
                 handlers,
                 suspendHandlerInvokers,
-                eventDispatcher,
                 primaryNodeSourceName,
                 (timerName, operation) ->
                         dispatch.enqueue(

@@ -7,7 +7,6 @@ import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerInstanceOwner;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationAdapter;
-import systems.zlink.framework.runtime.internal.monitoring.ZLinkRuntimeEventDispatcher;
 import systems.zlink.framework.spots.ZLinkTimer;
 import systems.zlink.framework.spots.ZLinkTimerOptions;
 import systems.zlink.framework.spots.ZLinkTimerOverrunPolicy;
@@ -35,7 +34,6 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
     private final ScheduledExecutorService executor;
     private final ZLinkHandlerInstanceOwner handlers;
     private final List<ZLinkSuspendInvocationAdapter> suspendHandlerInvokers;
-    private final ZLinkRuntimeEventDispatcher eventDispatcher;
     private final String sourceName;
     private final Dispatch dispatch;
     private final ZLinkStateLane stateLane = new ZLinkStateLane();
@@ -70,7 +68,6 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
             ScheduledExecutorService executor,
             ZLinkHandlerActivator handlerFactory,
             List<ZLinkSuspendInvocationAdapter> suspendHandlerInvokers,
-            ZLinkRuntimeEventDispatcher eventDispatcher,
             String sourceName,
             Dispatch dispatch) {
         this(
@@ -78,7 +75,6 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
                 executor,
                 new ZLinkHandlerInstanceOwner(handlerFactory),
                 suspendHandlerInvokers,
-                eventDispatcher,
                 sourceName,
                 dispatch);
     }
@@ -88,14 +84,12 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
             ScheduledExecutorService executor,
             ZLinkHandlerInstanceOwner handlers,
             List<ZLinkSuspendInvocationAdapter> suspendHandlerInvokers,
-            ZLinkRuntimeEventDispatcher eventDispatcher,
             String sourceName,
             Dispatch dispatch) {
         this.spotId = spotId;
         this.executor = executor;
         this.handlers = handlers;
         this.suspendHandlerInvokers = suspendHandlerInvokers;
-        this.eventDispatcher = eventDispatcher;
         this.sourceName = sourceName;
         this.dispatch = dispatch;
     }

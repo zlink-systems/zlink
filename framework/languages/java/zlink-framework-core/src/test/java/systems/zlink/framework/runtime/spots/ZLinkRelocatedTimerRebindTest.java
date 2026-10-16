@@ -60,7 +60,6 @@ final class ZLinkRelocatedTimerRebindTest {
                             scheduler,
                             ignored -> new TickHandler(deliveries),
                             List.of(),
-                            null,
                             "test",
                             (name, callback) -> {
                                 var result = callback.get();
@@ -184,7 +183,6 @@ final class ZLinkRelocatedTimerRebindTest {
                             scheduler,
                             ignored -> new TickHandler(deliveries),
                             List.of(),
-                            null,
                             "test",
                             (name, callback) -> {
                                 queued.add(callback);
@@ -279,7 +277,6 @@ final class ZLinkRelocatedTimerRebindTest {
                                         ? new TickHandler(deliveries)
                                         : new OtherHandler(),
                         List.of(),
-                        null,
                         "test",
                         (name, callback) -> callback.get());
         registry.setSpot(new Object());
