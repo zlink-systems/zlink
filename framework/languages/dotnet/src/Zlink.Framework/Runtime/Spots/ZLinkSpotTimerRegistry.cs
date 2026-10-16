@@ -1,4 +1,3 @@
-using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Locations;
 using Zlink.Framework.Runtime.Timers;
 using static Zlink.Framework.Runtime.Execution.ZLinkStateLaneWait;
@@ -26,7 +25,9 @@ internal sealed class ZLinkSpotTimerRegistry(
     private bool _schedulerDisposed;
     private bool _closed;
     private bool _frozen = restorePending;
-    private bool _restorePending = restorePending;
+    private RelocationInitialization _relocationInitialization = restorePending
+        ? RelocationInitialization.AwaitingSnapshot
+        : RelocationInitialization.None;
 
     internal bool IsFrozen => AwaitStateLane(_lane.RunAsync(() => _frozen));
 
@@ -86,12 +87,34 @@ internal sealed class ZLinkSpotTimerRegistry(
         {
             ObjectDisposedException.ThrowIf(_closed, this);
             cancellationToken.ThrowIfCancellationRequested();
-            if (_frozen && !_restorePending)
+            var initializingTarget =
+                _relocationInitialization == RelocationInitialization.Initializing;
+            if (
+                _frozen
+                && _relocationInitialization != RelocationInitialization.AwaitingSnapshot
+                && !initializingTarget
+            )
                 throw new ZLinkConfigurationException(
                     "SPOT timer registration is sealed for relocation."
                 );
 
             var timerOptions = ValidateRegistration(name, period, options);
+
+            if (initializingTarget)
+            {
+                var restored = _timers.Find(registration =>
+                    registration.Restored
+                    && !registration.Timer.IsDisposed
+                    && registration.Timer.Snapshot().Name == name
+                );
+                if (restored is not null)
+                {
+                    restored.ValidateHandlerType(handlerType, spotType);
+                    // Restored callbacks already dispatch through this target activation.
+                    // Returning its handle preserves the logical cursor and pending tick.
+                    return (IZLinkTimer)restored.Timer;
+                }
+            }
 
             var descriptor = ZLinkSpotDescriptorFactory.CreateTimerDescriptor(
                 name,
@@ -116,7 +139,7 @@ internal sealed class ZLinkSpotTimerRegistry(
                     reportFailureAsync(descriptor, tick, error, stopped, ct),
                 () =>
                     ZLinkFlowContext.Enter(null, null, flowCaptureEnabled(), ZLinkFlowOrigin.Timer),
-                startFrozen: _restorePending,
+                startFrozen: _frozen,
                 scheduler: _scheduler
             );
             _timers.Add(new ZLinkSpotTimerRegistration(timer, handlerType, spotType));
@@ -276,18 +299,6 @@ internal sealed class ZLinkSpotTimerRegistry(
                     })
                     .ToArray();
 
-                if (_restorePending)
-                {
-                    RestoreConfiguredTimers(
-                        snapshots,
-                        stopToken,
-                        dispatchAsync,
-                        reportFailureAsync
-                    );
-                    _restorePending = false;
-                    _frozen = true;
-                    return;
-                }
                 if (_timers.Count != 0)
                     throw new InvalidOperationException(
                         "Logical timers can only be restored into an empty registry."
@@ -323,77 +334,37 @@ internal sealed class ZLinkSpotTimerRegistry(
                             snapshot.HandlerType,
                             snapshot.SpotType
                         )
+                        {
+                            Restored = true,
+                        }
                     );
                 }
+                _relocationInitialization = RelocationInitialization.Restored;
                 _frozen = true;
             })
         );
     }
 
-    private void RestoreConfiguredTimers(
-        IReadOnlyList<ZLinkSpotLogicalTimerSnapshot> snapshots,
-        CancellationToken stopToken,
-        Func<
-            ZLinkSpotTimerDescriptor,
-            ZLinkTimerTick,
-            CancellationToken,
-            ValueTask<bool>
-        > dispatchAsync,
-        Func<
-            ZLinkSpotTimerDescriptor,
-            ZLinkTimerTick,
-            Exception,
-            bool,
-            CancellationToken,
-            ValueTask
-        > reportFailureAsync
-    )
+    internal void BeginRelocatedInitialization()
     {
-        var registrations = _timers.ToDictionary(
-            static registration => registration.Timer.Snapshot().Name,
-            StringComparer.Ordinal
-        );
-        foreach (var snapshot in snapshots)
-        {
-            if (registrations.TryGetValue(snapshot.Timer.Name, out var registration))
+        AwaitStateLane(
+            _lane.RunAsync(() =>
             {
-                if (
-                    registration.HandlerType != snapshot.HandlerType
-                    || registration.SpotType != snapshot.SpotType
-                )
-                    throw new InvalidDataException(
-                        $"Logical timer '{snapshot.Timer.Name}' does not match its target registration."
-                    );
-                registration.Timer.RestoreFrozen(snapshot.Timer);
-                continue;
-            }
+                if (_relocationInitialization == RelocationInitialization.Restored)
+                    _relocationInitialization = RelocationInitialization.Initializing;
+            })
+        );
+    }
 
-            var descriptor = ZLinkSpotDescriptorFactory.CreateTimerDescriptor(
-                snapshot.Timer.Name,
-                snapshot.Timer.Period,
-                snapshot.HandlerType,
-                snapshot.SpotType
-            );
-            var timer = new ZLinkTimer(
-                snapshot.Timer,
-                stopToken,
-                (tick, ct) => dispatchAsync(descriptor, tick, ct),
-                (tick, error, stopped, ct) =>
-                    reportFailureAsync(descriptor, tick, error, stopped, ct),
-                () =>
-                    ZLinkFlowContext.Enter(null, null, flowCaptureEnabled(), ZLinkFlowOrigin.Timer),
-                startFrozen: true,
-                scheduler: _scheduler
-            );
-            var restored = new ZLinkSpotTimerRegistration(
-                timer,
-                snapshot.HandlerType,
-                snapshot.SpotType
-            );
-            if (!registrations.TryAdd(snapshot.Timer.Name, restored))
-                throw new InvalidDataException($"Duplicate logical timer '{snapshot.Timer.Name}'.");
-            _timers.Add(restored);
-        }
+    internal void EndRelocatedInitialization()
+    {
+        AwaitStateLane(
+            _lane.RunAsync(() =>
+            {
+                if (_relocationInitialization == RelocationInitialization.Initializing)
+                    _relocationInitialization = RelocationInitialization.Restored;
+            })
+        );
     }
 
     internal void Resume()
@@ -404,8 +375,12 @@ internal sealed class ZLinkSpotTimerRegistry(
                 if (!_frozen || _closed)
                     return;
                 _frozen = false;
+                _relocationInitialization = RelocationInitialization.None;
                 foreach (var registration in _timers)
+                {
+                    registration.Restored = false;
                     registration.Timer.Resume();
+                }
             })
         );
     }
@@ -480,5 +455,25 @@ internal sealed class ZLinkSpotTimerRegistry(
         ZLinkTimer Timer,
         Type HandlerType,
         Type SpotType
-    );
+    )
+    {
+        internal bool Restored { get; set; }
+
+        internal void ValidateHandlerType(Type handlerType, Type spotType)
+        {
+            if (HandlerType != handlerType || SpotType != spotType)
+                throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.InvalidOperation,
+                    $"Restored timer '{Timer.Snapshot().Name}' handler type does not match its target registration."
+                );
+        }
+    }
+
+    private enum RelocationInitialization
+    {
+        None,
+        AwaitingSnapshot,
+        Restored,
+        Initializing,
+    }
 }
