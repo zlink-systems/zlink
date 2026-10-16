@@ -1,3 +1,4 @@
+[CmdletBinding(PositionalBinding = $false)]
 param(
     [switch]$Local,
     [switch]$NoBuild,
@@ -27,6 +28,7 @@ if ($Local) {
     exit $LASTEXITCODE
 }
 if ($NoBuild) { throw '-NoBuild requires -Local; Docker builds reuse the layer cache automatically.' }
+$checkOnly = $RunnerArguments.Count -gt 0 -and $RunnerArguments[0] -eq '--check-structure'
 $project = 'my-game-e2e-' + [guid]::NewGuid().ToString('N')
 $logs = Join-Path $root ".logs/docker-$project"
 New-Item -ItemType Directory $logs | Out-Null
@@ -42,12 +44,12 @@ try {
     if ($BuildOnly) { $result = 0 }
     else {
         $checkArguments = @('--check-structure')
-        if ($RunnerArguments.Count -gt 0 -and $RunnerArguments[0] -eq '--check-structure') {
+        if ($checkOnly) {
             $checkArguments = $RunnerArguments
         }
         & docker @compose run --rm --no-deps -T --name "$project-check" runner @checkArguments
         if ($LASTEXITCODE -ne 0) { throw 'Structure check failed.' }
-        if ($RunnerArguments -contains '--check-structure') { $result = 0 }
+        if ($checkOnly) { $result = 0 }
         else {
             & docker @compose up -d --wait --wait-timeout 30 redis *> (Join-Path $logs 'redis-start.log')
             if ($LASTEXITCODE -ne 0) { throw 'Redis startup failed.' }
