@@ -19,6 +19,8 @@ Table owns game state. Player owns identity and connection access through Framew
 
 ## Changes and verification
 
+Run `./run-e2e.sh` or `pwsh -NoProfile -File ./run-e2e.ps1` for Docker e2e. Build images with `--build-only` or `-BuildOnly`; check structure with `--check-structure` or `-CheckStructure`. Use `--local` or `-Local` for local process debugging with JDK 25.
+
 Keep the structure, configuration IDs, server constants, README commands and scenario list consistent. Validate actual files with the structure checker. Maintain `table`, `reconnect` and `update`; received responses and events determine success. An intermittent failure is a defect.
 
 Run build and e2e on Windows and Linux/WSL. Preserve the first failure and node message-flow records from `.logs/run-<id>/`. Clean up only infrastructure and processes owned by the current run. Keep Framework versions centralized in `build.gradle.kts` and never commit local feeds or repository-source dependencies.

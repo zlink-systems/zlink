@@ -22,6 +22,8 @@ Lobby and Instance register the shared application Entry and first-admission han
 
 ## Changes and verification
 
+Run `./run-e2e.sh` or `pwsh -NoProfile -File ./run-e2e.ps1` for Docker e2e. Build images with `--build-only` or `-BuildOnly`; check structure with `--check-structure` or `-CheckStructure`. Use `--local` or `-Local` for local process debugging with JDK 25.
+
 Keep `party`, `reconnect`, and `update` and their order in the structure declaration and runner. Preserve actual response/event assertions, Actor generation checks, and replacement placement checks. Validate structure changes against real files, including negative mutations outside the committed template. Run builds and e2e on Windows and Linux; one intermittent failure remains a defect.
 
 Keep node-role entry points separate and shared hosting in one place. Keep package versions centralized. Run formatters and installation commands from this template directory only. Logs and effective run configurations belong in `.logs/run-<id>/`. Cleanup must affect only processes and Compose projects created by that run and must report failures.

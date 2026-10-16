@@ -12,19 +12,26 @@ flowchart LR
 
 ## Prerequisites
 
-JDK 25, Docker Compose v2 with a running Docker daemon, and PowerShell 7 on Windows. The Gradle wrapper downloads Gradle. Public ZLink Framework 0.30.1 and binding 1.19.0 are centrally pinned in `build.gradle.kts`. A valid `zlink.license`, when required by the installed distribution, must be available to each node through its public license configuration.
+Docker Compose v2 with a running Docker daemon, and PowerShell 7 on Windows. The Gradle wrapper downloads Gradle. Public ZLink Framework 0.30.1 and binding 1.19.0 are centrally pinned in `build.gradle.kts`. A valid `zlink.license`, when required by the installed distribution, must be available to each node through its public license configuration.
 
 ## Build
 
 ```sh
-./gradlew --no-daemon installDist
+./run-e2e.sh --build-only
 ```
 
 ```powershell
-./gradlew.bat --no-daemon installDist
+pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
 ```
 
-## Local e2e
+## Docker e2e
+
+Docker runs the Java e2e runner and every node role in containers. Nodes share the runner's network namespace and keep the existing stdin/stdout control protocol. Only the runner mounts the Docker socket. Each invocation removes its own containers, network and image tags; logs remain under `.logs/`.
+
+For local process debugging, install JDK 25 and use `./run-e2e.sh --local` or `pwsh -NoProfile -File ./run-e2e.ps1 -Local`. Add `--no-build` or `-NoBuild` to reuse a local build. Docker uses its image layer cache.
+
+> **Base images.** Dockerfile ARG defaults pin Eclipse Temurin JDK/JRE 25.0.1+8 and Docker CLI 28.5.1. Replace these defaults when adopting a deployment base image.
+
 
 ```sh
 ./run-e2e.sh
@@ -65,6 +72,8 @@ Framework owns Actor identity, Session binding, route and lease state, membershi
 
 ## 한국어 실행 안내
 
-JDK 25와 Docker Compose를 준비한 뒤 위의 운영체제별 Build 및 Local e2e 명령을 실행합니다. runner는 실행마다 Redis key prefix와 Compose project를 새로 만들고, OS가 배정한 포트를 사용합니다. 로그는 `.logs/run-<id>/`에 보존되며 정리 실패도 검증 실패로 처리합니다.
+기본 e2e는 runner와 node를 Docker에서 실행합니다. 로컬 process 디버깅에는 JDK 25를 준비하고 `--local` 또는 `-Local`을 지정합니다.
+
+Docker Compose를 준비한 뒤 위의 운영체제별 Build 및 Docker e2e 명령을 실행합니다. runner는 실행마다 Redis key prefix와 Compose project를 새로 만들고, OS가 배정한 포트를 사용합니다. 로그는 `.logs/run-<id>/`에 보존되며 정리 실패도 검증 실패로 처리합니다.
 
 대기열은 Matchmaking User Spot, 위치·HP·명중·승자 판정은 Room User Spot이 소유합니다. 운영 중 교체할 때는 해당 match process에 `drain`을 보내고 `SAFE_TO_SHUTDOWN`까지 확인한 뒤 `shutdown`으로 종료합니다. 같은 설정으로 대체 process를 시작하고 `READY`를 확인합니다.

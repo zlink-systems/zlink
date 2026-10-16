@@ -20,4 +20,6 @@ Do not add internal APIs, reflection, raw frame parsing, custom codecs, reconnec
 
 ## Changes and verification
 
+Run `./run-e2e.sh` or `pwsh -NoProfile -File ./run-e2e.ps1` for Docker e2e. Build images with `--build-only` or `-BuildOnly`; check structure with `--check-structure` or `-CheckStructure`. Use `--local` or `-Local` for local process debugging with JDK 25.
+
 Keep the region, dungeon, reconnect, and update scenarios and their canonical order. Run structure validation before node startup. Verify changes on Windows and Linux; any intermittent failure is a defect. Preserve logs in `.logs/run-<id>/`. Cleanup failures must produce a nonzero exit code. Keep each role's separate entry point and update the structure declaration when composition changes.

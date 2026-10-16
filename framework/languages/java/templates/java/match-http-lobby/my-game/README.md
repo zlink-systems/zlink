@@ -14,23 +14,30 @@ flowchart LR
 
 ## Prerequisites
 
-Install JDK 25, Docker with Compose v2, and PowerShell 7 for Windows. The included Gradle wrapper downloads Gradle. Maven Central supplies Framework 0.30.1 and binding 1.19.0; versions are declared once in `build.gradle.kts`.
+Docker with Compose v2, and PowerShell 7 for Windows. The included Gradle wrapper downloads Gradle. Maven Central supplies Framework 0.30.1 and binding 1.19.0; versions are declared once in `build.gradle.kts`.
 
 ## Build
 
 Bash:
 
 ```sh
-./gradlew --no-daemon installDist
+./run-e2e.sh --build-only
 ```
 
 PowerShell:
 
 ```powershell
-./gradlew.bat --no-daemon installDist
+pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
 ```
 
-## Local e2e
+## Docker e2e
+
+Docker runs the Java e2e runner and every node role in containers. Nodes share the runner's network namespace and keep the existing stdin/stdout control protocol. Only the runner mounts the Docker socket. Each invocation removes its own containers, network and image tags; logs remain under `.logs/`.
+
+For local process debugging, install JDK 25 and use `./run-e2e.sh --local` or `pwsh -NoProfile -File ./run-e2e.ps1 -Local`. Add `--no-build` or `-NoBuild` to reuse a local build. Docker uses its image layer cache.
+
+> **Base images.** Dockerfile ARG defaults pin Eclipse Temurin JDK/JRE 25.0.1+8 and Docker CLI 28.5.1. Replace these defaults when adopting a deployment base image.
+
 
 Bash:
 
@@ -64,6 +71,8 @@ The Room domain is in `server/match/.../domain/RoomState.java`. HTTP and ZLink l
 
 ## 한국어 실행 안내
 
-JDK 25와 Docker Compose를 설치한 뒤 위 Build 명령으로 빌드합니다. Windows에서는 PowerShell 7을 사용합니다. e2e runner는 실행마다 별도 Redis project와 key prefix를 만들고 임시 포트를 사용하며, 로그를 `.logs/run-<id>/`에 보존합니다.
+기본 e2e는 runner와 node를 Docker에서 실행합니다. 로컬 process 디버깅에는 JDK 25를 준비하고 `--local` 또는 `-Local`을 지정합니다.
+
+Docker Compose를 설치한 뒤 위 Build 명령으로 빌드합니다. Windows에서는 PowerShell 7을 사용합니다. e2e runner는 실행마다 별도 Redis project와 key prefix를 만들고 임시 포트를 사용하며, 로그를 `.logs/run-<id>/`에 보존합니다.
 
 HTTP 로비는 같은 mode의 두 요청을 모아 Room을 준비한 뒤 Session endpoint를 반환합니다. 배포 시 Session의 READY 출력에서 실제 endpoint를 확인하여 로비 설정에 넣습니다. match node 교체는 drain 완료와 SAFE_TO_SHUTDOWN을 확인한 뒤 shutdown 순서로 수행합니다.
