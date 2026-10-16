@@ -1393,11 +1393,11 @@ target route를 채택한다.
 배제한다. 따라서 세 조건이 성립하면 이 relocation의 target CAS가 먼저 commit됐고, 그 뒤의 owner 변경은
 그 target에서 이어진 이동이다. 이 판정은 별도 commit 기록을 추가하지 않는다.
 
-이 경우 source는 commit된 첫 target으로 §7.3의 Message Follow route를 설치하고, 보관 사본을 해제하고
-source 정리를 한 번 수행한다. 만료 시각은 기존대로 이 relocation의 commit을 기준으로 한다. 첫 target
-이후의 이동은 첫 target이 가진 자신의 Message Follow route가 유효할 때만 hop으로 이어 전달한다(§7.3의
-hop 한도). 어느 hop의 route가 없거나 만료됐으면 §7.3대로 `Unavailable`이다.
-Source는 다시 읽은 현재 owner로 직접 가는 route를 만들지 않는다. `ObjectGeneration`이
+이 경우 source는 보관 사본을 해제하고 source 정리를 한 번 수행하되, §7.3의 Message Follow route는
+설치하지 않는다. §7.3의 route는 첫 target이 commit한 `AuthorityOwnerGeneration`을 fence로 검증하는데,
+다시 읽은 authority에는 그 값이 남지 않고 source는 그 값을 따로 알 수 없기 때문이다. 이후 source로
+도착한 message는 §7.3의 route 없음 결과(`Unavailable`)로 끝난다. Source는 다시 읽은 현재 owner로 직접
+가는 route를 만들거나 첫 target의 generation을 추측하지 않는다. `ObjectGeneration`이
 다르거나 `AuthorityOwnerGeneration`이 커지지 않았는데 owner가 source도 첫 target도 아니면 기존대로
 실패(`DataLost`)로 판정한다. `Preserve` 응답이 불확정이면 source lease가 유효한 동안 새 timer 없이 이 절의 Store-failure 정책으로 반복한다. Source lease 만료 또는 source가 다시 읽은 authority가 없음(`Missing`)은 source의 작업을 [공통 relocation §4.4](04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)의 expired-owner terminal로 끝낸다. `Missing`이면 source fence가 성립하지 않으므로 source는 `Preserve`를 시도하지 않는다. Source는 owner lease가
 §5에 따라 유효할 때만 dispatch를 재개한다.
