@@ -28,15 +28,28 @@ string? Option(string name)
     return args[index + 1];
 }
 
+WorldRun? run = null;
+Exception? scenarioFailure = null;
+var result = 0;
 try
 {
-    return await RunOutcome.RunAsync(RunAsync);
+    result = await RunAsync();
 }
 catch (Exception error)
 {
-    Console.Error.WriteLine(error);
+    scenarioFailure = error;
+}
+var failures = run?.Outcome.Failures ?? [];
+if (scenarioFailure is not null)
+    failures.Insert(0, scenarioFailure);
+if (failures.Count > 0)
+{
+    Console.Error.WriteLine(
+        new AggregateException("Run failed (scenario first, then cleanup).", failures)
+    );
     return 1;
 }
+return result;
 
 async Task<int> RunAsync()
 {
@@ -47,7 +60,8 @@ async Task<int> RunAsync()
         return 0;
     }
     var selected = Scenarios.Select(Option("--scenario"));
-    await using var run = new WorldRun(root);
+    run = new WorldRun(root);
+    await using var ownedRun = run;
     using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellation.Token);
     deadline.CancelAfter(TimeSpan.FromMinutes(3));
     try

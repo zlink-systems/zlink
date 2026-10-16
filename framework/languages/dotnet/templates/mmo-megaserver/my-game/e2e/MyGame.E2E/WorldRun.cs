@@ -5,6 +5,7 @@ namespace MyGame.E2E;
 
 internal sealed class WorldRun(string root) : IAsyncDisposable
 {
+    public RunOutcome Outcome { get; } = new();
     private readonly List<ManagedProcess> nodes = [];
     private readonly string project = "my-game-e2e-" + Guid.NewGuid().ToString("N");
     private readonly string runDirectory = Path.Combine(
@@ -81,7 +82,13 @@ internal sealed class WorldRun(string root) : IAsyncDisposable
             "net8.0",
             assembly + ".dll"
         );
-        var node = new ManagedProcess("dotnet", [dll, "--config", config], runDirectory, suffix);
+        var node = new ManagedProcess(
+            Outcome,
+            "dotnet",
+            [dll, "--config", config],
+            runDirectory,
+            suffix
+        );
         nodes.Add(node);
         var ready =
             JsonSerializer.Deserialize<NodeReady>(
@@ -118,7 +125,7 @@ internal sealed class WorldRun(string root) : IAsyncDisposable
             }
             catch (Exception error)
             {
-                RunOutcome.Record(error);
+                Outcome.Record(error);
             }
             try
             {
@@ -131,7 +138,7 @@ internal sealed class WorldRun(string root) : IAsyncDisposable
             }
             catch (Exception error)
             {
-                RunOutcome.Record(error);
+                Outcome.Record(error);
             }
         }
     }

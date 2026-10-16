@@ -34,7 +34,7 @@ internal static class Scenarios
 
     public static async Task RunAsync(
         string endpoint,
-        TableRun? run,
+        TableRun run,
         string[] selected,
         CancellationToken ct
     )
@@ -46,7 +46,7 @@ internal static class Scenarios
             {
                 try
                 {
-                    await PlayAsync(endpoint, scenario, run, ct);
+                    await PlayAsync(endpoint, scenario, run, run.Outcome, ct);
                     Console.WriteLine($"✓ {scenario}");
                     passed++;
                 }
@@ -67,14 +67,15 @@ internal static class Scenarios
         string endpoint,
         string scenario,
         TableRun? run,
+        RunOutcome outcome,
         CancellationToken ct,
         string? expectedNode = null
     )
     {
         var suffix = Guid.NewGuid().ToString("N");
         var table = "table-" + suffix;
-        await using var p1 = await GameClient.ConnectAsync(endpoint, "p1-" + suffix, ct);
-        await using var p2 = await GameClient.ConnectAsync(endpoint, "p2-" + suffix, ct);
+        await using var p1 = await GameClient.ConnectAsync(outcome, endpoint, "p1-" + suffix, ct);
+        await using var p2 = await GameClient.ConnectAsync(outcome, endpoint, "p2-" + suffix, ct);
         var joined1 = await p1.JoinAsync(table, ct);
         var joined2 = await p2.JoinAsync(table, ct);
         if (expectedNode is not null)
@@ -140,7 +141,12 @@ internal static class Scenarios
         if (scenario == "reconnect")
         {
             await p2.DisposeAsync();
-            await using var reconnected = await GameClient.ConnectAsync(endpoint, p2.PlayerId, ct);
+            await using var reconnected = await GameClient.ConnectAsync(
+                outcome,
+                endpoint,
+                p2.PlayerId,
+                ct
+            );
             var restored = await reconnected.JoinAsync(table, ct);
             var restoredCards = await reconnected.WaitAsync<HandDealt>(_ => true, ct);
             var restoredSession = await reconnected.SessionAsync(ct);
@@ -182,7 +188,7 @@ internal static class Scenarios
             if (scenario == "update")
             {
                 await run!.ReplaceAsync(before1.NodeId, ct);
-                await PlayAsync(endpoint, "table", null, ct, before1.NodeId);
+                await PlayAsync(endpoint, "table", null, outcome, ct, before1.NodeId);
             }
         }
         Require(

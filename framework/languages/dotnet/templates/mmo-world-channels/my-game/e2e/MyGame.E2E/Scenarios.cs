@@ -49,14 +49,24 @@ internal static class Scenarios
                 world.Name.Length > 0 && run.Endpoints[world.WorldId] == world.SessionEndpoint,
                 "Accounts endpoint differs from Session readiness."
             );
-        await using var a = await GameClient.ConnectAsync(run.Endpoints["A"], "worlds-player", ct);
+        await using var a = await GameClient.ConnectAsync(
+            run.Outcome,
+            run.Endpoints["A"],
+            "worlds-player",
+            ct
+        );
         var initial = await a.EnterAsync(ct);
         Require(initial.WorldId == "A" && initial.Gold == 0, "World A initial data differs.");
         Require(
             (await a.EarnAsync(EarnedGold, EarnedGold, ct)).Gold == EarnedGold,
             "World A earning was not persisted."
         );
-        await using var b = await GameClient.ConnectAsync(run.Endpoints["B"], a.PlayerId, ct);
+        await using var b = await GameClient.ConnectAsync(
+            run.Outcome,
+            run.Endpoints["B"],
+            a.PlayerId,
+            ct
+        );
         var isolated = await b.EnterAsync(ct);
         Require(
             isolated.WorldId == "B" && isolated.Gold == 0 && isolated.NodeId == "channelB",
@@ -71,6 +81,7 @@ internal static class Scenarios
     private static async Task ChannelAsync(WorldRun run, CancellationToken ct)
     {
         await using var client = await GameClient.ConnectAsync(
+            run.Outcome,
             run.Endpoints["A"],
             "channel-player",
             ct
@@ -101,14 +112,21 @@ internal static class Scenarios
         SessionInfo before;
         PlayerView saved;
         const string player = "reconnect-player";
-        await using (var client = await GameClient.ConnectAsync(run.Endpoints["A"], player, ct))
+        await using (
+            var client = await GameClient.ConnectAsync(run.Outcome, run.Endpoints["A"], player, ct)
+        )
         {
             await client.EnterAsync(ct);
             await client.EarnAsync(EarnedGold, EarnedGold, ct);
             saved = await client.ChangeAsync(SecondChannel, ct);
             before = await client.SessionAsync(ct);
         }
-        await using var reconnected = await GameClient.ConnectAsync(run.Endpoints["A"], player, ct);
+        await using var reconnected = await GameClient.ConnectAsync(
+            run.Outcome,
+            run.Endpoints["A"],
+            player,
+            ct
+        );
         Require(await reconnected.EnterAsync(ct) == saved, "Reconnect lost channel or gold.");
         var after = await reconnected.SessionAsync(ct);
         Require(
@@ -121,12 +139,22 @@ internal static class Scenarios
 
     private static async Task UpdateAsync(WorldRun run, CancellationToken ct)
     {
-        await using var a = await GameClient.ConnectAsync(run.Endpoints["A"], "update-player", ct);
+        await using var a = await GameClient.ConnectAsync(
+            run.Outcome,
+            run.Endpoints["A"],
+            "update-player",
+            ct
+        );
         await a.EnterAsync(ct);
         var before = await a.EarnAsync(EarnedGold, EarnedGold, ct);
         Require(before.NodeId == "channelA1", "Update subject was not on channelA1.");
         var binding = await a.SessionAsync(ct);
-        await using var b = await GameClient.ConnectAsync(run.Endpoints["B"], a.PlayerId, ct);
+        await using var b = await GameClient.ConnectAsync(
+            run.Outcome,
+            run.Endpoints["B"],
+            a.PlayerId,
+            ct
+        );
         var worldB = await b.EnterAsync(ct);
         var bindingB = await b.SessionAsync(ct);
         var source = run.Channels["channelA1"];
@@ -158,6 +186,7 @@ internal static class Scenarios
         await replacement.CommandAsync(NodeProtocol.CreateUpdateZone);
         await replacement.WaitLineAsync(NodeProtocol.UpdateZoneCreated, ct);
         await using var newcomer = await GameClient.ConnectAsync(
+            run.Outcome,
             run.Endpoints["A"],
             "replacement-player",
             ct

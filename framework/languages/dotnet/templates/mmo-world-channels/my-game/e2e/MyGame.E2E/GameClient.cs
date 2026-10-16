@@ -4,8 +4,11 @@ using Systems.Zlink.Stream.Connector.Contracts;
 
 namespace MyGame.E2E;
 
-internal sealed class GameClient(IZlinkStreamConnector connector, string playerId)
-    : IAsyncDisposable
+internal sealed class GameClient(
+    RunOutcome outcome,
+    IZlinkStreamConnector connector,
+    string playerId
+) : IAsyncDisposable
 {
     private static readonly TimeSpan MessageTimeout = TimeSpan.FromSeconds(10);
     public IZlinkStreamConnector Connector { get; } = connector;
@@ -13,6 +16,7 @@ internal sealed class GameClient(IZlinkStreamConnector connector, string playerI
     public bool Disconnected { get; private set; }
 
     public static async Task<GameClient> ConnectAsync(
+        RunOutcome outcome,
         string endpoint,
         string playerId,
         CancellationToken ct
@@ -27,7 +31,7 @@ internal sealed class GameClient(IZlinkStreamConnector connector, string playerI
                 DispatchMode = ZlinkStreamDispatchMode.Immediate,
             }
         );
-        var client = new GameClient(connector, playerId);
+        var client = new GameClient(outcome, connector, playerId);
         connector.OnDisconnected(
             (_, _) =>
             {
@@ -94,5 +98,5 @@ internal sealed class GameClient(IZlinkStreamConnector connector, string playerI
     public Task<SessionInfo> SessionAsync(CancellationToken ct) =>
         Connector.Request(new SessionInfoRequest()).Async<SessionInfo>(ct).AsTask();
 
-    public ValueTask DisposeAsync() => RunOutcome.CleanupAsync(Connector.DisposeAsync);
+    public ValueTask DisposeAsync() => outcome.CleanupAsync(Connector.DisposeAsync);
 }

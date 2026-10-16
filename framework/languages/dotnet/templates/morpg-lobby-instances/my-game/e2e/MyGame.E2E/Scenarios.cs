@@ -157,9 +157,9 @@ internal static class Scenarios
         try
         {
             current = selected[0];
-            await using var p1 = await GameClient.ConnectAsync(endpoint, "p1", ct);
+            await using var p1 = await GameClient.ConnectAsync(run.Outcome, endpoint, "p1", ct);
             await p1.JoinAsync(ct);
-            var p2 = await GameClient.ConnectAsync(endpoint, "p2", ct);
+            var p2 = await GameClient.ConnectAsync(run.Outcome, endpoint, "p2", ct);
             try
             {
                 await p2.JoinAsync(ct);
@@ -187,7 +187,7 @@ internal static class Scenarios
                 {
                     current = Reconnect;
                     await p2.DisposeAsync();
-                    p2 = await GameClient.ConnectAsync(endpoint, "p2", ct);
+                    p2 = await GameClient.ConnectAsync(run.Outcome, endpoint, "p2", ct);
                     var restored = await p2.SendAsync<DungeonView, JoinLobbyRequest>(
                         new("p2"),
                         _ => true,
@@ -236,9 +236,19 @@ internal static class Scenarios
                         "Session continuity failed during host relocation."
                     );
                     await run.ReplaceInstanceAsync(advanced.NodeId, ct);
-                    await using var p3 = await GameClient.ConnectAsync(endpoint, "p3", ct);
+                    await using var p3 = await GameClient.ConnectAsync(
+                        run.Outcome,
+                        endpoint,
+                        "p3",
+                        ct
+                    );
                     await p3.JoinAsync(ct);
-                    await using var p4 = await GameClient.ConnectAsync(endpoint, "p4", ct);
+                    await using var p4 = await GameClient.ConnectAsync(
+                        run.Outcome,
+                        endpoint,
+                        "p4",
+                        ct
+                    );
                     await p4.JoinAsync(ct);
                     var fresh = await EnterAsync(p3, p4, "party-2", ct);
                     Require(

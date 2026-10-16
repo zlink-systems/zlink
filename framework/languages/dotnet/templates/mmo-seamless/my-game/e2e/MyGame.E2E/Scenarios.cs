@@ -41,7 +41,7 @@ internal static class Scenarios
 
     public static async Task RunAsync(
         string endpoint,
-        WorldRun? run,
+        WorldRun run,
         string[] selected,
         CancellationToken ct
     )
@@ -56,16 +56,16 @@ internal static class Scenarios
                 switch (scenario)
                 {
                     case "cross":
-                        await CrossAsync(endpoint, ct);
+                        await CrossAsync(endpoint, run, ct);
                         break;
                     case "border":
-                        await BorderAsync(endpoint, ct);
+                        await BorderAsync(endpoint, run, ct);
                         break;
                     case "reconnect":
-                        await ReconnectAsync(endpoint, ct);
+                        await ReconnectAsync(endpoint, run, ct);
                         break;
                     case "update":
-                        await UpdateAsync(endpoint, run!, ct);
+                        await UpdateAsync(endpoint, run, ct);
                         break;
                 }
                 Console.WriteLine($"✓ {scenario}");
@@ -83,9 +83,10 @@ internal static class Scenarios
         }
     }
 
-    private static async Task CrossAsync(string endpoint, CancellationToken ct)
+    private static async Task CrossAsync(string endpoint, WorldRun run, CancellationToken ct)
     {
         await using var client = await GameClient.ConnectAsync(
+            run.Outcome,
             endpoint,
             "cross-" + Guid.NewGuid().ToString("N"),
             ct
@@ -116,15 +117,17 @@ internal static class Scenarios
         );
     }
 
-    private static async Task BorderAsync(string endpoint, CancellationToken ct)
+    private static async Task BorderAsync(string endpoint, WorldRun run, CancellationToken ct)
     {
         await using var observer = await GameClient.ConnectAsync(
+            run.Outcome,
             endpoint,
             "observer-" + Guid.NewGuid().ToString("N"),
             ct
         );
         var observed = await observer.JoinAsync(300, ct);
         await using var source = await GameClient.ConnectAsync(
+            run.Outcome,
             endpoint,
             "border-" + Guid.NewGuid().ToString("N"),
             ct
@@ -149,18 +152,18 @@ internal static class Scenarios
         );
     }
 
-    private static async Task ReconnectAsync(string endpoint, CancellationToken ct)
+    private static async Task ReconnectAsync(string endpoint, WorldRun run, CancellationToken ct)
     {
         var id = "reconnect-" + Guid.NewGuid().ToString("N");
         WorldState before;
         string session;
-        await using (var client = await GameClient.ConnectAsync(endpoint, id, ct))
+        await using (var client = await GameClient.ConnectAsync(run.Outcome, endpoint, id, ct))
         {
             await client.JoinAsync(299, ct);
             before = await client.MoveAsync(300, 1, ct);
             session = await client.SessionAsync(ct);
         }
-        await using var reconnect = await GameClient.ConnectAsync(endpoint, id, ct);
+        await using var reconnect = await GameClient.ConnectAsync(run.Outcome, endpoint, id, ct);
         var after = await reconnect.JoinAsync(0, ct);
         SameActor(before, after);
         Require(
@@ -180,6 +183,7 @@ internal static class Scenarios
     private static async Task UpdateAsync(string endpoint, WorldRun run, CancellationToken ct)
     {
         await using var client = await GameClient.ConnectAsync(
+            run.Outcome,
             endpoint,
             "update-" + Guid.NewGuid().ToString("N"),
             ct
@@ -235,6 +239,7 @@ internal static class Scenarios
         var dungeon = await client.DungeonAsync("after-update-" + Guid.NewGuid().ToString("N"), ct);
         Require(dungeon.NodeId == "instance", "Dungeon access failed after replacement.");
         await using var fresh = await GameClient.ConnectAsync(
+            run.Outcome,
             endpoint,
             "replacement-" + Guid.NewGuid().ToString("N"),
             ct

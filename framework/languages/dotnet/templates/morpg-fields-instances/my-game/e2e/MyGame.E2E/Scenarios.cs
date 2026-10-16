@@ -108,8 +108,18 @@ internal static class Scenarios
             if (selected.Contains("field"))
             {
                 current = "field";
-                await using var player = await GameClient.ConnectAsync(endpoint, "p1", ct);
-                await using var observer = await GameClient.ConnectAsync(endpoint, "border-p2", ct);
+                await using var player = await GameClient.ConnectAsync(
+                    run.Outcome,
+                    endpoint,
+                    "p1",
+                    ct
+                );
+                await using var observer = await GameClient.ConnectAsync(
+                    run.Outcome,
+                    endpoint,
+                    "border-p2",
+                    ct
+                );
                 var observed = await observer.JoinAsync(199, ct);
                 var origin = await player.JoinAsync(198, ct);
                 Require(
@@ -146,9 +156,14 @@ internal static class Scenarios
             if (selected.Any(id => id != "field"))
             {
                 current = selected.First(id => id != "field");
-                await using var p1 = await GameClient.ConnectAsync(endpoint, "dungeon-p1", ct);
+                await using var p1 = await GameClient.ConnectAsync(
+                    run.Outcome,
+                    endpoint,
+                    "dungeon-p1",
+                    ct
+                );
                 await p1.JoinAsync(250, ct);
-                var p2 = await GameClient.ConnectAsync(endpoint, "dungeon-p2", ct);
+                var p2 = await GameClient.ConnectAsync(run.Outcome, endpoint, "dungeon-p2", ct);
                 try
                 {
                     await p2.JoinAsync(250, ct);
@@ -177,7 +192,7 @@ internal static class Scenarios
                     {
                         current = "reconnect";
                         await p2.DisposeAsync();
-                        p2 = await GameClient.ConnectAsync(endpoint, "dungeon-p2", ct);
+                        p2 = await GameClient.ConnectAsync(run.Outcome, endpoint, "dungeon-p2", ct);
                         var restored = await p2.SendAsync<DungeonView, JoinWorldRequest>(
                             new("dungeon-p2", 250),
                             _ => true,
@@ -220,9 +235,19 @@ internal static class Scenarios
                             "Session continuity failed during host relocation."
                         );
                         await run.ReplaceInstanceAsync(advanced.NodeId, ct);
-                        await using var p3 = await GameClient.ConnectAsync(endpoint, "p3", ct);
+                        await using var p3 = await GameClient.ConnectAsync(
+                            run.Outcome,
+                            endpoint,
+                            "p3",
+                            ct
+                        );
                         await p3.JoinAsync(250, ct);
-                        await using var p4 = await GameClient.ConnectAsync(endpoint, "p4", ct);
+                        await using var p4 = await GameClient.ConnectAsync(
+                            run.Outcome,
+                            endpoint,
+                            "p4",
+                            ct
+                        );
                         await p4.JoinAsync(250, ct);
                         var fresh = await EnterAsync(p3, p4, "party-2", ct);
                         Require(
