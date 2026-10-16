@@ -150,7 +150,9 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
   private readonly liveRows: ZLinkLiveRowFilter;
   private readonly leaseTracker: ZLinkOwnerLeaseTracker;
   private readonly ownershipLostHandlers = new Set<(event: ZLinkOwnershipLostEvent) => void>();
-  private readonly ownerLeaseRenewedHandlers = new Set<(renewal: ZLinkOwnerLeaseRenewed) => void>();
+  private readonly ownerLeaseRenewedHandlers = new Set<
+    (renewal: ZLinkOwnerLeaseRenewed, wasOwnerLeaseUsable: boolean) => void
+  >();
   private readonly ownerLeaseRenewalFailedHandlers = new Set<() => void>();
   private heartbeatTimer: unknown;
   private heartbeatRenewal?: Promise<unknown>;
@@ -323,11 +325,15 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
     this.ownershipLostHandlers.delete(handler);
   }
 
-  addOwnerLeaseRenewedHandler(handler: (renewal: ZLinkOwnerLeaseRenewed) => void): void {
+  addOwnerLeaseRenewedHandler(
+    handler: (renewal: ZLinkOwnerLeaseRenewed, wasOwnerLeaseUsable: boolean) => void
+  ): void {
     this.ownerLeaseRenewedHandlers.add(handler);
   }
 
-  removeOwnerLeaseRenewedHandler(handler: (renewal: ZLinkOwnerLeaseRenewed) => void): void {
+  removeOwnerLeaseRenewedHandler(
+    handler: (renewal: ZLinkOwnerLeaseRenewed, wasOwnerLeaseUsable: boolean) => void
+  ): void {
     this.ownerLeaseRenewedHandlers.delete(handler);
   }
 
@@ -468,8 +474,8 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
         result.storeNow
       );
       this.lastError = undefined;
-      if (!wasOwnerLeaseUsable) {
-        for (const handler of this.ownerLeaseRenewedHandlers) handler(result);
+      for (const handler of this.ownerLeaseRenewedHandlers) {
+        handler(result, wasOwnerLeaseUsable);
       }
       return true;
     } catch (error) {
@@ -525,11 +531,14 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
       );
       this.lastError = undefined;
       for (const handler of this.ownerLeaseRenewedHandlers) {
-        handler({
-          kind: 'renewed',
-          leaseExpiresAt: claim.leaseExpiresAt,
-          storeNow: claim.storeNow
-        });
+        handler(
+          {
+            kind: 'renewed',
+            leaseExpiresAt: claim.leaseExpiresAt,
+            storeNow: claim.storeNow
+          },
+          false
+        );
       }
       return true;
     } catch (error) {
