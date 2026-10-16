@@ -167,12 +167,40 @@ export class ZLinkMeshDispatchPump {
     try {
       for (;;) {
         await this.waitForApplicationReady();
-        if (this.disposed) return;
+        this.beginDrain();
         try {
-          await this.drainDomain(ReadyDomain.Application, readyBatch, receiveBatch);
+          while (!this.disposed) {
+            readyBatch.reset();
+            const drained = this.node.drainReady(
+              ReadyDomain.Application,
+              readyBatch,
+              ZLINK_BACKEND_RECV_DONT_WAIT
+            );
+            if (!drained.ok || drained.records.length === 0) break;
+            if (drained.hasResidue) this.markReady(ReadyDomain.Application);
+            for (let index = 0; index < drained.records.length; index += 1) {
+              const claim = readyBatch.takeClaim(index);
+              // Raw ingress already attached one host permit to each record.
+              // A claim reserving admission may receive only that permit's record.
+              await this.drainClaim(
+                ReadyDomain.Application,
+                drained.records[index]!,
+                claim,
+                receiveBatch
+              );
+            }
+            // Empty ready claims count toward the shared pump budget too.
+            this.recordsSinceYield += 1;
+            const yieldTurn = this.yieldIfNeeded();
+            if (yieldTurn !== undefined) await yieldTurn;
+          }
         } catch (error) {
           this.reportDispatchError(error);
+        } finally {
+          readyBatch.reset();
+          this.draining -= 1;
         }
+        if (this.disposed) return;
       }
     } finally {
       receiveBatch.close();
@@ -189,77 +217,62 @@ export class ZLinkMeshDispatchPump {
     return new Promise((resolve) => this.idleApplicationWorkers.add(resolve));
   }
 
-  private dispatchRecord(owner: ReadyRecord, record: ReceiveRecord): void | Promise<void> {
-    let result: void | Promise<void>;
-    try {
-      result = this.options.dispatch(owner, record);
-    } catch (error) {
-      this.reportDispatchError(error, meshDispatchFailureContext(record));
-      return;
-    }
-    return result === undefined
-      ? this.finishRecord(record)
-      : Promise.resolve(result).then(
-          () => this.finishRecord(record),
-          (error) => this.reportDispatchError(error, meshDispatchFailureContext(record))
-        );
-  }
-
   /**
-   * Dispatches one permitted record in this worker's turn. The permit scope
-   * covers the synchronous dispatch; the record's terminal and the permit
-   * turn release share the one continuation on an asynchronous handler.
+   * Starts one record in this worker's turn; a permit's scope covers the
+   * synchronous dispatch. Returns `false` when the dispatch threw (already
+   * reported), `true` when it returned synchronously, or the handler's pending
+   * completion, which the draining turn awaits itself before
+   * {@link finishRecord}.
    */
-  private dispatchPermittedRecord(
-    permit: ApplicationJobPermitPort,
+  private dispatchRecord(
     owner: ReadyRecord,
-    record: ReceiveRecord
-  ): void | Promise<void> {
-    const previous = enterApplicationJobPermitScope(permit);
-    let result: void | Promise<void>;
+    record: ReceiveRecord,
+    permit: ApplicationJobPermitPort | undefined
+  ): boolean | PromiseLike<void> {
+    const previous = permit === undefined ? undefined : enterApplicationJobPermitScope(permit);
+    let result: void | PromiseLike<void>;
     try {
       result = this.options.dispatch(owner, record);
     } catch (error) {
-      releaseApplicationJobPermitTurn(permit);
-      this.reportDispatchError(error, meshDispatchFailureContext(record));
-      return;
+      this.failRecord(error, record, permit);
+      return false;
     } finally {
-      leaveApplicationJobPermitScope(previous);
+      if (permit !== undefined) leaveApplicationJobPermitScope(previous);
     }
-    if (result === undefined) return this.finishPermittedRecord(permit, record);
-    return Promise.resolve(result).then(
-      () => this.finishPermittedRecord(permit, record),
-      (error) => {
-        releaseApplicationJobPermitTurn(permit);
-        this.reportDispatchError(error, meshDispatchFailureContext(record));
-      }
-    );
+    return result ?? true;
   }
 
-  private finishPermittedRecord(
-    permit: ApplicationJobPermitPort,
-    record: ReceiveRecord
+  private failRecord(
+    error: unknown,
+    record: ReceiveRecord,
+    permit: ApplicationJobPermitPort | undefined
+  ): void {
+    releaseApplicationJobPermitTurn(permit);
+    this.reportDispatchError(error, meshDispatchFailureContext(record));
+  }
+
+  /** Runs the record's terminal completion, then releases its permit turn. */
+  private finishRecord(
+    record: ReceiveRecord,
+    permit: ApplicationJobPermitPort | undefined
   ): void | Promise<void> {
-    const finished = this.finishRecord(record);
-    if (finished === undefined) {
-      releaseApplicationJobPermitTurn(permit);
-      return;
-    }
-    return finished.then(() => releaseApplicationJobPermitTurn(permit));
-  }
-
-  private finishRecord(record: ReceiveRecord): void | Promise<void> {
-    let result: void | Promise<void>;
+    let result: void | Promise<void> = undefined;
     try {
       result = record.onTerminalCompletion?.();
     } catch (error) {
       this.reportDispatchError(error, meshDispatchFailureContext(record));
+    }
+    if (result === undefined) {
+      releaseApplicationJobPermitTurn(permit);
       return;
     }
-    if (result !== undefined)
-      return Promise.resolve(result).catch((error) =>
-        this.reportDispatchError(error, meshDispatchFailureContext(record))
-      );
+    return Promise.resolve(result).then(
+      () => releaseApplicationJobPermitTurn(permit),
+      (error) => {
+        this.reportDispatchError(error, meshDispatchFailureContext(record));
+        releaseApplicationJobPermitTurn(permit);
+      }
+    );
   }
 
   private reportDispatchError(error: unknown, context?: ZLinkMeshDispatchFailureContext): void {
@@ -311,12 +324,7 @@ export class ZLinkMeshDispatchPump {
         if ((this.pendingDomains & ReadyDomain.Application) !== 0) {
           setImmediate(() => this.wakeApplicationWorker());
         }
-        const lifecycleBudgetExhausted = await this.drainDomain(
-          ReadyDomain.Infrastructure,
-          readyBatch,
-          undefined,
-          MESH_DISPATCH_LIFECYCLE_CLAIM_BUDGET
-        );
+        const lifecycleBudgetExhausted = await this.drainDomain(readyBatch);
         if (lifecycleBudgetExhausted) {
           this.pendingDomains |= ReadyDomain.Infrastructure;
           await yieldToEventLoop();
@@ -327,50 +335,40 @@ export class ZLinkMeshDispatchPump {
     }
   }
 
-  private async drainDomain(
-    domain: number,
-    readyBatch: ReadyBatch,
-    receiveBatch: ReceiveBatch | undefined,
-    claimBudget?: number
-  ): Promise<boolean> {
+  private async drainDomain(readyBatch: ReadyBatch): Promise<boolean> {
     let claimsDrained = 0;
     this.beginDrain();
     try {
       while (!this.disposed) {
-        if (claimBudget !== undefined && claimsDrained >= claimBudget) {
+        if (claimsDrained >= MESH_DISPATCH_LIFECYCLE_CLAIM_BUDGET) {
           // Lifecycle work has priority, but a bounded turn lets application
           // work make progress when lifecycle records keep arriving.
           return true;
         }
         readyBatch.reset();
-        const drained = this.node.drainReady(domain, readyBatch, ZLINK_BACKEND_RECV_DONT_WAIT);
+        const drained = this.node.drainReady(
+          ReadyDomain.Infrastructure,
+          readyBatch,
+          ZLINK_BACKEND_RECV_DONT_WAIT
+        );
         if (!drained.ok || drained.records.length === 0) {
           return false;
-        }
-        if (domain === ReadyDomain.Application && drained.hasResidue) {
-          this.markReady(ReadyDomain.Application);
         }
         for (let index = 0; index < drained.records.length; index += 1) {
           const claim = readyBatch.takeClaim(index);
           claimsDrained += 1;
           const owner = drained.records[index]!;
-          // Raw ingress already attached one host permit to each record.
-          // A claim that reserves admission here may receive only that permit's record.
-          if (receiveBatch !== undefined) {
-            await this.drainClaim(domain, owner, claim, receiveBatch);
-          } else {
-            this.beginDrain();
-            const drain = this.drainClaim(domain, owner, claim, undefined).catch((error) =>
-              this.reportDispatchError(error)
-            );
-            this.activeDrains.add(drain);
-            void drain.finally(() => {
-              this.draining -= 1;
-              this.activeDrains.delete(drain);
-            });
-          }
+          this.beginDrain();
+          const drain = this.drainClaim(ReadyDomain.Infrastructure, owner, claim, undefined).catch(
+            (error) => this.reportDispatchError(error)
+          );
+          this.activeDrains.add(drain);
+          void drain.finally(() => {
+            this.draining -= 1;
+            this.activeDrains.delete(drain);
+          });
         }
-        if (claimBudget !== undefined && claimsDrained >= claimBudget) {
+        if (claimsDrained >= MESH_DISPATCH_LIFECYCLE_CLAIM_BUDGET) {
           this.wakeApplicationWorker();
           return true;
         }
@@ -436,19 +434,28 @@ export class ZLinkMeshDispatchPump {
                 );
               }
               this.recordsSinceYield += 1;
-              if (permit === undefined) {
-                const dispatched = this.dispatchRecord(owner, record);
-                if (dispatched !== undefined) await dispatched;
-              } else {
+              if (permit !== undefined) {
                 if (domain === ReadyDomain.Application && record.applicationJobPermit === undefined)
                   permit.markApplicationQueued();
                 // The scope now owns this reservation, including failure
                 // and detached handler handoff. Only unused permits remain
                 // owned by the receive attempt's finally block.
                 if (permit === claimPermit) claimPermit = undefined;
-                const dispatched = this.dispatchPermittedRecord(permit, owner, record);
-                if (dispatched !== undefined) await dispatched;
               }
+              // The record's terminal and the permit turn release follow the
+              // handler in this turn's own continuation.
+              const dispatched = this.dispatchRecord(owner, record, permit);
+              if (dispatched === false) continue;
+              if (dispatched !== true) {
+                try {
+                  await dispatched;
+                } catch (error) {
+                  this.failRecord(error, record, permit);
+                  continue;
+                }
+              }
+              const finished = this.finishRecord(record, permit);
+              if (finished !== undefined) await finished;
             }
           } finally {
             // Batch ownership includes records whose dispatch never began,

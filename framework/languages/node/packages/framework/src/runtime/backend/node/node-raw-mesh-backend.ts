@@ -120,9 +120,8 @@ import {
   ServiceWireFrameworkErrorCode
 } from '../../foundation/service-wire-constants.generated';
 import {
-  APPLICATION_PAYLOAD_MINIMUM_FIELD_BYTES,
-  APPLICATION_PAYLOAD_VERSION,
   decodeApplicationPayloadView,
+  decodeMultipartApplicationPayloadView,
   encodeMultipartApplicationPayload,
   ServiceWireProtocolError,
   type ServiceApplicationPayload
@@ -148,7 +147,6 @@ const UNSTARTED_DIAGNOSTIC_ENDPOINT = 'inproc://not-started';
 
 const MULTIPART_PACKET_NAME = SERVICE_FRAMEWORK_MULTIPART_PACKET_NAME;
 const MULTIPART_CONTENT_TYPE = SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE;
-const FATAL_UTF8 = new TextDecoder('utf-8', { fatal: true });
 const MAX_DRAIN_RECORDS = 64;
 // The maintenance timer runs at the nearest management deadline and never
 // sooner than this. Only the binding readable handler admits receive work;
@@ -2357,7 +2355,7 @@ function decodeMultipartRecord(
   const header = record.parts[0]!;
   const command = header[SERVICE_WIRE_COMMAND_OFFSET]!;
   const payloadFrame = record.parts[1]!;
-  const application = decodeApplicationEnvelope(payloadFrame);
+  const application = decodeMultipartApplicationPayloadView(payloadFrame);
   const channelName = record.owner.startsWith('channel:')
     ? record.owner.slice('channel:'.length)
     : null;
@@ -2439,7 +2437,7 @@ function decodeStatefulRecord(
     ? stateful.canonicalApplicationPayload
     : payloadFrame === undefined
       ? undefined
-      : decodeApplicationEnvelope(payloadFrame);
+      : decodeMultipartApplicationPayloadView(payloadFrame);
   const operationId =
     record.correlation === undefined
       ? { high: 0n, low: 0n }
@@ -2667,53 +2665,6 @@ function encodeMultipartApplicationFrame(parts: MessageLike | readonly MessageLi
   );
 }
 
-function decodeApplicationEnvelope(frame: Uint8Array) {
-  const bytes = Buffer.from(frame.buffer, frame.byteOffset, frame.byteLength);
-  if (
-    bytes.length < APPLICATION_PAYLOAD_MINIMUM_FIELD_BYTES ||
-    bytes[0] !== APPLICATION_PAYLOAD_VERSION
-  ) {
-    throw new ServiceWireProtocolError('Invalid application envelope.');
-  }
-  const bodyLength = bytes.readUInt32BE(1);
-  if (bodyLength !== bytes.length - 5) {
-    throw new ServiceWireProtocolError('Invalid application envelope length.');
-  }
-  let offset = 5;
-  const packetLength = bytes[offset++]!;
-  if (packetLength === 0 || bytes.length - offset < packetLength + 1) {
-    throw new ServiceWireProtocolError('Invalid application envelope packet name.');
-  }
-  let packetName: string;
-  try {
-    packetName = FATAL_UTF8.decode(bytes.subarray(offset, offset + packetLength));
-  } catch {
-    throw new ServiceWireProtocolError('Invalid application envelope packet name.');
-  }
-  offset += packetLength;
-  const contentLength = bytes[offset++]!;
-  if (contentLength === 0 || bytes.length - offset < contentLength + 4) {
-    throw new ServiceWireProtocolError('Invalid application envelope content type.');
-  }
-  let contentType: string;
-  try {
-    contentType = FATAL_UTF8.decode(bytes.subarray(offset, offset + contentLength));
-  } catch {
-    throw new ServiceWireProtocolError('Invalid application envelope content type.');
-  }
-  offset += contentLength;
-  const payloadLength = bytes.readUInt32BE(offset);
-  offset += 4;
-  if (
-    packetName !== MULTIPART_PACKET_NAME ||
-    contentType !== MULTIPART_CONTENT_TYPE ||
-    payloadLength !== bytes.length - offset
-  ) {
-    throw new ServiceWireProtocolError('Unexpected M6A application payload.');
-  }
-  return { packetName, contentType, payload: bytes.subarray(offset) };
-}
-
 function decodeMultipart(payload: Uint8Array): FrameworkMessage[] {
   return decodeMultipartParts(payload, ZLinkBufferMessage.fromOwned, closeMultipartMessage);
 }
@@ -2731,7 +2682,9 @@ function decodeMultipartParts<T>(
   materialize: (part: Buffer) => T,
   release?: (part: T) => void
 ): T[] {
-  const bytes = Buffer.from(payload.buffer, payload.byteOffset, payload.byteLength);
+  const bytes = Buffer.isBuffer(payload)
+    ? payload
+    : Buffer.from(payload.buffer, payload.byteOffset, payload.byteLength);
   if (bytes.length < 4) throw new ServiceWireProtocolError('Truncated multipart payload.');
   const count = bytes.readUInt32BE(0);
   if (count === 0 || count > Math.floor((bytes.length - 4) / 4)) {
