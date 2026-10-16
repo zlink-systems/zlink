@@ -212,12 +212,6 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
         rebindNativeActor(targetActor);
     }
 
-    CompletionStage<Void> compensatePreparedNativeActorRoute(
-            ZLinkBackendActorRef sourceActor, Duration timeout) {
-        return stream.relocateBoundActor(
-                sessionRid, sourceActor.actorId(), bindingGeneration, sourceActor, timeout);
-    }
-
     void setUnbindListener(Runnable unbindListener) {
         this.unbindListener = unbindListener == null ? () -> {} : unbindListener;
     }
