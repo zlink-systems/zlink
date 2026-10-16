@@ -2035,6 +2035,11 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         return spotLifecycle.userSpotCount();
     }
 
+    /** Instance Spots activated in this process. */
+    public int activeInstanceSpotCount() {
+        return instanceSpotActivations.size();
+    }
+
     /** User and Instance Spots activated on the named MeshNode in this process. */
     public int activeSpotCount(String meshName) {
         int userSpots = spotLifecycle.userSpotCount(meshName);
@@ -2375,9 +2380,6 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                         : new systems.zlink.framework.runtime.actors
                                 .ZLinkSessionRelocationPeerClient(relocationMesh);
         actorAdmissions.attach(actorRuntime, this::isDraining, sessionRelocationPeer);
-        //  The same peer client also carries command 42 from the relocation
-        //  source to the bound Session owner (spec 20 §5 step 1).
-        actorRuntime.setSessionRelocationSealer(sessionRelocationPeer);
         actorRuntime.setLocalActorJoiner(this::joinLocalActor);
     }
 
@@ -6398,13 +6400,19 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
     CompletionStage<Void> dispatchActorControlPacket(
             ActorPacketFrames.Header packetHeader,
             ZLinkBackendActorReceived headerPart,
+            ZLinkBackendActorReceived bodyPart,
             ZLinkActor actor,
             boolean pendingHeader) {
         if (ZLinkActorSpotRoutePackets.SESSION_DISCONNECTED_PACKET_NAME.equals(
                 packetHeader.packetName())) {
+            byte[] namedSession = bodyPart == null ? new byte[0] : bodyPart.message().toByteArray();
+            RoutingId sessionRid =
+                    namedSession.length == 0
+                            ? headerPart.sourceSessionRid()
+                            : RoutingId.from(namedSession);
             return actorSessions
                     .runtime()
-                    .notifyDisconnected(actor)
+                    .notifyDisconnected(actor, headerPart.sourceNodeRid(), sessionRid)
                     .handle(
                             (ignored, error) -> {
                                 try {

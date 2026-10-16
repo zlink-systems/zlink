@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Numerics;
+using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Runtime.Diagnostics;
 using Zlink.Framework.Runtime.Identifiers;
 using Zlink.Framework.Runtime.Locations;
@@ -372,7 +373,18 @@ internal abstract partial class ZLinkSpotActivation
         // external ingress.
         return _serial.ExecuteSealedRelocationAsync(
             admissionSeal.QueueSeal,
-            static (activation, ct) => activation.UserSpot.OnInitializeAsync(ct),
+            static async (activation, ct) =>
+            {
+                activation._timers.BeginRelocatedInitialization();
+                try
+                {
+                    await activation.UserSpot.OnInitializeAsync(ct).ConfigureAwait(false);
+                }
+                finally
+                {
+                    activation._timers.EndRelocatedInitialization();
+                }
+            },
             cancellationToken
         );
     }
@@ -584,7 +596,18 @@ internal abstract partial class ZLinkSpotActivation
     protected ValueTask InitializeInstanceCoreAsync(CancellationToken cancellationToken)
     {
         return ExecuteSerializedAsync(
-            static (activation, state, ct) => state.OnInitializeAsync(ct),
+            static async (activation, state, ct) =>
+            {
+                activation._timers.BeginRelocatedInitialization();
+                try
+                {
+                    await state.OnInitializeAsync(ct).ConfigureAwait(false);
+                }
+                finally
+                {
+                    activation._timers.EndRelocatedInitialization();
+                }
+            },
             InstanceSpot,
             cancellationToken
         );
@@ -1975,7 +1998,7 @@ internal abstract partial class ZLinkSpotActivation
             ?? throw new InvalidOperationException(
                 "A bound Session route requires a target NodeRid."
             );
-        _ = await _runtime
+        var response = await _runtime
             .SealSessionRelocationAsync(
                 route.MeshName!,
                 routeNodeRid,
@@ -1983,7 +2006,9 @@ internal abstract partial class ZLinkSpotActivation
                 cancellationToken
             )
             .ConfigureAwait(false);
-        return route;
+        return response.SealResult == ServiceWirePilotCodec.SessionSealResult.BindingAbsent
+            ? default
+            : route;
     }
 
     internal async ValueTask AbortActorBoundSessionRouteSealForRetireAsync(

@@ -178,10 +178,12 @@ export interface ZLinkSpotHandlerRegistry extends ZLinkActorHandlerRegistry {
  addHandler<THandler>(handlerType: Type<THandler>, packetName?: string): this;
  addPacket<THandler>(handlerType: Type<THandler>): this;
  addSubscribe<THandler>(handlerType: Type<THandler>, channelName: string, topic: string): this;
+ addTimerHandler<THandler extends ZLinkSpotTimerHandler<ZLinkSpot>>(handlerType: Type<THandler>): this;
 }
 
 export interface ZLinkInstanceSpotHandlerRegistry {
  addPacket<THandler>(handlerType: Type<THandler>): this;
+ addTimerHandler<THandler extends ZLinkSpotTimerHandler<ZLinkInstanceSpot>>(handlerType: Type<THandler>): this;
 }
 
 export interface ZLinkSpotOutbound {
@@ -356,6 +358,20 @@ time, and pending ticks not yet run. The target restores the logical
 timer registration, so the application doesn't re-register the timer in restore. If the target's `configure` or pre-Ready `onInitialize` registers a restored key, it reattaches to the restored registration under the [Spot timer §1](../../../03-spot-actor/10-spot-timer.en.md#1-timer-generation-and-cancel) exception.
 Only the currently running timer handler finishes on the source, and
 the restored tick isn't run before target Ready.
+
+Node.js can't find a constructor from the handler name recorded in
+the payload, so the target uses, as a restored timer's handler, the
+constructor among those its Spot announced in `configure()` whose
+`name` property equals the payload's handler name. A Spot announces a
+constructor with `addTimer(...)` inside `configure()` or with
+`handlers.addTimerHandler(Handler)`. The same constructor object
+announced both ways counts as one candidate. `addTimerHandler`
+registers no endpoint. A handler used with `addTimer(...)` only in
+`onInitialize()` or in a handler must be announced with
+`addTimerHandler` in `configure()`. If no constructor has that name, or
+two or more different constructor objects share it, target restore
+fails and the relocation follows the restore failure rule of the
+[host relocation flow](../../../05-location-relocation/05-host-relocation-flow.en.md#13-relocate-completion-and-failure).
 
 The public trace categories are `spot-instance`, `actor-relocation`.
 The meaning and verification criteria are owned by

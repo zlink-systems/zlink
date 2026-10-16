@@ -3642,6 +3642,13 @@ final class ZLinkJavaRawMeshNode
             return handler.handle(routingId, record)
                     .thenApply(
                             reply -> {
+                                if (reply == null) {
+                                    // An unanswered command 42 fails this attempt like a
+                                    // remote request that received no reply.
+                                    throw new ZLinkFrameworkException(
+                                            ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
+                                            "Session relocation seal was not answered");
+                                }
                                 statefulWire.decodeSessionRelocationSealed(reply);
                                 return reply.clone();
                             });
@@ -5498,20 +5505,21 @@ final class ZLinkJavaRawMeshNode
         }
         completion.whenComplete(
                 (ack, failure) -> {
-                    if (failure != null || ack == null) {
-                        Throwable cause = failure == null ? null : unwrap(failure);
-                        String diagnostic =
+                    if (failure != null) {
+                        Throwable cause = unwrap(failure);
+                        LOGGER.warning(
                                 "session-seal-handler-failed source="
                                         + inbound.source()
                                         + " request="
                                         + inbound.requestSequence()
                                         + " error="
-                                        + (cause == null
-                                                ? "missing-ack"
-                                                : cause.getClass().getSimpleName()
-                                                        + ": "
-                                                        + String.valueOf(cause.getMessage()));
-                        LOGGER.warning(diagnostic);
+                                        + cause.getClass().getSimpleName()
+                                        + ": "
+                                        + cause.getMessage());
+                        return;
+                    }
+                    if (ack == null) {
+                        // The Session owner chose not to answer (Session-Actor binding §8.3).
                         return;
                     }
                     try {

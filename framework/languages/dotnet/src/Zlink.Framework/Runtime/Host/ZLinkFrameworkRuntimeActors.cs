@@ -29,8 +29,17 @@ internal sealed partial class ZLinkFrameworkRuntime
     {
         var node = GetMeshNodeRuntime(meshName).Node;
         if (sessionOwnerNode == node.RoutingId)
-            return await SealCanonicalSessionActorRouteAsync(seal, cancellationToken)
+        {
+            var response = await SealCanonicalSessionActorRouteAsync(seal, cancellationToken)
                 .ConfigureAwait(false);
+            if (response is { } reply)
+                return reply;
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.DeadlineExceeded,
+                "The session relocation seal was not acknowledged.",
+                ZLinkRetryAdvice.RetryAfterBackoff
+            );
+        }
         if (node is not IZLinkBackendSessionRelocationBarrier barrier)
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.InvalidOperation,
@@ -45,6 +54,12 @@ internal sealed partial class ZLinkFrameworkRuntime
                 cancellationToken
             )
             .ConfigureAwait(false);
+    }
+
+    internal void CompleteSessionRelocation(string meshName, Guid relocationId)
+    {
+        if (GetMeshNodeRuntime(meshName).Node is IZLinkBackendSessionRelocationBarrier barrier)
+            barrier.CompleteSessionRelocation(relocationId);
     }
 
     internal async ValueTask RouteSessionRelocationAsync(
@@ -3851,46 +3866,23 @@ internal sealed partial class ZLinkFrameworkRuntime
         CancellationToken cancellationToken = default
     )
     {
-        var actor = binding.Route.Ref;
-        var state = GetOrCreateActorState(actor.ActorId);
-        if (
-            state.Actor is not null
-            && state.NativeActorRef is { } localActor
-            && localActor.NodeRid == actor.NodeRid
-            && localActor.Generation == actor.ObjectGeneration
-        )
-        {
-            if (
-                !state.TryGetBoundSession(out var current)
-                || !string.Equals(
-                    current.BindingToken,
-                    binding.BindingToken,
-                    StringComparison.Ordinal
-                )
-            )
-                return;
-            try
-            {
-                await NotifyActorDisconnectedByIdAsync(actor.ActorId, cancellationToken)
-                    .ConfigureAwait(false);
-            }
-            finally
-            {
-                RemoveActorSessionBinding(actor.ActorId, binding.BindingToken);
-            }
-            return;
-        }
-
         var nodeRuntime = GetMeshNodeRuntime(binding.MeshName);
 
-        await _actorBoundSessionCoordinator
-            .NotifyRemoteDisconnectedAsync(
-                binding,
-                nodeRuntime.Node,
-                nodeRuntime.LocalRequestSource,
-                cancellationToken
-            )
-            .ConfigureAwait(false);
+        try
+        {
+            await _actorBoundSessionCoordinator
+                .NotifyDisconnectedAsync(
+                    binding,
+                    nodeRuntime.Node,
+                    nodeRuntime.LocalRequestSource,
+                    cancellationToken
+                )
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            RemoveActorSessionBinding(binding.ActorRef.ActorId, binding.BindingToken);
+        }
     }
 
     internal ZLinkActorRuntimeState GetOrCreateActorState(string actorId)
@@ -4007,7 +3999,7 @@ internal sealed partial class ZLinkFrameworkRuntime
         CancellationToken cancellationToken
     ) => _actorBoundSessionCoordinator.SealSessionRouteAsync(request, cancellationToken);
 
-    internal ValueTask<ZLinkServiceWireCodec.SessionRelocationSealedRecord> SealCanonicalSessionActorRouteAsync(
+    internal ValueTask<ZLinkServiceWireCodec.SessionRelocationSealedRecord?> SealCanonicalSessionActorRouteAsync(
         ZLinkServiceWireCodec.SessionRelocationSealRecord request,
         CancellationToken cancellationToken
     ) => _actorBoundSessionCoordinator.SealCanonicalSessionRouteAsync(request, cancellationToken);
@@ -4138,13 +4130,17 @@ internal sealed partial class ZLinkFrameworkRuntime
             || relayNodeRid.IsEmpty
             || authenticatedRelayNodeRid != relayNodeRid
             || relayNodeGeneration == 0
-            || !targetNode
-                .MeshPeers()
-                .Any(peer =>
-                    peer.State == MeshPeerState.Admitted
-                    && peer.RoutingId == authenticatedRelayNodeRid
-                    && peer.LifecycleGeneration == relayNodeGeneration
-                )
+            || !(
+                authenticatedRelayNodeRid == targetNode.RoutingId
+                && relayNodeGeneration == targetNode.MeshStatus().LifecycleGeneration
+            )
+                && !targetNode
+                    .MeshPeers()
+                    .Any(peer =>
+                        peer.State == MeshPeerState.Admitted
+                        && peer.RoutingId == authenticatedRelayNodeRid
+                        && peer.LifecycleGeneration == relayNodeGeneration
+                    )
         )
         {
             throw new ZLinkFrameworkException(
@@ -4203,17 +4199,20 @@ internal sealed partial class ZLinkFrameworkRuntime
                 (replyRequestId != 0 || replyFlags != 0)
                 && !ZLinkActorBoundSessionRelay.IsNoBindRequest(replyRequestId, replyFlags)
             )
-            || !state.TryGetBoundSessionForInbound(out var session)
-            || boundSessionFence.ActorId != actorId
             || boundSessionFence.ActorGeneration != actorGeneration
-            || boundSessionFence.SessionRid != sourceSessionRid
-            || session.SessionOwnerNodeGeneration != sourceNodeGeneration
-            || session.BindingGeneration != boundSessionFence.BindingGeneration
-            || !ZLinkActorBoundSessionRelay.MatchesRelaySource(
-                session,
-                sourceNodeRid,
-                sourceSessionRid
+            || (
+                !state.TryGetBoundSessionForInbound(out var session)
+                || session.SessionOwnerNodeGeneration != sourceNodeGeneration
+                || session.BindingGeneration != boundSessionFence.BindingGeneration
+                || !ZLinkActorBoundSessionRelay.MatchesRelaySource(
+                    session,
+                    sourceNodeRid,
+                    sourceSessionRid
+                )
             )
+                && !ZLinkActorBoundSessionRelay.IsSessionDisconnectedPacket(
+                    ZLinkStreamProtocolDefaults.DecodeHeader(header)
+                )
         )
         {
             //  A replaced incarnation never comes back, so this is NotFound
@@ -4372,17 +4371,10 @@ internal sealed partial class ZLinkFrameworkRuntime
                 $"Actor '{actor.ActorId}' relay route is not ready.",
                 ZLinkRetryAdvice.RetryAfterBackoff
             );
-        try
-        {
-            await relay
-                .NodeRuntime.SendToNodeAsync(relay.TargetNodeRid, relay.Parts, cancellationToken)
-                .EnsureAcceptedAsync("Remote actor session relay")
-                .ConfigureAwait(false);
-        }
-        finally
-        {
-            ZLinkMessageParts.DisposeAll(relay.Parts);
-        }
+        await relay
+            .NodeRuntime.SendToNodeAsync(relay.TargetNodeRid, relay.Parts, cancellationToken)
+            .EnsureAcceptedAsync("Remote actor session relay")
+            .ConfigureAwait(false);
     }
 
     private RemoteActorFrameSubmission? PrepareRemoteActorFrame(

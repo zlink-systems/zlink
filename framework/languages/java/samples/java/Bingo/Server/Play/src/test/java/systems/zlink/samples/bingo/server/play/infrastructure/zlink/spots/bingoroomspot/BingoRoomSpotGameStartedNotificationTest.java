@@ -14,6 +14,7 @@ import systems.zlink.framework.actors.ZLinkBoundSession;
 import systems.zlink.framework.actors.ZLinkBoundSessionSendCall;
 import systems.zlink.framework.channels.ZLinkPublishCall;
 import systems.zlink.framework.channels.ZLinkRequestCall;
+import systems.zlink.framework.channels.ZLinkRequestStage;
 import systems.zlink.framework.channels.ZLinkSendCall;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.spots.ZLinkSpotContext;
@@ -380,7 +381,7 @@ final class BingoRoomSpotGameStartedNotificationTest {
                 }
 
                 @Override
-                public <TReply> CompletionStage<TReply> submit(Class<TReply> replyType) {
+                public <TReply> ZLinkRequestStage<TReply> submit(Class<TReply> replyType) {
                     throw new UnsupportedOperationException();
                 }
 

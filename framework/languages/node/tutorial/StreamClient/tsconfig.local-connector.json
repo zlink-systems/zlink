@@ -3,7 +3,10 @@
   "compilerOptions": {
     "baseUrl": ".",
     "paths": {
-      "@zlink-systems/stream-wire": ["node_modules/@zlink-systems/stream-wire/dist/esm/index.d.ts"]
+      "@zlink-systems/stream-wire": ["node_modules/@zlink-systems/stream-wire/dist/esm/index.d.ts"],
+      "@zlink-systems/stream-wire/internal/json": [
+        "node_modules/@zlink-systems/stream-wire/dist/internal/json.d.ts"
+      ]
     },
     "rootDir": "../../packages/stream-connector/src",
     "outDir": "node_modules/@zlink-systems/stream-connector/dist/browser"
