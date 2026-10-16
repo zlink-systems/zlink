@@ -55,6 +55,7 @@ class raw_relocation_replay_coordinator_t;
 
 namespace zlink::framework::detail
 {
+class delay_owner_t;
 class spot_node_runtime_t;
 }
 
@@ -597,6 +598,7 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     }
 
     bool capture_flow () const { return !_flow_capture || _flow_capture (); }
+    void set_delay_owner (detail::delay_owner_t &owner) noexcept { _delay_owner = &owner; }
 
     bool connect_peer (const std::string &endpoint,
                        std::optional<zlink::routing_id_t> expected = std::nullopt,
@@ -944,6 +946,7 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
 
     host_options_t _options;
     std::function<bool ()> _flow_capture;
+    detail::delay_owner_t *_delay_owner = nullptr;
     std::string _entry_spot_id;
     std::shared_ptr<mesh::raw_mesh_node_owner_t> _transport;
     std::unique_ptr<stateful::raw_relocation_replay_coordinator_t> _relocation_wire;

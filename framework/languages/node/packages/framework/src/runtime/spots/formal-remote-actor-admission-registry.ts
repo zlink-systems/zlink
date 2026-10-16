@@ -34,7 +34,14 @@ function objectKey(actorId: string, objectGeneration: bigint): string {
 }
 
 export type ZLinkFormalRemoteActorAdmissionState =
-  'provisional' | 'admitting' | 'admitted' | 'rejected' | 'committed' | 'aborted' | 'failed';
+  | 'provisional'
+  | 'admitting'
+  | 'admitted'
+  | 'restoring'
+  | 'rejected'
+  | 'committed'
+  | 'aborted'
+  | 'failed';
 
 export interface ZLinkFormalRemoteActorAdmission {
   readonly actorId: string;
@@ -79,7 +86,7 @@ export interface ZLinkFormalRemoteActorAdmissionRecord {
 }
 
 interface ZLinkFormalRemoteActorAdmissionEntry extends ZLinkFormalRemoteActorAdmissionRecord {
-  readonly timer: ReturnType<typeof setTimeout>;
+  timer: ReturnType<typeof setTimeout>;
   readonly resolveResult: (result: ZLinkFormalRemoteActorAdmissionResult) => void;
   admission: ZLinkFormalRemoteActorAdmission;
   state: ZLinkFormalRemoteActorAdmissionState;
@@ -106,6 +113,35 @@ export class ZLinkFormalRemoteActorAdmissionRegistry {
 
   get(transferId: string): ZLinkFormalRemoteActorAdmissionEntry | undefined {
     return this.admissions.get(transferId);
+  }
+
+  /** PREPARE transfers prepared resources to the target attempt until its terminal. */
+  beginRestore(transferId: string): void {
+    const entry = this.admissions.get(transferId);
+    if (entry === undefined || (entry.state !== 'admitted' && entry.state !== 'restoring')) {
+      throw new Error(`Remote actor admission '${transferId}' is not ready to restore.`);
+    }
+    clearTimeout(entry.timer);
+    entry.state = 'restoring';
+  }
+
+  /** Retains successful commit replay; unsuccessful attempts release their resources now. */
+  finishRestore(transferId: string): void {
+    const entry = this.admissions.get(transferId);
+    if (entry === undefined) return;
+    if (entry.state === 'committed') {
+      clearTimeout(entry.timer);
+      entry.timer = this.scheduleExpiry(transferId);
+    } else {
+      this.abort(transferId);
+      this.delete(transferId);
+    }
+  }
+
+  private scheduleExpiry(transferId: string): ReturnType<typeof setTimeout> {
+    const timer = setTimeout(() => this.delete(transferId), ADMISSION_RETENTION_MS);
+    timer.unref();
+    return timer;
   }
 
   begin(input: ZLinkFormalRemoteActorAdmission): {
@@ -183,10 +219,7 @@ export class ZLinkFormalRemoteActorAdmissionRegistry {
     const resultTask = new Promise<ZLinkFormalRemoteActorAdmissionResult>((resolve) => {
       resolveResult = resolve;
     });
-    const timer = setTimeout(() => {
-      this.delete(input.transferId);
-    }, ADMISSION_RETENTION_MS);
-    timer.unref();
+    const timer = this.scheduleExpiry(input.transferId);
     const entry = {
       admission: input,
       state,
@@ -310,7 +343,7 @@ export class ZLinkFormalRemoteActorAdmissionRegistry {
   markCommitted(transferId: string, actor: ZLinkActor): void {
     const entry = this.admissions.get(transferId);
     if (entry === undefined) return;
-    if (entry.state !== 'admitted' && entry.state !== 'committed') {
+    if (entry.state !== 'admitted' && entry.state !== 'restoring' && entry.state !== 'committed') {
       throw new Error(`Remote actor admission '${transferId}' is not ready to commit.`);
     }
     entry.state = 'committed';
@@ -321,7 +354,7 @@ export class ZLinkFormalRemoteActorAdmissionRegistry {
     const entry = this.admissions.get(transferId);
     if (
       entry === undefined ||
-      entry.state !== 'admitted' ||
+      (entry.state !== 'admitted' && entry.state !== 'restoring') ||
       entry.result === undefined ||
       'error' in entry.result ||
       !entry.result.accepted
@@ -355,7 +388,7 @@ export class ZLinkFormalRemoteActorAdmissionRegistry {
    */
   delete(transferId: string): void {
     const pending = this.admissions.get(transferId);
-    if (pending === undefined) return;
+    if (pending === undefined || pending.state === 'restoring') return;
     clearTimeout(pending.timer);
     this.admissions.delete(transferId);
     this.failParked(pending);
@@ -370,20 +403,7 @@ function sameAdmission(
   left: ZLinkFormalRemoteActorAdmission,
   right: ZLinkFormalRemoteActorAdmission
 ): boolean {
-  return (
-    left.actorId === right.actorId &&
-    left.actorType === right.actorType &&
-    String(left.spotId) === String(right.spotId) &&
-    left.targetSpotGeneration === right.targetSpotGeneration &&
-    left.expectedMembershipEpoch === right.expectedMembershipEpoch &&
-    left.requestFingerprint === right.requestFingerprint &&
-    sameOperationId(left.completionOperationId, right.completionOperationId) &&
-    String(left.sourceSpotId ?? '') === String(right.sourceSpotId ?? '') &&
-    routingIdsEqual(left.sourceActorNodeRid, right.sourceActorNodeRid) &&
-    left.actorRef.actorId === right.actorRef.actorId &&
-    routingIdsEqual(left.actorRef.nodeRid, right.actorRef.nodeRid) &&
-    left.actorRef.objectGeneration === right.actorRef.objectGeneration
-  );
+  return left.actorType === right.actorType && sameProvisionalAdmission(left, right);
 }
 
 function sameProvisionalAdmission(

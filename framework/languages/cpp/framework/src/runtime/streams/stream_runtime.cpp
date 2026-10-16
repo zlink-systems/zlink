@@ -858,6 +858,20 @@ stream_write_call_t stream_t::write_packet_with_header (detail::stream_header_t 
                                 stream_submitter (_state));
 }
 
+stream_write_call_t stream_t::reply_packet (const zlink::framework::message_t &payload)
+{
+    if (!_state->serializers) {
+        return stream_write_call_t (result_t<void>::failure (
+          framework_error_kind_t::protocol_error, "STREAM reply requires a serializer registry"));
+    }
+    try {
+        return reply_packet (detail::message_to_raw (payload, *_state->serializers));
+    }
+    catch (const framework_exception_t &error) {
+        return stream_write_call_t (detail::result_access_t::failure<void> (error));
+    }
+}
+
 stream_write_call_t stream_t::reply_packet (const zlink::message_t &payload)
 {
     const auto request_header = _reply_header;
