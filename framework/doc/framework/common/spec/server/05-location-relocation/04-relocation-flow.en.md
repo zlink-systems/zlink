@@ -144,9 +144,11 @@ scheduled timestamp, and skipped-tick count. Native timer handles and callback
 continuations are not part of this frozen saved-work record.
 
 `sessionBindings` carries, for each participant sealed under §4.1, the Session owner
-identity confirmed by command 43 (`sessionOwnerNodeRid`, `sessionOwnerNodeGeneration`,
+identity confirmed by command 43 with `sealResult = sealed` (`sessionOwnerNodeRid`, `sessionOwnerNodeGeneration`,
 `sessionOwnerId`, `sessionOwnerLeaseGeneration`) together with `sessionRid` and
-`bindingGeneration`. A participant without a binding has no entry. The target builds the
+`bindingGeneration`. A participant without a binding, and a participant whose command 43 is
+`bindingAbsent`, has no entry
+([Session and Actor Binding §8.3](../04-session/02-session-actor-binding.en.md#83-sealing-an-already-cleaned-binding)). The target builds the
 command 44 commit of
 [Session and Actor Binding §8.2](../04-session/02-session-actor-binding.en.md#82-control-messages-42-43-44)
 from this entry.
@@ -586,6 +588,8 @@ defined by [Complete Host Relocation Flow](05-host-relocation-flow.en.md).
 | Timing | Owner and queue kept | Result and follow-up |
 |---|---|---|
 | Failure before target selection or preparation | Source | Doesn't block source dispatch and fails the operation. |
+| Command 43 is `bindingAbsent` | Source, relocation continues | Treats that participant as unbound and leaves it out of `sessionBindings` and command 44 ([Session and Actor Binding §8.3](../04-session/02-session-actor-binding.en.md#83-sealing-an-already-cleaned-binding)). |
+| Command 42 rejected, or seal wait deadline reached | Source | Releases the seals of participants already `sealed` with command 44 abort, restores every capture already started to the source queue, and fails the operation. |
 | Explicit failure after Session seal but before the ready-to-receive-relay reply reaches its accepted state | Source | Doesn't run the target's temporary queue. Restores source queue and matching Session seal from the payload kept in memory. |
 | Chunk assembly result doesn't match the Restore request's checksum | Source | Target doesn't start restoration, sends an explicit failure reply, and removes the chunks being assembled. Source restores the queue from the memory payload and fails the operation. No retry. |
 | A Restore request with the same relocation identity arrives with a length or checksum different from the first | Source | Target neither reuses nor overwrites the existing assembly and ends with an explicit conflict failure. Source restores as with the explicit failure above. |

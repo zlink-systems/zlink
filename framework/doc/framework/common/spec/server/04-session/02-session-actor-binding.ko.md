@@ -316,7 +316,7 @@ binding을 해제하지만 Actor를 destroy하거나 Spot membership을 바꾸�
 | 36 | `boundSessionSend` | Actor owner → Session owner: Actor→session push | send |
 | 51 | `boundSessionReplaced` | Actor owner → 이전 Session owner: binding 교체 통지 | one-way, 최대 1회 |
 | 42 | `sessionRelocationSeal` | Relocation coordinator → Session owner: 이동 대상 binding에 seal 설치 요청 | request |
-| 43 | `sessionRelocationSealed` | Session owner → Relocation coordinator: seal 설치 결과 | reply |
+| 43 | `sessionRelocationSealed` | Session owner → Relocation coordinator: seal 설치 결과 또는 exact binding 부재(`sealResult`, §8.3) | reply |
 | 44 | `sessionRelocationRoute` | Target runtime 또는 relocation coordinator → Session owner: route 적용 또는 abort | one-way(send), 응답 없음 |
 | 45 | (reserved) | Reserved | 보내지도 수락하지도 않는다 |
 
@@ -526,7 +526,7 @@ message를 source route로 다시 제출하며 reply를 만들지 않는다. Rel
 
 ### 8.2 Control message 42·43·44
 
-Command 42와 43은 Session seal의 설치 request와 reply를 전달한다. Command 43은 seal 설치 결과만 전달하며 Session message sequence나 high-water는 포함하지 않는다.
+Command 42와 43은 Session seal의 설치 request와 reply를 전달한다. Command 43은 seal 설치 결과(`sealResult`)만 전달하며 Session message sequence나 high-water는 포함하지 않는다. `sealResult`는 `sealed`(1) 또는 `bindingAbsent`(2)이고, `bindingAbsent`의 판정과 처리는 §8.3이 소유한다.
 
 Command 44는 target runtime의 commit 또는 relocation coordinator의 relay-ready accepted
 전 abort를 전달하는 one-way control이다. **Command 44는 response 없이 한 번만 제출하고
@@ -554,6 +554,37 @@ Command들은 relocation을 조정하기 위한 내부 message이며 Location St
 Store CAS가 결정했으므로 Session owner가 Store나 Actor authority mirror를 다시
 조회하지 않는다. Reserved command 45는 보내지 않으며 수락하지도 않는다. 각 command의
 방향·용도·완료 방식은 §5의 command 표에 있다.
+
+### 8.3 이미 정리된 binding에 대한 seal
+
+§7의 disconnect 통지나 logical notification으로 binding이 이미 tombstone·정리된 뒤 command 42가
+도착할 수 있다. Session owner는 command 42를 다음 셋 중 하나로 판정한다. 판정은 §8.1의 Session
+owner 한 곳에서만 한다.
+
+| 판정 | 조건 | Session owner 처리 |
+|---|---|---|
+| Seal 설치 | Command 42의 Session identity·SessionRid, binding generation, `ActorId`·`ObjectGeneration`이 current binding과 일치한다. | §8.1대로 seal을 설치하고 command 43을 `sealResult = sealed`로 반환한다. |
+| Exact binding 부재 | Command 42가 가리키는 SessionRid의 current Session이 없거나, 그 Session에 같은 `ActorId`의 current binding이 없다. | Seal, held message, seal timeout을 만들지 않고 command 43을 `sealResult = bindingAbsent`로 반환한다. |
+| 불일치 | 같은 `ActorId`의 current binding이 있으나 Session identity, binding generation 또는 `ObjectGeneration`이 다르거나, 같은 binding에 다른 relocation identity의 seal이 있다. | 기존대로 거부한다. 부재로 바꿔 반환하지 않는다. |
+
+`bindingAbsent`는 seal을 설치했다는 뜻이 아니라 seal할 exact binding이 없다는 뜻이다. Session owner는
+같은 command 42를 다시 받으면 같은 판정을 반환하며 state를 바꾸지 않는다. 설치된 seal이 없으므로
+이 relocation identity로 늦게 도착한 command 44는 §8.1의 `late_session_route_update` Warning만 남기고
+무시한다.
+
+Relocation coordinator는 `bindingAbsent`를 받은 participant를 bind되지 않은 participant와 같이
+다룬다. Relocation envelope의 `sessionBindings`에 넣지 않고, target은 그 Session에 command 44를
+보내지 않으며, relocation은 계속 진행한다. 부재 판정은 Session owner만 소유한다. Coordinator와 Actor
+owner는 자신이 보관한 binding 정보로 seal을 생략하거나 부재를 추측하지 않는다.
+
+§7에 따라 binding은 disconnect callback이 terminal에 도달한 뒤에만 tombstone으로 정리되므로,
+`bindingAbsent` 시점에 그 binding의 disconnect callback은 이미 끝났거나 source queue의 saved work로
+capture된다. Coordinator는 disconnect callback을 다시 만들지 않는다.
+
+Command 42가 불일치로 거부되거나 seal 대기 deadline에 도달하면 relocation은 실패한다. Coordinator는
+이미 `sealed`로 확인한 다른 participant의 seal을 command 44 abort로 해제하고, 이미 시작한 capture를
+source queue로 복원한 뒤 operation을 실패로 끝낸다
+([Relocation §9](../05-location-relocation/04-relocation-flow.ko.md#9-timeout-failure와-cancellation)).
 
 ## 9. 재접속과 이동의 구분
 
@@ -788,6 +819,8 @@ lane 정책 타입, 검증 지점 하나)은 [§10](#10-실행과-수명)·[§11
 - Relay-ready 전에 target이 명시적으로 실패하면 held message가 source route로 처리되고 connection은
   유지된다.
 - Relay-ready 뒤 source route 재개는 공통 relocation §4.4의 source `Preserve` fence 결과를 따른다. Fence 판정 중 seal timeout은 기존대로 처리한다.
+- Disconnect로 이미 정리된 binding을 seal하려 하면 command 43이 `bindingAbsent`로 끝나고, relocation은
+  그 Session 없이 진행된다. Session owner는 seal을 설치하지 않는다.
 - Wire에서 command 43에는 sequence·high-water가 없고, command 44에는 응답이 없으며, command 45는
   오가지 않는다.
 

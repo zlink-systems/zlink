@@ -375,7 +375,7 @@ The control commands this section and §8.2 use are as follows.
 | 36 | `boundSessionSend` | Actor owner → Session owner: Actor→session push | send |
 | 51 | `boundSessionReplaced` | Actor owner → previous Session owner: binding-replacement notification | one-way, at most once |
 | 42 | `sessionRelocationSeal` | Relocation coordinator → Session owner: request to install a seal on the relocation-target binding | request |
-| 43 | `sessionRelocationSealed` | Session owner → Relocation coordinator: seal-installation result | reply |
+| 43 | `sessionRelocationSealed` | Session owner → Relocation coordinator: seal-installation result or exact-binding absence (`sealResult`, §8.3) | reply |
 | 44 | `sessionRelocationRoute` | Target runtime or relocation coordinator → Session owner: route apply or abort | one-way (send), no response |
 | 45 | (reserved) | Reserved | Neither sent nor accepted |
 
@@ -642,8 +642,9 @@ route. Seal timeout during settlement follows the existing rule.
 ### 8.2 Control Messages 42, 43, 44
 
 Commands 42 and 43 carry the Session seal's install request and reply.
-Command 43 carries only the seal-installation result, with no
-Session message sequence or high-water.
+Command 43 carries only the seal-installation result (`sealResult`), with no
+Session message sequence or high-water. `sealResult` is `sealed` (1) or
+`bindingAbsent` (2); §8.3 owns how `bindingAbsent` is decided and handled.
 
 Command 44 is a one-way control that carries the target runtime's commit,
 or the relocation coordinator's abort before relay-ready becomes accepted.
@@ -678,6 +679,40 @@ valid has already been decided by the target-only Location Store CAS, so
 the Session owner doesn't re-query the Store or an Actor authority mirror.
 The reserved command 45 is neither sent nor accepted. Each command's
 direction, use, and completion style are in §5's command table.
+
+### 8.3 Sealing an Already-Cleaned Binding
+
+Command 42 can arrive after the binding was already tombstoned and cleaned by §7's
+disconnect notification or a logical notification. The Session owner classifies command 42
+as one of the following three. Only the Session owner of §8.1 makes this decision.
+
+| Decision | Condition | Session owner handling |
+|---|---|---|
+| Seal installed | Command 42's Session identity/SessionRid, binding generation, and `ActorId`/`ObjectGeneration` match the current binding. | Installs the seal per §8.1 and returns command 43 with `sealResult = sealed`. |
+| Exact binding absent | There is no current Session for command 42's SessionRid, or that Session has no current binding for the same `ActorId`. | Creates no seal, held messages, or seal timeout, and returns command 43 with `sealResult = bindingAbsent`. |
+| Mismatch | A current binding exists for the same `ActorId` but its Session identity, binding generation, or `ObjectGeneration` differs, or the same binding holds a seal of a different relocation identity. | Rejects as before. It is never turned into an absence result. |
+
+`bindingAbsent` doesn't mean a seal was installed; it means there is no exact binding to
+seal. When the Session owner receives the same command 42 again, it returns the same
+decision without changing state. Because no seal is installed, a late command 44 for this
+relocation identity only records §8.1's `late_session_route_update` Warning and is ignored.
+
+The relocation coordinator treats a participant that received `bindingAbsent` like an
+unbound participant. It leaves it out of the relocation envelope's `sessionBindings`, the
+target sends no command 44 to that Session, and the relocation continues. Only the Session
+owner decides absence. The coordinator and the Actor owner don't skip the seal or guess
+absence from binding information they keep.
+
+Under §7 a binding is tombstoned only after its disconnect callback reaches a terminal, so
+when `bindingAbsent` is returned that binding's disconnect callback has already finished or
+is captured as saved work in the source queue. The coordinator doesn't create the disconnect
+callback again.
+
+If command 42 is rejected as a mismatch or the seal wait reaches its deadline, the
+relocation fails. The coordinator releases the seals of other participants already confirmed
+`sealed` with command 44 abort, restores every capture already started to the source queue,
+and fails the operation
+([Relocation §9](../05-location-relocation/04-relocation-flow.en.md#9-timeout-failure-and-cancellation)).
 
 ## 9. Distinguishing Reconnection from Relocation
 
@@ -973,6 +1008,8 @@ here.
 - If the target explicitly fails before relay-ready, the held messages are
   processed via the source route and the connection is kept.
 - After relay-ready, source route resumption follows the source `Preserve` fence in common relocation §4.4. Seal timeout during settlement follows its existing rule.
+- Sealing a binding already cleaned by disconnect ends command 43 with `bindingAbsent`, and the
+  relocation continues without that Session. The Session owner installs no seal.
 - On the wire, command 43 has no sequence/high-water, command 44 has no
   response, and command 45 isn't exchanged.
 
