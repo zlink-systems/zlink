@@ -4,7 +4,7 @@
     <CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled>
   </PropertyGroup>
   <ItemGroup>
-    <PackageVersion Include="Zlink" Version="1.19.0" />
+    <PackageVersion Include="Zlink" Version="1.19.2" />
     <PackageVersion Include="Zlink.Framework" Version="0.30.1" />
     <PackageVersion Include="Zlink.Framework.AspNetCore" Version="0.30.1" />
     <PackageVersion Include="Zlink.Framework.Locations.Redis" Version="0.30.1" />
