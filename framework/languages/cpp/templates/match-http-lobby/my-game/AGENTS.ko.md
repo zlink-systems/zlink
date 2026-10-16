@@ -28,13 +28,13 @@ Bash도 같은 절차를 실행한다.
 ./run-e2e.sh --check-structure
 ```
 
-로컬 process 디버깅은 C++20 컴파일러(GCC 13 이상 또는 Visual Studio 2022 17.4 이상이며 Windows에서는 Visual Studio 개발자 셸), CMake 3.24 이상과 Ninja를 설치한 뒤 `--local` 또는 `-Local`로 실행한다. 로컬 모드는 `cmake -P bootstrap.cmake`, `cmake --preset default`, `cmake --build --preset default`를 실행한 뒤 `build/bin/my-game-e2e`를 시작한다. 로컬 빌드가 있으면 `--no-build` 또는 `-NoBuild`를 추가한다. 시나리오 순서와 assertion은 유지하며 최초 실패를 README의 Known issues와 대조한다. Room 규칙 테스트와 HTTP 연결 끊김·재참가 회귀 테스트(`e2e/domain_tests.cpp`로 빌드되는 `room-rules`)는 프로젝트와 함께 빌드되며, 로컬 빌드 뒤 `ctest --test-dir build --output-on-failure`로 실행한다.
+로컬 process 디버깅은 C++20 컴파일러(GCC 13 이상 또는 Visual Studio 2022 17.4 이상이며 Windows에서는 Visual Studio 개발자 셸), CMake 3.24 이상과 Ninja를 설치한 뒤 `--local` 또는 `-Local`로 실행한다. 로컬 모드는 `cmake -P bootstrap.cmake`, `cmake --preset default`, `cmake --build --preset default`를 실행한 뒤 `build/bin/my-game-e2e`를 시작한다. 로컬 빌드가 있으면 `--no-build` 또는 `-NoBuild`를 추가한다. 시나리오 순서와 assertion은 유지하며 최초 실패를 README의 Known issues와 대조한다. Room 규칙 테스트와 lobby 대기열 테스트(`e2e/domain_tests.cpp`로 빌드되는 `room-rules`)는 프로젝트와 함께 빌드되며, 로컬 빌드 뒤 `ctest --test-dir build --output-on-failure`로 실행한다.
 
 ## 프로젝트 구성과 확장 위치
 
 ### HTTP 로비
 
-`server/lobby/main.cpp`는 Lobby node를 RouteMesh client로 등록하고 `server/lobby/http.hpp`의 `HttpLobby`를 hosted service로 추가한다. `HttpLobby`는 `MatchRequest`(`playerId`, `mode`)를 담은 `POST /match`를 받아, 같은 mode를 요청하는 다른 플레이어가 올 때까지 첫 응답을 붙들고 있다가 새 Room을 `get_or_create`한 뒤 두 플레이어에게 `MatchResponse`(`roomId`, `sessionEndpoint`)로 답한다. HTTP listener는 `server/lobby/http.hpp`와 `server/shared/http.hpp`에서 Boost.Beast로 작성되어 있으며, Framework 자체의 HTTP 표면은 [HTTP hosting 가이드](https://docs.zlink.systems/ko/cpp/guide/server/42-http-hosting/)가 설명한다. lobby는 대기열을 process 메모리에 두며 relocation 참가자가 아니다. 운영용 인증과 내구성 있는 매칭은 이 node의 확장 지점이다.
+`server/lobby/main.cpp`는 Lobby node를 RouteMesh client로 등록하고, `Matchmaker`를 service로 등록하며, [HTTP hosting 가이드](https://docs.zlink.systems/ko/cpp/guide/server/42-http-hosting/)가 설명하는 대로 `options.http().listen(...).map_post<MatchHandler>(...)`로 Framework HTTP host의 `POST /match`를 `MatchHandler`에 연결한다. `server/lobby/http.hpp`의 `MatchHandler`는 typed route로서 `MatchRequest`(`playerId`, `mode`)를 받고 `MatchResponse`(`roomId`, `sessionEndpoint`)를 반환한다. 같은 mode 대기열은 `server/lobby/matchmaker.hpp`의 `Matchmaker`가 관리한다. 첫 요청은 짝이 정해질 때까지 기다리고, 두 번째 요청이 새 Room의 `get_or_create`를 `co_await`한 뒤 두 요청을 함께 완료한다. lobby는 대기열을 process 메모리에 두며 relocation 참가자가 아니다. Framework HTTP handler는 client 연결 끊김을 통지받지 않으므로, 대기 중인 요청은 같은 mode의 다른 플레이어가 올 때까지 대기열에 남는다. 운영용 인증과 내구성 있는 매칭은 이 node의 확장 지점이다.
 
 ### Session gateway
 
@@ -52,7 +52,7 @@ ID로 찾는 게임 상태 객체가 Actor이며, `server/match/player.hpp`의 `
 
 ### 빌드와 e2e runner
 
-`CMakeLists.txt`는 role마다 `server/<role>/main.cpp`로 실행 파일(`my-game-session`, `my-game-match`, `my-game-lobby`)을 만들고 `my-game-e2e` runner를 만든다. node role을 추가하면 `foreach(role ...)` 목록에 넣는다. `e2e/client.hpp`는 공개 stream connector로 게임에 접속하고 `e2e/scenarios.hpp`는 client가 관찰할 결과를 검사한다. `e2e/world.hpp`는 `e2e/process.hpp`로 node와 기반 시설을 시작하고, `e2e/main.cpp`는 시나리오를 선택해 실행하며, `e2e/structure.hpp`는 `zlink.structure.json`을 `server/config/`와 `contracts.hpp`의 이름에 대조해 검사한다. 새 게임 동작은 client가 받은 결과로 검증하며, Room 규칙과 lobby의 HTTP 처리는 별도 unit test target `my-game-rules`가 검사한다. formatter 설정은 포함되어 있지 않다.
+`CMakeLists.txt`는 role마다 `server/<role>/main.cpp`로 실행 파일(`my-game-session`, `my-game-match`, `my-game-lobby`)을 만들고 `my-game-e2e` runner를 만든다. node role을 추가하면 `foreach(role ...)` 목록에 넣는다. `e2e/client.hpp`는 공개 stream connector로 게임에 접속하고 `e2e/scenarios.hpp`는 client가 관찰할 결과를 검사한다. `e2e/world.hpp`는 `e2e/process.hpp`로 node와 기반 시설을 시작하고, `e2e/main.cpp`는 시나리오를 선택해 실행하며, `e2e/structure.hpp`는 `zlink.structure.json`을 `server/config/`와 `contracts.hpp`의 이름에 대조해 검사한다. 새 게임 동작은 client가 받은 결과로 검증하며, Room 규칙과 lobby 대기열은 별도 unit test target `my-game-rules`가 검사한다. formatter 설정은 포함되어 있지 않다.
 
 ## 프로젝트의 ZLink 개념
 
@@ -84,8 +84,8 @@ Actor가 소속 Spot을 바꾸는 동작은 membership 변경이다. 대상 Spot
 
 예시 게임의 요청은 다음 경로로 처리된다. 기능을 더하거나 옮기기 전에 이 경로를 따라 코드를 읽으면 바꿀 위치를 빠르게 찾을 수 있다.
 
-1. client가 Lobby node의 `POST /match`에 `{"playerId":"p1","mode":"duel"}`를 보낸다(`HttpLobby::match`). 같은 mode를 요청하는 다른 플레이어가 올 때까지 첫 응답은 보류된다.
-2. 같은 mode의 두 플레이어가 대기하면 `HttpLobby`가 Room 번호를 매기고 Spot manager로 Room을 `get_or_create`한 뒤, `roomId`와 `lobby.json`에 설정한 `SessionEndpoint`를 담은 `MatchResponse`로 두 요청에 답한다.
+1. client가 Lobby node의 `POST /match`에 `{"playerId":"p1","mode":"duel"}`를 보낸다(`MatchHandler::handle`). 같은 mode를 요청하는 다른 플레이어가 올 때까지 첫 응답은 보류된다.
+2. 같은 mode의 두 번째 플레이어가 오면 `Matchmaker`가 Room 번호를 매기고, `MatchHandler`가 Spot manager로 Room을 `get_or_create`한 뒤 `roomId`와 `lobby.json`에 설정한 `SessionEndpoint`를 담은 `MatchResponse`로 두 요청에 답한다.
 3. 각 client는 그 Session endpoint에 STREAM으로 연결하고 첫 패킷 `JoinRoomRequest`를 보낸다. `Session::on_packet`은 첫 패킷 이름을 확인하고 `playerId`로 Player Actor를 `get_or_create`한 뒤 `bind_or_get`으로 binding하고 원래 패킷을 relay한다.
 4. 새 Actor는 Entry Spot `Entry`에서 시작한다. `Entry::join`이 identity를 확인하고 Room에 `join_spot(...).defer()`를 요청한다. `Room::on_actor_join`이 플레이어를 수락하고 `Room::on_actor_joined`가 Actor client로 플레이어에게 `RoomView`를 broadcast하며, `Room::deliver_view`가 이를 binding된 Session으로 전달한다.
 5. `MoveRequest`와 `ShootRequest`는 `Room::move`와 `Room::shoot`가 처리한다. `RoomState` 규칙을 적용하고 거부는 `ActionRejected`나 `ShotRejected`로 답하며, 새 `RoomView`와 승자가 나오면 `MatchEnded`(`Room::deliver_end`가 전달)를 broadcast한다.
@@ -111,8 +111,8 @@ Actor가 소속 Spot을 바꾸는 동작은 membership 변경이다. 대상 Spot
 | Entry·첫 입장 | `server/match/player.hpp`의 `Entry`, `server/match/room.hpp`의 `Room::reconnect` | `Entry::join`(identity 확인, Room으로의 지연 참가)과 `Room::reconnect`의 identity 확인과 view 재전송 | `add_entry_spot` 등록과 `entry` 선언. 첫 입장 시나리오(`hit`)와 재접속 뒤 상태를 비교하는 `reconnect` 시나리오 |
 | Session binding | `server/session/session.hpp` | 첫 패킷 검사, Actor 조회·생성, `bind_or_get` binding과 원래 typed 패킷 relay | `Entry::join`와 같은 첫 패킷 타입. 기본 셋업의 `server/session/session.hpp`에 옮긴다 |
 | Host relocation | `server/match/player.hpp`의 `PlayerRelocation`, `server/match/room.hpp`의 `RoomRelocation`, `server/shared/hosting.hpp`의 `NodeControl` | `RoomState`의 `capture`·`restore`를 가진 adapter, 상태 없는 Actor를 위한 `PlayerRelocation`, `drain`·`shutdown` 제어 | `main.cpp`의 `preserve_state_with` 등록. 서버 교체 뒤에도 연결·상태가 유지되고 대체 node가 새 작업을 받는지 판정하는 `update` 시나리오 |
-| HTTP 로비 | `server/lobby/http.hpp`의 `HttpLobby`, `server/lobby/main.cpp`, `server/shared/http.hpp` | 같은 mode끼리 짝짓는 `POST /match` endpoint, 대기 중 client 연결이 끊기면 요청을 제거하는 동작, Room 준비 | 새 `server/lobby/` role과 그 설정(`HttpEndpoint`, `SessionEndpoint`), `CMakeLists.txt` 항목. `zlink.structure.json`의 `lobby` node. `lobby` 시나리오 |
-| 동적 Room | `server/lobby/http.hpp`의 `HttpLobby`, `server/match/main.cpp`의 `Room` factory | 동적 User Spot 생성 형태. 이름 할당, Spot manager로 `Room` `get_or_create`, 이름을 client에 반환 | `RoomCapacity`를 지정한 `Room` factory 등록. `zlink.structure.json`의 `room` Spot 선언 |
+| HTTP 로비 | `server/lobby/http.hpp`의 `MatchHandler`, `server/lobby/matchmaker.hpp`의 `Matchmaker`, `server/lobby/main.cpp` | Framework HTTP host의 `POST /match` route, 같은 mode 대기열, Room 준비 | 새 `server/lobby/` role과 그 설정(`HttpEndpoint`, `SessionEndpoint`), `CMakeLists.txt` 항목. `zlink.structure.json`의 `lobby` node. `lobby` 시나리오 |
+| 동적 Room | `server/lobby/http.hpp`의 `MatchHandler`, `server/match/main.cpp`의 `Room` factory | 동적 User Spot 생성 형태. 이름 할당, Spot manager로 `Room` `get_or_create`, 이름을 client에 반환 | `RoomCapacity`를 지정한 `Room` factory 등록. `zlink.structure.json`의 `room` Spot 선언 |
 
 `drain`과 `shutdown`은 `NodeControl`과 함께 옮긴다.
 
@@ -122,7 +122,7 @@ Actor가 소속 Spot을 바꾸는 동작은 membership 변경이다. 대상 Spot
 
 메시지 contract부터 옮긴다. `server/shared/contracts.hpp`에 packet struct를 `packet_name`과 JSON 변환을 갖춰 먼저 정의한 뒤, 컴파일 오류가 나는 handler를 하나씩 새 메시지로 옮긴다. 첫 입장 패킷을 바꾸면 `server/session/session.hpp`의 `Session::on_packet`에 있는 첫 패킷 검사와 `Entry::join`, `Room::reconnect`가 같은 타입을 받도록 함께 고친다.
 
-상태는 그 상태를 결정하는 객체에 둔다. HP·위치·sequence는 `RoomState`를 통해 `Room`에 두며 `Player`는 application 상태를 갖지 않고 `HttpLobby`는 일시적인 대기열만 가진다. 상태 필드를 바꿀 때는 같은 객체의 상태 struct와 JSON 변환, relocation adapter의 `capture`·`restore`를 함께 고친다. 빠뜨린 필드는 relocation 뒤 사라지고, `update` 시나리오가 그 손실을 잡는다.
+상태는 그 상태를 결정하는 객체에 둔다. HP·위치·sequence는 `RoomState`를 통해 `Room`에 두며 `Player`는 application 상태를 갖지 않고 `Matchmaker`는 일시적인 대기열만 가진다. 상태 필드를 바꿀 때는 같은 객체의 상태 struct와 JSON 변환, relocation adapter의 `capture`·`restore`를 함께 고친다. 빠뜨린 필드는 relocation 뒤 사라지고, `update` 시나리오가 그 손실을 잡는다.
 
 `HttpEndpoint`는 port 0으로 설정하고 실제 port는 lobby의 `READY` 줄에서 읽으며, lobby의 `SessionEndpoint`에는 Session node가 게시한 endpoint를 설정한다. `e2e/world.hpp`가 실행마다 두 가지를 모두 수행한다.
 
@@ -136,11 +136,11 @@ Lobby·Match·Room 같은 역할 이름을 이 샘플과 다르게 정하려면 
 
 `bootstrap.cmake`가 고정 버전으로 설치하는 공개 Framework prebuilt를 사용하며, 저장소 소스나 로컬 feed를 프로젝트에 추가하지 않는다. typed 메시지는 기본 Framework JSON serializer로 처리하여 process마다 같은 계약을 사용한다. 메시지는 `server/shared/contracts.hpp`에 `packet_name`과 JSON 변환을 갖춰 선언하고, 메시지별 codec·수동 encode·raw frame 해석은 추가하지 않는다. relocation adapter가 직접 직렬화하는 대상은 application 상태(`capture`의 `zlink::message_t::from_json`, `restore`의 `parse_json`)로 한정하여 Framework의 실행 상태와 게임 상태의 관리 책임을 분리한다.
 
-플레이어의 HP와 위치 같은 게임 사실은 그것을 변경하는 객체 한 곳에서 관리한다. Spot에는 플레이어 ID와 관찰용 복사 값을 보관하고 Actor 참조는 보관하지 않는다. Spot handler는 Actor를 인자로 받으며 다른 플레이어에게는 `actor_client_t`로 플레이어 ID를 지정해 보낸다. Session은 인증과 binding 뒤 packet을 전달하고, 이동과 전투 판정은 해당 상태를 관리하는 `Room`에서 수행하며, `HttpLobby`는 HTTP 요청을 짝짓고 Room을 준비하는 일만 한다. 게임 규칙은 `server/match/domain.hpp`에 두고 Framework callback은 Spot·Actor·Session 파일에 둔다.
+플레이어의 HP와 위치 같은 게임 사실은 그것을 변경하는 객체 한 곳에서 관리한다. Spot에는 플레이어 ID와 관찰용 복사 값을 보관하고 Actor 참조는 보관하지 않는다. Spot handler는 Actor를 인자로 받으며 다른 플레이어에게는 `actor_client_t`로 플레이어 ID를 지정해 보낸다. Session은 인증과 binding 뒤 packet을 전달하고, 이동과 전투 판정은 해당 상태를 관리하는 `Room`에서 수행하며, lobby는 HTTP 요청을 짝짓고 Room을 준비하는 일만 한다. 게임 규칙은 `server/match/domain.hpp`에 두고 Framework callback은 Spot·Actor·Session 파일에 둔다.
 
 ### 비동기 실행과 lifecycle
 
-handler는 `task_t` coroutine으로 작성하고 공개 비동기 호출은 템플릿처럼 `co_await`한다. `.result()` 같은 blocking 대기는 [Host execution model](https://docs.zlink.systems/ko/cpp/guide/server/43-execution-model/)이 테스트와 client에만 허용한다. handler에서 대기나 동기 I/O로 실행을 중단하지 않는다. `NodeControl`은 자신의 stdin thread에서, `HttpLobby`는 Room을 준비할 때 자신의 IO thread에서 `await_host`로 대기하며, 둘 다 Spot이나 Actor handler 안에서 실행되지 않는다. SpotWide 실행 모드가 같은 상태의 실행을 하나의 gate로 제한하므로 별도 lock이나 queue로 같은 상태를 다시 보호하지 않는다. await 중에도 turn을 유지할 수 있으므로 같은 Spot에 대한 request처럼 그 turn이 끝나야 실행되는 작업을 기다리지 않으며, 긴 작업은 handler 밖에서 처리한다. 실행 경계는 [Execution model](https://docs.zlink.systems/ko/cpp/guide/server/32-execution-model/)이 설명한다.
+handler는 `task_t` coroutine으로 작성하고 공개 비동기 호출은 템플릿처럼 `co_await`한다. `.result()` 같은 blocking 대기는 [Host execution model](https://docs.zlink.systems/ko/cpp/guide/server/43-execution-model/)이 테스트와 client에만 허용한다. handler에서 대기나 동기 I/O로 실행을 중단하지 않는다. `NodeControl`은 handler 밖의 자신의 stdin thread에서만 `await_host`로 대기한다. `MatchHandler`는 Room 준비와 짝 결정을 `co_await`하며 HTTP host가 이를 worker pool에서 실행한다. 동시에 실행되는 HTTP handler가 대기열을 공유하므로 `Matchmaker`는 lobby 대기열에만 lock을 쓴다. SpotWide 실행 모드가 같은 상태의 실행을 하나의 gate로 제한하므로 별도 lock이나 queue로 같은 상태를 다시 보호하지 않는다. await 중에도 turn을 유지할 수 있으므로 같은 Spot에 대한 request처럼 그 turn이 끝나야 실행되는 작업을 기다리지 않으며, 긴 작업은 handler 밖에서 처리한다. 실행 경계는 [Execution model](https://docs.zlink.systems/ko/cpp/guide/server/32-execution-model/)이 설명한다.
 
 타입 등록과 객체별 callback은 각각 정해진 lifecycle 단계에 둔다. factory와 Entry Spot은 node의 `main.cpp`에서 등록하고, handler는 `configure()`에서 등록하고, 참가 수락과 membership 판정은 `on_actor_join`, `on_actor_joined`, `on_leave_actor`, `on_disconnect_actor`에서 처리한다. membership 변경은 `join_spot(...).defer()`와 공개 완료 callback `on_join_completed`를 사용하고 host 종료는 relocation과 runtime 관찰로 확인하여 요청 수락을 완료로 오인하지 않는다. 생성과 초기화의 차이는 [Activation and lifetime](https://docs.zlink.systems/ko/cpp/guide/server/34-activation-lifetime/)이 설명한다.
 

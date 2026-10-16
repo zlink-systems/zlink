@@ -2,7 +2,7 @@
 #include <utility>
 #include <boost/asio.hpp>
 #include <boost/beast.hpp>
-#include "contracts.hpp"
+#include "server/shared/contracts.hpp"
 namespace MyGame
 {
 namespace net = boost::asio;

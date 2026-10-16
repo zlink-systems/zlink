@@ -1,6 +1,6 @@
 #pragma once
 #include "client.hpp"
-#include "server/shared/http.hpp"
+#include "http.hpp"
 #include <future>
 namespace MyGame::E2E
 {

@@ -1,5 +1,5 @@
 #include "server/match/domain.hpp"
-#include "server/lobby/http.hpp"
+#include "server/lobby/matchmaker.hpp"
 #include <iostream>
 #include <limits>
 namespace
@@ -10,51 +10,35 @@ void require (bool value, const char *message)
     if (!value)
         throw std::runtime_error (message);
 }
-void disconnected_waiter ()
+void lobby_queue ()
 {
-    NodeConfig config;
-    config.HttpEndpoint = "http://127.0.0.1:0";
-    config.SessionEndpoint = "tcp://localhost:1";
-    HttpLobby lobby (config, [&config] (const std::string &room) {
-        return MatchResponse{room, config.SessionEndpoint};
-    });
-    net::io_context io;
-    const auto address = http_address (lobby.endpoint ());
-    auto request = [&] (boost::beast::tcp_stream &stream, const std::string &player) {
-        stream.connect (address);
-        http::request<http::string_body> message{http::verb::post, Names::match_path,
-                                                 Http::version};
-        message.set (http::field::host, "localhost");
-        message.body () = nlohmann::json (MatchRequest{player, Names::default_mode}).dump ();
-        message.prepare_payload ();
-        http::write (stream, message);
+    Matchmaker lobby;
+    const auto rejected = [&lobby] (const MatchRequest &request) {
+        try {
+            (void) lobby.enter (request);
+        }
+        catch (const fx::framework_exception_t &error) {
+            return error.kind () == fx::framework_error_kind_t::invalid_operation;
+        }
+        return false;
     };
-    boost::beast::tcp_stream abandoned (io);
-    request (abandoned, "a");
-    abandoned.socket ().shutdown (Tcp::socket::shutdown_send);
-    char byte;
-    boost::system::error_code ended;
-    abandoned.expires_after (Limits::packet);
-    abandoned.async_read_some (net::buffer (&byte, 1), [&] (auto error, auto) { ended = error; });
-    io.run ();
-    require (ended == net::error::eof, "Disconnected waiter must be removed before server EOF");
-    boost::beast::tcp_stream first (io), second (io);
-    request (first, "a");
-    request (second, "b");
-    auto response = [&] (boost::beast::tcp_stream &stream) {
-        boost::beast::flat_buffer buffer;
-        http::response<http::string_body> message;
-        boost::system::error_code result;
-        stream.expires_after (Limits::packet);
-        io.restart ();
-        http::async_read (stream, buffer, message, [&] (auto error, auto) { result = error; });
-        io.run ();
-        require (!result && message.result () == http::status::ok, "Rejoined waiter must match");
-        return nlohmann::json::parse (message.body ());
-    };
-    const auto a = response (first), b = response (second);
-    require (a == b && a.at ("roomId") == std::string (Names::room_prefix) + "1",
-             "Rejoined A and B must share the first prepared room");
+    require (rejected ({" ", Names::default_mode}) && rejected ({"a", ""}),
+             "Blank player or mode accepted");
+    const auto first = lobby.enter ({"a", Names::default_mode});
+    require (first.pending && !first.partner, "First request must wait");
+    require (rejected ({"a", Names::default_mode}), "Duplicate pending player accepted");
+    const auto other = lobby.enter ({"c", "other"});
+    require (other.pending != nullptr, "Another mode must wait in its own queue");
+    const auto second = lobby.enter ({"b", Names::default_mode});
+    require (!second.pending && second.partner == first.pending
+               && second.room == std::string (Names::room_prefix) + "1",
+             "Second request must pair with the first in the first Room");
+    const MatchResponse assignment{second.room, "tcp://127.0.0.1:1"};
+    second.partner->complete (fx::result_t<MatchResponse>::success (assignment));
+    require (first.pending->task ().result ().value ().roomId == assignment.roomId,
+             "Waiting request must receive the paired assignment");
+    require (lobby.enter ({"a", Names::default_mode}).pending != nullptr,
+             "Paired player must be able to queue again");
 }
 RoomState pair (double ax, double ay, double bx, double by)
 {
@@ -76,7 +60,7 @@ void expect_shot (RoomState state, const std::string &reason)
 int main ()
 {
     try {
-        disconnected_waiter ();
+        lobby_queue ();
         RoomState room;
         require (room.admit ("a") && room.admit ("a") && room.admit ("b") && !room.admit ("c"),
                  "Capacity or idempotent admission failed");
@@ -105,7 +89,8 @@ int main ()
         const auto restored = nlohmann::json (state).get<RoomState> ();
         require (nlohmann::json (restored) == nlohmann::json (state),
                  "Relocation application snapshot changed state");
-        std::cout << "Domain: admission, geometry, rejection, winner and snapshot passed\n";
+        std::cout
+          << "Domain: lobby queue, admission, geometry, rejection, winner and snapshot passed\n";
         return 0;
     }
     catch (const std::exception &error) {

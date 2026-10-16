@@ -79,7 +79,7 @@ struct MatchRequest
     static constexpr auto packet_name = "MatchRequest";
     std::string playerId;
     std::string mode = Names::default_mode;
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (MatchRequest, playerId, mode)
+    NLOHMANN_DEFINE_TYPE_INTRUSIVE_WITH_DEFAULT (MatchRequest, playerId, mode)
 };
 struct MatchResponse
 {

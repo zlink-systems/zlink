@@ -63,8 +63,8 @@ class NodeControl final : public fx::hosted_service_t
             ? nlohmann::json (
                 runtime.listener_status (fx::listener_kind_t::stream, Names::stream).endpoint)
             : nlohmann::json (nullptr);
-        if (!config_.HttpEndpoint.empty ())
-            output["httpEndpoint"] = config_.HttpEndpoint;
+        if (const auto http = runtime.http_listener_statuses (); !http.empty ())
+            output["httpEndpoint"] = http.front ().bound_url;
         std::cout << Control::ready << output.dump () << std::endl;
         control_ = std::thread ([this, &runtime] {
             try {
