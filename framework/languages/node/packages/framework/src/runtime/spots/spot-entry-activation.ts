@@ -1,3 +1,4 @@
+import { currentApplicationJobOrigin } from '../application-jobs/application-job-queue-scope';
 import type {
   ActorRef,
   RoutingId,
@@ -479,27 +480,31 @@ export class ZLinkEntrySpotActivation {
       remoteBoundSessionTarget,
       fallbackActorRef,
       undefined,
-      messageFollowOrigin,
-      (
-        replayedParts,
-        replayReturnResponse,
-        replayRemoteBoundSessionTarget,
-        replayFallbackActorRef
-      ) =>
-        this.spotSerialExecutor.executeActor(actorId, () =>
-          this.dispatchActorPacketInsideMailbox({
-            origin: delivery.origin,
-            actorId,
-            parts: replayedParts,
-            returnResponse: replayReturnResponse,
-            remoteBoundSessionTarget: replayRemoteBoundSessionTarget,
-            fallbackActorRef: replayFallbackActorRef
-          })
-        )
+      messageFollowOrigin
     );
     if (handoff !== undefined) return await handoff;
     return this.spotSerialExecutor.executeActor(actorId, () =>
       this.dispatchActorPacketInsideMailbox(delivery)
+    );
+  }
+
+  /** Restores source packets through the Entry Actor's existing executor. */
+  admitActorPacketPrefix(
+    actorId: string,
+    records: readonly import('../actors/actor-handoff').ZLinkActorHandoffPrefixRecord[]
+  ): import('../actors/actor-handoff').ZLinkActorHandoffPrefixAdmission {
+    return this.spotSerialExecutor.admitActorPacketPrefix(
+      actorId,
+      records,
+      (_serial, parts, returnResponse, remoteBoundSessionTarget, fallbackActorRef) =>
+        this.dispatchActorPacketInsideMailbox({
+          origin: currentApplicationJobOrigin(),
+          actorId,
+          parts,
+          returnResponse,
+          remoteBoundSessionTarget,
+          fallbackActorRef
+        })
     );
   }
 
