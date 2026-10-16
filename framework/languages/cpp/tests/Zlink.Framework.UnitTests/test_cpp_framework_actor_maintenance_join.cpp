@@ -1178,7 +1178,8 @@ TEST_P (ActorDeferredJoinFailure, FailureAndRejectionPreserveSourceActor)
                    .timeout (wait_budget)
                    .async<probe_t> ()
                    .result ();
-    ASSERT_TRUE (probe);
+    ASSERT_TRUE (probe) << "kind=" << static_cast<int> (probe.error_kind ())
+                        << " message=" << (probe.error () ? probe.error ()->what () : "");
     EXPECT_EQ (probe.value ().value, 17);
 }
 
