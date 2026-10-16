@@ -200,8 +200,9 @@ checksum이 도착하면 기존 조립을 재사용하지도 덮어쓰지도 않
 Temporary queue와 saved-work 구간은 dispatch 전 ordered durable backlog이며, 유한한 handoff 뒤 payload를 소유한다. Staging ingress와 runnable callback의 permit 반환·재획득은 [Application job queue §3](../01-execution/04-application-job-queue-and-backpressure.ko.md#3-ordinary-ingress-permit-순서)을 따른다.
 
 **Target은 relay 수신 준비 완료를 알리기 전에 옮겨 오는 binding의 Session owner와 ready route를 확보한다.**
-Relocation envelope의 `sessionBindings`(§4.2)에 항목이 있으면, target은 각 Session owner node에 대해
-[ready](../00-foundation/02-glossary.ko.md#ready) route가 있는지 확인한다. 없으면 자신의 auto-connect
+Relocation envelope의 `sessionBindings`(§4.2) 항목 중 Session owner가 target과 다른 node인 항목마다,
+target은 그 Session owner node와 [ready](../00-foundation/02-glossary.ko.md#ready) route가 있는지 확인한다.
+Session owner가 target node 자신이면 확보할 route가 없다. 없으면 자신의 auto-connect
 owner에 그 peer의 즉시 reconcile을 요청하고([MeshNode §7.1](../03-spot-actor/03-mesh-node.ko.md#71-peer-연결)),
 route가 ready가 될 때까지 relay 수신 준비 완료를 보내지 않는다. 이 대기는 relocation을 시작한 operation의
 기존 deadline 안에서만 하며 새 timer나 retry를 만들지 않는다. Target attempt의 continuation에서 기다리며

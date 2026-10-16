@@ -611,9 +611,9 @@ the failure is recorded once in that message's flow
 
 The Restore, relay, cutover, CAS, and queue-merge order follows [common relocation §4](../05-location-relocation/04-relocation-flow.en.md#4-normal-processing-order). The Session seal and route transition here follow the validation values above and timeout rule below.
 
-When installing a seal for command 42, the Session owner checks whether a
-[ready](../00-foundation/02-glossary.en.md#ready) route exists to the target node carried in command 42
-(`targetNodeRid` and node generation) and, if not, asks its auto-connect owner to reconcile that peer
+When installing a seal for command 42, if the target node carried in command 42 (`targetNodeRid` and
+node generation) is not the Session owner itself, the Session owner checks whether a
+[ready](../00-foundation/02-glossary.en.md#ready) route exists to that node and, if not, asks its auto-connect owner to reconcile that peer
 immediately ([MeshNode §7.1](../03-spot-actor/03-mesh-node.en.md#71-peer-connection)). This request
 doesn't make the seal result or command 43 wait. Together with the target-side preparation,
 [relocation §4.3](../05-location-relocation/04-relocation-flow.en.md#43-restore-the-target-without-running-it)
