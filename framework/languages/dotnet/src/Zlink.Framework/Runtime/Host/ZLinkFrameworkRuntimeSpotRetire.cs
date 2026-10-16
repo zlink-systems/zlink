@@ -80,7 +80,8 @@ internal sealed partial class ZLinkFrameworkRuntime
                         spotParticipant.ObjectGeneration,
                         targetOwnerGeneration,
                         cancellationToken,
-                        restoreLogicalTimers: true
+                        restoreLogicalTimers: true,
+                        logicalTimers: spotParticipant.LogicalTimers
                     )
                     .ConfigureAwait(false);
             }
@@ -103,7 +104,8 @@ internal sealed partial class ZLinkFrameworkRuntime
                     targetOwnerGeneration,
                     ZLinkMessage.Empty,
                     cancellationToken,
-                    invokeCreate: false
+                    invokeCreate: false,
+                    logicalTimers: spotParticipant.LogicalTimers
                 )
                 .ConfigureAwait(false);
         }
@@ -154,9 +156,6 @@ internal sealed partial class ZLinkFrameworkRuntime
                     $"Target SPOT '{request.SpotId}' could not seal staging admission.",
                     ZLinkRetryAdvice.RetryAfterBackoff
                 );
-            await preparedSpot
-                .Activation.RestoreLogicalTimersAsync(spotParticipant.LogicalTimers)
-                .ConfigureAwait(false);
             return new TargetStage(
                 node,
                 preparedSpot,

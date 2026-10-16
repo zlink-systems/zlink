@@ -821,8 +821,7 @@ final class ZLinkDefaultSpotContextTest {
                 String spotId,
                 ZLinkHandlerInstanceOwner handlers,
                 ZLinkSpotTimerRegistry.Dispatch dispatch) {
-            return new ZLinkSpotTimerRegistry(
-                    spotId, null, handlers, List.of(), null, "test", dispatch);
+            return new ZLinkSpotTimerRegistry(spotId, null, handlers, List.of(), "test", dispatch);
         }
 
         @Override
