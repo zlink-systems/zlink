@@ -44,6 +44,7 @@ Bash:
 ```sh
 ./run-e2e.sh
 ./run-e2e.sh --scenario lobby,hit,reconnect,update
+./run-e2e.sh --check-structure
 ```
 
 PowerShell:
@@ -51,6 +52,7 @@ PowerShell:
 ```powershell
 pwsh -NoProfile -File ./run-e2e.ps1
 pwsh -NoProfile -File ./run-e2e.ps1 -Scenario lobby,hit,reconnect,update
+pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
 ```
 
 The runner validates `zlink.structure.json`, creates its own Redis Compose project with an OS-assigned loopback port, and starts match, session, and lobby processes. Each scenario uses a fresh cluster, unique Redis prefix and `.logs/run-<id>/` directory. Cleanup errors fail the run. `lobby` checks equal HTTP assignments and both Room participants; `hit` checks damage, wall and range rejection, missing targets and the winner; `reconnect` checks Actor identity and HP; `update` checks relocation, unchanged SessionInfo and Room state, graceful shutdown, replacement readiness and new Room admission on the replacement node.

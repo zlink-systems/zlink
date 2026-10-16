@@ -63,6 +63,7 @@ Bash:
 ```sh
 ./run-e2e.sh
 ./run-e2e.sh --scenario channel,dungeon,reconnect,update
+./run-e2e.sh --check-structure
 ```
 
 PowerShell:
@@ -70,6 +71,7 @@ PowerShell:
 ```powershell
 pwsh -NoProfile -File ./run-e2e.ps1
 pwsh -NoProfile -File ./run-e2e.ps1 -Scenario channel,dungeon,reconnect,update
+pwsh -NoProfile -File ./run-e2e.ps1 --check-structure
 ```
 
 `channel` checks Session continuity while switching towns. `dungeon` checks party entry and stage broadcasts. `reconnect` checks Actor identity and Dungeon state after reconnect. `update` drains the active instance, checks state and Session continuity, shuts it down, and verifies its replacement accepts a new dungeon. Selecting reconnect or update runs the party setup first. Each run owns a unique Compose project, Redis key prefix, and `.logs/run-<id>/` directory. Redis, mesh and STREAM ports are assigned by the OS. Cleanup failures fail the run.

@@ -63,10 +63,12 @@ The default runs all four scenarios. To select scenarios, use:
 
 ```sh
 ./run-e2e.sh --scenario cross,border,reconnect
+./run-e2e.sh --check-structure
 ```
 
 ```powershell
 pwsh -NoProfile -File ./run-e2e.ps1 -Scenario cross,border,reconnect
+pwsh -NoProfile -File ./run-e2e.ps1 --check-structure
 ```
 
 Selection retains the canonical scenario order. Unknown or duplicate names fail before node startup. Exit status includes cleanup failures even when all selected scenarios pass.

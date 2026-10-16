@@ -44,6 +44,7 @@ The `connect` scenario waits for node READY, connects and disposes one public ST
 ```powershell
 pwsh -NoProfile -File ./run-e2e.ps1
 pwsh -NoProfile -File ./run-e2e.ps1 -Scenario connect
+pwsh -NoProfile -File ./run-e2e.ps1 --check-structure
 ```
 
 A successful run prints `✓ connect` and `Scenarios: 1/1 passed`. Cleanup failures return a nonzero exit code.
