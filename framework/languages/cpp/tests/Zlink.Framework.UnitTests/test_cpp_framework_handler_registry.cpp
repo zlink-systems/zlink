@@ -838,7 +838,7 @@ int main ()
     spot_handlers.add_handler<&dispatch_spot_t::on_packet> ("spot-packet");
     bool missing_topic_failed = false;
     try {
-        spot_handlers.add_subscribe<&dispatch_spot_t::on_topic_event> ("");
+        spot_handlers.add_subscribe<&dispatch_spot_t::on_topic_event> ("rooms", "");
     }
     catch (const zlink::framework::framework_exception_t &error) {
         missing_topic_failed =
@@ -851,9 +851,9 @@ int main ()
     if (!missing_topic_failed || spot_handlers.descriptors ().size () != 1) {
         return 47;
     }
-    spot_handlers.add_subscribe<&dispatch_spot_t::on_topic_event> ("spot-topic");
+    spot_handlers.add_subscribe<&dispatch_spot_t::on_topic_event> ("rooms", "spot-topic");
     try {
-        spot_handlers.add_subscribe<&dispatch_spot_t::on_topic_event> ("spot-topic");
+        spot_handlers.add_subscribe<&dispatch_spot_t::on_topic_event> ("rooms", "spot-topic");
         return 48;
     }
     catch (const zlink::framework::framework_exception_t &error) {

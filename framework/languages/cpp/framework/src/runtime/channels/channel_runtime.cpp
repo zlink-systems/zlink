@@ -2415,7 +2415,6 @@ mesh_node_builder_t zlink_builder_t::add_route_mesh (std::string mesh_name)
     auto state = std::make_shared<detail::mesh_node_builder_state_t> (mesh_name);
     state->spot_builder._state->channel_runtime = _state->runtime;
     state->spot_builder._state->dispatch = _state->runtime->dispatch;
-    state->spot_builder._state->snapshot.discovery_channel_name = mesh_name;
     _state->mesh_nodes.emplace (std::move (mesh_name), state);
     return mesh_node_builder_t (std::move (state));
 }

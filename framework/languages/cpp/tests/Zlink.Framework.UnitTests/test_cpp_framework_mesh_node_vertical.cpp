@@ -576,7 +576,7 @@ void verify_route_internal_packets_precede_application_dispatch ()
     context->handlers.push_back (spot_handler_descriptor_t{
       spot_handler_kind_t::subscription, "Rel358MulticastPayload", "rel-358-topic",
       std::type_index (typeid (int)), std::type_index (typeid (void)),
-      std::type_index (typeid (void)), std::type_index (typeid (void))});
+      std::type_index (typeid (void)), std::type_index (typeid (void)), "vertical-mesh"});
     context->handler_invokers.push_back (
       [multicast_received] (void *, void *, service_provider_t &, serializer_registry_t &,
                             const zlink::message_t &message,

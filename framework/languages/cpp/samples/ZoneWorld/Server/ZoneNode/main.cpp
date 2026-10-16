@@ -269,7 +269,7 @@ class zone_spot_t final : public fw::spot_t<player_actor_t>
         // --8<-- [start:doc-zw-border-subscribe]
         for (const auto &from : adjacent_zones (_context.spot_id ()))
             _context.handlers ().add_subscribe<&zone_spot_t::border> (
-              border_topic (from, _context.spot_id ()));
+              std::string (_context.mesh_name ()), border_topic (from, _context.spot_id ()));
         // --8<-- [end:doc-zw-border-subscribe]
     }
 
