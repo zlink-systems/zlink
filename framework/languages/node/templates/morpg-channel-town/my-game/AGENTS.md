@@ -1,29 +1,246 @@
-# Project instructions
+# MyGame development guide
 
-This template implements MORPG town channels and party Dungeons with public ZLink Framework APIs. Extend game rules in the owning Spot rather than Session routing or infrastructure.
+## Project overview
 
-## Node responsibilities
+This Node.js 22 (TypeScript, NestJS) project is a MORPG server example in which players join town channels, form parties of up to four players, and enter a dedicated dungeon. It runs a Session gateway for connections, Town nodes A and B that host the fixed Towns `town-1` and `town-2`, Instance nodes A and B that host Dungeons, and Redis for location and relocation state. `package.json` pins the ZLink Framework and connector packages to `0.30.1`.
 
-| Role     | Responsibility and extension location                                            |
-| -------- | -------------------------------------------------------------------------------- |
-| session  | STREAM, Player GetOrCreate, bind and relay in `server/session/session.ts`.       |
-| town     | Fixed Town, party rules and Entry admission in `server/town/`.                   |
-| instance | Dynamic Dungeon, member admission and stage in `server/instance/`.               |
-| shared   | Contracts, stateless Player, diagnostics and hosting in `server/shared/`.        |
-| e2e      | Public STREAM client, scenarios, process control and structure checks in `e2e/`. |
+The project layout and feature procedure below describe where to add gameplay. The [README](README.md) covers prerequisites, deployment, and known issues in the public packages. [zlink.structure.json](zlink.structure.json) describes the initial node composition and scenarios; Framework and Redis manage object placement at runtime. [한국어](AGENTS.ko.md) provides the same guide in Korean.
 
-## Public API boundaries
+> **Documentation and package versions.** The [ZLink documentation](https://docs.zlink.systems/), [Node.js guide](https://docs.zlink.systems/node/guide/server/), [API reference](https://docs.zlink.systems/node/reference/), and [agent index](https://docs.zlink.systems/llms.txt) are the public documentation entry points. When a current guide describes a newer release, check its API against the package pinned in `package.json`.
 
-Use typed messages and the Framework default JSON serializer. Requests reply through the handler Actor's bound Session. Other pushes use player IDs and public Actor sends; the receiving Spot delivery handler forwards to the bound Session. Spots never retain Actor references. The packet-name-to-class delivery table preserves declared DTO classes for issue #1731.
+## Development commands
 
-Town owns players and parties. Dungeon owns members and stage. Player has no application state. Relocation adapters serialize only these application facts. Framework owns identity, binding, placement, relocation and execution gates. Do not use internal APIs, reflection, raw frames, custom message codecs, sleeps, retries or longer deadlines to hide failures.
+Default builds and e2e run nodes and the runner in Docker without a host Node.js installation. Run these commands from this directory.
 
-## Changes and verification
+```powershell
+pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
+pwsh -NoProfile -File ./run-e2e.ps1
+pwsh -NoProfile -File ./run-e2e.ps1 -Scenario channel,dungeon,reconnect,update
+pwsh -NoProfile -File ./run-e2e.ps1 --check-structure
+```
 
-Run `./run-e2e.sh --build-only` and `./run-e2e.sh` for Docker verification. On Windows use `pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly` and `pwsh -NoProfile -File ./run-e2e.ps1`. The default runs the runner and nodes in Docker with unique project resources. Preserve stdin/stdout lifecycle control and inspect `.logs/docker-<project>/` as well as `.logs/run-<id>/`. Use `--local` or `-Local` for local process debugging; Node.js and npm are required in that mode. Keep resource limits in the validation environment rather than template scripts.
+Bash provides the same workflow:
 
-Keep channel, dungeon, reconnect and update scenarios and their order. Update contracts, structure and configuration together when changing composition. Run build, typecheck, lint, format checks and e2e on Windows and Linux. A single intermittent failure is a defect. Preserve first-failure message-flow logs in `.logs/run-<id>/`; do not weaken assertions. Cleanup only the runner's own processes and Compose project.
+```bash
+./run-e2e.sh --build-only
+./run-e2e.sh
+./run-e2e.sh --scenario channel,dungeon,reconnect,update
+./run-e2e.sh --check-structure
+```
 
-Town and Instance register the shared application Entry and first-admission handler. Declare one Entry for each of these nodes and none for roles without application Entry registration; Framework default Entries are not part of the structure. Keep dynamic Dungeon declarations complete for every owning Instance. Preserve one Dungeon slot per Instance in the e2e configuration; it makes replacement placement deterministic. Keep the Message Follow duration and derived SafeToShutdown observation budget under their shared lifecycle constants.
+For host process debugging, install Node.js 22 or later and npm, then add `--local` or `-Local`; the nodes run as local processes with Redis in Docker. Add `--no-build` or `-NoBuild` only with an existing local build. Keep canonical scenario order and assertions; compare first failures with Known issues in the README.
 
-Bootstrap Town providers sequentially, waiting for each READY before starting the next. Set each Town provider's public stable-type capacity to exactly its configured fixed Town count. Earlier providers are full and later providers are absent during bootstrap, so only the declared owner can create its fixed Towns. The structure checker enforces the exact capacity.
+## Project layout and extension points
+
+### Session gateway
+
+`server/session/main.ts` registers STREAM and the mesh listener, and `server/session/session.ts` handles connection callbacks and forwards incoming packets. A Session is a communication object for a connection; Framework provides binding to associate it with a player state object. `Session` accepts `JoinTownRequest` as the first packet. Add authentication before binding and retain the existing typed packet relay so Framework can identify the connection for replies to that player.
+
+### Towns and players
+
+A Spot is a state object that accepts Actors and executes shared game rules; `Town` in `server/town/town.ts` holds the players of one channel and the parties formed in it. An Actor is a game state object addressed by ID; `Player` in `server/shared/player.ts` has no application state of its own, so a Town keeps the facts and a player can move between Towns without copying state.
+
+`server/town/main.ts` registers the Entry Spot, factories, handlers, and creates the Town named by `townId` in the node configuration. Add handlers that combine player rules with town rules in `server/town/handlers.ts`, and list every new handler in the `providers` array of `server/town/main.ts`. When changing node composition, update registrations, `server/config/`, and the descriptor together so the structure check validates the same composition.
+
+### Dungeons
+
+`server/instance/main.ts` registers the Instance node, `Dungeon` in `server/instance/dungeon.ts` holds the admitted party and stage, and `server/instance/handlers.ts` holds the dungeon handlers. `Dungeon` is an application-created User Spot, distinct from the Framework Instance Spot with its separate creation and initialization contract. `Town.enter` creates it on demand and prepares it for a party. Add encounters, rewards, and Dungeon lifecycle behavior in this project.
+
+### Entry and shared Player
+
+`Entry` and the `EnterTown` handler in `server/shared/entry.ts` receive the first admission of a player Actor on both Town and Instance nodes, because any node that registers the Player factory can receive a new Actor. `EnterTown` checks the identity and requests deferred admission to the Town of the requested channel.
+
+### Shared contracts and hosting
+
+`server/shared/messages.ts` defines messages shared by processes, `server/shared/constants.ts` defines names, scenario IDs, limits, and control strings, and `server/shared/config.ts` defines process settings. `server/shared/hosting.ts` configures hosting and diagnostics and handles runtime control commands, while `server/shared/diagnostics.ts` writes diagnostic records to stderr. Define messages in `server/shared/messages.ts`: the build generates packet schemas from that directory. Parties and channel membership stay in `Town`, and the admitted party and stage stay in `Dungeon`, so separate processes do not independently modify the same fact.
+
+### E2E client
+
+`e2e/client.mts` connects through the public connector and runs the scenarios, which check results observable by the client. `e2e/runner.ts` starts nodes, captures logs, and cleans up what each run created, while `e2e/structure.ts` validates composition. Verify new gameplay through received client results; the project includes no separate unit-test project.
+
+## ZLink concepts in this project
+
+### RouteMesh and channels
+
+A RouteMesh connects nodes that exchange messages between processes; this project uses `Names.mesh` (`my-game-world`). [Channel messaging](https://docs.zlink.systems/node/guide/server/20-channel-messaging/) describes registration and calls.
+
+### Spots and Actors
+
+`Entry` handles Actor entry, `Town` represents a fixed town channel, and `Dungeon` represents a dynamically created party dungeon. A channel here is a game space that the player selects, distinct from a messaging channel; this project registers no pub/sub subscriptions. The [Spot guide](https://docs.zlink.systems/node/guide/server/21-spot/) describes registration and calls for these objects, and the [Actor guide](https://docs.zlink.systems/node/guide/server/22-actor/) describes Actor creation and calls.
+
+### STREAM and Sessions
+
+With [STREAM](https://docs.zlink.systems/node/guide/server/23-stream/), which processes packets on client connections, `Session` obtains the Player Actor from `JoinTownRequest`, binds it, and forwards the original typed packet. Actor handlers send messages to the client through the bound Session. [Session and Actor](https://docs.zlink.systems/node/guide/server/24-actor-session/) describes the relationship between connections and Actors.
+
+### Location Store
+
+The Location Store records an object's current runtime location by ID; this project uses its Redis implementation. Application code addresses Actors and Spots by ID rather than node address, so calls can use the same ID after placement changes. The [Location guide](https://docs.zlink.systems/node/guide/server/25-location/) explains location resolution.
+
+### Actor membership
+
+A membership change moves an Actor from one Spot to another. Admission is the target Spot's decision to accept or reject the membership request. `EnterTown` and `ChangeChannel` request deferred admission to a Town with `joinSpot(...).defer()`, `Town.onActorJoin` accepts or rejects it, and `Player.onJoinCompleted` observes a rejection. A party enters a dungeon through the same mechanism: each member's Actor receives `JoinDungeon` and requests admission to the Dungeon. [Actor membership](https://docs.zlink.systems/node/guide/server/35-actor-membership/) explains the order of admission and completion.
+
+### Host relocation and drain
+
+Relocation changes an object's execution host; drain moves a host's workload elsewhere so the host can shut down. Application adapters capture and restore game state (`Town` players and parties, `Dungeon` members and stage, captured by `TownRelocation` and `DungeonRelocation`), while Framework transfers workload and routes. `runHost` in `server/shared/hosting.ts` requests public host relocation on the `drain` command and observes safe shutdown; the [Relocation guide](https://docs.zlink.systems/node/guide/server/37-relocation/) explains the procedure.
+
+## Request flow
+
+Requests in the example game follow this path. Reading the code along this path before adding or transferring a feature locates the places to change.
+
+1. The client connects to the Session node over STREAM and sends the first packet, `JoinTownRequest`. `Session` checks the first packet name, calls `getOrCreate` for the Player Actor by `playerId`, binds it to the Session, and relays the original packet.
+2. A new Actor starts in the Entry Spot `Entry`. The `EnterTown` handler checks the identity with `Player.assertIdentity` and requests `joinSpot(townId(channel), ...).defer()`. `Town.onActorJoin` accepts the player, and `Town.onJoinedActor` broadcasts `TownView` to the players in the Town.
+3. `ChangeChannel` requests admission to another Town; the client connection and the bound Session do not change, even when that Town is on another node.
+4. `CreateParty` and `JoinParty` change the parties in `Town` and broadcast `TownView`. When the leader sends `EnterDungeon`, `Town.enter` calls `getOrCreate` for the `Dungeon`, sends `PrepareDungeon` to it as a request, and sends `JoinDungeon` to each member's Actor.
+5. `DungeonTravel` requests the Dungeon join, `Dungeon.onJoinedActor` pushes `DungeonView` through `DungeonDelivery`, and `Advance` moves the stage and pushes it to the members.
+6. To replace a node, the `drain` command in `runHost` requests relocation. Framework takes the game state from `capture` in `TownRelocation` and `DungeonRelocation` and calls `restore` on another node.
+
+## Developing from this sample
+
+This sample shows how the features work together, so read and run it rather than turning it into your game. Start your own project from the Node.js starter: choose Node.js in the Initializer at [ZLink Start](https://zlink.systems/start), or use `framework/languages/node/templates/starter/my-game` in the ZLink repository. Then transfer the features you need from this sample one at a time. The starter's `AGENTS.md` owns the choice between structures; this section covers only `morpg-channel-town`. Keep this sample unchanged next to your project as a reference.
+
+### Run the sample first
+
+Before transferring anything, run the build and e2e once with the [Development commands](#development-commands) to confirm the downloaded sample works and to see its behavior. This result is the baseline for comparison. If it fails, compare the failure with Known issues in the [README](README.md) first.
+
+### Features to transfer
+
+Feature names match the feature table in the starter's `AGENTS.md`. Paths are relative to this directory. The starter has one Session node and the `connect` scenario only, so the last column lists what grows in the starter with each feature.
+
+| Feature                   | File in this sample                                                                                                                                                                                                                                        | What to transfer                                                                                                                                                                                                                                                                                                                                                                           | What to grow in the starter alongside                                                                                                                                                                                                                                |
+| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Typed messages            | `server/shared/messages.ts`                                                                                                                                                                                                                                | The classes of the features you adopt: `JoinTownRequest`, `ChangeChannelRequest`, `CreatePartyRequest`, `JoinPartyRequest`, `EnterDungeonRequest`, `AdvanceRequest`, `ViewRequest`, `PartyView`, `TownView`, `DungeonView`, `PrepareDungeon`, `DungeonPrepared`, `JoinDungeon`, `ActionRejected`, and `restorePush`; `SessionInfoRequest` and `SessionInfo` only if your client needs them | The packet names in `PacketNames` and the registration names in `Names` in `server/shared/constants.ts`                                                                                                                                                              |
+| Actor                     | `server/shared/player.ts`                                                                                                                                                                                                                                  | `Player` with `assertIdentity` and the join-completion handling, `PlayerFactory`, and `PlayerRelocation`, which uses an empty payload                                                                                                                                                                                                                                                      | A new `server/town/` project with `main.ts`, its `server/config/` files, and the Actor factory registration; a `town` entry in `NodeEntrypoints` in `server/shared/constants.ts`; the Actor declaration and the structure check                                      |
+| Spot                      | `server/town/town.ts`                                                                                                                                                                                                                                      | `Town` with players, parties, admission, and the broadcast of `TownView`                                                                                                                                                                                                                                                                                                                   | The Spot factory registration and the `townId` bootstrap in `server/town/main.ts`; the `spots` and `nodes` declarations in `zlink.structure.json`, and the structure check, which asserts zero Spots in the starter, extended to compare them with the registrations |
+| Entry and first admission | `server/shared/entry.ts`; `TownReconnect` in `server/town/handlers.ts`                                                                                                                                                                                     | `Entry`, `EnterTown`, and the identity check and state resend of `TownReconnect`                                                                                                                                                                                                                                                                                                           | The Entry Spot registration and its `entry` declaration; a first-entry scenario and a `reconnect` scenario that compares state after reconnection                                                                                                                    |
+| Session binding           | `server/session/session.ts`                                                                                                                                                                                                                                | The first-packet check, then find or create the Actor, bind, and relay the original typed packet, and the `SessionInfo` reply                                                                                                                                                                                                                                                              | The same first-packet name as `EnterTown`; transfer it into the starter's `session.ts`                                                                                                                                                                               |
+| Host relocation           | `PlayerRelocation` in `server/shared/player.ts`, `TownRelocation` in `server/town/town.ts`, `DungeonRelocation` in `server/instance/dungeon.ts`, `Control` in `server/shared/constants.ts` and the control loop in `runHost` of `server/shared/hosting.ts` | The snapshot adapters with `capture` and `restore`; the starter already has `drain` and `shutdown`                                                                                                                                                                                                                                                                                         | The `preserveStateWith` registrations; the `update` scenario, which checks that connections and state survive a server replacement and that the replacement node accepts a new dungeon                                                                               |
+| Dynamic dungeon           | `server/instance/dungeon.ts`, `server/instance/handlers.ts`; `Town.enter` in `server/town/town.ts`; `EnterDungeon` and `DungeonTravel` in `server/town/handlers.ts`                                                                                        | The dynamic User Spot creation pattern, `PrepareDungeon` admission of the party, and the dungeon stage                                                                                                                                                                                                                                                                                     | A new `server/instance/` project with `main.ts` and its config; an `instance` entry in `NodeEntrypoints`; the dynamic `dungeon` Spot and the `GetOrCreate` edge in `zlink.structure.json`; a `dungeon` scenario                                                      |
+| World/channel selection   | `ChangeChannel` in `server/town/handlers.ts`; `townId` in `server/shared/constants.ts`                                                                                                                                                                     | The deferred admission to another Town that keeps the connection, and the channel-to-Town mapping                                                                                                                                                                                                                                                                                          | The fixed `Town` Spots and their node assignment in `zlink.structure.json`; a `channel` scenario that checks the same connection and `SessionInfo`                                                                                                                   |
+
+### Transfer order and rules
+
+Transfer one row at a time and run the build, the structure check, and the related e2e scenario after each. Add a scenario ID to the `Scenarios` list in `server/shared/constants.ts`, to `run.scenarios`, and to the selection examples in `run.commands` of `zlink.structure.json` together. Judge results by the replies and events actually received; do not make tests pass with fixed sleeps or longer deadlines.
+
+Start with the message contracts. Define the classes in `messages.ts` first, then move each handler that fails to compile to the new messages. The build generates packet schemas from `server/shared`, so messages defined elsewhere are not registered. When you change the first-entry packet, update the first-packet check in `Session`, `EnterTown`, and `TownReconnect` to receive the same packet. Register `Entry` and `EnterTown` on every node that registers the `Player` factory, and declare one Entry in `zlink.structure.json` for each such node (here Town and Instance); do not declare Framework default Entries.
+
+Keep each piece of state in the object that decides it. Channel membership and parties belong in `Town`, the admitted party and stage belong in `Dungeon`, and `Player` keeps none. When you change state fields, update that object's snapshot and its `capture` and `restore` together. A missing field disappears after relocation, and the `update` scenario detects the loss.
+
+Fixed Towns are created at startup from `townId`. Set each Town node's `townCapacity` to exactly the number of Towns it creates, and start Town nodes one at a time, waiting for `READY`. Earlier nodes are full and later nodes are absent, so only the declared owner creates each Town. A replacement for a Town node starts with `bootstrap` set to `false`, because the Location Store already owns the logical Town. The e2e configuration sets `dungeonCapacity` to 1 per Instance node, so after a drain the surviving node is full and only the replacement can host the new dungeon.
+
+To name roles such as Town or Dungeon differently from this sample, change the class names, `Names`, `server/config/`, and `zlink.structure.json` at once. Do the renaming in its own change, separate from transferring a feature, so failures are easier to trace.
+
+If `update` fails after a transfer, first check whether the snapshot is missing any state, then use the message flow in [Debugging](#debugging) to find the first failing step.
+
+## Development considerations
+
+### State and message contracts
+
+Use public npm packages at the versions pinned in `package.json`, and keep imports between this project's own modules relative. Process typed messages with the default Framework JSON serializer so processes use the same contract; the build generates the packet schemas and `server/shared/hosting.ts` loads them. Limit direct serialization in relocation adapters to application snapshots, keeping management of Framework execution state separate from game state.
+
+Manage each game fact, such as a party's members, in the object responsible for changing it. Store player IDs in Spots, without assuming an Actor object reference remains usable after movement; host relocation does not repeat `onJoinedActor` on the target, so a Spot cannot rely on a stored reference for later delivery. Reply to the requesting Actor through the handler's bound Session, and push to other players by addressing the Actor by player ID. `SessionInfo` is the source of Actor identity. Node.js typed handlers currently receive the fields without the declared class (#1731), so `restorePush` in `server/shared/messages.ts` restores the class from the packet name before the delivery handlers forward it; keep it in step with the pushes you add. Keep the Message Follow duration and the derived `Limits.safeMs` observation deadline in `server/shared/constants.ts`.
+
+### Asynchronous execution and lifecycle
+
+Await public asynchronous calls as the template does, and do not block handler execution with synchronous I/O or busy loops. Since `SpotWide` limits execution over the same state, do not protect that state again with another lock or queue. Awaiting can retain the turn, so do not await work that requires that turn to finish, such as a request back to the same Spot; perform long-running work outside handlers. The [Execution model](https://docs.zlink.systems/node/guide/server/32-execution-model/) explains these execution boundaries.
+
+Keep type registration and per-instance callbacks in their defined lifecycle phases. Apply the User Spot contract to `Dungeon` even though its process is named Instance; [Activation and lifetime](https://docs.zlink.systems/node/guide/server/34-activation-lifetime/) explains creation and initialization. Use `joinSpot(...).defer()` and the public completion callback for Town and Dungeon changes, and relocation with runtime observations for host shutdown, so request acceptance is not mistaken for completion.
+
+### Reconnection and failure handling
+
+Reconnect with the same Actor ID and bind the new Session to continue using the existing channel and party. Framework manages current placement, so do not add an application route cache or reset state during reconnect. Backpressure is the behavior that delays or rejects calls when processing capacity is unavailable; observe the public results described in the [Backpressure guide](https://docs.zlink.systems/node/guide/server/33-backpressure/).
+
+Investigate Framework failures using actual replies, events, and lifecycle results. Internal APIs, reflection, raw frames, private codecs, extra pollers, fixed sleeps, transport retries, increased deadlines, and weakened assertions do not verify the failing public operation and must not be added as fixes. Write code comments in English and exclude execution and build artifacts in `.logs/`, `dist/`, and `node_modules/` from commits.
+
+## Debugging
+
+### Logs for each run
+
+Preserve the first failing run and read its logs before deciding whether to run it again. An intermittent failure is an observed defect; a subsequent pass does not invalidate it. `.logs/run-<id>/` contains effective settings written by `e2e/runner.ts` at node startup and logs for each node.
+
+Settings files are `instanceA.json`, `instanceB.json`, `session.json`, `townA.json`, and `townB.json`. `NodeProcess` in `e2e/runner.ts` records diagnostic stderr in `<node>-<n>.err.log` and readiness/control stdout in `<node>-<n>.out.log`, where `<n>` counts the processes started in the run; a replaced node has a second pair with a later `<n>`. The client packets each scenario received are in `<suffix>.jsonl`. Docker command logs of the run are `docker-<label>.log`, and local build output is in `.logs/build.log`. The shell runner writes Docker build, Redis, and outer cleanup logs to `.logs/docker-<project>/`.
+
+### Diagnostic levels
+
+`runHost` in `server/shared/hosting.ts` enables message flow, which records the stages from message receipt to completion, with this setting.
+
+```typescript
+builder.configureDispatch().messageFlow('normal');
+```
+
+`normal` records receive, dispatch, and completion stages and errors. The accepted modes are `off`, `errors`, `normal`, and `detailed`; use `detailed` only for the investigation scope that needs it, because it records more.
+
+`server/shared/config.ts` defines no diagnostics key, so change the hosting call, rebuild, and restart to apply startup settings. This project's stdin controls do not change the mode at runtime. [Monitoring](https://docs.zlink.systems/node/guide/server/26-monitoring/) and [Observability diagnostics](https://docs.zlink.systems/node/reference/08-observability-diagnostics/) describe diagnostic records and settings.
+
+### Message flow investigation
+
+`server/shared/diagnostics.ts` writes each diagnostic record to stderr as one JSON line, so inspect message flow in node `.err.log` files; the template creates no separate flow file. A record's `flow` value identifies a message across nodes, and `corr` relates request and reply records. The `body` field starts with `zlink flow:`; failures have `outcome=failed`, `error_type`, and `error_message`.
+
+Read the failure fields and preceding stage together without filtering categories out. Flow IDs differ between runs, so compare passing and failing runs by logical operation, Actor ID, and stage order to find the first missing or failed stage. If startup fails before message flow recording, preserve the startup exception and stack.
+
+### Supplementary tracing and cleanup
+
+In local process mode, set supplementary relocation tracing in the parent environment before starting nodes. Docker nodes do not inherit host environment variables. In PowerShell, use this environment variable.
+
+```powershell
+$env:ZLINK_DEBUG_FRAMEWORK_RELOCATION = "1"
+```
+
+The value applies to child processes started from that environment; preserve stderr alongside message flow. In Bash, set the same variable as follows.
+
+```bash
+export ZLINK_DEBUG_FRAMEWORK_RELOCATION=1
+```
+
+`ZLINK_DEBUG_FRAMEWORK_RELOCATION` is a version-specific diagnostic switch in the public `0.30.1` package, so do not use it as a routing API. Let the runner clean up its own processes and Compose project, preserve cleanup failures, and avoid stopping unrelated processes or containers.
+
+## Reporting ZLink defects
+
+### Identifying a defect
+
+A ZLink defect is a case where a public API called as documented produces a result that differs from the documentation. First compare your API usage with the public guides and samples linked above to rule out an application usage error. If the usage is correct, report an issue instead of adding a workaround, and keep the scenario assertions unchanged. A workaround hides the defect and stays in the code after you upgrade to a fixed package, where it changes behavior.
+
+### Checking existing issues
+
+Before filing, search both open and closed [ZLink issues](https://github.com/zlink-systems/zlink/issues?q=is%3Aissue) by error message, exception type, and API name. If the same defect is already reported, add your environment and logs to that issue instead of opening a new one. If it matches a closed issue, find the package version that contains the fix in that issue, raise the pinned version in this project, and run again.
+
+### Issue body
+
+The body follows the issue template of the ZLink repository. Copy the following form and fill it in.
+
+```markdown
+# Issue description
+
+<scenario and the public operation that fails>
+
+# Environment
+
+- zlink version: <package versions from package.json>
+- OS: <OS, Node.js version>
+
+# Minimal test code / Steps to reproduce the issue
+
+1. <commands or minimal code using public APIs only>
+
+# What's the actual result? (include assertion message & call stack if applicable)
+
+<first failing node-log excerpt, exception and stack, flow/corr records>
+
+# What's the expected result?
+
+<observable result the guide or reference documents>
+```
+
+Reduce the reproduction to the minimal code or commands that keep only the failing public call, not this whole project. Paste only the first failing log section and the step before it; attach the full log as a file when it is needed. State when startup failed before flow recording.
+
+> **Issues are public.** Remove license keys, tokens, internal host names, and personal data from logs and settings before filing.
+
+### Filing procedure
+
+A coding agent drafts the issue body and shows it to the developer, and the developer confirms it before it is filed. An issue is published in an external repository, so do not file one without the developer's confirmation. With the GitHub CLI, file the confirmed body file as follows.
+
+```bash
+gh issue create --repo zlink-systems/zlink --title "<area>: <observed failure>" --body-file issue.md
+```
+
+Put the language and the failing behavior in the title (for example, `framework(node): Spot startup fails with empty SpotId`). Record the filed issue number in the README Known issues so the project keeps the place to re-verify when a fixed package is released.
