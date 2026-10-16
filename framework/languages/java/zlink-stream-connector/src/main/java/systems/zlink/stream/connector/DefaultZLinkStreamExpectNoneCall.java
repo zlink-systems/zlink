@@ -41,17 +41,12 @@ final class DefaultZLinkStreamExpectNoneCall implements ZLinkStreamExpectNoneCal
             throw ZLinkStreamException.validationFailed("expectNone requires within(window)");
         }
         if (connector instanceof DefaultZLinkStreamConnector concrete) {
-            CompletableFuture<Void> result = new CompletableFuture<>();
             CompletableFuture<ZLinkStreamMessage<ZLinkStreamEncodedPayload>> waiter =
                     concrete.awaitMessage(name, ignored -> true)
                             .toCompletableFuture()
                             .orTimeout(window.toMillis(), TimeUnit.MILLISECONDS);
-            result.whenComplete(
-                    (ignored, error) -> {
-                        if (result.isCancelled()) {
-                            waiter.cancel(false);
-                        }
-                    });
+            CompletableFuture<Void> result =
+                    ZLinkStreamWaitFailure.withCancellation(() -> waiter.cancel(false));
             waiter.whenComplete(
                     (message, error) -> {
                         if (message != null) {
