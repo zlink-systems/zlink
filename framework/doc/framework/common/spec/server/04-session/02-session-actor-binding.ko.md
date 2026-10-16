@@ -417,7 +417,8 @@ owner lifecycle generation(u64 big-endian), binding generation(u64 big-endian). 
 다른 node를 거쳐 도착할 수 있으므로 Actor owner는 transport source가 아니라 본문으로 identity를
 확인한다. Actor owner는 Actor turn에서 이 identity를 current binding과 비교해, 다른 current binding이
 있으면 통지를 버리고, current binding이 없거나 같은 binding이면 callback을 실행한다. 본문이 이
-형식이 아니면 통지를 버리고 `ProtocolError` Warning을 남긴다.
+형식이 아니면 통지를 버리고 `ProtocolError` Warning을 남긴다. 통지의 성공 응답 본문은 0바이트이며
+Session owner는 이 본문을 해석하지 않는다.
 
 한 Actor의 제출이나 callback이 실패해도 나머지 Actor 통지와 Session cleanup을 계속하는
 all-settled 규칙을 사용한다. Automatic 통지와 public `NotifyDisconnectedAsync(...)`
