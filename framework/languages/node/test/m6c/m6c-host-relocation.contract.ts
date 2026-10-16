@@ -2163,7 +2163,10 @@ for (const observed of [
       }
       const third = await harness.location.readAuthority();
       assert.equal(third.kind, 'snapshot');
-      assert.equal(third.ownerId, observed === 'normalized-target' ? 'target-owner' : second.ownerId);
+      assert.equal(
+        third.ownerId,
+        observed === 'normalized-target' ? 'target-owner' : second.ownerId
+      );
       if (observed !== 'normalized-target')
         assert.equal(third.ownerLeaseGeneration, second.leaseGeneration);
       assert.equal(
