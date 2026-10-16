@@ -63,6 +63,7 @@ internal sealed class WorldRun(string root) : IAsyncDisposable
             ) ?? throw new InvalidOperationException($"Invalid {configName} configuration.");
         settings = settings with
         {
+            ZoneCapacity = configName == "zone-b" ? GameNames.ZoneCount - 1 : settings.ZoneCapacity,
             RedisEndpoint = redisEndpoint,
             KeyPrefix = project + ":",
             MeshEndpoint = "tcp://127.0.0.1:0",

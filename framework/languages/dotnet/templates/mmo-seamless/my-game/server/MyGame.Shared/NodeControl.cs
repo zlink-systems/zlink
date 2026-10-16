@@ -30,6 +30,18 @@ public static class NodeControl
         {
             switch (command.Trim())
             {
+                case NodeProtocol.VacateZone:
+                    var spots =
+                        host.Services.GetRequiredService<Zlink.Framework.Contracts.Spots.IZLinkSpotManager>();
+                    var spot =
+                        await spots.FindAsync(
+                            GameNames.ZoneId(NodeProtocol.ReplacementX),
+                            lifetime.Token
+                        ) ?? throw new InvalidOperationException("Idle Zone not found.");
+                    if (!await spots.CloseAsync(spot, lifetime.Token))
+                        throw new InvalidOperationException("Idle Zone close failed.");
+                    Console.WriteLine(NodeProtocol.ZoneVacated);
+                    break;
                 case NodeProtocol.Drain:
                     Console.WriteLine(NodeProtocol.RelocationRequested);
                     var relocation = runtime

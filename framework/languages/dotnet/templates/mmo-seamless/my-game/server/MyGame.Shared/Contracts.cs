@@ -69,6 +69,9 @@ public sealed record NodeReady(string Id, string MeshEndpoint, string? StreamEnd
 
 public static class NodeProtocol
 {
+    public const int ReplacementX = 0;
+    public const string VacateZone = "vacate-zone";
+    public const string ZoneVacated = "ZONE_VACATED";
     public const string ReadyPrefix = "READY ";
     public const string Drain = "drain";
     public const string Shutdown = "shutdown";

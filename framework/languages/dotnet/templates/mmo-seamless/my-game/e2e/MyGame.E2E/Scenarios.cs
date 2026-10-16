@@ -195,6 +195,8 @@ internal static class Scenarios
             await run.ZoneA.WaitLineAsync(NodeProtocol.Relocated, ct);
             await run.ZoneA.WaitLineAsync(NodeProtocol.SafeToShutdown, ct);
         }
+        await run.ZoneA.CommandAsync(NodeProtocol.VacateZone);
+        await run.ZoneA.WaitLineAsync(NodeProtocol.ZoneVacated, ct);
         var safe = ObserveDrainAsync();
         async Task<(WorldState State, int Sequence)> ContinuePlayingAsync()
         {
@@ -232,5 +234,19 @@ internal static class Scenarios
         );
         var dungeon = await client.DungeonAsync("after-update-" + Guid.NewGuid().ToString("N"), ct);
         Require(dungeon.NodeId == "instance", "Dungeon access failed after replacement.");
+        await using var fresh = await GameClient.ConnectAsync(
+            endpoint,
+            "replacement-" + Guid.NewGuid().ToString("N"),
+            ct
+        );
+        var placed = await fresh.JoinAsync(NodeProtocol.ReplacementX, ct);
+        Require(placed.NodeId == before.NodeId, "Replacement did not accept the new Zone.");
+        var identity = await fresh.SessionAsync(ct);
+        var moved = await fresh.MoveAsync(NodeProtocol.ReplacementX + 1, 1, ct);
+        Require(moved.NodeId == before.NodeId, "Replacement movement failed.");
+        Require(
+            identity == await fresh.SessionAsync(ct) && !fresh.Disconnected,
+            "Replacement changed SessionInfo."
+        );
     }
 }

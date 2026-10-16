@@ -128,6 +128,8 @@ Use an external deployment orchestrator to control process lifetime in productio
 
 Remove a manually started local Redis project with `docker compose -p my-game-local down --volumes`. The e2e runner removes only its own project automatically.
 
+Fixed Zones are bootstrapped serially: Zone A fills its three-Spot capacity before Zone B starts. This makes the declared initial owners deterministic through public stable-type capacity. During e2e, Zone B has capacity for all but one world Zone. Before update drains Zone A, `vacate-zone` closes the unused first Zone through the public Spot manager. The remaining Zones fill Zone B; a fresh player then recreates the first Zone at the replacement Zone A and verifies its host and continued movement. Existing relocated players remain on Zone B.
+
 ## 한국어 실행 안내
 
 이 프로젝트는 Session, Zone A·B, Instance node와 Redis를 실행한다. `run-e2e.sh`와 `run-e2e.ps1`은 같은 C# 실행기를 사용하며, cross·border·reconnect·update의 실제 동작을 확인한 뒤 자신이 만든 process와 container를 정리한다. 로그는 `.logs/`에 남는다.
