@@ -23,14 +23,20 @@ final class ZLinkFrameworkShutdownOrderTest {
     private static final long OVERLAP_WINDOW_SECONDS = 2;
     private static final long WAIT_SECONDS = 10;
 
+    private static ZLinkFrameworkShutdown shutdownAfterDrainDeadline() {
+        // The merged API takes the teardown end; the original drain deadline is expired.
+        var shutdownDeadline = Instant.now().minusNanos(1);
+        return new ZLinkFrameworkShutdown(
+                shutdownDeadline.plus(
+                        new systems.zlink.framework.locations.ZLinkLocationOptions()
+                                .ownerLeaseRenewTimeout()));
+    }
+
     @Test
     void expiredDeadlineWaitsForAnAsynchronousResourceClose() throws Exception {
         var resourceStopped = new CompletableFuture<Void>();
         var contextCloseStarted = new CompletableFuture<Void>();
-        var shutdown = new ZLinkFrameworkShutdown(
-                        Instant.now().minusSeconds(1).plus(
-                                new systems.zlink.framework.locations.ZLinkLocationOptions()
-                                        .ownerLeaseRenewTimeout()));
+        var shutdown = shutdownAfterDrainDeadline();
         shutdown.deferStage(
                 "context_close",
                 () -> {
@@ -56,10 +62,7 @@ final class ZLinkFrameworkShutdownOrderTest {
         List<String> events = new CopyOnWriteArrayList<>();
         CountDownLatch contextCloseStarted = new CountDownLatch(1);
         AtomicBoolean overlapped = new AtomicBoolean();
-        var shutdown = new ZLinkFrameworkShutdown(
-                        Instant.now().minusSeconds(1).plus(
-                                new systems.zlink.framework.locations.ZLinkLocationOptions()
-                                        .ownerLeaseRenewTimeout()));
+        var shutdown = shutdownAfterDrainDeadline();
         // Stages run in reverse registration order, as in ZLinkFrameworkRuntime.closeCoreAsync.
         shutdown.defer(
                 "context_close",

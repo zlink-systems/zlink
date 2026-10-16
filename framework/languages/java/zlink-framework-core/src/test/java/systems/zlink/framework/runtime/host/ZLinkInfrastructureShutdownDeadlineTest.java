@@ -121,11 +121,22 @@ final class ZLinkInfrastructureShutdownDeadlineTest {
             assertFalse(shutdown.isDone());
             if (!executorDeadline) {
                 var deadlineField =
-                        ZLinkFrameworkRuntime.class.getDeclaredField("terminationDeadline");
+                        ZLinkFrameworkRuntime.class.getDeclaredField("activeTermination");
                 deadlineField.setAccessible(true);
                 @SuppressWarnings("unchecked")
-                var deadline = (AtomicReference<Instant>) deadlineField.get(runtime);
-                deadline.set(Instant.EPOCH);
+                var operationOwner = (AtomicReference<Object>) deadlineField.get(runtime);
+                var operation = operationOwner.get();
+                var constructor = operation.getClass().getDeclaredConstructors()[0];
+                constructor.setAccessible(true);
+                var intent = operation.getClass().getDeclaredMethod("intent");
+                var completion = operation.getClass().getDeclaredMethod("completion");
+                intent.setAccessible(true);
+                completion.setAccessible(true);
+                operationOwner.set(
+                        constructor.newInstance(
+                                intent.invoke(operation),
+                                Instant.EPOCH,
+                                completion.invoke(operation)));
             }
         } finally {
             release.countDown();
