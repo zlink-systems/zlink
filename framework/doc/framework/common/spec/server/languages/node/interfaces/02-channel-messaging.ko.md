@@ -18,6 +18,13 @@ context를 하나 만든다. Handler와 filter는 같은 context에서 한 번�
 만든다. Nest provider scope나 Application provider 등록으로 이 수명을 바꿀 수 없다. Dispatch가 끝나면
 Framework가 만든 instance와 child context를 정리한다.
 
+`ZLinkEncodedPayload.from(bytes)`와 `data()`는 byte를 복사한다. `fromOwned(bytes)`는 전달받은
+byte와 그 offset·length를 복사 없이 보관한다. 호출자는 전달한 뒤 원본 byte를 수정하지 않는다.
+수정하면 payload의 내용도 바뀐다. `view()`는 보관 중인 byte를 복사 없이 돌려주는 읽기 전용
+view다. 반환된 view와 그 backing buffer를 수정하지 않는다. `toBytes()`와 `copy()`는 복사본을 돌려준다.
+`view()`를 받은 codec은 반환하는 application 값이 view나 그 backing buffer를 참조하지 않게 한다.
+소유권 이전과 접근자 복사의 공통 규칙은 [Payload 소유권과 codec §2](../../../01-execution/05-payload-ownership-and-codec.ko.md#2-없앨-수-있는-복사)가 소유한다.
+
 ## 1. Entry Spot과 classic fanout
 
 ```ts
@@ -25,7 +32,9 @@ export declare class ZLinkEncodedPayload {
  private readonly payload;
  private constructor();
  static from(bytes: Uint8Array): ZLinkEncodedPayload;
+ static fromOwned(bytes: Uint8Array): ZLinkEncodedPayload;
  data(): Uint8Array;
+ view(): Readonly<Uint8Array>;
  toBytes(): Uint8Array;
  copy(): ZLinkEncodedPayload;
  size(): number;
