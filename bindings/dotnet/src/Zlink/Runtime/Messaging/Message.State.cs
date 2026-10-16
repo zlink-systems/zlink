@@ -22,7 +22,14 @@ public sealed unsafe partial class Message
     // managed life, including time spent in the thread-static pool, and is
     // freed only by ReleaseNativeStorage.
     private ZlinkMsg* _msg = AllocateNativeStorage();
-    private bool _pooled;
+    private enum PoolState : byte
+    {
+        Owned,
+        Rented,
+        Returned
+    }
+
+    private PoolState _poolState;
 
     internal Message(bool init)
     {

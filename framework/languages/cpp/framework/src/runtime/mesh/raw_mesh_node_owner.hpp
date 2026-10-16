@@ -494,8 +494,13 @@ class raw_mesh_node_owner_t
     std::shared_ptr<foundation::operation_registry_t> _operations;
     std::map<std::vector<std::uint8_t>, service_node_descriptor_t, raw_mesh_byte_vector_less_t>
       _expected_peers;
-    // Last observed Core selected route per RID: RID -> route generation.
-    std::map<std::vector<std::uint8_t>, std::uint64_t, raw_mesh_byte_vector_less_t> _routes;
+    struct selected_route_t
+    {
+        std::uint64_t generation;
+        // The admission exchange retains its first HELLO until ADMIT or route end.
+        std::vector<std::uint8_t> hello;
+    };
+    std::map<std::vector<std::uint8_t>, selected_route_t, raw_mesh_byte_vector_less_t> _routes;
     std::set<std::string> _outbound_endpoints;
     std::uint64_t _next_reply_route_id = 1;
     std::uint64_t _next_operation_sequence = 1;

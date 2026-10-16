@@ -25,8 +25,7 @@ public sealed class LogicalMulticastSubmitTests
         );
 
         Assert.Equal(SubmitResult.Ok, result);
-        Assert.True(SpinWait.SpinUntil(() => proxy.PublishCount == 1, TimeSpan.FromSeconds(5)));
-        Assert.Equal(1, proxy.PublishCount);
+        Assert.True(SpinWait.SpinUntil(() => proxy.Flags.Length == 1, TimeSpan.FromSeconds(5)));
         Assert.Equal([SendFlags.None], proxy.Flags);
     }
 
@@ -254,9 +253,9 @@ public sealed class LogicalMulticastSubmitTests
 
     private class PublishSpotProxy : DispatchProxy
     {
-        internal int PublishCount { get; private set; }
+        private SendFlags[] _flags = [];
 
-        internal List<SendFlags> Flags { get; } = [];
+        internal SendFlags[] Flags => Volatile.Read(ref _flags);
 
         protected override object? Invoke(MethodInfo? targetMethod, object?[]? args)
         {
@@ -271,8 +270,7 @@ public sealed class LogicalMulticastSubmitTests
 
         private object? Publish(object?[]? args)
         {
-            PublishCount++;
-            Flags.Add((SendFlags)args![3]!);
+            Volatile.Write(ref _flags, [.. Flags, (SendFlags)args![3]!]);
             return null;
         }
     }

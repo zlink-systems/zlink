@@ -42,11 +42,11 @@ public sealed partial class Message : IDisposable, IAsyncDisposable
             pool[count] = null!;
             t_poolCount = count;
             result.Invalidate(clearHandle: true);
-            result._pooled = true;
+            result._poolState = PoolState.Rented;
             return result;
         }
 
-        return new Message(false) { _pooled = true };
+        return new Message(false) { _poolState = PoolState.Rented };
     }
 
     // Deterministic cleanup ends here. A released pooled wrapper keeps its
@@ -57,11 +57,13 @@ public sealed partial class Message : IDisposable, IAsyncDisposable
     {
         // Defensive: a wrapper with a live native handle is neither pooled nor
         // released here; its owner closes it first.
-        if (IsValid)
+        // The pool holds a strong reference until rent or thread teardown.
+        // Repeated disposal must leave that entry and its native block intact;
+        // an unreachable pool still lets the finalizer reclaim its wrappers.
+        if (IsValid || _poolState == PoolState.Returned)
             return;
-        if (_pooled)
+        if (_poolState == PoolState.Rented)
         {
-            _pooled = false;
             var pool = t_pool;
             if (pool == null)
             {
@@ -72,10 +74,13 @@ public sealed partial class Message : IDisposable, IAsyncDisposable
             var count = t_poolCount;
             if (count < PoolCapacity)
             {
+                _poolState = PoolState.Returned;
                 pool[count] = this;
                 t_poolCount = count + 1;
                 return;
             }
+
+            _poolState = PoolState.Owned;
         }
 
         ReleaseNativeStorage();

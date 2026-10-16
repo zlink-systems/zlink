@@ -220,6 +220,7 @@ class stream_t
     task_t<void> close ();
     stream_send_call_t write_packet (const zlink::message_t &payload);
     stream_write_call_t reply_packet (const zlink::message_t &payload);
+    stream_write_call_t reply_packet (const zlink::framework::message_t &payload);
 
   private:
     friend class detail::actor_gateway_runtime_t;

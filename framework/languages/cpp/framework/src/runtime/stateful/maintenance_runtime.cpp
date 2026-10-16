@@ -533,28 +533,24 @@ void maintenance_runtime_t::retain_message_follow (
      * and boundary copies and keeps only the Message Follow route. S4, the
      * route becoming removable (18 §2.4), is MessageFollowDuration after the
      * cutover submit terminal; route_convergence and the SafeToShutdown
-     * pending-unit token both end there. The coroutine is detached and
-     * captures the shutdown tracking by value, not `this`. */
+     * pending-unit token both end there. */
     state->payload.clear ();
     state->payload.shrink_to_fit ();
     state->records.reset ();
     state->cutover_record.reset ();
     auto tracking = _shutdown_tracking;
-    auto retention =
-      std::make_shared<task_t<void>> ([] (std::shared_ptr<relocation_terminal_state_t> retained,
-                                          std::chrono::milliseconds follow) -> task_t<void> {
-          const auto deadline = retained->cutover_terminal_at + follow;
-          const auto now = std::chrono::steady_clock::now ();
-          if (deadline > now) {
-              co_await ::zlink::framework::detail::delay (
-                std::chrono::duration_cast<std::chrono::milliseconds> (deadline - now));
-          }
-      }(state, _limits.message_follow_duration));
-    detail::observe_task_completion (
-      *retention, [retention, tracking, state] (const result_t<void> &) {
+    const auto deadline = state->cutover_terminal_at + _limits.message_follow_duration;
+    const auto now = std::chrono::steady_clock::now ();
+    auto retention = std::make_shared<task_t<void>> (
+      deadline > now
+        ? ::zlink::framework::detail::delay (
+            _delay_owner, std::chrono::duration_cast<std::chrono::milliseconds> (deadline - now))
+        : task_t<void> (result_t<void>::success ()));
+    detail::observe_task_terminal (
+      *retention, [retention, tracking, state] (const result_t<void> &result) {
           {
               std::lock_guard lock (tracking->metric_mutex);
-              if (tracking->route_convergence_metric) {
+              if (result && tracking->route_convergence_metric) {
                   const auto elapsed = std::chrono::duration<double> (
                     std::chrono::steady_clock::now () - state->cutover_terminal_at);
                   tracking->route_convergence_metric (elapsed.count ());
@@ -600,7 +596,8 @@ maintenance_runtime_t::settle_relocation (std::shared_ptr<relocation_terminal_st
             if (co_await send_boundary_records (state->context, *state->records, state->batch))
                 (void) co_await state->context.send_cutover (*state->cutover_record);
         }
-        co_await ::zlink::framework::detail::delay (dispatch_limits::management_retry_interval);
+        co_await ::zlink::framework::detail::delay (_delay_owner,
+                                                    dispatch_limits::management_retry_interval);
     }
 }
 
@@ -1919,19 +1916,33 @@ task_t<termination_result_t> host_maintenance_runtime_t::run_retire ()
 
         std::vector<authority_relocation_reference_t> current;
         relocation_terminal_t terminal = relocation_terminal_t::blocked;
-        if (eligible.unit.participants.size () == 1) {
-            const auto result = co_await _relocation.relocate (
-              eligible.unit.participants.front (), eligible.target_node_id, eligible.target_owner,
-              eligible.encoded_upper_bound, eligible.inventory_digest, eligible.canonical_wire);
-            terminal = result.terminal;
-            if (result.authority)
-                current.push_back (*result.authority);
-        } else {
-            const auto result = co_await _relocation.relocate_aggregate (
-              eligible.unit.participants, eligible.target_node_id, eligible.target_owner,
-              eligible.encoded_upper_bound, eligible.inventory_digest, eligible.canonical_wire);
-            terminal = result.terminal;
-            current = result.authority;
+        bool shutting_down = false;
+        try {
+            if (eligible.unit.participants.size () == 1) {
+                const auto result = co_await _relocation.relocate (
+                  eligible.unit.participants.front (), eligible.target_node_id,
+                  eligible.target_owner, eligible.encoded_upper_bound, eligible.inventory_digest,
+                  eligible.canonical_wire);
+                terminal = result.terminal;
+                if (result.authority)
+                    current.push_back (*result.authority);
+            } else {
+                const auto result = co_await _relocation.relocate_aggregate (
+                  eligible.unit.participants, eligible.target_node_id, eligible.target_owner,
+                  eligible.encoded_upper_bound, eligible.inventory_digest, eligible.canonical_wire);
+                terminal = result.terminal;
+                current = result.authority;
+            }
+        }
+        catch (const framework_exception_t &error) {
+            if (error.kind () != framework_error_kind_t::shutting_down)
+                throw;
+            shutting_down = true;
+        }
+        if (shutting_down) {
+            for (const auto &barrier : barriers)
+                (void) _sessions.abort_barrier (barrier);
+            co_return co_await run_shutdown (termination_intent_t::shutdown);
         }
         if (terminal != relocation_terminal_t::completed) {
             for (const auto &barrier : barriers)
@@ -2061,6 +2072,8 @@ void public_host_runtime_t::configure_relocation (
     auto maintenance = std::make_unique<stateful::maintenance_runtime_t> (
       _objects, std::move (authority), std::move (relocations), limits,
       std::move (relocation_observer), std::move (aggregate_authority));
+    if (_delay_owner)
+        maintenance->bind_delay_owner (*_delay_owner);
     maintenance->attach_relocation_wire (*_relocation_wire);
     maintenance->attach_committed_terminal ([this] (const stateful::object_ref_t &owner) {
         if (_stateful_dispatch)
@@ -2109,6 +2122,8 @@ void public_host_runtime_t::configure_maintenance (
     _relocation_cutover_wait = limits.cutover_wait_timeout;
     auto maintenance = std::make_unique<stateful::maintenance_runtime_t> (
       _objects, std::move (providers), limits, std::move (relocation_observer));
+    if (_delay_owner)
+        maintenance->bind_delay_owner (*_delay_owner);
     maintenance->attach_relocation_wire (*_relocation_wire);
     maintenance->attach_committed_terminal ([this] (const stateful::object_ref_t &owner) {
         if (_stateful_dispatch)

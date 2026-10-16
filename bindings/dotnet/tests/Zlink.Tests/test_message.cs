@@ -7,6 +7,37 @@ namespace Systems.Zlink.Tests;
 
 public sealed class test_message
 {
+    [Theory]
+    [InlineData(0)]
+    [InlineData(29)]
+    [InlineData(30)]
+    public void allocated_owned_message_is_not_reused_by_another_owner(int size)
+    {
+        Assert.True(CoreTestSupport.IsNativeAvailable());
+
+        Message original = Message.Allocate(size);
+        original.Dispose();
+        using Message replacement = Message.Allocate(size);
+
+        Assert.NotSame(original, replacement);
+        Assert.Throws<ObjectDisposedException>(() => original.AsSpan());
+        Assert.Equal(size, replacement.Size);
+    }
+
+    [Fact]
+    public void repeated_owned_disposal_does_not_release_a_pooled_native_block()
+    {
+        Assert.True(CoreTestSupport.IsNativeAvailable());
+
+        Message original = Message.Allocate(3);
+        original.Dispose();
+        original.Dispose();
+
+        using Message replacement = Message.Allocate(3);
+        "new"u8.CopyTo(replacement.AsSpan());
+        Assert.Equal("new"u8.ToArray(), replacement.ToArray());
+    }
+
     [Fact]
     public void message_move_is_public_contract()
     {
