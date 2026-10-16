@@ -93,7 +93,8 @@ public sealed class CanonicalActorJoinIngressReplyTests
             (ulong)payload.TotalLength,
             (uint)payload.ChunkCount,
             payload.ChecksumCrc32c,
-            1
+            1,
+            checked((ulong)DateTimeOffset.UtcNow.AddMinutes(1).ToUnixTimeMilliseconds())
         );
         var preparationStarted = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously
@@ -161,7 +162,8 @@ public sealed class CanonicalActorJoinIngressReplyTests
             (ulong)payload.TotalLength,
             (uint)payload.ChunkCount,
             payload.ChecksumCrc32c,
-            1
+            1,
+            checked((ulong)DateTimeOffset.UtcNow.AddMinutes(1).ToUnixTimeMilliseconds())
         );
         Assert.True(
             ZLinkServiceWireCodec.TryDecodeRelocationPrepare(

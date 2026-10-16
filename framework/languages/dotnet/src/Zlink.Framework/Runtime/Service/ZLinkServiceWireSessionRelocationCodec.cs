@@ -37,7 +37,9 @@ internal static partial class ZLinkServiceWireCodec
         RelocationCoordinatorFence Coordinator,
         byte SenderRole,
         SessionActorRouteFenceRecord Actor,
-        SessionOwnerFenceRecord Session
+        SessionOwnerFenceRecord Session,
+        RoutingId TargetNodeRid,
+        ulong TargetNodeGeneration
     );
 
     internal readonly record struct SessionRelocationSealedRecord(
@@ -106,13 +108,17 @@ internal static partial class ZLinkServiceWireCodec
             throw new ArgumentOutOfRangeException(nameof(record));
         ValidateSessionActorRouteFence(record.Actor);
         ValidateSessionOwnerFence(record.Session);
+        if (record.TargetNodeRid.IsEmpty || record.TargetNodeGeneration == 0)
+            throw new ArgumentOutOfRangeException(nameof(record));
         return ServiceWirePilotCodec.EncodeSessionRelocationSeal42(
             new(
                 ToGenerated(record.RelocationId),
                 ToGenerated(record.Coordinator),
                 ServiceWirePilotCodec.RelocationRole.Source,
                 ToGenerated(record.Actor),
-                ToGenerated(record.Session)
+                ToGenerated(record.Session),
+                record.TargetNodeRid.ToBytes().ToArray(),
+                record.TargetNodeGeneration
             )
         );
     }
@@ -139,7 +145,9 @@ internal static partial class ZLinkServiceWireCodec
             FromGenerated(generated.Coordinator),
             FromGeneratedRole(generated.SenderRole),
             FromGeneratedActorFence(generated.Actor),
-            FromGenerated(generated.Session)
+            FromGenerated(generated.Session),
+            RoutingId.From(generated.TargetNodeRid),
+            generated.TargetNodeGeneration
         );
         return true;
     }

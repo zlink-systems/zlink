@@ -4002,7 +4002,38 @@ internal sealed partial class ZLinkFrameworkRuntime
     internal ValueTask<ZLinkServiceWireCodec.SessionRelocationSealedRecord?> SealCanonicalSessionActorRouteAsync(
         ZLinkServiceWireCodec.SessionRelocationSealRecord request,
         CancellationToken cancellationToken
-    ) => _actorBoundSessionCoordinator.SealCanonicalSessionRouteAsync(request, cancellationToken);
+    ) =>
+        _actorBoundSessionCoordinator.SealCanonicalSessionRouteAsync(
+            request,
+            cancellationToken,
+            () => RequestSessionRelocationTargetRoute(request)
+        );
+
+    private void RequestSessionRelocationTargetRoute(
+        ZLinkServiceWireCodec.SessionRelocationSealRecord request
+    )
+    {
+        var node = TryGetSpotNodeRuntime(request.Session.SessionOwnerNodeRid);
+        if (
+            _autoConnect is null
+            || node is null
+            || request.TargetNodeRid == node.Node.RoutingId
+            || node.Node.ObservePeerRoute(
+                request.TargetNodeRid,
+                request.TargetNodeGeneration
+            ).ReadyGeneration != 0
+        )
+            return;
+        TryRunDetached(
+            "session-relocation-peer-reconcile",
+            token =>
+                _autoConnect.ReconcilePeerAsync(
+                    node.Registration.SpotMeshChannelName ?? node.Registration.SpotNodeName,
+                    request.TargetNodeRid,
+                    token
+                )
+        );
+    }
 
     internal bool RouteCanonicalSessionActor(
         ZLinkServiceWireCodec.SessionRelocationRouteRecord request,

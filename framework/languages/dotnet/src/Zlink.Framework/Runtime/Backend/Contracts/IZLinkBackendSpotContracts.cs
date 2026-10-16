@@ -27,7 +27,7 @@ internal interface IZLinkBackendSpotNode : IAsyncDisposable
 
     RoutingId RoutingId { get; }
 
-    ZLinkPeerRouteObservation ObservePeerRoute(RoutingId target);
+    ZLinkPeerRouteObservation ObservePeerRoute(RoutingId target, ulong lifecycleGeneration = 0);
 
     void SetRoutingId(RoutingId routingId);
 

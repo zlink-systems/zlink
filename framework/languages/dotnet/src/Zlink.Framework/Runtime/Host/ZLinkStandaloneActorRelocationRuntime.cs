@@ -203,6 +203,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                         actorState,
                         bound,
                         sessionRelocationContext,
+                        target,
                         cancellationToken
                     )
                     .ConfigureAwait(false);
@@ -309,7 +310,8 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                 target,
                 initialEnvelope,
                 transferPayload,
-                registration.ApplicationVersion
+                registration.ApplicationVersion,
+                absoluteDeadline
             );
             _ = await canonical
                 .PrepareCanonicalRelocationAsync(
@@ -1011,6 +1013,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
         ZLinkActorRuntimeState actorState,
         ZLinkActorBoundSession session,
         ZLinkSessionRelocationContext wireContext,
+        ZLinkMeshNodeDescriptor target,
         CancellationToken cancellationToken
     )
     {
@@ -1042,7 +1045,9 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                     actorState.ActorId,
                     sourceRef.NodeRid,
                     normalized,
-                    wireContext
+                    wireContext,
+                    target.Rid,
+                    target.LifecycleGeneration
                 ),
                 cancellationToken
             )
@@ -1130,7 +1135,8 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
         ZLinkMeshNodeDescriptor target,
         ZLinkRelocationEnvelope envelope,
         ZLinkRelocationTransferPayload payload,
-        long applicationVersion
+        long applicationVersion,
+        DateTimeOffset absoluteDeadline
     )
     {
         var relocationId = ToWireId(envelope.AggregateId);
@@ -1163,7 +1169,8 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
             checked((ulong)payload.TotalLength),
             checked((uint)payload.ChunkCount),
             payload.ChecksumCrc32c,
-            checked((ulong)applicationVersion)
+            checked((ulong)applicationVersion),
+            checked((ulong)absoluteDeadline.ToUnixTimeMilliseconds())
         );
     }
 

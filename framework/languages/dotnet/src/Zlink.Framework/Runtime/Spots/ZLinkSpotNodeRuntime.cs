@@ -175,21 +175,55 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
             _canonicalRelocationTargetOwner = new ZLinkCanonicalRelocationTargetOwner(
                 node.RoutingId,
                 canonicalStartup.Descriptor.LifecycleGeneration,
-                frameworkRegistration.DefaultRequestTimeout,
                 targetRuntime: services.GetRequiredService<ZLinkSpotRetireTargetRuntime>(),
                 standaloneActorRuntime: runtime.StandaloneActorRelocationRuntime,
-                awaitTargetReady: async cancellationToken =>
+                awaitTargetReady: async (envelope, cancellationToken) =>
                 {
-                    var routeMesh = services.GetRequiredService<IZLinkRouteMeshRuntime>();
-                    if (routeMesh.GetStatus(spotChannelName).IsReady)
-                        return;
-                    await foreach (
-                        var observed in routeMesh
-                            .ObserveAsync(spotChannelName, cancellationToken)
-                            .ConfigureAwait(false)
+                    foreach (
+                        var owner in envelope
+                            .Participants.Where(static participant =>
+                                participant.SessionBinding is not null
+                            )
+                            .Select(static participant =>
+                                (
+                                    Rid: RoutingId.From(
+                                        participant.SessionBinding!.SessionOwnerNodeRid
+                                    ),
+                                    Generation: participant
+                                        .SessionBinding
+                                        .SessionOwnerNodeGeneration
+                                )
+                            )
+                            .Distinct()
                     )
-                        if (observed.Status.IsReady)
-                            return;
+                    {
+                        if (owner.Rid == node.RoutingId)
+                            continue;
+                        var route = node.ObservePeerRoute(owner.Rid, owner.Generation);
+                        if (route.ReadyGeneration != 0)
+                            continue;
+                        if (services.GetService<ZLinkLocationAutoConnectHost>() is { } autoConnect)
+                            await autoConnect
+                                .ReconcilePeerAsync(spotChannelName, owner.Rid, cancellationToken)
+                                .ConfigureAwait(false);
+                        while (
+                            (
+                                route = node.ObservePeerRoute(owner.Rid, owner.Generation)
+                            ).ReadyGeneration == 0
+                        )
+                            await route.Changed.WaitAsync(cancellationToken).ConfigureAwait(false);
+                    }
+                    var routeMesh = services.GetRequiredService<IZLinkRouteMeshRuntime>();
+                    if (!routeMesh.GetStatus(spotChannelName).IsReady)
+                    {
+                        await foreach (
+                            var observed in routeMesh
+                                .ObserveAsync(spotChannelName, cancellationToken)
+                                .ConfigureAwait(false)
+                        )
+                            if (observed.Status.IsReady)
+                                break;
+                    }
                     cancellationToken.ThrowIfCancellationRequested();
                 }
             );
