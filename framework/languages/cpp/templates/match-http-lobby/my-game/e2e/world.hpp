@@ -123,6 +123,11 @@ class World
     }
     const std::string &lobby_endpoint () const { return lobby_endpoint_; }
     Process &match_node (const std::string &id) { return *matches_.at (id)->process; }
+    bool is_live_match (const std::string &id) const
+    {
+        const auto node = matches_.find (id);
+        return node != matches_.end () && node->second->process->is_alive ();
+    }
     void replace_match (const std::string &id)
     {
         auto &node = matches_.at (id);

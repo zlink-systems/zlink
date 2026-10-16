@@ -113,6 +113,10 @@ public final class Nodes implements AutoCloseable {
             node.waitFor(stage);
     }
 
+    boolean isLiveMatch(String id) {
+        return Roles.MATCH.equals(modules.get(id)) && nodes.get(id).process.isAlive();
+    }
+
     void replace(String id) throws Exception {
         nodes.get(id).stop();
         startNode(id);

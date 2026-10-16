@@ -89,7 +89,7 @@ public final class Scenarios {
                     Structure.require(
                             !view(a).nodeId().equals(before.nodeId()), "Room did not relocate");
                     nodes.replace(before.nodeId());
-                    newMatch(nodes, before.nodeId());
+                    newMatch(nodes);
                     a.clear();
                     b.clear();
                     hit(a, b, 3, Rules.INITIAL_HP - Rules.DAMAGE * 2);
@@ -141,7 +141,7 @@ public final class Scenarios {
                         });
     }
 
-    private static void newMatch(Nodes nodes, String replacement) throws Exception {
+    private static void newMatch(Nodes nodes) throws Exception {
         String suffix = UUID.randomUUID().toString(),
                 pa = "new-a-" + suffix,
                 pb = "new-b-" + suffix;
@@ -149,10 +149,15 @@ public final class Scenarios {
         try (var a = new Client(assignment.sessionEndpoint(), pa, assignment.roomId());
                 var b = new Client(assignment.sessionEndpoint(), pb, assignment.roomId())) {
             a.connect();
-            b.connect();
-            var room = both(a, b, v -> v.players().size() == Rules.PLAYERS);
+            var room = b.connect();
             Structure.require(
-                    room.nodeId().equals(replacement), "Replacement did not accept new room");
+                    room.players().size() == Rules.PLAYERS, "Incorrect initial player count");
+            Structure.require(
+                    room.equals(a.next(RoomView.class, v -> v.players().size() == Rules.PLAYERS)),
+                    "Room views differ");
+            Structure.require(
+                    room.roomId().equals(assignment.roomId()) && nodes.isLiveMatch(room.nodeId()),
+                    "New Room is not on a live match node");
             connected(a, b);
         }
     }

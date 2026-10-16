@@ -61,7 +61,7 @@ fun configure(
 ) {
     options.useCoroutineHandlers(Dispatchers.Default)
     options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL)
-    options.configureLocations()
+    options.configureLocations().setMessageFollowDuration(Control.MESSAGE_FOLLOW)
     options.addLocationStore(locations)
     options.addRelocationStore(relocations)
 }

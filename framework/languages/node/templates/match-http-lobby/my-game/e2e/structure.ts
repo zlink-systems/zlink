@@ -91,14 +91,14 @@ export function checkStructure(path = 'zlink.structure.json'): void {
     }
   }
   assert(
-    spots.some((s) => s.kind === 'entry'),
-    'Missing Entry Spot'
-  );
-  assert(
-    spots.some((s) => s.type === Names.room),
+    spots.some((s) => s.kind === 'user' && s.type === Names.room && s.dynamic === true),
     'Missing Room type'
   );
   for (const node of nodes.filter((n) => n.role === 'match')) {
+    assert(
+      spots.some((s) => s.owner === node.id && s.kind === 'entry'),
+      'Room node lacks Entry Spot'
+    );
     const cfg = object(JSON.parse(readFileSync(text(node.config), 'utf8')));
     assert(
       Number.isSafeInteger(cfg.roomCapacity) && Number(cfg.roomCapacity) > 0,

@@ -1,6 +1,7 @@
 #pragma once
 #include "server/shared/config.hpp"
 #include <set>
+#include <algorithm>
 #include <array>
 
 namespace MyGame::E2E
@@ -76,7 +77,7 @@ inline void check_structure (const std::filesystem::path &root)
             require (command.is_string () && !command.get<std::string> ().empty (),
                      "Empty command");
     }
-    std::set<std::string> nodes, spot_ids, logical_ids;
+    std::set<std::string> nodes, spot_ids, logical_ids, match_nodes;
     std::map<std::string, nlohmann::json> configurations;
     require (j.at ("nodes").is_array () && j.at ("spots").is_array ()
                && j.at ("channels").is_array () && j.at ("edges").is_array (),
@@ -98,8 +99,10 @@ inline void check_structure (const std::filesystem::path &root)
                 if (role == "http-lobby")
                     require (!config.HttpEndpoint.empty () && !config.SessionEndpoint.empty (),
                              "HTTP and Session endpoints required");
-                if (role == "match")
+                if (role == "match") {
                     require (config.RoomCapacity > 0, "Room capacity must be positive");
+                    match_nodes.insert (id);
+                }
             }
         }
     }
@@ -107,7 +110,8 @@ inline void check_structure (const std::filesystem::path &root)
     for (const auto &spot : j.at ("spots")) {
         require (spot_ids.insert (nonempty (spot, "id")).second, "Duplicate composition Spot ID");
         const auto owner = nonempty (spot, "owner"), kind = nonempty (spot, "kind");
-        require (nodes.contains (owner) && configurations.contains (owner), "Unknown Spot owner");
+        require (match_nodes.contains (owner) && configurations.contains (owner),
+                 "Unknown Spot owner");
         const auto &config = configurations.at (owner);
         require (config.contains ("RoomCapacity") && config.at ("RoomCapacity").get<int> () > 0,
                  "Spot owner must register match server with positive capacity");
@@ -127,6 +131,19 @@ inline void check_structure (const std::filesystem::path &root)
                          "Duplicate logical Spot ID");
         }
     }
+    const auto &spots = j.at ("spots");
+    require (std::any_of (spots.begin (), spots.end (),
+                          [] (const auto &spot) {
+                              return spot.at ("kind") == "user" && spot.at ("type") == Names::room
+                                     && spot.value ("dynamic", false);
+                          }),
+             "Missing dynamic Room family");
+    for (const auto &id : match_nodes)
+        require (std::any_of (spots.begin (), spots.end (),
+                              [&id] (const auto &spot) {
+                                  return spot.at ("owner") == id && spot.at ("kind") == "entry";
+                              }),
+                 "Room node lacks Entry Spot");
     for (const auto &edge : j.at ("edges")) {
         require (nodes.contains (nonempty (edge, "from")) && nodes.contains (nonempty (edge, "to")),
                  "Unknown edge endpoint");

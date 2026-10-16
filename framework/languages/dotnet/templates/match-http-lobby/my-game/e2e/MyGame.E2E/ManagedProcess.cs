@@ -87,7 +87,7 @@ internal sealed class ManagedProcess : IAsyncDisposable
     public async Task<string> WaitLineAsync(string prefix, CancellationToken ct)
     {
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        deadline.CancelAfter(TimeSpan.FromSeconds(30));
+        deadline.CancelAfter(NodeProtocol.RelocationDeadline);
         try
         {
             await foreach (var line in lines.Reader.ReadAllAsync(deadline.Token))
@@ -103,6 +103,8 @@ internal sealed class ManagedProcess : IAsyncDisposable
         }
         throw new InvalidOperationException($"Process {process.Id} exited before '{prefix}'.");
     }
+
+    public bool IsAlive => !process.HasExited;
 
     public Task CommandAsync(string command) => process.StandardInput.WriteLineAsync(command);
 

@@ -211,6 +211,12 @@ async function runScenario(name: string): Promise<boolean> {
     const endpoint = ready.find((r) => r.id === session.config.id)!.endpoint;
     const { scenario } = await import('./client.mjs');
     const control = {
+      isLiveMatch(id: string): boolean {
+        const node = nodes.get(id);
+        return (
+          node?.role === 'match' && node.child.exitCode === null && node.child.signalCode === null
+        );
+      },
       async drain(id: string): Promise<void> {
         const node = nodes.get(id);
         assert(node, `Unknown host ${id}`);

@@ -22,7 +22,7 @@ public final class Hosting {
             ZLinkRedisLocationStore locations,
             ZLinkRedisRelocationStore relocations) {
         options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL);
-        options.configureLocations();
+        options.configureLocations().setMessageFollowDuration(Control.MESSAGE_FOLLOW);
         options.addLocationStore(locations);
         options.addRelocationStore(relocations);
     }

@@ -10,7 +10,7 @@ import kotlin.concurrent.thread
 
 private class Node(val id: String, module: String, config: Path, root: Path, logs: Path) {
     private val output = LinkedBlockingQueue<String>()
-    private val process =
+    val process =
         ProcessBuilder(
                 Path.of(
                         System.getProperty("java.home"),
@@ -175,6 +175,9 @@ class Nodes(private val root: Path) : AutoCloseable {
             listOf(Control.RELOCATION_REQUESTED, Control.RELOCATED, Control.SAFE_TO_SHUTDOWN)) node
             .waitFor(stage)
     }
+
+    fun isLiveMatch(id: String): Boolean =
+        modules[id] == Roles.MATCH && nodes[id]?.process?.isAlive == true
 
     fun replace(id: String) {
         requireNotNull(nodes[id]).stop()

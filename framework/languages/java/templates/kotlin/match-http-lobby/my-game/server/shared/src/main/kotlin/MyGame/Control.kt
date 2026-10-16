@@ -11,6 +11,7 @@ object Control {
     const val SAFE_TO_SHUTDOWN = "SAFE_TO_SHUTDOWN"
     const val STOPPED = "STOPPED"
     const val PROCESS_EXIT = "PROCESS_EXIT "
-    val HOST_DEADLINE: Duration = Duration.ofSeconds(30)
+    val MESSAGE_FOLLOW: Duration = Duration.ofSeconds(20)
+    val HOST_DEADLINE: Duration = MESSAGE_FOLLOW.plusSeconds(10)
     const val PROCESS_SECONDS = 35L
 }

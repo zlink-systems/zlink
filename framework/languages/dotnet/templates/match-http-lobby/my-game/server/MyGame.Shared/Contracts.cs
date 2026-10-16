@@ -64,6 +64,8 @@ public sealed record NodeReady(
 
 public static class NodeProtocol
 {
+    public static readonly TimeSpan MessageFollow = TimeSpan.FromSeconds(20);
+    public static readonly TimeSpan RelocationDeadline = MessageFollow + TimeSpan.FromSeconds(10);
     public const string ReadyPrefix = "READY ";
     public const string Drain = "drain";
     public const string Shutdown = "shutdown";

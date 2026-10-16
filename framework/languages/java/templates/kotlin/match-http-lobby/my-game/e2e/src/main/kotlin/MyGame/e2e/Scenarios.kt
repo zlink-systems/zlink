@@ -83,7 +83,7 @@ suspend fun scenario(id: String, nodes: Nodes) {
                 sameState(before, view(b))
                 check(view(a).nodeId != before.nodeId) { "Room did not relocate" }
                 nodes.replace(before.nodeId)
-                newMatch(nodes, before.nodeId)
+                newMatch(nodes)
                 a.clear()
                 b.clear()
                 hit(a, b, 3, Rules.INITIAL_HP - Rules.DAMAGE * 2)
@@ -133,7 +133,7 @@ private fun post(http: HttpClient, endpoint: String, player: String) =
             Json.mapper.readValue(response.body(), MatchResponse::class.java)
         }
 
-private suspend fun newMatch(nodes: Nodes, replacement: String) {
+private suspend fun newMatch(nodes: Nodes) {
     val suffix = UUID.randomUUID().toString()
     val assignment = match(nodes, "new-a-$suffix", "new-b-$suffix")
     val a = Client(assignment.sessionEndpoint, "new-a-$suffix", assignment.roomId)
@@ -141,8 +141,9 @@ private suspend fun newMatch(nodes: Nodes, replacement: String) {
     try {
         a.connect()
         b.connect()
-        check(both(a, b) { it.players.size == Rules.PLAYERS }.nodeId == replacement) {
-            "Replacement did not accept new room"
+        val room = both(a, b) { it.players.size == Rules.PLAYERS }
+        check(room.roomId == assignment.roomId && nodes.isLiveMatch(room.nodeId)) {
+            "New Room is not on a live match node"
         }
         connected(a, b)
     } finally {

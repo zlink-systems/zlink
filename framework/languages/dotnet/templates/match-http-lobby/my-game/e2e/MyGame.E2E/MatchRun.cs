@@ -109,6 +109,9 @@ internal sealed class MatchRun(string root) : IAsyncDisposable
         await node.WaitLineAsync(NodeProtocol.SafeToShutdown, ct);
     }
 
+    public bool IsLiveMatch(string nodeId) =>
+        matches.TryGetValue(nodeId, out var node) && node.Process.IsAlive;
+
     public async Task ReplaceAsync(string nodeId, CancellationToken ct)
     {
         await matches[nodeId].Process.StopAsync();

@@ -138,6 +138,7 @@ inline fx::zlink_framework_options_t &configure_host (fx::app_t &app, const Node
           std::cerr << line.dump () << std::endl;
       });
     auto &options = app.add_zlink_framework ();
+    options.set_message_follow_duration (Limits::message_follow);
     options.services ().add_singleton (std::make_unique<NodeConfig> (config));
     options.configure_dispatch ().message_flow (fx::message_flow_log_mode_t::normal);
     options.add_location_store<fx::redis::redis_location_store_t> ()

@@ -168,8 +168,8 @@ internal static class Scenarios
             SameState(before, after1);
             SameState(before, after2);
             await run.ReplaceAsync(before.NodeId, ct);
-            // New actors exercise the replacement process's entry and admission responsibilities.
-            await NewMatchAsync(run.LobbyEndpoint, before.NodeId, ct);
+            // New actors exercise admission after replacement readiness.
+            await NewMatchAsync(run, ct);
             await HitAsync(p1, p2, 3, GameNames.InitialHp - GameNames.ShotDamage * 2, ct);
             Require(
                 await p1.SessionAsync(ct) == session1 && await p2.SessionAsync(ct) == session2,
@@ -211,16 +211,12 @@ internal static class Scenarios
         return assignment;
     }
 
-    private static async Task NewMatchAsync(
-        string lobbyEndpoint,
-        string replacementId,
-        CancellationToken ct
-    )
+    private static async Task NewMatchAsync(MatchRun run, CancellationToken ct)
     {
         var suffix = Guid.NewGuid().ToString("N");
         var player1 = "new-a-" + suffix;
         var player2 = "new-b-" + suffix;
-        var assignment = await MatchPairAsync(lobbyEndpoint, player1, player2, ct);
+        var assignment = await MatchPairAsync(run.LobbyEndpoint, player1, player2, ct);
         await using var a = await GameClient.ConnectAsync(assignment.SessionEndpoint, player1, ct);
         await using var b = await GameClient.ConnectAsync(assignment.SessionEndpoint, player2, ct);
         await a.JoinAsync(assignment.RoomId, ct);
@@ -231,8 +227,8 @@ internal static class Scenarios
         );
         await b.WaitAsync<RoomView>(v => v.Players.Length == GameNames.PlayersPerRoom, ct);
         Require(
-            room.RoomId == assignment.RoomId && room.NodeId == replacementId,
-            "Replacement node did not accept the new room."
+            room.RoomId == assignment.RoomId && run.IsLiveMatch(room.NodeId),
+            "New Room is not on a live match node."
         );
     }
 

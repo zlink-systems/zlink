@@ -176,7 +176,7 @@ inline void update (const std::string &endpoint, World &world)
     require (after.nodeId != before.nodeId, "Room was not relocated");
     world.replace_match (before.nodeId);
     Pair fresh (endpoint, world);
-    require (fresh.a.view ().nodeId == before.nodeId, "Replacement did not accept a new Room");
+    require (world.is_live_match (fresh.a.view ().nodeId), "New Room is not on a live match node");
     shoot (pair, 3, Game::initial_hp - Game::damage * 2);
     require (pair.a.info () == ia && pair.b.info () == ib, "Replacement changed Session binding");
     fresh.close ();

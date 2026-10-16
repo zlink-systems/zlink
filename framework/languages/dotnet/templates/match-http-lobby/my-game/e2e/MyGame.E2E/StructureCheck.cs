@@ -173,6 +173,21 @@ internal static class StructureCheck
             else
                 Require(logicalIds.Add(Text(spot, "logicalId")), "Duplicate logical Spot ID.");
         }
+        var spots = Array(document, "spots");
+        Require(
+            spots.Any(spot =>
+                Text(spot, "kind") == "user"
+                && Text(spot, "type") == GameNames.RoomType
+                && spot!["dynamic"]?.GetValue<bool>() == true
+            ),
+            "Missing dynamic Room family."
+        );
+        foreach (var (id, role) in roles)
+            if (role == "match")
+                Require(
+                    spots.Any(spot => Text(spot, "owner") == id && Text(spot, "kind") == "entry"),
+                    "Room node lacks Entry Spot."
+                );
         foreach (var edge in Array(document, "edges"))
         {
             Require(

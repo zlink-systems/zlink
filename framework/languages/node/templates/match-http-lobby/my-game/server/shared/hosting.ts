@@ -59,6 +59,7 @@ export async function runHost(
   class Configuration {}
   class Host {}
   const builder = zlinkFramework();
+  builder.setMessageFollowDuration(Limits.messageFollowMs);
   builder.addLocationStore(location);
   builder.addRelocationStore(relocation);
   builder.configureDispatch().messageFlow('normal');

@@ -39,7 +39,8 @@ struct Limits
     static constexpr int room_capacity = std::numeric_limits<int>::max ();
     static constexpr auto packet = std::chrono::seconds (10);
     static constexpr auto startup = std::chrono::seconds (30);
-    static constexpr auto relocation = std::chrono::seconds (30);
+    static constexpr auto message_follow = std::chrono::seconds (20);
+    static constexpr auto relocation = message_follow + packet;
     static constexpr auto shutdown = std::chrono::seconds (30);
     static constexpr std::size_t observation_capacity = 128;
 };
