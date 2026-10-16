@@ -36,7 +36,7 @@ New-Item -ItemType Directory $logs | Out-Null
 # timestamps would build each other's files. A link with a per-run name gives every build its own
 # transfer.
 $env:MY_GAME_BUILD_CONTEXT = Join-Path $logs $project
-New-Item -ItemType Junction -Path $env:MY_GAME_BUILD_CONTEXT -Target $root | Out-Null
+New-Item -ItemType ($IsWindows ? 'Junction' : 'SymbolicLink') -Path $env:MY_GAME_BUILD_CONTEXT -Target $root | Out-Null
 $compose = @('compose', '-f', (Join-Path $root 'docker-compose.yml'), '-p', $project, '--profile', 'docker')
 $result = 1
 Write-Host "Docker logs: $logs"
