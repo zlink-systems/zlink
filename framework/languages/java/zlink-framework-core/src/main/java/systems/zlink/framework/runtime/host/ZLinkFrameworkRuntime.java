@@ -1065,18 +1065,12 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                         (reason, failure) -> {
                             Throwable preflightFailure = unwrapCompletionFailure(failure);
                             ZLinkFrameworkRelocationReason blocker =
-                                    activeTermination.get() != null
-                                            ? ZLinkFrameworkRelocationReason.SHUTDOWN_REQUESTED
-                                            : failure == null
+                                    relocationReason(
+                                            preflightFailure,
+                                            false,
+                                            failure == null
                                                     ? toPublicRelocationReason(reason)
-                                                    : preflightFailure instanceof TimeoutException
-                                                                    || preflightFailure
-                                                                            instanceof
-                                                                            CancellationException
-                                                            ? ZLinkFrameworkRelocationReason
-                                                                    .DEADLINE_EXCEEDED
-                                                            : ZLinkFrameworkRelocationReason
-                                                                    .STORE_UNAVAILABLE;
+                                                    : ZLinkFrameworkRelocationReason.NONE);
                             if (blocker != ZLinkFrameworkRelocationReason.NONE) {
                                 completeRelocation(
                                         candidate,
@@ -1098,8 +1092,10 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                                         Throwable relocationCause =
                                                 unwrapCompletionFailure(relocationFailure);
                                         ZLinkFrameworkRelocationReason failureReason =
-                                                relocationFailureReason(
-                                                        relocationCause, relocationPublished.get());
+                                                relocationReason(
+                                                        relocationCause,
+                                                        relocationPublished.get(),
+                                                        ZLinkFrameworkRelocationReason.NONE);
                                         ZLinkFrameworkRelocationResult result =
                                                 relocationFailure == null
                                                                 && activeTermination.get() == null
@@ -1320,10 +1316,19 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
         return result;
     }
 
-    private ZLinkFrameworkRelocationReason relocationFailureReason(
-            Throwable failure, boolean relocationPublished) {
+    private ZLinkFrameworkRelocationReason relocationReason(
+            Throwable failure,
+            boolean relocationPublished,
+            ZLinkFrameworkRelocationReason successReason) {
+        if (failure != null) {
+            Logger.getLogger(ZLinkFrameworkRuntime.class.getName())
+                    .log(java.util.logging.Level.WARNING, "Host relocation failed", failure);
+        }
         if (activeTermination.get() != null) {
             return ZLinkFrameworkRelocationReason.SHUTDOWN_REQUESTED;
+        }
+        if (failure == null) {
+            return successReason;
         }
         if (failure
                 instanceof

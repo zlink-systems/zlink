@@ -317,9 +317,10 @@ export interface ZLinkBackendMeshNode {
     source: ServiceDirectSpotRouteFence
   ): ServiceSpotMessageFollowSeal | undefined;
   abortSpotMessageFollowIngress?(seal: ServiceSpotMessageFollowSeal): boolean;
+  /** A null target consumes the committed seal without installing a Follow route. */
   commitSpotMessageFollowIngress?(
     seal: ServiceSpotMessageFollowSeal,
-    target: ServiceDirectSpotRouteFence,
+    target: ServiceDirectSpotRouteFence | null,
     durationMs: number
   ): Promise<boolean>;
   joinActorSpot(

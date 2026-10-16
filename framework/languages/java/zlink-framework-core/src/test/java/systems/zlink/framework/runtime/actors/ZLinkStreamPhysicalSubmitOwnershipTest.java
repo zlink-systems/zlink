@@ -266,110 +266,128 @@ final class ZLinkStreamPhysicalSubmitOwnershipTest {
     }
 
     @Test
-    void targetOutboundFifoWaitsForOneBackendPhysicalTerminalAtATime() {
-        CompletableFuture<Void> firstTerminal = new CompletableFuture<>();
-        CompletableFuture<Void> secondTerminal = new CompletableFuture<>();
-        ArrayDeque<CompletableFuture<Void>> terminals =
-                new ArrayDeque<>(List.of(firstTerminal, secondTerminal));
-        AtomicInteger asyncSubmits = new AtomicInteger();
-        AtomicInteger syncSubmits = new AtomicInteger();
-        ZLinkBackendStreamSocket stream = relocationStream(asyncSubmits, syncSubmits, terminals);
-        ZLinkSessionActorsRuntime runtime = runtime(stream);
-        runtime.bind(new ActorRef("actor-1", 7, "game", NODE_A)).toCompletableFuture().join();
-        ZLinkServiceM6BWireCodec.RelocationIdentity relocation = relocation();
-        runtime.applyRelocationSealCommand(seal(relocation)).toCompletableFuture().join();
-        ZLinkServiceM6BWireCodec.BoundSessionSend target = targetBoundSend();
-        ZLinkSessionActorsRuntime.TargetOutboundAdmission first =
-                runtime.admitBoundSessionSend(target, outboundPayload("first"));
-        ZLinkSessionActorsRuntime.TargetOutboundAdmission second =
-                runtime.admitBoundSessionSend(target, outboundPayload("second"));
-
-        runtime.applyRelocationRouteCommand(route(relocation)).toCompletableFuture().join();
-
-        assertEquals(1, asyncSubmits.get());
-        assertEquals(0, syncSubmits.get());
-        assertFalse(first.settlement().toCompletableFuture().isDone());
-        assertFalse(second.settlement().toCompletableFuture().isDone());
-
-        firstTerminal.complete(null);
-        awaitCount(asyncSubmits, 2);
-        assertEquals(
-                ZLinkSessionActorsRuntime.TargetOutboundSettlement.DELIVERED,
-                first.settlement().toCompletableFuture().join());
-        assertFalse(second.settlement().toCompletableFuture().isDone());
-
-        secondTerminal.complete(null);
-        assertEquals(
-                ZLinkSessionActorsRuntime.TargetOutboundSettlement.DELIVERED,
-                second.settlement().toCompletableFuture().join());
-    }
-
-    @Test
-    void targetOutboundShutdownCancelsThePendingBackendPhysicalTerminal() {
-        CompletableFuture<Void> physicalTerminal = new CompletableFuture<>();
-        AtomicInteger asyncSubmits = new AtomicInteger();
-        AtomicInteger syncSubmits = new AtomicInteger();
-        ZLinkBackendStreamSocket stream =
-                relocationStream(
-                        asyncSubmits, syncSubmits, new ArrayDeque<>(List.of(physicalTerminal)));
-        ZLinkSessionActorsRuntime runtime = runtime(stream);
-        runtime.bind(new ActorRef("actor-1", 7, "game", NODE_A)).toCompletableFuture().join();
-        ZLinkServiceM6BWireCodec.RelocationIdentity relocation = relocation();
-        runtime.applyRelocationSealCommand(seal(relocation)).toCompletableFuture().join();
-        ZLinkSessionActorsRuntime.TargetOutboundAdmission admission =
-                runtime.admitBoundSessionSend(targetBoundSend(), outboundPayload("pending"));
-        runtime.applyRelocationRouteCommand(route(relocation)).toCompletableFuture().join();
-
-        runtime.notifyDisconnectedAll(Duration.ofSeconds(1)).toCompletableFuture().join();
-
-        assertEquals(1, asyncSubmits.get());
-        assertEquals(0, syncSubmits.get());
-        assertTrue(physicalTerminal.isCancelled());
-        assertEquals(
-                ZLinkSessionActorsRuntime.TargetOutboundSettlement.SHUTDOWN,
-                admission.settlement().toCompletableFuture().join());
-    }
-
-    @Test
-    void targetOutboundErrorSettlesOnceAndAdvancesTheOwnedFifo() {
-        CompletableFuture<Void> failedTerminal = new CompletableFuture<>();
-        CompletableFuture<Void> nextTerminal = new CompletableFuture<>();
-        AtomicInteger asyncSubmits = new AtomicInteger();
-        AtomicInteger syncSubmits = new AtomicInteger();
-        ZLinkBackendStreamSocket stream =
+    void sealedOutboundDelegatesBothPhysicalTerminalsToTheBackend() throws Exception {
+        var firstTerminal = new CompletableFuture<Void>();
+        var secondTerminal = new CompletableFuture<Void>();
+        var submitted = new CompletableFuture<Void>();
+        var asyncSubmits = new AtomicInteger();
+        var syncSubmits = new AtomicInteger();
+        var stream =
                 relocationStream(
                         asyncSubmits,
                         syncSubmits,
-                        new ArrayDeque<>(List.of(failedTerminal, nextTerminal)));
-        ZLinkSessionActorsRuntime runtime = runtime(stream);
+                        new ArrayDeque<>(List.of(firstTerminal, secondTerminal)),
+                        submitted);
+        var runtime = runtime(stream);
         runtime.bind(new ActorRef("actor-1", 7, "game", NODE_A)).toCompletableFuture().join();
-        ZLinkServiceM6BWireCodec.RelocationIdentity relocation = relocation();
+        var relocation = relocation();
         runtime.applyRelocationSealCommand(seal(relocation)).toCompletableFuture().join();
-        ZLinkServiceM6BWireCodec.BoundSessionSend target = targetBoundSend();
-        ZLinkSessionActorsRuntime.TargetOutboundAdmission failed =
-                runtime.admitBoundSessionSend(target, outboundPayload("failed"));
-        ZLinkSessionActorsRuntime.TargetOutboundAdmission next =
-                runtime.admitBoundSessionSend(target, outboundPayload("next"));
-        AtomicInteger settlements = new AtomicInteger();
-        CompletionStage<Void> observedSettlement =
-                failed.settlement().thenAccept(ignored -> settlements.incrementAndGet());
-        runtime.applyRelocationRouteCommand(route(relocation)).toCompletableFuture().join();
+        var first =
+                runtime.acceptBoundSessionSendAsync(targetBoundSend(), outboundPayload("first"));
+        var second =
+                runtime.acceptBoundSessionSendAsync(targetBoundSend(), outboundPayload("second"));
+        try {
+            submitted.get(5, java.util.concurrent.TimeUnit.SECONDS);
+            assertEquals(2, asyncSubmits.get());
+            assertEquals(0, syncSubmits.get());
+            assertFalse(first.toCompletableFuture().isDone());
+            assertFalse(second.toCompletableFuture().isDone());
+            firstTerminal.complete(null);
+            assertTrue(first.toCompletableFuture().join());
+            assertFalse(second.toCompletableFuture().isDone());
+            secondTerminal.complete(null);
+            assertTrue(second.toCompletableFuture().join());
+        } finally {
+            firstTerminal.complete(null);
+            secondTerminal.complete(null);
+            runtime.applyRelocationRouteCommand(route(relocation)).toCompletableFuture().join();
+            runtime.notifyDisconnectedAll().toCompletableFuture().join();
+        }
+    }
 
-        failedTerminal.completeExceptionally(new IllegalStateException("physical submit failed"));
-        awaitCount(asyncSubmits, 2);
+    @Test
+    void outboundDisconnectLeavesThePhysicalTerminalToItsBackendOwner() throws Exception {
+        var physicalTerminal = new CompletableFuture<Void>();
+        var submitted = new CompletableFuture<Void>();
+        var asyncSubmits = new AtomicInteger();
+        var syncSubmits = new AtomicInteger();
+        var stream =
+                relocationStream(
+                        asyncSubmits,
+                        syncSubmits,
+                        new ArrayDeque<>(List.of(physicalTerminal)),
+                        submitted);
+        var runtime = runtime(stream);
+        runtime.bind(new ActorRef("actor-1", 7, "game", NODE_A)).toCompletableFuture().join();
+        var relocation = relocation();
+        runtime.applyRelocationSealCommand(seal(relocation)).toCompletableFuture().join();
+        var admission =
+                runtime.acceptBoundSessionSendAsync(targetBoundSend(), outboundPayload("pending"));
+        try {
+            submitted.get(5, java.util.concurrent.TimeUnit.SECONDS);
+            runtime.notifyDisconnectedAll(Duration.ofSeconds(1)).toCompletableFuture().join();
+            assertEquals(1, asyncSubmits.get());
+            assertEquals(0, syncSubmits.get());
+            assertFalse(physicalTerminal.isDone());
+            assertFalse(admission.toCompletableFuture().isDone());
+            var disconnected = new IllegalStateException("backend disconnected");
+            physicalTerminal.completeExceptionally(disconnected);
+            assertSame(
+                    disconnected,
+                    assertThrows(
+                                    CompletionException.class,
+                                    () -> admission.toCompletableFuture().join())
+                            .getCause());
+        } finally {
+            physicalTerminal.complete(null);
+            runtime.notifyDisconnectedAll().toCompletableFuture().join();
+        }
+    }
 
-        assertEquals(
-                ZLinkSessionActorsRuntime.TargetOutboundSettlement.REJECTED,
-                failed.settlement().toCompletableFuture().join());
-        observedSettlement.toCompletableFuture().join();
-        assertEquals(1, settlements.get());
-        assertFalse(next.settlement().toCompletableFuture().isDone());
-        assertEquals(0, syncSubmits.get());
-
-        nextTerminal.complete(null);
-        assertEquals(
-                ZLinkSessionActorsRuntime.TargetOutboundSettlement.DELIVERED,
-                next.settlement().toCompletableFuture().join());
+    @Test
+    void outboundFailureSettlesOnceWithoutResubmittingEitherFrame() throws Exception {
+        var failedTerminal = new CompletableFuture<Void>();
+        var nextTerminal = new CompletableFuture<Void>();
+        var submitted = new CompletableFuture<Void>();
+        var asyncSubmits = new AtomicInteger();
+        var syncSubmits = new AtomicInteger();
+        var stream =
+                relocationStream(
+                        asyncSubmits,
+                        syncSubmits,
+                        new ArrayDeque<>(List.of(failedTerminal, nextTerminal)),
+                        submitted);
+        var runtime = runtime(stream);
+        runtime.bind(new ActorRef("actor-1", 7, "game", NODE_A)).toCompletableFuture().join();
+        var relocation = relocation();
+        runtime.applyRelocationSealCommand(seal(relocation)).toCompletableFuture().join();
+        var failed =
+                runtime.acceptBoundSessionSendAsync(targetBoundSend(), outboundPayload("failed"));
+        var next = runtime.acceptBoundSessionSendAsync(targetBoundSend(), outboundPayload("next"));
+        var settlements = new AtomicInteger();
+        var observed = failed.whenComplete((ignored, failure) -> settlements.incrementAndGet());
+        try {
+            submitted.get(5, java.util.concurrent.TimeUnit.SECONDS);
+            var rejected = new IllegalStateException("physical submit failed");
+            failedTerminal.completeExceptionally(rejected);
+            assertSame(
+                    rejected,
+                    assertThrows(
+                                    CompletionException.class,
+                                    () -> observed.toCompletableFuture().join())
+                            .getCause());
+            assertEquals(1, settlements.get());
+            assertEquals(2, asyncSubmits.get());
+            assertEquals(0, syncSubmits.get());
+            assertFalse(next.toCompletableFuture().isDone());
+            nextTerminal.complete(null);
+            assertTrue(next.toCompletableFuture().join());
+        } finally {
+            failedTerminal.complete(null);
+            nextTerminal.complete(null);
+            runtime.applyRelocationRouteCommand(route(relocation)).toCompletableFuture().join();
+            runtime.notifyDisconnectedAll().toCompletableFuture().join();
+        }
     }
 
     @Test
@@ -541,7 +559,8 @@ final class ZLinkStreamPhysicalSubmitOwnershipTest {
     private static ZLinkBackendStreamSocket relocationStream(
             AtomicInteger asyncSubmits,
             AtomicInteger syncSubmits,
-            ArrayDeque<CompletableFuture<Void>> terminals) {
+            ArrayDeque<CompletableFuture<Void>> terminals,
+            CompletableFuture<Void> submitted) {
         return streamProxy(
                 (method, arguments) ->
                         switch (method.getName()) {
@@ -558,7 +577,9 @@ final class ZLinkStreamPhysicalSubmitOwnershipTest {
                                             timeout -> CompletableFuture.completedFuture(null);
                             case "sendBoundSessionPushAsync" -> {
                                 asyncSubmits.incrementAndGet();
-                                yield terminals.removeFirst();
+                                var terminal = terminals.removeFirst();
+                                if (terminals.isEmpty()) submitted.complete(null);
+                                yield terminal;
                             }
                             case "sendBoundSessionPush" -> {
                                 syncSubmits.incrementAndGet();
@@ -615,14 +636,6 @@ final class ZLinkStreamPhysicalSubmitOwnershipTest {
         try (Message payload = Message.from(value)) {
             return ZLinkServiceM6AWireCodec.encodeFrameworkMultipart(List.of(payload));
         }
-    }
-
-    private static void awaitCount(AtomicInteger value, int expected) {
-        long deadline = System.nanoTime() + Duration.ofSeconds(2).toNanos();
-        while (value.get() < expected && System.nanoTime() < deadline) {
-            Thread.onSpinWait();
-        }
-        assertEquals(expected, value.get());
     }
 
     private static ZLinkBackendStreamSocket streamProxy(Invocation invocation) {
