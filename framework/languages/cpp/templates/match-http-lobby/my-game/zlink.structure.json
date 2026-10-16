@@ -1,0 +1,114 @@
+{
+  "version": 1,
+  "id": "action-http-lobby",
+  "name": "my-game",
+  "language": "cpp",
+  "run": {
+    "commands": {
+      "sh": [
+        "cmake --preset default && cmake --build --preset default",
+        "./run-e2e.sh",
+        "./run-e2e.sh --scenario lobby,hit,reconnect,update"
+      ],
+      "powershell": [
+        "cmake --preset default; if ($LASTEXITCODE -eq 0) { cmake --build --preset default }",
+        "pwsh -NoProfile -File ./run-e2e.ps1",
+        "pwsh -NoProfile -File ./run-e2e.ps1 -Scenario lobby,hit,reconnect,update"
+      ]
+    },
+    "scenarios": [
+      "lobby",
+      "hit",
+      "reconnect",
+      "update"
+    ]
+  },
+  "nodes": [
+    {
+      "id": "players",
+      "role": "external",
+      "title": "Players",
+      "config": null
+    },
+    {
+      "id": "lobby",
+      "role": "http-lobby",
+      "title": "HTTP lobby",
+      "config": "server/config/lobby.json"
+    },
+    {
+      "id": "session",
+      "role": "session",
+      "title": "Session node",
+      "config": "server/config/session.json"
+    },
+    {
+      "id": "matchA",
+      "role": "match",
+      "title": "Match node A",
+      "config": "server/config/match-a.json"
+    },
+    {
+      "id": "matchB",
+      "role": "match",
+      "title": "Match node B",
+      "config": "server/config/match-b.json"
+    },
+    {
+      "id": "location",
+      "role": "location-store",
+      "title": "Location Store",
+      "config": "docker-compose.yml"
+    }
+  ],
+  "channels": [],
+  "spots": [
+    {
+      "id": "match-entry-a",
+      "kind": "entry",
+      "type": null,
+      "owner": "matchA"
+    },
+    {
+      "id": "match-entry-b",
+      "kind": "entry",
+      "type": null,
+      "owner": "matchB"
+    },
+    {
+      "id": "room",
+      "kind": "user",
+      "type": "Room",
+      "owner": "matchA",
+      "dynamic": true
+    }
+  ],
+  "edges": [
+    {
+      "to": "lobby",
+      "label": "HTTP",
+      "from": "players"
+    },
+    {
+      "from": "players",
+      "to": "session",
+      "label": "STREAM"
+    },
+    {
+      "from": "session",
+      "to": "matchA",
+      "label": "relay"
+    },
+    {
+      "from": "lobby",
+      "to": "location",
+      "label": "Find room"
+    },
+    {
+      "from": "matchA",
+      "to": "location",
+      "label": "Location / lease",
+      "semantic": "location-authority"
+    }
+  ]
+}
