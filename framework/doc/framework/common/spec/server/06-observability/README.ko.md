@@ -73,7 +73,7 @@ handler 분배, lifecycle 결정을 바꾸지 않는다. Application, 운영 도
 | 대상 | 켜는 방법 |
 |---|---|
 | Message flow(`flow`, `corr` 포함 전 구간 추적) | runtime diagnostics의 message flow mode |
-| C++ / .NET spot discovery trace | `ZLINK_DEBUG_FRAMEWORK_SPOT_DISCOVERY` |
+| .NET spot discovery trace | `ZLINK_DEBUG_FRAMEWORK_SPOT_DISCOVERY` |
 | Java / Kotlin stream trace | `ZLINK_JAVA_STREAM_TRACE=1` |
 | Sample 서버 log 보존 | .NET `ZLINK_SAMPLE_EVIDENCE_DIR`, JVM `ZLINK_SAMPLE_KEEP_RUN_DIR=1`, Node는 실패 시 자동 |
 
