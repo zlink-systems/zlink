@@ -19,6 +19,7 @@ import java.util.Map;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -42,6 +43,37 @@ final class ZLinkStateLaneTest {
         long bytes = allocations.getThreadAllocatedBytes(thread) - before;
         assertTrue(bytes < 20_000, "idle turn allocated " + bytes + " bytes");
         assertTrue(lane.closeAsync().toCompletableFuture().isDone());
+    }
+
+    @Test
+    void concurrentFirstSubmissionsKeepOneTurnOwnerAndCloseDrainsEveryTurn() throws Exception {
+        var lane = new ZLinkStateLane();
+        int producers = 16;
+        var start = new java.util.concurrent.CyclicBarrier(producers);
+        var active = new AtomicInteger();
+        var completed = new AtomicInteger();
+        var submitted = new ArrayList<java.util.concurrent.Future<CompletionStage<Void>>>();
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            for (int index = 0; index < producers; index++) {
+                submitted.add(
+                        executor.submit(
+                                () -> {
+                                    start.await(5, TimeUnit.SECONDS);
+                                    return lane.runAsync(
+                                            () -> {
+                                                assertEquals(1, active.incrementAndGet());
+                                                completed.incrementAndGet();
+                                                assertEquals(0, active.decrementAndGet());
+                                            });
+                                }));
+            }
+            var turns = new ArrayList<CompletionStage<Void>>();
+            for (var submission : submitted) turns.add(submission.get(5, TimeUnit.SECONDS));
+            lane.closeAsync().toCompletableFuture().get(5, TimeUnit.SECONDS);
+            for (var turn : turns) turn.toCompletableFuture().get(5, TimeUnit.SECONDS);
+            assertEquals(producers, completed.get());
+            assertThrows(IllegalStateException.class, () -> lane.runAsync(() -> {}));
+        }
     }
 
     @Test

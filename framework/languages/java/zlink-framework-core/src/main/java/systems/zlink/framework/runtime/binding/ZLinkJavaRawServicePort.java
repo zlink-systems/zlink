@@ -16,6 +16,7 @@ import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.internal.ZLinkCompletionBridge;
 import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceWireFrame;
 
@@ -45,6 +46,7 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
     private final LinkedHashMap<RouterSocket, ZLinkJavaSocketReceivePoller> receivePollers =
             new LinkedHashMap<>();
     private final ZLinkStateLane stateLane;
+    private final ZLinkServiceOperationRegistry operations;
     private CompletableFuture<Void> closeCompletion;
 
     private Function<
@@ -80,6 +82,26 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
 
     private ZLinkJavaRawServicePort(
             Context context, boolean ownsContext, ZLinkStateLane stateLane) {
+        this(
+                context,
+                ownsContext,
+                stateLane,
+                new ZLinkServiceOperationRegistry(
+                        ZLinkProcessExecutionLanes.deadlines(),
+                        ZLinkOneWayCalls.failureForStatus(ZLinkOneWayCalls.SHUTDOWN)));
+    }
+
+    ZLinkJavaRawServicePort(
+            Context context, ZLinkStateLane stateLane, ZLinkServiceOperationRegistry operations) {
+        this(context, false, stateLane, operations);
+    }
+
+    private ZLinkJavaRawServicePort(
+            Context context,
+            boolean ownsContext,
+            ZLinkStateLane stateLane,
+            ZLinkServiceOperationRegistry operations) {
+        this.operations = Objects.requireNonNull(operations, "operations");
         this.context = Objects.requireNonNull(context, "context");
         this.ownsContext = ownsContext;
         this.stateLane = Objects.requireNonNull(stateLane, "stateLane");
@@ -146,7 +168,7 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
                                     submit.message(ownedMessages.get(index));
                                 }
                                 try {
-                                    return ZLinkJavaSocketSupport.submit(submit);
+                                    return ZLinkJavaSocketSupport.submit(submit, operations);
                                 } catch (RuntimeException failure) {
                                     return CompletableFuture.failedFuture(failure);
                                 }
@@ -504,7 +526,10 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
         var completion =
                 inStateLane(
                         () -> {
-                            if (closeCompletion == null) closeCompletion = attempt;
+                            if (closeCompletion == null) {
+                                closeCompletion = attempt;
+                                operations.close();
+                            }
                             return closeCompletion;
                         });
         if (completion == attempt) {

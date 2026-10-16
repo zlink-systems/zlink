@@ -181,7 +181,8 @@ final class ZLinkJavaRawMeshNode
     private final ScheduledExecutorService deadlines = ZLinkProcessExecutionLanes.deadlines();
     private final Executor applicationDispatch = ZLinkProcessExecutionLanes.applicationLane();
     private final ZLinkServiceOperationRegistry operations =
-            new ZLinkServiceOperationRegistry(deadlines);
+            new ZLinkServiceOperationRegistry(
+                    deadlines, ZLinkOneWayCalls.failureForStatus(ZLinkOneWayCalls.SHUTDOWN));
     private final ConcurrentLinkedQueue<PeerCloseRequest> pendingPeerCloseRequests =
             new ConcurrentLinkedQueue<>();
     // RID -> route generation Core selected, as last observed by the receive pump (the ROUTER's
@@ -314,7 +315,7 @@ final class ZLinkJavaRawMeshNode
         }
         this.meshName = meshName;
         this.messageMetrics = ZLinkMeshMessageMetrics.forMesh(meshName);
-        this.port = new ZLinkJavaRawServicePort(context, transportStateLane);
+        this.port = new ZLinkJavaRawServicePort(context, transportStateLane, operations);
         this.currentTimeMillis = Objects.requireNonNull(currentTimeMillis, "currentTimeMillis");
         this.nanoTime = Objects.requireNonNull(nanoTime, "nanoTime");
         this.ingressWaitTimeout =
@@ -1920,7 +1921,7 @@ final class ZLinkJavaRawMeshNode
             submission = CompletableFuture.failedFuture(failure);
         }
         ZLinkDispatchErrorReporter reporter = dispatchErrorReporter;
-        if (reporter == null || !reporter.captureEnabled()) {
+        if (reporter == null || !reporter.errorsEnabled()) {
             return submission.toCompletableFuture();
         }
         CompletionStage<Void> observed =
@@ -4052,7 +4053,7 @@ final class ZLinkJavaRawMeshNode
                 ((ZLinkJavaRawSpotNode) spotNode()).recoverInstanceSpot(envelope, route);
         ZLinkDispatchErrorReporter reporter = dispatchErrorReporter;
         if ((!envelope.request() && !ZLinkRuntimeMetrics.enabled())
-                && (reporter == null || !reporter.captureEnabled())) return recovery;
+                && (reporter == null || !reporter.errorsEnabled())) return recovery;
         return recovery.whenComplete(
                 (ignored, failure) -> {
                     if (failure != null) {
@@ -4519,7 +4520,11 @@ final class ZLinkJavaRawMeshNode
         admissionControlReadyConnections.clear();
         helloExchanges.clear();
         selectedRoutes = Map.of();
-        operations.close();
+        port.inStateLane(
+                () -> {
+                    operations.close();
+                    return null;
+                });
         // Stop receiving queue transitions before the service port closes its
         // ROUTER. The controller waits for any in-flight apply on this socket.
         var currentReceiveFlowRegistration = receiveFlowRegistration;
@@ -5131,7 +5136,7 @@ final class ZLinkJavaRawMeshNode
             ZLinkDispatchErrorAction action) {
         Throwable cause = unwrap(failure);
         ZLinkDispatchErrorReporter reporter = dispatchErrorReporter;
-        boolean captureEnabled = reporter != null && reporter.captureEnabled();
+        boolean captureEnabled = reporter != null && reporter.errorsEnabled();
         boolean metricsEnabled = !request && ZLinkRuntimeMetrics.enabled();
         if (action == ZLinkDispatchErrorAction.DROP && !metricsEnabled && !captureEnabled) {
             return null;

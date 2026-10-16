@@ -303,9 +303,14 @@ final class ZLinkChannelSubmitTurnTest {
     }
 
     private static void awaitQueued(ZLinkStateLane lane) throws Exception {
-        Queue<?> mailbox = (Queue<?>) field(lane, "mailbox");
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
-        while (mailbox.isEmpty() && System.nanoTime() < deadline) Thread.yield();
+        Queue<?> mailbox;
+        do {
+            mailbox = (Queue<?>) field(lane, "mailbox");
+            if (mailbox != null && !mailbox.isEmpty()) break;
+            Thread.yield();
+        } while (System.nanoTime() < deadline);
+        org.junit.jupiter.api.Assertions.assertNotNull(mailbox, "the mailbox must be published");
         assertFalse(mailbox.isEmpty(), "the mutation must be queued behind the submission turn");
     }
 
