@@ -85,7 +85,8 @@ final class ZLinkStreamPhysicalSubmitOwnershipTest {
                         null,
                         new RawSerializer(),
                         0,
-                        BINDING_GENERATION,
+                        new ZLinkSessionDisconnected(
+                                RoutingId.from("session-owner-node"), 1L, BINDING_GENERATION),
                         null,
                         true,
                         ZLinkStreamCodec.JSON,
@@ -137,7 +138,8 @@ final class ZLinkStreamPhysicalSubmitOwnershipTest {
                         null,
                         new RawSerializer(),
                         0,
-                        BINDING_GENERATION,
+                        new ZLinkSessionDisconnected(
+                                RoutingId.from("session-owner-node"), 1L, BINDING_GENERATION),
                         null,
                         true,
                         ZLinkStreamCodec.JSON,
@@ -237,7 +239,8 @@ final class ZLinkStreamPhysicalSubmitOwnershipTest {
                         null,
                         new RawSerializer(),
                         0,
-                        BINDING_GENERATION,
+                        new ZLinkSessionDisconnected(
+                                RoutingId.from("session-owner-node"), 1L, BINDING_GENERATION),
                         null,
                         true,
                         ZLinkStreamCodec.JSON,
@@ -456,7 +459,7 @@ final class ZLinkStreamPhysicalSubmitOwnershipTest {
                         null,
                         new RawSerializer(),
                         0,
-                        1,
+                        new ZLinkSessionDisconnected(RoutingId.from("session-owner-node"), 1L, 1),
                         (ignoredActor,
                                 sourceNode,
                                 sourceSession,
@@ -552,8 +555,31 @@ final class ZLinkStreamPhysicalSubmitOwnershipTest {
     }
 
     private static ZLinkSessionActorsRuntime runtime(ZLinkBackendStreamSocket stream) {
+        var owner =
+                (systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode)
+                        Proxy.newProxyInstance(
+                                ZLinkStreamPhysicalSubmitOwnershipTest.class.getClassLoader(),
+                                new Class<?>[] {
+                                    systems.zlink.framework.runtime.internal.backend
+                                            .ZLinkInternalSpotNode.class
+                                },
+                                (proxy, method, arguments) ->
+                                        switch (method.getName()) {
+                                            case "routingId" -> NODE_A;
+                                            case "localNodeGeneration" -> 1L;
+                                            default ->
+                                                    throw new UnsupportedOperationException(
+                                                            method.getName());
+                                        });
         return new ZLinkSessionActorsRuntime(
-                stream, SESSION, null, new RawSerializer(), null, true, ZLinkStreamCodec.RAW);
+                owner,
+                stream,
+                SESSION,
+                null,
+                new RawSerializer(),
+                null,
+                true,
+                ZLinkStreamCodec.RAW);
     }
 
     private static ZLinkBackendStreamSocket relocationStream(

@@ -452,7 +452,7 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
             ZLinkBackendActorRef sourceRef = sourceActors.currentRef(sourceActor);
             sourceActors
                     .bindNativeSession(
-                            sourceActor, inertSpotNode(), sourceRef, SOURCE_RID, SESSION_RID, 7)
+                            sourceActor, inertSpotNode(), sourceRef, SOURCE_RID, SESSION_RID, 7, 1L)
                     .toCompletableFuture()
                     .join();
 
@@ -1575,7 +1575,8 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                             actorRoute.actor(),
                             session.nodeRid(),
                             session.sessionRid(),
-                            session.bindingGeneration())
+                            session.bindingGeneration(),
+                            session.nodeGeneration())
                     .thenApply(ignored -> null);
         }
 

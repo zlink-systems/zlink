@@ -6408,25 +6408,26 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             boolean pendingHeader) {
         if (ZLinkActorSpotRoutePackets.SESSION_DISCONNECTED_PACKET_NAME.equals(
                 packetHeader.packetName())) {
-            byte[] namedSession = bodyPart == null ? new byte[0] : bodyPart.message().toByteArray();
-            RoutingId sessionRid =
-                    namedSession.length == 0
-                            ? headerPart.sourceSessionRid()
-                            : RoutingId.from(namedSession);
+            byte[] identity = bodyPart == null ? new byte[0] : bodyPart.message().toByteArray();
             return actorSessions
                     .runtime()
-                    .notifyDisconnected(actor, headerPart.sourceNodeRid(), sessionRid)
+                    .notifyDisconnected(actor, identity)
                     .handle(
                             (ignored, error) -> {
                                 try {
-                                    if (error != null && flowCaptureEnabled()) {
+                                    if (error != null && dispatchErrors.errorsEnabled()) {
                                         reportDispatchError(
                                                 DispatchFailureReport.of(
                                                                 ZLinkDispatchErrorSurface
                                                                         .SPOT_ACTOR,
-                                                                ZLinkDispatchMessageKind.CONTROL,
-                                                                ZLinkDispatchErrorReason
-                                                                        .HANDLER_EXCEPTION,
+                                                                ZLinkDispatchMessageKind.ACTOR_SEND,
+                                                                systems.zlink.framework.runtime
+                                                                        .diagnostics
+                                                                        .ZLinkDispatchErrorReporter
+                                                                        .reasonFrom(
+                                                                                unwrapCompletion(
+                                                                                        error),
+                                                                                0),
                                                                 ZLinkDispatchErrorAction.DROP)
                                                         .packetName(packetHeader.packetName())
                                                         .actorId(actor.context().actorId())

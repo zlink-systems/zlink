@@ -49,7 +49,7 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
     private final ZLinkActorRuntime actors;
     private final ZLinkMessageSerializer serializer;
     private final long bindingToken;
-    private final long bindingGeneration;
+    private final ZLinkSessionDisconnected disconnectIdentity;
     private final int actorSlot;
     private final ZLinkSessionActorsRuntime.LocalActorDispatcher localActorDispatcher;
     private final boolean nativeSessionRelayAttached;
@@ -72,7 +72,7 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
             ZLinkActorRuntime actors,
             ZLinkMessageSerializer serializer,
             long bindingToken,
-            long bindingGeneration,
+            ZLinkSessionDisconnected disconnectIdentity,
             int actorSlot,
             ZLinkSessionActorsRuntime.LocalActorDispatcher localActorDispatcher,
             boolean nativeSessionRelayAttached,
@@ -82,6 +82,7 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
             BooleanSupplier currentBinding,
             ZLinkSessionActorsRuntime.IngressAdmission ingressAdmission,
             ZLinkRelayMetadataPolicy metadataPolicy) {
+        this.disconnectIdentity = disconnectIdentity;
         this.stream = stream;
         this.sessionRid = sessionRid;
         this.ref = ref;
@@ -90,10 +91,9 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
         this.actors = actors;
         this.serializer = Objects.requireNonNull(serializer, "serializer");
         this.bindingToken = bindingToken;
-        if (bindingGeneration <= 0) {
+        if (disconnectIdentity.bindingGeneration() <= 0) {
             throw new IllegalArgumentException("bound Session binding generation must be positive");
         }
-        this.bindingGeneration = bindingGeneration;
         if (actorSlot <= 0 || actorSlot > MAX_ACTOR_SLOT) {
             throw new IllegalArgumentException(
                     "bound Session Actor slot must be in 1.." + MAX_ACTOR_SLOT);
@@ -120,7 +120,7 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
             ZLinkActorRuntime actors,
             ZLinkMessageSerializer serializer,
             long bindingToken,
-            long bindingGeneration,
+            ZLinkSessionDisconnected disconnectIdentity,
             ZLinkSessionActorsRuntime.LocalActorDispatcher localActorDispatcher,
             boolean nativeSessionRelayAttached,
             ZLinkStreamCodec defaultCodec,
@@ -138,7 +138,7 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
                 actors,
                 serializer,
                 bindingToken,
-                bindingGeneration,
+                disconnectIdentity,
                 1,
                 localActorDispatcher,
                 nativeSessionRelayAttached,
@@ -181,7 +181,7 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
     }
 
     long bindingGeneration() {
-        return bindingGeneration;
+        return disconnectIdentity.bindingGeneration();
     }
 
     int actorSlot() {
@@ -205,7 +205,7 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
                     targetActor, authorityOwnerGeneration, ownerLeaseGeneration);
         }
         return stream.relocateBoundActor(
-                sessionRid, ref.actorId(), bindingGeneration, targetActor, timeout);
+                sessionRid, ref.actorId(), bindingGeneration(), targetActor, timeout);
     }
 
     void commitPreparedNativeActorRoute(ZLinkBackendActorRef targetActor) {
@@ -309,7 +309,7 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
                             ref,
                             ref.nodeRid(),
                             sessionRid,
-                            bindingGeneration,
+                            bindingGeneration(),
                             sourceSessionSequence,
                             header,
                             payload);
@@ -527,7 +527,8 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
                                                         cleared ->
                                                                 cleared
                                                                         ? actors.notifyDisconnected(
-                                                                                managedActor.get())
+                                                                                managedActor.get(),
+                                                                                disconnectIdentity)
                                                                         : CompletableFuture
                                                                                 .<Void>
                                                                                         completedFuture(
@@ -591,9 +592,7 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
                         Optional.empty(),
                         ZLinkActorSpotRoutePackets.SESSION_DISCONNECTED_PACKET_NAME,
                         Map.of());
-        // The body names the Session of this binding so the Actor owner can tell it from
-        // a later binding of the same Actor (Session-Actor binding §8.3).
-        try (Message payloadPart = Message.from(sessionRid.toBytes())) {
+        try (Message payloadPart = Message.from(disconnectIdentity.encode())) {
             return stream.requestExactActor(
                             ref,
                             header,
