@@ -801,7 +801,11 @@ public sealed partial class EntrySpotActorDispatchTests
         try
         {
             using var operation = (await runtime.AdmitOperationAsync()).Enter();
-            var seal = await activation.SealRelocationAsync(CancellationToken.None);
+            // A canonical replay runs under the target admission seal
+            // (StageInboundSpotAggregateAsync), not under a source unit seal.
+            var seal =
+                await activation.TrySealRelocationAsync()
+                ?? throw new InvalidOperationException("The target admission seal was refused.");
             state.Handoff.BeginCanonicalMaintenanceImport(handoffId, []);
             state.Handoff.MarkAuthorityCommitted(
                 handoffId,
