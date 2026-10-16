@@ -204,7 +204,9 @@ internal sealed class ZLinkLocationAutoConnectHost
                 {
                     if (!await reconciler.MarkServingAsync(cancellationToken).ConfigureAwait(false))
                         throw new ZLinkConfigurationException(
-                            "The claimed MeshNode descriptor could not enter Serving state."
+                            "The claimed MeshNode descriptor could not enter Serving state: "
+                                + (reconciler.LocalWriteStatus?.ToString() ?? "not written")
+                                + "."
                         );
                 }
             }

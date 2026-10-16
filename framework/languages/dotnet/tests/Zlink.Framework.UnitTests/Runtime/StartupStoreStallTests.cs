@@ -101,6 +101,27 @@ public sealed class StartupStoreStallTests
     }
 
     [Fact]
+    public async Task MeshNodeHost_ServingDescriptorNotStored_FailsStartupWithWriteStatus()
+    {
+        // The lease is held, but the Store never accepts the Serving revision
+        // of the claimed descriptor: startup fails and names the write status.
+        var store = new GatedLocationStore(new ZLinkInMemoryProviderLocationStore())
+        {
+            RejectDescriptorRenew = true,
+        };
+        await using var provider = BuildProvider(store);
+
+        var failure = await Assert.ThrowsAnyAsync<Exception>(() =>
+            HostedService(provider).StartAsync(CancellationToken.None).WaitAsync(Hang)
+        );
+        Assert.Contains(
+            "could not enter Serving state: IgnoredStale",
+            failure.ToString(),
+            StringComparison.Ordinal
+        );
+    }
+
+    [Fact]
     public async Task MeshNodeHost_StartupClaimConflict_FailsStartup()
     {
         var store = new GatedLocationStore(new ZLinkInMemoryProviderLocationStore())
@@ -172,6 +193,8 @@ public sealed class StartupStoreStallTests
 
         internal bool ExhaustOwnerGenerations { get; init; }
 
+        internal bool RejectDescriptorRenew { get; init; }
+
         internal Channel<int> CompletedWrites { get; } = Channel.CreateUnbounded<int>();
 
         internal bool IsHolding => !Volatile.Read(ref _gate).Task.IsCompleted;
@@ -217,6 +240,14 @@ public sealed class StartupStoreStallTests
         )
         {
             await PassGateAsync();
+            if (
+                RejectDescriptorRenew
+                && request.Conditions.Any(condition =>
+                    condition is ZLinkStoreCondition.Version version
+                    && version.Key.Value.Contains("mesh-node", StringComparison.Ordinal)
+                )
+            )
+                return new ZLinkStoreWriteResult.Conflict(DateTimeOffset.UtcNow);
             var result = await inner.WriteAsync(request, cancellationToken);
             CompletedWrites.Writer.TryWrite(0);
             return result;
