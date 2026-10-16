@@ -410,11 +410,20 @@ ZLinkActorCreateResult result = await actorManager
 Framework는 다음 순서로 target 후보를 검사한다.
 
 1. Object role을 확인한다.
-2. 요청한 stable type이 등록되어 있는지 확인한다.
+2. 요청한 stable type이 등록되어 있는지 확인한다. 새 Actor를 만드는 Create·GetOrCreate는 이 가운데
+   그 Actor stable type을 받는 Entry Spot type을 등록한 Object Server(descriptor capability의 `entryAccepted`가
+   `true`인 node)만 남긴다.
 3. Active·pending capacity가 남아 있는지 확인한다.
 4. 남은 후보에 node-wide placement weight를 적용한다.
 
 Caller는 target node나 endpoint를 선택하지 않는다.
+
+새 Actor의 initial Entry Spot membership은 생성 node에서 그 Actor stable type을 받는 Entry Spot이 `OnCreateActor`로
+승인한다([Spot model §3.2](01-spot-model.ko.md#32-spot-종류별-lifecycle-callback)). 따라서 Actor factory만 등록하고 그 type을 받는 Entry Spot type이 없는
+node는 새 Actor를 만들지 않는다. 그런 node도 이미 있는 Actor의 join·relocation target은 될 수 있다. 선택한 target에
+그런 Entry Spot type이 없으면 target은 callback 전 Framework 처리 실패로 그 생성을 끝낸다. 이 결과는 application
+`Rejected`가 아니므로, Framework는 [Location runtime §7](../05-location-relocation/01-location-runtime.ko.md#7-actor와-user-spot을-만든다)의
+`Reserve` 실패와 같이 그 host 실행 세대를 제외하고 deadline까지 다른 후보를 고른다.
 
 ### 6.4 Creation request와 factory 실행
 

@@ -253,7 +253,7 @@ export interface ZLinkNestMeshObjectClientBuilder extends ZLinkNestFrameworkOpti
 }
 
 export interface ZLinkNestMeshObjectServerBuilder extends ZLinkNestFrameworkOptionsBuilder {
-    addEntrySpot<TEntrySpot extends ZLinkEntrySpot>(entrySpotType: Type<TEntrySpot>): this;
+    addEntrySpot<TEntrySpot extends ZLinkEntrySpot>(entrySpotType: Type<TEntrySpot>, actorType: string): this;
     addSpotFactory<TSpot extends ZLinkSpot>(
         spotType: string,
         implementation: Type<TSpot>,
@@ -419,7 +419,7 @@ HWM과 Application job queue의 의미·기본값·범위는
 [Application job queue와 backpressure §2](../../../01-execution/04-application-job-queue-and-backpressure.ko.md#2-설정과-profile-경계)가 소유한다.
 Application listener의 `maxMessageSize` 기본값은 `16_777_216` bytes다.
 
-NestJS builder도 Entry Spot 구현 type만 등록한다. Entry Spot의 `SpotId`는 Framework가
+NestJS builder도 Entry Spot 구현 type과 그 Entry Spot이 받는 Actor stable type(`actorType`)만 등록하며, `actorType`의 의미는 [기본 builder](01-foundation-configuration.ko.md)와 같다. Entry Spot의 `SpotId`는 Framework가
 `<prefix>-entry-<lowercase-canonical-uuid-v4>` 형식으로 발급하며 caller 지정 identity option은 없다.
 
 `RecreateOnRelocation` 또는 `PreserveStateWith` factory가 하나라도 있거나 Instance Spot [factory](../../../00-foundation/02-glossary.ko.md#factory)가 하나라도 등록된 Object Server는
