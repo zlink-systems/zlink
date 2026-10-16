@@ -161,6 +161,7 @@ export async function scenario(
   };
   const id = `${name}-${runId}`;
   const client = create('player');
+  const failures: unknown[] = [];
   try {
     if (name === 'border') {
       const observer = create('observer');
@@ -257,13 +258,12 @@ export async function scenario(
       } else throw new Error(`Unknown scenario ${name}`);
       if (name !== 'reconnect') assert.equal(client.disconnects, 0);
     }
+  } catch (error) {
+    failures.push(error);
   } finally {
-    const closed = await Promise.allSettled(clients.map((c) => c.close()));
-    for (const result of closed)
-      if (result.status === 'rejected') console.error('Client cleanup failed', result.reason);
-    assert(
-      closed.every((r) => r.status === 'fulfilled'),
-      'Client cleanup failed'
-    );
+    const results = await Promise.allSettled(clients.map((c) => c.close()));
+    for (const result of results) if (result.status === 'rejected') failures.push(result.reason);
   }
+  if (failures.length)
+    throw new AggregateError(failures, `Scenario ${name} or client cleanup failed`);
 }
