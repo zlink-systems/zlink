@@ -90,8 +90,12 @@ public final class Client implements AutoCloseable {
     }
 
     RegionView view() throws Exception {
+        return view(v -> true);
+    }
+
+    RegionView view(Predicate<RegionView> predicate) throws Exception {
         send(new ViewRequest());
-        return next(RegionView.class);
+        return next(RegionView.class, predicate);
     }
 
     DungeonOpened dungeon(String id) throws Exception {
@@ -109,10 +113,6 @@ public final class Client implements AutoCloseable {
 
     void send(Object message) {
         connector.send(message).submit().toCompletableFuture().join();
-    }
-
-    <T> T next(Class<T> type) throws Exception {
-        return next(type, v -> true);
     }
 
     <T> T next(Class<T> type, Predicate<T> predicate) throws Exception {

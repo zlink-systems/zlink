@@ -55,6 +55,10 @@ Send `drain` to the Region process's stdin. Wait for `RELOCATION_REQUESTED`, `RE
 
 The demonstration trusts player IDs sent on the first packet. Add application authentication before deploying publicly. Disconnected players retain membership and position for reconnect; explicit lifecycle policies can extend the domain model. Repeating `EnterRegionRequest` for an already joined Actor returns its current Region view.
 
+The update scenario waits for the replacement process to report `READY`, then checks that a new Region is served by a live Region node. Object placement can choose either available Region node; it does not promise the replacement. Existing Region state and Session identity checks remain required. All Object Servers, including the Instance node's framework Entry, are declared in `zlink.structure.json`.
+
+Message Follow is explicitly set to 30 seconds. The `SAFE_TO_SHUTDOWN` observation budget is the follow duration plus the existing relocation budget; the relocation operation deadline is unchanged.
+
 ## 한국어 실행 안내
 
 .NET SDK 8 이상과 Docker Compose v2를 설치한 뒤 이 디렉터리에서 `dotnet build server/MyGame.sln`을 실행합니다. Linux에서는 `./run-e2e.sh`, PowerShell 7에서는 `./run-e2e.ps1`로 전체 시나리오를 실행합니다. 공개 0.30.1 패키지가 게시되어야 원본 템플릿을 복원할 수 있습니다.

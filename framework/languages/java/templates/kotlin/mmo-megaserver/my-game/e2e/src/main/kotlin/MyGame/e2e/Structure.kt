@@ -74,16 +74,16 @@ fun checkStructure(root: Path) {
     val channels = array("channels")
     unique(channels.map { text(it, "name") to owner(it) })
     check(channels.isEmpty()) { "Server registers no channels" }
+    val objectServerRoles = setOf(Roles.REGION, Roles.INSTANCE)
     val spots = array("spots")
     unique(spots.map { text(it, "id") })
-    val logicalIds = mutableListOf<String>()
     val dynamicTypes = mutableSetOf<String>()
     for (spot in spots) {
-        check(roles[owner(spot)] in listOf(Roles.REGION, Roles.INSTANCE))
+        check(roles[owner(spot)] in objectServerRoles)
         when (text(spot, "kind")) {
             "entry" ->
                 check(
-                    roles[owner(spot)] == Roles.REGION &&
+                    roles[owner(spot)] in objectServerRoles &&
                         spot["type"]?.isNull == true &&
                         !spot.has("logicalId") &&
                         !spot.has("dynamic")
@@ -93,17 +93,16 @@ fun checkStructure(root: Path) {
                     text(spot, "type") ==
                         if (roles[owner(spot)] == Roles.REGION) Names.REGION else Names.DUNGEON
                 )
-                if (spot["dynamic"]?.asBoolean() == true) {
-                    check(!spot.has("logicalId"))
-                    dynamicTypes += text(spot, "type")
-                } else logicalIds += text(spot, "logicalId")
-                if (spot.has("dynamic")) check(spot["dynamic"].isBoolean)
+                check(spot["dynamic"]?.isBoolean == true && spot["dynamic"].asBoolean()) {
+                    "Region and Dungeon registrations are dynamic families"
+                }
+                check(!spot.has("logicalId"))
+                dynamicTypes += text(spot, "type")
             }
             else -> error("Unregistered Spot kind")
         }
     }
-    unique(logicalIds)
-    for (node in nodes.filter { roles[it["id"].asText()] == Roles.REGION }) {
+    for (node in nodes.filter { roles[it["id"].asText()] in objectServerRoles }) {
         val id = text(node, "id")
         check(spots.any { it["owner"].asText() == id && it["kind"].asText() == "entry" })
     }

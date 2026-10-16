@@ -1,6 +1,7 @@
 #pragma once
 #include "server/shared/config.hpp"
 #include <set>
+#include <algorithm>
 #include <array>
 
 namespace MyGame::E2E
@@ -76,14 +77,16 @@ inline void check_structure (const std::filesystem::path &root)
             require (command.is_string () && !command.get<std::string> ().empty (),
                      "Empty command");
     }
-    std::set<std::string> nodes, spot_ids, logical_ids;
+    std::set<std::string> nodes, spot_ids;
     std::map<std::string, nlohmann::json> configurations;
+    std::map<std::string, std::string> roles;
     require (j.at ("nodes").is_array () && j.at ("spots").is_array ()
                && j.at ("channels").is_array () && j.at ("edges").is_array (),
              "Structure collections must be arrays");
     for (const auto &node : j.at ("nodes")) {
         const auto id = nonempty (node, "id"), role = nonempty (node, "role");
         (void) nonempty (node, "title");
+        roles[id] = role;
         require (nodes.insert (id).second, "Duplicate node ID");
         if (role == "external")
             require (node.at ("config").is_null (), "External config must be null");
@@ -106,20 +109,18 @@ inline void check_structure (const std::filesystem::path &root)
             require (spot.at ("type").is_null () && !spot.contains ("logicalId")
                        && !spot.contains ("dynamic"),
                      "Invalid Entry declaration");
-            require (config.contains ("Capacity") && config.contains ("RegionLimit"),
-                     "Entry owner must register Region");
+            require (roles.at (owner) == "region" || roles.at (owner) == "instance",
+                     "Entry owner must be an Object Server");
             continue;
         }
         require (kind == "user", "Unknown application Spot kind");
         const auto type = nonempty (spot, "type");
         require (type == Names::region || type == Names::dungeon, "Unknown stable type");
-        if (spot.contains ("dynamic"))
-            require (spot.at ("dynamic").is_boolean (), "Dynamic must be boolean");
-        if (spot.value ("dynamic", false))
-            require (!spot.contains ("logicalId"), "Dynamic Spot cannot declare logical ID");
-        else
-            require (logical_ids.insert (nonempty (spot, "logicalId")).second,
-                     "Duplicate logical Spot ID");
+        require (spot.at ("dynamic").is_boolean () && spot.at ("dynamic").get<bool> (),
+                 "Region and Dungeon registrations are dynamic families");
+        require (!spot.contains ("logicalId"), "Dynamic Spot cannot declare logical ID");
+        require (roles.at (owner) == (type == Names::region ? "region" : "instance"),
+                 "Spot type differs from its owner registration");
         if (type == Names::region)
             require (config.contains ("Capacity") && config.contains ("RegionLimit"),
                      "Region owner configuration missing");
@@ -127,6 +128,21 @@ inline void check_structure (const std::filesystem::path &root)
             require (!config.contains ("Capacity") && !config.contains ("StreamEndpoint"),
                      "Dungeon owner must register Dungeon");
     }
+    const auto &spots = j.at ("spots");
+    for (const auto &[id, role] : roles) {
+        if (role == "region" || role == "instance")
+            require (std::any_of (spots.begin (), spots.end (),
+                                  [&id] (const auto &spot) {
+                                      return spot.at ("kind") == "entry" && spot.at ("owner") == id;
+                                  }),
+                     "Object Server lacks Entry Spot: " + id);
+    }
+    for (const auto type : {Names::region, Names::dungeon})
+        require (std::any_of (spots.begin (), spots.end (),
+                              [type] (const auto &spot) {
+                                  return spot.at ("kind") == "user" && spot.at ("type") == type;
+                              }),
+                 "Missing registered User Spot type: " + std::string (type));
     for (const auto &edge : j.at ("edges")) {
         require (nodes.contains (nonempty (edge, "from")) && nodes.contains (nonempty (edge, "to")),
                  "Unknown edge endpoint");

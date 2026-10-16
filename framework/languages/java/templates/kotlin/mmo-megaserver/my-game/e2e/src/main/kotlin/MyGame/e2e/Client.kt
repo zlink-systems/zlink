@@ -79,9 +79,9 @@ class Client(endpoint: String, val playerId: String) {
         }
     }
 
-    suspend fun view(): RegionView {
+    suspend fun view(predicate: (RegionView) -> Boolean = { true }): RegionView {
         send(ViewRequest())
-        return next<RegionView>()
+        return next<RegionView>(predicate)
     }
 
     suspend fun dungeon(id: String): DungeonOpened {
@@ -99,7 +99,7 @@ class Client(endpoint: String, val playerId: String) {
         registrations.forEach { it.close() }
     }
 
-    inline fun <reified T> next(noinline predicate: (T) -> Boolean = { true }): T =
+    inline fun <reified T> next(noinline predicate: (T) -> Boolean): T =
         next(T::class.java, predicate)
 
     fun <T> next(type: Class<T>, predicate: (T) -> Boolean): T {

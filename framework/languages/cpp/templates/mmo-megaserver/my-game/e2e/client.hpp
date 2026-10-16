@@ -45,19 +45,32 @@ class Client
         std::lock_guard lock (error_mutex_);
         require (error_.empty (), "Connector error: " + error_);
     }
-    template <class Request, class Reply> Reply exchange (const Request &request)
+    template <class Request, class Reply, class Predicate>
+    Reply exchange (const Request &request, Predicate predicate)
     {
         healthy ();
         connector_.send (request).submit ();
-        const auto reply = checked (connector_.wait_for<Reply> ().submit ()).payload;
+        const auto reply = checked (connector_.wait_for<Reply> ()
+                                      .where ([predicate] (const auto &message) {
+                                          return predicate (message.payload);
+                                      })
+                                      .submit ())
+                             .payload;
         healthy ();
         return reply;
+    }
+    template <class Request, class Reply> Reply exchange (const Request &request)
+    {
+        return exchange<Request, Reply> (request, [] (const auto &) { return true; });
     }
     RegionView join (const std::string &region)
     {
         return exchange<EnterRegionRequest, RegionView> ({player_id, region});
     }
-    RegionView view () { return exchange<ViewRequest, RegionView> ({}); }
+    template <class Predicate> RegionView view (Predicate predicate)
+    {
+        return exchange<ViewRequest, RegionView> ({}, predicate);
+    }
     void move (int x, std::int64_t sequence)
     {
         healthy ();

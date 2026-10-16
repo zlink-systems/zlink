@@ -83,8 +83,9 @@ inline void update (const std::string &endpoint, World &world)
     owner.command (Control::drain);
     owner.wait_line (Control::requested, Limits::relocation);
     owner.wait_line (Control::relocated, Limits::relocation);
-    owner.wait_line (Control::safe, Limits::relocation);
-    const auto after = p1.view ();
+    owner.wait_line (Control::safe, Limits::safe_observation);
+    const auto after =
+      p1.view ([&before] (const auto &view) { return view.nodeId != before.nodeId; });
     require (before.regionId == after.regionId && before.players == after.players
                && before.nodeId != after.nodeId,
              "Relocation changed application state or retained owner");
@@ -95,13 +96,13 @@ inline void update (const std::string &endpoint, World &world)
     p2.wait_view ([] (const auto &view) { return at (view, "p1", 32); });
     require (identity1 == p1.info () && identity2 == p2.info (),
              "Replacement changed Session identity");
-    // The survivor can host one more Region. Two new Regions guarantee work on the replacement.
-    Client fresh1 (endpoint, "fresh1"), fresh2 (endpoint, "fresh2");
-    const auto first = fresh1.join ("new-first"), second = fresh2.join ("new-second");
-    require (first.nodeId == before.nodeId || second.nodeId == before.nodeId,
-             "Replacement did not accept new Region work");
-    fresh1.close ();
-    fresh2.close ();
+    Client fresh (endpoint, "fresh");
+    const auto created = fresh.join ("new-region");
+    require (world.is_live_region (created.nodeId),
+             "New Region was not accepted by a live Region node");
+    require (created.players.size () == 1 && created.players.front ().playerId == "fresh",
+             "New Region membership mismatch");
+    fresh.close ();
     p1.close ();
     p2.close ();
 }

@@ -78,6 +78,12 @@
       "owner": "regionB"
     },
     {
+      "id": "entryInstance",
+      "kind": "entry",
+      "type": null,
+      "owner": "instance"
+    },
+    {
       "id": "region",
       "kind": "user",
       "type": "Region",

@@ -125,7 +125,10 @@ export async function scenario(
       assert.equal(other.nodeId, after.nodeId);
       await control.replace(before.nodeId);
       const fresh = await enter(create('p4'), Test.freshRegion);
-      assert.equal(fresh.nodeId, before.nodeId, 'Replacement did not accept a new region');
+      assert(
+        control.isLiveRegion(fresh.nodeId),
+        'New region was not accepted by a live Region node'
+      );
       assert.deepEqual(await a.sessionInfo(), identity);
       assert.deepEqual(await b.sessionInfo(), otherIdentity);
     } else throw new Error(`Unknown scenario ${name}`);
@@ -142,6 +145,7 @@ export async function scenario(
     throw new AggregateError(failures, `Scenario ${name} or client cleanup failed`);
 }
 export interface NodeControl {
+  isLiveRegion(id: string): boolean;
   drain(id: string): Promise<void>;
   replace(id: string): Promise<void>;
 }

@@ -98,9 +98,9 @@ suspend fun scenarios(selected: List<String>, nodes: Nodes): Int {
                 }
                 Names.UPDATE -> {
                     nodes.drain(moved.nodeId)
-                    val relocated = p1.view()
+                    val relocated = p1.view { it.nodeId != moved.nodeId }
                     sameState(moved, relocated)
-                    sameState(relocated, p2.view())
+                    sameState(relocated, p2.view { it.nodeId == relocated.nodeId })
                     check(relocated.nodeId != moved.nodeId) { "Region did not relocate" }
                     check(session == p1.sessionInfo() && session2 == p2.sessionInfo()) {
                         "Relocation changed Sessions"
@@ -113,10 +113,10 @@ suspend fun scenarios(selected: List<String>, nodes: Nodes): Int {
                     val fresh = create(PLAYER_FOUR)
                     val admitted = fresh.join("desert")
                     check(
-                        admitted.nodeId == moved.nodeId &&
+                        nodes.isLiveRegion(admitted.nodeId) &&
                             admitted.players == listOf(PlayerPosition(PLAYER_FOUR, 0))
                     ) {
-                        "Replacement did not accept new Region"
+                        "New Region was not accepted by a live Region node"
                     }
                 }
             }

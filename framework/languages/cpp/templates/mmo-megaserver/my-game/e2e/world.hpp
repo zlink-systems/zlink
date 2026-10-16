@@ -115,6 +115,11 @@ class World
         return stream;
     }
     Process &region (const std::string &id) { return *regions_.at (id)->process; }
+    bool is_live_region (const std::string &id) const
+    {
+        const auto node = regions_.find (id);
+        return node != regions_.end () && !node->second->stopped;
+    }
     void replace_region (const std::string &id)
     {
         stop_node (*regions_.at (id));

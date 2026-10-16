@@ -78,24 +78,29 @@ internal static class Scenarios
                 var leaked = new TaskCompletionSource<RegionView>(
                     TaskCreationOptions.RunContinuationsAsynchronously
                 );
-                using var subscription = p3.Connector.On<RegionView>(
-                    (message, _) =>
-                    {
-                        if (message.Payload.Players.Any(p => p.PlayerId != "p3"))
-                            leaked.TrySetResult(message.Payload);
-                        return ValueTask.CompletedTask;
-                    }
-                );
-                var observed = p2.ReceiveAsync<RegionView>(
-                    view => view.Players.Any(p => p.PlayerId == "p1" && p.X == MovedX),
-                    ct
-                );
-                var moved = await p1.SendAsync<RegionView, MoveRequest>(
-                    new(MovedX, 1),
-                    view => view.Players.Any(p => p.PlayerId == "p1" && p.X == MovedX),
-                    ct
-                );
-                SameState(moved, await observed);
+                RegionView moved;
+                using (
+                    var subscription = p3.Connector.On<RegionView>(
+                        (message, _) =>
+                        {
+                            if (message.Payload.Players.Any(p => p.PlayerId != "p3"))
+                                leaked.TrySetResult(message.Payload);
+                            return ValueTask.CompletedTask;
+                        }
+                    )
+                )
+                {
+                    var observed = p2.ReceiveAsync<RegionView>(
+                        view => view.Players.Any(p => p.PlayerId == "p1" && p.X == MovedX),
+                        ct
+                    );
+                    moved = await p1.SendAsync<RegionView, MoveRequest>(
+                        new(MovedX, 1),
+                        view => view.Players.Any(p => p.PlayerId == "p1" && p.X == MovedX),
+                        ct
+                    );
+                    SameState(moved, await observed);
+                }
                 SameState(separate, await p3.RegionAsync(ct));
                 Require(!leaked.Task.IsCompleted, "p3 received another region's movement.");
                 if (selected.Contains("region"))
@@ -145,9 +150,9 @@ internal static class Scenarios
                     await source.WaitLineAsync(NodeProtocol.RelocationRequested, ct);
                     await source.WaitLineAsync(NodeProtocol.Relocated, ct);
                     await source.WaitLineAsync(NodeProtocol.SafeToShutdown, ct);
-                    var relocated = await p1.RegionAsync(ct);
+                    var relocated = await p1.RegionAsync(ct, view => view.NodeId != moved.NodeId);
                     SameState(moved, relocated);
-                    var other = await p2.RegionAsync(ct);
+                    var other = await p2.RegionAsync(ct, view => view.NodeId == relocated.NodeId);
                     SameState(relocated, other);
                     Require(
                         relocated.NodeId != moved.NodeId
@@ -166,9 +171,9 @@ internal static class Scenarios
                     await using var fresh = await GameClient.ConnectAsync(endpoint, "p4", ct);
                     var created = await fresh.JoinAsync("desert", ct);
                     Require(
-                        created.NodeId == moved.NodeId
+                        run.Regions.ContainsKey(created.NodeId)
                             && created.Players.Any(p => p.PlayerId == "p4"),
-                        "Replacement node did not accept a new region."
+                        "New region was not accepted by a live Region node."
                     );
                     Console.WriteLine("✓ update");
                     passed++;

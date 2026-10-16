@@ -76,31 +76,29 @@ export function checkStructure(path = 'zlink.structure.json'): void {
     spots.map((n) => text(n.id)),
     'Spot ID'
   );
-  const logical: string[] = [];
   for (const spot of spots) {
     const host = owner(spot.owner);
-    assert(['entry', 'user', 'instance'].includes(text(spot.kind)), 'Unknown Spot kind');
+    assert(['entry', 'user'].includes(text(spot.kind)), 'Unknown Spot kind');
     if (spot.kind === 'entry') {
-      assert.equal(host.role, 'region');
+      assert(
+        host.role === 'region' || host.role === 'instance',
+        'Entry owner must be an Object Server'
+      );
       assert.equal(spot.type, null);
       assert(!('dynamic' in spot) && !('logicalId' in spot));
     } else {
-      assert.equal(spot.kind, 'user');
       const type = text(spot.type);
       assert(type === Names.region || type === Names.dungeon, 'Unregistered Spot type');
       assert.equal(host.role, type === Names.region ? 'region' : 'instance');
-      if (spot.dynamic === true) assert(!('logicalId' in spot));
-      else {
-        assert(!('dynamic' in spot) || spot.dynamic === false);
-        logical.push(text(spot.logicalId));
-      }
+      assert.equal(spot.dynamic, true, 'Region and Dungeon registrations are dynamic families');
+      assert(!('logicalId' in spot));
     }
   }
-  unique(logical, 'logical Spot ID');
-  assert(
-    spots.some((s) => s.kind === 'entry'),
-    'Missing Entry Spot'
-  );
+  for (const node of nodes.filter((n) => n.role === 'region' || n.role === 'instance'))
+    assert(
+      spots.some((s) => s.kind === 'entry' && s.owner === node.id),
+      `Object Server lacks Entry Spot: ${String(node.id)}`
+    );
   for (const type of [Names.region, Names.dungeon])
     assert(
       spots.some((s) => s.type === type),

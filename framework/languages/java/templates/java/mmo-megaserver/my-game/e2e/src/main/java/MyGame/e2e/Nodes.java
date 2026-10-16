@@ -106,6 +106,10 @@ public final class Nodes implements AutoCloseable {
             node.waitFor(stage);
     }
 
+    boolean isLiveRegion(String id) {
+        return Roles.REGION.equals(modules.get(id)) && nodes.get(id).process.isAlive();
+    }
+
     void replace(String id) throws Exception {
         nodes.get(id).stop();
         startNode(id);
@@ -184,7 +188,11 @@ public final class Nodes implements AutoCloseable {
         }
 
         String waitFor(String prefix) throws Exception {
-            long expires = System.nanoTime() + TimeUnit.SECONDS.toNanos(Control.PROCESS_SECONDS);
+            long expires =
+                    System.nanoTime()
+                            + (prefix.equals(Control.SAFE_TO_SHUTDOWN)
+                                    ? Control.SAFE_OBSERVATION.toNanos()
+                                    : TimeUnit.SECONDS.toNanos(Control.PROCESS_SECONDS));
             while (true) {
                 var line =
                         output.poll(Math.max(0, expires - System.nanoTime()), TimeUnit.NANOSECONDS);

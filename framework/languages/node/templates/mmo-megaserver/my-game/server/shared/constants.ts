@@ -11,11 +11,15 @@ export const Game = {
   initialSequence: 0
 } as const;
 export const Rejection = { regionFull: 'region-full' } as const;
+const messageFollowMs = 30_000;
+const relocationMs = 25_000;
 export const Limits = {
+  messageFollowMs,
+  safeObservationMs: messageFollowMs + relocationMs,
   observationCapacity: 64,
   messageMs: 10_000,
   startupMs: 30_000,
-  relocationMs: 25_000,
+  relocationMs,
   shutdownMs: 10_000
 } as const;
 export const Scenarios = ['region', 'dungeon', 'reconnect', 'update'] as const;

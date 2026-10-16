@@ -27,6 +27,9 @@ private class Node(val id: String, module: String, config: Path, root: Path, log
             .directory(root.toFile())
             .redirectError(logs.resolve("$id-stderr.log").toFile())
             .start()
+    val isAlive
+        get() = process.isAlive
+
     private val input = process.outputWriter()
 
     init {
@@ -45,7 +48,10 @@ private class Node(val id: String, module: String, config: Path, root: Path, log
     }
 
     fun waitFor(prefix: String): String {
-        val expires = System.nanoTime() + TimeUnit.SECONDS.toNanos(Control.PROCESS_SECONDS)
+        val expires =
+            System.nanoTime() +
+                (if (prefix == Control.SAFE_TO_SHUTDOWN) Control.SAFE_OBSERVATION.toNanos()
+                else TimeUnit.SECONDS.toNanos(Control.PROCESS_SECONDS))
         while (true) {
             val line =
                 output.poll((expires - System.nanoTime()).coerceAtLeast(0), TimeUnit.NANOSECONDS)
@@ -163,6 +169,8 @@ class Nodes(private val root: Path) : AutoCloseable {
             listOf(Control.RELOCATION_REQUESTED, Control.RELOCATED, Control.SAFE_TO_SHUTDOWN)) node
             .waitFor(stage)
     }
+
+    fun isLiveRegion(id: String) = roles[id] == Roles.REGION && nodes[id]?.isAlive == true
 
     fun replace(id: String) {
         requireNotNull(nodes[id]).stop()

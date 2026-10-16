@@ -112,9 +112,9 @@ public final class Scenarios {
                     }
                     case UPDATE -> {
                         nodes.drain(moved.nodeId());
-                        var relocated = p1.view();
+                        var relocated = p1.view(v -> !v.nodeId().equals(moved.nodeId()));
                         sameState(moved, relocated);
-                        sameState(relocated, p2.view());
+                        sameState(relocated, p2.view(v -> v.nodeId().equals(relocated.nodeId())));
                         require(
                                 !relocated.nodeId().equals(moved.nodeId()),
                                 "Region did not relocate");
@@ -130,10 +130,10 @@ public final class Scenarios {
                         var fresh = create(nodes, clients, "p4");
                         var admitted = fresh.join("desert");
                         require(
-                                admitted.nodeId().equals(moved.nodeId())
+                                nodes.isLiveRegion(admitted.nodeId())
                                         && admitted.players()
                                                 .equals(List.of(new PlayerPosition("p4", 0))),
-                                "Replacement did not accept new Region");
+                                "New Region was not accepted by a live Region node");
                     }
                 }
                 for (var client : clients)

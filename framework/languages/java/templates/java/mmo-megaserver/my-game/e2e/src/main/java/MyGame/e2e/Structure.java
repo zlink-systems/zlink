@@ -100,20 +100,20 @@ public final class Structure {
         var channels = array(s, "channels");
         unique(channels.stream().map(c -> List.of(text(c, "name"), owner(c, roles))).toList());
         require(channels.isEmpty(), "Server registers no channels");
+        var objectServerRoles = Set.of(Roles.REGION, Roles.INSTANCE);
         var spots = array(s, "spots");
         unique(spots.stream().map(p -> text(p, "id")).toList());
-        var logical = new ArrayList<String>();
         var dynamicTypes = new HashSet<String>();
         for (var spot : spots) {
             require(
-                    Set.of(Roles.REGION, Roles.INSTANCE).contains(roles.get(owner(spot, roles))),
+                    objectServerRoles.contains(roles.get(owner(spot, roles))),
                     "Spot owner must be a Region or Instance node");
             switch (text(spot, "kind")) {
                 case "entry" ->
                         require(
                                 spot.has("type")
                                         && spot.path("type").isNull()
-                                        && roles.get(owner(spot, roles)).equals(Roles.REGION)
+                                        && objectServerRoles.contains(roles.get(owner(spot, roles)))
                                         && !spot.has("logicalId")
                                         && !spot.has("dynamic"),
                                 "Invalid Entry Spot declaration");
@@ -125,29 +125,27 @@ public final class Structure {
                                                     ? Names.REGION
                                                     : Names.DUNGEON),
                             "Unregistered stable type");
-                    if (spot.has("dynamic"))
-                        require(spot.path("dynamic").isBoolean(), "Invalid dynamic flag");
-                    if (spot.path("dynamic").asBoolean()) {
-                        require(!spot.has("logicalId"), "Dynamic Spot declares logicalId");
-                        dynamicTypes.add(text(spot, "type"));
-                    } else logical.add(text(spot, "logicalId"));
+                    require(
+                            spot.path("dynamic").isBoolean() && spot.path("dynamic").asBoolean(),
+                            "Region and Dungeon registrations are dynamic families");
+                    require(!spot.has("logicalId"), "Dynamic Spot declares logicalId");
+                    dynamicTypes.add(text(spot, "type"));
                 }
                 default -> throw new IllegalStateException("Unregistered Spot kind");
             }
         }
-        unique(logical);
         require(
                 dynamicTypes.containsAll(Set.of(Names.REGION, Names.DUNGEON)),
                 "Missing dynamic Spot family");
         for (var node : nodes)
-            if (roles.get(text(node, "id")).equals(Roles.REGION))
+            if (objectServerRoles.contains(roles.get(text(node, "id"))))
                 require(
                         spots.stream()
                                 .anyMatch(
                                         p ->
                                                 p.path("owner").asText().equals(text(node, "id"))
                                                         && p.path("kind").asText().equals("entry")),
-                        "Region node lacks Entry Spot");
+                        "Object Server lacks Entry Spot");
         for (var edge : array(s, "edges")) {
             require(
                     ids.contains(text(edge, "from")) && ids.contains(text(edge, "to")),
