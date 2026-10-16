@@ -110,6 +110,11 @@ public interface ZLinkSpotRelocationAdapter<TSpot> {
  TSpot spot, byte[] state, ZLinkRelocationCancellation cancellation);
 }
 
+public interface ZLinkSpotHandlerRegistry {
+ void addHandler(Class<?> handlerType);
+ void addSubscribe(Class<?> handlerType, String channelName, String topic);
+}
+
 public interface ZLinkSpotContext {
  String meshName();
  String spotId();
@@ -169,6 +174,8 @@ public interface ZLinkSpotManager {
 }
 
 ```
+
+`addSubscribe(handlerType, channelName, topic)`은 [Spot messaging §5.1](../../../03-spot-actor/02-spot-messaging.ko.md#51-subscription-등록-값과-검사-시점)의 `ChannelName`·`topic` 쌍을 실행 중 등록한다. `@ZLinkSpotSubscription`으로 선언한 상수 topic과 같은 등록 경로를 쓰며, 같은 Spot activation에서 같은 `ChannelName`·`topic`·packet name을 두 번 등록하면 거부한다. Kotlin은 같은 Java 메서드를 호출한다.
 
 Java runtime은 Spot packet·request·subscription·timer handler를 Spot activation마다
 한 번 만들고 재사용한다. Actor send·request handler는 Actor activation마다 한 번
@@ -481,6 +488,7 @@ public final class systems.zlink.framework.spots.ZLinkSpotCreateState extends ja
 }
 public interface systems.zlink.framework.spots.ZLinkSpotHandlerRegistry {
  public abstract void addHandler(java.lang.Class<?>);
+ public abstract void addSubscribe(java.lang.Class<?>, java.lang.String, java.lang.String);
 }
 public final class systems.zlink.framework.spots.ZLinkSpotKind extends java.lang.Enum<systems.zlink.framework.spots.ZLinkSpotKind> {
  public static final systems.zlink.framework.spots.ZLinkSpotKind INVALID;

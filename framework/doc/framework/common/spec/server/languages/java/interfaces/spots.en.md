@@ -113,6 +113,11 @@ public interface ZLinkSpotRelocationAdapter<TSpot> {
  TSpot spot, byte[] state, ZLinkRelocationCancellation cancellation);
 }
 
+public interface ZLinkSpotHandlerRegistry {
+ void addHandler(Class<?> handlerType);
+ void addSubscribe(Class<?> handlerType, String channelName, String topic);
+}
+
 public interface ZLinkSpotContext {
  String meshName();
  String spotId();
@@ -172,6 +177,8 @@ public interface ZLinkSpotManager {
 }
 
 ```
+
+`addSubscribe(handlerType, channelName, topic)` registers the `ChannelName`/`topic` pair of [Spot messaging §5.1](../../../03-spot-actor/02-spot-messaging.en.md#51-subscription-registration-values-and-when-they-are-checked) at runtime. It shares the registration path of a constant topic declared with `@ZLinkSpotSubscription`; registering the same `ChannelName`, `topic` and packet name twice in one Spot activation is rejected. Kotlin calls the same Java method.
 
 The Java runtime creates each Spot packet/request/subscription/timer
 handler once per Spot activation and reuses it. An Actor send/request
@@ -532,6 +539,7 @@ public final class systems.zlink.framework.spots.ZLinkSpotCreateState extends ja
 }
 public interface systems.zlink.framework.spots.ZLinkSpotHandlerRegistry {
  public abstract void addHandler(java.lang.Class<?>);
+ public abstract void addSubscribe(java.lang.Class<?>, java.lang.String, java.lang.String);
 }
 public final class systems.zlink.framework.spots.ZLinkSpotKind extends java.lang.Enum<systems.zlink.framework.spots.ZLinkSpotKind> {
  public static final systems.zlink.framework.spots.ZLinkSpotKind INVALID;
