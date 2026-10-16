@@ -9,8 +9,7 @@ import { ZLinkLocationAutoConnectType } from '../../contracts/Locations/Values';
 import { ZLinkFrameworkRuntimeState, ZLinkLocationRole } from '../../contracts';
 import type { ZLinkSpotNodeOptions } from '../configuration';
 import type { ZLinkBackendMeshNode } from '../backend/contracts';
-import { AsyncResource } from 'node:async_hooks';
-import { ZLinkStateLane } from '../execution/state-lane';
+import { startOutsideStateLane, ZLinkStateLane } from '../execution/state-lane';
 import { toBackendRoutingId as toBackendRoutingId } from '../routing-id';
 import { MeshPeerRuntimeState } from '../foundation/service-runtime-contracts';
 import {
@@ -137,8 +136,6 @@ function meshDescriptorPeerResolver(runtime: ZLinkLocationRuntime): ZLinkPeerLoc
   };
 }
 
-const detachedSpotNodeAutoConnectResource = new AsyncResource('zlink:spot-node-autoconnect');
-
 interface ZLinkSpotNodeConnectionIntent {
   connectionIntentId?: bigint;
 }
@@ -162,7 +159,7 @@ class ZLinkSpotNodeAutoConnectExecutor implements IZLinkAutoConnectExecutor {
       return false;
     const intent = await this.lane.run(() => this.prepareConnectCore(key));
     if (intent === undefined) return true;
-    return await runDetachedSpotNodeAutoConnect(() => this.connectPeer(target, key, intent));
+    return await startOutsideStateLane(() => this.connectPeer(target, key, intent));
   }
 
   disconnect(target: ZLinkAutoConnectTarget): void {
@@ -269,10 +266,6 @@ class ZLinkSpotNodeAutoConnectExecutor implements IZLinkAutoConnectExecutor {
       this.node.disconnectPeer(peer.routingId, peer.lifecycleGeneration);
     }
   }
-}
-
-function runDetachedSpotNodeAutoConnect<T>(work: () => Promise<T>): Promise<T> {
-  return detachedSpotNodeAutoConnectResource.runInAsyncScope(work);
 }
 
 function connectionKey(target: ZLinkAutoConnectTarget): string {
