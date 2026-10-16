@@ -20,4 +20,6 @@ Use typed messages and the default Framework JSON serializer. Relocation adapter
 
 ## Changes and verification
 
+Run `./run-e2e.sh` or `pwsh -NoProfile -File ./run-e2e.ps1` for Docker e2e. Use `--local` or `-Local` for JDK 25 process debugging. Build images with `--build-only` or `-BuildOnly`. Preserve the Docker socket control path and remove only resources owned by the current run.
+
 Keep `cross`, `border`, `reconnect` and `update` in that order. Update configuration and `zlink.structure.json` together. Run the structure checker and the selected e2e scenarios after changes. A single intermittent failure is a defect. Preserve the first failure and message-flow records in `.logs/run-<id>/`; do not treat a later successful run as a correction.
