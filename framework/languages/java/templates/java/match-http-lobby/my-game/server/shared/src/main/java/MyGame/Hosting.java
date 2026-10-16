@@ -122,7 +122,7 @@ public final class Hosting {
                             if (result.outcome() != ZLinkFrameworkRelocationOutcome.RELOCATED)
                                 throw new IllegalStateException(result.toString());
                             System.out.println(Control.RELOCATED);
-                            safe.get(Control.HOST_DEADLINE.toSeconds(), TimeUnit.SECONDS);
+                            safe.get(Control.SAFE_SHUTDOWN_DEADLINE.toSeconds(), TimeUnit.SECONDS);
                             System.out.println(Control.SAFE_TO_SHUTDOWN);
                         }
                         case Control.SHUTDOWN -> {

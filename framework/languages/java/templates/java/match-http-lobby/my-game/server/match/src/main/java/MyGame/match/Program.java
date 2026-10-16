@@ -27,7 +27,11 @@ public class Program {
                     .server()
                     .addEntrySpot(Entry.class)
                     .addSpotFactory(
-                            Names.ROOM, Room.class, b -> b.preserveStateWith(RoomTransfer.class))
+                            Names.ROOM,
+                            Room.class,
+                            b ->
+                                    b.stableTypeLimit(config.roomCapacity())
+                                            .preserveStateWith(RoomTransfer.class))
                     .addActorFactory(
                             Names.PLAYER,
                             Player.class,

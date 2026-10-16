@@ -168,7 +168,7 @@ inline void update (const std::string &endpoint, World &world)
     host.command (Control::drain);
     host.wait_line (Control::requested, Limits::relocation);
     host.wait_line (Control::relocated, Limits::relocation);
-    host.wait_line (Control::safe, Limits::relocation);
+    host.wait_line (Control::safe, Limits::safe_shutdown);
     require (pair.a.info () == ia && pair.b.info () == ib, "Relocation changed Session binding");
     const auto after = pair.a.view ();
     same_state (before, after);
@@ -176,7 +176,8 @@ inline void update (const std::string &endpoint, World &world)
     require (after.nodeId != before.nodeId, "Room was not relocated");
     world.replace_match (before.nodeId);
     Pair fresh (endpoint, world);
-    require (world.is_live_match (fresh.a.view ().nodeId), "New Room is not on a live match node");
+    require (fresh.a.view ().nodeId == before.nodeId,
+             "New Room is not on the replacement match node");
     shoot (pair, 3, Game::initial_hp - Game::damage * 2);
     require (pair.a.info () == ia && pair.b.info () == ib, "Replacement changed Session binding");
     fresh.close ();

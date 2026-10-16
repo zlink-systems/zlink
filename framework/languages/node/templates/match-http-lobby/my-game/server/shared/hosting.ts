@@ -59,7 +59,7 @@ export async function runHost(
   class Configuration {}
   class Host {}
   const builder = zlinkFramework();
-  builder.setMessageFollowDuration(Limits.messageFollowMs);
+  builder.configureLocations().messageFollowDurationMs(Limits.messageFollowMs);
   builder.addLocationStore(location);
   builder.addRelocationStore(relocation);
   builder.configureDispatch().messageFlow('normal');
@@ -93,7 +93,7 @@ export async function runHost(
     throw new Error('Readiness observation deadline expired');
   }
   async function waitSafe(): Promise<void> {
-    for await (const observed of runtime.observe(AbortSignal.timeout(Limits.relocationMs))) {
+    for await (const observed of runtime.observe(AbortSignal.timeout(Limits.safeShutdownMs))) {
       if (observed.loss.discardedTerminalCount !== 0n)
         throw new Error('Lifecycle observation lost');
       if (observed.status.safeToShutdown) return;

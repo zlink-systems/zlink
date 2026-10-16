@@ -51,7 +51,14 @@ public class MatchmakerTest {
     void disconnectedWaiterCanRequestAgainAndMatch() throws Exception {
         var config =
                 new NodeConfig(
-                        "lobby", "", "", "", null, "http://127.0.0.1:0", "tcp://localhost:1");
+                        "lobby",
+                        "",
+                        "",
+                        "",
+                        null,
+                        "http://127.0.0.1:0",
+                        "tcp://localhost:1",
+                        Integer.MAX_VALUE);
         try (var matches =
                         new Matchmaker(
                                 id ->

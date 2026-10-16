@@ -185,7 +185,8 @@ internal static class StructureCheck
         foreach (var (id, role) in roles)
             if (role == "match")
                 Require(
-                    spots.Any(spot => Text(spot, "owner") == id && Text(spot, "kind") == "entry"),
+                    spots.Count(spot => Text(spot, "owner") == id && Text(spot, "kind") == "entry")
+                        == 1,
                     "Room node lacks Entry Spot."
                 );
         foreach (var edge in Array(document, "edges"))

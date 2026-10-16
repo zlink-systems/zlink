@@ -8,6 +8,8 @@ import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
 
+private const val RUN_ROOM_CAPACITY = 1
+
 private class Node(val id: String, module: String, config: Path, root: Path, logs: Path) {
     private val output = LinkedBlockingQueue<String>()
     val process =
@@ -45,7 +47,10 @@ private class Node(val id: String, module: String, config: Path, root: Path, log
     }
 
     fun waitFor(prefix: String): String {
-        val expires = System.nanoTime() + TimeUnit.SECONDS.toNanos(Control.PROCESS_SECONDS)
+        val expires =
+            System.nanoTime() +
+                (if (prefix == Control.SAFE_TO_SHUTDOWN) Control.SAFE_SHUTDOWN_DEADLINE.toNanos()
+                else TimeUnit.SECONDS.toNanos(Control.PROCESS_SECONDS))
         while (true) {
             val line =
                 output.poll((expires - System.nanoTime()).coerceAtLeast(0), TimeUnit.NANOSECONDS)
@@ -142,6 +147,7 @@ class Nodes(private val root: Path) : AutoCloseable {
                 )
             val config =
                 source.copy(
+                    roomCapacity = RUN_ROOM_CAPACITY,
                     redisEndpoint = redis,
                     keyPrefix = "my-game:$runId:",
                     meshEndpoint = "tcp://127.0.0.1:0",
@@ -175,9 +181,6 @@ class Nodes(private val root: Path) : AutoCloseable {
             listOf(Control.RELOCATION_REQUESTED, Control.RELOCATED, Control.SAFE_TO_SHUTDOWN)) node
             .waitFor(stage)
     }
-
-    fun isLiveMatch(id: String): Boolean =
-        modules[id] == Roles.MATCH && nodes[id]?.process?.isAlive == true
 
     fun replace(id: String) {
         requireNotNull(nodes[id]).stop()

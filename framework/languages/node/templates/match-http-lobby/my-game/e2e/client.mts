@@ -29,7 +29,6 @@ interface Received {
 export interface NodeControl {
   drain(id: string): Promise<void>;
   replace(id: string): Promise<void>;
-  isLiveMatch(id: string): boolean;
 }
 class PlayerClient {
   readonly connector: ZlinkStreamConnector;
@@ -285,7 +284,7 @@ export async function scenario(
         sameState(before, afterB);
         await control.replace(before.nodeId);
         const fresh = await pair(create('new-a'), create('new-b'));
-        assert(control.isLiveMatch(fresh.nodeId), 'New Room is not on a live match node');
+        assert.equal(fresh.nodeId, before.nodeId, 'New Room is not on the replacement match node');
         await hit(a, b, 3, Game.initialHp - Game.shotDamage * 2);
         assert.deepEqual(await a.sessionInfo(), sa);
         assert.deepEqual(await b.sessionInfo(), sb);

@@ -5,6 +5,7 @@ namespace MyGame.E2E;
 
 internal sealed class MatchRun(string root) : IAsyncDisposable
 {
+    private const int RunRoomCapacity = 1;
     private readonly List<ManagedProcess> nodes = [];
     private readonly string project = "my-game-e2e-" + Guid.NewGuid().ToString("N");
     private readonly string runDirectory = Path.Combine(
@@ -70,7 +71,7 @@ internal sealed class MatchRun(string root) : IAsyncDisposable
         settings = settings with
         {
             RedisEndpoint = redisEndpoint,
-            RoomCapacity = 1,
+            RoomCapacity = RunRoomCapacity,
             KeyPrefix = project + ":",
             MeshEndpoint = "tcp://127.0.0.1:0",
             StreamEndpoint = settings.StreamEndpoint is null ? null : "ws://127.0.0.1:0",
@@ -108,9 +109,6 @@ internal sealed class MatchRun(string root) : IAsyncDisposable
         await node.WaitLineAsync(NodeProtocol.Relocated, ct);
         await node.WaitLineAsync(NodeProtocol.SafeToShutdown, ct);
     }
-
-    public bool IsLiveMatch(string nodeId) =>
-        matches.TryGetValue(nodeId, out var node) && node.Process.IsAlive;
 
     public async Task ReplaceAsync(string nodeId, CancellationToken ct)
     {

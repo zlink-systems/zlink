@@ -5,5 +5,6 @@
   "meshEndpoint": "tcp://127.0.0.1:0",
   "streamEndpoint": null,
   "httpEndpoint": null,
-  "sessionEndpoint": null
+  "sessionEndpoint": null,
+  "roomCapacity": 2147483647
 }

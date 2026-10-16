@@ -25,6 +25,7 @@ data class NodeConfig(
     val streamEndpoint: String? = null,
     val httpEndpoint: String? = null,
     val sessionEndpoint: String? = null,
+    val roomCapacity: Int = Int.MAX_VALUE,
 )
 
 object Json {
@@ -170,7 +171,7 @@ fun runNode(application: Class<*>, args: Array<String>) = runBlocking {
                             }
                             println(Control.RELOCATED)
                             safe.get(
-                                Control.HOST_DEADLINE.toSeconds(),
+                                Control.SAFE_SHUTDOWN_DEADLINE.toSeconds(),
                                 java.util.concurrent.TimeUnit.SECONDS,
                             )
                             println(Control.SAFE_TO_SHUTDOWN)

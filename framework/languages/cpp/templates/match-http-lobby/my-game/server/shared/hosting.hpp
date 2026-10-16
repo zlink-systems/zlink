@@ -94,7 +94,7 @@ class NodeControl final : public fx::hosted_service_t
                               else if (safe_to_shutdown (observed.status))
                                   safe->complete (fx::result_t<void>::success ());
                           });
-                        await_host (safe->task (), Limits::relocation);
+                        await_host (safe->task (), Limits::safe_shutdown);
                         observation->close ();
                         std::cout << Control::safe << std::endl;
                     } else if (command == Control::shutdown) {

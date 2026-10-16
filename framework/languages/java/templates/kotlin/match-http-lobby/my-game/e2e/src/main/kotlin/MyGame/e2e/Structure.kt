@@ -80,10 +80,15 @@ fun checkStructure(root: Path) {
             check(node.path("config").isNull) { "External config must be null" }
         else {
             val file = configPath(root, text(node, "config"))
-            if (role != Roles.LOCATION)
-                check(Json.mapper.readTree(file.toFile()).path("id").asText() == id) {
-                    "Configuration Id mismatch: $file"
+            if (role != Roles.LOCATION) {
+                val config = Json.mapper.readTree(file.toFile())
+                check(config.path("id").asText() == id) { "Configuration Id mismatch: $file" }
+                if (role == Roles.MATCH) {
+                    check(config.path("roomCapacity").asInt() > 0) {
+                        "Room capacity must be positive"
+                    }
                 }
+            }
         }
     }
     fun owner(node: JsonNode): String {
@@ -128,11 +133,11 @@ fun checkStructure(root: Path) {
     check(dynamic) { "Missing dynamic Room family" }
     for (node in nodes.filter { roles[text(it, "id")] == Roles.MATCH }) {
         check(
-            spots.any {
+            spots.count {
                 it.path("owner").asText() == text(node, "id") && it.path("kind").asText() == "entry"
-            }
+            } == 1
         ) {
-            "Room node lacks Entry Spot"
+            "Match node must declare exactly one application Entry Spot"
         }
     }
     for (edge in array(s, "edges")) {

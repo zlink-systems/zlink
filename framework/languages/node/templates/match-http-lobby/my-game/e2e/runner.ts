@@ -14,6 +14,8 @@ import {
   type NodeRole
 } from '../server/shared/constants';
 import type { NodeConfig } from '../server/shared/config';
+const RunRoomCapacity = 1;
+
 class NodeProcess {
   readonly child: ChildProcess;
   private readonly lines: string[] = [];
@@ -99,7 +101,7 @@ class NodeProcess {
     this.child.stdin!.write(Control.drain + '\n');
     await this.wait(Control.requested, Limits.messageMs);
     await this.wait(Control.relocated, Limits.relocationMs);
-    await this.wait(Control.safe, Limits.relocationMs);
+    await this.wait(Control.safe, Limits.safeShutdownMs);
   }
   async stop(): Promise<void> {
     if (!this.exited) this.child.stdin!.end(Control.shutdown + '\n');
@@ -194,7 +196,7 @@ async function runScenario(name: string): Promise<boolean> {
       cfg.redisEndpoint = redis;
       cfg.keyPrefix = `my-game:${runId}:`;
       cfg.meshEndpoint = 'tcp://127.0.0.1:0';
-      if (node.role === 'match') cfg.roomCapacity = 1;
+      if (node.role === 'match') cfg.roomCapacity = RunRoomCapacity;
       if (node.role === 'session') cfg.streamEndpoint = 'ws://127.0.0.1:0';
       if (node.role === 'http-lobby') {
         cfg.httpEndpoint = 'http://127.0.0.1:0';
@@ -211,12 +213,6 @@ async function runScenario(name: string): Promise<boolean> {
     const endpoint = ready.find((r) => r.id === session.config.id)!.endpoint;
     const { scenario } = await import('./client.mjs');
     const control = {
-      isLiveMatch(id: string): boolean {
-        const node = nodes.get(id);
-        return (
-          node?.role === 'match' && node.child.exitCode === null && node.child.signalCode === null
-        );
-      },
       async drain(id: string): Promise<void> {
         const node = nodes.get(id);
         assert(node, `Unknown host ${id}`);

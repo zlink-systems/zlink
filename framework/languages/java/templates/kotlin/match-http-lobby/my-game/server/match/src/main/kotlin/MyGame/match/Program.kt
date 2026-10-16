@@ -28,7 +28,10 @@ class Program {
             .objects()
             .server()
             .addEntrySpot<Entry>()
-            .addSpotFactory<Room>(Names.ROOM) { preserveStateWith<Room, RoomTransfer>() }
+            .addSpotFactory<Room>(Names.ROOM) {
+                stableTypeLimit(config.roomCapacity)
+                preserveStateWith<Room, RoomTransfer>()
+            }
             .addActorFactory<Player, PlayerFactory>(Names.PLAYER) {
                 preserveStateWith<Player, PlayerTransfer>()
             }

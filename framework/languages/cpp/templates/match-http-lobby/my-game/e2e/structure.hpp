@@ -139,10 +139,11 @@ inline void check_structure (const std::filesystem::path &root)
                           }),
              "Missing dynamic Room family");
     for (const auto &id : match_nodes)
-        require (std::any_of (spots.begin (), spots.end (),
-                              [&id] (const auto &spot) {
-                                  return spot.at ("owner") == id && spot.at ("kind") == "entry";
-                              }),
+        require (std::count_if (spots.begin (), spots.end (),
+                                [&id] (const auto &spot) {
+                                    return spot.at ("owner") == id && spot.at ("kind") == "entry";
+                                })
+                   == 1,
                  "Room node lacks Entry Spot");
     for (const auto &edge : j.at ("edges")) {
         require (nodes.contains (nonempty (edge, "from")) && nodes.contains (nonempty (edge, "to")),

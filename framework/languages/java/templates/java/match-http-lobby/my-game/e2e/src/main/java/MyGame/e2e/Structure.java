@@ -95,10 +95,16 @@ public final class Structure {
                 require(node.path("config").isNull(), "External config must be null");
             else {
                 var file = configPath(root, text(node, "config"));
-                if (!role.equals(Roles.LOCATION))
+                if (!role.equals(Roles.LOCATION)) {
+                    var config = Json.MAPPER.readTree(file.toFile());
                     require(
-                            Json.MAPPER.readTree(file.toFile()).path("id").asText().equals(id),
+                            config.path("id").asText().equals(id),
                             "Configuration Id mismatch: " + file);
+                    if (role.equals(Roles.MATCH))
+                        require(
+                                config.path("roomCapacity").asInt() > 0,
+                                "Room capacity must be positive");
+                }
             }
         }
         var channels = array(s, "channels");
@@ -137,11 +143,17 @@ public final class Structure {
             if (roles.get(text(node, "id")).equals(Roles.MATCH))
                 require(
                         spots.stream()
-                                .anyMatch(
-                                        p ->
-                                                p.path("owner").asText().equals(text(node, "id"))
-                                                        && p.path("kind").asText().equals("entry")),
-                        "Room node lacks Entry Spot");
+                                        .filter(
+                                                p ->
+                                                        p.path("owner")
+                                                                        .asText()
+                                                                        .equals(text(node, "id"))
+                                                                && p.path("kind")
+                                                                        .asText()
+                                                                        .equals("entry"))
+                                        .count()
+                                == 1,
+                        "Match node must declare exactly one application Entry Spot");
         for (var edge : array(s, "edges")) {
             require(
                     ids.contains(text(edge, "from")) && ids.contains(text(edge, "to")),

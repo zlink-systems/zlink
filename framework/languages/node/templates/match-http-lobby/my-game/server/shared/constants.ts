@@ -23,14 +23,16 @@ export const Rejection = {
   staleSequence: 'stale-sequence',
   matchFinished: 'match-finished'
 } as const;
-const messageFollowMs = 20_000;
+const messageFollowMs = 30_000;
+const relocationMs = 25_000;
 const messageMs = 10_000;
 export const Limits = {
   messageFollowMs,
   observationCapacity: 64,
   messageMs,
   startupMs: 30_000,
-  relocationMs: messageFollowMs + messageMs,
+  relocationMs,
+  safeShutdownMs: messageFollowMs + relocationMs,
   shutdownMs: 10_000
 } as const;
 export const Scenarios = ['lobby', 'hit', 'reconnect', 'update'] as const;

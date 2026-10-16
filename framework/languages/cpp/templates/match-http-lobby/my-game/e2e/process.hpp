@@ -291,11 +291,6 @@ class Process
                  "Process exited before " + prefix + " (exit " + std::to_string (exit_code_) + ")");
         return *found;
     }
-    bool is_alive ()
-    {
-        std::lock_guard lock (mutex_);
-        return !exited_;
-    }
     int wait_exit (std::chrono::milliseconds timeout = Limits::shutdown)
     {
         std::unique_lock lock (mutex_);

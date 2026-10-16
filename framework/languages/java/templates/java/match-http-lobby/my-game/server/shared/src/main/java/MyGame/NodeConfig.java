@@ -7,4 +7,5 @@ public record NodeConfig(
         String meshEndpoint,
         String streamEndpoint,
         String httpEndpoint,
-        String sessionEndpoint) {}
+        String sessionEndpoint,
+        int roomCapacity) {}

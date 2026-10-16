@@ -10,6 +10,7 @@ import java.util.*;
 import java.util.concurrent.*;
 
 public final class Nodes implements AutoCloseable {
+    private static final int RUN_ROOM_CAPACITY = 1;
     private final Path root;
     private final String runId = UUID.randomUUID().toString();
     final Path logs;
@@ -88,7 +89,8 @@ public final class Nodes implements AutoCloseable {
                             "tcp://127.0.0.1:0",
                             role.equals(Roles.SESSION) ? "tcp://127.0.0.1:0" : null,
                             role.equals(Roles.LOBBY) ? "http://127.0.0.1:0" : null,
-                            role.equals(Roles.LOBBY) ? endpoint : null);
+                            role.equals(Roles.LOBBY) ? endpoint : null,
+                            RUN_ROOM_CAPACITY);
             var path = logs.resolve(id + ".json");
             Json.MAPPER.writeValue(path.toFile(), config);
             configs.put(id, path);
@@ -111,10 +113,6 @@ public final class Nodes implements AutoCloseable {
         for (var stage :
                 List.of(Control.RELOCATION_REQUESTED, Control.RELOCATED, Control.SAFE_TO_SHUTDOWN))
             node.waitFor(stage);
-    }
-
-    boolean isLiveMatch(String id) {
-        return Roles.MATCH.equals(modules.get(id)) && nodes.get(id).process.isAlive();
     }
 
     void replace(String id) throws Exception {
@@ -195,7 +193,11 @@ public final class Nodes implements AutoCloseable {
         }
 
         String waitFor(String prefix) throws Exception {
-            long expires = System.nanoTime() + TimeUnit.SECONDS.toNanos(Control.PROCESS_SECONDS);
+            long expires =
+                    System.nanoTime()
+                            + (prefix.equals(Control.SAFE_TO_SHUTDOWN)
+                                    ? Control.SAFE_SHUTDOWN_DEADLINE.toNanos()
+                                    : TimeUnit.SECONDS.toNanos(Control.PROCESS_SECONDS));
             while (true) {
                 var line =
                         output.poll(Math.max(0, expires - System.nanoTime()), TimeUnit.NANOSECONDS);

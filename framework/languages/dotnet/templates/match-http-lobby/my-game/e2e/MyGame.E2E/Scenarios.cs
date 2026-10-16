@@ -169,7 +169,7 @@ internal static class Scenarios
             SameState(before, after2);
             await run.ReplaceAsync(before.NodeId, ct);
             // New actors exercise admission after replacement readiness.
-            await NewMatchAsync(run, ct);
+            await NewMatchAsync(run, before.NodeId, ct);
             await HitAsync(p1, p2, 3, GameNames.InitialHp - GameNames.ShotDamage * 2, ct);
             Require(
                 await p1.SessionAsync(ct) == session1 && await p2.SessionAsync(ct) == session2,
@@ -211,7 +211,11 @@ internal static class Scenarios
         return assignment;
     }
 
-    private static async Task NewMatchAsync(MatchRun run, CancellationToken ct)
+    private static async Task NewMatchAsync(
+        MatchRun run,
+        string replacementId,
+        CancellationToken ct
+    )
     {
         var suffix = Guid.NewGuid().ToString("N");
         var player1 = "new-a-" + suffix;
@@ -227,8 +231,8 @@ internal static class Scenarios
         );
         await b.WaitAsync<RoomView>(v => v.Players.Length == GameNames.PlayersPerRoom, ct);
         Require(
-            room.RoomId == assignment.RoomId && run.IsLiveMatch(room.NodeId),
-            "New Room is not on a live match node."
+            room.RoomId == assignment.RoomId && room.NodeId == replacementId,
+            "New Room is not on the replacement match node."
         );
     }
 
