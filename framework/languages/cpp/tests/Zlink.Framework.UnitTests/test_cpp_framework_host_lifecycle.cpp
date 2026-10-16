@@ -1157,8 +1157,14 @@ bool verify_deferred_framework_apply_preserves_hosted_service_order ()
     char *arguments[] = {program, nullptr};
     try {
         const auto exit_code = app.run (1, arguments);
-        if (exit_code == 0 && probe_view->started)
-            return true;
+        if (exit_code == 0 && probe_view->started) {
+            probe_view->started = false;
+            const bool stopped_run_skips_start =
+              app.run (1, arguments) == 0 && !probe_view->started;
+            std::cout << "stopped host: rerun-skips-service-start=" << stopped_run_skips_start
+                      << '\n';
+            return stopped_run_skips_start;
+        }
     }
     catch (const std::exception &error) {
         std::cerr << "deferred Framework hosted-service order failed: " << error.what () << '\n';
@@ -1660,11 +1666,8 @@ bool verify_host_without_mesh_validates_target_version ()
     bool passed = true;
     for (const auto target_version : {-1, 0, 1}) {
         auto app = zlink::framework::app_t::create ();
-        auto &options = app.add_zlink_framework ();
-        options.add_location_store (
-          std::make_shared<zlink::framework::runtime::in_memory_location_store_t> ());
-        options.add_relocation_store (
-          std::make_shared<zlink::framework::runtime::in_memory_relocation_store_t> ());
+        // No Store is needed when there are no relocation units (§5.1).
+        app.add_zlink_framework ();
         auto probe = std::make_unique<ready_host_probe_t> ();
         auto *ready = probe.get ();
         app.add_hosted_service (std::move (probe));
@@ -1686,6 +1689,9 @@ bool verify_host_without_mesh_validates_target_version ()
             relocated = result.outcome == zlink::framework::relocation_outcome_t::relocated
                         && result.reason == zlink::framework::relocation_reason_t::none
                         && result.effective_target_application_version == target_version;
+            std::cout << "no-store result: target=" << target_version
+                      << " outcome=" << static_cast<int> (result.outcome)
+                      << " reason=" << static_cast<int> (result.reason) << '\n';
         }
         catch (const std::invalid_argument &) {
             rejected = true;
@@ -2402,6 +2408,9 @@ bool verify_relocation_target_eligibility_applies_full_narrowing ()
 
 int main (int argc, char **argv)
 {
+    if (argc == 2 && std::string_view (argv[1]) == "stopped-host-rerun")
+        return verify_deferred_framework_apply_preserves_hosted_service_order () ? EXIT_SUCCESS
+                                                                                 : EXIT_FAILURE;
     if (argc == 2 && std::string_view (argv[1]) == "mesh-discovery-stop")
         return verify_mesh_discovery_stop_wakes_polling_waits () ? EXIT_SUCCESS : EXIT_FAILURE;
     if (argc == 2 && std::string_view (argv[1]) == "no-mesh-target-version")
@@ -2564,12 +2573,11 @@ int main (int argc, char **argv)
                     .deadline = std::chrono::seconds (2)})
         .result ()
         .value ();
-    // No unit needs a target (spec 05 §5.1), but this host has no Location
-    // Store to read its own descriptor from.
-    if (unavailable_relocation.outcome != zlink::framework::relocation_outcome_t::blocked
-        || unavailable_relocation.reason != zlink::framework::relocation_reason_t::store_unavailable
-        || !running.is_ready ()) {
-        std::cerr << "Relocation preflight blocker must preserve Serving\n";
+    // Spec 05 §5.1: an empty host needs neither a target nor a Store descriptor.
+    if (unavailable_relocation.outcome != zlink::framework::relocation_outcome_t::relocated
+        || unavailable_relocation.reason != zlink::framework::relocation_reason_t::none
+        || running.runtime_state () != zlink::framework::framework_runtime_state_t::relocated) {
+        std::cerr << "Empty host without a Store must finish Relocated/None\n";
         running.stop ();
         service_view->release ();
         run_thread.join ();

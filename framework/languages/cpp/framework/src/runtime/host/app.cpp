@@ -3169,6 +3169,16 @@ relocation_topology_preflight_once (detail::app_state_t &state, const relocation
     const bool requires_target =
       std::any_of (state.route_mesh_nodes.begin (), state.route_mesh_nodes.end (),
                    [] (const auto &node) { return node && has_relocation_units (*node); });
+    if (!requires_target) {
+        const auto source_version = mesh_node_descriptor_t{}.application_version;
+        co_return relocation_preflight_t{
+          std::nullopt, relocation_target_application_version (options, source_version),
+          source_version};
+    }
+    if (!state.services.contains (std::type_index (typeid (relocation_repository_t)))
+        || !state.services.contains (std::type_index (typeid (location_repository_t)))) {
+        co_return relocation_preflight_t{relocation_reason_t::store_unavailable, 0};
+    }
 
     try {
         auto provider = state.services.build_provider ();
@@ -3221,8 +3231,6 @@ relocation_topology_preflight_once (detail::app_state_t &state, const relocation
             source_application_version = source->application_version;
             const auto target_application_version =
               relocation_target_application_version (options, source->application_version);
-            if (!requires_target)
-                continue;
 
             bool replacement = false;
             for (const auto &candidate : descriptors) {
@@ -3243,10 +3251,7 @@ relocation_topology_preflight_once (detail::app_state_t &state, const relocation
                                                  target_application_version};
             }
         }
-        // A host without a RouteMesh publishes no descriptor and keeps the
-        // descriptor's default application version.
-        const auto source_version =
-          source_application_version.value_or (mesh_node_descriptor_t{}.application_version);
+        const auto source_version = *source_application_version;
         const auto effective = relocation_target_application_version (options, source_version);
         co_return relocation_preflight_t{std::nullopt, effective, source_version};
     }
@@ -3460,11 +3465,6 @@ task_t<relocation_result_t> app_t::relocate_async (relocation_options_t options,
                 throw;
             preflight.blocker = relocation_reason_t::shutdown_requested;
         }
-        if (!preflight.blocker
-            && (!_state->services.contains (std::type_index (typeid (relocation_repository_t)))
-                || !_state->services.contains (std::type_index (typeid (location_repository_t))))) {
-            preflight.blocker = relocation_reason_t::store_unavailable;
-        }
     }
 
     std::shared_ptr<detail::app_state_t::relocation_waiter_t> waiter;
@@ -3609,16 +3609,6 @@ task_t<void> app_t::run_shared_relocation (detail::app_state_t &state)
     };
 
     try {
-        auto provider = state.services.build_provider ();
-        auto peers = provider.get<runtime::store_location_resolvers_t> ();
-        auto location_store = provider.get<location_repository_t> ();
-        if (!peers || !location_store) {
-            terminal.reason = relocation_reason_t::store_unavailable;
-            complete (terminal);
-            co_return;
-        }
-        const auto topology_poll_interval = relocation_topology_poll_interval (state);
-
         std::vector<std::shared_ptr<detail::mesh_node_runtime_t>> relocation_nodes;
         for (const auto &service : state.hosted_services) {
             if (auto *lifecycle = detail::lifecycle_of (service.get ()))
@@ -3654,6 +3644,16 @@ task_t<void> app_t::run_shared_relocation (detail::app_state_t &state)
             // §5.1: with no unit on this Mesh there is no target to narrow.
             if (!has_relocation_units (*node))
                 continue;
+
+            auto provider = state.services.build_provider ();
+            auto peers = provider.get<runtime::store_location_resolvers_t> ();
+            auto location_store = provider.get<location_repository_t> ();
+            if (!peers || !location_store) {
+                terminal.reason = relocation_reason_t::store_unavailable;
+                complete (terminal);
+                co_return;
+            }
+            const auto topology_poll_interval = relocation_topology_poll_interval (state);
 
             // Source's own descriptor supplies the maintenance wave and the
             // declared relocation policy per capability for the candidate

@@ -245,6 +245,9 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
 
     void stop () noexcept override
     {
+        // The host cannot restart this service: app_t::run (runtime/host/app.cpp:2962)
+        // returns for Stopped before start_hosted_services. stop_hosted_services joins
+        // here on the host run thread; repeated stop/destruction sees no joinable loops.
         // Each running loop consumes one stop signal before its thread joins.
         _stop.release (std::count_if (_loops.begin (), _loops.end (),
                                       [] (const auto &loop) { return loop.thread.joinable (); }));
