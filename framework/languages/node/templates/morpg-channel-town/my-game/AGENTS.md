@@ -20,6 +20,8 @@ Town owns players and parties. Dungeon owns members and stage. Player has no app
 
 ## Changes and verification
 
+Run `./run-e2e.sh --build-only` and `./run-e2e.sh` for Docker verification. On Windows use `pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly` and `pwsh -NoProfile -File ./run-e2e.ps1`. The default runs the runner and nodes in Docker with unique project resources. Preserve stdin/stdout lifecycle control and inspect `.logs/docker-<project>/` as well as `.logs/run-<id>/`. Use `--local` or `-Local` for local process debugging; Node.js and npm are required in that mode. Keep resource limits in the validation environment rather than template scripts.
+
 Keep channel, dungeon, reconnect and update scenarios and their order. Update contracts, structure and configuration together when changing composition. Run build, typecheck, lint, format checks and e2e on Windows and Linux. A single intermittent failure is a defect. Preserve first-failure message-flow logs in `.logs/run-<id>/`; do not weaken assertions. Cleanup only the runner's own processes and Compose project.
 
 Town and Instance register the shared application Entry and first-admission handler. Declare one Entry for each of these nodes and none for roles without application Entry registration; Framework default Entries are not part of the structure. Keep dynamic Dungeon declarations complete for every owning Instance. Preserve one Dungeon slot per Instance in the e2e configuration; it makes replacement placement deterministic. Keep the Message Follow duration and derived SafeToShutdown observation budget under their shared lifecycle constants.

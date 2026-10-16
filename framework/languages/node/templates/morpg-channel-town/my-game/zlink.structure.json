@@ -6,16 +6,14 @@
   "run": {
     "commands": {
       "sh": [
-        "npm install",
-        "npm run build",
+        "./run-e2e.sh --build-only",
         "./run-e2e.sh",
         "./run-e2e.sh --scenario channel,dungeon,reconnect,update"
       ],
       "powershell": [
-        "npm install",
-        "npm run build",
-        "./run-e2e.ps1",
-        "./run-e2e.ps1 -Scenario channel,dungeon,reconnect,update"
+        "pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly",
+        "pwsh -NoProfile -File ./run-e2e.ps1",
+        "pwsh -NoProfile -File ./run-e2e.ps1 -Scenario channel,dungeon,reconnect,update"
       ]
     },
     "scenarios": ["channel", "dungeon", "reconnect", "update"]
