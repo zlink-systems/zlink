@@ -35,10 +35,8 @@ internal static class ZLinkCompletionDispatcher
             }
         }
 
-        // Runs the terminal and its accounting. The pool turn above calls it; a
-        // terminal that is known before its caller holds the completion calls it
-        // in that call, because no continuation can be waiting yet.
-        internal void Run()
+        // Runs the terminal and its accounting in the pool turn above.
+        private void Run()
         {
             Exception? failure = null;
             try

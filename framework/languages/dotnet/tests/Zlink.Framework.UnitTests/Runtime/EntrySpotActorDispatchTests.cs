@@ -7909,7 +7909,12 @@ public sealed partial class EntrySpotActorDispatchTests
     public async Task Retained_BoundSession_Preserves_The_Ambient_Lifecycle_Flow()
     {
         var node = new CapturingSpotNode();
-        var (runtime, actor) = await CreateStartedRuntimeAsync(node);
+        // Flow-correlation §4: flow IDs are carried only while message-flow
+        // tracing is on, at Normal or Detailed.
+        var (runtime, actor) = await CreateStartedRuntimeAsync(
+            node,
+            messageFlowMode: ZLinkDiagnosticsLevel.Normal
+        );
         try
         {
             runtime.GetOrCreateActorState(actor.ActorId).BindNativeActorRef(actor);
@@ -9647,7 +9652,12 @@ public sealed partial class EntrySpotActorDispatchTests
     {
         const string flowId = "0196f7c2-4cb4-7cc8-89d4-2d6aee6fca2d";
         var node = new CapturingSpotNode();
-        var (runtime, actorRef) = await CreateStartedRuntimeAsync(node);
+        // Flow-correlation §4: flow IDs are carried only while message-flow
+        // tracing is on, at Normal or Detailed.
+        var (runtime, actorRef) = await CreateStartedRuntimeAsync(
+            node,
+            messageFlowMode: ZLinkDiagnosticsLevel.Normal
+        );
         try
         {
             var actor = RegisterProbeActor(runtime, actorRef);
