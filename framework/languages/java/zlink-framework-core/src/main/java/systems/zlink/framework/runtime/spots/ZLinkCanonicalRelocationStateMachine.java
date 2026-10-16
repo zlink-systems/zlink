@@ -705,8 +705,17 @@ final class ZLinkCanonicalRelocationStateMachine
                                 }
                             });
         }
-        attempt.assembler()
-                .assembled()
+        target.beginPrepare(
+                        prepare.id(),
+                        attempt.terminal(),
+                        () ->
+                                discardTarget(
+                                        fence,
+                                        attempt,
+                                        new ZLinkFrameworkException(
+                                                ZLinkFrameworkErrorKind.UNAVAILABLE,
+                                                "canonical relocation target was superseded")))
+                .thenCompose(ignored -> attempt.assembler().assembled())
                 .thenCompose(payload -> reconstruct(prepare, payload))
                 .thenCompose(
                         restore -> {
@@ -1122,10 +1131,8 @@ final class ZLinkCanonicalRelocationStateMachine
                                             if (discardFailure == null) {
                                                 retainTerminalTarget(fence, attempt);
                                             } else {
-                                                inStateLane(() -> targets.remove(fence, attempt));
-                                                attempt.terminal()
-                                                        .completeExceptionally(
-                                                                unwrap(discardFailure));
+                                                completeTargetTerminal(
+                                                        fence, attempt, unwrap(discardFailure));
                                             }
                                         });
                     } else {
@@ -1202,7 +1209,6 @@ final class ZLinkCanonicalRelocationStateMachine
                             if (existing == null) {
                                 terminalTargets.put(fence, terminal);
                             }
-                            targets.remove(fence, attempt);
                             return existing;
                         });
         if (current == null) {
@@ -1210,7 +1216,33 @@ final class ZLinkCanonicalRelocationStateMachine
                     Instant.now().plus(transferOptions.messageFollowDuration()),
                     () -> inStateLane(() -> terminalTargets.remove(fence, terminal)));
         }
-        attempt.terminal().complete(null);
+        completeTargetTerminal(fence, attempt, null);
+    }
+
+    private void completeTargetTerminal(Fence fence, TargetAttempt attempt, Throwable failure) {
+        target.endPrepare(fence.id())
+                .handle(
+                        (ignored, cleanupFailure) -> {
+                            Throwable cause = failure != null ? failure : cleanupFailure;
+                            if (failure != null && cleanupFailure != null) {
+                                failure.addSuppressed(unwrap(cleanupFailure));
+                            }
+                            return cause;
+                        })
+                .thenCompose(
+                        cause ->
+                                stateLane.runAsync(
+                                        () -> {
+                                            targets.remove(fence, attempt);
+                                            return cause;
+                                        }))
+                .whenComplete(
+                        (cause, completionFailure) -> {
+                            Throwable terminalFailure =
+                                    completionFailure == null ? cause : completionFailure;
+                            if (terminalFailure == null) attempt.terminal().complete(null);
+                            else attempt.terminal().completeExceptionally(unwrap(terminalFailure));
+                        });
     }
 
     private CompletionStage<ZLinkAggregateRelocationCoordinator.Published> commitUntilSettled(
