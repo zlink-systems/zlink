@@ -1919,6 +1919,11 @@ void verify_automatic_identity_and_port_builder ()
       zlink::framework::detail::mesh_node_runtime_t::registrations (builder);
     assert (registrations.size () == 1);
     const auto &state = registrations.front ();
+    assert (!state->spot_state->snapshot.spot_route_channel_name);
+    assert (state->spot_state->snapshot.accepted_route_channels.empty ());
+    assert (zlink::framework::detail::spot_node_runtime_t (state->spot_state)
+              .actor_route_transport_name ()
+            == "automatic-builder-mesh");
     assert (state->listen_endpoint == "tcp://127.0.0.1:0");
     assert (state->routing_id);
     assert (std::regex_match (
