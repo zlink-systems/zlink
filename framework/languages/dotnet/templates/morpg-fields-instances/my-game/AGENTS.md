@@ -1,25 +1,246 @@
-# Project guidelines
+# MyGame development guide
 
-This template implements MORPG fields and party-owned dungeons through public ZLink Framework APIs.
+## Project overview
 
-## Node responsibilities
+This C#/.NET 8 project is a MORPG server example in which players cross fixed fields without dropping their connection, see nearby players across field borders, and form parties to enter dedicated Dungeons. It runs a Session gateway for connections, Field hosts A and B, Instance hosts A and B for Dungeons, and Redis for location and relocation state. `Directory.Packages.props` pins the ZLink Framework and connector packages to `0.30.1`.
 
-| Role | Responsibility and extension point |
-| --- | --- |
-| Session | Authenticate and bind Player Actors; extend `PlayerSession` for authentication. |
-| Field | Fixed fields, border subscriptions, party creation and dungeon admission; extend `FieldSpot` and its typed handlers. |
-| Instance | Dynamic Dungeon User Spots, roster and stage; extend `DungeonSpot` and its typed handlers. |
-| Shared | Typed contracts, Player Actor position and sequence, Redis hosting, diagnostics and node control. |
-| E2E | Public stream client, process ownership and scenario assertions. |
+The project layout and feature procedure below describe where to add gameplay. The [README](README.md) covers prerequisites, deployment, and known issues in the public packages. [zlink.structure.json](zlink.structure.json) describes the initial node composition and scenarios; Framework and Redis manage object placement at runtime.
 
-## Public API boundaries
+> **Documentation and package versions.** The [ZLink documentation](https://docs.zlink.systems/), [.NET guide](https://docs.zlink.systems/dotnet/guide/server/), [API reference](https://docs.zlink.systems/dotnet/reference/), and [agent index](https://docs.zlink.systems/llms.txt) are the public documentation entry points. When a current guide describes a newer release, check its API against the package pinned in this project.
 
-Use typed messages and the default Framework JSON serializer. Reply to the requesting Actor through its bound Session. Send other pushes by player ID through Actor send; the receiving Spot handler forwards them to the bound Session. Spots never retain Actor references. Session binding owns Actor identity; game state views must not include Actor generation or Session identity. Relocation adapters serialize application state only. Do not use internal APIs, reflection, raw frames, custom codecs, transport retries, fixed sleeps or expanded deadlines to hide Framework failures.
+## Development commands
 
-## Changes and verification
+Default builds and e2e run nodes and the client in Docker without a host SDK. Run these commands from this directory.
 
-Run `./run-e2e.sh --build-only` (PowerShell: `pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly`) to build Docker images. The default `./run-e2e.sh` or `pwsh -NoProfile -File ./run-e2e.ps1` runs nodes and the e2e runner in Docker. Use `--local` or `-Local` for host process debugging with the .NET 8 SDK; only that mode accepts `--no-build` or `-NoBuild`. Pass `--check-structure` to check without starting nodes. Preserve stdin lifecycle control and inspect `.logs/docker-<project>/` and `.logs/run-<id>/`.
+```powershell
+pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
+./run-e2e.ps1
+./run-e2e.ps1 -Scenario field,dungeon,reconnect,update
+pwsh -NoProfile -File ./run-e2e.ps1 --check-structure
+```
 
-Keep all four scenario IDs and their order in `zlink.structure.json` aligned with the runner. Validate structure before Redis or nodes start. The checker examines real files only. Verify invalid structures with temporary files under `.logs/`, never embed checker self-tests. Run build and e2e on Windows and WSL; repeat successful complete runs three times. A single intermittent failure is a defect. Preserve `.logs/run-<id>/` including message flow in stderr. Clean up only processes and the Compose project owned by the run. Preserve the single owners of Field and Dungeon state and let the Framework execution gate serialize handlers.
+Bash provides the same workflow:
 
-Register the shared Entry and first-login handler on every node that registers the Player Actor factory. Declare Entry only on roles registering application Entry and its first-entry handler: Field and Instance in this template. Do not declare internal Framework default Entries. Structure validation must require those Entries and every registered User Spot type. Initial Field hosts start sequentially, awaiting READY after bootstrap; each Field capacity must equal its configured Field ID count so earlier hosts are full. Keep Message Follow and the derived safe-shutdown observation deadline in shared timing constants.
+```bash
+./run-e2e.sh --build-only
+./run-e2e.sh
+./run-e2e.sh --scenario field,dungeon,reconnect,update
+./run-e2e.sh --check-structure
+```
+
+For host process debugging, install the .NET 8 SDK and add `--local` or `-Local`. Add `--no-build` or `-NoBuild` only with an existing local Debug build. Keep canonical scenario order and assertions; compare first failures with Known issues in the README.
+
+## Project layout and extension points
+
+### Session gateway
+
+`server/MyGame.Session/Program.cs` registers connection handling, and `server/MyGame.Session/PlayerSession.cs` handles connection callbacks and forwards incoming packets. A Session is a communication object for a connection; Framework provides binding to associate it with a player state object. The first packet must be `JoinWorldRequest`, and the example trusts the player ID in it; add authentication before binding and retain the existing typed packet relay so Framework can identify the connection for replies to that player.
+
+### Fields and players
+
+An Actor is a game state object addressed by ID; `PlayerActor` in `server/MyGame.Shared/PlayerActor.cs` owns the player's coordinate `X` and movement `Sequence`. A Spot is a state object that accepts Actors and executes shared game rules; `FieldSpot` in `server/MyGame.Field/FieldSpot.cs` owns the parties of one field and a visibility projection of its players. The projection is a copy of Actor movement state used for observation, so apply player state changes to the Actor.
+
+`server/MyGame.Field/Program.cs` registers types, handlers, and the `border` channel, and creates the fixed fields listed in `FieldIds` of the node settings when the host starts. `server/MyGame.Field/Handlers.cs` holds the Field handlers, including movement, party creation and joining, dungeon entry, the border timer and subscription handlers, and the delivery handlers that forward pushes to the client. `server/MyGame.Shared/WorldEntry.cs` receives the first packet and moves the Actor to the field that covers its coordinate; it is registered on Field and Instance nodes alike. When changing node composition, update registrations, `server/config/`, and the descriptor together so the structure check validates the same composition.
+
+### Dungeons
+
+`server/MyGame.Instance/Program.cs` registers the Dungeon factory, and `server/MyGame.Instance/DungeonSpot.cs` owns the party roster and the stage of one Dungeon, accepts only roster members, and answers the typed preparation request. `server/MyGame.Instance/Handlers.cs` holds the Dungeon handlers, including `Advance` and the delivery handler. `DungeonSpot` is an application-created User Spot, distinct from the Framework Instance Spot with its separate creation and initialization contract. Add encounters, rewards, and Dungeon lifecycle behavior in this project.
+
+### Shared contracts and hosting
+
+`server/MyGame.Shared/Contracts.cs` defines messages and game constants shared by processes, including the field geometry and `GameTiming`, while `server/MyGame.Shared/NodeSettings.cs` defines process settings, including `FieldIds`, `FieldCapacity`, and `DungeonCapacity`. `server/MyGame.Shared/GameHosting.cs` configures hosting and diagnostics, and `server/MyGame.Shared/NodeControl.cs` handles runtime control commands. Add contracts used by several processes here, and keep player state in `PlayerActor` so separate processes do not independently modify the same fact.
+
+### E2E client
+
+`e2e/MyGame.E2E/GameClient.cs` connects through the public connector, and `e2e/MyGame.E2E/Scenarios.cs` checks results observable by the client. `e2e/MyGame.E2E/WorldRun.cs` manages processes and infrastructure for each run, while `e2e/MyGame.E2E/StructureCheck.cs` validates composition. Verify new gameplay through received client results; the project includes no separate unit-test project or formatter configuration.
+
+## ZLink concepts in this project
+
+### RouteMesh and channels
+
+A RouteMesh connects nodes that exchange messages between processes; this project uses `GameNames.WorldMesh`. Channels distinguish messages by purpose and name, and the `border` channel carries typed publications between adjacent fields. [Channel messaging](https://docs.zlink.systems/dotnet/guide/server/20-channel-messaging/) describes registration and calls.
+
+### Spots and Actors
+
+`WorldEntry` receives the first packet, `FieldSpot` is a fixed User Spot created at host startup for each field, and `DungeonSpot` is a User Spot created on demand for each party. The [Spot guide](https://docs.zlink.systems/dotnet/guide/server/21-spot/) describes registration and calls for these objects, including the request that `FieldSpot.EnterAsync` sends to prepare a Dungeon. `PlayerActor` retains its coordinate when its host Spot changes; the [Actor guide](https://docs.zlink.systems/dotnet/guide/server/22-actor/) describes Actor creation and calls.
+
+### STREAM and Sessions
+
+With [STREAM](https://docs.zlink.systems/dotnet/guide/server/23-stream/), which processes packets on client connections, `PlayerSession` obtains the Player Actor, binds it, and forwards the original typed packet. Actor handlers send messages to the client through the bound Session. [Session and Actor](https://docs.zlink.systems/dotnet/guide/server/24-actor-session/) describes the relationship between connections and Actors.
+
+### Location Store
+
+The Location Store records an object's current runtime location by ID; this project uses its Redis implementation. Application code addresses Actors and Spots by ID rather than node address, so calls can use the same ID after placement changes. The [Location guide](https://docs.zlink.systems/dotnet/guide/server/25-location/) explains location resolution.
+
+### Actor membership
+
+A membership change moves an Actor from one Spot to another. Admission is the target Spot's decision to accept or reject the membership request. `PlayerActor.Move` requests `JoinSpot(...).Defer()` into the field that covers the coordinate, `FieldSpot.OnActorJoinAsync` accepts an arrival that belongs to it, and `PlayerActor.OnJoinCompletedAsync` observes the completion result. [Actor membership](https://docs.zlink.systems/dotnet/guide/server/35-actor-membership/) explains the order of admission and completion.
+
+### Host relocation and drain
+
+Relocation changes an object's execution host; drain moves a host's workload elsewhere so the host can shut down. Application adapters capture and restore game state, while Framework transfers workload and routes. `PlayerRelocation`, `FieldRelocation`, and `DungeonRelocation` serialize the player, field, and Dungeon state, and `NodeControl` requests public host relocation and observes safe shutdown; the [Relocation guide](https://docs.zlink.systems/dotnet/guide/server/37-relocation/) explains the procedure.
+
+### Border notifications and timers
+
+A timer runs a handler periodically; `BorderTick` uses one to publish information about players near a border. In this pub/sub exchange, `BorderHandler` receives subscribed information, and `BorderDelivery` forwards notifications through the receiving Actor's bound Session. [Timers and workers](https://docs.zlink.systems/dotnet/guide/server/36-timer-worker/) explains registration and execution of periodic work.
+
+## Request flow
+
+Requests in the example game follow this path. Reading the code along this path before adding or transferring a feature locates the places to change.
+
+1. The client connects to the Session node over STREAM and sends the first packet, `JoinWorldRequest`. `PlayerSession` checks the first packet type, calls `GetOrCreate` for the Player Actor by `playerId`, binds it to the Session, and relays the original packet.
+2. A new Actor starts in the Entry Spot `WorldEntry`. `EnterWorldHandler` checks the identity and calls `PlayerActor.Move`, which requests `JoinSpot(...).Defer()` for the field that covers the coordinate.
+3. `FieldSpot.OnActorJoinAsync` accepts an arrival that belongs to the field, and `OnJoinedActorAsync` applies it to the Actor and records the visibility copy. `PlayerActor.OnJoinCompletedAsync` then sends `WorldState` through the bound Session.
+4. `MoveRequest` reaches `MoveHandler`, which requires a sequence one higher than the Actor's. A move inside the field updates the Actor and replies with `WorldState`; a move into another field calls `PlayerActor.Move` again, and the client connection does not change even when that field is on another node.
+5. The timer handler `BorderTick` publishes `BorderPresence` for players near a border to the `border` channel, and the adjacent field's `BorderHandler` sends `BorderVisible` to nearby observers by player ID. `BorderDelivery` forwards it through each observer's bound Session.
+6. `CreatePartyRequest` and `JoinPartyRequest` reach `CreateParty` and `JoinParty`, which call `FieldSpot.PartyAsync`; an invalid request is rejected through the requester's bound Session as `ActionRejected`. `EnterDungeonRequest` from the party leader reaches `EnterDungeon`, which calls `FieldSpot.EnterAsync`: it calls `GetOrCreate` for the party's Dungeon, sends a typed `PrepareDungeon` request that fixes the roster, and sends `JoinDungeon` to each member by player ID. `DungeonTravel` then requests the join into the Dungeon.
+7. `AdvanceRequest` reaches `Advance`, which raises the Dungeon stage and broadcasts `DungeonView` to every member.
+8. When the same player reconnects, `PlayerSession` binds the existing Actor to the new Session, and `ReconnectHandler` or `DungeonReconnect` in the Spot that holds the Actor checks the identity and resends the current state.
+9. To replace a node, `drain` in `NodeControl` requests relocation. Framework takes the state from the relocation adapters and restores it on another node.
+
+## Developing from this sample
+
+This sample shows how the features work together, so read and run it rather than turning it into your game. Start your own project from the .NET starter: choose .NET in the Initializer at [ZLink Start](https://zlink.systems/start), or use `framework/languages/dotnet/templates/starter/my-game` in the ZLink repository. Then transfer the features you need from this sample one at a time. The starter's `AGENTS.md` owns the choice between structures; this section covers only `morpg-fields-instances`. Keep this sample unchanged next to your project as a reference.
+
+### Run the sample first
+
+Before transferring anything, run the build and e2e once with the [Development commands](#development-commands) to confirm the downloaded sample works and to see its behavior. This result is the baseline for comparison. If it fails, compare the failure with Known issues in the [README](README.md) first.
+
+### Features to transfer
+
+Feature names match the feature table in the starter's `AGENTS.md`. Paths are relative to this directory. The starter has one Session node and the `connect` scenario only, so the last column lists what grows in the starter with each feature.
+
+| Feature | File in this sample | What to transfer | What to grow in the starter alongside |
+| --- | --- | --- | --- |
+| Typed messages | `server/MyGame.Shared/Contracts.cs` | The records of the features you adopt: `JoinWorldRequest`, `MoveRequest`, `EnterField`, `WorldState`, `BorderPresence`, `BorderVisible`, `CreatePartyRequest`, `JoinPartyRequest`, `EnterDungeonRequest`, `AdvanceRequest`, `ViewRequest`, `PartyView`, `FieldView`, `DungeonView`, `PrepareDungeon`, `DungeonPrepared`, `JoinDungeon`, `ActionRejected`; `SessionInfoRequest` and `SessionInfo` only if your client needs them | The registration names and the field helpers in `GameNames`, `GameTiming`, and the `Rejection` reasons; the starter already has `NodeReady` and `NodeProtocol` |
+| Spot | `server/MyGame.Field/FieldSpot.cs`, `server/MyGame.Instance/DungeonSpot.cs` | `FieldSpot` with the visibility projection, arrivals, and parties, and `DungeonSpot` with the roster and stage | New `server/MyGame.Field/` and `server/MyGame.Instance/` projects, their `server/config/` files, and the `AddSpotFactory<FieldSpot>` and `AddSpotFactory<DungeonSpot>` registrations in `Program.cs`; the `FieldIds` and `FieldCapacity` settings and the startup callback that creates the fixed fields; the `spots` and `nodes` declarations in `zlink.structure.json` and the structure check that compares them with the registrations |
+| Actor | `server/MyGame.Shared/PlayerActor.cs` | `PlayerActor` with the coordinate `X`, `Sequence`, and `Move`, and `PlayerFactory` | The `AddActorFactory<PlayerActor, PlayerFactory>` registration in each `Program.cs` |
+| Entry and first admission | `server/MyGame.Shared/WorldEntry.cs`, `ReconnectHandler` in `server/MyGame.Field/Handlers.cs`, `DungeonReconnect` in `server/MyGame.Instance/Handlers.cs` | `EnterWorldHandler` and the deferred join into the field, and the identity check and state resend of the reconnect handlers | The Entry Spot registration on Field and Instance nodes and its `entry` declarations; the `field` scenario for first entry and a `reconnect` scenario that compares state after reconnection |
+| Session binding | `server/MyGame.Session/PlayerSession.cs` | The first-packet check, then find or create the Actor, bind, and relay the original typed packet | The same first-packet type as `EnterWorldHandler`; transfer it into the starter's `PlayerSession.cs` |
+| Host relocation | `PlayerRelocation` in `server/MyGame.Shared/PlayerActor.cs`, `FieldRelocation` in `server/MyGame.Field/FieldSpot.cs`, `DungeonRelocation` in `server/MyGame.Instance/DungeonSpot.cs`, `server/MyGame.Shared/NodeControl.cs` | The snapshot records with `Capture` and `Restore`, and the `drain` and `shutdown` controls | The `PreserveStateWith` relocation registrations; the `update` scenario, which checks that connections and state survive a server replacement and that the replacement node accepts a new Dungeon |
+| Dynamic dungeon | `FieldSpot.EnterAsync` in `server/MyGame.Field/FieldSpot.cs`, `DungeonTravel` in `server/MyGame.Field/Handlers.cs`, `server/MyGame.Instance/DungeonSpot.cs`, `server/MyGame.Instance/Program.cs` | The `GetOrCreate` and typed preparation of a party Dungeon, the roster-only admission, and the stage | The dynamic `dungeon` Spots of each Instance and the `GetOrCreate` edge in `zlink.structure.json`; a `dungeon` scenario |
+| Channel pub/sub and seamless movement | `Configure()` and `OnInitializeAsync` in `server/MyGame.Field/FieldSpot.cs`; `BorderTick`, `BorderHandler`, and `BorderDelivery` in `server/MyGame.Field/Handlers.cs` | The border timer, subscription, and publication, and the delivery to the receiving Actor's bound Session | The `border` channel registration in `Program.cs` and its `channels` declarations in `zlink.structure.json`; the `field` scenario, which checks the `BorderVisible` event and an unchanged `SessionInfo` |
+
+### Transfer order and rules
+
+Transfer one row at a time and run the build, the structure check, and the related e2e scenario after each. Add a scenario ID to the list in `e2e/MyGame.E2E/Scenarios.cs`, to `run.scenarios`, and to the selection examples in `run.commands` of `zlink.structure.json` together. Judge results by the replies and events actually received; do not make tests pass with fixed sleeps or longer deadlines.
+
+Start with the message contracts. Define the typed records in `Contracts.cs` first, then move each handler that fails to compile to the new messages. When you change the first-entry packet, update the first-packet check in `PlayerSession`, `EnterWorldHandler`, and the reconnect handlers to receive the same type.
+
+Keep each piece of state in the object that decides it. Per-player state belongs in `PlayerActor`, and state shared by several players belongs in a Spot. Game state views must not include the Actor generation or the Session identity, because Session binding owns Actor identity. When you change state fields, update the snapshot record and its `Capture` and `Restore` of that object together; a missing field disappears after relocation, and the `update` scenario detects the loss.
+
+Add a channel, its subscription, and its declaration in the same change: the subscription in `FieldSpot.Configure()`, the channel registration in `Program.cs`, and the `channels` declaration in `zlink.structure.json`. If the three disagree, the structure check fails before startup.
+
+Register the shared Entry and the Player factory on every node that can host an Actor, including the Instance nodes, and declare one Entry for each Field and Instance node in `zlink.structure.json`; the Framework default Entries are not part of the structure. Start the initial Field hosts one at a time and wait for each `READY` line, which follows the creation of all its fields, before starting the next. Set each host's `FieldCapacity` to exactly its `FieldIds` count, so earlier hosts are full and only the newly started host can take its declared fields.
+
+To name roles such as Field or Dungeon differently from this sample, change the type names, `GameNames`, `server/config/`, and `zlink.structure.json` at once. Do the renaming in its own change, separate from transferring a feature, so failures are easier to trace.
+
+If `update` fails after a transfer, first check whether a snapshot is missing a field, then use the message flow in [Debugging](#debugging) to find the first failing step.
+
+## Development considerations
+
+### State and message contracts
+
+Use public NuGet packages at the centrally pinned versions, and keep project references between this project's own modules. Process typed messages with the default Framework JSON serializer so processes use the same contract. Limit direct serialization in relocation adapters to application state, keeping management of Framework execution state separate from game state.
+
+Manage each game fact in the object responsible for changing it: the coordinate and sequence in `PlayerActor`, parties in `FieldSpot`, and the roster and stage in `DungeonSpot`. Store player IDs and observational copies in Spots, without assuming the same Actor object reference remains usable after movement. Deliver replies inside a request handler through the `BoundSession` of the Actor the handler receives, and deliver other pushes by player ID through the public Actor client to a delivery handler that forwards them to the bound Session. Sessions forward packets after authentication and binding; the Actor or Spot responsible for the state makes movement and gameplay decisions.
+
+### Asynchronous execution and lifecycle
+
+Await public asynchronous calls as the template does, and avoid `.Wait()`, `.Result`, or synchronous I/O that blocks handler execution. Since `SpotWide` limits execution over the same state, do not protect that state again with another lock or queue. Awaiting can retain the turn, so do not await work that requires that turn to finish, such as a request back to the same Spot; perform long-running work outside handlers. The [Execution model](https://docs.zlink.systems/dotnet/guide/server/32-execution-model/) explains these execution boundaries.
+
+Create Dungeons with `GetOrCreate`, move Actors with `JoinSpot(...).Defer()` and the public completion callback, and use relocation with runtime observations for host shutdown, so request acceptance is not mistaken for completion. `FieldSpot` and `DungeonSpot` are application-created User Spots; [Activation and lifetime](https://docs.zlink.systems/dotnet/guide/server/34-activation-lifetime/) explains creation and initialization. Apply the User Spot contract to `DungeonSpot` even though its process is named Instance. Do not rely on a fixed Dungeon-to-node assignment: the runner uses one Dungeon slot per Instance, so the survivor is full after a drain and only the replacement can host a new Dungeon.
+
+### Reconnection and failure handling
+
+Reconnect with the same Actor ID and bind the new Session to continue using the existing coordinate and Dungeon state. Dungeon rosters and stages survive disconnects. Framework manages current placement, so do not add an application route cache or reset player state during reconnect. Backpressure is the behavior that delays or rejects calls when processing capacity is unavailable; observe the public results described in the [Backpressure guide](https://docs.zlink.systems/dotnet/guide/server/33-backpressure/).
+
+Investigate Framework failures using actual replies, events, and lifecycle results. Internal APIs, reflection, raw frames, private codecs, extra pollers, fixed sleeps, transport retries, increased deadlines, and weakened assertions do not verify the failing public operation and must not be added as fixes. Write code comments in English and exclude execution and build artifacts in `.logs/`, `bin/`, and `obj/` from commits.
+
+## Debugging
+
+### Logs for each run
+
+Preserve the first failing run and read its logs before deciding whether to run it again. An intermittent failure is an observed defect; a subsequent pass does not invalidate it. `.logs/run-<id>/` contains effective settings written by `WorldRun.cs` at node startup and logs for each node.
+
+Settings files are `session.json`, `fieldA.json`, `fieldB.json`, `instanceA.json`, and `instanceB.json`; a replaced node uses the `-replacement` suffix, such as `instanceA-replacement`. `ManagedProcess.cs` records diagnostic stderr in `<node>.err.log` and readiness/control stdout in `<node>.out.log`. Redis logs are `redis-start.log`, `redis-port.log`, `redis.log`, and `redis-stop.log`; local build output is in `.logs/build.log`. Docker build, Redis, and outer cleanup logs are in `.logs/docker-<project>/`.
+
+### Diagnostic levels
+
+`GameHosting.cs` enables message flow, which records the stages from message receipt to completion, with this setting.
+
+```csharp
+options.ConfigureDispatch().Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
+```
+
+`Normal` records receive, dispatch, and completion stages and errors. Use `Detailed` for timing detail, and also enable `IncludeMessageSizes(true)` for size recording. Detailed recording adds cost, so use it for the required investigation scope.
+
+`NodeSettings.cs` defines no diagnostics JSON key, so change the hosting call, rebuild, and restart to apply startup settings. The package exposes `IZLinkDiagnosticsRuntime.Level` and `SetLevelAsync` for runtime changes, but this project's stdin controls do not expose them. The property setter blocks, so use the asynchronous method inside Framework handlers and callbacks. [Monitoring](https://docs.zlink.systems/dotnet/guide/server/26-monitoring/) and [Observability diagnostics](https://docs.zlink.systems/dotnet/reference/08-observability-diagnostics/) describe diagnostic records and settings.
+
+### Message flow investigation
+
+`GameHosting` writes console logs to stderr, so inspect message flow in node `.err.log` files; the template creates no separate `.flow` file. A record's `flow` value identifies a message across nodes, and `corr` relates request and reply records. Records begin with `zlink flow:`; failures have `outcome=failed`, `error_type`, and `error_message`.
+
+Read the failure fields and preceding stage together without filtering categories out. Flow IDs differ between runs, so compare passing and failing runs by logical operation, Actor ID, and stage order to find the first missing or failed stage. If startup fails before message flow recording, preserve the startup exception and stack.
+
+### Supplementary tracing and cleanup
+
+In local process mode, set supplementary Spot discovery tracing in the parent environment before starting nodes. Docker nodes do not inherit host environment variables. In PowerShell, use this environment variable.
+
+```powershell
+$env:ZLINK_DEBUG_FRAMEWORK_SPOT_DISCOVERY = "1"
+```
+
+The value applies to child processes started from that environment; preserve stderr alongside message flow. In Bash, set the same variable as follows.
+
+```bash
+export ZLINK_DEBUG_FRAMEWORK_SPOT_DISCOVERY=1
+```
+
+`ZLINK_DEBUG_FRAMEWORK_SPOT_DISCOVERY` is a version-specific diagnostic switch in the public `0.30.1` package, so do not use it as a routing API. Let the runner clean up its own processes and Compose project, preserve cleanup failures, and avoid stopping unrelated processes or containers.
+
+## Reporting ZLink defects
+
+### Identifying a defect
+
+A ZLink defect is a case where a public API called as documented produces a result that differs from the documentation. First compare your API usage with the public guides and samples linked above to rule out an application usage error. If the usage is correct, report an issue instead of adding a workaround, and keep the scenario assertions unchanged. A workaround hides the defect and stays in the code after you upgrade to a fixed package, where it changes behavior.
+
+### Checking existing issues
+
+Before filing, search both open and closed [ZLink issues](https://github.com/zlink-systems/zlink/issues?q=is%3Aissue) by error message, exception type, and API name. If the same defect is already reported, add your environment and logs to that issue instead of opening a new one. If it matches a closed issue, find the package version that contains the fix in that issue, raise the pinned version in this project, and run again.
+
+### Issue body
+
+The body follows the issue template of the ZLink repository. Copy the following form and fill it in.
+
+```markdown
+# Issue description
+<scenario and the public operation that fails>
+
+# Environment
+* zlink version: <package versions from Directory.Packages.props>
+* OS: <OS, .NET runtime version>
+
+# Minimal test code / Steps to reproduce the issue
+1. <commands or minimal code using public APIs only>
+
+# What's the actual result? (include assertion message & call stack if applicable)
+<first failing node-log excerpt, exception and stack, flow/corr records>
+
+# What's the expected result?
+<observable result the guide or reference documents>
+```
+
+Reduce the reproduction to the minimal code or commands that keep only the failing public call, not this whole project. Paste only the first failing log section and the step before it; attach the full log as a file when it is needed. State when startup failed before flow recording.
+
+> **Issues are public.** Remove license keys, tokens, internal host names, and personal data from logs and settings before filing.
+
+### Filing procedure
+
+A coding agent drafts the issue body and shows it to the developer, and the developer confirms it before it is filed. An issue is published in an external repository, so do not file one without the developer's confirmation. With the GitHub CLI, file the confirmed body file as follows.
+
+```bash
+gh issue create --repo zlink-systems/zlink --title "<area>: <observed failure>" --body-file issue.md
+```
+
+Put the language and the failing behavior in the title (for example, `framework(dotnet): Spot startup fails with empty SpotId`). Record the filed issue number in the README Known issues so the project keeps the place to re-verify when a fixed package is released.
