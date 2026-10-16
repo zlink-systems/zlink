@@ -42,7 +42,9 @@ public sealed class SubmitAdmissionRuntimeTests
         var create = nodeType
             .GetMethods(flags)
             .Single(method =>
-                method.Name == "CreateOperation" && method.GetParameters().Length == 5
+                method.Name == "CreateOperation"
+                && method.GetParameters().Length == 6
+                && method.GetParameters()[1].ParameterType == typeof(MeshOperationId)
             );
         object?[] arguments =
         [
@@ -51,6 +53,7 @@ public sealed class SubmitAdmissionRuntimeTests
             0UL,
             null,
             awaited,
+            null,
         ];
         create.Invoke(node, arguments);
         var pending = arguments[3]!;
