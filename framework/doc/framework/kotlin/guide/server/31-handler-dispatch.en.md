@@ -220,13 +220,20 @@ The interface names and registration methods per language are as follows.
 | --- | --- | --- |
 | A one-way packet addressed to the Spot | `ZLinkSpotPacketHandler<TSpot, TMessage>` | `addHandler<THandler>()` |
 | A request addressed to the Spot | `ZLinkSpotRequestHandler<TSpot, TRequest, TReply>` | `addHandler<THandler>()` |
-| A Logical Multicast subscription event | `ZLinkSpotSubscriptionHandler<TSpot, TEvent>` | `@ZLinkSpotSubscription(topic)` on the handler + `addHandler<THandler>()` |
+| A Logical Multicast subscription event | `ZLinkSpotSubscriptionHandler<TSpot, TEvent>` | `@ZLinkSpotSubscription(spotNodeName = "game", channelName = "events", topic = "orders")` on the handler + `addHandler<THandler>()` |
 | A timer tick | `ZLinkSpotTimerHandler<TSpot>` | `context.addTimer<THandler>(name, period, options)` ([Timers and workers](36-timer-worker.en.md)) |
 | A one-way packet addressed to a member Actor | `ZLinkSpotActorSendHandler<TSpot, TActor, TMessage>` | `@ZLinkSpotActorSend` on the handler + `addHandler<THandler>()` |
 | A request addressed to a member Actor | `ZLinkSpotActorRequestHandler<TSpot, TActor, TRequest, TReply>` | `@ZLinkSpotActorRequest` on the handler + `addHandler<THandler>()` |
 
 **Register with reified `addHandler<THandler>()`.** What kind of handler it is comes from the
 interface it implements and its annotation.
+
+Dynamic subscriptions call the same Java method. The annotation is optional and, when
+present, defines a separate subscription.
+
+```kotlin
+context().handlers().addSubscribe(ProjectionUpdatedHandler::class.java, channelName, topic)
+```
 
 A handler takes the target Spot instance as its first argument. It runs inside the Spot, so
 it touches state directly, with no lock.

@@ -16,6 +16,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResult;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpot;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpotRouteBridge;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSubscription;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.internal.backend.ZLinkMeshApplicationReceiver;
@@ -2871,6 +2872,14 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
 
     private record ActorAuthorityKey(RoutingId nodeRid, String actorId, long objectGeneration) {}
 
+    void requireSubscriptionChannel(String channelName) {
+        if (!owner.channelWeights().containsKey(channelName)) {
+            throw new systems.zlink.framework.errors.ZLinkConfigurationException(
+                    systems.zlink.framework.errors.ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                    "SPOT does not participate in subscription channel: " + channelName);
+        }
+    }
+
     boolean publish(
             ZLinkJavaRawSpot source,
             String channelName,
@@ -2898,8 +2907,9 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
             byte[] metadata,
             String contentType,
             List<Message> parts) {
+        var subscription = new ZLinkBackendSubscription(channelName, topic);
         for (ZLinkJavaRawSpot target : spots.values()) {
-            if (target.accepts(topic)) {
+            if (target.accepts(subscription)) {
                 enqueueLogicalMulticast(
                         target, channelName, topic, sourceNodeRid, metadata, contentType, parts);
             }
@@ -2907,10 +2917,11 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
     }
 
     /** The local Spots a received Logical Multicast fans out to, in the order they are posted. */
-    List<ZLinkJavaRawSpot> logicalMulticastTargets(String topic) {
+    List<ZLinkJavaRawSpot> logicalMulticastTargets(String channelName, String topic) {
         List<ZLinkJavaRawSpot> targets = new ArrayList<>();
+        var subscription = new ZLinkBackendSubscription(channelName, topic);
         for (ZLinkJavaRawSpot target : spots.values()) {
-            if (target.accepts(topic)) {
+            if (target.accepts(subscription)) {
                 targets.add(target);
             }
         }

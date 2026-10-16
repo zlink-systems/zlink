@@ -11,6 +11,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpot;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpotDispatchEvent;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpotDispatchHandler;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpotDispatchInfo;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSubscription;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendTopicMessage;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalAsyncSpotDispatchHandler;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry;
@@ -35,7 +36,7 @@ final class ZLinkJavaRawSpot implements ZLinkBackendSpot {
     private final long lifecycleGeneration;
     private final Queue<ZLinkBackendReceived> routes = new ConcurrentLinkedQueue<>();
     private final Queue<ZLinkBackendTopicMessage> subscriptions = new ConcurrentLinkedQueue<>();
-    private final Set<String> topics = ConcurrentHashMap.newKeySet();
+    private final Set<ZLinkBackendSubscription> subscriptionTargets = ConcurrentHashMap.newKeySet();
     private volatile String spotId;
     private volatile ZLinkBackendSpotDispatchHandler dispatchHandler;
 
@@ -72,11 +73,10 @@ final class ZLinkJavaRawSpot implements ZLinkBackendSpot {
     }
 
     @Override
-    public void setSubscription(String topic) {
-        if (topic == null || topic.isBlank()) {
-            throw new IllegalArgumentException("topic is required");
-        }
-        topics.add(topic);
+    public void setSubscription(String channelName, String topic) {
+        var subscription = ZLinkBackendSubscription.registration(channelName, topic);
+        owner.requireSubscriptionChannel(channelName);
+        subscriptionTargets.add(subscription);
     }
 
     @Override
@@ -222,8 +222,8 @@ final class ZLinkJavaRawSpot implements ZLinkBackendSpot {
                 "raw Spot local Actor Join records are not supported");
     }
 
-    boolean accepts(String topic) {
-        return topics.contains(topic);
+    boolean accepts(ZLinkBackendSubscription subscription) {
+        return subscriptionTargets.contains(subscription);
     }
 
     CompletionStage<Void> enqueueRoute(

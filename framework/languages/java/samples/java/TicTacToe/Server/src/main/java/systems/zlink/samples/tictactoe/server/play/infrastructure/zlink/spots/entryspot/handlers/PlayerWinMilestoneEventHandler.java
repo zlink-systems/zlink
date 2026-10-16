@@ -11,7 +11,7 @@ import java.util.concurrent.CompletionStage;
 
 // --8<-- [start:doc-multicast-subscribe]
 // --8<-- [start:doc-ttt-milestone-handler]
-@ZLinkSpotSubscription(topic = SampleNames.PlayerMilestoneTopic)
+@ZLinkSpotSubscription(channelName = SampleNames.PlayNode, topic = SampleNames.PlayerMilestoneTopic)
 public final class PlayerWinMilestoneEventHandler
         implements ZLinkSpotSubscriptionHandler<PlayEntrySpot, PlayerWinMilestoneEvent> {
     @Override

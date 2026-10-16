@@ -69,6 +69,7 @@ final class ServiceWireCodec {
   enum SessionRelocationRouteAction { COMMIT(1L), ABORT(2L); final long wire; SessionRelocationRouteAction(long wire){this.wire=wire;} }
   enum RelocationPhase { NONE(0L), PREPARING(1L), CAPTURED(2L), PREPARED(3L), COMMITTED(4L), ACTIVATING(5L), ACTIVATED(6L), CLEANING(7L), COMPLETED(8L), ABORTED(9L); final long wire; RelocationPhase(long wire){this.wire=wire;} }
   enum SourceCleanupState { PENDING(0L), COMPLETED(1L), SOURCE_LEASE_EXPIRED(2L); final long wire; SourceCleanupState(long wire){this.wire=wire;} }
+  enum SessionSealResult { SEALED(1L), BINDING_ABSENT(2L); final long wire; SessionSealResult(long wire){this.wire=wire;} }
   enum ReplyRelayAckStatus { TERMINAL_RECEIVED(1L), ALREADY_TERMINAL(2L); final long wire; ReplyRelayAckStatus(long wire){this.wire=wire;} }
   enum AuthorityOperationKind { STEADY(0L), COLD_ACTIVATION(1L), MAINTENANCE_RELOCATION(2L), CLOSE(3L); final long wire; AuthorityOperationKind(long wire){this.wire=wire;} }
   enum MeshOperationKind { NONE(0L), NODE_REQUEST(1L), CHANNEL_REQUEST(2L), SPOT_REQUEST(3L), ACTOR_REQUEST(4L), ACTOR_LOOKUP(5L), ACTOR_DESTROY(6L), ACTOR_JOIN(7L), ACTOR_LEAVE(8L), STREAM_BIND(9L), STREAM_UNBIND(10L), STREAM_CLOSE(11L), INSTANCE_SPOT_REQUEST(12L), USER_SPOT_CREATE(13L), USER_SPOT_CLOSE(14L), ACTOR_CREATE(15L); final long wire; MeshOperationKind(long wire){this.wire=wire;} }
@@ -297,7 +298,7 @@ final class ServiceWireCodec {
   record InstanceSpotCommand(int flags, InstanceRouteV1 route, NonzeroU64 sourceNodeGeneration, Rid sourceNodeRid, OptionalText8 sourceSpotId, InstanceOperationKind operationKind, OperationIdOrZero operation, InstanceReplyRoute replyRoute, MetadataFrame metadata, ApplicationPayloadEnvelopeV1 payload) implements ServiceWireCommand { public int id(){return 39;} }
   record RelocationPrepareCommand(int flags, RelocationId relocation, NonzeroU64 targetAttemptGeneration, RelocationCoordinatorFence coordinator, RelocationTargetFence target, RelocationRole initiatorRole, RelocationObjectIdentity object, Rid sourceNodeRid, NonzeroU64 sourceNodeGeneration, RelocationLogicalLength payloadTotalLength, RelocationChunkCount payloadChunkCount, U32 payloadChecksumCrc32c, ApplicationVersion applicationVersion) implements ServiceWireCommand { public int id(){return 40;} }
   record SessionRelocationSealCommand(int flags, RelocationId relocation, RelocationCoordinatorFence coordinator, RelocationRole senderRole, ActorRouteFence actor, Rid sessionOwnerNodeRid, NonzeroU64 sessionOwnerNodeGeneration, Text8 sessionOwnerId, NonzeroU64 sessionOwnerLeaseGeneration, Rid sessionRid, NonzeroU64 bindingGeneration) implements ServiceWireCommand { public int id(){return 42;} }
-  record SessionRelocationSealedCommand(int flags, RelocationId relocation, RelocationCoordinatorFence coordinator, ActorRouteFence actor, Rid sessionOwnerNodeRid, NonzeroU64 sessionOwnerNodeGeneration, Text8 sessionOwnerId, NonzeroU64 sessionOwnerLeaseGeneration, Rid sessionRid, NonzeroU64 bindingGeneration) implements ServiceWireCommand { public int id(){return 43;} }
+  record SessionRelocationSealedCommand(int flags, RelocationId relocation, RelocationCoordinatorFence coordinator, ActorRouteFence actor, Rid sessionOwnerNodeRid, NonzeroU64 sessionOwnerNodeGeneration, Text8 sessionOwnerId, NonzeroU64 sessionOwnerLeaseGeneration, Rid sessionRid, NonzeroU64 bindingGeneration, SessionSealResult sealResult) implements ServiceWireCommand { public int id(){return 43;} }
   record SessionRelocationRouteCommand(int flags, RelocationId relocation, RelocationCoordinatorFence coordinator, RelocationRole senderRole, ActorRef actor, Rid sessionOwnerNodeRid, NonzeroU64 sessionOwnerNodeGeneration, Text8 sessionOwnerId, NonzeroU64 sessionOwnerLeaseGeneration, Rid sessionRid, NonzeroU64 bindingGeneration, SessionRelocationRouteUpdate route) implements ServiceWireCommand { public int id(){return 44;} }
   record ReplyRelayAckCommand(int flags, RelocationId relocation, RelocationCoordinatorFence coordinator, OperationId operation, NonzeroU64 replyRouteId, RequestSourceFence requestSource, ReplyRelayAckStatus status) implements ServiceWireCommand { public int id(){return 46;} }
   record UserSpotCreateCommand(int flags, NonzeroU64 correlation, OperationId operation, Rid sourceNodeRid, NonzeroU64 sourceNodeGeneration, Text8 spotId, Text8 stableType, ObjectReservationFence reservation, NonzeroU64 deadlineUnixMs) implements ServiceWireCommand { public int id(){return 47;} }
@@ -477,6 +478,8 @@ final class ServiceWireCodec {
   private static void encodeRelocationPhase(RelocationPhase value, Writer w, DecoderContext c, int flags){w.uint(1,value.wire);}
   private static SourceCleanupState decodeSourceCleanupState(Reader r, DecoderContext c, int flags) throws IOException { long wire=r.uint(1);if(wire==0L)return SourceCleanupState.PENDING;if(wire==1L)return SourceCleanupState.COMPLETED;if(wire==2L)return SourceCleanupState.SOURCE_LEASE_EXPIRED;throw error("source-cleanup-state enum"); }
   private static void encodeSourceCleanupState(SourceCleanupState value, Writer w, DecoderContext c, int flags){w.uint(1,value.wire);}
+  private static SessionSealResult decodeSessionSealResult(Reader r, DecoderContext c, int flags) throws IOException { long wire=r.uint(1);if(wire==1L)return SessionSealResult.SEALED;if(wire==2L)return SessionSealResult.BINDING_ABSENT;throw error("session-seal-result enum"); }
+  private static void encodeSessionSealResult(SessionSealResult value, Writer w, DecoderContext c, int flags){w.uint(1,value.wire);}
   private static ReplyRelayAckStatus decodeReplyRelayAckStatus(Reader r, DecoderContext c, int flags) throws IOException { long wire=r.uint(1);if(wire==1L)return ReplyRelayAckStatus.TERMINAL_RECEIVED;if(wire==2L)return ReplyRelayAckStatus.ALREADY_TERMINAL;throw error("reply-relay-ack-status enum"); }
   private static void encodeReplyRelayAckStatus(ReplyRelayAckStatus value, Writer w, DecoderContext c, int flags){w.uint(1,value.wire);}
   private static AuthorityOperationKind decodeAuthorityOperationKind(Reader r, DecoderContext c, int flags) throws IOException { long wire=r.uint(1);if(wire==0L)return AuthorityOperationKind.STEADY;if(wire==1L)return AuthorityOperationKind.COLD_ACTIVATION;if(wire==2L)return AuthorityOperationKind.MAINTENANCE_RELOCATION;if(wire==3L)return AuthorityOperationKind.CLOSE;throw error("authority-operation-kind enum"); }
@@ -2819,6 +2822,8 @@ final class ServiceWireCodec {
   static byte[] encodeRelocationPhase(RelocationPhase value,DecoderContext context)throws IOException{Writer w=new Writer();encodeRelocationPhase(value,w,context,0);return w.result();}
   static SourceCleanupState decodeSourceCleanupState(byte[] bytes,DecoderContext context)throws IOException{Reader r=new Reader(bytes);SourceCleanupState value=decodeSourceCleanupState(r,context,0);r.end("source-cleanup-state");return value;}
   static byte[] encodeSourceCleanupState(SourceCleanupState value,DecoderContext context)throws IOException{Writer w=new Writer();encodeSourceCleanupState(value,w,context,0);return w.result();}
+  static SessionSealResult decodeSessionSealResult(byte[] bytes,DecoderContext context)throws IOException{Reader r=new Reader(bytes);SessionSealResult value=decodeSessionSealResult(r,context,0);r.end("session-seal-result");return value;}
+  static byte[] encodeSessionSealResult(SessionSealResult value,DecoderContext context)throws IOException{Writer w=new Writer();encodeSessionSealResult(value,w,context,0);return w.result();}
   static ReplyRelayAckStatus decodeReplyRelayAckStatus(byte[] bytes,DecoderContext context)throws IOException{Reader r=new Reader(bytes);ReplyRelayAckStatus value=decodeReplyRelayAckStatus(r,context,0);r.end("reply-relay-ack-status");return value;}
   static byte[] encodeReplyRelayAckStatus(ReplyRelayAckStatus value,DecoderContext context)throws IOException{Writer w=new Writer();encodeReplyRelayAckStatus(value,w,context,0);return w.result();}
   static AuthorityOperationKind decodeAuthorityOperationKind(byte[] bytes,DecoderContext context)throws IOException{Reader r=new Reader(bytes);AuthorityOperationKind value=decodeAuthorityOperationKind(r,context,0);r.end("authority-operation-kind");return value;}
@@ -3217,7 +3222,8 @@ r.end("sessionRelocationSeal");return new SessionRelocationSealCommand(flags, re
         NonzeroU64 sessionOwnerLeaseGeneration = decodeNonzeroU64(r, c, flags);
         Rid sessionRid = decodeRid(r, c, flags);
         NonzeroU64 bindingGeneration = decodeNonzeroU64(r, c, flags);
-r.end("sessionRelocationSealed");return new SessionRelocationSealedCommand(flags, relocation, coordinator, actor, sessionOwnerNodeRid, sessionOwnerNodeGeneration, sessionOwnerId, sessionOwnerLeaseGeneration, sessionRid, bindingGeneration);}
+        SessionSealResult sealResult = decodeSessionSealResult(r, c, flags);
+r.end("sessionRelocationSealed");return new SessionRelocationSealedCommand(flags, relocation, coordinator, actor, sessionOwnerNodeRid, sessionOwnerNodeGeneration, sessionOwnerId, sessionOwnerLeaseGeneration, sessionRid, bindingGeneration, sealResult);}
   private static SessionRelocationRouteCommand decodeSessionRelocationRouteCommand(List<byte[]> frames,DecoderContext c,Reader r,int flags)throws IOException{require((flags&~0)==0&&(flags&0)==0,"sessionRelocationRoute flags");int next=1;require(frames.size()==next,"sessionRelocationRoute payload");require(frames.size()==next,"sessionRelocationRoute frames");
         RelocationId relocation = decodeRelocationId(r, c, flags);
         RelocationCoordinatorFence coordinator = decodeRelocationCoordinatorFence(r, c, flags);
@@ -3478,6 +3484,7 @@ List<byte[]> frames=new ArrayList<>();frames.add(w.result());return frames;}
         encodeNonzeroU64(item.sessionOwnerLeaseGeneration(), w, c, item.flags());
         encodeRid(item.sessionRid(), w, c, item.flags());
         encodeNonzeroU64(item.bindingGeneration(), w, c, item.flags());
+        encodeSessionSealResult(item.sealResult(), w, c, item.flags());
 List<byte[]> frames=new ArrayList<>();frames.add(w.result());return frames;}
   private static List<byte[]> encodeSessionRelocationRouteCommand(SessionRelocationRouteCommand item,DecoderContext c,Writer w)throws IOException{require((item.flags()&~0)==0&&(item.flags()&0)==0,"sessionRelocationRoute flags");
         encodeRelocationId(item.relocation(), w, c, item.flags());

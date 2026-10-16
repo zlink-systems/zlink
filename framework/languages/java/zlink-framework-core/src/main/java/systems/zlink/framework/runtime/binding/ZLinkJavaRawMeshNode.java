@@ -5733,7 +5733,8 @@ final class ZLinkJavaRawMeshNode
                 fanout =
                         new RawMulticastFanout(
                                 ((ZLinkJavaRawSpotNode) spotNode())
-                                        .logicalMulticastTargets(header.topic()),
+                                        .logicalMulticastTargets(
+                                                header.channelName(), header.topic()),
                                 header.channelName(),
                                 header.topic(),
                                 inbound.source(),

@@ -578,7 +578,7 @@ export class ZLinkSpotNodeRuntimeManager {
     if (owner === undefined) return;
     const current = (await location.runtime.listLiveMeshNodes(meshName, signal)).find(
       (descriptor) =>
-        String(descriptor.rid) === String(status.routingId) &&
+        routingIdsEqual(descriptor.rid, status.routingId) &&
         descriptor.lifecycleGeneration === status.lifecycleGeneration &&
         descriptor.ownerId === owner.ownerId &&
         descriptor.leaseGeneration === owner.leaseGeneration
@@ -870,33 +870,54 @@ export class ZLinkSpotNodeRuntimeManager {
     this.meshCompletions.clear();
   }
 
-  private async dispatchMeshRecord(
+  /**
+   * Node and Channel records go straight to the framework dispatcher in the
+   * pump's turn. Only Spot and Actor records addressed to the Entry Spot wait
+   * for its activation first.
+   */
+  private dispatchMeshRecord(
     meshName: string,
     owner: ReadyRecord,
     record: ReceiveRecord
-  ): Promise<void> {
-    const node = this.meshNodes.get(meshName);
-    const targetsEntrySpot =
-      owner.spotId === null ||
-      (node !== undefined &&
-        routingIdsEqual(owner.spotId as unknown as RoutingId, String(node.status().routingId)));
+  ): void | Promise<void> {
     if (
-      targetsEntrySpot &&
       (record.kind === ReceiveKind.ActorSend ||
         record.kind === ReceiveKind.ActorRequest ||
         record.kind === ReceiveKind.SpotSend ||
         record.kind === ReceiveKind.SpotRequest ||
-        record.kind === ReceiveKind.SpotMulticast)
+        record.kind === ReceiveKind.SpotMulticast) &&
+      this.targetsEntrySpot(meshName, owner)
     ) {
-      await this.ensureEntryActivation(meshName);
-    }
-    const dispatcher = this.options.meshRecordDispatcher;
-    if (dispatcher === undefined) {
-      throw new ZLinkConfigurationException(
-        `MeshNode '${meshName}' received a record before its framework dispatcher was registered.`
+      return this.ensureEntryActivation(meshName).then(() =>
+        this.dispatchFrameworkRecord(meshName, owner, record)
       );
     }
-    await dispatcher(meshName, owner, record);
+    return this.dispatchFrameworkRecord(meshName, owner, record);
+  }
+
+  private targetsEntrySpot(meshName: string, owner: ReadyRecord): boolean {
+    if (owner.spotId === null) return true;
+    const node = this.meshNodes.get(meshName);
+    return (
+      node !== undefined &&
+      routingIdsEqual(owner.spotId as unknown as RoutingId, String(node.status().routingId))
+    );
+  }
+
+  private dispatchFrameworkRecord(
+    meshName: string,
+    owner: ReadyRecord,
+    record: ReceiveRecord
+  ): void | Promise<void> {
+    const dispatcher = this.options.meshRecordDispatcher;
+    if (dispatcher === undefined) {
+      return Promise.reject(
+        new ZLinkConfigurationException(
+          `MeshNode '${meshName}' received a record before its framework dispatcher was registered.`
+        )
+      );
+    }
+    return dispatcher(meshName, owner, record);
   }
 
   async dispatchEntrySpotRecord(

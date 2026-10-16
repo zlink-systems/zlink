@@ -25,7 +25,7 @@ public interface ZLinkBackendSpot extends ZLinkBackendObject {
 
     void setRoutingId(String spotId);
 
-    void setSubscription(String topic);
+    void setSubscription(String channelName, String topic);
 
     ZLinkBackendTopicMessage subscribe(ZLinkBackendRecvMode mode);
 

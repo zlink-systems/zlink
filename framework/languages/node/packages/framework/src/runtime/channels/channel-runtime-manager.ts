@@ -208,11 +208,15 @@ export class ZLinkChannelRuntimeManager {
     meshName: string,
     record: ReceiveRecord,
     signal?: AbortSignal
-  ): Promise<void> {
+  ): void | Promise<void> {
     return this.lifecycle.dispatchMeshChannel(meshName, record, signal);
   }
 
-  dispatchMeshRoute(meshName: string, record: ReceiveRecord, signal?: AbortSignal): Promise<void> {
+  dispatchMeshRoute(
+    meshName: string,
+    record: ReceiveRecord,
+    signal?: AbortSignal
+  ): void | Promise<void> {
     return this.lifecycle.dispatchMeshRoute(meshName, record, signal);
   }
 

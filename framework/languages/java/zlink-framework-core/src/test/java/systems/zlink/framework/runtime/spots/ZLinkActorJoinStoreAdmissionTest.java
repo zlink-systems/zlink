@@ -42,6 +42,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 final class ZLinkActorJoinStoreAdmissionTest {
+    private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(1);
     private static final String ACTOR_ID = "actor-a";
     private static final RoutingId NODE = RoutingId.from("node-a");
 
@@ -237,7 +238,8 @@ final class ZLinkActorJoinStoreAdmissionTest {
             var result =
                     admission(Map.of("canonical-type", Factory.class), admitted::set)
                             .prepareCanonicalRoutedActor(
-                                    ZLinkSpotRuntime.canonicalActorJoinRequest(decoded, NODE),
+                                    ZLinkSpotRuntime.canonicalActorJoinRequest(
+                                            decoded, NODE, REQUEST_TIMEOUT),
                                     null,
                                     NODE,
                                     "spot",
@@ -259,6 +261,7 @@ final class ZLinkActorJoinStoreAdmissionTest {
                             .join();
             assertEquals(true, result.accepted());
             assertEquals(1, callbacks.get());
+            assertEquals(REQUEST_TIMEOUT, admitted.get().timeout());
             assertEquals(
                     "canonical-type",
                     admitted.get().actorType(),
@@ -293,7 +296,7 @@ final class ZLinkActorJoinStoreAdmissionTest {
                                 admission(Map.of("canonical-type", Factory.class))
                                         .prepareCanonicalRoutedActor(
                                                 ZLinkSpotRuntime.canonicalActorJoinRequest(
-                                                        forged, NODE),
+                                                        forged, NODE, REQUEST_TIMEOUT),
                                                 null,
                                                 NODE,
                                                 "spot",
@@ -330,7 +333,7 @@ final class ZLinkActorJoinStoreAdmissionTest {
                                         "routingId".equals(method.getName()) ? NODE : null);
         ZLinkActorRuntime runtime =
                 new ZLinkActorRuntime(
-                        node, factories, Duration.ofSeconds(1), new ZLinkJsonMessageSerializer());
+                        node, factories, REQUEST_TIMEOUT, new ZLinkJsonMessageSerializer());
         runtime.setDirectJoinRelocationStores(store());
         runtime.setActorJoinRelocationPort(
                 new ZLinkActorJoinRelocationPort() {
