@@ -20,6 +20,8 @@ Player Actor is the only gold owner. Zone identity comes from Framework Spot con
 
 ## Changes and verification
 
+Run `./run-e2e.sh --build-only` (PowerShell: `pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly`) to build Docker images. The default `./run-e2e.sh` or `pwsh -NoProfile -File ./run-e2e.ps1` runs nodes and the e2e runner in Docker. Use `--local` or `-Local` for host process debugging with the .NET 8 SDK; only that mode accepts `--no-build` or `-NoBuild`. Pass `--check-structure` to check without starting nodes. Preserve stdin lifecycle control and inspect `.logs/docker-<project>/` and `.logs/run-<id>/`.
+
 Keep the ordered worlds, channel, reconnect and update scenarios. Update structure and configuration together when extending topology. Logical Spot IDs are unique within a world mesh; composition IDs are globally unique. Run structure validation before startup, and verify invalid structures are rejected using temporary validation copies outside the deliverable.
 
 Run builds and e2e on Windows and Linux. Treat every intermittent failure as a defect. Preserve the first failure and message flow from `.logs/run-<id>/`; do not increase deadlines, sleep, retry or weaken assertions. A Framework defect is a blocker rather than a reason to bypass its contracts. Cleanup must affect only this run's resources. Keep README commands identical to `run.commands`.
