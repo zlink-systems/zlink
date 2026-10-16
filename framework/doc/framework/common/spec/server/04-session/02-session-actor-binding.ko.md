@@ -602,9 +602,16 @@ binding이나 seal이 아니며 1단계 조회에만 쓴다. 같은 키의 comma
 **이전 relocation의 지연 요청.** 닫힌 기록을 다음 seal 설치 때 지울 수 있는 근거는 command 42의 전달
 순서다. Relocation coordinator는 relocation이 terminal에 도달한 뒤 그 relocation의 command 42를 다시
 보내지 않으며, 같은 Actor의 다음 relocation은 이전 relocation의 terminal 뒤에만 시작한다. 같은 source
-node가 보낸 command 42는 Session owner와의 한 transport 연결 안에서 보낸 순서대로 도착하고, 끊긴
-연결에 남은 message는 늦게 도착하지 않고 사라진다. 따라서 다음 relocation의 command 42가 도착한 뒤에는
-같은 source node의 이전 relocation 요청이 도착하지 않는다. 다른 node가 보낸 이전 relocation 요청은
+node가 보낸 command 42가 Session owner에 도착하는 경우는 둘이다.
+
+- 같은 pipe로 오면 보낸 순서대로 도착한다. 이전 relocation의 요청은 다음 relocation의 요청보다 먼저
+  도착한다.
+- 다음 relocation의 요청이 새로 선택된 pipe로 오면, Session owner의 ROUTER는 그 pipe를 선택할 때 이전
+  pipe에 남은 DATA·REQUEST를 버린다([Core ROUTER §10.1](../../../../../../../core/doc/spec/core/socket/07-router.ko.md)).
+  다음 relocation의 요청은 선택된 뒤에만 반환되므로, 그 뒤 이전 pipe의 요청이 반환되지 않는다.
+
+따라서 다음 relocation의 command 42가 도착한 뒤에는 같은 source node의 이전 relocation 요청이 도착하지
+않는다. 다른 node가 보낸 이전 relocation 요청은
 owner가 바뀌었으므로 위 `OwnerLeaseGeneration` fence로 불일치가 된다.
 
 별도 message ACK journal이나 두 번째 binding registry를 두지 않는다.

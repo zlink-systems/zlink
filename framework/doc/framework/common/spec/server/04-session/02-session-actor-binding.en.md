@@ -731,10 +731,19 @@ same key must match every field of the original request; otherwise it is rejecte
 **Late requests of an earlier relocation.** Removing a closed record when the next seal is installed
 relies on the delivery order of command 42. The relocation coordinator never resends a relocation's
 command 42 after that relocation reaches a terminal, and the next relocation of the same Actor starts
-only after the earlier one's terminal. Command 42s sent by the same source node arrive in send order
-within one transport connection to the Session owner, and messages left on a broken connection are lost
-rather than delivered late. So once the next relocation's command 42 has arrived, no request of an
-earlier relocation from the same source node arrives. An earlier relocation's request from another node
+only after the earlier one's terminal. A command 42 sent by the same source node reaches the Session owner
+in one of two ways.
+
+- On the same pipe, requests arrive in send order, so the earlier relocation's request arrives before
+  the next relocation's request.
+- If the next relocation's request comes on a newly selected pipe, the Session owner's ROUTER discards
+  the DATA/REQUEST records left on the earlier pipe when it selects the new one
+  ([Core ROUTER §10.1](../../../../../../../core/doc/spec/core/socket/07-router.en.md)). The next
+  relocation's request is returned only after that selection, so no request from the earlier pipe is
+  returned afterwards.
+
+So once the next relocation's command 42 has arrived, no request of an earlier relocation from the same
+source node arrives. An earlier relocation's request from another node
 belongs to a changed owner and is a mismatch under the `OwnerLeaseGeneration` fence above.
 
 No separate message ACK journal or second binding registry is kept.
