@@ -1174,7 +1174,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
 
   commitSpotMessageFollowIngress(
     seal: ServiceSpotMessageFollowSeal,
-    target: ServiceDirectSpotRouteFence,
+    target: ServiceDirectSpotRouteFence | null,
     durationMs: number
   ): Promise<boolean> {
     return this.requireStateful().commitSpotMessageFollowIngress(seal, target, durationMs);
