@@ -21,6 +21,8 @@ Use public host relocation and runtime observation for `drain`; require `SafeToS
 
 ## Changes and verification
 
+Use `./run-e2e.sh` or `pwsh -NoProfile -File ./run-e2e.ps1` for the default Docker build and e2e. Build-only uses `--build-only` or `-BuildOnly`. For local process debugging, use `--local` or `-Local`; add `--no-build` or `-NoBuild` to reuse a local build. Preserve stdin/stdout lifecycle control in both modes. Keep Docker build and cleanup logs in `.logs/docker-<project>/` and node logs in `.logs/run-<id>/`. Cleanup must remove only this run's containers, network and image tags, and must fail the run on errors.
+
 Keep `zlink.structure.json`, server configuration, contracts, and scenario order consistent. Run the smallest relevant build or check first, then Windows and Linux e2e. An isolated intermittent failure is a defect; a successful rerun does not cancel it. Preserve the first failing message-flow log and report any Framework blocker separately from application errors.
 
 Run formatters and installation commands only from this project directory, with explicit file paths that exclude `.logs`, `.validation`, and build outputs. Node logging writes one Normal message-flow stream to stderr. The runner retains logs under `.logs/run-<id>/`, uses unique Redis prefixes and Compose project names, and cleans up only processes and containers it created. Cleanup failures must return exit code 1.
