@@ -2375,9 +2375,6 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                         : new systems.zlink.framework.runtime.actors
                                 .ZLinkSessionRelocationPeerClient(relocationMesh);
         actorAdmissions.attach(actorRuntime, this::isDraining, sessionRelocationPeer);
-        //  The same peer client also carries command 42 from the relocation
-        //  source to the bound Session owner (spec 20 §5 step 1).
-        actorRuntime.setSessionRelocationSealer(sessionRelocationPeer);
         actorRuntime.setLocalActorJoiner(this::joinLocalActor);
     }
 
@@ -6404,7 +6401,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                 packetHeader.packetName())) {
             return actorSessions
                     .runtime()
-                    .notifyDisconnected(actor)
+                    .notifyDisconnected(
+                            actor, headerPart.sourceNodeRid(), headerPart.sourceSessionRid())
                     .handle(
                             (ignored, error) -> {
                                 try {
