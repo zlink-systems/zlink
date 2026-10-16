@@ -71,7 +71,7 @@ On PowerShell:
 ```powershell
 pwsh -NoProfile -File ./run-e2e.ps1
 pwsh -NoProfile -File ./run-e2e.ps1 -Scenario region,dungeon,reconnect,update
-pwsh -NoProfile -File ./run-e2e.ps1 --check-structure
+pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
 ```
 
 `region` checks capacity overflow, shared positions, and instance isolation. `dungeon` checks the hosting node. `reconnect` checks Actor identity, membership, and position. `update` drains the current Region host, checks unchanged game state and Sessions, shuts down the drained process, and starts a replacement that accepts a new Region.

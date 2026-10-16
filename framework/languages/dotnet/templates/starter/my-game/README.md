@@ -44,7 +44,7 @@ The `connect` scenario waits for node READY, connects and disposes one public ST
 ```powershell
 pwsh -NoProfile -File ./run-e2e.ps1
 pwsh -NoProfile -File ./run-e2e.ps1 -Scenario connect
-pwsh -NoProfile -File ./run-e2e.ps1 --check-structure
+pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
 ```
 
 A successful run prints `✓ connect` and `Scenarios: 1/1 passed`. Cleanup failures return a nonzero exit code.
@@ -57,7 +57,7 @@ Validate the structure without starting Redis or the node.
 ./run-e2e.sh --check-structure
 ```
 
-PowerShell accepts `--check-structure` after the script name. Changes to registrations, settings, structure, and scenarios must be made together; see [the development guide](AGENTS.md).
+PowerShell uses the `-CheckStructure` switch. Changes to registrations, settings, structure, and scenarios must be made together; see [the development guide](AGENTS.md).
 
 ## Deployment sequence
 

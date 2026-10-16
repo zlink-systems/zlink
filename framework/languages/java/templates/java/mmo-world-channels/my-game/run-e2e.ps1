@@ -11,9 +11,9 @@ Set-StrictMode -Version Latest
 if ($PSVersionTable.PSVersion.Major -lt 7) { throw 'PowerShell 7 or later is required.' }
 $root = $PSScriptRoot
 Set-Location $root
-if ($CheckStructure) { $RunnerArguments = @('--check-structure') }
 New-Item -ItemType Directory -Force (Join-Path $root '.logs') | Out-Null
-if ($Scenario) { $RunnerArguments = @('--scenario', $Scenario) + $RunnerArguments }
+if ($CheckStructure) { $RunnerArguments = @('--check-structure') + $RunnerArguments }
+elseif ($Scenario) { $RunnerArguments = @('--scenario', $Scenario) + $RunnerArguments }
 if ($Local) {
     if (-not $NoBuild) {
         & ./gradlew.bat --no-daemon installDist :e2e:javaHome *> (Join-Path $root '.logs/build.log')
@@ -48,9 +48,10 @@ try {
     }
     if ($BuildOnly) { $result = 0 }
     else {
-        & docker @compose run --rm --no-deps -T --name "$project-check" runner --check-structure
+        $checkArguments = @(if ($CheckStructure) { $RunnerArguments } else { '--check-structure' })
+        & docker @compose run --rm --no-deps -T --name "$project-check" runner @checkArguments
         if ($LASTEXITCODE -ne 0) { throw 'Structure check failed.' }
-        if ($RunnerArguments -contains '--check-structure') { $result = 0 }
+        if ($CheckStructure) { $result = 0 }
         else {
             & docker @compose up -d --wait --wait-timeout 30 dbA dbB *> (Join-Path $logs 'redis-start.log')
             if ($LASTEXITCODE -ne 0) { throw 'Redis startup failed.' }

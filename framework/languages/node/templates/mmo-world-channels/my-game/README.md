@@ -54,7 +54,7 @@ Build and outer cleanup logs are in `.logs/docker-<project>/`; node configuratio
 ```powershell
 pwsh -NoProfile -File ./run-e2e.ps1
 pwsh -NoProfile -File ./run-e2e.ps1 -Scenario worlds,channel,reconnect,update
-pwsh -NoProfile -File ./run-e2e.ps1 --check-structure
+pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
 ```
 
 | Scenario  | Assertions                                                                                                    |

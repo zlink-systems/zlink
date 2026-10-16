@@ -3,6 +3,7 @@ param(
     [switch]$Local,
     [switch]$NoBuild,
     [switch]$BuildOnly,
+    [switch]$CheckStructure,
     [string]$Scenario,
     [Parameter(ValueFromRemainingArguments = $true)][string[]]$RunnerArguments = @()
 )
@@ -12,7 +13,8 @@ if ($PSVersionTable.PSVersion.Major -lt 7) { throw 'PowerShell 7 or later is req
 $root = $PSScriptRoot
 Set-Location $root
 New-Item -ItemType Directory -Force (Join-Path $root '.logs') | Out-Null
-if ($Scenario) { $RunnerArguments = @('--scenario', $Scenario) + $RunnerArguments }
+if ($CheckStructure) { $RunnerArguments = @('--check-structure') + $RunnerArguments }
+elseif ($Scenario) { $RunnerArguments = @('--scenario', $Scenario) + $RunnerArguments }
 if ($Local) {
     if (-not $NoBuild) {
         & npm install *> (Join-Path $root '.logs/build.log')
@@ -28,7 +30,6 @@ if ($Local) {
     exit $LASTEXITCODE
 }
 if ($NoBuild) { throw '-NoBuild requires -Local; Docker builds reuse the layer cache automatically.' }
-$checkOnly = $RunnerArguments.Count -gt 0 -and $RunnerArguments[0] -eq '--check-structure'
 $project = 'my-game-e2e-' + [guid]::NewGuid().ToString('N')
 $logs = Join-Path $root ".logs/docker-$project"
 New-Item -ItemType Directory $logs | Out-Null
@@ -49,13 +50,10 @@ try {
     }
     if ($BuildOnly) { $result = 0 }
     else {
-        $checkArguments = @('--check-structure')
-        if ($checkOnly) {
-            $checkArguments = $RunnerArguments
-        }
+        $checkArguments = @(if ($CheckStructure) { $RunnerArguments } else { '--check-structure' })
         & docker @compose run --rm --no-deps -T --name "$project-check" runner @checkArguments
         if ($LASTEXITCODE -ne 0) { throw 'Structure check failed.' }
-        if ($checkOnly) { $result = 0 }
+        if ($CheckStructure) { $result = 0 }
         else {
             & docker @compose up -d --wait --wait-timeout 30 redis *> (Join-Path $logs 'redis-start.log')
             if ($LASTEXITCODE -ne 0) { throw 'Redis startup failed.' }

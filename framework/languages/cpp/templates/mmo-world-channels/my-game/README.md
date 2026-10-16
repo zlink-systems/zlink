@@ -63,7 +63,7 @@ The runner checks the project structure before starting its Redis containers and
 | `reconnect` | A new physical connection binds the same Actor generation, channel, and gold. |
 | `update` | Draining channelA1 moves its Zone and Actors to channelA2, leaves B unchanged, and verifies a new Zone and Player work on the replacement. |
 
-Run `./run-e2e.sh --check-structure` for an isolated structure check (PowerShell: `pwsh -NoProfile -File ./run-e2e.ps1 --check-structure`).
+Run `./run-e2e.sh --check-structure` for an isolated structure check (PowerShell: `pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure`).
 
 ## Local debugging
 
