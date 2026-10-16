@@ -75,14 +75,6 @@ Each run owns one `World`. `World::close()` stops the nodes and removes the run'
 
 Read the first exception and the preceding flow/correlation records. A connection-only run may contain no application message-flow events because it dispatches no game packets. Startup failures before dispatch must retain their exception and stack.
 
-For supplementary local tracing, set the parent process environment before running.
-
-```powershell
-$env:ZLINK_DEBUG_FRAMEWORK_SPOT_DISCOVERY = "1"
-```
-
-Bash uses `export ZLINK_DEBUG_FRAMEWORK_SPOT_DISCOVERY=1`. Docker nodes do not inherit host variables; add diagnostic environment values (`-e NAME=value`) to the `docker create` call in `e2e/world.hpp` when required. This version-specific switch is for diagnosis, not routing.
-
 ## Defect reporting
 
 Compare public API usage with the guide and a working sample first. Preserve the pinned versions, OS, reproduction command, first node failure, and flow/correlation records. Check existing [ZLink issues](https://github.com/zlink-systems/zlink/issues) and record the matching issue number in README Known issues. If a coding agent prepares a new public issue, show its body to the developer before publication. Remove credentials and personal information from attached logs.
