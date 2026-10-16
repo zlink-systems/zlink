@@ -3078,7 +3078,7 @@ export class DefaultZLinkSpotManager {
     }
     const outcome = admission.result ?? (await admission.resultTask);
     if ('error' in outcome) throw outcome.error;
-    if (!outcome.accepted || admission.state !== 'admitted') {
+    if (!outcome.accepted || (admission.state !== 'admitted' && admission.state !== 'restoring')) {
       throw new Error(`Actor Join relocation '${relocationId}' has no accepted admission.`);
     }
     const entrySpotId = this.options.entryNodeRidProvider?.() ?? this.options.entryNodeRid;
@@ -3138,6 +3138,11 @@ export class DefaultZLinkSpotManager {
     return true;
   }
 
+  beginActorJoinRelocation(relocationId: string): () => void {
+    this.formalRemoteActorAdmissions.beginRestore(relocationId);
+    return () => this.formalRemoteActorAdmissions.finishRestore(relocationId);
+  }
+
   async restoreCanonicalActorJoinRecovery(
     recovery: CanonicalActorJoinRecovery,
     signal?: AbortSignal
@@ -3150,7 +3155,11 @@ export class DefaultZLinkSpotManager {
       );
     }
     const outcome = admission.result ?? (await admission.resultTask);
-    if ('error' in outcome || !outcome.accepted || admission.state !== 'admitted') {
+    if (
+      'error' in outcome ||
+      !outcome.accepted ||
+      (admission.state !== 'admitted' && admission.state !== 'restoring')
+    ) {
       throw new Error(
         `Actor Join recovery '${recovery.request.handoffId}' has no accepted admission.`
       );
