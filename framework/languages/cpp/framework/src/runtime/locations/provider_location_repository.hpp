@@ -3420,7 +3420,8 @@ class provider_location_repository_t final : public location_repository_t
                {location_record_fields::stableType, item.stable_type},
                {location_record_fields::policy, maintenance_policy_name (item.policy)},
                {location_record_fields::hasSnapshotAdapter, item.has_snapshot_adapter},
-               {location_record_fields::limit, item.spot_limit}});
+               {location_record_fields::limit, item.spot_limit},
+               {location_record_fields::entryAccepted, item.entry_accepted}});
         json_t spot_types = json_t::array ();
         for (const auto &item : value.capacity.spot_types)
             spot_types.push_back (
@@ -3482,7 +3483,7 @@ class provider_location_repository_t final : public location_repository_t
             return lhs.object_kind == rhs.object_kind && lhs.stable_type == rhs.stable_type
                    && lhs.policy == rhs.policy
                    && lhs.has_snapshot_adapter == rhs.has_snapshot_adapter
-                   && lhs.spot_limit == rhs.spot_limit;
+                   && lhs.spot_limit == rhs.spot_limit && lhs.entry_accepted == rhs.entry_accepted;
         };
         return std::equal (left.object_capabilities.begin (), left.object_capabilities.end (),
                            right.object_capabilities.begin (), capabilities_equal)
@@ -3828,7 +3829,8 @@ class provider_location_repository_t final : public location_repository_t
                parse_maintenance_policy (
                  item.at (location_record_fields::policy).get<std::string> ()),
                item.at (location_record_fields::hasSnapshotAdapter).get<bool> (),
-               item.at (location_record_fields::limit).get<std::int32_t> ()});
+               item.at (location_record_fields::limit).get<std::int32_t> (),
+               item.value (location_record_fields::entryAccepted, false)});
         result.object_role =
           parse_object_role (value.at (location_record_fields::objectRole).get<std::string> ());
         result.placement_weight = value.at (location_record_fields::placementWeight).get<int> ();

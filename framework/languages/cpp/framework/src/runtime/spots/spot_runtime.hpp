@@ -1943,6 +1943,9 @@ class spot_node_runtime_t
     // the entry Spot it actually joined (entry=true requests carry an
     // advisory targetSpot the entry path does not use to select the Spot).
     std::optional<spot_id_t> resolve_entry_spot_id () const;
+    // Actor model §6.3: whether this node's Entry Spot accepts the Actor registered under
+    // `stable_type`, which decides whether the node creates new Actors of that type.
+    task_t<bool> entry_accepts_actor (std::string stable_type) const;
     // actor_context_t's default constructor is private (friended to
     // spot_node_runtime_t among a few others) -- this exposes it to callers
     // outside spots/** that need a default/unbound context, e.g. the

@@ -1542,7 +1542,8 @@ class in_memory_location_repository_t : public location_repository_t
         return left.object_kind == right.object_kind && left.stable_type == right.stable_type
                && left.policy == right.policy
                && left.has_snapshot_adapter == right.has_snapshot_adapter
-               && left.spot_limit == right.spot_limit;
+               && left.spot_limit == right.spot_limit
+               && left.entry_accepted == right.entry_accepted;
     }
 
     static bool same_capabilities (const std::vector<object_capability_t> &left,
