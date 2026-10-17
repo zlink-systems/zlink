@@ -2163,6 +2163,14 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_include_directories(test_cpp_framework_application_job_queue PRIVATE
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   add_zlink_framework_test(
+    test_cpp_framework_spot_subscribe
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_spot_subscribe.cpp
+    "framework-unit;framework-contract;spot"
+    contract)
+  target_include_directories(test_cpp_framework_spot_subscribe PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  target_use_zlink_gtest_main(test_cpp_framework_spot_subscribe)
+  add_zlink_framework_test(
     test_cpp_framework_instance_spot_activation
     tests/Zlink.Framework.UnitTests/test_cpp_framework_instance_spot_activation.cpp
     "framework-unit;framework-regression;spot;instance-activation")

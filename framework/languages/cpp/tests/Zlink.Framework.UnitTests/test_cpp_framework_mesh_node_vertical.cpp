@@ -10,6 +10,7 @@
 #include "runtime/execution/infrastructure_wait_guard.hpp"
 #include "runtime/mesh/mesh_node_host_service.hpp"
 #include "runtime/mesh/mesh_metadata_codec.hpp"
+#include <service_wire_codec.hpp>
 #include "runtime/mesh/route_mesh_runtime_options_service.hpp"
 #include "runtime/mesh/route_mesh_runtime_service.hpp"
 #include "runtime/messaging/client_call_codec.hpp"
@@ -34,6 +35,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <future>
+#include <latch>
 #include <iostream>
 #include <map>
 #include <mutex>
@@ -513,7 +515,7 @@ zlink::message_t make_route_multicast_frame (std::string_view packet_name,
     namespace messaging = zlink::framework::runtime::messaging;
     messaging::envelope_header_t header;
     header.kind = messaging::message_kind_t::publish;
-    header.channel_name = "vertical-mesh";
+    header.channel_name = "work";
     header.message_name = packet_name;
     header.content_type = messaging::envelope_codec_t::default_content_type;
     header.topic = std::string (topic);
@@ -571,16 +573,31 @@ void verify_route_internal_packets_precede_application_dispatch ()
     context->spot_instance = std::make_shared<int> (1);
     context->serial_executor = worker;
 
+    auto application_jobs = std::make_shared<runtime::application_job_queue_t> (
+      runtime::application_job_queue_configuration_t{application_job_queue_profile_t::balanced,
+                                                     std::uint32_t{1}, 1, 1});
+    auto ingress_supply = application_jobs->try_reserve_supply ();
+    assert (ingress_supply);
+    auto ingress_entered = std::make_shared<std::latch> (1);
     auto multicast_received = std::make_shared<std::promise<std::string>> ();
     auto multicast_future = multicast_received->get_future ();
     context->handlers.push_back (spot_handler_descriptor_t{
       spot_handler_kind_t::subscription, "Rel358MulticastPayload", "rel-358-topic",
       std::type_index (typeid (int)), std::type_index (typeid (void)),
-      std::type_index (typeid (void)), std::type_index (typeid (void))});
+      std::type_index (typeid (void)), std::type_index (typeid (void)), "work"});
     context->handler_invokers.push_back (
-      [multicast_received] (void *, void *, service_provider_t &, serializer_registry_t &,
-                            const zlink::message_t &message,
-                            const spot_inbound_message_t &) -> task_t<zlink::message_t> {
+      [multicast_received, ingress_entered,
+       application_jobs] (void *, void *, service_provider_t &, serializer_registry_t &,
+                          const zlink::message_t &message,
+                          const spot_inbound_message_t &inbound) -> task_t<zlink::message_t> {
+          assert (ingress_entered->try_wait ());
+          const auto capacity = application_jobs->snapshot ();
+          assert (capacity.effective_max_queued_application_jobs == 1);
+          assert (capacity.queued_application_jobs == 0);
+          assert (inbound.channel_name == "work");
+          assert (
+            (inbound.values
+             == std::map<std::string, std::string>{{"trace-key", "native-receive-snapshot"}}));
           multicast_received->set_value (message.to_string ());
           co_return zlink::message_t{};
       });
@@ -623,34 +640,54 @@ void verify_route_internal_packets_precede_application_dispatch ()
     location_runtime.start (*registration->routing_id);
     runtime::mesh_node_host_service_t service (
       std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> (), {registration},
-      serializers);
+      serializers, {}, {}, application_jobs);
     service.start (provider);
     const auto node = service.nodes ().front ();
     auto native_spot = std::make_shared<host::spot_handle_t> (
       node->native_node ().get_or_create_spot (std::string (context->spot_id)));
     registration->spot_state->lane.run ([&] { context->native_spot = native_spot; }).get ();
 
-    messaging::client_call_codec_t route_codec;
-    auto multicast_header = route_codec.create_envelope (messaging::message_kind_t::command, "work",
-                                                         spot_multicast_route_send_t::packet_name);
-    const auto multicast = spot_multicast_route_send_t{
-      "rel-358-topic", make_route_multicast_frame ("Rel358MulticastPayload", "rel-358-topic",
-                                                   "multicast-through-host")
-                         .to_bytes ()};
-    auto multicast_parts =
-      route_codec.encode_envelope_parts (multicast_header, multicast, serializers);
-    host::ready_record_t channel_owner;
-    channel_owner.owner_kind = host::owner_kind_t::channel;
-    channel_owner.channel_name = "work";
-    host::receive_record_t channel_record;
-    channel_record.kind = host::record_kind_t::channel_send;
-    channel_record.channel_name = "work";
-    channel_record.source_node_rid = zlink::routing_id_t::from ("route-source");
-    enqueue_application_route (node, std::move (channel_owner), std::move (channel_record),
-                               std::move (multicast_parts).take_items ());
+    native_spot->set_subscription ("work", "rel-358-topic");
+    namespace wire = runtime::protocol::generated::detail;
+    wire::logicalMulticast_23_t multicast;
+    multicast.flags = static_cast<std::uint8_t> (runtime::protocol::flag::metadata);
+    multicast.channelName.value = "work";
+    multicast.topic.value = "rel-358-topic";
+    multicast.sourceSpotId.value = "source-spot";
+    wire::writer_t multicast_header;
+    assert (wire::encode_head_logicalMulticast_23 (multicast_header, multicast)
+            == wire::error_code::ok);
+    runtime::mesh::service_mailbox_record_t multicast_record;
+    multicast_record.owner =
+      runtime::mesh::service_mailbox_t::application_owner (host::owner_kind_t::node);
+    multicast_record.domain = runtime::mesh::service_mailbox_domain_t::application;
+    multicast_record.source_routing_id = zlink::routing_id_t::from ("route-source").to_bytes ();
+    auto ingress_permit =
+      std::make_shared<runtime::application_job_queue_t::permit_t> (std::move (*ingress_supply));
+    ingress_supply.reset ();
+    ingress_permit->mark_queued ();
+    multicast_record.before_application_handler = [permit = std::move (ingress_permit),
+                                                   ingress_entered] {
+        permit->release_for_handler_entry ();
+        ingress_entered->count_down ();
+    };
+    const auto queued_ingress = application_jobs->snapshot ();
+    assert (queued_ingress.effective_max_queued_application_jobs == 1);
+    assert (queued_ingress.queued_application_jobs == 1);
+    assert (queued_ingress.permits_in_use == 1);
+    multicast_record.parts = {
+      zlink::message_t::from (std::move (multicast_header.data)),
+      zlink::message_t::from (
+        mesh_metadata_codec_t::encode ({{"trace-key", "native-receive-snapshot"}})),
+      zlink::message_t::from (runtime::protocol::encode_application_payload (
+        runtime::protocol::application_payload_t::from_parts ({make_route_multicast_frame (
+          "Rel358MulticastPayload", "rel-358-topic", "multicast-through-host")})))};
+    assert (
+      node->native_node ().transport ().mailbox ().try_enqueue (std::move (multicast_record)));
     assert (multicast_future.wait_for (1s) == std::future_status::ready);
     assert (multicast_future.get () == "multicast-through-host");
 
+    messaging::client_call_codec_t route_codec;
     auto disconnect_header =
       route_codec.create_envelope (messaging::message_kind_t::request, "work",
                                    spot_actor_disconnect_route_request_t::packet_name);
@@ -1919,6 +1956,11 @@ void verify_automatic_identity_and_port_builder ()
       zlink::framework::detail::mesh_node_runtime_t::registrations (builder);
     assert (registrations.size () == 1);
     const auto &state = registrations.front ();
+    assert (!state->spot_state->snapshot.spot_route_channel_name);
+    assert (state->spot_state->snapshot.accepted_route_channels.empty ());
+    assert (zlink::framework::detail::spot_node_runtime_t (state->spot_state)
+              .actor_route_transport_name ()
+            == "automatic-builder-mesh");
     assert (state->listen_endpoint == "tcp://127.0.0.1:0");
     assert (state->routing_id);
     assert (std::regex_match (

@@ -50,7 +50,6 @@ inline constexpr char expectedActorStoreVersion[] = "expectedActorStoreVersion";
 inline constexpr char expectedOwnerLeaseGeneration[] = "expectedOwnerLeaseGeneration";
 inline constexpr char finalize[] = "finalize";
 inline constexpr char finalizeTimeoutMs[] = "finalizeTimeoutMs";
-inline constexpr char frame[] = "frame";
 inline constexpr char handoffBacklog[] = "handoffBacklog";
 inline constexpr char hasReply[] = "hasReply";
 inline constexpr char isRequest[] = "isRequest";
@@ -76,7 +75,6 @@ inline constexpr char targetOwnerId[] = "targetOwnerId";
 inline constexpr char targetOwnerLeaseGeneration[] = "targetOwnerLeaseGeneration";
 inline constexpr char targetSpotGeneration[] = "targetSpotGeneration";
 inline constexpr char targetSpotId[] = "targetSpotId";
-inline constexpr char topic[] = "topic";
 inline constexpr char transferId[] = "transferId";
 } // namespace packet_field
 
@@ -172,20 +170,6 @@ void validate_handoff_backlog_json (const nlohmann::json &backlog)
 }
 
 } // namespace
-
-void to_json (nlohmann::json &json, const spot_multicast_route_send_t &value)
-{
-    json =
-      nlohmann::json{{packet_field::topic, value.topic},
-                     {packet_field::frame, zlink::framework::detail::base64_encode (std::as_bytes (
-                                             std::span<const std::uint8_t> (value.frame)))}};
-}
-
-void from_json (const nlohmann::json &json, spot_multicast_route_send_t &value)
-{
-    value.topic = json.at (packet_field::topic).get<std::string> ();
-    value.frame = decode_base64_field (json, packet_field::frame);
-}
 
 result_t<zlink::message_t> encode_actor_bound_session_frame (stream_codec_t codec,
                                                              std::string packet_name,
