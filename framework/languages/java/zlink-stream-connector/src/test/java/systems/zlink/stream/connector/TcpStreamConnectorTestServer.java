@@ -58,10 +58,12 @@ final class TcpStreamConnectorTestServer implements Closeable {
     }
 
     CompletableFuture<ReceivedFrame> readFrameAsync() {
+        // The fixture caller selects one connection before reader and writer tasks run.
+        // Both I/O directions must share it instead of competing for the accept queue.
+        Socket socket = socket();
         return CompletableFuture.supplyAsync(
                 () -> {
                     try {
-                        Socket socket = socket();
                         DataInputStream input = new DataInputStream(socket.getInputStream());
                         int headerLength = input.readUnsignedShort();
                         int payloadLength = input.readInt();
@@ -82,10 +84,10 @@ final class TcpStreamConnectorTestServer implements Closeable {
     }
 
     CompletableFuture<Void> sendRawAsync(byte[] header, byte[] payload) {
+        Socket socket = socket();
         return CompletableFuture.runAsync(
                 () -> {
                     try {
-                        Socket socket = socket();
                         byte[] frame =
                                 ZLinkStreamWireProtocol.encodeFrame(header, payload, 64 * 1024);
                         DataOutputStream output = new DataOutputStream(socket.getOutputStream());
@@ -99,10 +101,10 @@ final class TcpStreamConnectorTestServer implements Closeable {
     }
 
     CompletableFuture<Void> sendBytesAsync(byte[] bytes) {
+        Socket socket = socket();
         return CompletableFuture.runAsync(
                 () -> {
                     try {
-                        Socket socket = socket();
                         DataOutputStream output = new DataOutputStream(socket.getOutputStream());
                         output.write(bytes);
                         output.flush();

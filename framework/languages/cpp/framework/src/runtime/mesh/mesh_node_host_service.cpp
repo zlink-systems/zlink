@@ -1818,8 +1818,7 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
         }
         auto &location_runtime = services.get_required<location_runtime_t> ();
         _location_runtime = &location_runtime;
-        _location_owner = location_runtime.current_owner_token ();
-        _accept_application_dispatch.store (_location_owner.has_value (),
+        _accept_application_dispatch.store (location_runtime.owner_lease_usable (),
                                             std::memory_order_release);
         std::shared_ptr<stateful::relocation_store_port_t> instance_relocations;
         const auto has_instance_factories = std::any_of (
@@ -2038,7 +2037,7 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                                     original_command->application_payload.packet_name,
                                     "application/octet-stream", reply.value ().to_bytes ()};
                                   if (detail::message_flow_tracer_t (_dispatch_options)
-                                        .capture_enabled ()) {
+                                        .flow_tracing ()) {
                                       response->flow_id =
                                         original_command->application_payload.flow_id;
                                       response->flow_origin =
@@ -2483,15 +2482,14 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                   });
             }
             if (owner) {
-                const auto written =
-                  _location_store->update_mesh_node (descriptor, location_write_intent_t::new_claim)
-                    .result ()
-                    .value ();
-                if (written.status != location_write_status_t::stored)
-                    throw framework_exception_t (
-                      framework_error_kind_t::not_configured,
-                      "MeshNode Location descriptor publication was fenced");
-                _published_mesh_nodes.push_back ({descriptor.mesh_name, descriptor.rid});
+                const auto written = infrastructure_result ([&] {
+                                         return _location_runtime->descriptor_write_confirmed ([&] {
+                                             return _location_store->update_mesh_node (
+                                               descriptor, location_write_intent_t::new_claim);
+                                         });
+                                     }).value ();
+                if (written)
+                    _published_mesh_nodes.push_back ({descriptor.mesh_name, descriptor.rid});
             }
             _published_mesh_descriptors.push_back (descriptor);
             node->bind_descriptor_publisher (
@@ -2595,29 +2593,20 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                         observe_management ();
                 };
                 while (!_stop.load (std::memory_order_acquire)) {
-                    constexpr std::size_t max_application_permits_per_turn = 64;
-                    std::array<application_job_queue_t::permit_t,
-                               max_application_permits_per_turn - 1>
-                      application_permit_budget;
-                    std::size_t application_permit_budget_size = 0;
-                    supply.ensure_waiter ();
-                    application_permit = supply.take ();
-                    while (application_permit
-                           && application_permit_budget_size < application_permit_budget.size ()) {
-                        auto extra = _application_jobs->try_reserve_supply ();
-                        if (!extra)
-                            break;
-                        application_permit_budget[application_permit_budget_size++] =
-                          std::move (*extra);
-                    }
+                    supply.ensure_waiter (dispatch_limits::receive_batch_messages);
+                    auto budget = supply.take_budget ();
+                    application_permit =
+                      budget ? std::optional<application_job_queue_t::permit_t> (budget->take ())
+                             : std::nullopt;
+                    auto application_permit_budget =
+                      budget ? std::move (*budget) : application_job_queue_t::permit_batch_t{};
                     const auto next_application_receive = [&] {
                         application_permit.reset ();
                         if (_stop.load (std::memory_order_acquire))
                             return false;
-                        if (application_permit_budget_size == 0)
+                        if (!application_permit_budget)
                             return false;
-                        application_permit.emplace (
-                          std::move (application_permit_budget[--application_permit_budget_size]));
+                        application_permit.emplace (application_permit_budget.take ());
                         return static_cast<bool> (application_permit);
                     };
                     const bool accept_application_receive = static_cast<bool> (application_permit);
@@ -2689,7 +2678,7 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                                           const auto header = decode_mesh_record_header (
                                             record, parts,
                                             detail::message_flow_tracer_t (_dispatch_options)
-                                              .capture_enabled (),
+                                              .flow_tracing (),
                                             _dispatch_options);
                                           if (!header) {
                                               return;
@@ -2740,7 +2729,7 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                                   auto decoded_header = decode_mesh_record_header (
                                     record, parts,
                                     detail::message_flow_tracer_t (_dispatch_options)
-                                      .capture_enabled (),
+                                      .flow_tracing (),
                                     _dispatch_options);
                                   if (!decoded_header)
                                       return;
@@ -2763,10 +2752,7 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                     mailbox.end_application_receive_turn ();
                     receive_turn.dismiss ();
                     application_permit.reset ();
-                    while (application_permit_budget_size != 0) {
-                        application_permit_budget[--application_permit_budget_size]
-                          .release_without_handler ();
-                    }
+                    application_permit_budget.release_without_handler ();
                     if (count != 0 && pending_management) {
                         if (pending_management->armed)
                             pending_management->armed->store (false, std::memory_order_release);
@@ -2944,7 +2930,7 @@ bool mesh_node_host_service_t::publish_descriptor_state (framework_runtime_state
     }
 }
 
-bool mesh_node_host_service_t::republish_after_store_recovery ()
+bool mesh_node_host_service_t::republish_after_store_recovery (location_write_intent_t intent)
 {
     std::lock_guard lock (_descriptor_publish_mutex);
     const auto owner = current_location_owner ();
@@ -2962,6 +2948,8 @@ bool mesh_node_host_service_t::republish_after_store_recovery ()
         if (!first_publication && descriptor.owner_id == owner->owner_id
             && descriptor.lease_generation == owner->lease_generation)
             continue;
+        if (intent == location_write_intent_t::renew)
+            return false;
         descriptor.owner_id = owner->owner_id;
         descriptor.lease_generation = owner->lease_generation;
         if (!first_publication
@@ -2972,11 +2960,13 @@ bool mesh_node_host_service_t::republish_after_store_recovery ()
             ++descriptor.descriptor_revision;
         const auto written =
           infrastructure_result ([&] {
-              return _location_store->update_mesh_node (
-                descriptor, first_publication ? location_write_intent_t::new_claim
-                                              : location_write_intent_t::renew);
+              return _location_runtime->descriptor_write_confirmed ([&] {
+                  return _location_store->update_mesh_node (
+                    descriptor, first_publication ? location_write_intent_t::new_claim
+                                                  : location_write_intent_t::renew);
+              });
           }).value ();
-        if (written.status != location_write_status_t::stored)
+        if (!written)
             return false;
         _published_mesh_descriptors[index] = std::move (descriptor);
         if (first_publication)
@@ -3017,7 +3007,6 @@ void mesh_node_host_service_t::stop () noexcept
         });
     if (_published_mesh_nodes.empty ()) {
         _published_mesh_descriptors.clear ();
-        _location_owner.reset ();
         _location_runtime = nullptr;
     }
     for (auto &node : _nodes) {
@@ -3072,7 +3061,7 @@ void mesh_node_host_service_t::dispatch_application (
         detail::spot_node_runtime_t application_spot_runtime (registration->spot_state);
         bool terminal_deferred = false;
         auto decoded_header = decode_mesh_record_header (
-          record, parts, detail::message_flow_tracer_t (dispatch_options).capture_enabled (),
+          record, parts, detail::message_flow_tracer_t (dispatch_options).flow_tracing (),
           dispatch_options);
         if (!decoded_header) {
             deferred_terminal->settle ();

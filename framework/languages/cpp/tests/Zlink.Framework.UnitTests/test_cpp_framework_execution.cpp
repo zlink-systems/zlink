@@ -5064,7 +5064,7 @@ bool verify_wire_actor_join_admission_is_approval_only_and_later_attempt_wins ()
       std::make_shared<std::promise<runtime::host::actor_join_operation_result_t>> ();
     auto second_future = second_promise->get_future ();
     owner.dispatch_wire_actor_join_admission (
-      spot_id_t ("target-spot"),
+      spot_id_t ("target-spot"), second_actor.actor.actor_id,
       [node, local_rid, second_actor, &serializers, second_promise] () -> task_t<void> {
           second_promise->set_value (
             admit_wire_actor_join (node, local_rid, second_actor, std::nullopt, &serializers));
@@ -5133,7 +5133,7 @@ bool verify_wire_join_requires_active_local_target ()
     std::atomic<int> unavailable{0};
     const auto receive = [&] (const char *target) {
         owner.dispatch_wire_actor_join_admission (
-          spot_id_t (target),
+          spot_id_t (target), std::string_view{},
           [&] () -> task_t<void> {
               ++accepted;
               co_return;
@@ -5186,7 +5186,7 @@ bool verify_relocation_abort_does_not_hold_receive_worker ()
         owner.abort_relocation_materialization (
           {{.kind = runtime::stateful::object_kind_t::user_spot, .key = "abort-target"}});
         owner.dispatch_wire_actor_join_admission (
-          spot_id_t ("following-target"), [] () -> task_t<void> { co_return; },
+          spot_id_t ("following-target"), std::string_view{}, [] () -> task_t<void> { co_return; },
           [&] { following_frame.set_value (); });
     });
     const bool entered = started.wait_for (std::chrono::seconds (2)) == std::future_status::ready;
@@ -5765,7 +5765,7 @@ bool verify_join_commit_does_not_wait_for_joined_callback (bool lifecycle_failur
     std::thread receiver ([&] {
         committed.store (owner.commit_relocation_materialization ({target}));
         owner.dispatch_wire_actor_join_admission (
-          spot_id_t ("following-target"), [] () -> task_t<void> { co_return; },
+          spot_id_t ("following-target"), std::string_view{}, [] () -> task_t<void> { co_return; },
           [&] { following_frame.set_value (); });
     });
     const bool entered = started.wait_for (std::chrono::seconds (2)) == std::future_status::ready;

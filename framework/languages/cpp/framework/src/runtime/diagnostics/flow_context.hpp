@@ -57,6 +57,14 @@ struct flow_value_t
 class flow_context_t
 {
   public:
+    // Message-flow tracing is on at Normal and Detailed only
+    // (04-flow-correlation section 4). Below it no flow is created, read from
+    // an inbound message, captured or propagated. This is the one decision.
+    static constexpr bool tracing (message_flow_log_mode_t mode) noexcept
+    {
+        return mode == message_flow_log_mode_t::normal || mode == message_flow_log_mode_t::detailed;
+    }
+
     class scope_t
     {
       public:
@@ -97,9 +105,9 @@ class flow_context_t
                           flow_origin_t default_origin,
                           std::optional<std::string> stream_session_id)
     {
-        // Flow fields are observation-only.  At Off the processing point must
-        // neither validate nor install inbound flow state (spec 27 §4).
-        if (diagnostics_mode == message_flow_log_mode_t::off) {
+        // Flow fields are observation-only.  Without tracing the processing
+        // point neither validates nor installs inbound flow state.
+        if (!tracing (diagnostics_mode)) {
             return scope_t (std::nullopt);
         }
         if (flow_id.has_value () != origin.has_value ()) {
@@ -124,7 +132,7 @@ class flow_context_t
                           flow_origin_t default_origin,
                           std::optional<std::string> stream_session_id)
     {
-        if (diagnostics_mode == message_flow_log_mode_t::off)
+        if (!tracing (diagnostics_mode))
             return scope_t (std::nullopt);
         if (flow_id.has_value () != origin.has_value ()) {
             throw framework_exception_t (framework_error_kind_t::protocol_error,
@@ -145,7 +153,7 @@ class flow_context_t
     static scope_t enter_current_or_create (flow_origin_t origin,
                                             message_flow_log_mode_t diagnostics_mode)
     {
-        if (diagnostics_mode == message_flow_log_mode_t::off)
+        if (!tracing (diagnostics_mode))
             return scope_t (std::nullopt);
         const auto &value = current ();
         if (value) {

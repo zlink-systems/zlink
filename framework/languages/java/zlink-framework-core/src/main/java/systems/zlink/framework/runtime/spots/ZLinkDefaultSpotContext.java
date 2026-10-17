@@ -1233,7 +1233,8 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
             waiter.result.completeExceptionally(failure);
             return CompletableFuture.failedFuture(failure);
         }
-        return claimed.thenCompose(
+        return ZLinkSerialExecutionQueue.yieldCurrent(claimed)
+                .thenCompose(
                         result -> {
                             waiter.result.complete(result);
                             return result.isPresent()

@@ -109,17 +109,12 @@ final class ZLinkActorSessionCoordinator {
             systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
                             .ActorRouteFence
                     source,
-            systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
-                            .ActorRouteFence
-                    target) {
-        return requireActors().stageRelocationMessageFollowAsync(source, target);
-    }
-
-    void commitRelocationMessageFollow(
-            systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
-                            .ActorRouteFence
-                    source) {
-        requireActors().commitRelocationMessageFollow(source);
+            ZLinkBackendActorRef targetActor,
+            CompletionStage<
+                            systems.zlink.framework.runtime.internal.service
+                                    .ZLinkServiceM6BWireCodec.ActorRouteFence>
+                    targetFence) {
+        return requireActors().stageRelocationMessageFollowAsync(source, targetActor, targetFence);
     }
 
     CompletionStage<Void> commitRelocationMessageFollowAsync(
@@ -127,16 +122,6 @@ final class ZLinkActorSessionCoordinator {
                             .ActorRouteFence
                     source) {
         return requireActors().commitRelocationMessageFollowAsync(source);
-    }
-
-    void refreshRelocationMessageFollow(
-            systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
-                            .ActorRouteFence
-                    source,
-            systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
-                            .ActorRouteFence
-                    target) {
-        requireActors().refreshRelocationMessageFollow(source, target);
     }
 
     CompletionStage<Void> confirmRelocationMessageFollow(

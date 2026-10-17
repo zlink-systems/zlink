@@ -41,6 +41,122 @@ import java.util.concurrent.atomic.AtomicReference;
 final class ZLinkSerialExecutionQueueTest {
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
+    void managedCompletionKeepsApplicationJobContextAtItsExecutionBoundary(boolean returnsGate)
+            throws Exception {
+        CountingExecutor executor = new CountingExecutor();
+        var queue =
+                new ZLinkSerialExecutionQueue(
+                        executor,
+                        returnsGate
+                                ? ZLinkExecutionLanePolicy.spotReturningGate()
+                                : ZLinkExecutionLanePolicy.session());
+        var remote = new CompletableFuture<Void>();
+        var observed = new CompletableFuture<Boolean>();
+        try (var jobs = applicationJobs()) {
+            var permit = jobs.acquireBlocking(ZLinkApplicationJobQueue.Origin.REMOTE);
+            CompletionStage<Void> dispatch;
+            try (var ignored = ZLinkApplicationJobContext.enter(permit)) {
+                dispatch =
+                        queue.enqueue(
+                                () -> {
+                                    ZLinkApplicationJobContext.beforeFirstApplicationInstruction();
+                                    return ZLinkSerialExecutionQueue.manageCurrentInTurn(remote)
+                                            .thenRun(
+                                                    () ->
+                                                            observed.complete(
+                                                                    ZLinkApplicationJobContext
+                                                                            .current()
+                                                                            .isPresent()));
+                                },
+                                null);
+            }
+            executor.take().run();
+            remote.complete(null);
+            executor.runUntil(dispatch.toCompletableFuture());
+            assertFalse(observed.get(3, TimeUnit.SECONDS));
+            assertTrue(ZLinkApplicationJobContext.current().isEmpty());
+            assertEquals(0, jobs.snapshot().permitsInUse());
+        }
+    }
+
+    @Test
+    void capturedCallbackDoesNotRestoreTheOriginatingApplicationJob() throws Exception {
+        CountingExecutor executor = new CountingExecutor();
+        var queue = new ZLinkSerialExecutionQueue(executor, ZLinkExecutionLanePolicy.spot());
+        var captured = new CompletableFuture<Executor>();
+        try (var jobs = applicationJobs()) {
+            var permit = jobs.acquireBlocking(ZLinkApplicationJobQueue.Origin.REMOTE);
+            try (var ignored = ZLinkApplicationJobContext.enter(permit)) {
+                queue.enqueue(
+                        () -> {
+                            ZLinkApplicationJobContext.beforeFirstApplicationInstruction();
+                            captured.complete(
+                                    ZLinkSerialExecutionQueue.captureCurrentCallbackExecutor());
+                            return CompletableFuture.completedFuture(null);
+                        },
+                        null);
+            }
+            executor.take().run();
+            var observed = new CompletableFuture<Boolean>();
+            captured.get(3, TimeUnit.SECONDS)
+                    .execute(
+                            () ->
+                                    observed.complete(
+                                            ZLinkApplicationJobContext.current().isPresent()));
+            executor.runUntil(observed);
+            assertFalse(observed.get(3, TimeUnit.SECONDS));
+            assertTrue(ZLinkApplicationJobContext.current().isEmpty());
+            assertEquals(0, jobs.snapshot().permitsInUse());
+        }
+    }
+
+    @Test
+    void propagatedExecutorRetainsQueuedApplicationJobOwnership() throws Exception {
+        CountingExecutor executor = new CountingExecutor();
+        CountingExecutor handler = new CountingExecutor();
+        var queue = new ZLinkSerialExecutionQueue(executor, ZLinkExecutionLanePolicy.session());
+        var observed = new CompletableFuture<ZLinkApplicationJobQueue.Permit>();
+        var completed = new CompletableFuture<Void>();
+        try (var jobs = applicationJobs()) {
+            var permit = jobs.acquireBlocking(ZLinkApplicationJobQueue.Origin.REMOTE);
+            CompletionStage<Void> dispatch;
+            try (var ignored = ZLinkApplicationJobContext.enter(permit)) {
+                dispatch =
+                        queue.enqueue(
+                                () -> {
+                                    ZLinkSerialExecutionQueue.propagateCurrent(handler)
+                                            .execute(
+                                                    () -> {
+                                                        observed.complete(
+                                                                ZLinkApplicationJobContext.current()
+                                                                        .orElse(null));
+                                                        ZLinkApplicationJobContext
+                                                                .beforeFirstApplicationInstruction();
+                                                        completed.complete(null);
+                                                    });
+                                    return completed;
+                                },
+                                null);
+            }
+            executor.take().run();
+            assertEquals(1, jobs.snapshot().permitsInUse());
+            handler.take().run();
+            dispatch.toCompletableFuture().get(3, TimeUnit.SECONDS);
+            assertSame(permit, observed.get(3, TimeUnit.SECONDS));
+            assertTrue(ZLinkApplicationJobContext.current().isEmpty());
+            assertEquals(0, jobs.snapshot().permitsInUse());
+        }
+    }
+
+    private static ZLinkApplicationJobQueue applicationJobs() {
+        return new ZLinkApplicationJobQueue(
+                ZLinkApplicationJobQueueProfile.BALANCED,
+                OptionalLong.of(1),
+                new ZLinkApplicationJobQueue.ProcessorCandidates(1, 1, 1, 1));
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
     void committedMessageSubmitsDirectlyToItsWorker(boolean shared) throws Exception {
         var submittingThread = new AtomicReference<Thread>();
         var submitted = new CompletableFuture<Void>();
@@ -1585,7 +1701,8 @@ final class ZLinkSerialExecutionQueueTest {
                                 () -> {
                                     order.add("first-start");
                                     started.complete(null);
-                                    return remote.thenRun(() -> order.add("first-end"));
+                                    return ZLinkSerialExecutionQueue.yieldCurrent(remote)
+                                            .thenRun(() -> order.add("first-end"));
                                 })
                         .toCompletableFuture();
         started.get(3, TimeUnit.SECONDS);
@@ -1683,7 +1800,7 @@ final class ZLinkSerialExecutionQueueTest {
                 queue.enqueueLifecycleBarrier(
                                 () -> {
                                     order.add("lifecycle");
-                                    return remote;
+                                    return ZLinkSerialExecutionQueue.yieldCurrent(remote);
                                 })
                         .toCompletableFuture();
         close.whenComplete((ignored, failure) -> order.add("continuation"));
@@ -1729,7 +1846,7 @@ final class ZLinkSerialExecutionQueueTest {
                 queue.enqueueLifecycleBarrier(
                                 () -> {
                                     order.add("lifecycle-start");
-                                    return lifecycleRemote;
+                                    return ZLinkSerialExecutionQueue.yieldCurrent(lifecycleRemote);
                                 })
                         .toCompletableFuture();
         lifecycle.whenComplete((ignored, failure) -> order.add("lifecycle-resume"));
@@ -1780,9 +1897,10 @@ final class ZLinkSerialExecutionQueueTest {
         CompletableFuture<Void> close =
                 queue.enqueueLifecycleBarrier(
                                 () ->
-                                        queue.awaitQuiescence(
-                                                        ZLinkSerialExecutionQueue.Quiescence
-                                                                .APPLICATION)
+                                        ZLinkSerialExecutionQueue.yieldCurrent(
+                                                        queue.awaitQuiescence(
+                                                                ZLinkSerialExecutionQueue.Quiescence
+                                                                        .APPLICATION))
                                                 .thenRun(() -> order.add("close")))
                         .toCompletableFuture();
         CompletableFuture<Void> laterLifecycle =

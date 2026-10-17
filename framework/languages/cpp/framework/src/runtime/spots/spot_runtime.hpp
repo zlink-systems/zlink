@@ -27,6 +27,7 @@
 #include <zlink/framework/contracts/workers/worker.hpp>
 
 #include <atomic>
+#include <limits>
 #include <cassert>
 #include <chrono>
 #include <cstdint>
@@ -330,6 +331,15 @@ class spot_node_builder_state_t
     std::map<std::string, std::int32_t> spot_stable_type_limits;
     std::map<std::string, spot_relocation_coordination_mode_t> spot_relocation_coordination_modes;
     actor_transfer_coordinator_t actor_transfer_coordinator;
+    // Earliest instant the node's own Actor management (handoff request
+    // expiry, remote leave and source cleanup) can be due, written on lane.
+    // An insertion resets it to management_due_now; pending leaves or
+    // cleanups keep it there because they follow transfer events.
+    static constexpr std::chrono::steady_clock::rep management_due_now =
+      std::numeric_limits<std::chrono::steady_clock::rep>::min ();
+    static constexpr std::chrono::steady_clock::rep management_never_due =
+      std::numeric_limits<std::chrono::steady_clock::rep>::max ();
+    std::atomic<std::chrono::steady_clock::rep> management_next_due{management_due_now};
     struct actor_join_relocation_recovery_t
     {
         std::string handoff_id;
@@ -1813,6 +1823,7 @@ class spot_node_runtime_t
                                 std::uint64_t target_spot_generation = 0,
                                 std::uint64_t target_spot_authority_owner_generation = 0);
     void dispatch_wire_actor_join_admission (const spot_id_t &target_spot_id,
+                                             std::string_view actor_id,
                                              std::function<task_t<void> ()> admission,
                                              std::function<void ()> rejected,
                                              std::function<void ()> completed = {});
@@ -2084,7 +2095,7 @@ class spot_node_runtime_t
     }
 
   private:
-    std::vector<actor_ref_t> local_actor_refs_on_lane () const;
+    task_t<std::vector<actor_ref_t>> local_actor_refs_async () const;
     std::size_t active_user_spot_count_on_lane () const;
     std::optional<std::string> spot_name_for_unlocked (const spot_id_t &spot_id) const;
 
@@ -2148,6 +2159,7 @@ class spot_node_runtime_t
       const std::string &join_spot_id,
       const std::vector<zlink::message_t> &parts,
       const zlink::message_t &request,
+      bool remote_transfer,
       bool targets_entry_spot,
       const std::string &local_node_rid,
       service_provider_t &services,

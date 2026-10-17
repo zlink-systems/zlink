@@ -145,18 +145,7 @@ export class ZLinkInMemoryLocationStore
                     typeCapacity.limit)))
           );
         },
-        identityClaimed: (authorityKey) => this.entrySpotClaims.has(authorityKey),
-        hasSpotMembers: (spotId, objectGeneration) => {
-          for (const actor of this.actors.rows.values()) {
-            if (
-              actor.spotKind === ZLinkSpotKind.User &&
-              String(actor.spotId) === spotId &&
-              actor.spotGeneration === objectGeneration
-            )
-              return true;
-          }
-          return false;
-        }
+        identityClaimed: (authorityKey) => this.entrySpotClaims.has(authorityKey)
       },
       now
     );

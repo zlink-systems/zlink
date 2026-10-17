@@ -346,7 +346,7 @@ final class ZLinkSpotActivationFactory {
         }
         return (ownerQueue == null
                         ? context.runLifecycle(spot::onInitialize)
-                        : systems.zlink.framework.execution.ZLinkSerialExecutionQueue.yieldCurrent(
+                        : systems.zlink.framework.execution.ZLinkSerialExecutionQueue.manageCurrent(
                                 context.runLifecycleExecution(spot::onInitialize)
                                         .exceptionallyCompose(
                                                 failure ->
