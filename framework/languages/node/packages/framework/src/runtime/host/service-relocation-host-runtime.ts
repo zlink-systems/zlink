@@ -163,6 +163,7 @@ import type { ZLinkTrackedInstanceAuthority } from '../locations/spot-location-c
 import { decodeRoutingId, encodeRoutingIdStorageHex, routingIdsEqual } from '../routing-id';
 import type { DefaultZLinkSpotManager } from '../spots';
 import type { ZLinkSpotActivation } from '../spots/spot-activation-state';
+import type { ZLinkSpotRouteTarget } from '../spots/spot-routing-internal';
 import { createProviderInstance } from '../spots/spot-provider';
 import { decodeHandoffBacklog } from '../spots/spot-remote-codec';
 import { committedActorOwnerFence, type ZLinkActorTransferRuntime } from './actor-transfer-runtime';
@@ -506,7 +507,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         target.applicationVersion,
         input.signal,
         {
-          spotId: input.target.spotId,
+          ...input.target,
           spotKind:
             input.target.spotKind === ZLinkSpotKind.Entry
               ? ZLinkSpotKind.Entry
@@ -725,6 +726,11 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
             id: `actor:${state.actorId}`,
             relocate: async (relocationSignal) => {
               await relocateShell(relocationSignal);
+              const spotAuthority = await requireAuthority(
+                this.requireLocationStore(),
+                encodeAuthorityKey('user_spot', String(activation.spotId)),
+                relocationSignal
+              );
               await this.relocateStandaloneActor(
                 meshName,
                 state,
@@ -732,15 +738,14 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
                 targetApplicationVersion,
                 relocationSignal,
                 {
-                  spotId: activation.spotId,
-                  spotKind: ZLinkSpotKind.User,
-                  spotObjectGeneration: (
-                    await requireAuthority(
-                      this.requireLocationStore(),
-                      encodeAuthorityKey('user_spot', String(activation.spotId)),
-                      relocationSignal
-                    )
-                  ).objectGeneration
+                  ...committedSpotRoute(
+                    meshName,
+                    activation.spotId,
+                    ZLinkSpotKind.User,
+                    spotAuthority.allocation.descriptor.rid,
+                    spotAuthority
+                  ),
+                  spotObjectGeneration: spotAuthority.objectGeneration
                 }
               );
             }
@@ -1705,6 +1710,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
             const committedAuthority = followAuthorities.get(
               encodeAuthorityKey('actor', session.state.actorId).value
             );
+            const committedSpot = followAuthorities.get(spotKey.value);
             const targetActorRef = {
               actorId: session.state.actorId,
               objectGeneration: actorAuthorities.get(session.state.actorId)!.objectGeneration,
@@ -1712,15 +1718,15 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
               nodeRid: target.rid
             };
             await session.prepared.commit(
-              {
-                routerChannelId: meshName,
-                targetNodeRid: target.rid,
-                spotId: activation.spotId,
-                spotKind: kind === 'user_spot' ? ZLinkSpotKind.User : ZLinkSpotKind.Instance,
-                authorityOwnerGeneration: committedAuthority?.authorityOwnerGeneration
-              } as never,
+              committedSpotRoute(
+                meshName,
+                activation.spotId,
+                kind === 'user_spot' ? ZLinkSpotKind.User : ZLinkSpotKind.Instance,
+                target.rid,
+                committedSpot
+              ),
               targetActorRef,
-              committedAuthority === undefined
+              committedAuthority === undefined || committedSpot === undefined
                 ? null
                 : committedActorOwnerFence(
                     session.state.actorId,
@@ -1893,8 +1899,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     target: ZLinkMeshNodeDescriptor | undefined,
     targetApplicationVersion: bigint | undefined,
     signal?: AbortSignal,
-    targetMembership?: {
-      readonly spotId: RoutingId;
+    targetMembership?: ZLinkSpotRouteTarget & {
       readonly spotKind: ZLinkSpotKind.Entry | ZLinkSpotKind.User;
       readonly spotObjectGeneration: bigint;
     },
@@ -1941,10 +1946,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       true,
       target,
       meshName,
-      {
-        spotId: membershipSpotId,
-        spotKind: targetMembership?.spotKind ?? ZLinkSpotKind.Entry
-      },
+      targetMembership,
       relocationWireId(aggregateId),
       retainSourceForActorJoin
     );
@@ -2174,10 +2176,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     standalone = false,
     target?: ZLinkMeshNodeDescriptor,
     meshName?: string,
-    targetMembership?: {
-      readonly spotId: RoutingId;
-      readonly spotKind: ZLinkSpotKind.Entry | ZLinkSpotKind.User;
-    },
+    targetMembership?: ZLinkSpotRouteTarget,
     sessionRelocation?: ServiceWireOperationId,
     retainSourceForActorJoin = false
   ): ServiceRelocationCaptureUnit {
@@ -2253,8 +2252,6 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
           return;
         const failures: unknown[] = [];
         try {
-          const membershipSpotId =
-            targetMembership?.spotId ?? ((target.entrySpotId ?? String(target.rid)) as RoutingId);
           const committedAuthority = followAuthorities.get(
             encodeAuthorityKey('actor', state.actorId).value
           );
@@ -2265,13 +2262,12 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
             nodeRid: target.rid
           };
           await ownSession.prepared.commit(
-            {
+            targetMembership ?? {
               routerChannelId: meshName,
               targetNodeRid: target.rid,
-              spotId: membershipSpotId,
-              spotKind: targetMembership?.spotKind ?? ZLinkSpotKind.Entry,
-              authorityOwnerGeneration: committedAuthority?.authorityOwnerGeneration
-            } as never,
+              spotId: (target.entrySpotId ?? String(target.rid)) as RoutingId,
+              spotKind: ZLinkSpotKind.Entry
+            },
             targetActorRef,
             committedAuthority === undefined
               ? null
@@ -4651,6 +4647,27 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     }
     return await request.call(node, targetNodeRid, frames, { timeoutMs, signal, onSubmitted });
   }
+}
+
+function committedSpotRoute<TKind extends ZLinkSpotKind.User | ZLinkSpotKind.Instance>(
+  meshName: string,
+  spotId: RoutingId,
+  spotKind: TKind,
+  targetNodeRid: RoutingId,
+  authority: ZLinkAuthoritySnapshot | undefined
+): ZLinkSpotRouteTarget & { readonly spotKind: TKind } {
+  return {
+    routerChannelId: meshName,
+    targetNodeRid,
+    spotId,
+    spotKind,
+    targetSpotGeneration: authority?.objectGeneration,
+    targetNodeGeneration: authority?.allocation.descriptorLifecycleGeneration,
+    authorityOwnerGeneration: authority?.authorityOwnerGeneration,
+    targetOwnerId: authority?.ownerId,
+    ownerLeaseGeneration: authority?.ownerLeaseGeneration,
+    authorityStoreVersion: authority?.storeVersion.value
+  };
 }
 
 function canonicalActorJoinRecovery(
