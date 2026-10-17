@@ -686,8 +686,9 @@ bool concurrent_actor_handle_lookup (const nlohmann::json &lease)
         start.arrive_and_wait ();
         while (!creation_finished.load (std::memory_order_relaxed))
             std::this_thread::yield ();
+        fw::runtime::host::pending_operation_t operation;
         const auto submitted = mesh->submit_application_actor_entry_spot_join (
-          missing, node, zlink::message_t{}, operation_timeout,
+          missing, node, zlink::message_t{}, operation_timeout, operation,
           [] (fw::result_t<fw::detail::actor_join_reply_t>) {});
         rejected_missing =
           !submitted && submitted.error_kind () == fw::framework_error_kind_t::not_found;
