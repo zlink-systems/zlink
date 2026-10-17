@@ -233,7 +233,7 @@ export class ZLinkSpotActivation {
   }
 
   async notifyRelocatedBoundary(): Promise<void> {
-    await this.serial.post(() =>
+    await this.serial.postBarrierTurn(() =>
       this.notifyRelocationReadyCompleted(ZLinkSpotRelocationReadyOutcome.Relocated)
     );
   }

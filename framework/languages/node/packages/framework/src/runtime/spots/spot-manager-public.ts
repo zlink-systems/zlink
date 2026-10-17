@@ -264,7 +264,7 @@ export class ZLinkPublicSpotManager implements ZLinkSpotManager {
             }
           };
         } catch (error) {
-          this.options.local.abortUserSpotPublication(target.meshName, spotId);
+          await this.options.local.abortUserSpotPublication(target.meshName, spotId);
           throw error;
         }
       },

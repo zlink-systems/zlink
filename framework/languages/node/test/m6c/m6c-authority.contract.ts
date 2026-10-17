@@ -1845,8 +1845,12 @@ test('public User Spot coordinator hides Pending, runs one factory, then publish
       spotId: request.spotId,
       state: ZLinkSpotCreateState.Created,
       publication: {
-        publish: () => publicationOrder.push('publish'),
-        abort: () => publicationOrder.push('abort')
+        publish: () => {
+          publicationOrder.push('publish');
+        },
+        abort: () => {
+          publicationOrder.push('abort');
+        }
       }
     };
   });
