@@ -183,7 +183,7 @@ task_scheduler_t capture_host_continuation_scheduler (bool scope_exit_only)
     // Classify the registered caller for the provider's reuse decision; this
     // snapshot grants no execution authority on the completing thread.
     const bool caller_owned_turn = caller_job != nullptr || current_held_serial_turn () != nullptr;
-    return [caller_job, scope_exit_only, caller_owned_turn] (std::function<void ()> work) {
+    return [caller_job, scope_exit_only, caller_owned_turn] (std::function<void ()> &&work) {
         {
             std::lock_guard lock (runtime::executor_mutex ());
             if (runtime::executor_shutdown_requested () || runtime::executor_owner_count () == 0) {

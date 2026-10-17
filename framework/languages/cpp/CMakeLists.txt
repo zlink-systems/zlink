@@ -1833,6 +1833,10 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     "framework-unit;framework-regression;async")
   zlink_framework_cpp_add_boost_headers(test_cpp_framework_async_task)
   add_zlink_framework_test(
+    test_cpp_framework_completion_allocations
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_completion_allocations.cpp
+    "framework-unit;framework-regression;async")
+  add_zlink_framework_test(
     test_cpp_framework_outside_runtime_resumption
     tests/Zlink.Framework.UnitTests/test_cpp_framework_outside_runtime_resumption.cpp
     "framework-unit;framework-regression;async")

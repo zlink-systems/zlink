@@ -675,7 +675,7 @@ bool verify_ownerless_wait_after_context_stop ()
 {
     using namespace zlink::framework;
     task_completion_source_t<int> source;
-    auto view = detail::with_task_resume_scheduler (source.task (), [] (std::function<void ()>) {
+    auto view = detail::with_task_resume_scheduler (source.task (), [] (std::function<void ()> &&) {
         throw framework_exception_t (framework_error_kind_t::shutting_down,
                                      "registered context stopped");
     });

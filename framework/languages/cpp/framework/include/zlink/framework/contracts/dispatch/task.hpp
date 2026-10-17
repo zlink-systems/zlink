@@ -31,7 +31,8 @@ template <typename T> class task_completion_source_t;
 namespace detail
 {
 
-using task_scheduler_t = std::function<void (std::function<void ()>)>;
+// A scheduler can reject without consuming work, allowing its caller to fall back.
+using task_scheduler_t = std::function<void (std::function<void ()> &&)>;
 
 inline constexpr char registered_execution_context_shutting_down_message[] =
   "registered execution context is shutting down";
@@ -50,6 +51,15 @@ bool can_reuse_completion_turn (bool known_runtime_worker = false,
 void dispatch_completion (std::function<void ()> work,
                           bool inline_allowed = false,
                           const void *owner = nullptr);
+inline bool dispatch_shutdown_fallback (std::function<void ()> &work,
+                                        const std::stop_token &wait_owner,
+                                        bool inline_allowed)
+{
+    if (wait_owner.stop_possible ())
+        return false;
+    dispatch_completion (std::move (work), inline_allowed);
+    return true;
+}
 void ensure_blocking_submit_allowed ();
 std::stop_token current_wait_owner ();
 std::stop_token exchange_wait_owner (std::stop_token token);
@@ -287,7 +297,7 @@ inline task_scheduler_t capture_native_continuation_scheduler ()
             if (work)
                 work ();
         };
-        auto dispatch = [turn_scheduler, resume = std::move (resume)] () mutable {
+        std::function<void ()> dispatch = [turn_scheduler, resume = std::move (resume)] () mutable {
             if (turn_scheduler) {
                 turn_scheduler (std::move (resume));
             } else {
@@ -296,13 +306,14 @@ inline task_scheduler_t capture_native_continuation_scheduler ()
         };
         if (runtime_scheduler) {
             try {
-                runtime_scheduler (dispatch);
+                runtime_scheduler (std::move (dispatch));
                 return;
             }
             catch (const framework_exception_t &error) {
                 if (error.kind () != framework_error_kind_t::shutting_down
-                    || ambient.wait_owner.stop_possible ())
+                    || !dispatch_shutdown_fallback (dispatch, ambient.wait_owner, inline_allowed))
                     throw;
+                return;
             }
         }
         dispatch_completion (std::move (dispatch), inline_allowed);
@@ -367,14 +378,14 @@ class task_wait_registration_t : public std::enable_shared_from_this<task_wait_r
         if (_started.load (std::memory_order_acquire))
             return true;
         auto self = shared_from_this ();
-        auto resume = [self, lifetime = std::move (lifetime)] {
+        std::function<void ()> resume = [self, lifetime = std::move (lifetime)] {
             (void) lifetime; // Retain the terminal result until delivery finishes.
             self->resume (false);
         };
         const bool inline_allowed = _ambient.infrastructure_wait || _turn != nullptr;
         try {
             if (_scheduler)
-                _scheduler (resume);
+                _scheduler (std::move (resume));
             else
                 dispatch_completion (std::move (resume), inline_allowed);
         }
@@ -387,11 +398,8 @@ class task_wait_registration_t : public std::enable_shared_from_this<task_wait_r
             /* Cancellation §5.1: the owner ends this wait, even when its stop
              * is already requested and its callback has not run yet. The
              * registration stays owned until that callback settles it. */
-            if (_ambient.wait_owner.stop_possible ())
+            if (!dispatch_shutdown_fallback (resume, _ambient.wait_owner, inline_allowed))
                 return false;
-            // The host has stopped, but no invocation owns this wait. Preserve
-            // the result and callback in the process completion turn instead.
-            dispatch_completion (std::move (resume), inline_allowed);
             return true;
         }
         return true;
