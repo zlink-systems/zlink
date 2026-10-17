@@ -286,6 +286,30 @@ actor_route_fence_t read_actor_route_fence (std::span<const std::uint8_t> bytes,
 } // namespace
 
 std::vector<std::uint8_t>
+encode_session_disconnected (const session_disconnected_identity_t &identity)
+{
+    std::vector<std::uint8_t> bytes;
+    append_bytes8 (bytes, identity.session_owner_node_rid, "Session owner node RID");
+    append_nonzero_u64 (bytes, identity.session_owner_node_generation,
+                        "Session owner node generation");
+    append_nonzero_u64 (bytes, identity.binding_generation, "binding generation");
+    return bytes;
+}
+
+session_disconnected_identity_t decode_session_disconnected (std::span<const std::uint8_t> bytes)
+{
+    std::size_t offset = 0;
+    session_disconnected_identity_t identity;
+    identity.session_owner_node_rid = read_bytes8 (bytes, offset, "Session owner node RID");
+    identity.session_owner_node_generation =
+      read_nonzero_u64 (bytes, offset, "Session owner node generation");
+    identity.binding_generation = read_nonzero_u64 (bytes, offset, "binding generation");
+    if (offset != bytes.size ())
+        throw service_wire_error_t ("Session disconnect identity has trailing bytes");
+    return identity;
+}
+
+std::vector<std::uint8_t>
 pack_infrastructure_reply (const std::vector<std::vector<std::uint8_t>> &parts)
 {
     std::size_t size = 1;

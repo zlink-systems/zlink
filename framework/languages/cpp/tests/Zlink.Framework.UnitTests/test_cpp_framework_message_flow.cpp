@@ -718,6 +718,32 @@ int main ()
                  != log_level_t::error) {
             return 27;
         }
+        auto disconnected_error = error_event ();
+        disconnected_error.message_kind = dispatch_message_kind_t::actor_request;
+        disconnected_error.reason = dispatch_error_reason_t::invalid_frame;
+        disconnected_error.action = dispatch_error_action_t::drop;
+        disconnected_error.packet_name = runtime::protocol::session_disconnected_packet_name;
+        if (detail::dispatch_error_reporter_t::default_log_level (disconnected_error)
+            != log_level_t::warn) {
+            return 71;
+        }
+        disconnected_error.packet_name = "other.actor.packet";
+        if (detail::dispatch_error_reporter_t::default_log_level (disconnected_error)
+            != log_level_t::error) {
+            return 72;
+        }
+        disconnected_error.packet_name = runtime::protocol::session_disconnected_packet_name;
+        disconnected_error.action = dispatch_error_action_t::reply_error;
+        if (detail::dispatch_error_reporter_t::default_log_level (disconnected_error)
+            != log_level_t::error) {
+            return 73;
+        }
+        disconnected_error.action = dispatch_error_action_t::drop;
+        disconnected_error.reason = dispatch_error_reason_t::handler_exception;
+        if (detail::dispatch_error_reporter_t::default_log_level (disconnected_error)
+            != log_level_t::error) {
+            return 74;
+        }
         if (enum_name (message_flow_outcome_t::received) != "received"
             || enum_name (message_flow_outcome_t::admitted) != "admitted"
             || enum_name (message_flow_outcome_t::dispatched) != "dispatched"

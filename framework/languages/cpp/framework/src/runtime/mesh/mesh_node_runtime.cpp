@@ -3988,50 +3988,34 @@ mesh_node_runtime_t::retire_application_actor_session (runtime::stateful::stream
 }
 
 task_t<void> mesh_node_runtime_t::notify_application_actor_disconnected (
-  const actor_ref_t &actor, const node_rid_t &target_node, std::chrono::milliseconds timeout)
+  const actor_ref_t &actor,
+  runtime::stateful::stream_binding_t binding,
+  std::chrono::milliseconds timeout)
 {
-    if (!_serializers) {
+    if (!binding.connection.owner_node_rid || binding.connection.owner_node_generation == 0)
         throw framework_exception_t (framework_error_kind_t::protocol_error,
-                                     "MeshNode serializers are not configured");
-    }
-    try {
-        runtime::messaging::client_call_codec_t codec;
-        auto envelope =
-          codec.create_envelope (runtime::messaging::message_kind_t::request, "spot",
-                                 spot_actor_disconnect_route_request_t::packet_name, timeout);
-        auto encoded = codec.encode_envelope_parts (
-          envelope, make_spot_actor_disconnect_route_request (actor), *_serializers);
-        host::pending_operation_t operation;
-        const auto submitted = co_await native_node ().request_to_node (
-          zlink::routing_id_t::from (std::string (target_node.value ())), encoded.items (),
-          operation, timeout);
-        if (submitted != zlink::submit_result_t::ok) {
-            throw framework_exception_t (framework_error_kind_t::internal_failure,
-                                         "Actor disconnect notification was not submitted");
-        }
-        auto completed = co_await await_completion (operation);
-        if (completed.record.terminal_result != static_cast<int> (zlink::request_result_t::ok)) {
-            throw framework_exception_t (framework_error_kind_t::internal_failure,
-                                         "Actor disconnect notification returned an error");
-        }
-        runtime::messaging::message_parts_t reply (std::move (completed.parts));
-        auto decoded = codec.decode_envelope_reply<spot_actor_disconnect_route_reply_t> (
-          reply, *_serializers, "Actor disconnect reply is empty",
-          "Actor disconnect reply decode failed", "DisconnectActor");
-        if (!decoded) {
-            throw decoded.error ()
-              ? *decoded.error ()
-              : framework_exception_t (framework_error_kind_t::internal_failure,
-                                       "Actor disconnect notification failed");
-        }
-        co_return;
-    }
-    catch (const framework_exception_t &error) {
-        throw error;
-    }
-    catch (const std::exception &error) {
-        throw framework_exception_t (framework_error_kind_t::internal_failure, error.what ());
-    }
+                                     "Actor disconnect source identity is unavailable");
+    const auto target =
+      actor_ref_access_t::make (node_rid_t::from_string (binding.actor.node_id),
+                                std::string (actor_ref_access_t::actor_type (actor)),
+                                binding.actor.key, binding.actor.object_generation);
+    const stream_header_t header (stream_message_kind_t::request, stream_codec_t::raw,
+                                  stream_header_flags_t::none, std::nullopt,
+                                  runtime::protocol::session_disconnected_packet_name);
+    const auto payload = zlink::message_t::from (runtime::protocol::encode_session_disconnected (
+      {binding.connection.owner_node_rid->to_bytes (), binding.connection.owner_node_generation,
+       binding.binding_generation}));
+    runtime::protocol::actor_route_fence_t route{
+      binding.actor.key,
+      binding.actor.object_generation,
+      zlink::routing_id_t::from (binding.actor.node_id).to_bytes (),
+      binding.target_node_generation,
+      binding.actor.authority_owner_generation,
+      binding.owner_lease_generation};
+    auto request = relay_application_actor (target, header, payload, timeout, false, std::nullopt,
+                                            std::move (route));
+    co_await detail::request_task_access_t::physical_reply (request);
+    co_return;
 }
 
 result_t<mesh_node_runtime_t::operation_completion_t>

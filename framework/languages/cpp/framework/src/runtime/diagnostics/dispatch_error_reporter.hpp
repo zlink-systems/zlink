@@ -10,6 +10,7 @@
 #include "runtime/diagnostics/diagnostic_event_sink.hpp"
 #include "runtime/diagnostics/dispatch_diagnostics_names.hpp"
 #include "runtime/diagnostics/message_flow_tracer.hpp"
+#include "runtime/protocol/service_wire_codec.hpp"
 
 #include <atomic>
 #include <cstdint>
@@ -104,11 +105,17 @@ class dispatch_error_reporter_t
 
     /* channel 메시징 §3.1: drop 여부와 오류 분류는 별개다. application 코드가 던진 handler
      * 예외는 one-way라도 Error로 남기고, handler 없음·decode 실패·invalid frame은 send를
-     * Warning, publish를 Debug로 낮춘다. request는 error reply로 끝나므로 Error를 유지한다. */
+     * Warning, publish를 Debug로 낮춘다. request는 error reply로 끝나므로 Error를 유지한다.
+     * Session-Actor binding §7의 malformed disconnect는 성공 응답과 Warning으로 끝난다. */
     static log_level_t default_log_level (const message_dispatch_error_event_t &event) noexcept
     {
         if (event.reason == dispatch_error_reason_t::handler_exception) {
             return log_level_t::error;
+        }
+        if (event.packet_name == runtime::protocol::session_disconnected_packet_name
+            && event.reason == dispatch_error_reason_t::invalid_frame
+            && event.action == dispatch_error_action_t::drop) {
+            return log_level_t::warn;
         }
         switch (event.message_kind) {
             case dispatch_message_kind_t::publish:

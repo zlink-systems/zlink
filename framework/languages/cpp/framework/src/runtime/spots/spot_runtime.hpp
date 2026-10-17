@@ -2063,7 +2063,11 @@ class spot_node_runtime_t
       std::function<void ()> transfer_owner_reservation = {},
       std::size_t transferred_owner_byte_cost = 0,
       std::shared_ptr<actor_dispatch_admission_token_t> admission_token = {});
-    task_t<void> notify_actor_disconnected_erased (const actor_ref_t &actor_ref) const;
+    task_t<zlink::message_t> notify_actor_disconnected_erased (void *instance,
+                                                               std::type_index actor_type,
+                                                               actor_gateway_runtime_t gateway,
+                                                               zlink::message_t body,
+                                                               spot_handler_kind_t kind) const;
 
     template <typename TActor>
     std::optional<std::reference_wrapper<TActor>> actor_instance (const actor_ref_t &actor_ref)
