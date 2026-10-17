@@ -54,7 +54,8 @@ class fanout_location_runtime_t final : public fanout_runtime_t
 
     void start ();
     void stop ();
-    bool republish_after_store_recovery ();
+    bool republish_after_store_recovery (
+      location_write_intent_t intent = location_write_intent_t::new_claim);
     bool empty () const noexcept;
 
     fanout_channel_snapshot_t snapshot (std::string channel_name) const override;
@@ -74,7 +75,7 @@ class fanout_location_runtime_t final : public fanout_runtime_t
                           const std::optional<location_owner_token_t> &owner);
     void start_subscriber (const channel_snapshot_t &channel);
     void run ();
-    void publish_descriptors ();
+    bool publish_descriptors (location_write_intent_t intent);
     void reconcile_subscribers ();
     void reconcile_subscriber (subscriber_entry_t &subscriber);
     void publish_snapshot_changes ();

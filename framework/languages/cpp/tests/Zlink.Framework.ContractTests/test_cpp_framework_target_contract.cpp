@@ -809,7 +809,7 @@ int main ()
     const auto recovery_owner_check =
       location_auto_connect.find ("owner_lease_usable ()", complete_recovery_snapshot);
     const auto recovery_republish =
-      location_auto_connect.find ("republish_after_store_recovery ()", recovery_owner_check);
+      location_auto_connect.find ("republish_after_store_recovery (intent)", recovery_owner_check);
     const auto recovery_invalidation = location_auto_connect.find (
       "invalidate_all_routes_after_store_recovery ();", recovery_republish);
     const auto recovery_diff =
