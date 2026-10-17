@@ -429,14 +429,13 @@ final class ZLinkJavaRawMeshNode
                 local, local, message, metadata, wire.encodeFrameworkMultipartFrame(parts));
     }
 
-    byte[] encodeLocalActorAccepted(
+    ZLinkServiceM6BWireCodec.ActorMessage localActorMessage(
             ZLinkBackendActorRef actor,
             RoutingId sourceNodeRid,
             RoutingId sourceSessionRid,
             long sourceBindingGeneration,
             long sourceSessionSequence,
-            long requestId,
-            List<Message> parts) {
+            long requestId) {
         ZLinkInternalMeshNode.PeerAuthorityFence local = localAuthorityFence;
         ZLinkServiceNodeDescriptor descriptor = localDescriptor;
         ZLinkJavaRawSpotNode spots = (ZLinkJavaRawSpotNode) spotNode();
@@ -450,7 +449,7 @@ final class ZLinkJavaRawMeshNode
                         && (sourceBindingGeneration <= 0 || sourceSessionSequence <= 0)
                 || ownerGeneration <= 0
                 || ownerLeaseGeneration <= 0) {
-            return new byte[0];
+            return null;
         }
         var boundSession =
                 sourceSessionRid == null
@@ -458,21 +457,26 @@ final class ZLinkJavaRawMeshNode
                         : new ZLinkServiceM6BWireCodec.BoundSessionTail(
                                 sourceSessionRid, sourceBindingGeneration, sourceSessionSequence);
         UUID operation = UUID.randomUUID();
-        var message =
-                new ZLinkServiceM6BWireCodec.ActorMessage(
-                        requestId != 0,
-                        0,
-                        requestId == 0 ? null : requestId,
-                        operation.getMostSignificantBits(),
-                        operation.getLeastSignificantBits(),
-                        0,
-                        null,
-                        new ZLinkServiceM6BWireCodec.ActorRouteFence(
-                                actor,
-                                descriptor.lifecycleGeneration(),
-                                ownerGeneration,
-                                ownerLeaseGeneration),
-                        boundSession);
+        return new ZLinkServiceM6BWireCodec.ActorMessage(
+                requestId != 0,
+                0,
+                requestId == 0 ? null : requestId,
+                operation.getMostSignificantBits(),
+                operation.getLeastSignificantBits(),
+                0,
+                null,
+                new ZLinkServiceM6BWireCodec.ActorRouteFence(
+                        actor,
+                        descriptor.lifecycleGeneration(),
+                        ownerGeneration,
+                        ownerLeaseGeneration),
+                boundSession);
+    }
+
+    byte[] encodeLocalActorAccepted(
+            ZLinkServiceM6BWireCodec.ActorMessage message, List<Message> parts) {
+        if (message == null) return new byte[0];
+        ZLinkInternalMeshNode.PeerAuthorityFence local = localAuthorityFence;
         return ZLinkServiceFrozenRecordCodec.encodeActor(
                 local, local, message, new byte[0], wire.encodeFrameworkMultipartFrame(parts));
     }

@@ -473,39 +473,39 @@ export class RawServiceMeshRuntime {
     for (const listener of this.peerConnectionIntentRemoved) listener(nodeRoutingId);
   }
 
-  announcePeer(nodeRoutingId: string): Promise<boolean> {
-    if (this.closed) return Promise.resolve(false);
+  announcePeer(nodeRoutingId: string): boolean {
+    if (this.closed) return false;
     const generation = this.selectedRoutes.get(nodeRoutingId);
-    if (generation === undefined) return Promise.resolve(false);
-    const current = () => {
-      const admission = this.topology.routeAdmission(nodeRoutingId);
-      return (
-        this.selectedRoutes.get(nodeRoutingId) === generation &&
-        !(
-          admission?.connectionId === routeConnectionId(generation) &&
-          admission.remoteAdmitReceived === true
-        ) &&
-        this.peerAdmissionSealed?.() !== true
-      );
-    };
+    if (generation === undefined) return false;
     const key = controlSendKey(nodeRoutingId, M6aServiceWireCommand.hello);
-    if (!current()) {
+    if (!this.isPeerAnnouncementCurrent(nodeRoutingId, generation)) {
       this.controlSends.delete(key);
-      return Promise.resolve(false);
+      return false;
     }
+    const current = () => this.isPeerAnnouncementCurrent(nodeRoutingId, generation);
     const existing = this.controlSends.get(key);
     const hello =
       existing?.current?.() === true
         ? existing.hello!
         : encodeRouteMeshAdmission(M6aServiceWireCommand.hello, this.topology.localDescriptor());
-    return Promise.resolve(
-      this.startControlSend(
-        nodeRoutingId,
-        M6aServiceWireCommand.hello,
-        () => this.submitControl(nodeRoutingId, [hello]),
-        current,
-        hello
-      )
+    return this.startControlSend(
+      nodeRoutingId,
+      M6aServiceWireCommand.hello,
+      () => this.submitControl(nodeRoutingId, [hello]),
+      current,
+      hello
+    );
+  }
+
+  private isPeerAnnouncementCurrent(nodeRoutingId: string, generation: bigint): boolean {
+    const admission = this.topology.routeAdmission(nodeRoutingId);
+    return (
+      this.selectedRoutes.get(nodeRoutingId) === generation &&
+      !(
+        admission?.connectionId === routeConnectionId(generation) &&
+        admission.remoteAdmitReceived === true
+      ) &&
+      this.peerAdmissionSealed?.() !== true
     );
   }
 
@@ -1802,7 +1802,7 @@ export class RawServiceMeshRuntime {
 }
 
 function controlSendKey(target: string, command: number): string {
-  return JSON.stringify([target, command]);
+  return `${command}:${target}`;
 }
 
 function routeConnectionId(generation: bigint): string {

@@ -122,6 +122,8 @@ import {
 import {
   decodeApplicationPayloadView,
   decodeMultipartApplicationPayloadView,
+  decodeMultipartApplicationParts,
+  decodeMultipartParts,
   encodeMultipartApplicationPayload,
   ServiceWireProtocolError,
   type ServiceApplicationPayload
@@ -1629,28 +1631,30 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
 
   private pump(): void {
     if (this.closed || this.pumpTask !== undefined) return;
-    const runtime = this.requireRuntime();
-    // Install the owned task before running callbacks that can signal readiness again.
-    this.pumpTask = Promise.resolve().then(async () => {
-      try {
-        do {
-          const ready = this.readable;
-          this.readable = 0;
-          const more = await runtime.pumpBatch((ready & 1) !== 0, (ready & 2) !== 0);
-          if (more) {
-            // Yield only after actual progress, retaining readiness across the
-            // existing batch limits until receive reports no data.
-            this.readable |= 1;
-            await yieldToIO();
-          }
-        } while (!this.closed && this.readable !== 0);
-      } catch (error) {
-        runtime.reportInfrastructureFailure(error);
-      } finally {
-        this.pumpTask = undefined;
-        this.scheduleMaintenance();
-      }
-    });
+    this.pumpTask = this.runPump(this.requireRuntime());
+  }
+
+  private async runPump(runtime: RawServiceMeshRuntime): Promise<void> {
+    // Publish pumpTask before any callback can signal readiness or begin close.
+    await Promise.resolve();
+    try {
+      do {
+        const ready = this.readable;
+        this.readable = 0;
+        const more = await runtime.pumpBatch((ready & 1) !== 0, (ready & 2) !== 0);
+        if (more) {
+          // Yield only after actual progress, retaining readiness across the
+          // existing batch limits until receive reports no data.
+          this.readable |= 1;
+          await yieldToIO();
+        }
+      } while (!this.closed && this.readable !== 0);
+    } catch (error) {
+      runtime.reportInfrastructureFailure(error);
+    } finally {
+      this.pumpTask = undefined;
+      this.scheduleMaintenance();
+    }
   }
 
   private notifyReady(): void {
@@ -2369,7 +2373,11 @@ function decodeMultipartRecord(
   const header = record.parts[0]!;
   const command = header[SERVICE_WIRE_COMMAND_OFFSET]!;
   const payloadFrame = record.parts[1]!;
-  const application = decodeMultipartApplicationPayloadView(payloadFrame);
+  const parts = decodeMultipartApplicationParts(
+    payloadFrame,
+    ZLinkBufferMessage.fromOwned,
+    closeMultipartMessage
+  );
   const channelName = record.owner.startsWith('channel:')
     ? record.owner.slice('channel:'.length)
     : null;
@@ -2404,14 +2412,14 @@ function decodeMultipartRecord(
     channelName,
     topic: null,
     applicationMetadata: null,
-    packetName: application.packetName,
-    contentType: application.contentType,
+    packetName: SERVICE_FRAMEWORK_MULTIPART_PACKET_NAME,
+    contentType: SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE,
     kindData: null,
     terminalResult: 0,
     failureErrno: 0,
     applicationJobPermit: applicationJob,
     releaseRetainedIngress: applicationJob === undefined ? undefined : releaseRecordApplicationJob,
-    parts: decodeMultipart(application.payload),
+    parts,
     reply(parts) {
       if (record.correlation === undefined) return SubmitResult.InvalidState;
       runtime.reply(record, encodeMultipartApplicationFrame(parts));
@@ -2689,47 +2697,6 @@ function closeMultipartMessage(part: FrameworkMessage): void {
 
 function borrowMultipartPart(part: Buffer): Buffer {
   return part;
-}
-
-function decodeMultipartParts<T>(
-  payload: Uint8Array,
-  materialize: (part: Buffer) => T,
-  release?: (part: T) => void
-): T[] {
-  const bytes = Buffer.isBuffer(payload)
-    ? payload
-    : Buffer.from(payload.buffer, payload.byteOffset, payload.byteLength);
-  if (bytes.length < 4) throw new ServiceWireProtocolError('Truncated multipart payload.');
-  const count = bytes.readUInt32BE(0);
-  if (count === 0 || count > Math.floor((bytes.length - 4) / 4)) {
-    throw new ServiceWireProtocolError('Invalid multipart part count.');
-  }
-  const result = new Array<T>(count);
-  let offset = 4;
-  let index = 0;
-  try {
-    for (; index < count; index++) {
-      if (bytes.length - offset < 4) {
-        throw new ServiceWireProtocolError('Truncated multipart part length.');
-      }
-      const length = bytes.readUInt32BE(offset);
-      offset += 4;
-      if (bytes.length - offset < length) {
-        throw new ServiceWireProtocolError('Truncated multipart part.');
-      }
-      result[index] = materialize(bytes.subarray(offset, offset + length));
-      offset += length;
-    }
-    if (offset !== bytes.length) {
-      throw new ServiceWireProtocolError('Multipart payload has trailing bytes.');
-    }
-    return result;
-  } catch (error) {
-    if (release !== undefined) {
-      for (let retained = 0; retained < index; retained++) release(result[retained]!);
-    }
-    throw error;
-  }
 }
 
 function messageBytesView(value: MessageLike): Uint8Array {

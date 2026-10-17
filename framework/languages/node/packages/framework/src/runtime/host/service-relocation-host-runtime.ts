@@ -848,10 +848,9 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     const payload = record.parts[0]!.data();
     const command = serviceRelocationControlCommand(payload);
     if (command === undefined) {
-      if (record.kind !== ReceiveKind.NodeSend) return false;
+      if (record.kind !== ReceiveKind.NodeSend || record.parts.length !== 1) return false;
       const sourceLeave = decodeRemoteActorSourceLeaveTerminal(payload);
       if (sourceLeave === undefined) return false;
-      if (record.parts.length !== 1) return false;
       return this.acceptActorJoinSourceLeave(sourceLeave);
     }
     return this.handleControl(meshName, record, payload, command, signal);

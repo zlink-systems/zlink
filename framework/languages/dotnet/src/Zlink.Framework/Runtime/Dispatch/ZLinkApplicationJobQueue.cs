@@ -336,29 +336,18 @@ internal sealed class ZLinkApplicationJobQueue : IDisposable
         return acquired.Count == 0 ? null : new ZLinkApplicationJobQueueLease(this, origin);
     }
 
-    internal int TryAcquireBatch(
-        ZLinkApplicationJobQueueLease?[] destination,
-        int offset,
-        int maximum,
-        ZLinkApplicationJobOrigin origin
-    ) => AwaitStateLane(TryAcquireBatchAsync(destination, offset, maximum, origin));
-
-    internal async ValueTask<int> TryAcquireBatchAsync(
-        ZLinkApplicationJobQueueLease?[] destination,
-        int offset,
-        int maximum,
-        ZLinkApplicationJobOrigin origin
-    )
+    // Spec 08 I1: one receive rotation reserves its permit budget as a count
+    // before it claims any record. ZLinkApplicationJobQueueReservation creates
+    // a lease only for a claimed record and returns the rest.
+    internal int TryReserveBatch(int maximum)
     {
-        ArgumentOutOfRangeException.ThrowIfNegative(offset);
         ArgumentOutOfRangeException.ThrowIfNegative(maximum);
-        if (offset > destination.Length - maximum)
-            throw new ArgumentOutOfRangeException(nameof(maximum));
-        var acquired = await _lane
-            .RunAsync(() => ReserveAvailableOnLane(maximum))
-            .ConfigureAwait(false);
-        for (var index = 0; index < acquired.Count; index++)
-            destination[offset + index] = new ZLinkApplicationJobQueueLease(this, origin);
+        var acquired = AwaitStateLane(
+            _lane.RunAsync(
+                static state => state.Queue.ReserveAvailableOnLane(state.Maximum),
+                (Queue: this, Maximum: maximum)
+            )
+        );
         if (acquired.PressureChanged)
             _receiveFlowController.ApplyPending();
         return acquired.Count;
@@ -455,22 +444,6 @@ internal sealed class ZLinkApplicationJobQueue : IDisposable
             (Queue: this, Lease: lease)
         );
 
-    internal void MarkQueuedBatch(IReadOnlyList<ZLinkApplicationJobQueueLease?> leases, int count)
-    {
-        if (count == 0)
-            return;
-        var marked = new ZLinkApplicationJobQueueLease[count];
-        var markedCount = 0;
-        for (var index = 0; index < count; index++)
-            if (leases[index] is { } lease)
-                marked[markedCount++] = lease;
-        _lane.TryPost(() =>
-        {
-            for (var index = 0; index < markedCount; index++)
-                MarkQueuedOnLane(marked[index]);
-        });
-    }
-
     private void MarkQueuedOnLane(ZLinkApplicationJobQueueLease lease)
     {
         if (!lease.TryMarkQueued())
@@ -497,34 +470,39 @@ internal sealed class ZLinkApplicationJobQueue : IDisposable
         CompleteRelease(released);
     }
 
-    internal void ReleaseBatch(IReadOnlyList<ZLinkApplicationJobQueueLease?> leases)
+    // The single return of a rotation's reserved permits that no claimed
+    // record took. Each returned permit may admit the oldest waiter, as a
+    // released lease does.
+    internal void ReleaseReserved(int count)
     {
-        List<ZLinkApplicationJobQueueLease>? owned = null;
-        for (var index = 0; index < leases.Count; index++)
-            if (leases[index] is { } lease)
-                (owned ??= []).Add(lease);
-        if (owned is not null)
-            _ = ReleaseBatchAsync(owned);
+        if (count > 0)
+            _ = ReleaseReservedAsync(count);
     }
 
-    private async Task ReleaseBatchAsync(List<ZLinkApplicationJobQueueLease> leases)
+    private async Task ReleaseReservedAsync(int count)
     {
         var released = await _lane
-            .RunAsync(() =>
-            {
-                List<ReleaseResult>? results = null;
-                foreach (var lease in leases)
-                {
-                    var result = ReleaseOnLane(lease);
-                    if (result.AdmittedWaiter is not null || result.PressureChanged)
-                        (results ??= []).Add(result);
-                }
-                return results;
-            })
+            .RunAsync(
+                static state => state.Queue.ReleaseReservedOnLane(state.Count),
+                (Queue: this, Count: count)
+            )
             .ConfigureAwait(false);
         if (released is not null)
             foreach (var result in released)
                 CompleteRelease(result);
+    }
+
+    private List<ReleaseResult>? ReleaseReservedOnLane(int count)
+    {
+        List<ReleaseResult>? results = null;
+        for (var index = 0; index < count; index++)
+        {
+            _reservedSupplyPermits = checked(_reservedSupplyPermits - 1);
+            var result = AdmitNextWaiterOnLane();
+            if (result.AdmittedWaiter is not null || result.PressureChanged)
+                (results ??= []).Add(result);
+        }
+        return results;
     }
 
     private ReleaseResult ReleaseOnLane(ZLinkApplicationJobQueueLease lease)
@@ -536,7 +514,11 @@ internal sealed class ZLinkApplicationJobQueue : IDisposable
             _reservedSupplyPermits = checked(_reservedSupplyPermits - 1);
         else
             _queuedApplicationJobs = checked(_queuedApplicationJobs - 1);
+        return AdmitNextWaiterOnLane();
+    }
 
+    private ReleaseResult AdmitNextWaiterOnLane()
+    {
         while (_waiters.First is { } node)
         {
             var candidate = node.Value;
@@ -1170,6 +1152,70 @@ internal sealed class ZLinkApplicationJobQueueLease : IDisposable
         Reserved = 0,
         Queued = 1,
         Released = 2,
+    }
+}
+
+/// <summary>
+/// One receive rotation's permits, reserved on the queue before any record is
+/// claimed (spec 08 I1). A lease exists only for a claimed record: the
+/// reserved count stays in <see cref="ZLinkApplicationJobQueue"/>'s reserved
+/// supply counter, and <see cref="Dispose"/> is the one place that returns the
+/// permits no record took. Without a queue, claims carry no lease.
+/// </summary>
+internal struct ZLinkApplicationJobQueueReservation : IDisposable
+{
+    private readonly ZLinkApplicationJobQueue? _owner;
+    private readonly ZLinkApplicationJobOrigin _origin;
+    private ZLinkApplicationJobQueueLease? _held;
+    private int _unleased;
+
+    internal ZLinkApplicationJobQueueReservation(
+        ZLinkApplicationJobQueue? owner,
+        ZLinkApplicationJobOrigin origin,
+        ZLinkApplicationJobQueueLease? held,
+        int unleased = 0
+    )
+    {
+        _owner = owner;
+        _origin = origin;
+        _held = held;
+        _unleased = unleased;
+    }
+
+    internal readonly int Count => (_held is null ? 0 : 1) + _unleased;
+
+    /// <summary>Reserves the queue's available permits up to <paramref name="maximum"/> in all.</summary>
+    internal void ReserveAvailable(int maximum) =>
+        _unleased += _owner!.TryReserveBatch(Math.Max(0, maximum - Count));
+
+    /// <summary>Takes one reserved permit for a claimed record.</summary>
+    internal ZLinkApplicationJobQueueLease? Claim()
+    {
+        if (Count == 0)
+            throw new InvalidOperationException("The reservation has no unclaimed permit.");
+        if (_held is { } held)
+        {
+            _held = null;
+            return held;
+        }
+        _unleased--;
+        return _owner is null ? null : new ZLinkApplicationJobQueueLease(_owner, _origin);
+    }
+
+    public void Dispose()
+    {
+        var held = _held;
+        var unleased = _unleased;
+        _held = null;
+        _unleased = 0;
+        try
+        {
+            held?.Dispose();
+        }
+        finally
+        {
+            _owner?.ReleaseReserved(unleased);
+        }
     }
 }
 

@@ -117,7 +117,7 @@ final class ZLinkCanonicalRelocationSettlementTest {
         fixture.connected.set(readyAtObservation);
         var settlement =
                 fixture.source
-                        .settle(
+                        .settleAuthority(
                                 fixture.targetRid,
                                 fixture.request.fence(),
                                 Instant.now().plusSeconds(30))
@@ -135,7 +135,14 @@ final class ZLinkCanonicalRelocationSettlementTest {
         if (!settlement.isDone()) fixture.nextManagementTurn();
         assertTrue(settlement.isDone(), "the source must observe the target's committed authority");
         assertEquals(
-                ZLinkRelocationTransitionClient.Settlement.TARGET_COMMITTED, settlement.join());
+                ZLinkRelocationTransitionClient.Settlement.TARGET_COMMITTED,
+                settlement.join().outcome());
+        var target = settlement.join().target();
+        assertNotNull(target, "target settlement must retain the exact authority snapshot");
+        assertEquals(fixture.targetOwner.ownerId(), target.ownerId());
+        assertEquals(fixture.targetOwner.leaseGeneration(), target.ownerLeaseGeneration());
+        assertEquals(
+                fixture.authority().authorityOwnerGeneration(), target.authorityOwnerGeneration());
         assertEquals(emptyBatch ? 0 : 2, fixture.endpoint.relayed().size());
         assertEquals(1, fixture.commits.get());
     }
