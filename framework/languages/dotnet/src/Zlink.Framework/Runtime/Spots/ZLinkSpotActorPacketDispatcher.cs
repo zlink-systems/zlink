@@ -62,7 +62,7 @@ internal sealed class ZLinkSpotActorPacketDispatcher(
             return;
         }
 
-        scope.Dropped(dispatchErrors);
+        ReportMissingSendHandler(dispatchErrors, actor, header, sourceSessionRid);
     }
 
     public async ValueTask<ZLinkActorReply?> DispatchForReplyAsync(
@@ -120,6 +120,27 @@ internal sealed class ZLinkSpotActorPacketDispatcher(
             }
 
         return MissingHandlerReply(dispatchErrors, actor, header, sourceSessionRid);
+    }
+
+    internal static void ReportMissingSendHandler(
+        ZLinkDispatchErrorReporter errors,
+        IZLinkActor actor,
+        ZlinkStreamHeader header,
+        RoutingId? sourceSessionRid
+    )
+    {
+        var scope = new ZLinkDispatchFlowScope(
+            ZLinkDispatchErrorSurface.SpotActor,
+            errors.Flow.CaptureEnabled,
+            ZLinkDispatchMessageKind.ActorSend,
+            header.Name,
+            correlationId: header.CorrelationId,
+            actorId: actor.Context.ActorId,
+            streamSessionId: errors.Enabled && sourceSessionRid is { IsEmpty: false } sessionRid
+                ? sessionRid.ToHex()
+                : null
+        );
+        scope.HandlerMissing(errors, ZLinkDispatchErrorAction.Drop);
     }
 
     internal static ZLinkActorReply MissingHandlerReply(

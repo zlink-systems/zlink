@@ -355,6 +355,72 @@ public sealed partial class EntrySpotActorDispatchTests
         }
     }
 
+    [Theory]
+    [InlineData(false, ZLinkDiagnosticsLevel.Detailed)]
+    [InlineData(true, ZLinkDiagnosticsLevel.Detailed)]
+    [InlineData(false, ZLinkDiagnosticsLevel.Errors)]
+    [InlineData(true, ZLinkDiagnosticsLevel.Errors)]
+    public async Task Owned_durable_send_without_a_handler_reports_one_dispatch_error(
+        bool liveActivation,
+        ZLinkDiagnosticsLevel diagnosticsLevel
+    )
+    {
+        using var observer = new CapturingMessageFlowObserver();
+        var (runtime, actorRef) = await CreateStartedRuntimeAsync(
+            new CapturingSpotNode(),
+            observer,
+            messageFlowMode: diagnosticsLevel,
+            userSpotType: typeof(EmptyUserSpot)
+        );
+        try
+        {
+            RegisterProbeActor(runtime, actorRef);
+            var state = runtime.GetOrCreateActorState(actorRef.ActorId);
+            if (liveActivation)
+            {
+                var created = await runtime.GetOrCreateAsync<EmptyUserSpot>("owned-send-spot");
+                state.JoinSpot(GetSpotActivation(runtime, created.Spot.SpotId));
+            }
+            var pipeline = new ZLinkActorInboundPipeline(
+                runtime,
+                new ZLinkEntrySpotActorInboundEndpoint(runtime)
+            );
+            const string packet = "owned-missing-send";
+            var frames = ZLinkActorHandoffIngress.CaptureMovingFrames(
+                ZLinkApplicationJobOrigin.Remote,
+                runtime,
+                CreateActorRequestParts(
+                    actorRef,
+                    packet,
+                    "owned",
+                    requestId: 0,
+                    flags: 0,
+                    kind: ZlinkStreamMessageKind.Send
+                )
+            );
+            var terminals = state.AdmitDurablePrefix([
+                new ZLinkActorDurableRecord(ct => new ValueTask(
+                    pipeline.DispatchOwnedFrameAsync(frames, null, ct)
+                )),
+            ]);
+            await Task.WhenAll(terminals).WaitAsync(TimeSpan.FromSeconds(5));
+            var error = Assert.Single(
+                observer.Events.Where(flow => flow.PacketName == packet && flow.Outcome == "failed")
+            );
+            Assert.Equal("actor", error.Surface);
+            Assert.Equal("send", error.MessageKind);
+            Assert.Equal("no_handler", error.Reason);
+            Assert.Equal("drop", error.Action);
+            Assert.Equal(actorRef.ActorId, error.ActorId);
+            Assert.Equal("corr-1", error.CorrelationId);
+            Assert.Equal(RoutingId.From("source-session").ToHex(), error.StreamSessionId);
+        }
+        finally
+        {
+            await runtime.StopAsync(default);
+        }
+    }
+
     private sealed class FifoActivationNode
         : CapturingSpotNode,
             IZLinkBackendSessionRelocationBarrier

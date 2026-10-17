@@ -1090,7 +1090,8 @@ internal sealed class ZLinkEntrySpotActorInboundEndpoint(ZLinkFrameworkRuntime r
                 )
                 .ConfigureAwait(false);
         else
-            _ = await runtime
+        {
+            var handled = await runtime
                 .TrySubmitEntrySpotActorAsync(
                     actor,
                     state,
@@ -1100,6 +1101,17 @@ internal sealed class ZLinkEntrySpotActorInboundEndpoint(ZLinkFrameworkRuntime r
                     sourceSessionRid
                 )
                 .ConfigureAwait(false);
+            if (!handled)
+                ZLinkSpotActorPacketDispatcher.ReportMissingSendHandler(
+                    new ZLinkDispatchErrorReporter(
+                        runtime.Registration.DispatchOptions,
+                        runtime: runtime
+                    ),
+                    actor,
+                    header,
+                    sourceSessionRid
+                );
+        }
     }
 
     public async ValueTask<ZLinkActorReply?> DispatchForReplyAsync(
