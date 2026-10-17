@@ -411,10 +411,12 @@ runs the completion callback after processing the lifecycle callback and
 source membership cleanup. If completion keeps failing, the Actor is kept
 sealed, and regular messages behind the barrier aren't run.
 
-When one handler registers Joins for several Actors, each Actor's Join is an
-independent operation. "The Actor is moving" in the table above ends when that
-Actor's own Join reaches its terminal result. It doesn't wait for the Joins of
-other Actors registered by the same handler.
+When one handler registers Joins for several Actors, each Join is an operation
+for its own Actor. "The Actor is moving" in the table above is cleared when that
+Actor's own Join terminal and the completion ordering of its
+[Deferred Join barrier](../00-foundation/02-glossary.en.md#deferred-join-barrier)
+have finished. Completion of other Actors' Joins registered by the same handler is
+not a condition for clearing it.
 
 A same-node join isn't relocation, so it's allowed even if the relocation
 policy is `DisableRelocation`.
