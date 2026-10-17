@@ -312,7 +312,7 @@ final class ZLinkSpringHandlerFactory implements ZLinkHandlerActivator {
         private Object[] resolveArguments(
                 ConstructorPlan constructor, DependencyResolver dependencyResolver) {
             ParameterPlan[] parameters = constructor.parameters();
-            Object[] arguments = new Object[parameters.length];
+            Object[] arguments = parameters.length == 0 ? null : new Object[parameters.length];
             for (int index = 0; index < parameters.length; index++) {
                 ParameterPlan parameter = parameters[index];
                 Object supplied = dependencyResolver.resolve(parameter.type());

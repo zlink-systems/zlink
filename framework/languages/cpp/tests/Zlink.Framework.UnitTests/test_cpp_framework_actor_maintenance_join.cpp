@@ -4,6 +4,8 @@
 #include "runtime/locations/in_memory_store_providers.hpp"
 #include "runtime/stateful/public_host_runtime.hpp"
 #include "runtime/mesh/mesh_node_runtime.hpp"
+#include "runtime/actors/actor_gateway_runtime.hpp"
+#include "runtime/diagnostics/dispatch_options_access.hpp"
 #include "runtime/locations/authority_key_codec.hpp"
 #include "runtime/execution/serial_execution_queue.hpp"
 #include "runtime/diagnostics/dispatch_options_access.hpp"
@@ -11,6 +13,7 @@
 #include <zlink/stream_connector.hpp>
 #include <gtest/gtest.h>
 #include <algorithm>
+#include <atomic>
 #include <condition_variable>
 #include <cstdio>
 #include <future>
@@ -20,6 +23,7 @@
 #include <stdexcept>
 #include <thread>
 #include <tuple>
+#include <utility>
 
 namespace
 {
@@ -47,6 +51,14 @@ constexpr auto factory_failed_spot = "factory-failed";
 constexpr auto framework_failed_spot = "framework-failed";
 constexpr auto rejected_spot = "rejected";
 constexpr auto rejection_reply = "room is full";
+enum class creation_case_t
+{
+    accepted,
+    rejected,
+    failed,
+    publication_failed
+};
+constexpr auto entry_target = "entry";
 struct observations_t
 {
     std::mutex mutex;
@@ -56,6 +68,8 @@ struct observations_t
     bool leave_entered = false;
     bool materialization_entered = false;
     int instances = 0;
+    creation_case_t creation_case = creation_case_t::accepted;
+    int creation_callbacks = 0;
     bool fail_remote_factory = false;
     int remote_factory_failure_count = 0;
     std::vector<int> destroyed;
@@ -63,11 +77,28 @@ struct observations_t
     int destroy_callbacks = 0;
     int entry_joined = 0;
     int entry_left = 0;
+    std::atomic<fw::actor_client_t *> joined_sender{nullptr};
+    bool release_replay_post = false;
+    bool next_join_attempted = false;
+    bool send_after_close = false;
+    std::string next_join_error;
+    int session_pushes = 0;
+    std::vector<int> joined_payloads;
+    std::vector<int> handled_payloads;
+    std::vector<fw::message_flow_event_t> replay_failures;
+    int backlog_appends = 0;
+    int ordinary_posts = 0;
+    bool fail_completion = false;
+    bool hold_replay_prefix = false;
+    bool replay_prefix_entered = false;
+    bool release_replay_prefix = false;
+    fw::task_completion_source_t<void> joined_send_captured;
     fw::task_completion_source_t<void> release_leave;
     bool probe_admission_observed = false;
     std::optional<std::size_t> completion_to_hold;
     fw::task_completion_source_t<void> release_completion;
     std::vector<std::string> factory_nodes;
+    std::vector<int> recorded;
 } *observations;
 struct move_t
 {
@@ -99,6 +130,12 @@ struct view_t
     int instance{};
 };
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE (view_t, instance)
+struct record_t
+{
+    static constexpr const char *packet_name = "maintenance-join-record";
+    int value{};
+};
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE (record_t, value)
 class actor_t final : public fw::actor_t
 {
   public:
@@ -131,6 +168,8 @@ class actor_t final : public fw::actor_t
         observations->changed.notify_all ();
         if (hold)
             co_await observations->release_completion.task ();
+        if (observations->fail_completion)
+            throw std::runtime_error ("completion callback failed");
         co_return;
     }
 
@@ -169,6 +208,15 @@ class entry_t final : public fw::entry_spot_t<actor_t>
         _context.handlers ().add_actor_send<&entry_t::move> ();
         _context.handlers ().add_actor_request<&entry_t::probe> ();
         _context.handlers ().add_actor_send<&entry_t::view> ();
+        _context.handlers ().add_actor_send<&entry_t::record> ();
+    }
+    void record (actor_t &, fw::message_context_t &, const record_t &request)
+    {
+        {
+            std::lock_guard lock (observations->mutex);
+            observations->recorded.push_back (request.value);
+        }
+        observations->changed.notify_all ();
     }
     fw::task_t<void> view (actor_t &actor, fw::message_context_t &, const view_request_t &)
     {
@@ -181,6 +229,19 @@ class entry_t final : public fw::entry_spot_t<actor_t>
     void move (actor_t &actor, fw::message_context_t &, const move_t &request)
     {
         actor.context ().join_spot (fw::spot_id_t (request.target)).defer ();
+    }
+    fw::task_t<fw::actor_create_response_t> on_create_actor (actor_t &,
+                                                             const fw::message_t &) override
+    {
+        {
+            std::lock_guard lock (observations->mutex);
+            ++observations->creation_callbacks;
+        }
+        if (observations->creation_case == creation_case_t::failed)
+            throw std::runtime_error ("Entry creation failed");
+        co_return observations->creation_case == creation_case_t::rejected
+          ? fw::actor_create_response_t::reject ()
+          : fw::actor_create_response_t::accept ();
     }
     fw::task_t<void> on_actor_joined (actor_t &) override
     {
@@ -242,6 +303,7 @@ class room_t final : public fw::spot_t<actor_t>
     {
         _context.handlers ().add_actor_send<&room_t::move> ();
         _context.handlers ().add_actor_request<&room_t::probe> ();
+        _context.handlers ().add_actor_send<&room_t::push> ();
         _context.handlers ().add_actor_send<&room_t::view> ();
         _context.handlers ().add_handler<&room_t::ready> ();
     }
@@ -256,10 +318,52 @@ class room_t final : public fw::spot_t<actor_t>
     }
     void move (actor_t &actor, fw::message_context_t &, const move_t &request)
     {
-        actor.context ().join_spot (fw::spot_id_t (request.target)).defer ();
+        if (request.target == entry_target) {
+            actor.context ().join_entry_spot ().defer ();
+            return;
+        }
+        if (!observations->joined_sender || request.target != current_spot) {
+            actor.context ().join_spot (fw::spot_id_t (request.target)).defer ();
+            return;
+        }
+        try {
+            actor.context ().join_spot (fw::spot_id_t (request.target)).defer ();
+        }
+        catch (const std::exception &error) {
+            {
+                std::lock_guard lock (observations->mutex);
+                observations->next_join_error = error.what ();
+                observations->next_join_attempted = true;
+            }
+            observations->changed.notify_all ();
+            throw;
+        }
+        {
+            std::lock_guard lock (observations->mutex);
+            observations->next_join_attempted = true;
+        }
+        observations->changed.notify_all ();
+    }
+    fw::task_t<void> push (actor_t &actor, fw::message_context_t &, const probe_t &message)
+    {
+        if (!observations->joined_payloads.empty ()) {
+            {
+                std::lock_guard lock (observations->mutex);
+                observations->handled_payloads.push_back (message.value);
+            }
+            observations->changed.notify_all ();
+            if (message.value < 0)
+                throw std::runtime_error ("replayed payload failed");
+            co_return;
+        }
+        co_await actor.context ().bound_session ().send (message).async ();
     }
     probe_t probe (actor_t &actor, fw::message_context_t &, const probe_t &request)
     {
+        if (!observations->joined_payloads.empty ()) {
+            std::lock_guard lock (observations->mutex);
+            observations->handled_payloads.push_back (request.value);
+        }
         return request.value == instance_probe ? probe_t{actor.instance} : request;
     }
     fw::task_t<fw::spot_actor_join_result_t> on_actor_join (std::string_view,
@@ -275,7 +379,27 @@ class room_t final : public fw::spot_t<actor_t>
         co_return _context.spot_id () == maintenance_spot ? fw::spot_actor_join_result_t::reject ()
                                                           : fw::spot_actor_join_result_t::accept ();
     }
-    fw::task_t<void> on_actor_joined (actor_t &) override { co_return; }
+    fw::task_t<void> on_actor_joined (actor_t &actor) override
+    {
+        if (observations->joined_sender && _context.spot_id () == local_spot) {
+            if (observations->joined_payloads.empty ()) {
+                co_await observations->joined_sender.load ()
+                  ->send (actor.context ().actor_id (), move_t{current_spot})
+                  .async ();
+            } else {
+                for (const auto value : observations->joined_payloads)
+                    co_await observations->joined_sender.load ()
+                      ->send (actor.context ().actor_id (), probe_t{value})
+                      .async ();
+            }
+            co_await observations->joined_send_captured.task ();
+        }
+        if (observations->joined_sender && _context.spot_id () == current_spot)
+            co_await observations->joined_sender.load ()
+              ->send (actor.context ().actor_id (), probe_t{1})
+              .async ();
+        co_return;
+    }
     fw::task_t<void> on_closing (const fw::spot_closing_context_t &context,
                                  std::stop_token) override
     {
@@ -318,10 +442,15 @@ struct release_callbacks_t
     observations_t &e;
     ~release_callbacks_t ()
     {
+        {
+            std::lock_guard lock (e.mutex);
+            e.release_replay_post = true;
+            e.release_replay_prefix = true;
+        }
+        e.changed.notify_all ();
+        e.joined_send_captured.complete (fw::result_t<void>::success ());
         e.release_leave.complete (fw::result_t<void>::success ());
         e.release_completion.complete (fw::result_t<void>::success ());
-        std::lock_guard lock (e.mutex);
-        e.changed.notify_all ();
     }
 };
 struct host_t
@@ -368,6 +497,42 @@ void configure (host_t &host,
     }
     host.app.logging ().use_file (rid + ".flow").set_min_level (fw::log_level_t::debug);
     options.configure_dispatch ().message_flow (fw::message_flow_log_mode_t::detailed);
+    fw::detail::dispatch_options_access_t::set_observer_for_tests (
+      options.configure_dispatch (), [] (const fw::message_flow_event_t &event) {
+          bool captured = false;
+          {
+              std::lock_guard lock (observations->mutex);
+              if ((event.packet_name == move_t::packet_name
+                   || event.packet_name == probe_t::packet_name)
+                  && event.detail_stage == "relay_actor_packet.try_append_backlog"
+                  && event.detail_result == "result=appended") {
+                  ++observations->backlog_appends;
+                  captured = observations->backlog_appends >= static_cast<int> (
+                               std::max<std::size_t> (1, observations->joined_payloads.size ()));
+              }
+              if (event.packet_name == probe_t::packet_name && event.spot_id == local_spot
+                  && event.message_kind == fw::dispatch_message_kind_t::actor_request
+                  && event.detail_stage == "invoke_erased.post_serial")
+                  ++observations->ordinary_posts;
+              if (event.packet_name == "handoff_replay_failed")
+                  observations->replay_failures.push_back (event);
+          }
+          observations->changed.notify_all ();
+          if (captured)
+              observations->joined_send_captured.complete (fw::result_t<void>::success ());
+          if (observations->hold_replay_prefix && event.packet_name == "handoff_replay_enqueued") {
+              std::unique_lock lock (observations->mutex);
+              observations->replay_prefix_entered = true;
+              observations->changed.notify_all ();
+              observations->changed.wait (lock, [] { return observations->release_replay_prefix; });
+          }
+          if (!observations->joined_sender || observations->send_after_close
+              || event.packet_name != move_t::packet_name || event.spot_id != local_spot
+              || event.detail_stage != "invoke_erased.post_serial")
+              return;
+          std::unique_lock lock (observations->mutex);
+          observations->changed.wait (lock, [] { return observations->release_replay_post; });
+      });
     options.add_location_store (store);
     options.add_relocation_store (relocations);
     auto mesh = options.add_route_mesh (mesh_name);
@@ -547,6 +712,570 @@ bool peer_ready (fw::route_mesh_runtime_t &routes,
     while (!ready () && std::chrono::steady_clock::now () < deadline)
         std::this_thread::yield ();
     return ready ();
+}
+
+void joined_actor_chain (bool send_after_close)
+{
+    observations_t evidence;
+    evidence.send_after_close = send_after_close;
+    observations = &evidence;
+    host_t host;
+    release_callbacks_t release{evidence};
+    configure (host, first_rid, std::make_shared<fw::runtime::in_memory_location_store_t> (),
+               std::make_shared<fw::runtime::in_memory_relocation_store_t> ());
+    host.start ();
+    ASSERT_TRUE (ready (host));
+    auto services = host.app.advanced ().services ().build_provider ();
+    auto &client = services.get_required<fw::actor_client_t> ();
+    if (!send_after_close)
+        evidence.joined_sender = &client;
+    auto &spots = services.get_required<fw::spot_manager_t> ();
+    for (const auto *id : {local_spot, current_spot})
+        ASSERT_TRUE (spots.get_or_create (fw::spot_id_t (id), room_type).async ().result ());
+    const auto created = services.get_required<fw::actor_manager_t> ()
+                           .get_or_create (fw::actor_id_t (actor_id), actor_type)
+                           .async ()
+                           .result ();
+    ASSERT_TRUE (created);
+    const auto actor = std::get<fw::actor_create_created_t> (created.value ()).actor;
+    ASSERT_TRUE (services.get_required<fw::detail::actor_gateway_runtime_t> ().bind_session_sink (
+      actor, [&] (std::string, fw::stream_codec_t, const zlink::message_t &) -> fw::task_t<void> {
+          {
+              std::lock_guard lock (evidence.mutex);
+              ++evidence.session_pushes;
+          }
+          evidence.changed.notify_all ();
+          co_return;
+      }));
+    std::shared_ptr<fw::runtime::serial_execution_queue_t> source_queue;
+    if (send_after_close) {
+        const auto state =
+          fw::detail::mesh_node_runtime_t::registrations (host.app.advanced ().zlink ())
+            .front ()
+            ->spot_state;
+        const auto key = std::string (actor_type) + ":" + actor_id;
+        const auto context =
+          state->lane
+            .run ([&] {
+                return fw::detail::spot_context_access_t::state (
+                  state->spot_contexts_by_id.at (std::string (state->actor_spot_ids.at (key))));
+            })
+            .get ();
+        source_queue = context->ensure_spot_serial_executor ()->actor_executor (key)->queue ();
+    }
+    ASSERT_TRUE (client.send (fw::actor_id_t (actor_id), move_t{local_spot}).async ().result ());
+    if (send_after_close) {
+        std::unique_lock entered (evidence.mutex);
+        ASSERT_TRUE (evidence.changed.wait_for (entered, wait_budget,
+                                                [&] { return !evidence.completions.empty (); }));
+        entered.unlock ();
+        const auto state =
+          fw::detail::mesh_node_runtime_t::registrations (host.app.advanced ().zlink ())
+            .front ()
+            ->spot_state;
+        const auto key = std::string (actor_type) + ":" + actor_id;
+        const auto deadline = std::chrono::steady_clock::now () + wait_budget;
+        while (state->actor_transfer_coordinator.phase (key)
+               && std::chrono::steady_clock::now () < deadline)
+            std::this_thread::yield ();
+        const bool closed = !state->actor_transfer_coordinator.phase (key);
+        ASSERT_TRUE (closed);
+        source_queue->drain ();
+        evidence.joined_sender = &client;
+        ASSERT_TRUE (
+          client.send (fw::actor_id_t (actor_id), move_t{current_spot}).async ().result ());
+    }
+    std::unique_lock lock (evidence.mutex);
+    const auto attempted =
+      evidence.changed.wait_for (lock, wait_budget, [&] { return evidence.next_join_attempted; });
+    evidence.release_replay_post = true;
+    evidence.changed.notify_all ();
+    ASSERT_TRUE (attempted);
+    ASSERT_TRUE (evidence.next_join_error.empty ())
+      << evidence.next_join_error << " completions=" << evidence.completions.size ()
+      << " pushes=" << evidence.session_pushes;
+    ASSERT_TRUE (evidence.changed.wait_for (
+      lock, wait_budget,
+      [&] { return evidence.completions.size () >= 2 && evidence.session_pushes == 1; }))
+      << "completions=" << evidence.completions.size () << " pushes=" << evidence.session_pushes;
+    for (const auto &completion : evidence.completions)
+        EXPECT_TRUE (std::holds_alternative<fw::actor_join_accepted_t> (completion));
+}
+
+TEST (ActorMaintenanceJoin, JoinedActorSendCanDeferNextJoin)
+{
+    joined_actor_chain (false);
+}
+TEST (ActorMaintenanceJoin, AssignmentAfterMoveClosesReachesSession)
+{
+    joined_actor_chain (true);
+}
+
+enum class backlog_case_t
+{
+    ordinary_order,
+    completion_failure,
+    replay_failure
+};
+void local_join_backlog (backlog_case_t scenario)
+{
+    observations_t evidence;
+    evidence.joined_payloads =
+      scenario == backlog_case_t::replay_failure ? std::vector<int>{-1} : std::vector<int>{1, 2};
+    evidence.fail_completion = scenario == backlog_case_t::completion_failure;
+    evidence.hold_replay_prefix = scenario == backlog_case_t::ordinary_order;
+    observations = &evidence;
+    host_t host;
+    release_callbacks_t release{evidence};
+    configure (host, first_rid, std::make_shared<fw::runtime::in_memory_location_store_t> (),
+               std::make_shared<fw::runtime::in_memory_relocation_store_t> ());
+    host.start ();
+    ASSERT_TRUE (ready (host));
+    auto services = host.app.advanced ().services ().build_provider ();
+    auto &client = services.get_required<fw::actor_client_t> ();
+    evidence.joined_sender = &client;
+    ASSERT_TRUE (services.get_required<fw::spot_manager_t> ()
+                   .get_or_create (fw::spot_id_t (local_spot), room_type)
+                   .async ()
+                   .result ());
+    ASSERT_TRUE (services.get_required<fw::actor_manager_t> ()
+                   .get_or_create (fw::actor_id_t (actor_id), actor_type)
+                   .async ()
+                   .result ());
+    const auto state =
+      fw::detail::mesh_node_runtime_t::registrations (host.app.advanced ().zlink ())
+        .front ()
+        ->spot_state;
+    const auto key = std::string (actor_type) + ":" + actor_id;
+    auto actor_queue = [&] (fw::spot_id_t spot) {
+        auto context = state->lane
+                         .run ([&] {
+                             return fw::detail::spot_context_access_t::state (
+                               state->spot_contexts_by_id.at (std::string (spot)));
+                         })
+                         .get ();
+        return context->ensure_spot_serial_executor ()->actor_executor (key)->queue ();
+    };
+    const auto source = state->lane.run ([&] { return state->actor_spot_ids.at (key); }).get ();
+    auto source_queue = actor_queue (source);
+    ASSERT_TRUE (client.send (fw::actor_id_t (actor_id), move_t{local_spot}).async ().result ());
+    {
+        std::unique_lock lock (evidence.mutex);
+        ASSERT_TRUE (evidence.changed.wait_for (lock, wait_budget,
+                                                [&] { return !evidence.completions.empty (); }));
+    }
+    if (scenario == backlog_case_t::ordinary_order) {
+        std::unique_lock lock (evidence.mutex);
+        ASSERT_TRUE (evidence.changed.wait_for (lock, wait_budget,
+                                                [&] { return evidence.replay_prefix_entered; }));
+    } else {
+        source_queue->drain ();
+    }
+    if (scenario == backlog_case_t::completion_failure) {
+        ASSERT_TRUE (state->worker_executor);
+        state->worker_executor->drain ();
+        EXPECT_EQ (state->actor_transfer_coordinator.phase (key),
+                   fw::detail::actor_move_phase_t::local);
+        ASSERT_TRUE (client.send (fw::actor_id_t (actor_id), probe_t{3}).async ().result ());
+        std::unique_lock lock (evidence.mutex);
+        ASSERT_TRUE (evidence.changed.wait_for (lock, wait_budget,
+                                                [&] { return evidence.backlog_appends == 3; }));
+        EXPECT_TRUE (evidence.handled_payloads.empty ());
+        EXPECT_EQ (evidence.completions.size (), 1u);
+        EXPECT_TRUE (
+          std::holds_alternative<fw::actor_join_accepted_t> (evidence.completions.front ()));
+        lock.unlock ();
+        auto backlog = state->actor_transfer_coordinator.cancel_move (key);
+        EXPECT_EQ (backlog.size (), 3u);
+        return;
+    }
+    if (scenario == backlog_case_t::ordinary_order) {
+        EXPECT_FALSE (state->actor_transfer_coordinator.phase (key));
+        auto ordinary = client.request (fw::actor_id_t (actor_id), probe_t{3}).async<probe_t> ();
+        {
+            std::unique_lock lock (evidence.mutex);
+            ASSERT_TRUE (evidence.changed.wait_for (lock, wait_budget,
+                                                    [&] { return evidence.ordinary_posts > 0; }));
+            EXPECT_TRUE (evidence.handled_payloads.empty ());
+        }
+        {
+            std::lock_guard lock (evidence.mutex);
+            evidence.release_replay_prefix = true;
+        }
+        evidence.changed.notify_all ();
+        const auto replied = ordinary.result ();
+        ASSERT_TRUE (replied);
+        EXPECT_EQ (replied.value ().value, 3);
+        std::unique_lock lock (evidence.mutex);
+        ASSERT_TRUE (evidence.changed.wait_for (
+          lock, wait_budget, [&] { return evidence.handled_payloads.size () == 3; }));
+        EXPECT_EQ (evidence.handled_payloads, (std::vector<int>{1, 2, 3}));
+    } else {
+        std::unique_lock lock (evidence.mutex);
+        ASSERT_TRUE (evidence.changed.wait_for (
+          lock, wait_budget, [&] { return !evidence.replay_failures.empty (); }));
+        EXPECT_FALSE (state->actor_transfer_coordinator.phase (key));
+        const auto &event = evidence.replay_failures.front ();
+        EXPECT_EQ (event.result, fw::message_flow_result_t::failed);
+        ASSERT_TRUE (event.exception);
+        EXPECT_EQ (event.flow_id, event.correlation_id);
+        EXPECT_FALSE (event.flow_id.value_or ("").empty ());
+        try {
+            std::rethrow_exception (event.exception);
+        }
+        catch (const std::exception &error) {
+            EXPECT_STREQ (error.what (), "replayed payload failed");
+        }
+    }
+}
+TEST (ActorMaintenanceJoin, LocalJoinPlaceholderKeepsOrdinaryIngressBehindBacklog)
+{
+    local_join_backlog (backlog_case_t::ordinary_order);
+}
+TEST (ActorMaintenanceJoin, LocalJoinCompletionFailureKeepsBacklogSealed)
+{
+    local_join_backlog (backlog_case_t::completion_failure);
+}
+TEST (ActorMaintenanceJoin, ReplayFailureHasFailedOutcomeAndException)
+{
+    local_join_backlog (backlog_case_t::replay_failure);
+}
+
+class creation_store_t final : public fw::location_store_t
+{
+  public:
+    std::atomic<bool> fail_next_write{false};
+    std::atomic<int> failed_writes{0};
+    fw::task_t<fw::store_read_result_t> read (fw::store_key_t key) override
+    {
+        return inner.read (std::move (key));
+    }
+    fw::task_t<fw::store_scan_result_t> scan (fw::store_scan_request_t request) override
+    {
+        return inner.scan (std::move (request));
+    }
+    fw::task_t<fw::store_write_result_t> write (fw::store_write_request_t request) override
+    {
+        const auto terminal_write = std::any_of (
+          request.mutations.begin (), request.mutations.end (), [] (const auto &mutation) {
+              const auto *put = std::get_if<fw::store_put_t> (&mutation);
+              return put && put->key.value.starts_with (std::string ("creation-terminal") + '\0');
+          });
+        if (terminal_write && fail_next_write.exchange (false)) {
+            ++failed_writes;
+            throw fw::framework_exception_t (fw::framework_error_kind_t::internal_failure,
+                                             "creation terminal publication failed");
+        }
+        return inner.write (std::move (request));
+    }
+
+  private:
+    fw::runtime::in_memory_location_store_t inner;
+};
+class ActorCreationHandoff : public testing::TestWithParam<creation_case_t>
+{
+};
+TEST_P (ActorCreationHandoff, TerminalReleasesMoveWithoutJoinLifecycle)
+{
+    observations_t evidence;
+    evidence.creation_case = GetParam ();
+    observations = &evidence;
+    auto store = std::make_shared<creation_store_t> ();
+    host_t host;
+    release_callbacks_t release{evidence};
+    configure (host, first_rid, store,
+               std::make_shared<fw::runtime::in_memory_relocation_store_t> ());
+    host.start ();
+    ASSERT_TRUE (ready (host));
+    if (GetParam () == creation_case_t::publication_failed)
+        store->fail_next_write = true;
+    auto services = host.app.advanced ().services ().build_provider ();
+    const auto created = services.get_required<fw::actor_manager_t> ()
+                           .get_or_create (fw::actor_id_t (actor_id), actor_type)
+                           .async ()
+                           .result ();
+    if (GetParam () == creation_case_t::accepted) {
+        ASSERT_TRUE (created);
+        const auto first = services.get_required<fw::actor_client_t> ()
+                             .request (fw::actor_id_t (actor_id), probe_t{17})
+                             .async<probe_t> ()
+                             .result ();
+        ASSERT_TRUE (first);
+        EXPECT_EQ (first.value ().value, 17);
+    } else {
+        EXPECT_FALSE (created);
+    }
+    const auto state =
+      fw::detail::mesh_node_runtime_t::registrations (host.app.advanced ().zlink ())
+        .front ()
+        ->spot_state;
+    ASSERT_TRUE (state->worker_executor);
+    state->worker_executor->drain ();
+    EXPECT_FALSE (
+      state->actor_transfer_coordinator.phase (std::string (actor_type) + ":" + actor_id));
+    EXPECT_EQ (store->failed_writes.load (),
+               GetParam () == creation_case_t::publication_failed ? 1 : 0);
+    std::lock_guard lock (evidence.mutex);
+    EXPECT_EQ (evidence.creation_callbacks, 1);
+    EXPECT_EQ (evidence.entry_joined, 0);
+    EXPECT_TRUE (evidence.completions.empty ());
+}
+INSTANTIATE_TEST_SUITE_P (AcceptedRejectedFailedPublication,
+                          ActorCreationHandoff,
+                          testing::Values (creation_case_t::accepted,
+                                           creation_case_t::rejected,
+                                           creation_case_t::failed,
+                                           creation_case_t::publication_failed));
+TEST (ActorMaintenanceJoin, PublicEntryJoinCompletionPrecedesFirstCommand)
+{
+    observations_t evidence;
+    observations = &evidence;
+    host_t host;
+    release_callbacks_t release{evidence};
+    configure (host, first_rid, std::make_shared<fw::runtime::in_memory_location_store_t> (),
+               std::make_shared<fw::runtime::in_memory_relocation_store_t> ());
+    host.start ();
+    ASSERT_TRUE (ready (host));
+    auto services = host.app.advanced ().services ().build_provider ();
+    ASSERT_TRUE (services.get_required<fw::spot_manager_t> ()
+                   .get_or_create (fw::spot_id_t (local_spot), room_type)
+                   .async ()
+                   .result ());
+    ASSERT_TRUE (services.get_required<fw::actor_manager_t> ()
+                   .get_or_create (fw::actor_id_t (actor_id), actor_type)
+                   .async ()
+                   .result ());
+    auto &client = services.get_required<fw::actor_client_t> ();
+    ASSERT_TRUE (move_to (client, evidence, local_spot, 1));
+    ASSERT_TRUE (move_to (client, evidence, entry_target, 2));
+    const auto first =
+      client.request (fw::actor_id_t (actor_id), probe_t{17}).async<probe_t> ().result ();
+    ASSERT_TRUE (first);
+    EXPECT_EQ (first.value ().value, 17);
+    std::lock_guard lock (evidence.mutex);
+    EXPECT_EQ (evidence.creation_callbacks, 1);
+    EXPECT_EQ (evidence.entry_joined, 1);
+    ASSERT_EQ (evidence.completions.size (), 2u);
+    const auto *accepted = std::get_if<fw::actor_join_accepted_t> (&evidence.completions.back ());
+    ASSERT_NE (accepted, nullptr);
+    EXPECT_TRUE (accepted->operation_id_high != 0 || accepted->operation_id_low != 0);
+}
+
+// A Store write is visible before its caller receives the result. Exercise that
+// public provider boundary without changing the relocation runtime or its lanes.
+class observed_location_store_t final : public fw::location_store_t
+{
+  public:
+    fw::task_t<fw::store_read_result_t> read (fw::store_key_t key) override
+    {
+        return _inner.read (std::move (key));
+    }
+    fw::task_t<fw::store_scan_result_t> scan (fw::store_scan_request_t request) override
+    {
+        return _inner.scan (std::move (request));
+    }
+    fw::task_t<fw::store_write_result_t> write (fw::store_write_request_t request) override
+    {
+        std::function<void ()> before_write;
+        {
+            std::lock_guard lock (_mutex);
+            if (_before_write && _before_write_ready (request))
+                before_write = std::exchange (_before_write, {});
+        }
+        if (before_write)
+            before_write ();
+        auto result = co_await _inner.write (std::move (request));
+        if (before_write) {
+            std::lock_guard lock (_mutex);
+            _intercepted_write_conflicted =
+              std::holds_alternative<fw::store_write_conflict_t> (result);
+        }
+        if (std::holds_alternative<fw::store_write_applied_t> (result)) {
+            std::lock_guard lock (_mutex);
+            if (_after_write)
+                _after_write ();
+        }
+        co_return result;
+    }
+    void observe (std::function<void ()> after_write)
+    {
+        std::lock_guard lock (_mutex);
+        _after_write = std::move (after_write);
+    }
+    void before_next_write_when (std::function<bool (const fw::store_write_request_t &)> ready,
+                                 std::function<void ()> action)
+    {
+        std::lock_guard lock (_mutex);
+        _before_write_ready = std::move (ready);
+        _before_write = std::move (action);
+    }
+    bool intercepted_write_conflicted ()
+    {
+        std::lock_guard lock (_mutex);
+        return _intercepted_write_conflicted;
+    }
+
+  private:
+    fw::runtime::in_memory_location_store_t _inner;
+    std::mutex _mutex;
+    std::function<void ()> _after_write;
+    std::function<bool (const fw::store_write_request_t &)> _before_write_ready;
+    std::function<void ()> _before_write;
+    bool _intercepted_write_conflicted = false;
+};
+
+TEST (ActorMaintenanceJoin, ReadyAuthorityAcceptsLocalSendBeforeStoreWriteReturns)
+{
+    observations_t evidence;
+    observations = &evidence;
+    auto store = std::make_shared<observed_location_store_t> ();
+    auto relocations = std::make_shared<fw::runtime::in_memory_relocation_store_t> ();
+    host_t source, target;
+    configure (source, first_rid, store, relocations, source_follow_duration);
+    source.start ();
+    ASSERT_TRUE (ready (source));
+    auto services = source.app.advanced ().services ().build_provider ();
+    ASSERT_TRUE (services.get_required<fw::actor_manager_t> ()
+                   .get_or_create (fw::actor_id_t (actor_id), actor_type)
+                   .timeout (wait_budget)
+                   .async ()
+                   .result ());
+    configure (target, second_rid, store, relocations, source_follow_duration);
+    target.start ();
+    ASSERT_TRUE (ready (target));
+    ASSERT_TRUE (peer_ready (services.get_required<fw::route_mesh_runtime_t> ()));
+    auto target_services = target.app.advanced ().services ().build_provider ();
+    auto &client = target_services.get_required<fw::actor_client_t> ();
+    auto &query = target_services.get_required<fw::location_runtime_query_t> ();
+    bool observed = false;
+    std::optional<fw::result_t<void>> sent;
+    store->observe ([&] {
+        if (observed)
+            return;
+        const auto location =
+          query.find_actor_location (fw::actor_id_t (actor_id)).result ().value ();
+        if (!location || location->state != fw::location_object_state_t::ready
+            || location->node_rid.to_string () != second_rid)
+            return;
+        observed = true;
+        std::fprintf (stderr,
+                      "Store write boundary: Ready ActorId=%s NodeRid=%s ObjectGeneration=%llu\n",
+                      location->global_id.c_str (), location->node_rid.to_string ().c_str (),
+                      static_cast<unsigned long long> (location->object_generation));
+        sent.emplace (client.send (fw::actor_id_t (actor_id), record_t{1}).async ().result ());
+        std::lock_guard lock (evidence.mutex);
+        EXPECT_TRUE (evidence.recorded.empty ());
+    });
+    const auto relocated =
+      source.app
+        .relocate ({.mode = fw::relocation_mode_t::planned_maintenance, .deadline = wait_budget})
+        .result ();
+    store->observe ({});
+    ASSERT_TRUE (observed);
+    ASSERT_TRUE (sent.has_value ());
+    ASSERT_TRUE (*sent) << (sent->error () ? sent->error ()->what () : "");
+    ASSERT_TRUE (relocated);
+    EXPECT_EQ (relocated.value ().outcome, fw::relocation_outcome_t::relocated);
+    const auto reply = client.request (fw::actor_id_t (actor_id), probe_t{instance_probe})
+                         .timeout (wait_budget)
+                         .async<probe_t> ()
+                         .result ();
+    ASSERT_TRUE (reply);
+    EXPECT_EQ (reply.value ().value, 2);
+    std::unique_lock lock (evidence.mutex);
+    EXPECT_TRUE (evidence.changed.wait_for (
+      lock, wait_budget, [&] { return evidence.recorded == std::vector<int>{1}; }));
+}
+
+TEST (ActorMaintenanceJoin, SourcePreserveDiscardsRawIdentityPreparedBeforeTargetCas)
+{
+    observations_t evidence;
+    observations = &evidence;
+    auto store = std::make_shared<observed_location_store_t> ();
+    auto relocations = std::make_shared<fw::runtime::in_memory_relocation_store_t> ();
+    host_t source, target;
+    configure (source, first_rid, store, relocations, source_follow_duration);
+    source.start ();
+    ASSERT_TRUE (ready (source));
+    auto services = source.app.advanced ().services ().build_provider ();
+    ASSERT_TRUE (services.get_required<fw::actor_manager_t> ()
+                   .get_or_create (fw::actor_id_t (actor_id), actor_type)
+                   .timeout (wait_budget)
+                   .async ()
+                   .result ());
+    auto &repository = services.get_required<fw::location_repository_t> ();
+    const auto key = fw::runtime::actor_authority_key (actor_id);
+    const auto original =
+      std::get<fw::authority_snapshot_t> (repository.read_authority (key).result ().value ());
+    configure (target, second_rid, store, relocations, source_follow_duration);
+    target.start ();
+    ASSERT_TRUE (ready (target));
+    ASSERT_TRUE (peer_ready (services.get_required<fw::route_mesh_runtime_t> ()));
+    auto target_services = target.app.advanced ().services ().build_provider ();
+    auto &query = target_services.get_required<fw::location_runtime_query_t> ();
+    const auto state =
+      fw::detail::mesh_node_runtime_t::registrations (target.app.advanced ().zlink ())
+        .front ()
+        ->spot_state;
+    const auto native = fw::detail::spot_node_runtime_t (state).native_node ();
+    const auto candidate = fw::runtime::host::public_host_runtime_t::remote_actor_ref (
+      zlink::routing_id_t::from (second_rid), actor_id, original.object_generation);
+    auto preserved = std::make_shared<std::promise<bool>> ();
+    auto preservation = preserved->get_future ();
+    store->before_next_write_when (
+      [&] (const fw::store_write_request_t &request) {
+          // Read-only observation of the raw index; the failure is injected
+          // through the Store provider, without a relocation runtime hook.
+          if (!native->resolve_actor (candidate))
+              return false;
+          const auto location =
+            query.find_actor_location (fw::actor_id_t (actor_id)).result ().value ();
+          if (!location || location->node_rid.to_string () != first_rid)
+              return false;
+          const auto current =
+            std::get<fw::authority_snapshot_t> (repository.read_authority (key).result ().value ());
+          // This in-memory Store issues globally distinct versions. Match
+          // the Actor row condition without decoding provider keys/payloads.
+          return std::ranges::any_of (request.conditions, [&] (const auto &condition) {
+              const auto *version = std::get_if<fw::store_version_condition_t> (&condition);
+              return version && version->expected.value == current.store_version;
+          });
+      },
+      [&, preserved] {
+          const auto current =
+            std::get<fw::authority_snapshot_t> (repository.read_authority (key).result ().value ());
+          // The existing source Preserve operation is an unchanged-authority
+          // CAS. Restore the uncaptured payload so this newer Store fence
+          // definitively excludes the pending target CAS (Location §10).
+          preserved->set_value (std::holds_alternative<fw::authority_stored_t> (
+            repository
+              .compare_exchange_authority (key, current.store_version,
+                                           fw::authority_put_t{original.payload})
+              .result ()
+              .value ()));
+      });
+    const auto relocated =
+      source.app
+        .relocate ({.mode = fw::relocation_mode_t::planned_maintenance, .deadline = wait_budget})
+        .result ();
+    store->before_next_write_when ({}, {});
+    ASSERT_EQ (preservation.wait_for (wait_budget), std::future_status::ready);
+    ASSERT_TRUE (preservation.get ());
+    ASSERT_TRUE (relocated);
+    EXPECT_NE (relocated.value ().outcome, fw::relocation_outcome_t::relocated);
+    {
+        std::unique_lock lock (evidence.mutex);
+        ASSERT_TRUE (evidence.changed.wait_for (lock, wait_budget, [&] {
+            return std::ranges::find (evidence.destroyed, 2) != evidence.destroyed.end ();
+        }));
+    }
+    EXPECT_TRUE (store->intercepted_write_conflicted ());
+    EXPECT_FALSE (native->resolve_actor (candidate));
+    native->seal_relocation_targets ().result ().value ();
+    EXPECT_FALSE (native->objects ().find (fw::runtime::stateful::object_kind_t::actor, actor_id));
+    const auto location = query.find_actor_location (fw::actor_id_t (actor_id)).result ().value ();
+    ASSERT_TRUE (location);
+    EXPECT_EQ (location->node_rid.to_string (), first_rid);
 }
 
 TEST (ActorMaintenanceJoin, HostShutdownClosesOccupiedUserSpot)

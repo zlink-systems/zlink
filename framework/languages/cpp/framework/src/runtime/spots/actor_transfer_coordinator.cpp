@@ -1248,10 +1248,6 @@ actor_transfer_cleanup_snapshot_t actor_transfer_coordinator_t::cleanup_expired_
         else
             ++found;
     }
-    for (const auto &[key, move] : _moves) {
-        if (is_source_remote (move))
-            snapshot.source_remote_transfers.emplace_back (key, move.transfer_id);
-    }
     for (const auto &key : blocked_candidates) {
         if (_moves.contains (key))
             snapshot.blocked_dispatch_keys.push_back (key);
