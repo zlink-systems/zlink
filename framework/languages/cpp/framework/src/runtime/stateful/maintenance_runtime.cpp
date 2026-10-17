@@ -288,7 +288,7 @@ maintenance_runtime_t::maintenance_runtime_t (stateful_object_runtime_t &objects
                            std::move (observer),
                            std::move (providers.aggregate_authority))
 {
-    if (!_aggregate_authority || !providers.targets)
+    if (!_aggregate_authority)
         throw std::invalid_argument ("maintenance provider set is incomplete");
 }
 

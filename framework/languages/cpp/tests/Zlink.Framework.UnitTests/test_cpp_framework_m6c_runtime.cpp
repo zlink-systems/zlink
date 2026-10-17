@@ -2090,15 +2090,6 @@ class memory_aggregate_authority_t final : public aggregate_authority_port_t
     bool prepared = false;
 };
 
-class target_preflight_t final : public target_preflight_port_t
-{
-  public:
-    target_preflight_result_t preflight (const std::vector<relocation_unit_t> &) override
-    {
-        return {target_preflight_status_t::target_unavailable, {}};
-    }
-};
-
 object_ref_t
 create_actor (stateful_object_runtime_t &runtime, std::string key, std::string node = "node-a")
 {
@@ -3248,9 +3239,8 @@ void test_relocation_target_shutdown (test_context_t &test, int mode)
     target.objects ().configure_relocation_state (
       [] (const auto &, const auto &, std::stop_token) { return std::vector<std::uint8_t>{}; },
       [] (const auto &, const auto &, std::stop_token) { return true; });
-    target.configure_maintenance ({authority,
-                                   std::make_shared<memory_aggregate_authority_t> (authority),
-                                   roots, std::make_shared<target_preflight_t> ()});
+    target.configure_maintenance (
+      {authority, std::make_shared<memory_aggregate_authority_t> (authority), roots});
     target.configure_stateful_dispatch ([] (const accepted_record_authority_query_t &query)
                                           -> std::optional<accepted_record_authority_t> {
         return std::nullopt; // The Store still names the source; the exact attempt owns admission.

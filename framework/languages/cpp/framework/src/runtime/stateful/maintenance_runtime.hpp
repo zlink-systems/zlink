@@ -370,34 +370,11 @@ struct eligible_relocation_unit_t
     std::optional<canonical_wire_context_t> canonical_wire;
 };
 
-enum class target_preflight_status_t
-{
-    eligible,
-    target_unavailable,
-    store_unavailable,
-    relocation_disabled,
-    state_incompatible
-};
-
-struct target_preflight_result_t
-{
-    target_preflight_status_t status = target_preflight_status_t::target_unavailable;
-    std::vector<eligible_relocation_unit_t> units;
-};
-
-class target_preflight_port_t
-{
-  public:
-    virtual ~target_preflight_port_t () = default;
-    virtual target_preflight_result_t preflight (const std::vector<relocation_unit_t> &units) = 0;
-};
-
 struct maintenance_provider_set_t
 {
     std::shared_ptr<authority_relocation_port_t> authority;
     std::shared_ptr<aggregate_authority_port_t> aggregate_authority;
     std::shared_ptr<relocation_store_port_t> relocations;
-    std::shared_ptr<target_preflight_port_t> targets;
 };
 
 struct relocation_limits_t
