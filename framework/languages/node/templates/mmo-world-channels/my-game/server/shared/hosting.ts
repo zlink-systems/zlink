@@ -22,6 +22,7 @@ import {
   ZLinkFrameworkTerminationOutcome,
   ZLinkFrameworkTerminationReason,
   type ZLinkFrameworkRuntime,
+  type ZLinkFrameworkRuntimeStatus,
   type ZLinkRouteMeshRuntime,
   type ZLinkRouteMeshStatus
 } from '@zlink-systems/framework';
@@ -78,7 +79,13 @@ export async function runHost(
   });
   const runtime = app.get<ZLinkFrameworkRuntime>(ZLINK_FRAMEWORK_RUNTIME);
   const meshes = app.get<ZLinkRouteMeshRuntime>(ZLINK_ROUTE_MESH_RUNTIME);
+  function describe(observed: unknown): string {
+    return JSON.stringify(observed, (_, value: unknown) =>
+      typeof value === 'bigint' ? value.toString() : value
+    );
+  }
   async function waitReady(): Promise<void> {
+    let lastStatus: ZLinkRouteMeshStatus | undefined;
     for await (const observed of meshes.observe(
       meshName(config.worldId),
       Limits.observationCapacity,
@@ -87,17 +94,28 @@ export async function runHost(
       if (observed.loss.discardedTerminalCount !== 0n)
         throw new Error('Readiness observation lost');
       const status = observed.status;
+      lastStatus = status;
       if (status.isReady && composition.ready(status)) return;
     }
-    throw new Error('Readiness observation deadline expired');
+    throw new Error(
+      'Readiness observation deadline expired: ' +
+        (lastStatus
+          ? describe({ status: lastStatus, compositionReady: composition.ready(lastStatus) })
+          : 'no status observed')
+    );
   }
   async function waitSafe(): Promise<void> {
+    let lastStatus: ZLinkFrameworkRuntimeStatus | undefined;
     for await (const observed of runtime.observe(AbortSignal.timeout(Limits.safeMs))) {
       if (observed.loss.discardedTerminalCount !== 0n)
         throw new Error('Lifecycle observation lost');
-      if (observed.status.safeToShutdown) return;
+      lastStatus = observed.status;
+      if (lastStatus.safeToShutdown) return;
     }
-    throw new Error('SafeToShutdown observation deadline expired');
+    throw new Error(
+      'SafeToShutdown observation deadline expired: ' +
+        (lastStatus ? describe({ status: lastStatus }) : 'no status observed')
+    );
   }
   const input = createInterface({ input: process.stdin });
   const failures: unknown[] = [];
