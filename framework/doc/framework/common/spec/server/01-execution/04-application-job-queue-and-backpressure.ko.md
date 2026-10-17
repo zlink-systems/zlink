@@ -149,8 +149,13 @@ sequenceDiagram
 
 Handler가 시작한 뒤의 `await`, coroutine suspension, continuation과 reply 대기는 같은 permit을
 다시 얻지 않는다. Relocation처럼 아직 실행 가능하지 않은 durable backlog는 해당 relocation
-spec이 정한 유한한 payload owner로 handoff한 뒤 initial reservation을 반환하고, runnable
-callback turn마다 새 permit을 얻는다.
+spec이 정한 유한한 payload owner로 handoff한 뒤 initial reservation을 반환하고, record가 Actor
+FIFO head에서 실행 가능해질 때 permit을 다시 얻는다. **Actor FIFO가 아직 시작하지 않은 durable
+record를 소유하는 동안에는 그 뒤에 수락한 application record도 같은 payload owner가 순서와 함께
+인수하고 initial permit을 반환한다.** 이 판정과 record 수락은 같은 소유 turn에서 한다. 그래서
+뒤에 온 record가 permit을 쥔 채 앞선 durable record 뒤에서 기다리는 순환이 생기지 않는다.
+Permit을 기다리는 record는 실행 gate를 점유하지 않으며, 실행 전에 취소되거나 다른 handoff로
+넘어간 record의 waiter와 permit은 정확히 한 번 정리한다.
 
 **Pre-receive에 terminal reply 또는 error completion으로 식별되는 supply만 이 permit을
 우회한다.** Ordinary connection에서 receive한 뒤 completion으로 분류해 우회를 소급 적용하지
