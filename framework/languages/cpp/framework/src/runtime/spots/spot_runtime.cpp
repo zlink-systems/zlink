@@ -5486,10 +5486,7 @@ task_t<spot_create_result_t> spot_create_call_t::async ()
 
 task_t<spot_create_result_t> spot_create_call_t::yield ()
 {
-    if (!detail::current_serial_turn_allows_yield ()) {
-        return detail::unsupported_yield_task<spot_create_result_t> ();
-    }
-    return detail::release_turn_on_suspend (async ());
+    return detail::yield_call<spot_create_result_t> ([this] { return async (); });
 }
 
 spot_create_call_t spot_manager_t::create (std::string stable_type)
