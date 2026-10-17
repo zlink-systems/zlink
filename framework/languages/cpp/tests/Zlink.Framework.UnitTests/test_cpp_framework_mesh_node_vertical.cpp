@@ -513,7 +513,7 @@ zlink::message_t make_route_multicast_frame (std::string_view packet_name,
     namespace messaging = zlink::framework::runtime::messaging;
     messaging::envelope_header_t header;
     header.kind = messaging::message_kind_t::publish;
-    header.channel_name = "vertical-mesh";
+    header.channel_name = "work";
     header.message_name = packet_name;
     header.content_type = messaging::envelope_codec_t::default_content_type;
     header.topic = std::string (topic);
@@ -576,7 +576,7 @@ void verify_route_internal_packets_precede_application_dispatch ()
     context->handlers.push_back (spot_handler_descriptor_t{
       spot_handler_kind_t::subscription, "Rel358MulticastPayload", "rel-358-topic",
       std::type_index (typeid (int)), std::type_index (typeid (void)),
-      std::type_index (typeid (void)), std::type_index (typeid (void)), "vertical-mesh"});
+      std::type_index (typeid (void)), std::type_index (typeid (void)), "work"});
     context->handler_invokers.push_back (
       [multicast_received] (void *, void *, service_provider_t &, serializer_registry_t &,
                             const zlink::message_t &message,
