@@ -503,7 +503,7 @@ export class DefaultZLinkWorkerCall<T> implements ZLinkWorkerCall<T> {
   yield(signal?: AbortSignal): Promise<T> {
     const turn = requireZLinkYieldTurn(this.turn);
     const pending = this.begin(signal);
-    return turn.yieldPromise(pending);
+    return turn.yieldFrameworkPromise(pending);
   }
 
   private begin(signal?: AbortSignal): Promise<T> {
