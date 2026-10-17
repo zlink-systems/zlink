@@ -1622,7 +1622,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
 
   private async runPump(runtime: RawServiceMeshRuntime): Promise<void> {
     // Publish pumpTask before any callback can signal readiness or begin close.
-    await undefined;
+    await Promise.resolve();
     try {
       do {
         const ready = this.readable;
