@@ -22,6 +22,91 @@
 #include <tuple>
 #include <utility>
 
+namespace zlink::framework::runtime::host
+{
+// Reproduce a superseded assembly at the activation boundary without timing races.
+struct public_host_runtime_test_access_t
+{
+    static task_t<bool> activate_stale_actor_attempt (public_host_runtime_t &host,
+                                                      bool replaced,
+                                                      bool activation_started,
+                                                      const stateful::object_ref_t &target,
+                                                      std::string stable_type)
+    {
+        const public_host_runtime_t::relocation_attempt_key_t key{1, 2, 3};
+        auto pending = std::make_shared<public_host_runtime_t::pending_relocation_assembly_t> (
+          public_host_runtime_t::pending_relocation_assembly_t{
+            .assembly = stateful::relocation_state_assembly_t{{}, 0, {}, {}, {}}});
+        pending->prepare.relocation = {1, 2};
+        pending->prepare.target_attempt_generation = 3;
+        auto staging = std::make_shared<public_host_runtime_t::relocation_assembly_staging_t> ();
+        staging->targets.push_back (target);
+        staging->wire_objects.emplace_back ();
+        staging->wire_objects.back ().stable_type = std::move (stable_type);
+        host._relocation_session_terminal_lane
+          .run ([&] {
+              auto &attempt = host._relocation_target_attempts[key];
+              attempt.prepare = pending->prepare;
+              attempt.pending = pending;
+              attempt.terminal = std::make_shared<task_completion_source_t<void>> ();
+          })
+          .get ();
+        task_completion_source_t<void> release_index;
+        std::promise<void> index_entered;
+        auto index = std::async (std::launch::async, [&] {
+            host._spot_actor_index_lane
+              .run ([&] {
+                  index_entered.set_value ();
+                  release_index.task ().result ().value ();
+              })
+              .get ();
+        });
+        struct release_and_join_t
+        {
+            task_completion_source_t<void> &release;
+            std::future<void> &worker;
+            ~release_and_join_t ()
+            {
+                release.complete (result_t<void>::success ());
+                if (worker.valid ())
+                    worker.wait ();
+            }
+        } release_and_join{release_index, index};
+        index_entered.get_future ().get ();
+        std::optional<task_t<bool>> activated;
+        if (activation_started)
+            activated.emplace (host.activate_relocation_assembly (key, pending, staging));
+        auto discarded =
+          host._relocation_session_terminal_lane
+            .run ([&] {
+                auto &attempt = host._relocation_target_attempts.at (key);
+                auto cleanup = host.take_relocation_target_discard (attempt);
+                if (!cleanup)
+                    attempt.terminal->complete (result_t<void>::success ());
+                if (replaced) {
+                    attempt = public_host_runtime_t::relocation_target_attempt_t{};
+                    attempt.pending =
+                      std::make_shared<public_host_runtime_t::pending_relocation_assembly_t> (
+                        *pending);
+                } else
+                    host._relocation_target_attempts.erase (key);
+                return cleanup;
+            })
+            .get ();
+        if (!activation_started)
+            activated.emplace (host.activate_relocation_assembly (key, pending, staging));
+        release_index.complete (result_t<void>::success ());
+        index.get ();
+        if (discarded) {
+            std::vector<public_host_runtime_t::relocation_target_attempt_t> cleanup;
+            cleanup.push_back (std::move (*discarded));
+            host.discard_relocation_target_attempts (std::move (cleanup));
+        }
+        co_return co_await *activated;
+    }
+};
+} // namespace zlink::framework::runtime::host
+
 namespace
 {
 namespace fw = zlink::framework;
@@ -628,6 +713,40 @@ class observed_location_store_t final : public fw::location_store_t
     std::function<void ()> _before_write;
     bool _intercepted_write_conflicted = false;
 };
+
+TEST (ActorMaintenanceJoin, StaleAttemptActivationDoesNotLeaveRawIdentity)
+{
+    namespace runtime = fw::runtime;
+    for (const auto [replaced, activation_started] :
+         {std::pair{false, false}, std::pair{true, false}, std::pair{false, true},
+          std::pair{true, true}}) {
+        SCOPED_TRACE (activation_started ? "activation queued" : "before activation");
+        SCOPED_TRACE (replaced ? "replaced pending assembly" : "removed attempt");
+        const auto rid = zlink::routing_id_t::from (second_rid);
+        auto host = std::make_shared<runtime::host::public_host_runtime_t> (
+          runtime::host::host_options_t{runtime::mesh::raw_mesh_node_options_t{
+            .descriptor = {mesh_name,
+                           rid.to_bytes (),
+                           1,
+                           1,
+                           "tcp://127.0.0.1:0",
+                           {},
+                           runtime::mesh::service_node_state_t::preparing},
+            .runtime_failures = std::make_shared<runtime::runtime_failure_collector_t> ()}});
+        const runtime::stateful::object_ref_t target{
+          runtime::stateful::object_kind_t::actor, actor_id, 1, 1, mesh_name, second_rid};
+        const auto activated =
+          runtime::host::public_host_runtime_test_access_t::activate_stale_actor_attempt (
+            *host, replaced, activation_started, target, actor_type)
+            .result ();
+        ASSERT_FALSE (activated);
+        ASSERT_TRUE (activated.error ());
+        EXPECT_EQ (activated.error ()->kind (), fw::framework_error_kind_t::shutting_down);
+        const auto candidate = runtime::host::public_host_runtime_t::remote_actor_ref (
+          rid, actor_id, target.object_generation);
+        EXPECT_FALSE (host->resolve_actor (candidate));
+    }
+}
 
 TEST (ActorMaintenanceJoin, ReadyAuthorityAcceptsLocalSendBeforeStoreWriteReturns)
 {

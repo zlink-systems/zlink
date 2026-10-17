@@ -4131,33 +4131,14 @@ task_t<bool> public_host_runtime_t::activate_relocation_assembly (
   std::shared_ptr<const pending_relocation_assembly_t> pending,
   std::shared_ptr<relocation_assembly_staging_t> staging)
 {
-    const auto actor_indexes_current = co_await _spot_actor_index_lane.run_task ([&] {
-        // Relocation §4.3/§4.5: register raw identities during target preparation.
-        // The existing recovering gate prevents execution before Ready authority.
-        // Validate the whole unit before inserting any Actor.
-        for (const auto &target : staging->targets) {
-            if (target.kind != stateful::object_kind_t::actor)
-                continue;
-            const auto current = _actors.find (target.key);
-            if (current != _actors.end () && current->second.second != target)
-                return false;
-        }
-        for (std::size_t index = 0; index != staging->targets.size (); ++index) {
-            const auto &target = staging->targets[index];
-            if (target.kind == stateful::object_kind_t::actor)
-                _actors.try_emplace (target.key, staging->wire_objects[index].stable_type, target);
-        }
-        return true;
-    });
-    if (!actor_indexes_current)
-        throw framework_exception_t (framework_error_kind_t::invalid_operation,
-                                     "Relocation target Actor identity is already registered");
-    const auto inserted = co_await _relocation_session_terminal_lane.run_task ([&] {
+    std::optional<task_t<bool>> register_indexes;
+    co_await _relocation_session_terminal_lane.run_task ([&] {
         const auto found = _relocation_target_attempts.find (key);
         if (_options.mesh.shutdown_admission_seal->load (std::memory_order_acquire)
             || found == _relocation_target_attempts.end () || found->second.pending != pending
             || relocation_target_terminal (found->second))
-            return false;
+            throw framework_exception_t (framework_error_kind_t::shutting_down,
+                                         "Relocation target stopped before activation");
         auto &attempt = found->second;
         attempt.restore_identity = staging->restore_identity;
         attempt.sources = std::move (staging->sources);
@@ -4167,11 +4148,32 @@ task_t<bool> public_host_runtime_t::activate_relocation_assembly (
             attempt.session_routes.emplace_back ();
             attempt.session_routes.back ().route = std::move (route);
         }
-        return true;
+        // The attempt owns cleanup before any raw identity is registered.
+        // Submit on this turn so a later discard queues its index removal
+        // after registration. The index turn reads only its owned inputs.
+        register_indexes.emplace (_spot_actor_index_lane.run_task (
+          [this, targets = attempt.targets, wire_objects = attempt.wire_objects] {
+              // Relocation §4.3/§4.5: prepare raw identities before Ready CAS.
+              // The recovering gate still prevents application execution.
+              // Validate the whole unit before inserting any Actor.
+              for (const auto &target : targets) {
+                  if (target.kind != stateful::object_kind_t::actor)
+                      continue;
+                  const auto current = _actors.find (target.key);
+                  if (current != _actors.end () && current->second.second != target)
+                      return false;
+              }
+              for (std::size_t index = 0; index != targets.size (); ++index) {
+                  const auto &target = targets[index];
+                  if (target.kind == stateful::object_kind_t::actor)
+                      _actors.try_emplace (target.key, wire_objects[index].stable_type, target);
+              }
+              return true;
+          }));
     });
-    if (!inserted)
-        throw framework_exception_t (framework_error_kind_t::shutting_down,
-                                     "Relocation target stopped before activation");
+    if (!co_await *register_indexes)
+        throw framework_exception_t (framework_error_kind_t::invalid_operation,
+                                     "Relocation target Actor identity is already registered");
     if (!co_await submit_relocation_ready_reply (pending->prepare, pending->request))
         co_return false;
     pending->ready->complete (result_t<void>::success ());
