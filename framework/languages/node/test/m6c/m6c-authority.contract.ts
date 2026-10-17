@@ -114,6 +114,7 @@ for (const backend of ['provider', 'memory'] as const) {
                   stableType: 'player',
                   policy: 'disabled',
                   hasSnapshotAdapter: false,
+                  entryAccepted: false,
                   limit: 0
                 },
                 {
@@ -539,6 +540,7 @@ for (const backend of ['provider', 'memory'] as const) {
               stableType: 'player',
               policy: 'disabled' as const,
               hasSnapshotAdapter: false,
+              entryAccepted: false,
               limit: 0
             }
           ],
