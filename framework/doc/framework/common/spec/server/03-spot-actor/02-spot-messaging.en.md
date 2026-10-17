@@ -587,9 +587,10 @@ message.
 5. Submits a reference pointing to the same message data to each matching Spot's
    application queue.
 
-If a matching Spot isn't [Ready](../00-foundation/02-glossary.en.md#ready) yet, that Spot's execution gate
-holds the message until Ready. If Spot creation fails or the Spot is discarded before it
-becomes Ready, the held message is released without running a handler.
+If a matching Spot isn't [Ready](../00-foundation/02-glossary.en.md#ready) yet, the framework keeps the
+message in that Spot's application queue and runs the handler after the Spot becomes Ready.
+If creation is rejected or fails, or that incarnation is discarded before Ready, the framework
+releases the message without running a handler.
 
 When delivering to multiple Spots on the same node, the payload isn't re-encoded or
 copied per Spot. Message data can't be changed while processing, and each queue
