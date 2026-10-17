@@ -449,10 +449,13 @@ final class ZLinkUserSpotRetireTargetEndpoint
             Consumer<List<Message>> reply,
             Consumer<Throwable> failure) {
         var actor = header.target().actor();
-        var message =
-                new ZLinkActorJoinPrewarmRegistry.ParkedMessage(
-                        acceptedJournalRecord.get(), reply, failure);
-        var route = actorJoin.routeIngress(actor.actorId(), actor.generation(), message);
+        var route =
+                actorJoin.routeIngress(
+                        actor.actorId(),
+                        actor.generation(),
+                        () ->
+                                new ZLinkActorJoinPrewarmRegistry.ParkedMessage(
+                                        acceptedJournalRecord.get(), reply, failure));
         return route != ZLinkActorJoinPrewarmRegistry.IngressRoute.NOT_FOUND;
     }
 

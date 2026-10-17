@@ -64,6 +64,47 @@ final class ZLinkActorJoinPrewarmIngressTest {
     private static final long SOURCE_NODE_GENERATION = 11;
 
     @Test
+    void missingPrewarmDoesNotCaptureTheAcceptedJournal() throws Exception {
+        try (Harness harness = Harness.start(request -> CompletableFuture.completedFuture(null));
+                Message payload = Message.from("missing")) {
+            var captures = new java.util.concurrent.atomic.AtomicInteger();
+            assertFalse(
+                    harness.endpoint.handleActor(
+                            harness.sourceFence(),
+                            new ZLinkServiceM6BWireCodec.ActorMessage(
+                                    false,
+                                    0,
+                                    null,
+                                    0,
+                                    0,
+                                    1,
+                                    null,
+                                    new ZLinkServiceM6BWireCodec.ActorRouteFence(
+                                            new ZLinkBackendActorRef(
+                                                    TARGET_RID,
+                                                    harness.actorId,
+                                                    harness.objectGeneration),
+                                            TARGET_NODE_GENERATION,
+                                            harness.sourceAuthorityOwnerGeneration + 1,
+                                            23)),
+                            () -> {
+                                captures.incrementAndGet();
+                                return actorRecord(harness.actorId, "missing");
+                            },
+                            List.of(payload),
+                            null,
+                            ignored -> {
+                                throw new AssertionError("missing prewarm must not reply");
+                            },
+                            ignored -> {
+                                throw new AssertionError(
+                                        "missing prewarm must not consume ingress");
+                            }));
+            assertEquals(0, captures.get());
+        }
+    }
+
+    @Test
     void arrivalBetweenAcceptedAndPrepareIsDeliveredAfterRelocationCompletes() throws Exception {
         try (Harness harness = Harness.start(request -> CompletableFuture.completedFuture(null))) {
             harness.admit();

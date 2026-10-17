@@ -31,6 +31,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -440,7 +441,7 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
     ZLinkActorJoinPrewarmRegistry.IngressRoute routeIngress(
             String actorId,
             long objectGeneration,
-            ZLinkActorJoinPrewarmRegistry.ParkedMessage message) {
+            Supplier<ZLinkActorJoinPrewarmRegistry.ParkedMessage> message) {
         return prewarm.parkOrDeliver(actorId, objectGeneration, message);
     }
 

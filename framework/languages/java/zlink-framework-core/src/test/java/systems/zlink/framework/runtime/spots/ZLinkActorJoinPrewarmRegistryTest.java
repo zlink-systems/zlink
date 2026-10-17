@@ -27,6 +27,37 @@ final class ZLinkActorJoinPrewarmRegistryTest {
     private static final long OBJECT_GENERATION = 7L;
 
     @Test
+    void journalFactoryRunsOnlyAfterTheIngressOwnerAccepts() {
+        var registry = new ZLinkActorJoinPrewarmRegistry();
+        var evaluations = new java.util.concurrent.atomic.AtomicInteger();
+        java.util.function.Supplier<ZLinkActorJoinPrewarmRegistry.ParkedMessage> factory =
+                () -> {
+                    evaluations.incrementAndGet();
+                    return new ZLinkActorJoinPrewarmRegistry.ParkedMessage(
+                            new byte[] {1}, null, null);
+                };
+        assertEquals(
+                ZLinkActorJoinPrewarmRegistry.IngressRoute.NOT_FOUND,
+                registry.parkOrDeliver(ACTOR_ID, OBJECT_GENERATION, factory));
+        assertEquals(0, evaluations.get());
+        var relocation = UUID.randomUUID();
+        registry.register(relocation, ACTOR_ID, OBJECT_GENERATION, ignored -> {});
+        assertEquals(
+                ZLinkActorJoinPrewarmRegistry.IngressRoute.PARKED,
+                registry.parkOrDeliver(ACTOR_ID, OBJECT_GENERATION, factory));
+        assertEquals(1, evaluations.get());
+        var delivered = new java.util.concurrent.atomic.AtomicInteger();
+        registry.completeMigration(
+                relocation, ignored -> delivered.incrementAndGet(), () -> {}, () -> {});
+        assertEquals(1, delivered.get());
+        assertEquals(
+                ZLinkActorJoinPrewarmRegistry.IngressRoute.DELIVERED,
+                registry.parkOrDeliver(ACTOR_ID, OBJECT_GENERATION, factory));
+        assertEquals(2, evaluations.get());
+        assertEquals(2, delivered.get());
+    }
+
+    @Test
     void supersessionUsesTheAcceptedTargetOwnerAfterStageInstallation() {
         var registry = new ZLinkActorJoinPrewarmRegistry();
         UUID old = UUID.randomUUID();
@@ -144,8 +175,9 @@ final class ZLinkActorJoinPrewarmRegistryTest {
                 registry.parkOrDeliver(
                         ACTOR_ID,
                         OBJECT_GENERATION,
-                        new ZLinkActorJoinPrewarmRegistry.ParkedMessage(
-                                new byte[] {1}, null, null));
+                        () ->
+                                new ZLinkActorJoinPrewarmRegistry.ParkedMessage(
+                                        new byte[] {1}, null, null));
         assertEquals(ZLinkActorJoinPrewarmRegistry.IngressRoute.PARKED, route);
     }
 
@@ -160,7 +192,7 @@ final class ZLinkActorJoinPrewarmRegistryTest {
         registry.parkOrDeliver(
                 ACTOR_ID,
                 OBJECT_GENERATION,
-                new ZLinkActorJoinPrewarmRegistry.ParkedMessage(new byte[] {1}, null, null));
+                () -> new ZLinkActorJoinPrewarmRegistry.ParkedMessage(new byte[] {1}, null, null));
 
         //  A retried admission round trip (or the PREPARE-time lookup)
         //  for the exact same RelocationId must observe the same
@@ -200,8 +232,9 @@ final class ZLinkActorJoinPrewarmRegistryTest {
                 registry.parkOrDeliver(
                         ACTOR_ID,
                         OBJECT_GENERATION,
-                        new ZLinkActorJoinPrewarmRegistry.ParkedMessage(
-                                new byte[] {1}, null, null)));
+                        () ->
+                                new ZLinkActorJoinPrewarmRegistry.ParkedMessage(
+                                        new byte[] {1}, null, null)));
     }
 
     @Test
@@ -213,7 +246,9 @@ final class ZLinkActorJoinPrewarmRegistryTest {
         registry.parkOrDeliver(
                 ACTOR_ID,
                 OBJECT_GENERATION,
-                new ZLinkActorJoinPrewarmRegistry.ParkedMessage(new byte[] {1}, null, failed::set));
+                () ->
+                        new ZLinkActorJoinPrewarmRegistry.ParkedMessage(
+                                new byte[] {1}, null, failed::set));
 
         registry.releaseAsync(relocationId).toCompletableFuture().join();
 
@@ -233,7 +268,9 @@ final class ZLinkActorJoinPrewarmRegistryTest {
         registry.parkOrDeliver(
                 ACTOR_ID,
                 OBJECT_GENERATION,
-                new ZLinkActorJoinPrewarmRegistry.ParkedMessage(new byte[] {1}, null, failed::set));
+                () ->
+                        new ZLinkActorJoinPrewarmRegistry.ParkedMessage(
+                                new byte[] {1}, null, failed::set));
 
         ZLinkActorJoinPrewarmRegistry.Attempt newAttempt =
                 registry.register(newRelocationId, ACTOR_ID, OBJECT_GENERATION, evictions::add);
@@ -303,11 +340,11 @@ final class ZLinkActorJoinPrewarmRegistryTest {
         registry.parkOrDeliver(
                 ACTOR_ID,
                 OBJECT_GENERATION,
-                new ZLinkActorJoinPrewarmRegistry.ParkedMessage(new byte[] {1}, null, null));
+                () -> new ZLinkActorJoinPrewarmRegistry.ParkedMessage(new byte[] {1}, null, null));
         registry.parkOrDeliver(
                 ACTOR_ID,
                 OBJECT_GENERATION,
-                new ZLinkActorJoinPrewarmRegistry.ParkedMessage(new byte[] {2}, null, null));
+                () -> new ZLinkActorJoinPrewarmRegistry.ParkedMessage(new byte[] {2}, null, null));
 
         List<String> transitions = new ArrayList<>();
         registry.completeMigration(
@@ -328,8 +365,9 @@ final class ZLinkActorJoinPrewarmRegistryTest {
                 registry.parkOrDeliver(
                         ACTOR_ID,
                         OBJECT_GENERATION,
-                        new ZLinkActorJoinPrewarmRegistry.ParkedMessage(
-                                new byte[] {3}, null, null));
+                        () ->
+                                new ZLinkActorJoinPrewarmRegistry.ParkedMessage(
+                                        new byte[] {3}, null, null));
         assertEquals(
                 ZLinkActorJoinPrewarmRegistry.IngressRoute.DELIVERED,
                 route,
