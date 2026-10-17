@@ -345,73 +345,25 @@ internal abstract partial class ZLinkSpotActivation
         }
     }
 
-    internal async ValueTask ReplayTransferredActorHandoffAsync(
-        ZLinkActorRuntimeState actorState,
-        IReadOnlyList<ZLinkActorHandoffFrame> sourceFrames,
+    internal Task DispatchOwnedActorFrameAsync(
+        ZLinkBackendActorRef actorRef,
+        ZLinkActorHandoffFrame frame,
+        Func<ZLinkSpotActorFrame, ZLinkActorReply?, CancellationToken, ValueTask>? complete,
         CancellationToken cancellationToken
-    )
-    {
-        var frames = actorState.Handoff.PrepareImportedReplay(sourceFrames);
-        if (frames.Count == 0)
-            return;
-
-        var actorRef =
-            actorState.NativeActorRef
-            ?? throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.NotFound,
-                $"Actor '{actorState.ActorId}' does not have a native Actor ref during handoff completion."
-            );
-        foreach (var frame in frames.OrderBy(static frame => frame.ArrivalIndex))
-            ZLinkFrameworkDebugLog.SpotDiscovery(
-                $"backlog_enqueued actor={actorState.ActorId} arrival={frame.ArrivalIndex} trailing=true request_id={frame.RequestId} flags={frame.Flags}"
-            );
-        await _dispatcher
-            .DispatchActorReplayFramesAsync(
-                ZLinkActorHandoffFrames.Restore(actorRef, frames),
-                actorState.Handoff.AcknowledgeReplayedFrame,
-                cancellationToken
-            )
-            .ConfigureAwait(false);
-    }
-
-    internal async ValueTask ReplayFinalTransferredActorHandoffAsync(
-        ZLinkActorRuntimeState actorState,
-        string handoffId,
-        CancellationToken cancellationToken
-    )
-    {
-        var actorRef =
-            actorState.NativeActorRef
-            ?? throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.NotFound,
-                $"Actor '{actorState.ActorId}' does not have a native Actor ref during final handoff replay."
-            );
-        while (true)
-        {
-            var frames = actorState.Handoff.SnapshotFinalReplay();
-            _runtime.LogActorHandoff(
-                $"handoff_final_replay_snapshot actor={actorState.ActorId} frames={frames.Count}"
-            );
-            if (
-                frames.Count == 0
-                && actorState.Handoff.TryCompleteTransferredActorReplay(handoffId)
-            )
-                return;
-            if (frames.Count == 0)
-                continue;
-
-            await _dispatcher
+    ) =>
+        complete is null
+            ? _dispatcher
                 .DispatchActorReplayFramesAsync(
-                    ZLinkActorHandoffFrames.Restore(actorRef, frames),
-                    actorState.Handoff.AcknowledgeReplayedFrame,
+                    ZLinkActorHandoffFrames.Restore(actorRef, [frame]),
+                    static _ => { },
                     cancellationToken
                 )
-                .ConfigureAwait(false);
-            _runtime.LogActorHandoff(
-                $"handoff_final_replay_dispatched actor={actorState.ActorId} frames={frames.Count}"
+                .AsTask()
+            : _dispatcher.DispatchOwnedCanonicalActorFramesAsync(
+                ZLinkActorHandoffFrames.Restore(actorRef, [frame]),
+                complete,
+                cancellationToken
             );
-        }
-    }
 
     internal ValueTask ReplayAbortedActorHandoffAsync(
         ZLinkActorRuntimeState actorState,

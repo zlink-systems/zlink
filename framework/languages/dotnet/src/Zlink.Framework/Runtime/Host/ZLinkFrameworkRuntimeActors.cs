@@ -1124,7 +1124,8 @@ internal sealed partial class ZLinkFrameworkRuntime
         ZLinkActorRelocationRecoveryRecord recovery,
         string targetMeshName,
         Func<CancellationToken, ValueTask> normalizeDurableAuthority,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        Action finishTargetStage
     )
     {
         var completion = CreateCanonicalRoutedActorCompletion(request, spotId, recovery);
@@ -1159,76 +1160,79 @@ internal sealed partial class ZLinkFrameworkRuntime
                     $"Actor '{request.ActorId}' handoff target '{spotId}' "
                         + "is not active during direct completion."
                 );
-            actorState.Handoff.PrepareImportedReplay([]);
-            //  Mirrors the store-based recovery path's ReleasePublishedAsync
-            //  position: the durable row reaches its terminal (Activated,
-            //  then steady) before the public Join terminal, so a late or
-            //  duplicate cutover after completion performs zero authority
-            //  writes (spec 52 §4.2 — late cutover is ignored) and the
-            //  source's committed-target wait observes the activation.
-            await normalizeDurableAuthority(cancellationToken).ConfigureAwait(false);
-            if (recovery.OperationIdHigh != 0 || recovery.OperationIdLow != 0)
-            {
-                var actor =
-                    actorState.Actor
-                    ?? throw new ZLinkFrameworkException(
-                        ZLinkFrameworkErrorKind.NotFound,
-                        $"Actor '{request.ActorId}' has no transferred instance for Join completion."
-                    );
-                var currentRef =
-                    actorState.NativeActorRef
-                    ?? throw new ZLinkFrameworkException(
-                        ZLinkFrameworkErrorKind.NotFound,
-                        $"Actor '{request.ActorId}' has no current reference for Join completion."
-                    );
-                var reply =
-                    recovery.Reply.Length != 0 && recovery.ReplyContentType is { } contentType
-                        ? ZLinkMessage.FromCanonicalActorJoinReply(
-                            contentType,
-                            recovery.Reply,
-                            Registration.Codecs
-                        )
-                        : null;
-                await actorState
-                    .ExecuteRelocationCompletionAsync(
-                        currentRef.Generation,
-                        token =>
-                            actor.OnJoinCompletedAsync(
-                                new ZLinkActorJoinCompletion.Accepted(
-                                    new ZLinkActorJoinOperationId(
-                                        recovery.OperationIdHigh,
-                                        recovery.OperationIdLow
-                                    ),
-                                    currentRef.ToNative(targetMeshName),
-                                    reply
-                                ),
-                                token
-                            ),
-                        cancellationToken
-                    )
-                    .ConfigureAwait(false);
-            }
-            await ReplayFinalTransferredActorHandoffAsync(
-                    target,
-                    actorState,
-                    request.HandoffId,
-                    cancellationToken
+            await ZLinkActorTargetActivation
+                .CompleteAsync(
+                    () => normalizeDurableAuthority(cancellationToken),
+                    () =>
+                    {
+                        actorState.Handoff.PrepareImportedReplay([]);
+                        AdmitTransferredActorPrefix(actorState, request.HandoffId);
+                        return ValueTask.CompletedTask;
+                    },
+                    async () =>
+                    {
+                        if (recovery.OperationIdHigh != 0 || recovery.OperationIdLow != 0)
+                        {
+                            var actor =
+                                actorState.Actor
+                                ?? throw new ZLinkFrameworkException(
+                                    ZLinkFrameworkErrorKind.NotFound,
+                                    $"Actor '{request.ActorId}' has no transferred instance for Join completion."
+                                );
+                            var currentRef =
+                                actorState.NativeActorRef
+                                ?? throw new ZLinkFrameworkException(
+                                    ZLinkFrameworkErrorKind.NotFound,
+                                    $"Actor '{request.ActorId}' has no current reference for Join completion."
+                                );
+                            var reply =
+                                recovery.Reply.Length != 0
+                                && recovery.ReplyContentType is { } contentType
+                                    ? ZLinkMessage.FromCanonicalActorJoinReply(
+                                        contentType,
+                                        recovery.Reply,
+                                        Registration.Codecs
+                                    )
+                                    : null;
+                            await actorState
+                                .ExecuteRelocationCompletionAsync(
+                                    currentRef.Generation,
+                                    token =>
+                                        actor.OnJoinCompletedAsync(
+                                            new ZLinkActorJoinCompletion.Accepted(
+                                                new ZLinkActorJoinOperationId(
+                                                    recovery.OperationIdHigh,
+                                                    recovery.OperationIdLow
+                                                ),
+                                                currentRef.ToNative(targetMeshName),
+                                                reply
+                                            ),
+                                            token
+                                        ),
+                                    cancellationToken
+                                )
+                                .ConfigureAwait(false);
+                        }
+                    },
+                    () =>
+                        FinishRelocationSessionRouteAsync(
+                            actorState,
+                            request.HandoffId,
+                            cancellationToken
+                        ),
+                    async () =>
+                    {
+                        await _actorHandoffAdmissions
+                            .RecordCompletionAsync(completion, spotId)
+                            .ConfigureAwait(false);
+                        await _actorHandoffAdmissions
+                            .CompleteAsync(request.HandoffId)
+                            .ConfigureAwait(false);
+                        finishTargetStage();
+                        actorState.Handoff.Complete(request.HandoffId);
+                    }
                 )
                 .ConfigureAwait(false);
-            await actorState
-                .Handoff.WaitForTargetReplayCompletionAsync(cancellationToken)
-                .ConfigureAwait(false);
-            await FinishRelocationSessionRouteAsync(
-                    actorState,
-                    request.HandoffId,
-                    cancellationToken
-                )
-                .ConfigureAwait(false);
-            actorState.Handoff.Complete(request.HandoffId);
-            await _actorHandoffAdmissions
-                .RecordCompletionAsync(completion, spotId)
-                .ConfigureAwait(false);
-            await _actorHandoffAdmissions.CompleteAsync(request.HandoffId).ConfigureAwait(false);
         }
         catch (Exception completionFailure)
         {
@@ -1495,101 +1499,137 @@ internal sealed partial class ZLinkFrameworkRuntime
             ZLinkFrameworkDebugLog.SpotDiscovery(
                 $"handoff_recovery_replay_path actor={request.ActorId} handoff={request.HandoffId} canonical={canonicalMaintenance} frames={request.Frames.Count}"
             );
-            if (!canonicalMaintenance)
-                actorState.Handoff.PrepareImportedReplay(request.Frames);
-            var released = await new ZLinkRelocationPublicationCoordinator(
-                ErrorSink,
-                authorityStore,
-                relocationStore
-            )
-                .ReleasePublishedAsync(
-                    ZLinkActorAuthorityPayloadCodec.AuthorityKey(request.ActorId),
-                    publishedReference,
-                    cancellationToken
-                )
-                .ConfigureAwait(false);
-            if (released is { } releasedSnapshot)
-                await actorLocations
-                    .UpdateTrackedSnapshotAsync(request.ActorId, releasedSnapshot)
-                    .ConfigureAwait(false);
-            if (request.OperationIdHigh != 0 || request.OperationIdLow != 0)
-            {
-                var actor =
-                    actorState.Actor
-                    ?? throw new ZLinkFrameworkException(
-                        ZLinkFrameworkErrorKind.NotFound,
-                        $"Actor '{request.ActorId}' has no transferred instance for Join completion."
-                    );
-                var currentRef =
-                    actorState.NativeActorRef
-                    ?? throw new ZLinkFrameworkException(
-                        ZLinkFrameworkErrorKind.NotFound,
-                        $"Actor '{request.ActorId}' has no current reference for Join completion."
-                    );
-                var reply =
-                    request.Reply is { Length: > 0 } payload
-                    && request.ReplyContentType is { } contentType
-                        ? ZLinkMessage.FromCanonicalActorJoinReply(
-                            contentType,
-                            payload,
-                            Registration.Codecs
+            ZLinkStandaloneActorRelocationProgress? replayProgress = null;
+            ZLinkRelocationEnvelope? replayIdentity = null;
+            await ZLinkActorTargetActivation
+                .CompleteAsync(
+                    async () =>
+                    {
+                        if (canonicalMaintenance)
+                        {
+                            replayIdentity = await ZLinkRelocationTreeStore
+                                .GetAsync(
+                                    relocationStore,
+                                    publishedReference,
+                                    publishedManifest.ChecksumCrc32c,
+                                    cancellationToken
+                                )
+                                .ConfigureAwait(false);
+                            var owner = RequireStandaloneActorTargetOwner();
+                            replayProgress = await CreateStandaloneActorProgressCoordinator(
+                                    publishedActorAuthority,
+                                    canonical.TargetAttemptGeneration,
+                                    relocationId,
+                                    owner
+                                )
+                                .ReadAsync(replayIdentity, owner, cancellationToken)
+                                .ConfigureAwait(false);
+                        }
+                        var released = await new ZLinkRelocationPublicationCoordinator(
+                            ErrorSink,
+                            authorityStore,
+                            relocationStore
                         )
-                        : null;
-                await actorState
-                    .ExecuteRelocationCompletionAsync(
-                        currentRef.Generation,
-                        token =>
-                            actor.OnJoinCompletedAsync(
-                                new ZLinkActorJoinCompletion.Accepted(
-                                    new ZLinkActorJoinOperationId(
-                                        request.OperationIdHigh,
-                                        request.OperationIdLow
-                                    ),
-                                    currentRef.ToNative(publishedActorAuthority.MeshName),
-                                    reply
-                                ),
-                                token
-                            ),
-                        cancellationToken
-                    )
-                    .ConfigureAwait(false);
-            }
-            if (canonicalMaintenance)
-            {
-                await actorState
-                    .Handoff.WaitForTargetReplayCompletionAsync(cancellationToken)
-                    .ConfigureAwait(false);
-            }
-            else
-            {
-                await ReplayFinalTransferredActorHandoffAsync(
-                        target,
-                        actorState,
-                        request.HandoffId,
-                        cancellationToken
-                    )
-                    .ConfigureAwait(false);
-            }
-            var sessionRouteCommitted = await CommitSessionRouteAsync(
-                    actorState,
-                    request.HandoffId,
-                    cancellationToken
+                            .ReleasePublishedAsync(
+                                ZLinkActorAuthorityPayloadCodec.AuthorityKey(request.ActorId),
+                                publishedReference,
+                                cancellationToken
+                            )
+                            .ConfigureAwait(false);
+                        if (released is { } releasedSnapshot)
+                            await actorLocations
+                                .UpdateTrackedSnapshotAsync(request.ActorId, releasedSnapshot)
+                                .ConfigureAwait(false);
+                        if (replayProgress is not null && released is { } normalized)
+                            replayProgress = replayProgress with { Authority = normalized };
+                    },
+                    async () =>
+                    {
+                        if (canonicalMaintenance)
+                        {
+                            _ = actorState.Handoff.PrepareCanonicalMaintenanceReplay(
+                                request.HandoffId
+                            );
+                            await QueueCanonicalStandaloneActorFramesAsync(
+                                    actorState,
+                                    publishedActorAuthority,
+                                    replayIdentity!,
+                                    request.HandoffId,
+                                    replayProgress!
+                                )
+                                .ConfigureAwait(false);
+                        }
+                        else
+                        {
+                            actorState.Handoff.PrepareImportedReplay(request.Frames);
+                            AdmitTransferredActorPrefix(actorState, request.HandoffId);
+                        }
+                    },
+                    async () =>
+                    {
+                        if (request.OperationIdHigh != 0 || request.OperationIdLow != 0)
+                        {
+                            var actor =
+                                actorState.Actor
+                                ?? throw new ZLinkFrameworkException(
+                                    ZLinkFrameworkErrorKind.NotFound,
+                                    $"Actor '{request.ActorId}' has no transferred instance for Join completion."
+                                );
+                            var currentRef =
+                                actorState.NativeActorRef
+                                ?? throw new ZLinkFrameworkException(
+                                    ZLinkFrameworkErrorKind.NotFound,
+                                    $"Actor '{request.ActorId}' has no current reference for Join completion."
+                                );
+                            var reply =
+                                request.Reply is { Length: > 0 } payload
+                                && request.ReplyContentType is { } contentType
+                                    ? ZLinkMessage.FromCanonicalActorJoinReply(
+                                        contentType,
+                                        payload,
+                                        Registration.Codecs
+                                    )
+                                    : null;
+                            await actorState
+                                .ExecuteRelocationCompletionAsync(
+                                    currentRef.Generation,
+                                    token =>
+                                        actor.OnJoinCompletedAsync(
+                                            new ZLinkActorJoinCompletion.Accepted(
+                                                new ZLinkActorJoinOperationId(
+                                                    request.OperationIdHigh,
+                                                    request.OperationIdLow
+                                                ),
+                                                currentRef.ToNative(
+                                                    publishedActorAuthority.MeshName
+                                                ),
+                                                reply
+                                            ),
+                                            token
+                                        ),
+                                    cancellationToken
+                                )
+                                .ConfigureAwait(false);
+                        }
+                    },
+                    () =>
+                        FinishRelocationSessionRouteAsync(
+                            actorState,
+                            request.HandoffId,
+                            cancellationToken
+                        ),
+                    async () =>
+                    {
+                        await _actorHandoffAdmissions
+                            .RecordCompletionAsync(request, spotId)
+                            .ConfigureAwait(false);
+                        await _actorHandoffAdmissions
+                            .CompleteAsync(request.HandoffId)
+                            .ConfigureAwait(false);
+                        actorState.Handoff.Complete(request.HandoffId);
+                    }
                 )
                 .ConfigureAwait(false);
-            LogActorHandoff(
-                $"session_route_commit_{(sessionRouteCommitted ? "acknowledged" : "not_required")} "
-                    + $"actor={request.ActorId}"
-            );
-            actorState.Handoff.Complete(request.HandoffId);
-            if (ownsRecordedCompletion)
-            {
-                await _actorHandoffAdmissions
-                    .RecordCompletionAsync(request, spotId)
-                    .ConfigureAwait(false);
-                await _actorHandoffAdmissions
-                    .CompleteAsync(request.HandoffId)
-                    .ConfigureAwait(false);
-            }
             ZLinkFrameworkDebugLog.SpotDiscovery(
                 $"handoff_completion actor={request.ActorId} id={request.HandoffId} frames={request.Frames.Count}"
             );
@@ -2975,81 +3015,79 @@ internal sealed partial class ZLinkFrameworkRuntime
             _ => ZLinkFrameworkErrorKind.InternalFailure,
         };
 
-    private async ValueTask ReplayTransferredActorHandoffAsync(
-        ActorHandoffTarget target,
-        ZLinkActorRuntimeState actorState,
-        IReadOnlyList<ZLinkActorHandoffFrame> sourceFrames,
-        CancellationToken cancellationToken
-    )
-    {
-        if (target.UserSpot is { } userSpot)
-        {
-            await userSpot
-                .ReplayTransferredActorHandoffAsync(actorState, sourceFrames, cancellationToken)
-                .ConfigureAwait(false);
-            return;
-        }
-
-        var frames = actorState.Handoff.PrepareImportedReplay(sourceFrames);
-        await ReplayEntrySpotActorFramesAsync(actorState, frames, cancellationToken)
-            .ConfigureAwait(false);
-    }
-
-    private async ValueTask ReplayFinalTransferredActorHandoffAsync(
-        ActorHandoffTarget target,
+    private void AdmitTransferredActorPrefix(
         ZLinkActorRuntimeState actorState,
         string handoffId,
-        CancellationToken cancellationToken
+        Func<ZLinkActorHandoffFrame, Task>? dispatch = null
     )
     {
-        if (target.UserSpot is { } userSpot)
-        {
-            await userSpot
-                .ReplayFinalTransferredActorHandoffAsync(actorState, handoffId, cancellationToken)
-                .ConfigureAwait(false);
-            return;
-        }
-
-        while (true)
-        {
-            var frames = actorState.Handoff.SnapshotFinalReplay();
-            if (
-                frames.Count == 0
-                && actorState.Handoff.TryCompleteTransferredActorReplay(handoffId)
-            )
-                return;
-            if (frames.Count == 0)
-                continue;
-            await ReplayEntrySpotActorFramesAsync(actorState, frames, cancellationToken)
-                .ConfigureAwait(false);
-        }
-    }
-
-    private async ValueTask ReplayEntrySpotActorFramesAsync(
-        ZLinkActorRuntimeState actorState,
-        IReadOnlyList<ZLinkActorHandoffFrame> frames,
-        CancellationToken cancellationToken
-    )
-    {
-        if (frames.Count == 0)
-            return;
+        var start = actorState.Handoff.TargetActivation;
+        var hostQueue = GetOrStartState().ApplicationJobQueue;
+        var reportFailure = ErrorSink.CaptureGenerationReporter();
         var actorRef =
             actorState.NativeActorRef
-            ?? throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.NotFound,
-                $"Actor '{actorState.ActorId}' does not have a native Actor ref during handoff replay."
+            ?? throw new ZLinkRelocationDataLostException(
+                "Target Actor reference is missing during FIFO admission."
             );
         var pipeline = new ZLinkActorInboundPipeline(
             this,
             new ZLinkEntrySpotActorInboundEndpoint(this)
         );
-        await pipeline
-            .DispatchReplayAsync(
-                ZLinkActorHandoffFrames.Restore(actorRef, frames),
-                actorState.Handoff.AcknowledgeReplayedFrame,
-                cancellationToken
-            )
-            .ConfigureAwait(false);
+        dispatch ??= frame =>
+            actorState.LiveActivation is { } activation
+                ? activation.DispatchOwnedActorFrameAsync(actorRef, frame, null, ShutdownToken)
+                : pipeline
+                    .DispatchReplayAsync(
+                        ZLinkActorHandoffFrames.Restore(actorRef, [frame]),
+                        static _ => { },
+                        ShutdownToken
+                    )
+                    .AsTask();
+        var terminal = actorState.Handoff.AdmitDurablePrefix(
+            handoffId,
+            frame =>
+            {
+                ZLinkApplicationJobQueueLease? prepared = null;
+                var record = new ZLinkActorDurableRecord(
+                    async ct =>
+                    {
+                        actorState.Handoff.ClaimDurableFrame(frame);
+                        using var invocation = ZLinkApplicationJobQueueInvocation.Enter(prepared!);
+                        await dispatch(frame).ConfigureAwait(false);
+                    },
+                    async ct =>
+                    {
+                        await start.WaitAsync(ct).ConfigureAwait(false);
+                        var acquired = await hostQueue
+                            .AcquireAsync(ct, frame.Origin)
+                            .ConfigureAwait(false);
+                        Interlocked.Exchange(ref prepared, acquired);
+                        if (ct.IsCancellationRequested)
+                        {
+                            Interlocked.Exchange(ref prepared, null)?.Dispose();
+                            ct.ThrowIfCancellationRequested();
+                        }
+                        acquired.MarkQueued();
+                    },
+                    () => Interlocked.Exchange(ref prepared, null)?.Dispose(),
+                    OnWithdrawable: withdraw => frame.Withdraw = withdraw,
+                    Ready: () => actorState.Handoff.DurablePrefixCanRun,
+                    ReportFailure: reportFailure
+                );
+                return actorState.AdmitDurablePrefix([record])[0];
+            }
+        );
+        // Each FIFO item reports its failure through the captured runtime sink.
+        // Observe the aggregate without tying activation to handler terminals.
+        _ = terminal.ContinueWith(
+            static task =>
+            {
+                _ = task.Exception;
+            },
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted,
+            TaskScheduler.Default
+        );
     }
 
     private readonly record struct ActorHandoffTarget(
