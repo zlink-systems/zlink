@@ -25,7 +25,16 @@ final class ZLinkFrameworkShutdown {
         this.deadline = deadline;
     }
 
-    private final ArrayDeque<Supplier<CompletionStage<Void>>> actions = new ArrayDeque<>();
+    private final ArrayDeque<Stage> actions = new ArrayDeque<>();
+
+    private record Stage(
+            String name,
+            Supplier<CompletionStage<Void>> action,
+            CompletableFuture<Void> completion) {
+        Stage(String name, Supplier<CompletionStage<Void>> action) {
+            this(name, action, new CompletableFuture<>());
+        }
+    }
 
     /**
      * Registers a stage that closes a runtime resource. The next stage starts only after this one
@@ -38,7 +47,7 @@ final class ZLinkFrameworkShutdown {
     }
 
     void deferStage(String stage, Supplier<CompletionStage<Void>> action) {
-        actions.push(() -> atStage(stage, () -> withinDeadline(action.get())));
+        actions.push(new Stage(stage, () -> withinDeadline(action.get())));
     }
 
     private CompletionStage<Void> withinDeadline(CompletionStage<Void> action) {
@@ -101,7 +110,7 @@ final class ZLinkFrameworkShutdown {
                             error ->
                                     CompletableFuture.failedFuture(
                                             new Failure(stage, unwrap(error))));
-        } catch (RuntimeException error) {
+        } catch (RuntimeException | Error error) {
             return CompletableFuture.failedFuture(new Failure(stage, error));
         }
     }
@@ -119,35 +128,65 @@ final class ZLinkFrameworkShutdown {
         }
     }
 
-    CompletionStage<Void> closeAsync() {
-        AtomicReference<Throwable> failure = new AtomicReference<>();
-        CompletionStage<Void> chain = CompletableFuture.completedFuture(null);
-        while (!actions.isEmpty()) {
-            var action = actions.pop();
-            chain = chain.thenCompose(ignored -> invoke(action, failure));
-        }
-        return chain.thenCompose(
-                ignored ->
-                        failure.get() == null
-                                ? CompletableFuture.completedFuture(null)
-                                : CompletableFuture.failedFuture(failure.get()));
+    /** Registers a drain step in execution order; the host owns its single deadline. */
+    void appendStage(String stage, Supplier<CompletionStage<Void>> action) {
+        actions.addLast(new Stage(stage, action));
     }
 
-    private static CompletionStage<Void> invoke(
-            Supplier<CompletionStage<Void>> action, AtomicReference<Throwable> failure) {
-        try {
-            return action.get()
-                    .handle(
-                            (ignored, error) -> {
-                                if (error != null) {
-                                    recordFailure(failure, unwrap(error));
-                                }
-                                return null;
-                            });
-        } catch (RuntimeException error) {
-            recordFailure(failure, error);
-            return CompletableFuture.completedFuture(null);
+    Throwable deadlineFailure() {
+        for (var stage : actions) {
+            if (!stage.completion().isDone()) {
+                return new Failure(stage.name(), new ZLinkTeardownDeadlineExceededException());
+            }
+            try {
+                stage.completion().getNow(null);
+            } catch (CompletionException failure) {
+                return unwrap(failure);
+            }
         }
+        return null;
+    }
+
+    CompletionStage<Void> runAsync() {
+        return execute(null);
+    }
+
+    CompletionStage<Void> closeAsync() {
+        return execute(new AtomicReference<>());
+    }
+
+    private CompletionStage<Void> execute(AtomicReference<Throwable> failure) {
+        CompletionStage<Void> chain = CompletableFuture.completedFuture(null);
+        var stages = actions.iterator();
+        while (stages.hasNext()) {
+            var stage = stages.next();
+            if (failure != null) stages.remove();
+            chain = chain.thenCompose(ignored -> invoke(stage, failure));
+        }
+        return failure == null
+                ? chain
+                : chain.thenCompose(
+                        ignored ->
+                                failure.get() == null
+                                        ? CompletableFuture.completedFuture(null)
+                                        : CompletableFuture.failedFuture(failure.get()));
+    }
+
+    private static CompletionStage<Void> invoke(Stage stage, AtomicReference<Throwable> failure) {
+        atStage(stage.name(), stage.action())
+                .whenComplete(
+                        (ignored, error) -> {
+                            if (error == null) stage.completion().complete(null);
+                            else stage.completion().completeExceptionally(unwrap(error));
+                        });
+        return failure == null
+                ? stage.completion()
+                : stage.completion()
+                        .handle(
+                                (ignored, error) -> {
+                                    if (error != null) recordFailure(failure, unwrap(error));
+                                    return null;
+                                });
     }
 
     private static Throwable unwrap(Throwable error) {

@@ -144,6 +144,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
     private final AtomicReference<ZLinkFrameworkTerminationResult> lastTerminationResult =
             new AtomicReference<>();
     private final AtomicBoolean drainStarted = new AtomicBoolean(false);
+    private volatile ZLinkFrameworkShutdown drainStages;
     private final ZLinkRelocationShutdownGate relocationShutdown =
             new ZLinkRelocationShutdownGate();
     private final AtomicBoolean drainTerminalStarted = new AtomicBoolean(false);
@@ -2320,10 +2321,6 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
         if (drainTerminalStarted.get() || closeGate.closing()) return drained;
         if (drainStarted.compareAndSet(false, true)) {
             try {
-                long remaining =
-                        Duration.between(Instant.now(), currentLifecycleDeadline()).toNanos();
-                CompletableFuture.delayedExecutor(Math.max(0L, remaining), TimeUnit.NANOSECONDS)
-                        .execute(() -> forceStop(InternalDrainForceReason.DEADLINE_EXCEEDED));
                 meshDrains.sealAll();
                 meshNodes
                         .nodesByName()
@@ -2375,134 +2372,103 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
     }
 
     private void runDrain(CompletionStage<Void> acceptedTargetRelocations) {
-        CompletionStage<Void> markerPublished =
-                locationAutoConnectHost == null
-                        ? CompletableFuture.completedFuture(null)
-                        : locationAutoConnectHost.markDraining();
-        traceDrainStage("draining_publication", markerPublished);
-        markerPublished.whenComplete(
-                (ignored, publishFailure) -> {
-                    if (publishFailure != null) {
-                        forceStop(
-                                InternalDrainForceReason.DRAINING_STATE_PUBLISH_FAILED,
-                                new ZLinkFrameworkShutdown.Failure(
-                                        "draining_publication", publishFailure));
-                        return;
-                    }
-                    CompletionStage<Void> meshBarrier =
-                            traceDrainStage("mesh", meshDrains.awaitAllZero());
-                    CompletionStage<Void> applicationBarrier =
-                            meshBarrier
-                                    .thenCompose(
-                                            barrierStep ->
-                                                    traceDrainStage(
-                                                            "target_relocation",
-                                                            acceptedTargetRelocations))
-                                    .thenCompose(
-                                            barrierStep ->
-                                                    traceDrainStage(
-                                                            "spot",
-                                                            spots == null
-                                                                    ? CompletableFuture
-                                                                            .completedFuture(null)
-                                                                    : spots.awaitDrainBarrier()))
-                                    .thenCompose(
-                                            barrierStep ->
-                                                    traceDrainStage(
-                                                            "actor",
-                                                            actors == null
-                                                                    ? CompletableFuture
-                                                                            .completedFuture(null)
-                                                                    : actors.awaitDrainBarrier()))
-                                    .thenCompose(
-                                            barrierStep ->
-                                                    traceDrainStage(
-                                                            "stream",
-                                                            streams == null
-                                                                    ? CompletableFuture
-                                                                            .completedFuture(null)
-                                                                    : streams.awaitDrainBarrier()));
-                    applicationBarrier.whenComplete(
-                            (barrierIgnored, barrierFailure) -> {
-                                if (barrierFailure != null) {
-                                    forceStop(
-                                            InternalDrainForceReason.TEARDOWN_FAILED,
-                                            new ZLinkFrameworkShutdown.Failure(
-                                                    "application_barrier", barrierFailure));
-                                    return;
-                                }
-                                CompletionStage<Void> serverStreamBarrier =
-                                        streams == null
-                                                ? CompletableFuture.completedFuture(null)
-                                                : ZLinkFrameworkShutdown.atStage(
-                                                        "stream_drain", streams::notifyServerDrain);
-                                traceDrainStage("server_stream", serverStreamBarrier);
-                                CompletionStage<Void> spotClosing =
-                                        serverStreamBarrier.thenCompose(
-                                                streamIgnored ->
-                                                        traceDrainStage(
-                                                                "spot_closing",
-                                                                spots == null
-                                                                        ? CompletableFuture
-                                                                                .completedFuture(
-                                                                                        null)
-                                                                        : ZLinkFrameworkShutdown
-                                                                                .atStage(
-                                                                                        "spot_closing",
-                                                                                        () ->
-                                                                                                spots
-                                                                                                        .notifyClosing(
-                                                                                                                establishTeardownEnd(
-                                                                                                                        currentLifecycleDeadline())))));
-                                CompletionStage<Void> actorShutdown =
-                                        spotClosing.thenCompose(
-                                                closingIgnored ->
-                                                        traceDrainStage(
-                                                                "actor_close",
-                                                                actors == null
-                                                                        ? CompletableFuture
-                                                                                .completedFuture(
-                                                                                        null)
-                                                                        : ZLinkFrameworkShutdown
-                                                                                .atStage(
-                                                                                        "instance_close",
-                                                                                        actors
-                                                                                                ::closeAsync)));
-                                CompletionStage<Void> spotDrain =
-                                        actorShutdown.thenCompose(
-                                                streamIgnored ->
-                                                        traceDrainStage(
-                                                                "spot_close",
-                                                                spots == null
-                                                                        ? CompletableFuture
-                                                                                .completedFuture(
-                                                                                        null)
-                                                                        : ZLinkFrameworkShutdown
-                                                                                .atStage(
-                                                                                        "spot_close",
-                                                                                        () ->
-                                                                                                spots
-                                                                                                        .continueDrain(
-                                                                                                                systems
-                                                                                                                        .zlink
-                                                                                                                        .framework
-                                                                                                                        .spots
-                                                                                                                        .ZLinkSpotCloseReason
-                                                                                                                        .HOST_SHUTDOWN,
-                                                                                                                establishTeardownEnd(
-                                                                                                                        currentLifecycleDeadline())))));
-                                spotDrain.whenComplete(
-                                        (workloadsIgnored, workloadFailure) -> {
-                                            if (workloadFailure != null) {
-                                                forceStop(
-                                                        InternalDrainForceReason.TEARDOWN_FAILED,
-                                                        workloadFailure);
-                                                return;
-                                            }
-                                            completeDrain();
-                                        });
-                            });
+        var stages = new ZLinkFrameworkShutdown(currentLifecycleDeadline());
+        stages.appendStage(
+                "draining_publication",
+                () -> {
+                    CompletionStage<Void> markerPublished =
+                            locationAutoConnectHost == null
+                                    ? CompletableFuture.completedFuture(null)
+                                    : locationAutoConnectHost.markDraining();
+                    return traceDrainStage("draining_publication", markerPublished)
+                            .whenComplete(
+                                    (ignored, failure) -> {
+                                        if (failure != null)
+                                            forceStop(
+                                                    InternalDrainForceReason
+                                                            .DRAINING_STATE_PUBLISH_FAILED,
+                                                    new ZLinkFrameworkShutdown.Failure(
+                                                            "draining_publication", failure));
+                                    });
                 });
+        stages.appendStage("mesh", () -> traceDrainStage("mesh", meshDrains.awaitAllZero()));
+        stages.appendStage(
+                "target_relocation",
+                () -> traceDrainStage("target_relocation", acceptedTargetRelocations));
+        stages.appendStage(
+                "spot",
+                () ->
+                        traceDrainStage(
+                                "spot",
+                                spots == null
+                                        ? CompletableFuture.completedFuture(null)
+                                        : spots.awaitDrainBarrier()));
+        stages.appendStage(
+                "actor",
+                () ->
+                        traceDrainStage(
+                                "actor",
+                                actors == null
+                                        ? CompletableFuture.completedFuture(null)
+                                        : actors.awaitDrainBarrier()));
+        stages.appendStage(
+                "stream",
+                () ->
+                        traceDrainStage(
+                                "stream",
+                                streams == null
+                                        ? CompletableFuture.completedFuture(null)
+                                        : streams.awaitDrainBarrier()));
+        stages.appendStage(
+                "stream_drain",
+                () ->
+                        traceDrainStage(
+                                "server_stream",
+                                streams == null
+                                        ? CompletableFuture.completedFuture(null)
+                                        : streams.notifyServerDrain()));
+        stages.appendStage(
+                "spot_closing",
+                () ->
+                        traceDrainStage(
+                                "spot_closing",
+                                spots == null
+                                        ? CompletableFuture.completedFuture(null)
+                                        : spots.notifyClosing(
+                                                establishTeardownEnd(currentLifecycleDeadline()))));
+        stages.appendStage(
+                "instance_close",
+                () ->
+                        traceDrainStage(
+                                "actor_close",
+                                actors == null
+                                        ? CompletableFuture.completedFuture(null)
+                                        : actors.closeAsync()));
+        stages.appendStage(
+                "spot_close",
+                () ->
+                        traceDrainStage(
+                                "spot_close",
+                                spots == null
+                                        ? CompletableFuture.completedFuture(null)
+                                        : spots.continueDrain(
+                                                systems.zlink.framework.spots.ZLinkSpotCloseReason
+                                                        .HOST_SHUTDOWN,
+                                                establishTeardownEnd(currentLifecycleDeadline()))));
+        // Publish the complete plan before the deadline can observe it, including before its
+        // first action starts. The completions that execute the plan also identify its pending
+        // step.
+        drainStages = stages;
+        long remaining = Duration.between(Instant.now(), currentLifecycleDeadline()).toNanos();
+        CompletableFuture.delayedExecutor(Math.max(0L, remaining), TimeUnit.NANOSECONDS)
+                .execute(() -> forceStop(InternalDrainForceReason.DEADLINE_EXCEEDED));
+        stages.runAsync()
+                .whenComplete(
+                        (ignored, failure) -> {
+                            if (failure != null)
+                                forceStop(InternalDrainForceReason.TEARDOWN_FAILED, failure);
+                            else completeDrain();
+                        });
     }
 
     private <T> CompletionStage<T> traceDrainStage(String stage, CompletionStage<T> work) {
@@ -2582,7 +2548,12 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
     }
 
     private void forceStop(InternalDrainForceReason reason) {
-        forceStop(reason, null);
+        var stages = drainStages;
+        forceStop(
+                reason,
+                reason == InternalDrainForceReason.DEADLINE_EXCEEDED && stages != null
+                        ? stages.deadlineFailure()
+                        : null);
     }
 
     private void forceStop(InternalDrainForceReason reason, Throwable failure) {
@@ -2642,8 +2613,15 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                             if (initialFailure != null
                                     && failure != null
                                     && initialFailure != failure) {
-                                terminalFailure = new CompletionException(initialFailure);
-                                terminalFailure.addSuppressed(failure);
+                                Throwable primary =
+                                        !ZLinkFrameworkShutdown.hasTeardownFailure(initialFailure)
+                                                        && ZLinkFrameworkShutdown
+                                                                .hasTeardownFailure(failure)
+                                                ? failure
+                                                : initialFailure;
+                                terminalFailure = new CompletionException(primary);
+                                terminalFailure.addSuppressed(
+                                        primary == initialFailure ? failure : initialFailure);
                             }
                             completeForcedStop(initialReason, terminalFailure);
                         });
