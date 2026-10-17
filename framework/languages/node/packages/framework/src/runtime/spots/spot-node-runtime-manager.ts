@@ -453,9 +453,8 @@ export class ZLinkSpotNodeRuntimeManager {
     const ownerChanged =
       this.publishedOwnerToken !== undefined && !sameOwnerToken(this.publishedOwnerToken, owner);
     if (ownerChanged) {
-      // A new owner token can refer to an empty or replaced Store. The cached
-      // descriptor was written under the previous lease and must not force a
-      // Renew against a row that no longer exists.
+      // A descriptor confirmed under the previous lease must not supply
+      // cached population data for a new owner token.
       this.publishedMeshNodeDescriptors.clear();
     }
     for (const [meshName, registration] of this.options.registration.spotNodes) {
@@ -546,13 +545,14 @@ export class ZLinkSpotNodeRuntimeManager {
         state,
         securityIdentity: 'default'
       };
+      // Revision is issued before submission: an unconfirmed Store write may
+      // already have applied, so the next publication must not reuse it.
+      this.descriptorRevisionByMesh.set(meshName, descriptor.descriptorRevision);
       const result = await location.runtime.writeMeshNode(
         descriptor,
-        ownerChanged
-          ? ZLinkLocationWriteIntent.Renew
-          : current === undefined
-            ? ZLinkLocationWriteIntent.NewClaim
-            : ZLinkLocationWriteIntent.Renew,
+        previousRevision === 0n
+          ? ZLinkLocationWriteIntent.NewClaim
+          : ZLinkLocationWriteIntent.Renew,
         signal
       );
       if (result.status !== ZLinkLocationWriteStatus.Stored) {
@@ -566,7 +566,6 @@ export class ZLinkSpotNodeRuntimeManager {
         leaseGeneration: location.runtime.currentOwnerToken!.leaseGeneration,
         updatedAt: result.updatedAt
       });
-      this.descriptorRevisionByMesh.set(meshName, descriptor.descriptorRevision);
     }
     this.publishedOwnerToken = owner;
   }
