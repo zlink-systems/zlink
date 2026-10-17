@@ -41,6 +41,48 @@ import java.util.concurrent.atomic.AtomicReference;
 final class ZLinkSerialExecutionQueueTest {
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
+    void discardedLifecycleMessagesReachQuiescence(boolean shared) throws Exception {
+        var queue = new ZLinkSerialExecutionQueue(Runnable::run, ZLinkExecutionLanePolicy.spot());
+        if (shared) new ZLinkSerialExecutionQueue.SharedSpotGate(queue);
+        var lifecycle = new CompletableFuture<Void>();
+        var entered = new CompletableFuture<Void>();
+        var calls = new AtomicInteger();
+        var releases = new AtomicInteger();
+        try {
+            var transition =
+                    queue.enqueueLifecycleTransition(
+                            () -> {
+                                entered.complete(null);
+                                return ZLinkSerialExecutionQueue.yieldCurrent(lifecycle);
+                            },
+                            ignored -> CompletableFuture.completedFuture(null),
+                            () -> false,
+                            ignored -> false);
+            entered.get(3, TimeUnit.SECONDS);
+            assertTrue(
+                    queue.tryEnqueue(
+                            () -> {
+                                calls.incrementAndGet();
+                                return CompletableFuture.completedFuture(null);
+                            },
+                            releases::incrementAndGet));
+            var drained = queue.awaitQuiescence().toCompletableFuture();
+            assertFalse(drained.isDone());
+            queue.commitLifecycleTransition().toCompletableFuture().get(3, TimeUnit.SECONDS);
+            assertEquals(1, releases.get());
+            lifecycle.complete(null);
+            transition.toCompletableFuture().get(3, TimeUnit.SECONDS);
+            drained.get(3, TimeUnit.SECONDS);
+            assertEquals(0, calls.get());
+            assertEquals(1, releases.get());
+        } finally {
+            lifecycle.complete(null);
+            queue.close();
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
     void managedCompletionKeepsApplicationJobContextAtItsExecutionBoundary(boolean returnsGate)
             throws Exception {
         CountingExecutor executor = new CountingExecutor();

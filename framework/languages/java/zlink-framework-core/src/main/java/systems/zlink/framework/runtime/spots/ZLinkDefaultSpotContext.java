@@ -446,6 +446,7 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
             new ZLinkSpotHandlerCatalog(
                     "SPOT handler registration is only allowed while configure is running");
     private ZLinkSpot<?> spot;
+    private CompletableFuture<Boolean> activationOutcome;
 
     DefaultSpotContext(
             ZLinkSpotContextHost host,
@@ -678,7 +679,12 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
                             try {
                                 closeHandlerInstances();
                             } finally {
-                                backendSpot.close();
+                                try {
+                                    backendSpot.close();
+                                } finally {
+                                    if (activationOutcome != null)
+                                        activationOutcome.complete(false);
+                                }
                             }
                         });
     }
@@ -882,7 +888,7 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
     CompletionStage<Void> enqueueClose(
             Supplier<CompletionStage<Void>> operation,
             java.util.function.BooleanSupplier committed) {
-        return serials.enqueueClose(() -> runLifecycleExecution(operation), committed);
+        return serials.enqueueTransition(() -> runLifecycleExecution(operation), committed);
     }
 
     CompletionStage<Void> commitClose() {
@@ -906,8 +912,8 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
         return serials.admitIngress(admission);
     }
 
-    boolean tryEnqueueSpot(Supplier<CompletionStage<Void>> operation) {
-        return serials.tryEnqueueSpot(operation);
+    boolean tryEnqueueSpot(Supplier<CompletionStage<Void>> operation, Runnable release) {
+        return serials.tryEnqueueSpot(operation, release);
     }
 
     boolean isCurrentSpotTurn() {
@@ -939,6 +945,37 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
                     }
                     return relocationBarrier;
                 });
+    }
+
+    /** Holds the existing application FIFO until this incarnation reaches Ready or is discarded. */
+    <T> CompletionStage<T> runActivation(Supplier<CompletionStage<T>> operation) {
+        activationOutcome = new CompletableFuture<>();
+        CompletableFuture<T> prepared = new CompletableFuture<>();
+        serials.enqueueTransition(
+                        () -> {
+                            runLifecycleExecution(operation)
+                                    .whenComplete(
+                                            (value, failure) -> {
+                                                if (failure == null) prepared.complete(value);
+                                                else prepared.completeExceptionally(failure);
+                                            });
+                            return activationOutcome.thenCompose(
+                                    ready -> {
+                                        if (ready) return CompletableFuture.completedFuture(null);
+                                        serials.sealClosingAdmission();
+                                        return serials.commitClose();
+                                    });
+                        },
+                        () -> false)
+                .whenComplete(
+                        (ignored, failure) -> {
+                            if (failure != null) prepared.completeExceptionally(failure);
+                        });
+        return prepared;
+    }
+
+    void completeActivation() {
+        if (activationOutcome != null) activationOutcome.complete(true);
     }
 
     <T> CompletionStage<T> runLifecycleExecution(Supplier<CompletionStage<T>> operation) {

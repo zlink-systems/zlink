@@ -561,7 +561,11 @@ public final class ZLinkSerialExecutionQueue {
                 for (Entry entry : applicationPending) {
                     entry.operation = () -> dispatchPending(entry);
                 }
-                discarded.forEach(ZLinkSerialExecutionQueue.this::release);
+                discarded.forEach(
+                        entry -> {
+                            release(entry);
+                            decrementOutstanding();
+                        });
             }
             for (Entry entry : discarded) {
                 entry.relocationRelease.run();
@@ -978,12 +982,16 @@ public final class ZLinkSerialExecutionQueue {
     }
 
     public boolean tryEnqueue(Supplier<CompletionStage<Void>> operation) {
+        return tryEnqueue(operation, () -> {});
+    }
+
+    public boolean tryEnqueue(Supplier<CompletionStage<Void>> operation, Runnable release) {
         EnqueueResult result;
         synchronized (this) {
             if (admissionFailureLocked() != null) {
                 return false;
             }
-            result = enqueueAccepted(null, 0, operation);
+            result = enqueueAccepted(null, 0, operation, release);
         }
         scheduleDrainIfNeeded(result);
         return true;

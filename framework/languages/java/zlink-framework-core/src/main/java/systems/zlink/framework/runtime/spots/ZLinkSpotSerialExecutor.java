@@ -493,16 +493,18 @@ public final class ZLinkSpotSerialExecutor implements ZLinkActorDispatchTarget {
         return spotQueue.enqueueLifecycleAdmission(operation);
     }
 
-    CompletionStage<Void> enqueueClose(
+    CompletionStage<Void> enqueueTransition(
             Supplier<CompletionStage<Void>> operation,
             java.util.function.BooleanSupplier committed) {
-        CompletionStage<Void> close =
+        CompletionStage<Void> transition =
                 spotQueue.enqueueLifecycleTransition(
                         operation,
                         ignored -> CompletableFuture.completedFuture(null),
                         committed,
                         ignored -> false);
-        return spotQueue.isCurrent() ? ZLinkSerialExecutionQueue.yieldCurrent(close) : close;
+        return spotQueue.isCurrent()
+                ? ZLinkSerialExecutionQueue.yieldCurrent(transition)
+                : transition;
     }
 
     CompletionStage<Void> commitClose() {
@@ -521,8 +523,8 @@ public final class ZLinkSpotSerialExecutor implements ZLinkActorDispatchTarget {
         return spotQueue.admitIngress(admission);
     }
 
-    boolean tryEnqueueSpot(Supplier<CompletionStage<Void>> operation) {
-        return spotQueue.tryEnqueue(operation);
+    boolean tryEnqueueSpot(Supplier<CompletionStage<Void>> operation, Runnable release) {
+        return spotQueue.tryEnqueue(operation, release);
     }
 
     CompletionStage<Boolean> abortRelocation(ZLinkSerialExecutionQueue.RelocationSeal seal) {

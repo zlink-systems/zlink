@@ -333,7 +333,7 @@ final class ZLinkSpotLifecycleAwaitRegressionTest {
                         });
         try {
             var closed =
-                    serials.enqueueClose(
+                    serials.enqueueTransition(
                             () -> coordinator.close().thenApply(ignored -> null),
                             coordinator::committed);
             prefixReturned.get(BOUND_SECONDS, TimeUnit.SECONDS);

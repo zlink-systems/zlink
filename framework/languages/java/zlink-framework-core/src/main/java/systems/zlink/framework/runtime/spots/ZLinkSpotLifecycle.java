@@ -215,17 +215,18 @@ final class ZLinkSpotLifecycle {
         if (current != null && current != activation) {
             return SpotActivationBase.finishCleanup(
                     new IllegalStateException("User Spot Ready publication lost local admission"),
-                    activation.closeAsync());
+                    activation.context.closeResourcesAsync());
         }
         if (current == null) countChanged.run();
         recordSpotCount(USER_SPOT_METRIC_KIND, 1);
         recordSpotCreated(USER_SPOT_METRIC_KIND);
+        activation.context.completeActivation();
         return CompletableFuture.completedFuture(null);
     }
 
     CompletionStage<Void> discardReserved(PreparedUserSpot prepared) {
         if (!prepared.existing() && prepared.created().activation() != null) {
-            return prepared.created().activation().closeAsync();
+            return prepared.created().activation().context.closeResourcesAsync();
         }
         return CompletableFuture.completedFuture(null);
     }
