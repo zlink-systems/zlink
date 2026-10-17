@@ -5837,12 +5837,13 @@ class actor_cutover_probe_t final : public zlink::framework::actor_t
         target_joined.store (false, std::memory_order_release);
         submit_bound_push_on_join.store (false, std::memory_order_release);
         joined_bound_push_submitted.store (false, std::memory_order_release);
-        source_leave_entered.store (false, std::memory_order_release);
         source_leave_before_target_joined.store (false, std::memory_order_release);
         source_leave_calls.store (0, std::memory_order_release);
         target_completion_gate =
           std::make_shared<zlink::framework::task_completion_source_t<void>> ();
         source_leave_gate = std::make_shared<zlink::framework::task_completion_source_t<void>> ();
+        source_leave_started =
+          std::make_shared<zlink::framework::task_completion_source_t<void>> ();
     }
 
     static inline std::atomic_int source_completions{0};
@@ -5857,7 +5858,6 @@ class actor_cutover_probe_t final : public zlink::framework::actor_t
     static inline std::atomic_bool target_joined{false};
     static inline std::atomic_bool submit_bound_push_on_join{false};
     static inline std::atomic_bool joined_bound_push_submitted{false};
-    static inline std::atomic_bool source_leave_entered{false};
     static inline std::atomic_bool source_leave_before_target_joined{false};
     static inline std::atomic_int source_leave_calls{0};
     static inline std::shared_ptr<zlink::framework::task_completion_source_t<void>>
@@ -5865,6 +5865,8 @@ class actor_cutover_probe_t final : public zlink::framework::actor_t
         std::make_shared<zlink::framework::task_completion_source_t<void>> ();
     static inline std::shared_ptr<zlink::framework::task_completion_source_t<void>>
       source_leave_gate = std::make_shared<zlink::framework::task_completion_source_t<void>> ();
+    static inline std::shared_ptr<zlink::framework::task_completion_source_t<void>>
+      source_leave_started = std::make_shared<zlink::framework::task_completion_source_t<void>> ();
 
   private:
     zlink::framework::actor_context_t _context;
@@ -5935,7 +5937,8 @@ class actor_cutover_probe_spot_t final : public zlink::framework::spot_t<actor_c
             actor_cutover_probe_t::source_leave_before_target_joined.store (
               !actor_cutover_probe_t::target_joined.load (std::memory_order_acquire),
               std::memory_order_release);
-            actor_cutover_probe_t::source_leave_entered.store (true, std::memory_order_release);
+            actor_cutover_probe_t::source_leave_started->complete (
+              zlink::framework::result_t<void>::success ());
             co_await actor_cutover_probe_t::source_leave_gate->task ();
         }
         co_return;
@@ -7042,6 +7045,8 @@ bool verify_remote_actor_cutover_completion_is_target_owned (bool cancel_source_
         auto state = zlink::framework::test::runtime_failure_fixture<
           zlink::framework::detail::mesh_node_builder_state_t> ("actor-cutover-mesh");
         state->core_context = core_context;
+        if (cancel_source_delay)
+            state->spot_state->dispatch.message_flow (message_flow_log_mode_t::normal);
         state->listen_endpoint = "tcp://127.0.0.1:0";
         state->routing_id = zlink::routing_id_t::from (rid);
         state->spot_state->snapshot.routing_id = *state->routing_id;
@@ -7587,6 +7592,10 @@ bool verify_remote_actor_cutover_completion_is_target_owned (bool cancel_source_
           unknown_at_teardown
             ? !joined_result && joined_result.error_kind () == framework_error_kind_t::unavailable
             : static_cast<bool> (joined_result);
+        // Membership §Actor Join completion: the one-way source Leave does not
+        // delay target completion. Observe its own entry before counting calls.
+        if (expected_terminal && !unknown_at_teardown)
+            (void) actor_cutover_probe_t::source_leave_started->task ().result_for (join_timeout);
         if (expected_terminal && !stopped_management)
             active_drained.task ().result ().value ();
         const auto active = source.active_application_callbacks ();
@@ -7601,18 +7610,19 @@ bool verify_remote_actor_cutover_completion_is_target_owned (bool cancel_source_
                      && item.owner.key == "actor-cutover-probe"
                      && item.state == stateful::object_state_t::ready;
           });
+        const auto leave_calls =
+          actor_cutover_probe_t::source_leave_calls.load (std::memory_order_acquire);
         std::cerr << "Source mesh cancellation joined=" << static_cast<bool> (joined_result)
                   << " retained-active=" << retained_active << " active=" << active
                   << " pending-leaves=" << pending << " unknown=" << unknown_at_teardown
                   << " stopped-management=" << stopped_management
                   << " expected-terminal=" << expected_terminal
-                  << " dispatch-closed=" << dispatch_closed
+                  << " dispatch-closed=" << dispatch_closed << " source-leave-calls=" << leave_calls
                   << " authority-observations=" << source_settlement->observations.load ()
                   << " error="
                   << (joined_result.error () ? joined_result.error ()->what () : "none") << '\n';
-        const bool passed =
-          expected_terminal && retained_active && active == 0 && pending == 0 && dispatch_closed
-          && actor_cutover_probe_t::source_leave_calls.load () == (unknown_at_teardown ? 0 : 1);
+        const bool passed = expected_terminal && retained_active && active == 0 && pending == 0
+                            && dispatch_closed && leave_calls == (unknown_at_teardown ? 0 : 1);
         if (!passed) {
             // Failure was recorded in the snapshot above. Release only the failed
             // fixture's reservation so the red process can stop cooperatively.
@@ -7629,13 +7639,10 @@ bool verify_remote_actor_cutover_completion_is_target_owned (bool cancel_source_
         target.stop ();
         return passed;
     }
-    const auto source_leave_deadline = std::chrono::steady_clock::now () + 2s;
-    while (!actor_cutover_probe_t::source_leave_entered.load (std::memory_order_acquire)
-           && std::chrono::steady_clock::now () < source_leave_deadline) {
-        std::this_thread::sleep_for (1ms);
-    }
+    const auto source_leave_observation =
+      actor_cutover_probe_t::source_leave_started->task ().result_for (2s);
     const auto source_leave_started =
-      actor_cutover_probe_t::source_leave_entered.load (std::memory_order_acquire);
+      source_leave_observation && static_cast<bool> (*source_leave_observation);
     const auto returned_while_source_leave_blocked =
       joined.wait_for (250ms) == std::future_status::ready;
     const auto target_completion_deadline = std::chrono::steady_clock::now () + 250ms;

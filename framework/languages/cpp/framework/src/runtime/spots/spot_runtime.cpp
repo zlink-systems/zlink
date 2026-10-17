@@ -2574,16 +2574,7 @@ void spot_context_state_t::run_local_close_steps (
             return;
         }
         try {
-            const auto native =
-              reason == spot_close_reason_t::host_shutdown ? self->native_spot.lock () : nullptr;
             self->close_application_then_release_location (owner, reason, token);
-            if (native) {
-                if (!native->close ()) {
-                    done (result_t<bool>::failure (framework_error_kind_t::internal_failure,
-                                                   "Host shutdown native Spot close was refused"));
-                    return;
-                }
-            }
         }
         catch (...) {
             // Closing stays committed after local release failure.

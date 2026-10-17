@@ -2093,39 +2093,10 @@ class memory_aggregate_authority_t final : public aggregate_authority_port_t
 class target_preflight_t final : public target_preflight_port_t
 {
   public:
-    target_preflight_result_t preflight (const std::vector<relocation_unit_t> &units) override
+    target_preflight_result_t preflight (const std::vector<relocation_unit_t> &) override
     {
-        std::function<void ()> callback;
-        {
-            std::lock_guard lock (mutex);
-            ++calls;
-            observed_units = units;
-            callback = on_preflight;
-        }
-        if (callback)
-            callback ();
-        if (status != target_preflight_status_t::eligible)
-            return {status, {}};
-        target_preflight_result_t result{target_preflight_status_t::eligible, {}};
-        for (std::size_t index = 0; index != units.size (); ++index) {
-            result.units.push_back (
-              {.unit = units[index],
-               .target_node_id = "node-b",
-               .target_owner = {"owner-b", 1},
-               .encoded_upper_bound = 1024 * 1024,
-               .inventory_digest = digest_with (static_cast<std::uint8_t> (index + 10))});
-            if (configure_unit)
-                configure_unit (result.units.back ());
-        }
-        return result;
+        return {target_preflight_status_t::target_unavailable, {}};
     }
-
-    std::mutex mutex;
-    std::vector<relocation_unit_t> observed_units;
-    std::function<void ()> on_preflight;
-    std::function<void (eligible_relocation_unit_t &)> configure_unit;
-    target_preflight_status_t status = target_preflight_status_t::eligible;
-    int calls = 0;
 };
 
 object_ref_t
@@ -3002,169 +2973,6 @@ void test_pending_restore_holds_ingress_before_rollback (test_context_t &test)
                   "callback failure rollback must release the fresh retry");
 }
 
-void test_host_preflight_is_all_or_none (test_context_t &test)
-{
-    stateful_object_runtime_t objects;
-    const auto actor = create_actor (objects, "preflight-actor");
-    auto roots = std::make_shared<memory_relocation_repository_t> ();
-    auto authority = std::make_shared<memory_authority_store_t> ();
-    auto aggregates = std::make_shared<memory_aggregate_authority_t> (authority);
-    auto targets = std::make_shared<target_preflight_t> ();
-    targets->status = target_preflight_status_t::target_unavailable;
-    std::mutex delay_mutex;
-    zlink::framework::detail::delay_owner_t delays (delay_mutex);
-    maintenance_runtime_t relocation (
-      objects, maintenance_provider_set_t{authority, aggregates, roots, targets});
-    relocation.bind_delay_owner (delays);
-    stream_session_registry_t sessions (
-      [&] (const std::string &key) { return objects.find (object_kind_t::actor, key); });
-    host_maintenance_runtime_t host (objects, sessions, relocation, targets);
-    host.mark_serving ();
-    const auto result = await_task (host.terminate (termination_intent_t::retire));
-    test.require (result
-                    == termination_result_t{termination_intent_t::retire,
-                                            termination_outcome_t::blocked,
-                                            termination_reason_t::target_unavailable},
-                  "one target blocker must reject the whole host preflight");
-    test.require (roots->roots.empty ()
-                    && objects.enqueue (actor, turn_domain_t::application, {1, {1}})
-                         == stateful_error_t::none,
-                  "failed preflight must not seal an object or write relocation data");
-    const auto after_blocked =
-      objects.begin_create ({.kind = object_kind_t::actor,
-                             .key = "after-blocked",
-                             .stable_type = "actor",
-                             .mesh_name = std::optional<std::string>{"mesh"},
-                             .creation_request = {},
-                             .exclusive = true,
-                             .instance_intent = false});
-    test.require (host.state () == maintenance_admission_state_t::serving
-                    && !host.terminal_result ()
-                    && after_blocked.status == create_status_t::reserved,
-                  "blocked Retire must restore Serving without a host terminal result");
-}
-
-void test_shutdown_wins_during_retire_preflight (test_context_t &test)
-{
-    stateful_object_runtime_t objects;
-    (void) create_actor (objects, "race-actor");
-    auto roots = std::make_shared<memory_relocation_repository_t> ();
-    auto authority = std::make_shared<memory_authority_store_t> ();
-    auto aggregates = std::make_shared<memory_aggregate_authority_t> (authority);
-    auto targets = std::make_shared<target_preflight_t> ();
-    std::mutex gate;
-    std::condition_variable changed;
-    bool entered = false;
-    bool release = false;
-    targets->on_preflight = [&] {
-        std::unique_lock lock (gate);
-        entered = true;
-        changed.notify_all ();
-        changed.wait (lock, [&] { return release; });
-    };
-    std::mutex delay_mutex;
-    zlink::framework::detail::delay_owner_t delays (delay_mutex);
-    maintenance_runtime_t relocation (
-      objects, maintenance_provider_set_t{authority, aggregates, roots, targets});
-    relocation.bind_delay_owner (delays);
-    stream_session_registry_t sessions (
-      [&] (const std::string &key) { return objects.find (object_kind_t::actor, key); });
-    int observations = 0;
-    host_maintenance_runtime_t host (objects, sessions, relocation, targets,
-                                     [&] (const termination_result_t &) { ++observations; });
-    host.mark_serving ();
-
-    termination_result_t retire_result;
-    termination_result_t shutdown_result;
-    std::thread retire (
-      [&] { retire_result = await_task (host.terminate (termination_intent_t::retire)); });
-    {
-        std::unique_lock lock (gate);
-        changed.wait (lock, [&] { return entered; });
-    }
-    std::thread shutdown (
-      [&] { shutdown_result = await_task (host.terminate (termination_intent_t::shutdown)); });
-    while (host.intent_snapshot ()
-           != std::optional<termination_intent_t>{termination_intent_t::shutdown}) {
-        std::this_thread::yield ();
-    }
-    {
-        std::lock_guard lock (gate);
-        release = true;
-    }
-    changed.notify_all ();
-    retire.join ();
-    shutdown.join ();
-    const termination_result_t expected{termination_intent_t::shutdown,
-                                        termination_outcome_t::stopped, termination_reason_t::none};
-    test.require (retire_result == expected && shutdown_result == expected,
-                  "Shutdown seal claim during Retire preflight must win for all waiters");
-    test.require (roots->roots.empty () && aggregates->commit_count == 0,
-                  "winning Shutdown must not start continuity relocation");
-    test.require (observations == 1,
-                  "first-intent shared operation must emit one terminal observation");
-}
-
-void test_retire_delay_shutdown_completes_termination (test_context_t &test)
-{
-    using namespace std::chrono_literals;
-    namespace protocol = zlink::framework::runtime::protocol;
-    stateful_object_runtime_t objects;
-    objects.configure_relocation_state (
-      [] (const object_ref_t &, const std::string &, std::stop_token) {
-          return std::vector<std::uint8_t> (16, 0x5a);
-      },
-      [] (const frozen_object_state_t &, const object_ref_t &, std::stop_token) { return true; });
-    (void) create_actor (objects, "retire-delay-actor");
-    auto roots = std::make_shared<memory_relocation_repository_t> ();
-    auto authority = std::make_shared<memory_authority_store_t> ();
-    auto aggregates = std::make_shared<memory_aggregate_authority_t> (authority);
-    auto targets = std::make_shared<target_preflight_t> ();
-    std::mutex delay_mutex;
-    zlink::framework::detail::delay_owner_t delays (delay_mutex);
-    targets->configure_unit = [&] (eligible_relocation_unit_t &eligible) {
-        eligible.canonical_wire = eligible_relocation_unit_t::canonical_wire_context_t{
-          .relocation = {0x61, 0x62},
-          .target_attempt_generation = 7,
-          .coordinator = {"source-owner", 1, {'s', 'r', 'c'}, 3, "authority-v1"},
-          .target_node_routing_id = {'d', 's', 't'},
-          .target_node_generation = 7,
-          .application_version = 1,
-          .prepare_target = [] (const std::vector<frozen_object_state_t> &,
-                                const relocation_payload_manifest_t &)
-            -> zlink::framework::task_t<relocation_reason_t> {
-              co_return relocation_reason_t::none;
-          },
-          .send_state_chunk = [] (const protocol::relocation_state_t &)
-            -> zlink::framework::task_t<bool> { co_return true; },
-          .send_relocation_data = [] (const std::vector<protocol::relocation_data_t> &,
-                                      const relocation_ingress_batch_t &)
-            -> zlink::framework::task_t<bool> { co_return true; },
-          .send_application = [] (const object_ref_t &, const turn_record_t &,
-                                  std::optional<std::uint64_t>) {},
-          .send_cutover =
-            [&] (const protocol::relocation_cutover_t &) -> zlink::framework::task_t<bool> {
-              delays.request_stop ();
-              co_return true;
-          },
-          .restore_deadline = std::chrono::steady_clock::now () + 10s,
-          .target_route = [] { return std::pair{std::uint64_t{1}, true}; },
-          .abort_target_before_cutover = [] { return true; }};
-    };
-    maintenance_runtime_t relocation (
-      objects, maintenance_provider_set_t{authority, aggregates, roots, targets});
-    relocation.bind_delay_owner (delays);
-    stream_session_registry_t sessions (
-      [&] (const std::string &key) { return objects.find (object_kind_t::actor, key); });
-    host_maintenance_runtime_t host (objects, sessions, relocation, targets);
-    host.mark_serving ();
-    const auto result = await_task (host.terminate (termination_intent_t::retire));
-    const termination_result_t expected{termination_intent_t::shutdown,
-                                        termination_outcome_t::stopped, termination_reason_t::none};
-    test.require (result == expected && host.terminal_result () == expected,
-                  "interrupted source settlement must complete the shared host termination");
-}
-
 void test_public_relocation_store_adapter (test_context_t &test)
 {
     auto public_store = std::make_shared<public_memory_relocation_repository_t> ();
@@ -3607,7 +3415,7 @@ void test_relocation_target_shutdown (test_context_t &test, int mode)
         test.require (pump_until ([&] { return publishes () != 0; }, 3s),
                       "verified cutover must enter CAS before seal");
     }
-    auto shutdown = target.termination ()->terminate (termination_intent_t::shutdown);
+    auto shutdown = target.termination ()->terminate ();
     if (mode == 0) {
         test.require (pump_until ([&] { return shutdown.await_ready (); }, 2s),
                       "seal before cutover must finish shutdown within deadline");
@@ -7737,9 +7545,6 @@ int main (int argc, char **argv)
     test_restore_validates_generation_before_spot_publication (test);
     test_return_relocation_replaces_departed_remnant (test);
     test_pending_restore_holds_ingress_before_rollback (test);
-    test_host_preflight_is_all_or_none (test);
-    test_shutdown_wins_during_retire_preflight (test);
-    test_retire_delay_shutdown_completes_termination (test);
     test_public_relocation_store_adapter (test);
     test_public_authority_store_adapter (test);
     test_source_relocation_failure_stops_state_chunks_and_unseals (test);

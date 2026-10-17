@@ -1673,99 +1673,31 @@ relocation_result_t maintenance_runtime_t::finish (relocation_result_t result)
 host_maintenance_runtime_t::host_maintenance_runtime_t (
   stateful_object_runtime_t &objects,
   stream_session_registry_t &sessions,
-  maintenance_runtime_t &relocation,
-  std::shared_ptr<target_preflight_port_t> targets,
-  observer_t observer,
   std::function<task_t<void> ()> seal_targets) :
     _objects (objects),
     _sessions (sessions),
-    _relocation (relocation),
-    _targets (std::move (targets)),
-    _observer (std::move (observer)),
     _seal_targets (std::move (seal_targets)),
     _lane_executor (),
     _lane (_lane_executor)
 {
-    if (!_targets)
-        throw std::invalid_argument ("target preflight provider is missing");
 }
 
-void host_maintenance_runtime_t::mark_serving ()
-{
-    _lane
-      .run ([this] {
-          if (_state != maintenance_admission_state_t::preparing)
-              throw std::logic_error ("host can become serving only from preparing");
-          _state = maintenance_admission_state_t::serving;
-      })
-      .get ();
-}
-
-void host_maintenance_runtime_t::mark_error ()
-{
-    _lane
-      .run ([this] {
-          if (_state != maintenance_admission_state_t::stopped)
-              _state = maintenance_admission_state_t::error;
-      })
-      .get ();
-}
-
-maintenance_admission_state_t host_maintenance_runtime_t::state () const
-{
-    return _lane.run ([this] { return _state; }).get ();
-}
-
-std::optional<termination_result_t> host_maintenance_runtime_t::terminal_result () const
-{
-    return _lane.run ([this] { return _terminal; }).get ();
-}
-
-std::optional<termination_intent_t> host_maintenance_runtime_t::intent_snapshot () const
-{
-    return _lane
-      .run ([this] () -> std::optional<termination_intent_t> {
-          if (_shutdown_claimed)
-              return termination_intent_t::shutdown;
-          return _effective_intent;
-      })
-      .get ();
-}
-
-task_t<termination_result_t> host_maintenance_runtime_t::terminate (termination_intent_t intent)
+task_t<termination_result_t> host_maintenance_runtime_t::terminate ()
 {
     struct start_t
     {
-        std::uint64_t attempt = 0;
         std::shared_ptr<task_completion_source_t<termination_result_t>> completion;
         std::optional<termination_result_t> immediate;
         bool started = false;
     };
     auto start = _lane
-                   .run ([this, intent] {
+                   .run ([this] {
                        start_t start;
                        if (_terminal)
                            start.immediate = *_terminal;
-                       else if (_state == maintenance_admission_state_t::stopped) {
-                           start.immediate = {intent, termination_outcome_t::stopped,
-                                              termination_reason_t::none};
-                       } else if (_active) {
-                           start.attempt = _active_attempt;
-                           if (intent == termination_intent_t::shutdown && !_effective_intent)
-                               _shutdown_claimed = true;
+                       else if (_active_completion)
                            start.completion = _active_completion;
-                       } else if (intent == termination_intent_t::retire
-                                  && _state != maintenance_admission_state_t::serving) {
-                           start.immediate = {intent, termination_outcome_t::blocked,
-                                              termination_reason_t::runtime_not_ready};
-                       } else {
-                           _active = true;
-                           _shutdown_claimed = false;
-                           _effective_intent.reset ();
-                           start.attempt = _next_attempt++;
-                           _active_attempt = start.attempt;
-                           if (intent == termination_intent_t::shutdown)
-                               _effective_intent = termination_intent_t::shutdown;
+                       else {
                            start.completion =
                              std::make_shared<task_completion_source_t<termination_result_t>> ();
                            _active_completion = start.completion;
@@ -1781,8 +1713,7 @@ task_t<termination_result_t> host_maintenance_runtime_t::terminate (termination_
     auto output = start.completion->task ();
     if (!start.started)
         return output;
-    auto running = std::make_shared<task_t<termination_result_t>> (
-      run_termination_attempt (intent, start.attempt));
+    auto running = std::make_shared<task_t<termination_result_t>> (run_termination ());
     detail::observe_task_completion (*running, [completion = start.completion, running] (
                                                  const result_t<termination_result_t> &settled) {
         completion->complete (settled);
@@ -1790,311 +1721,38 @@ task_t<termination_result_t> host_maintenance_runtime_t::terminate (termination_
     return output;
 }
 
-task_t<termination_result_t>
-host_maintenance_runtime_t::run_termination_attempt (termination_intent_t intent,
-                                                     std::uint64_t attempt)
+task_t<termination_result_t> host_maintenance_runtime_t::run_termination ()
 {
-    if (intent == termination_intent_t::retire) {
-        const auto result = co_await run_retire ();
-        complete_attempt (attempt, result);
-        co_return result;
-    }
-    const auto result = co_await run_shutdown (termination_intent_t::shutdown);
-    complete_attempt (attempt, result);
+    const auto result = co_await run_shutdown ();
+    complete_termination (result);
     co_return result;
 }
 
-std::vector<relocation_unit_t>
-host_maintenance_runtime_t::inventory_units (std::vector<object_inventory_t> inventory)
+task_t<termination_result_t> host_maintenance_runtime_t::run_shutdown ()
 {
-    std::sort (inventory.begin (), inventory.end (),
-               [] (const object_inventory_t &left, const object_inventory_t &right) {
-                   if (left.owner.kind != right.owner.kind)
-                       return left.owner.kind < right.owner.kind;
-                   return left.owner.key < right.owner.key;
-               });
-    std::vector<relocation_unit_t> units;
-    std::map<std::string, std::size_t> user_spots;
-    for (const auto &object : inventory) {
-        if (object.owner.kind != object_kind_t::user_spot)
-            continue;
-        user_spots.emplace (object.owner.key, units.size ());
-        units.push_back ({{object.owner}});
-    }
-    for (const auto &object : inventory) {
-        if (object.owner.kind == object_kind_t::actor) {
-            const auto spot = user_spots.find (object.membership);
-            if (spot != user_spots.end ())
-                units[spot->second].participants.push_back (object.owner);
-            else
-                units.push_back ({{object.owner}});
-        } else if (object.owner.kind == object_kind_t::instance_spot) {
-            units.push_back ({{object.owner}});
-        }
-    }
-    for (auto &unit : units) {
-        std::sort (unit.participants.begin (), unit.participants.end (),
-                   [] (const object_ref_t &left, const object_ref_t &right) {
-                       if (left.kind != right.kind)
-                           return left.kind < right.kind;
-                       return left.key < right.key;
-                   });
-    }
-    return units;
-}
-
-task_t<termination_result_t> host_maintenance_runtime_t::run_retire ()
-{
-    auto inventory = _objects.try_begin_maintenance_inventory ();
-    if (!inventory) {
-        co_return termination_result_t{termination_intent_t::retire, termination_outcome_t::blocked,
-                                       termination_reason_t::runtime_not_ready};
-    }
-    _lane.run ([this] { _inventory_sealed = true; }).get ();
-    for (const auto &object : *inventory) {
-        if (object.state != object_state_t::ready) {
-            _objects.end_maintenance_inventory ();
-            _lane.run ([this] { _inventory_sealed = false; }).get ();
-            co_return termination_result_t{termination_intent_t::retire,
-                                           termination_outcome_t::blocked,
-                                           termination_reason_t::state_incompatible};
-        }
-    }
-    const auto units = inventory_units (std::move (*inventory));
-    target_preflight_result_t preflight;
-    try {
-        preflight = _targets->preflight (units);
-    }
-    catch (...) {
-        preflight.status = target_preflight_status_t::store_unavailable;
-    }
-
-    bool exact_preflight = preflight.units.size () == units.size ();
-    if (exact_preflight) {
-        for (std::size_t index = 0; index != units.size (); ++index) {
-            if (preflight.units[index].unit != units[index]) {
-                exact_preflight = false;
-                break;
-            }
-        }
-    }
-    struct preflight_state_t
-    {
-        bool shutdown = false;
-        std::optional<termination_reason_t> blocked_reason;
-    };
-    const auto preflight_state =
-      _lane
-        .run ([this, &preflight, exact_preflight] {
-            preflight_state_t state;
-            if (_shutdown_claimed) {
-                _effective_intent = termination_intent_t::shutdown;
-                _state = maintenance_admission_state_t::draining;
-                state.shutdown = true;
-            } else if (preflight.status == target_preflight_status_t::eligible && exact_preflight) {
-                _effective_intent = termination_intent_t::retire;
-                _state = maintenance_admission_state_t::retiring;
-            } else {
-                termination_reason_t reason = termination_reason_t::target_unavailable;
-                switch (preflight.status) {
-                    case target_preflight_status_t::store_unavailable:
-                        reason = termination_reason_t::store_unavailable;
-                        break;
-                    case target_preflight_status_t::relocation_disabled:
-                        reason = termination_reason_t::relocation_disabled;
-                        break;
-                    case target_preflight_status_t::state_incompatible:
-                        reason = termination_reason_t::state_incompatible;
-                        break;
-                    case target_preflight_status_t::eligible:
-                        reason = termination_reason_t::state_incompatible;
-                        break;
-                    default:
-                        break;
-                }
-                _inventory_sealed = false;
-                state.blocked_reason = reason;
-            }
-            return state;
-        })
-        .get ();
-    if (preflight_state.blocked_reason) {
-        _objects.end_maintenance_inventory ();
-        co_return termination_result_t{termination_intent_t::retire, termination_outcome_t::blocked,
-                                       *preflight_state.blocked_reason};
-    }
-    if (preflight_state.shutdown)
-        co_return co_await run_shutdown (termination_intent_t::shutdown);
-
-    std::size_t committed_units = 0;
-    const auto fail_relocation = [&] (termination_reason_t blocked_reason,
-                                      bool irreversible = false) {
-        if (committed_units == 0 && !irreversible) {
-            return termination_result_t{termination_intent_t::retire,
-                                        termination_outcome_t::blocked, blocked_reason};
-        }
-        _lane.run ([this] { _state = maintenance_admission_state_t::draining; }).get ();
-        _sessions.force_close_all ();
-        _lane.run ([this] { _state = maintenance_admission_state_t::stopped; }).get ();
-        return termination_result_t{termination_intent_t::retire,
-                                    termination_outcome_t::force_stopped,
-                                    termination_reason_t::relocation_failed};
-    };
-    for (const auto &eligible : preflight.units) {
-        if (eligible.unit.participants.empty () || eligible.target_node_id.empty ()
-            || eligible.encoded_upper_bound == 0) {
-            co_return fail_relocation (termination_reason_t::state_incompatible);
-        }
-
-        std::vector<stream_barrier_t> barriers;
-        bool barrier_ready = true;
-        for (const auto &participant : eligible.unit.participants) {
-            if (participant.kind != object_kind_t::actor)
-                continue;
-            auto [error, barrier] = _sessions.try_seal_actor (participant);
-            if (error != stateful_error_t::none) {
-                barrier_ready = false;
-                break;
-            }
-            barriers.push_back (barrier);
-        }
-        if (!barrier_ready) {
-            for (const auto &barrier : barriers)
-                (void) _sessions.abort_barrier (barrier);
-            co_return fail_relocation (termination_reason_t::state_incompatible);
-        }
-
-        std::vector<authority_relocation_reference_t> current;
-        relocation_terminal_t terminal = relocation_terminal_t::blocked;
-        bool shutting_down = false;
-        try {
-            if (eligible.unit.participants.size () == 1) {
-                const auto result = co_await _relocation.relocate (
-                  eligible.unit.participants.front (), eligible.target_node_id,
-                  eligible.target_owner, eligible.encoded_upper_bound, eligible.inventory_digest,
-                  eligible.canonical_wire);
-                terminal = result.terminal;
-                if (result.authority)
-                    current.push_back (*result.authority);
-            } else {
-                const auto result = co_await _relocation.relocate_aggregate (
-                  eligible.unit.participants, eligible.target_node_id, eligible.target_owner,
-                  eligible.encoded_upper_bound, eligible.inventory_digest, eligible.canonical_wire);
-                terminal = result.terminal;
-                current = result.authority;
-            }
-        }
-        catch (const framework_exception_t &error) {
-            if (error.kind () != framework_error_kind_t::shutting_down)
-                throw;
-            shutting_down = true;
-        }
-        if (shutting_down) {
-            for (const auto &barrier : barriers)
-                (void) _sessions.abort_barrier (barrier);
-            co_return co_await run_shutdown (termination_intent_t::shutdown);
-        }
-        if (terminal != relocation_terminal_t::completed) {
-            for (const auto &barrier : barriers)
-                (void) _sessions.abort_barrier (barrier);
-            co_return fail_relocation (termination_reason_t::store_unavailable,
-                                       terminal == relocation_terminal_t::recovery_required
-                                         || terminal == relocation_terminal_t::data_lost);
-        }
-        for (const auto &barrier : barriers) {
-            const auto target =
-              std::find_if (current.begin (), current.end (),
-                            [&] (const authority_relocation_reference_t &reference) {
-                                return reference.source == barrier.actor;
-                            });
-            if (target == current.end ()
-                || _sessions.commit_barrier (barrier, target->target) != stateful_error_t::none) {
-                co_return fail_relocation (termination_reason_t::relocation_failed, true);
-            }
-        }
-        ++committed_units;
-    }
-    _lane.run ([this] { _state = maintenance_admission_state_t::draining; }).get ();
-    if (!_sessions.try_seal_all ()) {
-        _sessions.force_close_all ();
-        _lane.run ([this] { _state = maintenance_admission_state_t::stopped; }).get ();
-        co_return termination_result_t{termination_intent_t::retire,
-                                       termination_outcome_t::force_stopped,
-                                       termination_reason_t::relocation_failed};
-    }
-    _lane.run ([this] { _state = maintenance_admission_state_t::stopped; }).get ();
-    co_return termination_result_t{termination_intent_t::retire, termination_outcome_t::stopped,
-                                   termination_reason_t::none};
-}
-
-task_t<termination_result_t>
-host_maintenance_runtime_t::run_shutdown (termination_intent_t effective_intent)
-{
-    const auto acquire_inventory = _lane
-                                     .run ([this, effective_intent] {
-                                         _effective_intent = effective_intent;
-                                         _state = maintenance_admission_state_t::draining;
-                                         return !_inventory_sealed;
-                                     })
-                                     .get ();
     if (_seal_targets)
         co_await _seal_targets ();
-    if (acquire_inventory) {
-        const auto inventory = _objects.try_begin_maintenance_inventory ();
-        if (!inventory) {
-            _lane.run ([this] { _state = maintenance_admission_state_t::stopped; }).get ();
-            co_return termination_result_t{effective_intent, termination_outcome_t::force_stopped,
-                                           termination_reason_t::teardown_failed};
-        }
-        _lane.run ([this] { _inventory_sealed = true; }).get ();
+    const auto inventory = _objects.try_begin_maintenance_inventory ();
+    if (!inventory) {
+        co_return termination_result_t{termination_outcome_t::force_stopped,
+                                       termination_reason_t::teardown_failed};
     }
     const auto sealed = _sessions.try_seal_all ();
     if (!sealed)
         _sessions.force_close_all ();
-    _lane.run ([this] { _state = maintenance_admission_state_t::stopped; }).get ();
     co_return termination_result_t{
-      effective_intent,
       sealed ? termination_outcome_t::stopped : termination_outcome_t::force_stopped,
       sealed ? termination_reason_t::none : termination_reason_t::teardown_failed};
 }
 
-void host_maintenance_runtime_t::complete_attempt (std::uint64_t attempt,
-                                                   const termination_result_t &result)
+void host_maintenance_runtime_t::complete_termination (const termination_result_t &result)
 {
-    const auto completion = _lane
-                              .run ([this, attempt, &result] {
-                                  struct completion_t
-                                  {
-                                      bool release_inventory = false;
-                                      observer_t observer;
-                                  } completion;
-                                  _attempt_results[attempt] = result;
-                                  _active = false;
-                                  _active_attempt = 0;
-                                  _active_completion.reset ();
-                                  _shutdown_claimed = false;
-                                  _effective_intent.reset ();
-                                  if (result.outcome != termination_outcome_t::blocked)
-                                      _terminal = result;
-                                  else {
-                                      completion.release_inventory = _inventory_sealed;
-                                      _inventory_sealed = false;
-                                      if (_state == maintenance_admission_state_t::retiring)
-                                          _state = maintenance_admission_state_t::serving;
-                                  }
-                                  completion.observer = _observer;
-                                  return completion;
-                              })
-                              .get ();
-    if (completion.release_inventory)
-        _objects.end_maintenance_inventory ();
-    if (completion.observer) {
-        try {
-            completion.observer (result);
-        }
-        catch (...) {
-        }
-    }
+    _lane
+      .run ([this, &result] {
+          _terminal = result;
+          _active_completion.reset ();
+      })
+      .get ();
 }
 
 } // namespace zlink::framework::runtime::stateful
@@ -2158,14 +1816,12 @@ void public_host_runtime_t::configure_relocation_source_metrics (
 void public_host_runtime_t::configure_maintenance (
   stateful::maintenance_provider_set_t providers,
   stateful::relocation_limits_t limits,
-  stateful::maintenance_runtime_t::observer_t relocation_observer,
-  stateful::host_maintenance_runtime_t::observer_t termination_observer)
+  stateful::maintenance_runtime_t::observer_t relocation_observer)
 {
     std::lock_guard lock (_mutex);
     if (_started || _maintenance || _termination) {
         throw std::logic_error ("maintenance providers must be configured once before host start");
     }
-    auto targets = providers.targets;
     _relocation_authority = providers.authority;
     _aggregate_relocation_authority = providers.aggregate_authority;
     _session_relocations = providers.relocations;
@@ -2184,14 +1840,10 @@ void public_host_runtime_t::configure_maintenance (
             (void) _stateful_dispatch->fail_pending_unavailable (owner);
     });
     auto termination = std::make_unique<stateful::host_maintenance_runtime_t> (
-      _objects, _sessions, *maintenance, std::move (targets), std::move (termination_observer),
-      [this] { return seal_relocation_targets (); });
+      _objects, _sessions, [this] { return seal_relocation_targets (); });
     _maintenance = std::move (maintenance);
     _termination = std::move (termination);
-    _maintenance_started = [this] { _termination->mark_serving (); };
-    _maintenance_closing = [this] {
-        _termination->terminate (stateful::termination_intent_t::shutdown).result ().value ();
-    };
+    _maintenance_closing = [this] { _termination->terminate ().result ().value (); };
 }
 
 stateful::maintenance_runtime_t *public_host_runtime_t::maintenance () noexcept
