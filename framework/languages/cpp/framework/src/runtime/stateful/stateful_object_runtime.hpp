@@ -301,6 +301,10 @@ class stateful_object_runtime_t
     create_result_t activate_instance (create_request_t request,
                                        const std::function<bool (const object_ref_t &)> &factory);
     std::optional<object_ref_t> find (object_kind_t kind, const std::string &key) const;
+    // Observes the existing source seal; does not resolve Store authority.
+    bool finalized_relocation_source (object_kind_t kind,
+                                      const std::string &key,
+                                      std::uint64_t object_generation) const;
 
     std::pair<stateful_error_t, membership_token_t>
     begin_membership_move (const object_ref_t &actor, const object_ref_t &target_spot);
@@ -350,7 +354,10 @@ class stateful_object_runtime_t
     stateful_error_t abort_relocation_before_cutover (std::uint64_t token);
     // Makes the source permanently follow-only once Cutover has been queued
     // (or its enqueue outcome is uncertain).
-    stateful_error_t finalize_relocation_cutover (std::uint64_t token);
+    stateful_error_t finalize_relocation_cutover (
+      std::uint64_t token,
+      std::optional<std::function<void (const object_ref_t &, const turn_record_t &)>> deliver =
+        std::nullopt);
     stateful_error_t abort_relocation (std::uint64_t token);
     std::pair<stateful_error_t, std::vector<object_ref_t>>
     commit_relocation_aggregate (std::uint64_t token, std::string target_node_id);

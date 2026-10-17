@@ -13,7 +13,11 @@ public final class ZLinkFrameworkRuntimeTestAccess {
     private ZLinkFrameworkRuntimeTestAccess() {}
 
     public static ZLinkFrameworkRuntime start(DefaultZLinkFrameworkOptions options) {
-        return ZLinkFrameworkRuntime.start(options, new ZLinkJavaBackendAdapterFactory());
+        return ZLinkFrameworkRuntime.startHost(
+                options,
+                new ZLinkJavaBackendAdapterFactory(),
+                ZLinkHandlerActivator.reflection(),
+                null);
     }
 
     public static ZLinkFrameworkRuntime start(
@@ -27,6 +31,11 @@ public final class ZLinkFrameworkRuntimeTestAccess {
 
     public static boolean ownerAdmissionOpen(ZLinkFrameworkRuntime runtime) {
         return runtime.ownerAdmissionOpen();
+    }
+
+    /** Runs one owner lease renewal now; completes after any republication it triggers. */
+    public static CompletionStage<Boolean> renewOwnerLeaseOnce(ZLinkFrameworkRuntime runtime) {
+        return runtime.renewOwnerLeaseOnce();
     }
 
     public static ZLinkFrameworkRuntime start(

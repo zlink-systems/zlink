@@ -1609,6 +1609,9 @@ If cancellation happens before starting a provider request, the Store may not be
 at all. If cancellation, timeout, or a provider error happens after starting the request,
 whether the Store changed is unknown. In this case the Framework re-reads the same key
 and expected `StoreVersion` to confirm the result, and only retries if needed.
+When a MeshNode descriptor write is sent again and the stored record differs from the sent
+descriptor only in its update time (`updatedAtEpochMs`), the earlier write already took effect, so the
+write ends as `Stored` regardless of its intent (`NewClaim` or `Renew`).
 
 A Relocation Store write must support being read or stored again using the same reference
 the Framework fixed in advance. That recheck has no separate time limit and runs within the deadline of the operation that started the write. Confirming that the same bytes are stored ends it as a success. When the re-read finds nothing, the same bytes are stored again under the same reference. When the put returns `Conflict` or the re-read finds different bytes, it is treated as the same collision and the store starts again with a new reference. This proceeds within that operation's deadline, with no retry cap and no separate time limit. A payload the Location Store already points to that is missing or fails its checksum follows the `DataLost` handling below, not this rule. Payload not pointed to by the Location Store is deleted
@@ -1685,6 +1688,9 @@ store record golden fixture. Each item maps to one test.
   startup succeeds and the four targets above are blocked.
 - A host that finished startup without a lease claims at each renew interval and
   publishes descriptors only after the lease is held.
+- A host that holds the lease but can't confirm its descriptor publication succeeds in
+  startup, stays `Preparing`, and retries the publication at each renew interval. A definite
+  rejection because another owner holds the row is a startup error.
 - The claim results `Conflict` and `GenerationExhausted` are startup errors.
 - Cancelling startup ends it as cancelled; an already committed claim is released and
   no heartbeat starts.

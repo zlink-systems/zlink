@@ -29,7 +29,9 @@ const test = require('node:test');
 const PUBLIC_OPERATION_TIMEOUT_MS = 5_000;
 const OBSERVATION_INTERVAL_MS = 10;
 const RELOCATION_TEST_TIMEOUT_MS = 30_000;
-const SOURCE_FOLLOW_DURATION_MS = 5_000;
+// This test checks safe-status publication, not the elapsed Message Follow duration.
+// Leave time for follow expiry and observer delivery within the operation budget.
+const SOURCE_FOLLOW_DURATION_MS = 1_000;
 const { Module } = require('@nestjs/common');
 const { NestFactory } = require('@nestjs/core');
 const framework = require('../../packages/framework/dist');
@@ -485,11 +487,29 @@ for (const variant of [
           }
           const observation = new AbortController();
           const statuses = [];
+          let onStatus;
+          async function waitForStatus(predicate) {
+            const published = statuses.findLast(predicate);
+            if (published !== undefined) return published;
+            return new Promise((resolve, reject) => {
+              const timeout = setTimeout(() => {
+                onStatus = undefined;
+                reject(new Error('Host status observation deadline exceeded'));
+              }, PUBLIC_OPERATION_TIMEOUT_MS);
+              onStatus = (status) => {
+                if (!predicate(status)) return;
+                clearTimeout(timeout);
+                onStatus = undefined;
+                resolve(status);
+              };
+            });
+          }
           const observer =
             variant === 'safe status'
               ? (async () => {
                   for await (const event of runtime.observe(observation.signal)) {
                     statuses.push(event.status);
+                    onStatus?.(event.status);
                   }
                 })()
               : Promise.resolve();
@@ -531,26 +551,21 @@ for (const variant of [
               );
             }
             if (variant === 'safe status') {
-              const observationDeadline = performance.now() + PUBLIC_OPERATION_TIMEOUT_MS;
-              while (!runtime.status.safeToShutdown && performance.now() < observationDeadline) {
-                await new Promise((resolve) => setTimeout(resolve, OBSERVATION_INTERVAL_MS));
-              }
-              assert.equal(runtime.status.safeToShutdown, true, 'source quiescence is queryable');
-              assert.ok(
-                statuses.some(
-                  (status) =>
-                    status.state === framework.ZLinkFrameworkRuntimeState.Relocated &&
-                    status.safeToShutdown
-                ),
-                'SAFE_TO_SHUTDOWN must be published after source quiescence changes'
-              );
-              const published = statuses.findLast(
+              await waitForStatus(
                 (status) =>
-                  status.safeToShutdown &&
-                  status.state === framework.ZLinkFrameworkRuntimeState.Relocated
+                  status.state === framework.ZLinkFrameworkRuntimeState.Relocated &&
+                  status.safeToShutdown
               );
-              assert.equal(published.sequence, runtime.status.sequence);
-              assert.equal(published, runtime.status);
+              // A query can publish changed capacity before the observer receives it.
+              // Reset through the public API to exercise that publication deterministically.
+              runtime.resetCapacityMetrics();
+              const current = runtime.status;
+              assert.equal(current.safeToShutdown, true, 'source quiescence is queryable');
+              const published = await waitForStatus(
+                (status) => status.sequence >= current.sequence
+              );
+              assert.equal(published.sequence, current.sequence);
+              assert.equal(published, current);
               assert.ok(
                 statuses.some(
                   (status) => !status.safeToShutdown && status.sequence < published.sequence

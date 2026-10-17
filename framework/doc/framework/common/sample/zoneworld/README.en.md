@@ -139,7 +139,7 @@ order of movement/publish is described in the §7 sequence diagrams.
   naming rule (`allow_empty_zone_set`, `allowsEmptyZoneSet`). On this path a node stops retrying
   and announces readiness once `attempt` reaches `8` with an empty census. A normal startup never
   takes this path.
-- `zoneworld.mesh` carries the ChannelName, Spot/Actor direct messages, and Logical Multicast.
+- `zoneworld.mesh` carries messages on the ChannelName `zoneworld.zones`, Spot/Actor direct messages, and Logical Multicast. Zone Spots join `zoneworld.zones` to subscribe and publish.
 - `zoneworld.broadcast` is a classic fanout publisher/subscriber connection independent of the mesh.
 - NodeId and the transport RID are separate domains.
 - Only the Gateway and Ops endpoints are provided to the Client; the ZoneNode endpoint isn't

@@ -305,13 +305,12 @@ CAS가 성공하면 target은 다음 순서의 ordered durable backlog를 확정
 배타적 접근을 쥔 채 callback을 실행하는 방식으로 구현하지 않는다.** 그 방식은 외부
 callback이 같은 배타적 접근 primitive를 다시 획득하는 구조가 되기 쉬우며
 [상태 소유와 state lane §6](../01-execution/06-state-ownership-and-lanes.ko.md#6-재진입을-만들지-않는-구조)이
-금지한다. 이 보장은 다음 두 형태 중 하나의 선형화점으로 만든다.
-
-- dispatch 개방 전에 backlog 몫의 placeholder ownership claim을 소유 turn 안에서
-  확정하고, 개별 execution claim은 배타적 접근 밖에서 채운 뒤 같은 소유 turn에서
-  placeholder를 정산하면서 ordinary admission을 연다.
-- 또는 backlog가 비었음을 원자적으로 관측한 시점에만 ordinary dispatch로 전환한다 —
-  관측 전에 게시된 backlog turn보다 ordinary ingress가 앞설 수 없다.
+금지한다. Target은 위 순서를 보존해 미실행 record마다 payload 소유권과 해당 owner queue 위치를
+한 소유 turn에서 확정한다. 아래의 후속 record 인수와 suffix 이전은 Actor record에 적용한다. 필요한 lifecycle과 Join completion 순서를 충족한 뒤 인수한 첫 handler가
+시작하기 전에 이전 move를 끝내며, 이 완료는 인수한 record의 handler terminal을 기다리지 않는다.
+인수한 record가 새 Deferred Join을 등록하면, 그 barrier의 경계에서 아직 시작하지 않은 suffix의
+payload 소유권과 순서를 다음 handoff로 원자적으로 넘긴다. 실행 중이거나 끝난 record는 suffix에
+들지 않고, 다음 handoff는 이전 prefix 전체의 handler terminal을 기다리지 않는다.
 
 Dispatch가 runnable해진 backlog turn의 permit 취득과 반환은 [Application job queue §3](../01-execution/04-application-job-queue-and-backpressure.ko.md#3-ordinary-ingress-permit-순서)을 따른다. 기다리는 item은 backlog payload owner가 계속 소유한다. Timer는 원래 timer
 lifecycle을 유지하고 callback turn이 runnable할 때 해당 ingress 규칙을 따른다.

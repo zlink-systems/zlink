@@ -1446,6 +1446,8 @@ Provider 요청을 시작하기 전에 cancellation되면 Store를 호출하지 
 뒤 cancellation, timeout 또는 provider error가 발생하면 Store 변경 여부를 알 수 없다. 이때
 Framework는 같은 key와 예상 `StoreVersion`을 다시 읽어 결과를 확인한 뒤 필요한 경우에만
 재시도한다.
+MeshNode descriptor 쓰기를 다시 보냈을 때 저장된 record가 보낸 descriptor와 갱신 시각(`updatedAtEpochMs`)만
+다르면 앞선 쓰기가 이미 반영된 것이므로, intent(`NewClaim`·`Renew`)와 관계없이 `Stored`로 끝난다.
 
 Relocation Store 쓰기는 Framework가 미리 정한 같은 reference로 다시 읽거나 다시 저장할 수
 있어야 한다. 이 재확인은 별도 기한을 두지 않고 그 쓰기를 시작한 operation의 deadline 안에서 한다. 같은 bytes가 저장된 것을 확인하면 성공으로 끝난다. 다시 읽은 결과가 없으면 같은 reference에 같은 bytes를 다시 저장한다. 저장이 `Conflict`를 반환하거나 다시 읽은 결과가 다른 bytes이면 같은 충돌로 보고 새 reference로 저장을 다시 시작한다. 재시도 횟수 상한이나 별도 기한 없이 그 operation의 deadline 안에서 진행한다. Location Store가 이미 가리키는 payload가 없거나 checksum이 다르면 이 규칙이 아니라 아래의 `DataLost` 처리를 따른다. Location Store가 가리키지 않는 payload는 보관 기한 뒤 삭제한다. Provider가
@@ -1511,6 +1513,8 @@ provider conformance test가 store record golden fixture로 관찰하는 key·va
   네 대상이 막힌다.
 - Lease 없이 startup을 마친 host는 renew interval마다 claim하며, 확보한 뒤에야 descriptor를
   게시한다.
+- Lease를 확보한 뒤 descriptor 게시 결과를 확인하지 못한 host는 startup에 성공하고 `Preparing`으로
+  남으며 renew interval마다 게시를 다시 시도한다. 다른 owner의 점유로 인한 확정 거절은 startup error다.
 - Claim 결과 `Conflict`·`GenerationExhausted`는 startup error다.
 - Startup을 cancellation하면 결과는 취소이며, 이미 commit된 claim은 해제되고 heartbeat가
   시작되지 않는다.
