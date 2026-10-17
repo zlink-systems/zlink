@@ -41,6 +41,15 @@ final class ZLinkLocalActorCutoverAdmissionTest {
 
     @Test
     void publicLocalSendSucceedsWhenThePostLookupCutIsAcceptedByTheForward() throws Exception {
+        publicLocalAdmissionSucceedsAfterCut(false);
+    }
+
+    @Test
+    void publicLocalRequestAdmissionSucceedsBeforeTheForwardReply() throws Exception {
+        publicLocalAdmissionSucceedsAfterCut(true);
+    }
+
+    private void publicLocalAdmissionSucceedsAfterCut(boolean request) throws Exception {
         SOURCE_HANDLERS.set(0);
         try (var host = ZLinkFrameworkRuntimeTestAccess.start(options())) {
             host.actorManager()
@@ -82,6 +91,7 @@ final class ZLinkLocalActorCutoverAdmissionTest {
                 var forwards = new AtomicInteger();
                 var dispatchTerminal = new CompletableFuture<Void>();
                 var accepted = new CompletableFuture<ZLinkServiceFrozenRecordCodec.DecodedActor>();
+                var replyFailure = new CompletableFuture<Consumer<Throwable>>();
                 byte[] expectedPayload =
                         new ZLinkJsonMessageSerializer().serialize(new Probe(7)).bytes();
 
@@ -186,6 +196,7 @@ final class ZLinkLocalActorCutoverAdmissionTest {
                                             restored.forEach(Message::close);
                                         }
                                         accepted.complete(record);
+                                        replyFailure.complete(failure);
                                         return true;
                                     } finally {
                                         // This receiver owns the forwarded copies, not a target
@@ -267,11 +278,19 @@ final class ZLinkLocalActorCutoverAdmissionTest {
                                                                 });
                                             });
                     entry.onDispatchEvent(wrapper);
+                    var response =
+                            request
+                                    ? host.actorClient()
+                                            .requestToActor(ACTOR, new Probe(7))
+                                            .submit(String.class)
+                                    : null;
                     var admission =
-                            host.actorClient()
-                                    .sendToActor(ACTOR, new Probe(7))
-                                    .submit()
-                                    .toCompletableFuture();
+                            request
+                                    ? response.admitted().toCompletableFuture()
+                                    : host.actorClient()
+                                            .sendToActor(ACTOR, new Probe(7))
+                                            .submit()
+                                            .toCompletableFuture();
                     dispatchTerminal.get(WAIT_SECONDS, TimeUnit.SECONDS);
                     accepted.get(WAIT_SECONDS, TimeUnit.SECONDS);
                     assertEquals(1, lookups.get());
@@ -281,6 +300,17 @@ final class ZLinkLocalActorCutoverAdmissionTest {
                     assertDoesNotThrow(
                             () -> admission.get(WAIT_SECONDS, TimeUnit.SECONDS),
                             "the original operation was accepted by the forward after its local FIFO candidate rejected it");
+                    if (request) {
+                        assertFalse(response.toCompletableFuture().isDone());
+                        var failure = new IllegalStateException("forward reply failed");
+                        replyFailure.get(WAIT_SECONDS, TimeUnit.SECONDS).accept(failure);
+                        assertThrows(
+                                java.util.concurrent.ExecutionException.class,
+                                () ->
+                                        response.toCompletableFuture()
+                                                .get(WAIT_SECONDS, TimeUnit.SECONDS));
+                        assertDoesNotThrow(() -> admission.get(WAIT_SECONDS, TimeUnit.SECONDS));
+                    }
                 } finally {
                     entry.onDispatchEvent(original);
                     node.setMessageFollowRelayHandler(originalFollow);

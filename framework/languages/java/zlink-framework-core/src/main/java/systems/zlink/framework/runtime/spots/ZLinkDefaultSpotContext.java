@@ -1,6 +1,7 @@
 package systems.zlink.framework.runtime.spots;
 
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.configuration.ZLinkSpotRelocationCoordinationMode;
 import systems.zlink.framework.configuration.ZLinkUserSpotExecutionMode;
@@ -11,6 +12,7 @@ import systems.zlink.framework.execution.ZLinkExecutionLanePolicy;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.execution.ZLinkWorkerPool;
 import systems.zlink.framework.runtime.actors.ZLinkActorDispatchTarget;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpot;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerInstanceOwner;
@@ -272,13 +274,26 @@ final class DefaultEntrySpotContext implements ZLinkEntrySpotContext, SpotDispat
             long payloadBytes,
             Supplier<CompletionStage<Void>> operation,
             CompletableFuture<Void> admission) {
+        return enqueueActorDispatch(actorId, payloadBytes, operation, admission, null, null);
+    }
+
+    @Override
+    public CompletionStage<Void> enqueueActorDispatch(
+            String actorId,
+            long payloadBytes,
+            Supplier<CompletionStage<Void>> operation,
+            CompletableFuture<Void> admission,
+            ZLinkBackendActorReceived header,
+            Message payload) {
         Objects.requireNonNull(actorId, "actorId");
         return host.enqueueActorDispatch(
                 serials,
                 actorId,
                 payloadBytes,
                 () -> runApplicationExecution(actorId, false, operation),
-                admission);
+                admission,
+                header,
+                payload);
     }
 
     @Override
@@ -289,6 +304,27 @@ final class DefaultEntrySpotContext implements ZLinkEntrySpotContext, SpotDispat
             Supplier<CompletionStage<Void>> operation,
             Runnable relocationRelease,
             CompletableFuture<Void> admission) {
+        return enqueueActorDispatch(
+                actorId,
+                acceptedJournalRecord,
+                acceptedJournalRecordSizeHint,
+                operation,
+                relocationRelease,
+                admission,
+                null,
+                null);
+    }
+
+    @Override
+    public CompletionStage<Void> enqueueActorDispatch(
+            String actorId,
+            Supplier<byte[]> acceptedJournalRecord,
+            long acceptedJournalRecordSizeHint,
+            Supplier<CompletionStage<Void>> operation,
+            Runnable relocationRelease,
+            CompletableFuture<Void> admission,
+            ZLinkBackendActorReceived header,
+            Message payload) {
         Objects.requireNonNull(actorId, "actorId");
         return host.enqueueActorDispatch(
                 serials,
@@ -297,7 +333,9 @@ final class DefaultEntrySpotContext implements ZLinkEntrySpotContext, SpotDispat
                 acceptedJournalRecordSizeHint,
                 () -> runApplicationExecution(actorId, false, operation),
                 relocationRelease,
-                admission);
+                admission,
+                header,
+                payload);
     }
 
     @Override
@@ -791,13 +829,26 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
             long payloadBytes,
             Supplier<CompletionStage<Void>> operation,
             CompletableFuture<Void> admission) {
+        return enqueueActorDispatch(actorId, payloadBytes, operation, admission, null, null);
+    }
+
+    @Override
+    public CompletionStage<Void> enqueueActorDispatch(
+            String actorId,
+            long payloadBytes,
+            Supplier<CompletionStage<Void>> operation,
+            CompletableFuture<Void> admission,
+            ZLinkBackendActorReceived header,
+            Message payload) {
         Objects.requireNonNull(actorId, "actorId");
         return host.enqueueActorDispatch(
                 serials,
                 actorId,
                 payloadBytes,
                 () -> runActorApplication(actorId, serials.usesSharedExecutionGate(), operation),
-                admission);
+                admission,
+                header,
+                payload);
     }
 
     @Override
@@ -808,6 +859,27 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
             Supplier<CompletionStage<Void>> operation,
             Runnable relocationRelease,
             CompletableFuture<Void> admission) {
+        return enqueueActorDispatch(
+                actorId,
+                acceptedJournalRecord,
+                acceptedJournalRecordSizeHint,
+                operation,
+                relocationRelease,
+                admission,
+                null,
+                null);
+    }
+
+    @Override
+    public CompletionStage<Void> enqueueActorDispatch(
+            String actorId,
+            Supplier<byte[]> acceptedJournalRecord,
+            long acceptedJournalRecordSizeHint,
+            Supplier<CompletionStage<Void>> operation,
+            Runnable relocationRelease,
+            CompletableFuture<Void> admission,
+            ZLinkBackendActorReceived header,
+            Message payload) {
         Objects.requireNonNull(actorId, "actorId");
         Objects.requireNonNull(acceptedJournalRecord, "acceptedJournalRecord");
         Objects.requireNonNull(relocationRelease, "relocationRelease");
@@ -818,7 +890,9 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
                 acceptedJournalRecordSizeHint,
                 () -> runActorApplication(actorId, serials.usesSharedExecutionGate(), operation),
                 relocationRelease,
-                admission);
+                admission,
+                header,
+                payload);
     }
 
     private CompletionStage<Void> runActorApplication(

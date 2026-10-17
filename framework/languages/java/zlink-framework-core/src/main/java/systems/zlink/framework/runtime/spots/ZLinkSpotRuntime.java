@@ -6336,9 +6336,23 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             long payloadBytes,
             Supplier<CompletionStage<Void>> operation,
             CompletableFuture<Void> admission) {
+        return enqueueActorDispatch(
+                target, actorId, payloadBytes, operation, admission, null, null);
+    }
+
+    @Override
+    CompletionStage<Void> enqueueActorDispatch(
+            ZLinkActorDispatchTarget target,
+            String actorId,
+            long payloadBytes,
+            Supplier<CompletionStage<Void>> operation,
+            CompletableFuture<Void> admission,
+            ZLinkBackendActorReceived header,
+            Message payload) {
         return actorSessions
                 .runtime()
-                .submitActorDispatch(target, actorId, payloadBytes, operation, admission);
+                .submitActorDispatch(
+                        target, actorId, payloadBytes, operation, admission, header, payload);
     }
 
     @Override
@@ -6367,6 +6381,29 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             Supplier<CompletionStage<Void>> operation,
             Runnable relocationRelease,
             CompletableFuture<Void> admission) {
+        return enqueueActorDispatch(
+                target,
+                actorId,
+                acceptedJournalRecord,
+                acceptedJournalRecordSizeHint,
+                operation,
+                relocationRelease,
+                admission,
+                null,
+                null);
+    }
+
+    @Override
+    CompletionStage<Void> enqueueActorDispatch(
+            ZLinkActorDispatchTarget target,
+            String actorId,
+            Supplier<byte[]> acceptedJournalRecord,
+            long acceptedJournalRecordSizeHint,
+            Supplier<CompletionStage<Void>> operation,
+            Runnable relocationRelease,
+            CompletableFuture<Void> admission,
+            ZLinkBackendActorReceived header,
+            Message payload) {
         return actorSessions
                 .runtime()
                 .submitActorDispatchLazyRecord(
@@ -6376,7 +6413,9 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                         acceptedJournalRecordSizeHint,
                         operation,
                         relocationRelease,
-                        admission);
+                        admission,
+                        header,
+                        payload);
     }
 
     private DefaultSpotOutbound createSpotOutbound(
@@ -6560,7 +6599,6 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             ZLinkBackendActorReceived headerCopy,
             Message payloadCopy,
             CompletableFuture<Void> requestAdmission) {
-        CompletionStage<Void> queued;
         ZLinkSpotRelocationReplyRoutes.LazyRegistration relocationReply = null;
         try {
             boolean noBindRequest = isNoBindActorRequest(packetHeader, headerCopy);
@@ -6663,68 +6701,26 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                     "actor bound session reply failed");
                         }
                     };
-            queued =
-                    relocationReply == null
-                            ? dispatchLine.enqueueActorDispatch(
-                                    actor.context().actorId(),
-                                    payloadCopy.size(),
-                                    operation,
-                                    requestAdmission)
-                            : dispatchLine.enqueueActorDispatch(
-                                    actor.context().actorId(),
-                                    relocationReply::record,
-                                    headerCopy.message().size()
-                                            + ACTOR_JOURNAL_SIZE_HINT_OVERHEAD_BYTES,
-                                    operation,
-                                    relocationReply::releaseForRelocation,
-                                    requestAdmission);
+            return relocationReply == null
+                    ? dispatchLine.enqueueActorDispatch(
+                            actor.context().actorId(),
+                            payloadCopy.size(),
+                            operation,
+                            requestAdmission,
+                            headerCopy,
+                            payloadCopy)
+                    : dispatchLine.enqueueActorDispatch(
+                            actor.context().actorId(),
+                            relocationReply::record,
+                            headerCopy.message().size() + ACTOR_JOURNAL_SIZE_HINT_OVERHEAD_BYTES,
+                            operation,
+                            relocationReply::releaseForRelocation,
+                            requestAdmission,
+                            headerCopy,
+                            payloadCopy);
         } catch (RuntimeException failure) {
             return CompletableFuture.failedFuture(failure);
         }
-        return recoverRelocatedActorDispatch(queued, headerCopy, payloadCopy);
-    }
-
-    /**
-     * Hands a turn that the Actor queue rejected after its relocation cut back to the mesh ingress
-     * so the relocation forward delivers it to the new owner (spec
-     * server/03-spot-actor/08-routing.ko.md:222,240). The turn never ran, so this is a re-route of
-     * an unaccepted arrival, not a re-submission of a failed operation (:244). When no forward is
-     * available the rejection stays on the stage as the stale terminal.
-     */
-    private static CompletionStage<Void> recoverRelocatedActorDispatch(
-            CompletionStage<Void> queued,
-            ZLinkBackendActorReceived headerCopy,
-            Message payloadCopy) {
-        ZLinkBackendActorReceived.RelocationRedirect redirect = headerCopy.relocationRedirect();
-        if (redirect == null) {
-            return queued;
-        }
-        return queued.handle(
-                        (ignored, error) -> {
-                            if (error == null) {
-                                return CompletableFuture.<Void>completedFuture(null);
-                            }
-                            Throwable cause = unwrapCompletion(error);
-                            if (!(cause
-                                    instanceof ZLinkSerialExecutionQueue.RelocatedOwnerException)) {
-                                return CompletableFuture.<Void>failedFuture(cause);
-                            }
-                            //  The lazy relocation-reply registration is never materialized
-                            //  for a rejected admission - its record supplier only runs when a
-                            //  seal captures the queued turn - so there is nothing to release
-                            //  here; the forward target registers its own reply route.
-                            boolean accepted;
-                            try {
-                                accepted = redirect.redirect(headerCopy.message(), payloadCopy);
-                            } catch (RuntimeException redirectFailure) {
-                                cause.addSuppressed(redirectFailure);
-                                return CompletableFuture.<Void>failedFuture(cause);
-                            }
-                            return accepted
-                                    ? CompletableFuture.<Void>completedFuture(null)
-                                    : CompletableFuture.<Void>failedFuture(cause);
-                        })
-                .thenCompose(stage -> stage);
     }
 
     static void closePendingActorHeader(

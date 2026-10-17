@@ -8,10 +8,17 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
+import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.configuration.ZLinkUserSpotExecutionMode;
 import systems.zlink.framework.execution.ZLinkExecutionLanePolicy;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorReceived;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.spots.ZLinkSpotSerialExecutor;
 
@@ -28,6 +35,236 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 final class ZLinkActorDispatchSerialsTest {
+    private enum ForwardResult {
+        ACCEPTED,
+        REJECTED,
+        THROWS,
+        ABSENT
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+        "true,ACCEPTED", "true,REJECTED", "true,THROWS", "true,ABSENT",
+        "false,ACCEPTED", "false,REJECTED", "false,THROWS", "false,ABSENT"
+    })
+    void candidateCutCombinesFollowResultBeforeCompletingAdmission(
+            boolean lazy, ForwardResult result) {
+        var target = actorTarget();
+        var dispatches = dispatches(new AtomicReference<>(target));
+        var turn = dispatches.prepareAsync("actor-1").toCompletableFuture().join();
+        var queue = turn.activation().relocationLane();
+        var seal = queue.trySealRelocation().toCompletableFuture().join().orElseThrow();
+        queue.commitRelocation(seal).toCompletableFuture().join().orElseThrow();
+        var calls = new AtomicInteger();
+        var redirectFailure = new IllegalStateException("follow failed");
+        ZLinkBackendActorReceived.RelocationRedirect redirect =
+                result == ForwardResult.ABSENT
+                        ? null
+                        : (header, payload) -> {
+                            calls.incrementAndGet();
+                            assertEquals(11, payload.toByteArray()[0]);
+                            if (result == ForwardResult.THROWS) throw redirectFailure;
+                            return result == ForwardResult.ACCEPTED;
+                        };
+        try (var header = followHeader(redirect);
+                var payload = Message.from(new byte[] {11})) {
+            var admission = new CompletableFuture<Void>();
+            var terminal =
+                    candidate(
+                            dispatches,
+                            turn,
+                            lazy,
+                            admission,
+                            header,
+                            payload,
+                            () -> {
+                                throw new AssertionError("a cut candidate cannot execute");
+                            });
+            if (result == ForwardResult.ACCEPTED) {
+                terminal.toCompletableFuture().join();
+                admission.join();
+            } else {
+                var failure =
+                        assertThrows(
+                                        CompletionException.class,
+                                        () -> terminal.toCompletableFuture().join())
+                                .getCause();
+                assertTrue(failure instanceof ZLinkSerialExecutionQueue.RelocatedOwnerException);
+                assertSame(
+                        failure,
+                        assertThrows(CompletionException.class, admission::join).getCause());
+                assertEquals(
+                        result == ForwardResult.THROWS ? List.of(redirectFailure) : List.of(),
+                        java.util.Arrays.asList(failure.getSuppressed()));
+            }
+            assertEquals(result == ForwardResult.ABSENT ? 0 : 1, calls.get());
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void closingCandidateNeverCallsFollow(boolean lazy) {
+        var dispatches = dispatches(new AtomicReference<>(actorTarget()));
+        var turn = dispatches.prepareAsync("actor-1").toCompletableFuture().join();
+        turn.activation().relocationLane().sealClosingAdmission();
+        try (var header =
+                        followHeader(
+                                (h, p) -> {
+                                    throw new AssertionError("Closing is not relocation");
+                                });
+                var payload = Message.from(new byte[] {11})) {
+            var admission = new CompletableFuture<Void>();
+            var terminal =
+                    candidate(
+                            dispatches,
+                            turn,
+                            lazy,
+                            admission,
+                            header,
+                            payload,
+                            () -> {
+                                throw new AssertionError("Closing candidate cannot execute");
+                            });
+            var failure =
+                    assertThrows(
+                                    CompletionException.class,
+                                    () -> terminal.toCompletableFuture().join())
+                            .getCause();
+            assertFalse(failure instanceof ZLinkSerialExecutionQueue.RelocatedOwnerException);
+            assertSame(
+                    failure, assertThrows(CompletionException.class, admission::join).getCause());
+        }
+    }
+
+    @ParameterizedTest
+    @CsvSource({"true,true", "true,false", "false,true", "false,false"})
+    void acceptedCandidateDoesNotTurnHandlerFailureIntoAdmissionFailure(
+            boolean lazy, boolean follow) {
+        var dispatches = dispatches(new AtomicReference<>(actorTarget()));
+        var turn = dispatches.prepareAsync("actor-1").toCompletableFuture().join();
+        var handlerFailure = new IllegalArgumentException("handler failed inline");
+        try (var header =
+                        followHeader(
+                                follow
+                                        ? (h, p) -> {
+                                            throw new AssertionError(
+                                                    "handler failure cannot follow");
+                                        }
+                                        : null);
+                var payload = Message.from(new byte[] {11})) {
+            var admission = new CompletableFuture<Void>();
+            var terminal =
+                    candidate(
+                            dispatches,
+                            turn,
+                            lazy,
+                            admission,
+                            header,
+                            payload,
+                            () -> CompletableFuture.failedFuture(handlerFailure));
+            admission.join();
+            assertSame(
+                    handlerFailure,
+                    assertThrows(
+                                    CompletionException.class,
+                                    () -> terminal.toCompletableFuture().join())
+                            .getCause());
+            admission.join();
+        }
+    }
+
+    @Test
+    void ordinarySpotLazyRejectionStillCompletesAdmission() {
+        var queue = new ZLinkSerialExecutionQueue(Runnable::run, ZLinkExecutionLanePolicy.spot());
+        queue.sealClosingAdmission();
+        var admission = new CompletableFuture<Void>();
+        var terminal =
+                queue.enqueueRelocatableLazyRecord(
+                        () -> new byte[] {1},
+                        1,
+                        () -> {
+                            throw new AssertionError("rejected Spot cannot execute");
+                        },
+                        () -> {},
+                        admission);
+        var failure =
+                assertThrows(CompletionException.class, () -> terminal.toCompletableFuture().join())
+                        .getCause();
+        assertSame(failure, assertThrows(CompletionException.class, admission::join).getCause());
+    }
+
+    @Test
+    void lifecycleFailureStillCompletesAdmission() {
+        var target = actorTarget();
+        var failure = new IllegalStateException("lifecycle failed");
+        var admission = new CompletableFuture<Void>();
+        var terminal =
+                target.executeActorLifecycleNext(
+                        "actor-1", () -> CompletableFuture.failedFuture(failure), admission);
+        assertSame(
+                failure,
+                assertThrows(CompletionException.class, () -> terminal.toCompletableFuture().join())
+                        .getCause());
+        admission.join();
+        var queue = target.claimActorQueue("actor-1").toCompletableFuture().join().relocationLane();
+        var seal = queue.trySealRelocation().toCompletableFuture().join().orElseThrow();
+        queue.commitRelocation(seal).toCompletableFuture().join().orElseThrow();
+        var rejectedAdmission = new CompletableFuture<Void>();
+        var rejected =
+                target.executeActorLifecycleNext(
+                        "actor-1",
+                        () -> {
+                            throw new AssertionError("relocated lifecycle cannot run");
+                        },
+                        rejectedAdmission);
+        var rejection =
+                assertThrows(CompletionException.class, () -> rejected.toCompletableFuture().join())
+                        .getCause();
+        assertTrue(rejection instanceof ZLinkSerialExecutionQueue.RelocatedOwnerException);
+        assertSame(
+                rejection,
+                assertThrows(CompletionException.class, rejectedAdmission::join).getCause());
+    }
+
+    private static CompletionStage<Void> candidate(
+            ZLinkActorDispatchSerials dispatches,
+            ZLinkActorDispatchTarget.QueuedTurn turn,
+            boolean lazy,
+            CompletableFuture<Void> admission,
+            ZLinkBackendActorReceived header,
+            Message payload,
+            java.util.function.Supplier<CompletionStage<Void>> operation) {
+        return lazy
+                ? dispatches.enqueueLazyRecord(
+                        turn,
+                        () -> new byte[] {1},
+                        1,
+                        operation,
+                        () -> {},
+                        admission,
+                        header,
+                        payload)
+                : dispatches.enqueue(turn, 1, operation, () -> {}, admission, header, payload);
+    }
+
+    private static ZLinkBackendActorReceived followHeader(
+            ZLinkBackendActorReceived.RelocationRedirect redirect) {
+        var node = RoutingId.from("source");
+        return ZLinkBackendActorReceived.lazyJournal(
+                new ZLinkBackendActorRef(node, "actor-1", 1),
+                node,
+                null,
+                java.util.Optional.empty(),
+                0,
+                0,
+                Message.from(new byte[] {1}),
+                false,
+                () -> new byte[] {1},
+                "application/json",
+                () -> {},
+                redirect);
+    }
+
     @Test
     void failedLogicalRetirementStillObservesFailedDisposalOnce() {
         ZLinkActorDispatchSerials dispatches = dispatches(new AtomicReference<>(actorTarget()));

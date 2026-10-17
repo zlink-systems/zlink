@@ -752,6 +752,26 @@ public final class ZLinkSerialExecutionQueue {
             long payloadBytes,
             Supplier<CompletionStage<Void>> operation,
             CompletableFuture<Void> admission) {
+        EnqueueResult result = enqueueWithPayloadBytesResult(payloadBytes, operation, admission);
+        if (result.entry() == null && admission != null) {
+            result.result()
+                    .whenComplete((done, failure) -> admission.completeExceptionally(failure));
+        }
+        return result.result();
+    }
+
+    /** Returns an Actor candidate rejection without completing the public admission. */
+    public CompletionStage<Void> enqueueActorWithPayloadBytes(
+            long payloadBytes,
+            Supplier<CompletionStage<Void>> operation,
+            CompletableFuture<Void> admission) {
+        return enqueueWithPayloadBytesResult(payloadBytes, operation, admission).result();
+    }
+
+    private EnqueueResult enqueueWithPayloadBytesResult(
+            long payloadBytes,
+            Supplier<CompletionStage<Void>> operation,
+            CompletableFuture<Void> admission) {
         EnqueueResult result;
         CompletionStage<Void> rejection = null;
         synchronized (this) {
@@ -763,14 +783,9 @@ public final class ZLinkSerialExecutionQueue {
                                     null, payloadBytes, operation, () -> {}, null, admission)
                             : null;
         }
-        if (rejection != null) {
-            if (admission != null) {
-                rejection.whenComplete((done, failure) -> admission.completeExceptionally(failure));
-            }
-            return rejection;
-        }
+        if (result == null) return new EnqueueResult(rejection, false, null);
         scheduleDrainIfNeeded(result);
-        return result.result();
+        return result;
     }
 
     /**
@@ -929,6 +944,34 @@ public final class ZLinkSerialExecutionQueue {
             Supplier<CompletionStage<Void>> operation,
             Runnable relocationRelease,
             CompletableFuture<Void> admission) {
+        EnqueueResult result =
+                enqueueRelocatableLazyRecordResult(
+                        record, recordSizeHint, operation, relocationRelease, admission);
+        if (result.entry() == null && admission != null) {
+            result.result()
+                    .whenComplete((done, failure) -> admission.completeExceptionally(failure));
+        }
+        return result.result();
+    }
+
+    /** Returns an Actor candidate rejection without completing the public admission. */
+    public CompletionStage<Void> enqueueActorRelocatableLazyRecord(
+            Supplier<byte[]> record,
+            long recordSizeHint,
+            Supplier<CompletionStage<Void>> operation,
+            Runnable relocationRelease,
+            CompletableFuture<Void> admission) {
+        return enqueueRelocatableLazyRecordResult(
+                        record, recordSizeHint, operation, relocationRelease, admission)
+                .result();
+    }
+
+    private EnqueueResult enqueueRelocatableLazyRecordResult(
+            Supplier<byte[]> record,
+            long recordSizeHint,
+            Supplier<CompletionStage<Void>> operation,
+            Runnable relocationRelease,
+            CompletableFuture<Void> admission) {
         EnqueueResult result = null;
         CompletionStage<Void> immediate = null;
         synchronized (this) {
@@ -969,12 +1012,11 @@ public final class ZLinkSerialExecutionQueue {
             }
             if (entry != null) result = new EnqueueResult(entry, requestDrainLocked(entry));
         }
-        if (result != null) scheduleDrainIfNeeded(result);
-        if (result == null && admission != null) {
-            immediate.whenComplete((done, failure) -> admission.completeExceptionally(failure));
+        if (result != null) {
+            scheduleDrainIfNeeded(result);
+            return result;
         }
-        if (immediate != null) return immediate;
-        return result.result();
+        return new EnqueueResult(immediate, false, null);
     }
 
     public boolean tryEnqueue(Supplier<CompletionStage<Void>> operation) {

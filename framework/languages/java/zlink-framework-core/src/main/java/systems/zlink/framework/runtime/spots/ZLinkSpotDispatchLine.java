@@ -1,5 +1,7 @@
 package systems.zlink.framework.runtime.spots;
 
+import systems.zlink.contracts.messaging.Message;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorReceived;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerInstanceOwner;
 
 import java.util.concurrent.CompletableFuture;
@@ -61,6 +63,34 @@ interface SpotDispatchLine {
             Supplier<CompletionStage<Void>> operation,
             Runnable relocationRelease,
             CompletableFuture<Void> admission);
+
+    default CompletionStage<Void> enqueueActorDispatch(
+            String actorId,
+            long payloadBytes,
+            Supplier<CompletionStage<Void>> operation,
+            CompletableFuture<Void> admission,
+            ZLinkBackendActorReceived header,
+            Message payload) {
+        return enqueueActorDispatch(actorId, payloadBytes, operation, admission);
+    }
+
+    default CompletionStage<Void> enqueueActorDispatch(
+            String actorId,
+            Supplier<byte[]> acceptedJournalRecord,
+            long acceptedJournalRecordSizeHint,
+            Supplier<CompletionStage<Void>> operation,
+            Runnable relocationRelease,
+            CompletableFuture<Void> admission,
+            ZLinkBackendActorReceived header,
+            Message payload) {
+        return enqueueActorDispatch(
+                actorId,
+                acceptedJournalRecord,
+                acceptedJournalRecordSizeHint,
+                operation,
+                relocationRelease,
+                admission);
+    }
 
     String spotId();
 

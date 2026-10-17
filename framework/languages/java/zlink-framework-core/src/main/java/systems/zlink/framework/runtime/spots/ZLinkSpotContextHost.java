@@ -1,8 +1,10 @@
 package systems.zlink.framework.runtime.spots;
 
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.runtime.actors.ZLinkActorDispatchTarget;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpot;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerInstanceOwner;
 
@@ -87,4 +89,35 @@ abstract class ZLinkSpotContextHost {
             Supplier<CompletionStage<Void>> operation,
             Runnable relocationRelease,
             CompletableFuture<Void> admission);
+
+    CompletionStage<Void> enqueueActorDispatch(
+            ZLinkActorDispatchTarget target,
+            String actorId,
+            long payloadBytes,
+            Supplier<CompletionStage<Void>> operation,
+            CompletableFuture<Void> admission,
+            ZLinkBackendActorReceived header,
+            Message payload) {
+        return enqueueActorDispatch(target, actorId, payloadBytes, operation, admission);
+    }
+
+    CompletionStage<Void> enqueueActorDispatch(
+            ZLinkActorDispatchTarget target,
+            String actorId,
+            Supplier<byte[]> acceptedJournalRecord,
+            long acceptedJournalRecordSizeHint,
+            Supplier<CompletionStage<Void>> operation,
+            Runnable relocationRelease,
+            CompletableFuture<Void> admission,
+            ZLinkBackendActorReceived header,
+            Message payload) {
+        return enqueueActorDispatch(
+                target,
+                actorId,
+                acceptedJournalRecord,
+                acceptedJournalRecordSizeHint,
+                operation,
+                relocationRelease,
+                admission);
+    }
 }

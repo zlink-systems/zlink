@@ -1,11 +1,13 @@
 package systems.zlink.framework.runtime.actors;
 
+import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.configuration.ZLinkUserSpotExecutionMode;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.execution.ZLinkExecutionLanePolicy;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.runtime.actors.ZLinkActorDispatchTarget.QueuedTurn;
 import systems.zlink.framework.runtime.handlers.ZLinkHandlerStages;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorReceived;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.relocation.ZLinkRetainedSerialQueueCommit;
 import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorOrigin;
@@ -17,7 +19,9 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
 import java.util.function.Function;
 import java.util.function.Supplier;
@@ -315,12 +319,25 @@ final class ZLinkActorDispatchSerials {
             Supplier<CompletionStage<Void>> operation,
             Runnable relocationRelease,
             CompletableFuture<Void> requestAdmission) {
+        return enqueue(
+                turn, payloadBytes, operation, relocationRelease, requestAdmission, null, null);
+    }
+
+    CompletionStage<Void> enqueue(
+            QueuedTurn turn,
+            long payloadBytes,
+            Supplier<CompletionStage<Void>> operation,
+            Runnable relocationRelease,
+            CompletableFuture<Void> requestAdmission,
+            ZLinkBackendActorReceived header,
+            Message payload) {
         Supplier<CompletionStage<Void>> turnOperation = () -> runTurn(turn, operation);
         CompletableFuture<Void> admission =
                 requestAdmission == null ? new CompletableFuture<>() : requestAdmission;
         return enqueueAfterAdmission(
-                turn,
                 admission,
+                header,
+                payload,
                 accepted ->
                         turn.target()
                                 .executeActor(
@@ -342,7 +359,6 @@ final class ZLinkActorDispatchSerials {
         Supplier<CompletionStage<Void>> turnOperation = () -> runTurn(turn, operation);
         CompletableFuture<Void> admission = new CompletableFuture<>();
         return enqueueAfterAdmission(
-                turn,
                 admission,
                 accepted ->
                         acceptedJournalRecord == null || acceptedJournalRecord.length == 0
@@ -379,12 +395,33 @@ final class ZLinkActorDispatchSerials {
             Supplier<CompletionStage<Void>> operation,
             Runnable relocationRelease,
             CompletableFuture<Void> requestAdmission) {
+        return enqueueLazyRecord(
+                turn,
+                acceptedJournalRecord,
+                acceptedJournalRecordSizeHint,
+                operation,
+                relocationRelease,
+                requestAdmission,
+                null,
+                null);
+    }
+
+    CompletionStage<Void> enqueueLazyRecord(
+            QueuedTurn turn,
+            Supplier<byte[]> acceptedJournalRecord,
+            long acceptedJournalRecordSizeHint,
+            Supplier<CompletionStage<Void>> operation,
+            Runnable relocationRelease,
+            CompletableFuture<Void> requestAdmission,
+            ZLinkBackendActorReceived header,
+            Message payload) {
         Supplier<CompletionStage<Void>> turnOperation = () -> runTurn(turn, operation);
         CompletableFuture<Void> admission =
                 requestAdmission == null ? new CompletableFuture<>() : requestAdmission;
         return enqueueAfterAdmission(
-                turn,
                 admission,
+                header,
+                payload,
                 accepted ->
                         turn.target()
                                 .executeActorLazyRecord(
@@ -553,8 +590,15 @@ final class ZLinkActorDispatchSerials {
     }
 
     private CompletionStage<Void> enqueueAfterAdmission(
-            QueuedTurn turn,
             CompletableFuture<Void> admission,
+            Function<CompletableFuture<Void>, CompletionStage<Void>> enqueue) {
+        return enqueueAfterAdmission(admission, null, null, enqueue);
+    }
+
+    private CompletionStage<Void> enqueueAfterAdmission(
+            CompletableFuture<Void> admission,
+            ZLinkBackendActorReceived header,
+            Message payload,
             Function<CompletableFuture<Void>, CompletionStage<Void>> enqueue) {
         var ownership =
                 systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext
@@ -568,6 +612,36 @@ final class ZLinkActorDispatchSerials {
             }
         } catch (RuntimeException | Error failure) {
             queued = CompletableFuture.failedFuture(failure);
+        }
+        if (header != null && header.relocationRedirect() != null) {
+            return queued.handle(
+                            (ignored, error) -> {
+                                if (ownership != null) ownership.close();
+                                if (error == null) return COMPLETED;
+                                Throwable cause = error;
+                                while ((cause instanceof CompletionException
+                                                || cause instanceof ExecutionException)
+                                        && cause.getCause() != null) cause = cause.getCause();
+                                if (cause
+                                        instanceof
+                                        ZLinkSerialExecutionQueue.RelocatedOwnerException) {
+                                    // The local candidate never ran. Preserve its operation and
+                                    // reply route through Message Follow (routing spec §2.5), and
+                                    // complete admission only after the relay accepts the frames.
+                                    try {
+                                        if (header.relocationRedirect()
+                                                .redirect(header.message(), payload)) {
+                                            admission.complete(null);
+                                            return COMPLETED;
+                                        }
+                                    } catch (RuntimeException redirectFailure) {
+                                        cause.addSuppressed(redirectFailure);
+                                    }
+                                }
+                                admission.completeExceptionally(cause);
+                                return CompletableFuture.<Void>failedFuture(cause);
+                            })
+                    .thenCompose(stage -> stage);
         }
         return queued.whenComplete(
                 (ignored, error) -> {
