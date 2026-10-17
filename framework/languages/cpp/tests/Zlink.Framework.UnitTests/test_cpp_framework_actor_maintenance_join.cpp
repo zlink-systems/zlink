@@ -1624,3 +1624,213 @@ TEST (ActorMaintenanceJoin, CompletionCallbackPreservesStandardException)
         EXPECT_STREQ (error.what (), "completion callback failed");
     }
 }
+
+namespace
+{
+TEST (ActorMaintenanceJoin, RemoteJoinDoesNotLeaveLocalRelocationWork)
+{
+    observations_t evidence;
+    observations = &evidence;
+    auto store = std::make_shared<fw::runtime::in_memory_location_store_t> ();
+    auto relocations = std::make_shared<fw::runtime::in_memory_relocation_store_t> ();
+    host_t source, target;
+    release_callbacks_t release{evidence};
+    configure (source, first_rid, store, relocations, default_follow_duration, 0, true);
+    source.start ();
+    ASSERT_TRUE (ready (source));
+    auto services = source.app.advanced ().services ().build_provider ();
+    ASSERT_TRUE (services.get_required<fw::actor_manager_t> ()
+                   .get_or_create (fw::actor_id_t (actor_id), actor_type)
+                   .async ()
+                   .result ());
+    services.get_required<fw::route_mesh_runtime_options_t> ().mesh (mesh_name).placement_weight (
+      0);
+    configure (target, second_rid, store, relocations, default_follow_duration, 0, true);
+    target.start ();
+    ASSERT_TRUE (ready (target));
+    auto target_services = target.app.advanced ().services ().build_provider ();
+    ASSERT_TRUE (target_services.get_required<fw::spot_manager_t> ()
+                   .get_or_create (fw::spot_id_t (local_spot), room_type)
+                   .async ()
+                   .result ());
+    ASSERT_TRUE (peer_ready (services.get_required<fw::route_mesh_runtime_t> (), second_rid));
+    ASSERT_TRUE (move_to (services.get_required<fw::actor_client_t> (), evidence, local_spot, 1));
+    {
+        std::lock_guard lock (evidence.mutex);
+        ASSERT_TRUE (
+          std::holds_alternative<fw::actor_join_accepted_t> (evidence.completions.back ()));
+        ASSERT_EQ (std::get<fw::actor_join_accepted_t> (evidence.completions.back ())
+                     .actor.node_rid ()
+                     .value (),
+                   second_rid);
+    }
+    auto registration =
+      fw::detail::mesh_node_runtime_t::registrations (source.app.advanced ().zlink ()).front ();
+    const auto source_released_authority = [&] {
+        return registration->spot_state->lane
+          .run ([&] {
+              for (const auto &[key, route] : registration->spot_state->actor_routes) {
+                  if (route.node_rid.value () == second_rid
+                      && !registration->spot_state->actor_authority_fences.contains (key))
+                      return true;
+              }
+              return false;
+          })
+          .get ();
+    };
+    const auto source_completion_deadline = std::chrono::steady_clock::now () + wait_budget;
+    while (!source_released_authority ()
+           && std::chrono::steady_clock::now () < source_completion_deadline)
+        std::this_thread::yield ();
+    ASSERT_TRUE (source_released_authority ());
+    const auto refs =
+      fw::detail::spot_node_runtime_t (registration->spot_state).local_actor_refs ();
+    const auto authority_read = services.get_required<fw::location_repository_t> ()
+                                  .read_authority (fw::runtime::actor_authority_key (actor_id))
+                                  .result ()
+                                  .value ();
+    const auto *authority = std::get_if<fw::authority_snapshot_t> (&authority_read);
+    ASSERT_NE (authority, nullptr);
+    EXPECT_EQ (authority->allocation.target.node_rid.value (), second_rid);
+    EXPECT_TRUE (refs.empty ());
+    EXPECT_TRUE (source_released_authority ());
+    const auto result =
+      source.app
+        .relocate ({.mode = fw::relocation_mode_t::planned_maintenance, .deadline = wait_budget})
+        .result_for (wait_budget);
+    ASSERT_TRUE (result && *result);
+    EXPECT_EQ (result->value ().outcome, fw::relocation_outcome_t::relocated);
+    EXPECT_EQ (result->value ().reason, fw::relocation_reason_t::none);
+}
+}
+
+namespace
+{
+TEST (ActorMaintenanceJoin, ActiveInventoryExcludesCreatingRecoveringAndFinalizedSource)
+{
+    namespace stateful = fw::runtime::stateful;
+    const auto make_node = [] (std::string rid) {
+        const std::vector<std::uint8_t> routing_bytes (rid.begin (), rid.end ());
+        fw::runtime::mesh::service_node_descriptor_t descriptor{
+          mesh_name,
+          routing_bytes,
+          1,
+          1,
+          "tcp://127.0.0.1:0",
+          {},
+          fw::runtime::mesh::service_node_state_t::preparing};
+        auto native = std::make_shared<fw::runtime::host::public_host_runtime_t> (
+          fw::runtime::host::host_options_t{fw::test::runtime_failure_options (
+            fw::runtime::mesh::raw_mesh_node_options_t{.descriptor = std::move (descriptor)})});
+        auto state =
+          fw::test::runtime_failure_fixture<fw::detail::spot_node_builder_state_t> (mesh_name);
+        state->snapshot.name = mesh_name;
+        state->snapshot.routing_id = zlink::routing_id_t::from (rid);
+        state->native_node = native;
+        return std::pair{std::move (native), std::move (state)};
+    };
+    auto [source_native, source_state] = make_node (first_rid);
+    auto &source = source_native->objects ();
+    const fw::detail::spot_node_runtime_t source_runtime (source_state);
+    const stateful::object_ref_t owner{
+      stateful::object_kind_t::actor, actor_id, 1, 1, mesh_name, first_rid};
+    const auto materialized_key = std::string (actor_type) + ":" + actor_id;
+    const auto reserved = source.begin_reserved_object (owner, actor_type, {});
+    ASSERT_EQ (reserved.error, stateful::stateful_error_t::none);
+    source_state->lane
+      .run (
+        [&] { source_state->actor_instances.emplace (materialized_key, std::make_shared<int> ()); })
+      .get ();
+    EXPECT_TRUE (source_runtime.local_actor_refs ().empty ());
+    EXPECT_EQ (source_runtime.monitoring_counts_async ().result ().value ().first, 0u);
+    source_state->lane.run ([&] { source_state->actor_instances.erase (materialized_key); }).get ();
+    ASSERT_EQ (source.commit_create (reserved.attempt), stateful::stateful_error_t::none);
+    EXPECT_TRUE (source_runtime.local_actor_refs ().empty ());
+    source_state->lane
+      .run (
+        [&] { source_state->actor_instances.emplace (materialized_key, std::make_shared<int> ()); })
+      .get ();
+    const auto active = source_runtime.local_actor_refs ();
+    ASSERT_EQ (active.size (), 1u);
+    EXPECT_EQ (fw::detail::actor_ref_access_t::actor_type (active.front ()), actor_type);
+    EXPECT_EQ (active.front ().object_generation (), owner.object_generation);
+    EXPECT_EQ (active.front ().actor_id ().value (), owner.key);
+    EXPECT_EQ (source.inventory ().front ().owner, owner);
+    EXPECT_EQ (active.front ().node_rid ().value (), owner.node_id);
+    EXPECT_EQ (source_runtime.monitoring_counts_async ().result ().value ().first, 1u);
+
+    {
+        auto [remote_native, remote_state] = make_node (first_rid);
+        auto &remote_objects = remote_native->objects ();
+        const fw::detail::spot_node_runtime_t remote_runtime (remote_state);
+        const stateful::object_ref_t remote{
+          stateful::object_kind_t::actor, "remote-inventory", 1, 1, mesh_name, second_rid};
+        const auto remote_reserved = remote_objects.begin_reserved_object (remote, actor_type, {});
+        ASSERT_EQ (remote_reserved.error, stateful::stateful_error_t::none);
+        ASSERT_EQ (remote_objects.commit_create (remote_reserved.attempt),
+                   stateful::stateful_error_t::none);
+        const auto remote_key = std::string (actor_type) + ":" + remote.key;
+        remote_state->lane
+          .run (
+            [&] { remote_state->actor_instances.emplace (remote_key, std::make_shared<int> ()); })
+          .get ();
+        EXPECT_EQ (remote_objects.inventory ().front ().owner, remote);
+        EXPECT_TRUE (remote_runtime.local_actor_refs ().empty ());
+        EXPECT_EQ (remote_runtime.monitoring_counts_async ().result ().value ().first, 0u);
+    }
+
+    const stateful::object_ref_t destination{
+      stateful::object_kind_t::user_spot, local_spot, 1, 1, mesh_name, second_rid};
+    const auto move = source.begin_remote_membership_move (owner, destination);
+    ASSERT_EQ (move.first, stateful::stateful_error_t::none);
+    EXPECT_EQ (source_runtime.local_actor_refs ().size (), 1u);
+    ASSERT_EQ (source.abort_membership_move (move.second), stateful::stateful_error_t::none);
+
+    const auto sealed = source.try_seal_relocation_aggregate ({owner}).result ().value ();
+    ASSERT_EQ (sealed.error, stateful::stateful_error_t::none);
+    EXPECT_EQ (source_runtime.local_actor_refs ().size (), 1u);
+    ASSERT_EQ (source.begin_relocation_boundary (sealed.seal.token).first,
+               stateful::stateful_error_t::none);
+    ASSERT_EQ (source.finalize_relocation_cutover (sealed.seal.token),
+               stateful::stateful_error_t::none);
+    ASSERT_EQ (source.inventory ().size (), 1u);
+    EXPECT_TRUE (
+      source.finalized_relocation_source (owner.kind, owner.key, owner.object_generation));
+    EXPECT_TRUE (source_runtime.local_actor_refs ().empty ());
+    EXPECT_EQ (source_runtime.monitoring_counts_async ().result ().value ().first, 0u);
+
+    auto [target_native, target_state] = make_node (second_rid);
+    auto &target = target_native->objects ();
+    const fw::detail::spot_node_runtime_t target_runtime (target_state);
+    EXPECT_TRUE (target_runtime.local_actor_refs ().empty ());
+    auto relocated = owner;
+    relocated.node_id = second_rid;
+    ++relocated.authority_owner_generation;
+    const stateful::relocation_restore_identity_t identity{"active-inventory-relocation"};
+    ASSERT_EQ (target.restore_relocation (sealed.seal.participants.front (), relocated, identity)
+                 .result ()
+                 .value (),
+               stateful::stateful_error_t::none);
+    const auto staged = target.inventory ();
+    ASSERT_EQ (staged.size (), 1u);
+    EXPECT_EQ (staged.front ().owner, relocated);
+    EXPECT_EQ (staged.front ().state, stateful::object_state_t::recovering);
+    target_state->lane
+      .run (
+        [&] { target_state->actor_instances.emplace (materialized_key, std::make_shared<int> ()); })
+      .get ();
+    EXPECT_TRUE (target_runtime.local_actor_refs ().empty ());
+    EXPECT_EQ (target_runtime.monitoring_counts_async ().result ().value ().first, 0u);
+    ASSERT_EQ (target.commit_relocation_restore (relocated, identity),
+               stateful::stateful_error_t::none);
+    const auto committed = target_runtime.local_actor_refs ();
+    ASSERT_EQ (committed.size (), 1u);
+    EXPECT_EQ (fw::detail::actor_ref_access_t::actor_type (committed.front ()), actor_type);
+    EXPECT_EQ (committed.front ().object_generation (), relocated.object_generation);
+    EXPECT_EQ (committed.front ().actor_id ().value (), relocated.key);
+    EXPECT_EQ (target.inventory ().front ().owner, relocated);
+    EXPECT_EQ (committed.front ().node_rid ().value (), relocated.node_id);
+    EXPECT_EQ (target_runtime.monitoring_counts_async ().result ().value ().first, 1u);
+    EXPECT_TRUE (source_runtime.local_actor_refs ().empty ());
+}
+}
