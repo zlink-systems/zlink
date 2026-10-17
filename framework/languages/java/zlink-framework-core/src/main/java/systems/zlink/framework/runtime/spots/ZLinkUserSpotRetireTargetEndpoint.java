@@ -977,7 +977,7 @@ final class ZLinkUserSpotRetireTargetEndpoint
                                                     targetOwnerGeneration))
                                     .thenCompose(
                                             prepared -> {
-                                                return ZLinkSerialExecutionQueue.yieldCurrent(
+                                                return ZLinkSerialExecutionQueue.manageCurrent(
                                                         actorJoin.notifyTargetJoined(
                                                                 target.directAdmission(),
                                                                 target.staged()));
@@ -998,7 +998,7 @@ final class ZLinkUserSpotRetireTargetEndpoint
                                             })
                                     .thenCompose(
                                             failure ->
-                                                    ZLinkSerialExecutionQueue.yieldCurrent(
+                                                    ZLinkSerialExecutionQueue.manageCurrent(
                                                                     actorJoin
                                                                             .notifyTargetCompletion(
                                                                                     target
