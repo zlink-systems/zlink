@@ -118,6 +118,7 @@ import type { CanonicalActorJoinRecovery } from '../foundation/actor-join-recove
 import { SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE } from '../foundation/service-wire-constants.generated';
 
 export { ZLinkSpotSerialTurnExecutor } from './spot-serial-turn-executor';
+import { spotFrameworkLifecycleContext } from './spot-serial-turn-executor';
 export { ZLinkSpotSerialExecutor } from './spot-serial-executor';
 export { ZLinkManagedTimer, ZLinkSpotTimerRegistry } from './spot-timer';
 export {
@@ -447,8 +448,21 @@ export class DefaultZLinkSpotManager {
       requestContextClose: (activation, objectGeneration, signal) =>
         this.closeFromContext(activation, objectGeneration, signal),
       registerActivation: (activation) => {
-        this.activations.register(activation);
+        if (
+          this.activations.activationForClose(activation.meshName, activation.spotId) === activation
+        ) {
+          this.activations.publish(activation.meshName, activation.spotId);
+        } else {
+          this.activations.register(activation);
+        }
         this.scheduleIdleSweep();
+      },
+      stageActivation: (activation) => {
+        this.activations.stage(activation.meshName, activation.spotId);
+        this.activations.register(activation);
+      },
+      discardActivation: (activation) => {
+        this.activations.finishClose(activation.meshName, activation.spotId);
       },
       //  Spec 15 §4.2 relocation temporary queue: production ingress
       //  consults the same admission attempts registered on Accepted
@@ -1049,7 +1063,8 @@ export class DefaultZLinkSpotManager {
     spotId: RoutingId,
     requestOrSignal: ZLinkMessage | TRequest | AbortSignal | undefined,
     authority: ZLinkNativeSpotAuthority | undefined,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    commitReady?: () => Promise<void>
   ): Promise<ZLinkLocalSpotCreateResult> {
     requireMeshName(meshName);
     const args = normalizeSpotCreateArgs(requestOrSignal, signal);
@@ -1068,7 +1083,8 @@ export class DefaultZLinkSpotManager {
           spotId,
           ownedRequest,
           undefined,
-          authority
+          authority,
+          commitReady
         );
       } finally {
         ownedRequest.close();
@@ -1226,11 +1242,7 @@ export class DefaultZLinkSpotManager {
         beginAuthority
       };
       if (reason === ZLinkSpotCloseReason.ExplicitClose) {
-        operation.canExecuteApplication = (record) => {
-          const context = record.context as
-            import('./spot-serial-turn-executor').ZLinkSpotApplicationTurnContext | undefined;
-          return context === undefined;
-        };
+        operation.canExecuteApplication = spotFrameworkLifecycleContext.canExecuteApplication;
       }
       this.closeOperations.set(key, operation);
     }
@@ -1428,18 +1440,6 @@ export class DefaultZLinkSpotManager {
 
   hasActiveSpot(spotId: RoutingId): boolean {
     return this.activations.resolveUnique(spotId) !== undefined;
-  }
-
-  beginUserSpotPublication(meshName: string, spotId: RoutingId): void {
-    this.activations.stage(meshName, spotId);
-  }
-
-  publishUserSpot(meshName: string, spotId: RoutingId): void {
-    this.activations.publish(meshName, spotId);
-  }
-
-  abortUserSpotPublication(meshName: string, spotId: RoutingId): void {
-    this.activations.abandonStage(meshName, spotId);
   }
 
   resolveLocalSpotRoute(spotId: RoutingId): ZLinkSpotRouteTarget | undefined {
@@ -1662,7 +1662,7 @@ export class DefaultZLinkSpotManager {
       throw new ZLinkConfigurationException('MeshNode Spot record is missing the owner Spot RID.');
     }
     if (record.kind === ReceiveKind.SpotMulticast) {
-      const activation = this.activations.resolve(meshName, spotId);
+      const activation = this.activations.activationForClose(meshName, spotId);
       if (activation?.actorDispatch === undefined) {
         throw new ZLinkConfigurationException(
           `MeshNode Spot multicast target '${String(spotId)}' is not active.`
@@ -3292,7 +3292,8 @@ export class DefaultZLinkSpotManager {
     spotId: RoutingId,
     request: Message,
     signal?: AbortSignal,
-    authority?: ZLinkNativeSpotAuthority
+    authority?: ZLinkNativeSpotAuthority,
+    commitReady?: () => Promise<void>
   ): Promise<ZLinkLocalSpotCreateResult> {
     this.requireRegisteredFactory(spotType);
     return await this.activationLifecycle.create(
@@ -3301,7 +3302,8 @@ export class DefaultZLinkSpotManager {
       spotId,
       request,
       signal,
-      authority
+      authority,
+      commitReady
     );
   }
 

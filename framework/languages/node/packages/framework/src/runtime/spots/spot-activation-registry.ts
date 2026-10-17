@@ -250,7 +250,7 @@ export class ZLinkSpotActivationRegistry {
   ): ZLinkSpotActivationOperation {
     const key = spotActivationKey(meshName, spotId);
     const existing = this.activations.get(key);
-    if (existing !== undefined) {
+    if (existing !== undefined && !this.pending.has(key)) {
       return {
         owner: false,
         ready: existing.serial.execute(() => {

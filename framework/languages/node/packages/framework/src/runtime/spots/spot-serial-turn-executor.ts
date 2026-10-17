@@ -29,6 +29,11 @@ import {
   hasApplicationJobPermit
 } from '../application-jobs/application-job-queue-scope';
 
+/** Lifecycle owners allow their framework turns while retaining application records. */
+export const spotFrameworkLifecycleContext: ZLinkSerialLifecycleContext = {
+  canExecuteApplication: (record) => record.context === undefined
+};
+
 export class ZLinkSpotSerialTurnExecutor {
   private readonly scheduler: ZLinkSerialExecutionQueue;
   private depth = 0;

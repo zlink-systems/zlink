@@ -73,7 +73,10 @@ import {
   type ZLinkTimerClock,
   type ZLinkTimerRelocationState
 } from './spot-timer';
-import { ZLinkSpotSerialTurnExecutor } from './spot-serial-turn-executor';
+import {
+  ZLinkSpotSerialTurnExecutor,
+  spotFrameworkLifecycleContext
+} from './spot-serial-turn-executor';
 import { ZLinkSpotSerialExecutor } from './spot-serial-executor';
 import { createInstanceSpotContext, createSpotContext } from './spot-context';
 import type {
@@ -151,6 +154,8 @@ export interface ZLinkSpotActivationLifecycleOptions {
     signal?: AbortSignal
   ) => Promise<boolean>;
   readonly registerActivation: (activation: ZLinkSpotActivation) => void;
+  readonly stageActivation?: (activation: ZLinkSpotActivation) => void;
+  readonly discardActivation?: (activation: ZLinkSpotActivation) => void;
   readonly routeToActorJoinPrewarm?: ZLinkRouteToActorJoinPrewarm;
   readonly releaseLocation: (
     activation: ZLinkSpotActivation,
@@ -547,7 +552,8 @@ export class ZLinkSpotActivationLifecycle {
     spotId: RoutingId,
     request: Message,
     signal?: AbortSignal,
-    authority?: ZLinkNativeSpotAuthority
+    authority?: ZLinkNativeSpotAuthority,
+    commitReady?: () => Promise<void>
   ): Promise<ZLinkLocalSpotCreateResult> {
     const executionMode =
       this.options.userSpotExecutionMode?.(meshName, spotType) ??
@@ -610,7 +616,8 @@ export class ZLinkSpotActivationLifecycle {
           unclaimed,
           executionMode,
           authority?.objectGeneration ?? 0n,
-          signal
+          signal,
+          commitReady
         );
       }
       throw new ZLinkConfigurationException('Core Spot lifecycle generation is not available.');
@@ -700,7 +707,8 @@ export class ZLinkSpotActivationLifecycle {
         request,
         locationClaim,
         nativeDispatch,
-        signal
+        signal,
+        commitReady
       );
     } catch (error) {
       const cleanupErrors: unknown[] = [];
@@ -761,7 +769,8 @@ export class ZLinkSpotActivationLifecycle {
     locationClaim: UserSpotLocationClaim,
     executionMode: ZLinkUserSpotExecutionMode,
     objectGeneration: bigint,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    commitReady?: () => Promise<void>
   ): Promise<ZLinkLocalSpotCreateResult> {
     let spot: ZLinkSpot | undefined;
     let activation: ZLinkSpotActivation | undefined;
@@ -825,7 +834,8 @@ export class ZLinkSpotActivationLifecycle {
       request,
       locationClaim,
       undefined,
-      signal
+      signal,
+      commitReady
     );
   }
 
@@ -945,62 +955,98 @@ export class ZLinkSpotActivationLifecycle {
     request: Message,
     locationClaim: UserSpotLocationClaim,
     nativeDispatch: ZLinkSpotActorJoinDispatch | undefined,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    commitReady?: () => Promise<void>
   ): Promise<ZLinkLocalSpotCreateResult> {
+    return await activation.serial.executeControlLifecycleOperation(
+      async () => {
+        try {
+          this.options.stageActivation?.(activation);
+          await activation.spot.configure?.();
+          nativeDispatch?.configureSubscriptions(activation.handlers.snapshot());
+          await addSpotTimerRegistrations(
+            activation.timers,
+            spotType,
+            activation.spotId,
+            activation.spot,
+            activation.serial,
+            { timerHandlers: this.options.spotTimerHandlers },
+            {
+              providerResolver: this.options.providerResolver,
+              runtimeEventPublisher: this.options.runtimeEventPublisher,
+              signal
+            }
+          );
+          let createResponse: ZLinkSpotCreateResponse | undefined;
+          await activation.serial.postBarrierTurn(async () => {
+            createResponse = await activation.spot.onCreate?.(
+              wrapFrameworkPayloadMessage(
+                request,
+                this.options.messageSerializers,
+                frameworkPayloadContentType(request)
+              )
+            );
+            if (createResponse?.accepted === false) {
+              return;
+            }
+            await activation.spot.onInitialize?.();
+          });
+          if (createResponse?.accepted === false) {
+            await this.cleanupFailedCreation(activation, locationClaim.meshName, false, signal);
+            return {
+              spotId: activation.spotId,
+              state: ZLinkSpotCreateState.Rejected,
+              reply: this.decodeCreateReply(createResponse.reply)
+            };
+          }
+          await commitReady?.();
+          this.options.registerActivation(activation);
+          return {
+            spotId: activation.spotId,
+            state: ZLinkSpotCreateState.Created,
+            reply: this.decodeCreateReply(createResponse?.reply)
+          };
+        } catch (error) {
+          try {
+            await this.cleanupFailedCreation(activation, locationClaim.meshName, true, signal);
+          } catch (cleanupError) {
+            throw new AggregateError(
+              [error, cleanupError],
+              `Spot '${activation.spotId}' creation cleanup failed.`
+            );
+          }
+          throw error;
+        }
+      },
+      // Creation retains application records until publication or disposal.
+      spotFrameworkLifecycleContext
+    );
+  }
+
+  private async cleanupFailedCreation(
+    activation: ZLinkSpotActivation,
+    meshName: string,
+    notifyClosing: boolean,
+    signal?: AbortSignal
+  ): Promise<void> {
     try {
-      await activation.spot.configure?.();
-      nativeDispatch?.configureSubscriptions(activation.handlers.snapshot());
-      await addSpotTimerRegistrations(
-        activation.timers,
-        spotType,
-        activation.spotId,
-        activation.spot,
-        activation.serial,
-        { timerHandlers: this.options.spotTimerHandlers },
-        {
-          providerResolver: this.options.providerResolver,
-          runtimeEventPublisher: this.options.runtimeEventPublisher,
-          signal
-        }
+      await this.cleanupActivation(
+        activation,
+        meshName,
+        notifyClosing,
+        signal,
+        ZLinkSpotCloseReason.ExplicitClose,
+        undefined,
+        true
       );
-      let createResponse: ZLinkSpotCreateResponse | undefined;
-      await activation.serial.execute(async () => {
-        createResponse = await activation.spot.onCreate?.(
-          wrapFrameworkPayloadMessage(
-            request,
-            this.options.messageSerializers,
-            frameworkPayloadContentType(request)
-          )
-        );
-        if (createResponse?.accepted === false) {
-          return;
-        }
-        await activation.spot.onInitialize?.();
+    } finally {
+      activation.serial.closeAdmission();
+      // The receive pump retains and releases the payload at this queue terminal.
+      // Retire its application callback without invoking code on a failed incarnation.
+      activation.serial.visitPendingApplication((record) => {
+        record.operation = () => undefined;
       });
-      if (createResponse?.accepted === false) {
-        await this.cleanupActivation(activation, locationClaim.meshName, false, signal);
-        return {
-          spotId: activation.spotId,
-          state: ZLinkSpotCreateState.Rejected,
-          reply: this.decodeCreateReply(createResponse.reply)
-        };
-      }
-      this.options.registerActivation(activation);
-      return {
-        spotId: activation.spotId,
-        state: ZLinkSpotCreateState.Created,
-        reply: this.decodeCreateReply(createResponse?.reply)
-      };
-    } catch (error) {
-      try {
-        await this.cleanupActivation(activation, locationClaim.meshName, true, signal);
-      } catch (cleanupError) {
-        throw new AggregateError(
-          [error, cleanupError],
-          `Spot '${activation.spotId}' creation cleanup failed.`
-        );
-      }
-      throw error;
+      this.options.discardActivation?.(activation);
     }
   }
 

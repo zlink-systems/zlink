@@ -240,33 +240,21 @@ export class ZLinkPublicSpotManager implements ZLinkSpotManager {
         signal,
         generatedIdentity
       },
-      async (target, authority, deadlineSignal) => {
+      async (target, authority, deadlineSignal, commitReady) => {
         const selected = selectFactory(this.options.factories, stableType, target.meshName);
-        this.options.local.beginUserSpotPublication(target.meshName, spotId);
-        try {
-          const result = await this.options.local.getOrCreateWithAuthority(
-            target.meshName,
-            selected.registration.implementation as Type<ZLinkSpot>,
-            spotId,
-            state.request,
-            {
-              stableType,
-              objectGeneration: authority.objectGeneration,
-              authorityOwnerGeneration: authority.authorityOwnerGeneration
-            },
-            deadlineSignal
-          );
-          return {
-            ...result,
-            publication: {
-              publish: () => this.options.local.publishUserSpot(target.meshName, spotId),
-              abort: () => this.options.local.abortUserSpotPublication(target.meshName, spotId)
-            }
-          };
-        } catch (error) {
-          this.options.local.abortUserSpotPublication(target.meshName, spotId);
-          throw error;
-        }
+        return await this.options.local.getOrCreateWithAuthority(
+          target.meshName,
+          selected.registration.implementation as Type<ZLinkSpot>,
+          spotId,
+          state.request,
+          {
+            stableType,
+            objectGeneration: authority.objectGeneration,
+            authorityOwnerGeneration: authority.authorityOwnerGeneration
+          },
+          deadlineSignal,
+          commitReady
+        );
       },
       async (cleanupSignal) => {
         const meshName =

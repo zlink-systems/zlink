@@ -2412,18 +2412,19 @@ test('public User Spot coordinator hides Pending, runs one factory, then publish
     requestPayload: Buffer.from('create-room'),
     timeoutMs: 1_000
   };
-  const first = coordinator.getOrCreate(request, async () => {
-    materializations++;
-    await initialize;
-    return {
-      spotId: request.spotId,
-      state: ZLinkSpotCreateState.Created,
-      publication: {
-        publish: () => publicationOrder.push('publish'),
-        abort: () => publicationOrder.push('abort')
-      }
-    };
-  });
+  const first = coordinator.getOrCreate(
+    request,
+    async (_target, _authority, _signal, commitReady) => {
+      materializations++;
+      await initialize;
+      await commitReady();
+      publicationOrder.push('publish');
+      return {
+        spotId: request.spotId,
+        state: ZLinkSpotCreateState.Created
+      };
+    }
+  );
   await new Promise((resolve) => setImmediate(resolve));
   const pending = await store.readAuthority(authorityKey('room-42'));
   assert.equal(pending.kind, 'snapshot');
@@ -2662,11 +2663,10 @@ test('User Spot placement excludes a capacity-race loser and reserves the next c
       requestPayload: Buffer.from('create'),
       timeoutMs: 1_000
     },
-    async (target) => ({
-      spotId: 'capacity-race-room',
-      state: ZLinkSpotCreateState.Created,
-      target
-    })
+    async (target, _authority, _signal, commitReady) => {
+      await commitReady();
+      return { spotId: 'capacity-race-room', state: ZLinkSpotCreateState.Created, target };
+    }
   );
 
   assert.equal(reserveCalls, 2);
@@ -2769,21 +2769,15 @@ test('User Spot creation reserves at the source and materializes exact Pending c
     remoteCreate: async (_meshName, _targetNodeRid, record) => {
       const coordinated = await targetCoordinator.handleRemoteCreate(
         { kind: 'userSpotCreate', correlation: 1n, operation: { high: 1n, low: 1n }, ...record },
-        async (requestPayload) => {
+        async (requestPayload, _authority, _signal, commitReady) => {
           materializations++;
           assert.deepEqual(requestPayload, Buffer.from('create'));
           await initialized;
+          await commitReady();
+          published = true;
           return {
             spotId: record.spotId,
-            state: ZLinkSpotCreateState.Created,
-            publication: {
-              publish: () => {
-                published = true;
-              },
-              abort: () => {
-                published = false;
-              }
-            }
+            state: ZLinkSpotCreateState.Created
           };
         }
       );
@@ -2906,10 +2900,10 @@ test('User Spot Ready commit Store rejection is exposed as RequestFailed with th
           requestPayload: Buffer.from('create'),
           timeoutMs: 100
         },
-        async () => ({
-          spotId: 'commit-failed-room',
-          state: ZLinkSpotCreateState.Created
-        })
+        async (_target, _authority, _signal, commitReady) => {
+          await commitReady();
+          return { spotId: 'commit-failed-room', state: ZLinkSpotCreateState.Created };
+        }
       ),
     (error: unknown) =>
       error instanceof ZLinkFrameworkException &&
@@ -2976,10 +2970,10 @@ test('User Spot close fences the exact generation and deletes authority only aft
       requestPayload: Buffer.from('create'),
       timeoutMs: 1_000
     },
-    async () => ({
-      spotId: 'close-room',
-      state: ZLinkSpotCreateState.Created
-    })
+    async (_target, _authority, _signal, commitReady) => {
+      await commitReady();
+      return { spotId: 'close-room', state: ZLinkSpotCreateState.Created };
+    }
   );
   let ownerClosed = false;
   assert.equal(
@@ -3048,21 +3042,23 @@ test('exact User Spot manager call is single-use and returns the committed SpotR
   let published = false;
   const manager = new ZLinkPublicSpotManager({
     local: {
-      async getOrCreateWithAuthority(_mesh: string, _type: typeof RoomSpot, spotId: string) {
+      async getOrCreateWithAuthority(
+        _mesh: string,
+        _type: typeof RoomSpot,
+        spotId: string,
+        _request: unknown,
+        _authority: unknown,
+        _signal: AbortSignal,
+        commitReady: () => Promise<void>
+      ) {
+        staged = true;
         assert.equal(staged, true);
         assert.equal(published, false);
         created++;
-        return { spotId, state: ZLinkSpotCreateState.Created };
-      },
-      beginUserSpotPublication() {
-        staged = true;
-      },
-      publishUserSpot() {
+        await commitReady();
         published = true;
         staged = false;
-      },
-      abortUserSpotPublication() {
-        staged = false;
+        return { spotId, state: ZLinkSpotCreateState.Created };
       },
       async close() {
         return true;
@@ -3716,11 +3712,10 @@ async function createThroughLiveDescriptor(
       requestPayload: Buffer.from('create'),
       timeoutMs: 1_000
     },
-    async (selected) => ({
-      spotId,
-      state: ZLinkSpotCreateState.Created,
-      target: selected
-    })
+    async (selected, _authority, _signal, commitReady) => {
+      await commitReady();
+      return { spotId, state: ZLinkSpotCreateState.Created, target: selected };
+    }
   );
 }
 

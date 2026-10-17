@@ -118,7 +118,8 @@ export class ZLinkUserSpotCreationCoordinator {
         readonly isLocal: boolean;
       },
       authority: ZLinkAuthoritySnapshot,
-      signal: AbortSignal
+      signal: AbortSignal,
+      commitReady: () => Promise<void>
     ) => Promise<ZLinkLocalSpotCreateResult>,
     discard?: (signal?: AbortSignal) => Promise<void>
   ): Promise<ZLinkUserSpotCreationResult> {
@@ -333,7 +334,8 @@ export class ZLinkUserSpotCreationCoordinator {
               target.nodeGeneration,
               deadlineUnixMs
             ),
-            (_payload, authority, localSignal) => materialize(target, authority, localSignal),
+            (_payload, authority, localSignal, commitReady) =>
+              materialize(target, authority, localSignal, commitReady),
             discard,
             signal
           )
@@ -405,7 +407,8 @@ export class ZLinkUserSpotCreationCoordinator {
     materialize: (
       requestPayload: Uint8Array,
       authority: ZLinkAuthoritySnapshot,
-      signal: AbortSignal
+      signal: AbortSignal,
+      commitReady: () => Promise<void>
     ) => Promise<ZLinkLocalSpotCreateResult>,
     discard?: (signal?: AbortSignal) => Promise<void>,
     signal?: AbortSignal
@@ -439,7 +442,8 @@ export class ZLinkUserSpotCreationCoordinator {
     materialize: (
       requestPayload: Uint8Array,
       authority: ZLinkAuthoritySnapshot,
-      signal: AbortSignal
+      signal: AbortSignal,
+      commitReady: () => Promise<void>
     ) => Promise<ZLinkLocalSpotCreateResult>,
     discard?: (signal?: AbortSignal) => Promise<void>,
     signal?: AbortSignal
@@ -465,7 +469,8 @@ export class ZLinkUserSpotCreationCoordinator {
     materialize: (
       requestPayload: Uint8Array,
       authority: ZLinkAuthoritySnapshot,
-      signal: AbortSignal
+      signal: AbortSignal,
+      commitReady: () => Promise<void>
     ) => Promise<ZLinkLocalSpotCreateResult>,
     discard?: (signal?: AbortSignal) => Promise<void>,
     signal?: AbortSignal
@@ -529,11 +534,69 @@ export class ZLinkUserSpotCreationCoordinator {
       pending.requestSha256,
       pending.requestEncodedSize
     );
-    let local: ZLinkLocalSpotCreateResult | undefined;
     try {
-      local = await materialize(requestPayload, current, signal ?? new AbortController().signal);
+      let readySpot = spot;
+      const commitReady = async (): Promise<void> => {
+        let committed;
+        try {
+          committed = await this.options.store.commit(
+            {
+              key: { kind: 'user_spot', globalId: record.spotId },
+              reservationId: pending.reservationId,
+              expectedStoreVersion: current.storeVersion.value,
+              target: {
+                meshName: current.allocation.descriptor.meshName,
+                nodeRid: current.allocation.descriptor.rid,
+                nodeLifecycleGeneration: current.allocation.descriptorLifecycleGeneration,
+                owner: {
+                  ownerId: current.ownerId,
+                  leaseGeneration: current.ownerLeaseGeneration
+                }
+              },
+              readyPayload: encodeServiceUserSpotAuthorityPayload({
+                state: 'ready',
+                stableType: record.stableType,
+                spotId: record.spotId,
+                ownerId: current.ownerId,
+                ownerLeaseGeneration: current.ownerLeaseGeneration,
+                ownerMeshName: current.allocation.descriptor.meshName,
+                ownerNodeRid: String(current.allocation.descriptor.rid),
+                ownerNodeGeneration: current.allocation.descriptorLifecycleGeneration
+              })
+            },
+            signal,
+            record.deadlineUnixMs
+          );
+        } catch (error) {
+          throw createInternalFrameworkException(
+            ZLinkFrameworkInternalErrorKind.RequestFailed,
+            'User Spot Ready commit Store operation failed.',
+            false,
+            error
+          );
+        }
+        if (committed.kind !== 'committed' && committed.kind !== 'alreadyCommitted') {
+          throw createInternalFrameworkException(
+            ZLinkFrameworkInternalErrorKind.RequestFailed,
+            `Remote User Spot Ready commit failed: ${committed.kind}.`
+          );
+        }
+        readySpot = {
+          ...spot,
+          objectGeneration: committed.ready.objectGeneration
+        };
+        this.options.publishReadyRoute?.(
+          committed.ready.allocation.descriptor.meshName,
+          readySpotRoute(record.spotId, committed.ready)
+        );
+      };
+      const local = await materialize(
+        requestPayload,
+        current,
+        signal ?? new AbortController().signal,
+        commitReady
+      );
       if (local.state === ZLinkSpotCreateState.Rejected) {
-        local.publication?.abort();
         await this.options.store.abort(
           {
             key: { kind: 'user_spot', globalId: record.spotId },
@@ -558,65 +621,11 @@ export class ZLinkUserSpotCreationCoordinator {
           spot
         };
       }
-      let committed;
-      try {
-        committed = await this.options.store.commit(
-          {
-            key: { kind: 'user_spot', globalId: record.spotId },
-            reservationId: pending.reservationId,
-            expectedStoreVersion: current.storeVersion.value,
-            target: {
-              meshName: current.allocation.descriptor.meshName,
-              nodeRid: current.allocation.descriptor.rid,
-              nodeLifecycleGeneration: current.allocation.descriptorLifecycleGeneration,
-              owner: {
-                ownerId: current.ownerId,
-                leaseGeneration: current.ownerLeaseGeneration
-              }
-            },
-            readyPayload: encodeServiceUserSpotAuthorityPayload({
-              state: 'ready',
-              stableType: record.stableType,
-              spotId: record.spotId,
-              ownerId: current.ownerId,
-              ownerLeaseGeneration: current.ownerLeaseGeneration,
-              ownerMeshName: current.allocation.descriptor.meshName,
-              ownerNodeRid: String(current.allocation.descriptor.rid),
-              ownerNodeGeneration: current.allocation.descriptorLifecycleGeneration
-            })
-          },
-          signal,
-          record.deadlineUnixMs
-        );
-      } catch (error) {
-        throw createInternalFrameworkException(
-          ZLinkFrameworkInternalErrorKind.RequestFailed,
-          'User Spot Ready commit Store operation failed.',
-          false,
-          error
-        );
-      }
-      if (committed.kind !== 'committed' && committed.kind !== 'alreadyCommitted') {
-        throw createInternalFrameworkException(
-          ZLinkFrameworkInternalErrorKind.RequestFailed,
-          `Remote User Spot Ready commit failed: ${committed.kind}.`
-        );
-      }
-      const readySpot: SpotRef = {
-        ...spot,
-        objectGeneration: committed.ready.objectGeneration
-      };
-      this.options.publishReadyRoute?.(
-        committed.ready.allocation.descriptor.meshName,
-        readySpotRoute(record.spotId, committed.ready)
-      );
-      local.publication?.publish();
       return {
         result: { spot: readySpot, state: local.state, reply: local.reply },
         spot: readySpot
       };
     } catch (error) {
-      local?.publication?.abort();
       const cleanupDeadline = createDeadline(
         this.options.cleanupTimeoutMs ?? DEFAULT_USER_SPOT_CLEANUP_TIMEOUT_MS
       );

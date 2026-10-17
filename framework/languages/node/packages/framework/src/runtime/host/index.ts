@@ -2450,7 +2450,7 @@ export class ZLinkFrameworkRuntimeHost
           create: async (record, signal) => {
             const coordinated = await coordinator.handleRemoteCreate(
               record,
-              async (requestPayload, authority, createSignal) => {
+              async (requestPayload, authority, createSignal, commitReady) => {
                 const selected = factories.get(meshName)?.get(record.stableType);
                 if (selected === undefined) {
                   throw new ZLinkConfigurationException(
@@ -2461,31 +2461,19 @@ export class ZLinkFrameworkRuntimeHost
                   requestPayload,
                   this.options.registration.messageSerializers
                 );
-                local.beginUserSpotPublication(meshName, record.spotId as never);
-                try {
-                  const result = await local.getOrCreateWithAuthority(
-                    meshName,
-                    selected.implementation as never,
-                    record.spotId as never,
-                    request,
-                    {
-                      stableType: record.stableType,
-                      objectGeneration: authority.objectGeneration,
-                      authorityOwnerGeneration: authority.authorityOwnerGeneration
-                    },
-                    createSignal
-                  );
-                  return {
-                    ...result,
-                    publication: {
-                      publish: () => local.publishUserSpot(meshName, record.spotId as never),
-                      abort: () => local.abortUserSpotPublication(meshName, record.spotId as never)
-                    }
-                  };
-                } catch (error) {
-                  local.abortUserSpotPublication(meshName, record.spotId as never);
-                  throw error;
-                }
+                return await local.getOrCreateWithAuthority(
+                  meshName,
+                  selected.implementation as never,
+                  record.spotId as never,
+                  request,
+                  {
+                    stableType: record.stableType,
+                    objectGeneration: authority.objectGeneration,
+                    authorityOwnerGeneration: authority.authorityOwnerGeneration
+                  },
+                  createSignal,
+                  commitReady
+                );
               },
               async (cleanupSignal) => {
                 await local.close(meshName, record.spotId as never, cleanupSignal);
