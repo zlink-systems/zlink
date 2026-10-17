@@ -451,6 +451,9 @@ test('rejected provisional Join releases its current Actor mailbox record before
   const transfer = new ZLinkActorTransferRuntime({
     actorHandoff: coordinator,
     spotManager: () => ({
+      admitSourceActorPacketPrefix(actorId, records) {
+        return this.admitRoutedActorPacketPrefix(undefined, actorId, records);
+      },
       admitRoutedActorPacketPrefix(_spotId, _actorId, records) {
         const terminals = actorMailbox.admitDurablePrefix(
           records.map((record) => ({
@@ -638,6 +641,9 @@ for (const firstJoin of ['accepted', 'rejected']) {
     const transfer = new ZLinkActorTransferRuntime({
       actorHandoff: coordinator,
       spotManager: () => ({
+        admitSourceActorPacketPrefix(actorId, records) {
+          return this.admitRoutedActorPacketPrefix(undefined, actorId, records);
+        },
         admitRoutedActorPacketPrefix(_spotId, _actorId, records) {
           const terminals = actorMailbox.admitDurablePrefix(
             records.map((record) => ({
@@ -783,6 +789,9 @@ test('deferred Join release uses the direct Spot replay path without recapturing
   const transfer = new ZLinkActorTransferRuntime({
     actorHandoff: coordinator,
     spotManager: () => ({
+      admitSourceActorPacketPrefix(actorId, records) {
+        return this.admitRoutedActorPacketPrefix(undefined, actorId, records);
+      },
       admitRoutedActorPacketPrefix(_spotId, _actorId, records) {
         const terminals = records.map((record) =>
           record.drain(

@@ -18,10 +18,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
- * Runtime {@code runWorker(...)} call. The work runs on the shared elastic worker pool; the
- * awaitable terminator completes the returned stage, and the callback terminator posts both
- * callbacks to the owning Spot serial line. A late result after a timeout is dropped without
- * invoking user callbacks.
+ * Runtime {@code runWorker(...)} call. The work runs on the shared elastic worker pool. A late
+ * result after a timeout is dropped without invoking user callbacks.
  */
 final class DefaultZLinkWorkerCall<T> implements ZLinkWorkerCall<T> {
     private final ZLinkWorkerPool pool;

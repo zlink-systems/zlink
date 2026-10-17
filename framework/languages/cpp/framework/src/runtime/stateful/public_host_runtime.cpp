@@ -944,12 +944,14 @@ void public_host_runtime_t::forward_relocation_application (
   const std::vector<std::uint8_t> &target_routing_id,
   std::uint64_t target_generation,
   std::uint64_t target_lease_generation,
-  std::chrono::milliseconds window)
+  std::chrono::milliseconds window,
+  std::optional<std::uint64_t> target_authority_generation)
 {
     if (!_stateful_dispatch)
         return;
     auto pending = std::make_shared<task_t<bool>> (_stateful_dispatch->forward_accepted (
-      owner, record, target_routing_id, target_generation, target_lease_generation, window));
+      owner, record, target_routing_id, target_generation, target_lease_generation, window,
+      target_authority_generation));
     detail::observe_task_completion (
       *pending, [host = shared_from_this (), pending] (const result_t<bool> &) {});
 }
