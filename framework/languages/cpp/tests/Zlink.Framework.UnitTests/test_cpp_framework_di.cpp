@@ -19,7 +19,9 @@ struct singleton_t
 
 struct scoped_t
 {
+    static inline int constructed = 0;
     static inline int destroyed = 0;
+    int generation = ++constructed;
     ~scoped_t () { ++destroyed; }
 };
 
@@ -220,8 +222,9 @@ int main ()
         return 4;
     }
 
+    scoped_t::constructed = 0;
     scoped_t::destroyed = 0;
-    scoped_t *first_scope_instance = nullptr;
+    int first_scope_generation = 0;
     {
         auto scope = zlink::framework::detail::service_scope_t::create (
           provider, zlink::framework::detail::service_scope_kind_t::stream_session);
@@ -233,9 +236,12 @@ int main ()
         if (&scoped_a != &scoped_b) {
             return 6;
         }
-        first_scope_instance = &scoped_a;
+        first_scope_generation = scoped_a.generation;
+        if (first_scope_generation != 1 || scoped_t::constructed != 1 || scoped_t::destroyed != 0) {
+            return 19;
+        }
     }
-    if (scoped_t::destroyed != 1) {
+    if (scoped_t::constructed != 1 || scoped_t::destroyed != 1) {
         return 7;
     }
 
@@ -246,20 +252,56 @@ int main ()
             return 8;
         }
         auto &scoped_c = scope.get_required<scoped_t> ();
-        if (&scoped_c == first_scope_instance) {
+        if (scoped_c.generation != first_scope_generation + 1 || scoped_t::constructed != 2
+            || scoped_t::destroyed != 1 || &scope.get_required<scoped_t> () != &scoped_c) {
             return 9;
         }
     }
 
+    if (scoped_t::constructed != 2 || scoped_t::destroyed != 2) {
+        return 20;
+    }
     {
         auto scope = zlink::framework::detail::service_scope_t::create (
           provider, zlink::framework::detail::service_scope_kind_t::actor_creation);
-        (void) scope.get_required<scoped_t> ();
+        if (scope.get_required<scoped_t> ().generation != 3 || scoped_t::constructed != 3
+            || scoped_t::destroyed != 2) {
+            return 21;
+        }
+    }
+    if (scoped_t::constructed != 3 || scoped_t::destroyed != 3) {
+        return 22;
     }
     {
         auto scope = zlink::framework::detail::service_scope_t::create (
           provider, zlink::framework::detail::service_scope_kind_t::entry_spot);
-        (void) scope.get_required<scoped_t> ();
+        if (scope.get_required<scoped_t> ().generation != 4 || scoped_t::constructed != 4
+            || scoped_t::destroyed != 3) {
+            return 23;
+        }
+    }
+    if (scoped_t::constructed != 4 || scoped_t::destroyed != 4) {
+        return 24;
+    }
+    {
+        auto first = zlink::framework::detail::service_scope_t::create (provider);
+        auto second = zlink::framework::detail::service_scope_t::create (provider);
+        auto &first_instance = first.get_required<scoped_t> ();
+        auto &second_instance = second.get_required<scoped_t> ();
+        if (&first_instance == &second_instance || first_instance.generation != 5
+            || second_instance.generation != 6 || scoped_t::constructed != 6
+            || scoped_t::destroyed != 4) {
+            return 25;
+        }
+        first.close ();
+        if (scoped_t::destroyed != 5 || scoped_t::constructed != 6
+            || &second.get_required<scoped_t> () != &second_instance
+            || second_instance.generation != 6) {
+            return 26;
+        }
+    }
+    if (scoped_t::constructed != 6 || scoped_t::destroyed != 6) {
+        return 27;
     }
 
     provider.close ();
