@@ -2826,26 +2826,22 @@ void spot_context_state_t::run_local_close_steps (
     cancel_timers ();
     try {
         const auto instance = spot_instance;
-        auto on_closing =
-          owner->lane.run ([&] { return std::exchange (lifecycle.on_closing, {}); }).get ();
-        if (on_closing && instance) {
-            service::after_close_step (
-              on_closing (
-                instance.get (),
-                spot_closing_context_t{
-                  reason, teardown_end.value_or (std::chrono::system_clock::time_point::max ())},
-                reason == spot_close_reason_t::host_shutdown ? cleanup_cancellation
-                                                             : std::stop_token{}),
-              resume,
-              [self = shared_from_this (), owner, instance,
-               after_closing] (result_t<void> result) mutable {
-                  if (!result)
-                      report_spot_close_diagnostic (owner, std::string (self->spot_id),
-                                                    "on_closing_failed", result.exception ());
-                  after_closing (result);
-              });
-            return;
-        }
+        service::after_close_step (
+          invoke_closing (
+            instance,
+            spot_closing_context_t{
+              reason, teardown_end.value_or (std::chrono::system_clock::time_point::max ())},
+            reason == spot_close_reason_t::host_shutdown ? cleanup_cancellation
+                                                         : std::stop_token{}),
+          resume,
+          [self = shared_from_this (), owner, instance,
+           after_closing] (result_t<void> result) mutable {
+              if (!result)
+                  report_spot_close_diagnostic (owner, std::string (self->spot_id),
+                                                "on_closing_failed", result.exception ());
+              after_closing (result);
+          });
+        return;
     }
     catch (const std::exception &) {
         report_spot_close_diagnostic (owner, std::string (spot_id), "on_closing_failed",
@@ -2853,7 +2849,6 @@ void spot_context_state_t::run_local_close_steps (
         after_closing (detail::result_access_t::failure<void> (std::current_exception ()));
         return;
     }
-    after_closing (result_t<void>::success ());
 }
 
 void report_spot_close_diagnostic (const std::shared_ptr<spot_node_builder_state_t> &owner,
@@ -12993,7 +12988,7 @@ local_spot_create_result_t spot_node_runtime_t::create_spot_context (
             catch (...) {
             }
         }
-        context_state->detach_application_instance (false);
+        context_state->detach_application_instance ();
     };
 
     if (context_state->spot_instance) {
@@ -13493,7 +13488,7 @@ bool spot_node_runtime_t::close_all_user_spots (std::chrono::steady_clock::time_
           _state->cleanup_cancellation = cleanup_cancellation.get_token ();
           user_spots.reserve (_state->spot_contexts_by_id.size ());
           for (const auto &[rid, context] : _state->spot_contexts_by_id) {
-              if (!context._state || context._state->is_entry_spot ())
+              if (!context._state)
                   continue;
               // A Close already running releases its authority before the
               // owner cleanup (Host relocation §14). Shutdown waits for it.
@@ -13504,7 +13499,7 @@ bool spot_node_runtime_t::close_all_user_spots (std::chrono::steady_clock::time_
                   running_closes.push_back (running->task ());
                   continue;
               }
-              if (context._state->closed || context._state->native_spot.expired ())
+              if (context._state->closed)
                   continue;
               user_spots.push_back (spot_id_t (rid));
           }
@@ -13835,13 +13830,9 @@ void spot_node_runtime_t::cancel_pending_work () noexcept
 void spot_node_runtime_t::release_native_handles () noexcept
 {
     std::vector<std::shared_ptr<detail::spot_context_state_t>> contexts;
-    std::stop_token cleanup_cancellation;
-    auto teardown_end = std::chrono::system_clock::time_point::max ();
     try {
         _state->lane
           .run ([&] {
-              cleanup_cancellation = _state->cleanup_cancellation;
-              teardown_end = _state->teardown_end.value_or (teardown_end);
               contexts.reserve (_state->spot_contexts_by_id.size ());
               for (auto &[_, context] : _state->spot_contexts_by_id) {
                   if (context._state) {
@@ -13859,8 +13850,7 @@ void spot_node_runtime_t::release_native_handles () noexcept
           .get ();
         for (auto &context : contexts) {
             try {
-                context->detach_application_instance (true, spot_close_reason_t::host_shutdown,
-                                                      teardown_end, cleanup_cancellation);
+                context->detach_application_instance ();
             }
             catch (...) {
             }

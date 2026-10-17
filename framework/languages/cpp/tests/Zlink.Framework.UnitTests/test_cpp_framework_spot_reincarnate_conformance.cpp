@@ -931,8 +931,7 @@ class exercise_t final : public zf::hosted_service_t
                 const auto state = _evidence->activation;
                 const auto owner = state->lane_owner.lock ();
                 if (_evidence->relocation_sealed)
-                    state->detach_application_instance (false,
-                                                        zf::spot_close_reason_t::relocation_out);
+                    state->detach_application_instance ();
                 const auto sealed =
                   owner->lane.run ([&] { return state->admission_sealed; }).get ();
                 if (sealed != _evidence->relocation_sealed)

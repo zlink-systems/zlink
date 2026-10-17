@@ -313,7 +313,7 @@ bool verify_timer_handler_activation_lifetime ()
             return false;
         }
 
-        state->detach_application_instance (false);
+        state->detach_application_instance ();
         const auto released = timer_activation_handler_t::destroyed.load ()
                                 == timer_activation_handler_t::created.load ()
                               && timer_activation_dependency_t::destroyed.load ()

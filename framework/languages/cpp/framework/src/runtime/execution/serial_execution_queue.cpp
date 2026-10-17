@@ -1237,6 +1237,10 @@ void serial_execution_queue_t::cancel_pending_owned () noexcept
                   // terminal is decided by the Actor mailbox.
                   if (_lane_policy.allows_turn_yield () && item.actor_mailbox)
                       return false;
+                  // Accepted lifecycle work without a cancellation capability
+                  // owns its FIFO position through its terminal result.
+                  if (item.lane == serial_work_lane_t::lifecycle && !item.cancel)
+                      return false;
                   queued_bytes += item.byte_cost;
                   ++removed;
                   cancelled_items.push_back (std::move (item));
@@ -1253,21 +1257,15 @@ void serial_execution_queue_t::cancel_pending_owned () noexcept
         };
         clear_queued (_application);
         clear_queued (_lifecycle);
-        if (_active_turn && _active_turn->turn && !_active_turn->turn->released ()) {
-            if (_active_turn->submission_id != 0 && !_active_turn->cancel_requested) {
-                _active_turn->cancel_requested = true;
-                if (_active_turn->cancel) {
-                    active_cancellations.push_back (std::move (_active_turn->cancel));
-                }
+        const auto cancel_active = [&active_cancellations] (auto &item) {
+            if (item && item->turn && !item->turn->released () && item->cancel
+                && !item->cancel_requested) {
+                item->cancel_requested = true;
+                active_cancellations.push_back (std::move (item->cancel));
             }
-        }
-        if (_suspended_lifecycle && _suspended_lifecycle->submission_id != 0
-            && !_suspended_lifecycle->cancel_requested
-            && !_suspended_lifecycle->turn->released ()) {
-            _suspended_lifecycle->cancel_requested = true;
-            if (_suspended_lifecycle->cancel)
-                active_cancellations.push_back (std::move (_suspended_lifecycle->cancel));
-        }
+        };
+        cancel_active (_active_turn);
+        cancel_active (_suspended_lifecycle);
     }
     for (auto &item : cancelled_items) {
         if (item.cancel)

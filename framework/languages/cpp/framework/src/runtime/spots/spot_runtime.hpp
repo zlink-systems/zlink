@@ -917,12 +917,7 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
     }
 
   public:
-    void detach_application_instance (
-      bool notify_closing,
-      spot_close_reason_t close_reason = spot_close_reason_t::explicit_close,
-      std::chrono::system_clock::time_point deadline =
-        std::chrono::system_clock::time_point::max (),
-      std::stop_token cleanup_cancellation = {})
+    void detach_application_instance ()
     {
         auto lifetime_guard = shared_from_this ();
         state_sync ([this] { admission_sealed = true; });
@@ -932,19 +927,6 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
             // Compatibility for an already-detached test/context. Production
             // contexts retain lane_owner from activation until destruction.
             auto instance = std::move (spot_instance);
-            std::exception_ptr callback_error;
-            if (notify_closing && lifecycle.on_closing && instance) {
-                try {
-                    lifecycle
-                      .on_closing (instance.get (), spot_closing_context_t{close_reason, deadline},
-                                   cleanup_cancellation)
-                      .result ()
-                      .value ();
-                }
-                catch (...) {
-                    callback_error = std::current_exception ();
-                }
-            }
             cancel_timers ();
             timer_handler_instances.clear ();
             instance.reset ();
@@ -953,8 +935,6 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
                 activation_scope.reset ();
             }
             node.reset ();
-            if (callback_error)
-                std::rethrow_exception (callback_error);
             return;
         }
 
@@ -969,8 +949,7 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
             .get ();
         std::exception_ptr detach_error;
         try {
-            detach_application_instance_reserved (owner, reservation.first, notify_closing,
-                                                  close_reason, deadline, cleanup_cancellation);
+            detach_application_instance_reserved (owner, reservation.first);
         }
         catch (...) {
             detach_error = std::current_exception ();
@@ -1297,9 +1276,25 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
                 return true;
             })
             .get ();
-        if (committed)
+        if (committed) {
+            auto instance = owner->lane.run ([this] { return spot_instance; }).get ();
+            try {
+                invoke_closing (
+                  instance,
+                  spot_closing_context_t{spot_close_reason_t::idle_evicted,
+                                         std::chrono::system_clock::time_point::max ()},
+                  {})
+                  .result ()
+                  .value ();
+            }
+            catch (...) {
+                report_spot_close_diagnostic (owner, std::string (spot_id), "on_closing_failed",
+                                              std::current_exception ());
+            }
+            instance.reset ();
             close_application_then_release_location (owner, spot_close_reason_t::idle_evicted,
                                                      reservation);
+        }
     }
 
   private:
@@ -1328,13 +1323,6 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
       service::spot_close_done_t done,
       detail::task_scheduler_t resume,
       spot_close_reason_t reason);
-
-    struct application_detach_work_t
-    {
-        std::shared_ptr<void> instance;
-        std::function<task_t<void> (void *, const spot_closing_context_t &, std::stop_token)>
-          on_closing;
-    };
 
     std::shared_ptr<spot_node_builder_state_t> state_lane_owner () const
     {
@@ -1382,36 +1370,27 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
         return last_ns > 0 && now_ns >= last_ns && now_ns - last_ns >= timeout_ns;
     }
 
+    task_t<void> invoke_closing (const std::shared_ptr<void> &instance,
+                                 const spot_closing_context_t &closing,
+                                 std::stop_token cleanup_cancellation)
+    {
+        auto on_closing = state_sync ([this] { return std::exchange (lifecycle.on_closing, {}); });
+        if (on_closing && instance)
+            return on_closing (instance.get (), closing, cleanup_cancellation);
+        return task_t<void> (result_t<void>::success ());
+    }
+
     void
     detach_application_instance_reserved (const std::shared_ptr<spot_node_builder_state_t> &owner,
-                                          std::uint64_t token,
-                                          bool notify_closing,
-                                          spot_close_reason_t close_reason,
-                                          std::chrono::system_clock::time_point deadline,
-                                          std::stop_token cleanup_cancellation)
+                                          std::uint64_t token)
     {
-        auto work =
-          owner->lane
-            .run ([this, &owner, token] {
-                if (close_reservation != token || node.get () != owner.get ())
-                    return application_detach_work_t{};
-                return application_detach_work_t{std::move (spot_instance), lifecycle.on_closing};
-            })
-            .get ();
-
-        std::exception_ptr callback_error;
-        if (notify_closing && work.on_closing && work.instance) {
-            try {
-                work
-                  .on_closing (work.instance.get (), spot_closing_context_t{close_reason, deadline},
-                               cleanup_cancellation)
-                  .result ()
-                  .value ();
-            }
-            catch (...) {
-                callback_error = std::current_exception ();
-            }
-        }
+        auto instance = owner->lane
+                          .run ([this, &owner, token] {
+                              if (close_reservation != token || node.get () != owner.get ())
+                                  return std::shared_ptr<void>{};
+                              return std::move (spot_instance);
+                          })
+                          .get ();
 
         // The reservation transfers the closed activation's teardown resources
         // to this coordinator. Timer/native callbacks remain outside state turns.
@@ -1424,7 +1403,7 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
                            return activation_scope;
                        })
                        .get ();
-        work.instance.reset ();
+        instance.reset ();
         if (scope)
             scope->close ();
         owner->lane
@@ -1437,9 +1416,6 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
                   node.reset ();
           })
           .get ();
-
-        if (callback_error)
-            std::rethrow_exception (callback_error);
     }
 
     void close_application_then_release_location (
@@ -1447,23 +1423,8 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
       spot_close_reason_t reason,
       std::uint64_t token)
     {
-        std::exception_ptr closing_error;
-        try {
-            // The location remains published until OnClosing has completed, so
-            // another node cannot create a competing incarnation while the
-            // application is still preserving its final state.
-            detach_application_instance_reserved (
-              owner, token, true, reason, std::chrono::system_clock::time_point::max (), {});
-        }
-        catch (...) {
-            closing_error = std::current_exception ();
-        }
+        detach_application_instance_reserved (owner, token);
         const auto rid = std::string (spot_id);
-        // An OnClosing failure is a diagnostic; cleanup continues and the Close
-        // result does not change (Spot address messaging §7 step 3).
-        if (closing_error)
-            report_spot_close_diagnostic (owner, rid, "on_closing_failed", closing_error);
-
         auto *location_lifecycle =
           owner->lane
             .run ([this, &owner, token] {

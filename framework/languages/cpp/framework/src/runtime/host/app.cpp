@@ -2965,44 +2965,88 @@ app_t &app_t::add_hosted_service (std::unique_ptr<hosted_service_t> service)
 }
 
 int app_t::run (int argc, char **argv)
-try {
-    _apply_zlink_framework ();
-    _state->config.load_cli (argc, argv);
-    detail::serializer_registry_access_t::freeze (_state->serializers);
-    _state->config.model ().set ("host.signal_handlers", "installed");
-    g_stop_signal_requested = 0;
-    std::signal (SIGINT, handle_process_signal);
-    std::signal (SIGTERM, handle_process_signal);
-#ifdef _WIN32
-    std::signal (SIGBREAK, handle_process_signal);
-#endif
-
-    auto provider = _state->services.build_provider ();
-    {
-        std::lock_guard lock (_state->termination_teardown_mutex);
-        if (_state->runtime_state.load (std::memory_order_acquire)
-            == framework_runtime_state_t::stopped)
-            return 0;
-        _state->run_active = true;
-        _state->teardown_complete = false;
-    }
-    std::vector<hosted_service_t *> started;
-    try {
-        runtime::install_host_context_hooks ();
-        runtime::configure_handler_coroutine_executor (
-          _state->framework_options ? _state->framework_options->handler_coroutine_workers () : 0);
-        _state->start_hosted_services (provider, started);
-        auto expected = framework_runtime_state_t::preparing;
-        (void) _state->runtime_state.compare_exchange_strong (
-          expected, framework_runtime_state_t::serving, std::memory_order_acq_rel);
+{
+    int exit_code = 0;
+    const auto report_failure = [this] (std::exception_ptr failure) {
+        {
+            std::lock_guard lock (_state->termination_operation.mutex);
+            if (!_state->termination_operation.terminal)
+                _state->runtime_state.store (framework_runtime_state_t::error,
+                                             std::memory_order_release);
+        }
         try {
-            runtime::runtime_metrics_t drain_metrics (_state->monitoring);
-            if (drain_metrics.enabled ()) {
-                drain_metrics.observable ("zlink.drain.state", "{state}", 1,
-                                          {{"state", "serving"}});
+            std::rethrow_exception (failure);
+        }
+        catch (const std::exception &error) {
+            const auto message = std::string ("zlink application failed: ") + error.what ();
+            std::cerr << message << '\n';
+            try {
+                _state->logging.create_logger ("zlink.framework.host").critical (message);
+            }
+            catch (const std::exception &logging_error) {
+                std::cerr << "zlink application failure logging failed: " << logging_error.what ()
+                          << '\n';
             }
         }
         catch (...) {
+            constexpr std::string_view message =
+              "zlink application failed with an unknown exception";
+            std::cerr << message << '\n';
+            try {
+                _state->logging.create_logger ("zlink.framework.host")
+                  .critical (std::string (message));
+            }
+            catch (const std::exception &logging_error) {
+                std::cerr << "zlink application failure logging failed: " << logging_error.what ()
+                          << '\n';
+            }
+        }
+        return 1;
+    };
+    try {
+        _apply_zlink_framework ();
+        _state->config.load_cli (argc, argv);
+        detail::serializer_registry_access_t::freeze (_state->serializers);
+        _state->config.model ().set ("host.signal_handlers", "installed");
+        g_stop_signal_requested = 0;
+        std::signal (SIGINT, handle_process_signal);
+        std::signal (SIGTERM, handle_process_signal);
+#ifdef _WIN32
+        std::signal (SIGBREAK, handle_process_signal);
+#endif
+
+        auto provider = _state->services.build_provider ();
+        {
+            std::lock_guard lock (_state->termination_teardown_mutex);
+            if (_state->stop_requested.load (std::memory_order_acquire))
+                return 0;
+            _state->run_active = true;
+            _state->teardown_complete = false;
+        }
+        std::vector<hosted_service_t *> started;
+        try {
+            runtime::install_host_context_hooks ();
+            runtime::configure_handler_coroutine_executor (
+              _state->framework_options ? _state->framework_options->handler_coroutine_workers ()
+                                        : 0);
+            _state->start_hosted_services (provider, started);
+            auto expected = framework_runtime_state_t::preparing;
+            (void) _state->runtime_state.compare_exchange_strong (
+              expected, framework_runtime_state_t::serving, std::memory_order_acq_rel);
+            try {
+                runtime::runtime_metrics_t drain_metrics (_state->monitoring);
+                if (drain_metrics.enabled ()) {
+                    drain_metrics.observable ("zlink.drain.state", "{state}", 1,
+                                              {{"state", "serving"}});
+                }
+            }
+            catch (...) {
+            }
+        }
+        catch (...) {
+            exit_code = report_failure (std::current_exception ());
+            begin_shared_shutdown (*_state, std::chrono::system_clock::now (),
+                                   termination_reason_t::teardown_failed);
         }
         while (!_state->stop_requested.load (std::memory_order_acquire)) {
             _state->delays.reap_completed ();
@@ -3012,59 +3056,23 @@ try {
             }
             zlink::framework::runtime::wait_poll_interval (std::chrono::milliseconds (1));
         }
-    }
-    catch (...) {
-        _state->runtime_state.store (framework_runtime_state_t::error, std::memory_order_release);
+
         _state->delays.stop_and_join ();
         _state->wait_relocation_preflights ();
         _state->stop_hosted_services (started);
         _state->close_framework_resources (provider);
-        {
-            std::lock_guard lock (_state->termination_teardown_mutex);
-            _state->run_active = false;
-            _state->teardown_complete = true;
-        }
-        _state->termination_teardown_changed.notify_all ();
-        throw;
+        _state->monitoring->runtime_failures->rethrow_if_failed ();
     }
-
-    _state->delays.stop_and_join ();
-    _state->wait_relocation_preflights ();
-    _state->stop_hosted_services (started);
-    _state->close_framework_resources (provider);
+    catch (...) {
+        exit_code = report_failure (std::current_exception ());
+    }
     {
         std::lock_guard lock (_state->termination_teardown_mutex);
         _state->run_active = false;
         _state->teardown_complete = true;
     }
     _state->termination_teardown_changed.notify_all ();
-    _state->runtime_state.store (framework_runtime_state_t::stopped, std::memory_order_release);
-    _state->monitoring->runtime_failures->rethrow_if_failed ();
-    return 0;
-}
-catch (const std::exception &error) {
-    _state->runtime_state.store (framework_runtime_state_t::error, std::memory_order_release);
-    const auto message = std::string ("zlink application failed: ") + error.what ();
-    std::cerr << message << '\n';
-    try {
-        _state->logging.create_logger ("zlink.framework.host").critical (message);
-    }
-    catch (const std::exception &logging_error) {
-        std::cerr << "zlink application failure logging failed: " << logging_error.what () << '\n';
-    }
-    return 1;
-}
-catch (...) {
-    _state->runtime_state.store (framework_runtime_state_t::error, std::memory_order_release);
-    constexpr std::string_view message = "zlink application failed with an unknown exception";
-    std::cerr << message << '\n';
-    try {
-        _state->logging.create_logger ("zlink.framework.host").critical (std::string (message));
-    }
-    catch (const std::exception &logging_error) {
-        std::cerr << "zlink application failure logging failed: " << logging_error.what () << '\n';
-    }
-    return 1;
+    return exit_code;
 }
 
 namespace
