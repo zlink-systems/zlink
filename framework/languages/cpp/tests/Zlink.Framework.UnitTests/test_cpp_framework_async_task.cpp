@@ -938,13 +938,13 @@ bool verify_nested_cancellation_lifetime ()
         return cleanup_nested_parent (source, probe);
     }();
     owner.request_stop ();
-    const auto result = parent.result_for (std::chrono::milliseconds::zero ());
+    const auto result = parent.result ();
     const bool original_pending = !source.task ().result_for (std::chrono::milliseconds::zero ());
     const bool first = source.complete (result_t<void>::success ());
     const bool duplicate = source.complete (result_t<void>::success ());
     observed.get ();
-    return result && *result && probe.child_before_parent && probe.parent_observations == 1
-           && original_pending && first && !duplicate;
+    return result && probe.child_before_parent && probe.parent_observations == 1 && original_pending
+           && first && !duplicate;
 }
 
 // An explicit co_return publishes only after the child's locals are destroyed.
