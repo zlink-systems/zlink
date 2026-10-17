@@ -90,17 +90,20 @@ internal static class ZLinkMeshNodeDescriptorFactory
         AddCapabilities(
             capabilities,
             ZLinkPlacementObjectKind.UserSpot,
-            registration.SpotRelocations
+            registration.SpotRelocations,
+            registration
         );
         AddCapabilities(
             capabilities,
             ZLinkPlacementObjectKind.InstanceSpot,
-            registration.InstanceSpotRelocations
+            registration.InstanceSpotRelocations,
+            registration
         );
         AddCapabilities(
             capabilities,
             ZLinkPlacementObjectKind.Actor,
-            registration.ActorRelocations
+            registration.ActorRelocations,
+            registration
         );
         return capabilities
             .OrderBy(static capability => capability.ObjectKind)
@@ -111,28 +114,29 @@ internal static class ZLinkMeshNodeDescriptorFactory
     private static void AddCapabilities(
         ICollection<ZLinkObjectCapability> capabilities,
         ZLinkPlacementObjectKind objectKind,
-        IReadOnlyDictionary<string, ZLinkObjectRelocationRegistration> registrations
+        IReadOnlyDictionary<string, ZLinkObjectRelocationRegistration> relocations,
+        ZLinkSpotNodeRegistration node
     )
     {
-        foreach (var (stableType, registration) in registrations)
+        foreach (var (stableType, relocation) in relocations)
         {
+            var isActor = objectKind == ZLinkPlacementObjectKind.Actor;
             capabilities.Add(
                 new ZLinkObjectCapability(
                     objectKind,
                     stableType,
-                    registration.PolicyKind switch
+                    relocation.PolicyKind switch
                     {
                         0 => ZLinkObjectMaintenancePolicyKind.Disabled,
                         1 => ZLinkObjectMaintenancePolicyKind.Recreate,
                         2 => ZLinkObjectMaintenancePolicyKind.Snapshot,
                         _ => throw new ZLinkConfigurationException(
-                            $"Unknown relocation policy kind '{registration.PolicyKind}'."
+                            $"Unknown relocation policy kind '{relocation.PolicyKind}'."
                         ),
                     },
-                    registration.AdapterType is not null,
-                    objectKind == ZLinkPlacementObjectKind.Actor
-                        ? 0
-                        : registration.Placement.MaxActiveObjects ?? 0
+                    relocation.AdapterType is not null,
+                    isActor ? 0 : relocation.Placement.MaxActiveObjects ?? 0,
+                    isActor && node.EntryAcceptsActor(stableType)
                 )
             );
         }

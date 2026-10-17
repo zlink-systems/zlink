@@ -62,7 +62,7 @@ Server).
 
 ```ts
 play.objects().server()
-  .addEntrySpot(GameEntrySpot)
+  .addEntrySpot(GameEntrySpot, "player")
   .addSpotFactory("room", RoomSpot, (factory) => {
     factory.executionMode(ZLinkUserSpotExecutionMode.SpotWide);
     factory.preserveStateWith(RoomRelocationAdapter);
@@ -77,7 +77,7 @@ play.objects().server()
 | Modifier | Default | Meaning |
 | --- | --- | --- |
 | `.client()` / `.server()` | `None` if omitted | Selects the Object Client (reference only) or Object Server (hosting) role. `server()` includes `client()` capability, and both require a Location Store |
-| `.addEntrySpot(entrySpotType)` | None | Registers an Entry Spot type dedicated to external entry |
+| `.addEntrySpot(entrySpotType, actorType)` | None | Registers an Entry Spot type dedicated to external entry. `actorType` is the Actor stable type this Entry accepts and is the same name as the `actorType` of `addActorFactory`. A new Actor is created on this node only for the Actor type this Entry Spot type accepts |
 | `.addSpotFactory(spotType, implementation, configure)` | None | Registers a stable User Spot type. `configure` must call exactly one of `disableRelocation()`/`recreateOnRelocation()`/`preserveStateWith(...)`, in addition to `stableTypeLimit`/`executionMode`/`relocationCoordinationMode` |
 | `.addInstanceSpotFactory(instanceSpotType, implementation, configure)` | None | Registers a cold-activation Instance Spot type. `configure` must call exactly one relocation behavior, in addition to `stableTypeLimit` |
 | `.addActorFactory(actorType, factoryType, configure)` | None | Registers a stable Actor type. `configure` must call exactly one relocation behavior (an Actor factory has no `stableTypeLimit`) |

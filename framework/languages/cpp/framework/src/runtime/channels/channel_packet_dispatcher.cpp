@@ -53,7 +53,7 @@ result_t<runtime::messaging::message_parts_t> channel_packet_dispatcher_t::dispa
 {
     runtime::messaging::envelope_codec_t codec;
     message_flow_tracer_t flow (_runtime.dispatch_options_ref ());
-    auto header = codec.decode_header (parts, flow.capture_enabled ());
+    auto header = codec.decode_header (parts, flow.flow_tracing ());
     if (!header) {
         return detail::propagate_failure<runtime::messaging::message_parts_t> (
           header, "channel envelope header decode failed");

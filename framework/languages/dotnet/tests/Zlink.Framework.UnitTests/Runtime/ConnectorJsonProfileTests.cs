@@ -14,6 +14,100 @@ namespace Zlink.Framework.UnitTests;
 public sealed class ConnectorJsonProfileTests
 {
     [Theory]
+    [InlineData("\"0\"", 0L)]
+    [InlineData("\"-1\"", -1L)]
+    [InlineData("\"9223372036854775807\"", long.MaxValue)]
+    [InlineData("\"-9223372036854775808\"", long.MinValue)]
+    [InlineData("\"\\u0031\"", 1L)]
+    [InlineData("\"\\u002d1\"", -1L)]
+    public void Connector_and_server_accept_canonical_signed_integer_strings(
+        string json,
+        long expected
+    )
+    {
+        Assert.Equal(expected, Payload(json).FromJson<long>());
+        Assert.Equal(
+            expected,
+            ZLinkFrameworkJsonPayloadCodec.Deserialize<long>(Encoding.UTF8.GetBytes(json))
+        );
+        Assert.Equal(
+            expected,
+            Payload(Encoding.UTF8.GetString(expected.ToJson().Payload.Span)).FromJson<long>()
+        );
+    }
+
+    [Theory]
+    [InlineData("\"0\"", 0UL)]
+    [InlineData("\"9223372036854775808\"", 9223372036854775808UL)]
+    [InlineData("\"18446744073709551615\"", ulong.MaxValue)]
+    [InlineData("\"\\u0031\"", 1UL)]
+    public void Connector_and_server_accept_canonical_unsigned_integer_strings(
+        string json,
+        ulong expected
+    )
+    {
+        Assert.Equal(expected, Payload(json).FromJson<ulong>());
+        Assert.Equal(
+            expected,
+            ZLinkFrameworkJsonPayloadCodec.Deserialize<ulong>(Encoding.UTF8.GetBytes(json))
+        );
+        Assert.Equal(
+            expected,
+            Payload(Encoding.UTF8.GetString(expected.ToJson().Payload.Span)).FromJson<ulong>()
+        );
+    }
+
+    [Theory]
+    [InlineData("\"\"")]
+    [InlineData("\"-\"")]
+    [InlineData("\"-0\"")]
+    [InlineData("\"+1\"")]
+    [InlineData("\"00\"")]
+    [InlineData("\"01\"")]
+    [InlineData("\"-01\"")]
+    [InlineData("\" 1\"")]
+    [InlineData("\"1 \"")]
+    [InlineData("\"1e0\"")]
+    [InlineData("\"1.0\"")]
+    [InlineData("\"١\"")]
+    [InlineData("\"１\"")]
+    [InlineData("\"1\\u0000\"")]
+    [InlineData("\"\\u002b1\"")]
+    [InlineData("\"\\u00301\"")]
+    [InlineData("\"18446744073709551616\"")]
+    [InlineData("\"-9223372036854775809\"")]
+    [InlineData("1")]
+    [InlineData("null")]
+    public void Connector_and_server_reject_noncanonical_integer_strings(string json)
+    {
+        Assert.ThrowsAny<JsonException>(() => Payload(json).FromJson<long>());
+        Assert.ThrowsAny<JsonException>(() => Payload(json).FromJson<ulong>());
+        Assert.ThrowsAny<JsonException>(() =>
+            ZLinkFrameworkJsonPayloadCodec.Deserialize<long>(Encoding.UTF8.GetBytes(json))
+        );
+        Assert.ThrowsAny<JsonException>(() =>
+            ZLinkFrameworkJsonPayloadCodec.Deserialize<ulong>(Encoding.UTF8.GetBytes(json))
+        );
+    }
+
+    [Fact]
+    public void Connector_and_server_preserve_each_integer_range()
+    {
+        const string signedOverflow = "\"9223372036854775808\"";
+        const string unsignedUnderflow = "\"-1\"";
+        Assert.ThrowsAny<JsonException>(() => Payload(signedOverflow).FromJson<long>());
+        Assert.ThrowsAny<JsonException>(() =>
+            ZLinkFrameworkJsonPayloadCodec.Deserialize<long>(Encoding.UTF8.GetBytes(signedOverflow))
+        );
+        Assert.ThrowsAny<JsonException>(() => Payload(unsignedUnderflow).FromJson<ulong>());
+        Assert.ThrowsAny<JsonException>(() =>
+            ZLinkFrameworkJsonPayloadCodec.Deserialize<ulong>(
+                Encoding.UTF8.GetBytes(unsignedUnderflow)
+            )
+        );
+    }
+
+    [Theory]
     [InlineData(long.MinValue)]
     [InlineData(long.MaxValue)]
     public async Task Typed_request_reaches_server_decode_and_reads_server_reply(long tick)

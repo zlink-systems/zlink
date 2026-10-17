@@ -61,6 +61,7 @@
 | 엔진 E2E가 server 종료까지 검증하나 | connector client 성공과 CTest 통과 | 하네스가 server 종료를 기다리지 않고 Redis를 제거하면 `ForceStopped/TeardownFailed`도 통과한다. Client 결과와 server 종료 결과를 함께 확인한다 | #1646 |
 | Configure 거부 뒤 source가 복원됐나 | `RelocationFailed` reason만 일치 | Source lease가 만료돼 `Error`가 되어도 같은 reason이다. `Blocked/RelocationFailed`와 source `Serving`을 함께 단언한다 | #1877 |
 | Session route 준비 전 READY가 막혔나 | stage 호출 직후 future 미완료와 READY 부재 | target stage가 아직 실행되지 않았어도 같은 결과다. command 52 처리 완료를 기다린 뒤 route 요청과 READY를 검사하고, 대기 호출을 뺀 구현에서 실패하는지 확인한다 | #1775 |
+| Descriptor 충돌이 startup을 실패시키나 | `app.run`의 0이 아닌 종료 코드 | Handler group 설정 누락도 같은 종료 코드를 반환한다. 주입한 게시 포트의 호출 횟수와 host의 Error 상태를 함께 단언해, 다른 초기화 오류로 통과하지 않도록 한다 | #1962 |
 | 끝난 member의 capacity가 반납됐나 | provider `list_mesh_nodes`의 descriptor capacity가 0 | 게시한 descriptor의 초기값이 0인지에만 답한다. 실제 capacity record의 수정 전 사용량과 수정 후 반환·예약 수를 함께 확인한다 | #1872 |
 | 완료 callback 안의 단언 실패가 시험에 전달되나 | callback 실행 뒤 시험 통과 | dispatcher가 `AssertionError`를 잡으면 내부 단언이 실패해도 통과한다. callback은 관찰값을 기록하고 시험 thread에서 단언하거나, 실패를 시험이 기다리는 future로 전달한다 | #1770 |
 

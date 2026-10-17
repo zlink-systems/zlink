@@ -63,7 +63,7 @@ function createZoneNodeModule(includeZoneRuntime = true) {
           }
           zoneMesh.listen(node.spotRouterEndpoint);
           const objectServer = zoneMesh.objects().server();
-          objectServer.addEntrySpot(ZoneEntrySpot);
+          objectServer.addEntrySpot(ZoneEntrySpot, ZoneWorldNames.playerActorType);
           objectServer.addSpotFactory(ZoneSpot.name, ZoneSpot, (factory) =>
             factory.stableTypeLimit(node.zoneCapacity).disableRelocation()
           );

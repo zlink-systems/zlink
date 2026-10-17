@@ -72,6 +72,9 @@ class message_flow_tracer_t
     /* flow-correlation §2.2: host entry points create new flow ids only when
      * tracing is not fully off. */
     bool capture_enabled () const noexcept { return enabled (message_flow_log_mode_t::errors); }
+    // Flow fields are created, read and propagated only while flow tracing is
+    // on; flow_context_t::tracing owns that decision.
+    bool flow_tracing () const noexcept { return runtime::flow_context_t::tracing (mode ()); }
 
     // Lazy form: the event (and its string fields) is built only after the cheap
     // mode/sample gate passes, so an "off" dispatch pays nothing but the gate.

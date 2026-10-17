@@ -68,13 +68,18 @@ export function validateSessionReplacementCallbackTimeout(timeoutMs: number): nu
 }
 
 export function registerEntrySpot(
-  options: { entrySpotType?: Type<ZLinkEntrySpot> },
-  entrySpotType: Type<ZLinkEntrySpot>
+  options: { entrySpotType?: Type<ZLinkEntrySpot>; entrySpotActorType?: string },
+  entrySpotType: Type<ZLinkEntrySpot>,
+  actorType: string
 ): void {
   if (options.entrySpotType !== undefined) {
     throw new ZLinkConfigurationException('Duplicate Entry Spot registration on SpotNode.');
   }
+  if (typeof actorType !== 'string' || actorType.length === 0) {
+    throw new ZLinkConfigurationException('Entry Spot Actor type must be a non-empty string.');
+  }
   options.entrySpotType = entrySpotType;
+  options.entrySpotActorType = actorType;
 }
 
 export function registerSpotFactory(

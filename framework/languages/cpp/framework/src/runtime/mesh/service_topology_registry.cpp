@@ -479,14 +479,14 @@ service_topology_registry_t::not_required_peers_on_lane () const
     return result;
 }
 
-std::optional<admitted_peer_t>
+std::shared_ptr<const admitted_peer_t>
 service_topology_registry_t::peer (const std::vector<std::uint8_t> &node_routing_id) const
 {
-    const auto topology = std::atomic_load_explicit (_topology.get (), std::memory_order_acquire);
+    auto topology = std::atomic_load_explicit (_topology.get (), std::memory_order_acquire);
     const auto found = topology->peers.find (node_routing_id);
     if (found == topology->peers.end ())
-        return std::nullopt;
-    return found->second;
+        return nullptr;
+    return std::shared_ptr<const admitted_peer_t> (std::move (topology), &found->second);
 }
 
 void service_topology_registry_t::materialize_selection_state (selection_state_t &state)

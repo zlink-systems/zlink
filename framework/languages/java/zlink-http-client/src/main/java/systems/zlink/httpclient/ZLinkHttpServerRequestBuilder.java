@@ -59,15 +59,18 @@ public final class ZLinkHttpServerRequestBuilder {
     }
 
     public <T> CompletionStage<HttpResponse<T>> yield(Class<T> type) {
-        return executionTurn.yield(request.submit(type));
+        return executionTurn.yield(() -> request.submit(type));
     }
 
     public <T> void submit(Class<T> type, ZLinkHttpCallback<T> callback) {
         Objects.requireNonNull(callback, "callback");
-        executionTurn
-                .yield(request.submit(type))
+        var scheduler = executionTurn.callbackScheduler();
+        request.submit(type)
                 .whenComplete(
                         (response, error) ->
-                                callback.complete(error, error == null ? response : null));
+                                scheduler.execute(
+                                        () ->
+                                                callback.complete(
+                                                        error, error == null ? response : null)));
     }
 }

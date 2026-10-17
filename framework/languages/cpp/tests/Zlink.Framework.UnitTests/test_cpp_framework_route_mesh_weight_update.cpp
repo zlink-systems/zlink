@@ -87,7 +87,7 @@ TEST (ServiceTopologyPreparedFacts, PublishesChangesBeforeNotification)
     mesh::service_topology_registry_t topology (local);
     auto remote = local;
     remote.node_routing_id = {'b'};
-    std::optional<mesh::admitted_peer_t> notified_peer;
+    std::shared_ptr<const mesh::admitted_peer_t> notified_peer;
     auto notified_local = local;
     int notifications = 0;
     topology.set_change_handler ([&] {
@@ -221,7 +221,8 @@ void expect_successful_channel_request (mesh::raw_mesh_node_owner_t &source,
     ASSERT_TRUE (await_task (
       source.request_to_channel ("X", request, 2s,
                                  [&promise] (foundation::operation_terminal_t terminal,
-                                             std::vector<std::uint8_t> payload) mutable {
+                                             zlink::message_t native_payload) mutable {
+                                     auto payload = native_payload.to_bytes ();
                                      promise.set_value ({terminal, std::move (payload)});
                                  })));
 
@@ -390,7 +391,7 @@ TEST (CppFrameworkRouteMeshWeightUpdate, ConcurrentWeightChangesReachPeerInRevis
     }
     EXPECT_EQ (100, peer_channel_weight (source, target_descriptor.node_routing_id, "X"));
     expect_successful_channel_request (source, target);
-    EXPECT_TRUE (target.topology ().peer (source_routing_id).has_value ())
+    EXPECT_TRUE (target.topology ().peer (source_routing_id) != nullptr)
       << "the target dropped the peer after it received descriptor revisions out of order";
 
     source.close ();

@@ -16,35 +16,50 @@ void actor_transfer_coordinator_t::set_activity_handler (std::function<void ()> 
     _lane.run ([&] { _activity_handler = std::move (handler); }).get ();
 }
 
+std::chrono::steady_clock::rep actor_transfer_coordinator_t::next_due_on_lane () const
+{
+    auto next = never_due;
+    const auto include = [&] (std::chrono::steady_clock::time_point deadline) {
+        next = std::min (next, deadline.time_since_epoch ().count ());
+    };
+    for (const auto &[key, admission] : _admissions) {
+        const auto moving = _moves.find (admission.actor_key);
+        if (moving != _moves.end () && moving->second.phase == actor_move_phase_t::target_pending)
+            include (admission.deadline);
+    }
+    for (const auto &[key, admission] : _completed_admissions)
+        include (admission.deadline);
+    for (const auto &[key, move] : _moves) {
+        if (move.phase == actor_move_phase_t::reconcile && move.next_reconcile_at)
+            include (*move.next_reconcile_at);
+    }
+    for (const auto &[key, routes] : _message_follow_routes) {
+        for (const auto &route : routes)
+            include (route.remove_at);
+    }
+    _next_due.store (next, std::memory_order_release);
+    return next;
+}
+
+bool actor_transfer_coordinator_t::due (std::chrono::steady_clock::time_point now) const noexcept
+{
+    return now.time_since_epoch ().count () >= _next_due.load (std::memory_order_acquire);
+}
+
 std::optional<std::chrono::steady_clock::time_point>
 actor_transfer_coordinator_t::next_activity () const
 {
-    return _lane
-      .run ([this] {
-          std::optional<std::chrono::steady_clock::time_point> next;
-          const auto include = [&] (std::chrono::steady_clock::time_point deadline) {
-              if (!next || deadline < *next)
-                  next = deadline;
-          };
-          for (const auto &[key, admission] : _admissions) {
-              const auto moving = _moves.find (admission.actor_key);
-              if (moving != _moves.end ()
-                  && moving->second.phase == actor_move_phase_t::target_pending)
-                  include (admission.deadline);
-          }
-          for (const auto &[key, admission] : _completed_admissions)
-              include (admission.deadline);
-          for (const auto &[key, move] : _moves) {
-              if (move.phase == actor_move_phase_t::reconcile && move.next_reconcile_at)
-                  include (*move.next_reconcile_at);
-          }
-          for (const auto &[key, routes] : _message_follow_routes) {
-              for (const auto &route : routes)
-                  include (route.remove_at);
-          }
-          return next;
-      })
-      .get ();
+    // Every added deadline resets the bound, so never_due means none exists.
+    // Otherwise the exact instant is read on the lane: a phase change can
+    // remove the earliest deadline without moving the published bound.
+    if (_next_due.load (std::memory_order_acquire) == never_due)
+        return std::nullopt;
+    const auto next = _lane.run ([this] { return next_due_on_lane (); }).get ();
+    if (next == never_due)
+        return std::nullopt;
+    if (next == due_now)
+        return std::chrono::steady_clock::now ();
+    return std::chrono::steady_clock::time_point (std::chrono::steady_clock::duration (next));
 }
 
 bool pending_actor_admission_t::matches_prepare (const actor_ref_t &actor,
@@ -176,10 +191,12 @@ void actor_transfer_coordinator_t::mark_reconcile (
               move.next_reconcile_at = deadline;
               move.reconcile_context = std::move (context);
               _moves.emplace (actor_key, std::move (move));
+              wake_management_on_lane ();
               return;
           }
           found->second.phase = actor_move_phase_t::reconcile;
           found->second.next_reconcile_at = deadline;
+          wake_management_on_lane ();
           found->second.reconcile_context = std::move (context);
       })
       .get ();
@@ -199,6 +216,7 @@ actor_transfer_coordinator_t::take_due_reconciles (std::chrono::steady_clock::ti
                     now + runtime::dispatch_limits::management_retry_interval;
               }
           }
+          (void) next_due_on_lane ();
           return expired;
       })
       .get ();
@@ -410,6 +428,7 @@ void actor_transfer_coordinator_t::activate_message_follow (
           if (_activity_handler)
               _activity_handler ();
           auto &routes = _message_follow_routes[actor_key];
+          wake_management_on_lane ();
           const auto existing =
             std::find_if (routes.begin (), routes.end (),
                           [&] (const auto &route) { return route.source_fence == source_fence; });
@@ -766,6 +785,7 @@ actor_transfer_coordinator_t::remove_expired_message_follow (
                   ++found;
               }
           }
+          (void) next_due_on_lane ();
           return removed;
       })
       .get ();
@@ -900,6 +920,7 @@ bool actor_transfer_coordinator_t::try_add_admission (std::string transfer_id,
               return false;
           _moves.emplace (actor_key, move_state_t{actor_move_phase_t::target_pending, transfer_id});
           _admissions.emplace (std::move (transfer_id), std::move (admission));
+          wake_management_on_lane ();
           return true;
       })
       .get ();
@@ -1051,6 +1072,7 @@ actor_transfer_coordinator_t::complete_commit_and_take_backlog (const std::strin
           }
           erase_move_on_lane (moving->first);
           _completed_admissions.insert_or_assign (transfer_id, found->second);
+          wake_management_on_lane ();
           _admissions.erase (found);
           return backlog;
       })
@@ -1157,6 +1179,7 @@ actor_transfer_coordinator_t::fail_commit (const std::string &transfer_id, bool 
               //  is retained, not discarded, across the transition.
               auto &move = _moves[actor_key];
               move.phase = actor_move_phase_t::reconcile;
+              wake_management_on_lane ();
               move.transfer_id.clear ();
           } else {
               //  Terminal failure (Rejected, invalid completion identity, prepare
@@ -1185,6 +1208,7 @@ void actor_transfer_coordinator_t::complete_commit (const std::string &transfer_
           }
           erase_move_on_lane (found->second.actor_key);
           _completed_admissions.insert_or_assign (transfer_id, found->second);
+          wake_management_on_lane ();
           _admissions.erase (found);
       })
       .get ();
@@ -1233,6 +1257,7 @@ actor_transfer_cleanup_snapshot_t actor_transfer_coordinator_t::cleanup_expired_
             snapshot.blocked_dispatch_keys.push_back (key);
     }
     std::ranges::sort (snapshot.blocked_dispatch_keys);
+    (void) next_due_on_lane ();
     return snapshot;
 }
 

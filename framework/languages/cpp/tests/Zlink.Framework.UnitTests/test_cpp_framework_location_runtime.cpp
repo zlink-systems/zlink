@@ -7,6 +7,7 @@
 #include "runtime/locations/in_memory_location_store.hpp"
 #include <runtime/locations/location_repository.hpp>
 #include "runtime/locations/location_runtime.hpp"
+#include "runtime/locations/location_auto_connect_host_service.hpp"
 #include "runtime/dispatch/coroutine_executor.hpp"
 #include <zlink/framework/contracts/configuration/detail/framework_options_validation.hpp>
 
@@ -22,6 +23,8 @@
 
 namespace zlink::framework::runtime
 {
+const auto requested_peer_rid = zlink::routing_id_t::from ("requested-peer");
+
 struct location_runtime_test_access_t
 {
     template <typename Now>
@@ -37,6 +40,13 @@ struct location_runtime_test_access_t
                                     heartbeat->stop.store (true, std::memory_order_release);
                                 });
         return delay;
+    }
+    static void enable_discovery_wait (location_runtime_t &runtime)
+    {
+        runtime.renew_owner_lease_once ();
+        std::atomic_store_explicit (&runtime._heartbeat_state,
+                                    std::make_shared<location_runtime_t::heartbeat_owner_t> (),
+                                    std::memory_order_release);
     }
     static state_lane_t &lane (location_runtime_t &runtime) { return runtime._lane; }
     static auto snapshot (const location_runtime_t &runtime)
@@ -59,6 +69,36 @@ struct location_runtime_test_access_t
         return location_runtime_t::owner_lease_usable (*snapshot (runtime), now);
     }
 };
+struct location_auto_connect_test_access_t
+{
+    template <typename Wait, typename Connected>
+    static void run (location_auto_connect_host_service_t &service,
+                     location_runtime_t &runtime,
+                     live_location_reader_t &store,
+                     Wait wait,
+                     Connected connected)
+    {
+        service._runtime = &runtime;
+        service._live_store = &store;
+        service.add_loop (
+          "wake-mesh", {}, {}, {}, false, [connected] (const auto &) { connected (); },
+          [] (const auto &) {});
+        service.run_loop (
+          runtime.owner_lease_observation (), [&] (auto observed, const auto &stopped) {
+              runtime.wait_for_owner_lease_change (
+                observed, stopped, runtime.options ().polling_interval,
+                [&] (auto &, auto &lock, auto, auto predicate) { wait (lock, predicate); });
+          });
+    }
+    static void request (location_auto_connect_host_service_t &service)
+    {
+        service._runtime->peer_reconcile_requester ("wake-mesh") (requested_peer_rid.to_bytes ());
+    }
+    static void stop (location_auto_connect_host_service_t &service)
+    {
+        service._stop_requested.complete (result_t<void>::success ());
+    }
+};
 } // namespace zlink::framework::runtime
 
 namespace
@@ -73,6 +113,92 @@ constexpr auto admission_observation_timeout = std::chrono::milliseconds (100);
 const location_options_t asynchronous_heartbeat_options{
   .owner_lease_renew_interval = std::chrono::milliseconds (5),
   .owner_lease_ttl = std::chrono::seconds (15)};
+
+class requested_peer_store_t final : public in_memory_location_repository_t
+{
+  public:
+    unsigned reads = 0;
+    bool visible = false;
+    zlink::framework::location_owner_token_t owner;
+    zlink::framework::task_t<
+      zlink::framework::location_page_t<zlink::framework::mesh_node_descriptor_t>>
+    list_mesh_nodes (std::string mesh, zlink::framework::location_page_request_t = {}) override
+    {
+        ++reads;
+        zlink::framework::location_page_t<zlink::framework::mesh_node_descriptor_t> page;
+        if (visible) {
+            zlink::framework::mesh_node_descriptor_t descriptor;
+            descriptor.mesh_name = std::move (mesh);
+            descriptor.rid = zlink::framework::runtime::requested_peer_rid;
+            descriptor.endpoint = "tcp://127.0.0.1:12345";
+            descriptor.lifecycle_generation = 1;
+            descriptor.descriptor_revision = 1;
+            descriptor.owner_id = owner.owner_id;
+            descriptor.lease_generation = owner.lease_generation;
+            page.items.push_back (std::move (descriptor));
+        }
+        return zlink::framework::task_t<decltype (page)> (
+          zlink::framework::result_t<decltype (page)>::success (std::move (page)));
+    }
+};
+
+void check_discovery_reconcile_without_periodic_wait (bool change_owner_lease)
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::runtime;
+    for (const bool request_after_initial_predicate : {false, true}) {
+        SCOPED_TRACE (request_after_initial_predicate);
+        requested_peer_store_t store;
+        location_runtime_t runtime (store);
+        location_runtime_test_access_t::enable_discovery_wait (runtime);
+        store.owner = runtime.current_owner_token ().value ();
+        live_location_reader_t live_store (store, runtime.options ());
+        handler_registry_t handlers;
+        serializer_registry_t serializers;
+        location_auto_connect_host_service_t service (
+          std::make_shared<runtime_failure_collector_t> (), message_bus_t{}, {}, handlers,
+          serializers);
+        unsigned waits = 0;
+        unsigned periodic_waits = 0;
+        unsigned connected = 0;
+        location_auto_connect_test_access_t::run (
+          service, runtime, live_store,
+          [&] (auto &lock, auto predicate) {
+              if (++waits == 1) {
+                  EXPECT_EQ (1u, store.reads);
+                  if (request_after_initial_predicate)
+                      EXPECT_FALSE (predicate ());
+                  lock.unlock ();
+                  store.visible = true;
+                  location_auto_connect_test_access_t::request (service);
+                  if (change_owner_lease)
+                      location_runtime_test_access_t::set_deadline (
+                        runtime,
+                        *runtime.owner_lease_observation () + std::chrono::milliseconds (1));
+                  lock.lock ();
+                  if (predicate ())
+                      return;
+                  ++periodic_waits;
+              }
+              location_auto_connect_test_access_t::stop (service);
+          },
+          [&] { ++connected; });
+        EXPECT_EQ (0u, periodic_waits);
+        EXPECT_EQ (2u, store.reads);
+        EXPECT_EQ (1u, connected);
+        EXPECT_EQ (2u, waits);
+    }
+}
+
+TEST (ZLinkFrameworkLocationRuntime, PeerRequestRunsReconcileWithoutPeriodicWait)
+{
+    check_discovery_reconcile_without_periodic_wait (false);
+}
+
+TEST (ZLinkFrameworkLocationRuntime, OwnerLeaseChangeRunsReconcileWithoutPeriodicWait)
+{
+    check_discovery_reconcile_without_periodic_wait (true);
+}
 
 class advancing_claim_store_t : public in_memory_location_repository_t
 {

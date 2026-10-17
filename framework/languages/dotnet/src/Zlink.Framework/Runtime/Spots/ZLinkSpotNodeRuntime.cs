@@ -253,6 +253,7 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
                 runtime,
                 node,
                 spotChannelName,
+                registration,
                 frameworkRegistration.Codecs
             );
             _actorCreateOperationTarget = actorOperationTarget;

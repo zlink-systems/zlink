@@ -170,42 +170,17 @@ internal sealed class ZLinkLocationAutoConnectHost
                         ZLinkLocationAutoConnectType.SpotMesh,
                         meshName,
                         ZLinkLocationRole.Spot,
-                        startupState.RoutingId,
-                        startupState.Descriptor.Endpoint,
-                        (uint)spot.Router.SocketConfig.Weight,
+                        startupState,
                         new SpotRouterExecutor(
                             node,
                             spot.Router.AcquisitionMode == ZLinkPeerAcquisitionMode.AutoConnect
                         ),
                         retainRemovedMembers: spot.Router.AcquisitionMode
                             == ZLinkPeerAcquisitionMode.Manual,
-                        // The row carries Core's nonzero lifecycle token verbatim.
-                        // Admission compares this opaque token for exact equality.
-                        lifecycleGeneration: node.Node.MeshStatus().LifecycleGeneration,
                         objectRole: spot.ObjectRole,
-                        objectCapabilities: BuildObjectCapabilities(spot),
-                        applicationVersion: registration.ApplicationVersion,
-                        maintenanceWave: registration.MaintenanceWave,
-                        entrySpotId: spot.EntrySpotId,
-                        placementWeight: spot.PlacementWeight,
-                        capacity: new ZLinkPlacementCapacity(
-                            new ZLinkPopulationCapacity(0, 0, spot.ActorLimit),
-                            new ZLinkPopulationCapacity(0, 0, spot.SpotLimit),
-                            BuildSpotTypeCapacities(spot)
-                        ),
-                        activationConcurrency: new ZLinkActivationConcurrency(
-                            0,
-                            spot.ActivationConcurrencyLimit
-                        ),
-                        channelWeights: spot.ChannelMemberships.Where(static membership =>
-                                membership.IsServer
-                            )
-                            .ToDictionary(
-                                static membership => membership.ChannelName,
-                                static membership => membership.Weight,
-                                StringComparer.Ordinal
-                            ),
-                        startupState: startupState
+                        hasChannelMemberships: spot.ChannelMemberships.Any(static membership =>
+                            membership.IsServer
+                        )
                     );
                 }
 
@@ -540,97 +515,39 @@ internal sealed class ZLinkLocationAutoConnectHost
         ZLinkLocationAutoConnectType type,
         ZLinkMeshName meshName,
         ZLinkLocationRole role,
-        RoutingId? nodeRid,
-        string endpoint,
-        uint weight,
+        ZLinkMeshNodeStartupState startupState,
         IZLinkAutoConnectExecutor executor,
-        bool retainRemovedMembers = false,
-        ulong lifecycleGeneration = 0,
-        ZLinkMeshNodeObjectRole objectRole = ZLinkMeshNodeObjectRole.None,
-        IReadOnlyList<ZLinkObjectCapability>? objectCapabilities = null,
-        long applicationVersion = 0,
-        string? maintenanceWave = null,
-        string? entrySpotId = null,
-        int placementWeight = ZLinkSpotNodeRegistration.DefaultPlacementWeight,
-        ZLinkPlacementCapacity? capacity = null,
-        ZLinkActivationConcurrency? activationConcurrency = null,
-        IReadOnlyDictionary<string, int>? channelWeights = null,
-        ZLinkMeshNodeStartupState? startupState = null
+        bool retainRemovedMembers,
+        ZLinkMeshNodeObjectRole objectRole,
+        bool hasChannelMemberships
     )
     {
         // MeshNode descriptors always require a physical node identity.
-        var advertisable = nodeRid is { Size: > 0 };
-        if (!advertisable)
+        if (startupState.RoutingId.Size == 0)
             return;
 
+        // The startup state owns the published descriptor, including its
+        // object capabilities (ZLinkMeshNodeDescriptorFactory).
         var local = new ZLinkAutoConnectLocal(
             type,
             meshName,
             role,
-            nodeRid,
-            endpoint,
+            startupState.RoutingId,
+            startupState.Descriptor.Endpoint,
             objectRole,
-            channelWeights?.Count > 0
+            hasChannelMemberships
         );
-        var effectiveLifecycleGeneration =
-            lifecycleGeneration == 0 ? CreateLifecycleNonce() : lifecycleGeneration;
-        var row =
-            startupState?.Descriptor
-            ?? (
-                advertisable
-                    ? new ZLinkMeshNodeDescriptor(
-                        meshName.Value,
-                        nodeRid!.Value,
-                        effectiveLifecycleGeneration,
-                        DescriptorRevision: 1,
-                        endpoint,
-                        channelWeights is null
-                            ? new Dictionary<string, int>(StringComparer.Ordinal)
-                            {
-                                [meshName.Value] = (int)weight,
-                            }
-                            : new Dictionary<string, int>(channelWeights, StringComparer.Ordinal),
-                        SecurityIdentity: ZLinkTransportSecurityIdentity.Plaintext,
-                        OwnerId: string.Empty,
-                        LeaseGeneration: 0,
-                        UpdatedAt: default
-                    )
-                    {
-                        ApplicationVersion = applicationVersion,
-                        ObjectRole = objectRole,
-                        ObjectCapabilities =
-                            objectCapabilities ?? Array.Empty<ZLinkObjectCapability>(),
-                        MaintenanceWave = maintenanceWave,
-                        EntrySpotId = entrySpotId,
-                        State = ZLinkFrameworkRuntimeState.Serving,
-                        PlacementWeight = placementWeight,
-                        Capacity =
-                            capacity
-                            ?? new ZLinkPlacementCapacity(
-                                new ZLinkPopulationCapacity(0, 0, 0),
-                                new ZLinkPopulationCapacity(0, 0, 0),
-                                Array.Empty<ZLinkSpotTypeCapacity>()
-                            ),
-                        ActivationConcurrency =
-                            activationConcurrency
-                            ?? new ZLinkActivationConcurrency(
-                                0,
-                                ZLinkSpotNodeRegistration.DefaultActivationConcurrencyLimit
-                            ),
-                    }
-                    : null
-            );
         var reconciler = new ZLinkAutoConnectReconciler(
             local,
-            row,
+            startupState.Descriptor,
             _runtime,
             _peers,
             executor,
             _options,
             _time,
             retainRemovedMembers,
-            initiallyPublished: startupState is not null,
-            initialStoreGeneration: startupState?.StoreGeneration ?? 0,
+            initiallyPublished: true,
+            initialStoreGeneration: startupState.StoreGeneration,
             errorSink: errorSink
         );
         _reconcilers.Add(reconciler);
@@ -763,98 +680,6 @@ internal sealed class ZLinkLocationAutoConnectHost
             ? reconciler.SetAllLocalChannelWeightsAsync(weight, cancellationToken)
             : reconciler.SetLocalWeightAsync(weight, cancellationToken);
     }
-
-    private static ulong CreateLifecycleNonce()
-    {
-        // Bounded to [1, long.MaxValue] to satisfy the wire schema's
-        // nonzero-u64 range (frozen at 2^63-1 for signed-language interop).
-        Span<byte> bytes = stackalloc byte[sizeof(ulong)];
-        ulong value;
-        do
-        {
-            System.Security.Cryptography.RandomNumberGenerator.Fill(bytes);
-            value = System.Buffers.Binary.BinaryPrimitives.ReadUInt64BigEndian(bytes);
-        } while (value is 0 or > long.MaxValue);
-        return value;
-    }
-
-    private static IReadOnlyList<ZLinkObjectCapability> BuildObjectCapabilities(
-        ZLinkSpotNodeRegistration registration
-    )
-    {
-        var capabilities = new List<ZLinkObjectCapability>(
-            registration.SpotRelocations.Count
-                + registration.InstanceSpotRelocations.Count
-                + registration.ActorRelocations.Count
-        );
-        AddCapabilities(
-            capabilities,
-            ZLinkPlacementObjectKind.UserSpot,
-            registration.SpotRelocations
-        );
-        AddCapabilities(
-            capabilities,
-            ZLinkPlacementObjectKind.InstanceSpot,
-            registration.InstanceSpotRelocations
-        );
-        AddCapabilities(
-            capabilities,
-            ZLinkPlacementObjectKind.Actor,
-            registration.ActorRelocations
-        );
-        return capabilities
-            .OrderBy(static capability => capability.ObjectKind)
-            .ThenBy(static capability => capability.StableType, StringComparer.Ordinal)
-            .ToArray();
-    }
-
-    private static void AddCapabilities(
-        ICollection<ZLinkObjectCapability> capabilities,
-        ZLinkPlacementObjectKind objectKind,
-        IReadOnlyDictionary<string, ZLinkObjectRelocationRegistration> registrations
-    )
-    {
-        foreach (var (stableType, registration) in registrations)
-        {
-            capabilities.Add(
-                new ZLinkObjectCapability(
-                    objectKind,
-                    stableType,
-                    registration.PolicyKind switch
-                    {
-                        0 => ZLinkObjectMaintenancePolicyKind.Disabled,
-                        1 => ZLinkObjectMaintenancePolicyKind.Recreate,
-                        2 => ZLinkObjectMaintenancePolicyKind.Snapshot,
-                        _ => throw new ZLinkConfigurationException(
-                            $"Unknown relocation policy kind '{registration.PolicyKind}'."
-                        ),
-                    },
-                    registration.AdapterType is not null,
-                    objectKind == ZLinkPlacementObjectKind.Actor
-                        ? 0
-                        : registration.Placement.MaxActiveObjects ?? 0
-                )
-            );
-        }
-    }
-
-    private static IReadOnlyList<ZLinkSpotTypeCapacity> BuildSpotTypeCapacities(
-        ZLinkSpotNodeRegistration registration
-    ) =>
-        BuildObjectCapabilities(registration)
-            .Where(static capability =>
-                capability.ObjectKind
-                    is ZLinkPlacementObjectKind.UserSpot
-                        or ZLinkPlacementObjectKind.InstanceSpot
-            )
-            .Select(static capability => new ZLinkSpotTypeCapacity(
-                capability.ObjectKind,
-                capability.StableType,
-                0,
-                0,
-                capability.Limit
-            ))
-            .ToArray();
 
     private sealed class SpotRouterExecutor(ZLinkSpotNodeRuntime node, bool connectRouter)
         : IZLinkAutoConnectExecutor
