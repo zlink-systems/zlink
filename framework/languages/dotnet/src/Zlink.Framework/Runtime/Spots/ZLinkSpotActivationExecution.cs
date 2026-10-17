@@ -611,7 +611,6 @@ internal abstract partial class ZLinkSpotActivation
         CancellationToken cancellationToken
     )
     {
-        AttachNativeDispatch();
         var create = new SpotCreateCallState(request);
         await ExecuteSerializedAsync(
             static async (activation, state, ct) =>

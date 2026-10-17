@@ -772,7 +772,7 @@ internal sealed class ZLinkSpotNodeCatalog(
             await _lane
                 .RunAsync(() =>
                 {
-                    _spots.Add(activation.SpotId, activation);
+                    PublishActivationLocked(activation);
                 })
                 .ConfigureAwait(false);
             ZLinkRuntimeMetrics.RecordSpotCreated(registration.SpotNodeName, "user");
@@ -953,7 +953,7 @@ internal sealed class ZLinkSpotNodeCatalog(
                 .RunAsync(() =>
                 {
                     _pending.Remove(requestedSpotId);
-                    _spots.Add(activation.SpotId, activation);
+                    PublishActivationLocked(activation);
                     pending.Complete(result);
                 })
                 .ConfigureAwait(false);
@@ -1259,7 +1259,7 @@ internal sealed class ZLinkSpotNodeCatalog(
                         $"SPOT '{prepared.Activation.SpotId}' became visible before publication."
                     );
                 _preparedSpotTypes.Remove(prepared.Activation.SpotId);
-                _spots.Add(prepared.Activation.SpotId, prepared.Activation);
+                PublishActivationLocked(prepared.Activation);
             })
             .ConfigureAwait(false);
         ZLinkRuntimeMetrics.RecordSpotCreated(registration.SpotNodeName, "user");
@@ -1339,7 +1339,7 @@ internal sealed class ZLinkSpotNodeCatalog(
                         $"SPOT '{prepared.Activation.SpotId}' became visible before relocation publication."
                     );
                 _preparedSpotTypes.Remove(prepared.Activation.SpotId);
-                _spots.Add(prepared.Activation.SpotId, prepared.Activation);
+                PublishActivationLocked(prepared.Activation);
                 if (prepared.InstanceStableType is not null)
                     _instanceSpotTypes.Add(
                         prepared.Activation.SpotId,
@@ -1411,9 +1411,8 @@ internal sealed class ZLinkSpotNodeCatalog(
                         ZLinkFrameworkErrorKind.Unavailable,
                         $"Instance Spot '{prepared.Activation.SpotId}' became visible before publication."
                     );
-                prepared.Activation.AttachNativeDispatch();
                 _preparedSpotTypes.Remove(prepared.Activation.SpotId);
-                _spots.Add(prepared.Activation.SpotId, prepared.Activation);
+                PublishActivationLocked(prepared.Activation);
                 _instanceSpotTypes.Add(
                     prepared.Activation.SpotId,
                     prepared.InstanceStableType
@@ -1724,6 +1723,14 @@ internal sealed class ZLinkSpotNodeCatalog(
         }
         return await CompleteExplicitCloseAsync(spotId, activation, transaction, attempt)
             .ConfigureAwait(false);
+    }
+
+    private void PublishActivationLocked(ZLinkSpotActivation activation)
+    {
+        // Ready includes the Location Store commit. Until publication the existing
+        // Spot ingress queue owns multicast payloads without running handlers.
+        activation.AttachNativeDispatch();
+        _spots.Add(activation.SpotId, activation);
     }
 
     /// <summary>A created User Spot claims its authority before it becomes
