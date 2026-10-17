@@ -39,6 +39,171 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 final class ZLinkSerialExecutionQueueTest {
+    private static final long LIFECYCLE_GATE_WAIT_SECONDS = 3;
+
+    @Test
+    void activationPreparationKeepsInitializationYieldOnItsSharedGate() throws Exception {
+        try (var executor = Executors.newSingleThreadExecutor()) {
+            var queue = new ZLinkSerialExecutionQueue(executor, ZLinkExecutionLanePolicy.spot());
+            new ZLinkSerialExecutionQueue.SharedSpotGate(queue);
+            var infrastructure = new CompletableFuture<Void>();
+            var entered = new CompletableFuture<Void>();
+            var resumed = new CompletableFuture<Void>();
+            var cleanup = new AtomicReference<Runnable>();
+            try {
+                var prepared =
+                        queue.prepareActivation(
+                                () -> {
+                                    var initialization =
+                                            ZLinkSerialExecutionQueue.yieldCurrent(infrastructure)
+                                                    .thenRun(
+                                                            () -> {
+                                                                Runnable releaseTurn =
+                                                                        () ->
+                                                                                ZLinkSerialExecutionQueue
+                                                                                        .yieldCurrent(
+                                                                                                CompletableFuture
+                                                                                                        .completedFuture(
+                                                                                                                null));
+                                                                ZLinkSerialExecutionQueue
+                                                                        .propagateCurrent(
+                                                                                cleanup::set)
+                                                                        .execute(releaseTurn);
+                                                                resumed.complete(null);
+                                                            });
+                                    entered.complete(null);
+                                    return initialization;
+                                });
+                entered.get(LIFECYCLE_GATE_WAIT_SECONDS, TimeUnit.SECONDS);
+                infrastructure.complete(null);
+                prepared.toCompletableFuture().get(LIFECYCLE_GATE_WAIT_SECONDS, TimeUnit.SECONDS);
+                queue.underSharedSpotGateAsync(() -> null)
+                        .toCompletableFuture()
+                        .get(LIFECYCLE_GATE_WAIT_SECONDS, TimeUnit.SECONDS);
+            } finally {
+                infrastructure.complete(null);
+                resumed.get(LIFECYCLE_GATE_WAIT_SECONDS, TimeUnit.SECONDS);
+                cleanup.get().run();
+                queue.finishActivationPreparation()
+                        .toCompletableFuture()
+                        .get(LIFECYCLE_GATE_WAIT_SECONDS, TimeUnit.SECONDS);
+                queue.awaitQuiescence()
+                        .toCompletableFuture()
+                        .get(LIFECYCLE_GATE_WAIT_SECONDS, TimeUnit.SECONDS);
+                queue.close();
+            }
+        }
+    }
+
+    @Test
+    void lifecycleTransitionKeepsYieldCompletionOnItsSharedGate() throws Exception {
+        try (var executor = Executors.newSingleThreadExecutor()) {
+            var queue = new ZLinkSerialExecutionQueue(executor, ZLinkExecutionLanePolicy.spot());
+            new ZLinkSerialExecutionQueue.SharedSpotGate(queue);
+            var infrastructure = new CompletableFuture<Void>();
+            var entered = new CompletableFuture<Void>();
+            var resumed = new CompletableFuture<Void>();
+            var cleanup = new AtomicReference<Runnable>();
+            try {
+                var transition =
+                        queue.enqueueLifecycleTransition(
+                                () -> {
+                                    var operation =
+                                            ZLinkSerialExecutionQueue.yieldCurrent(infrastructure)
+                                                    .thenRun(
+                                                            () -> {
+                                                                Runnable releaseTurn =
+                                                                        () ->
+                                                                                ZLinkSerialExecutionQueue
+                                                                                        .yieldCurrent(
+                                                                                                CompletableFuture
+                                                                                                        .completedFuture(
+                                                                                                                null));
+                                                                ZLinkSerialExecutionQueue
+                                                                        .propagateCurrent(
+                                                                                cleanup::set)
+                                                                        .execute(releaseTurn);
+                                                                resumed.complete(null);
+                                                            });
+                                    entered.complete(null);
+                                    return operation;
+                                },
+                                ignored -> CompletableFuture.completedFuture(null),
+                                () -> false,
+                                ignored -> false);
+                entered.get(LIFECYCLE_GATE_WAIT_SECONDS, TimeUnit.SECONDS);
+                infrastructure.complete(null);
+                resumed.get(LIFECYCLE_GATE_WAIT_SECONDS, TimeUnit.SECONDS);
+                transition.toCompletableFuture().get(LIFECYCLE_GATE_WAIT_SECONDS, TimeUnit.SECONDS);
+            } finally {
+                infrastructure.complete(null);
+                resumed.get(LIFECYCLE_GATE_WAIT_SECONDS, TimeUnit.SECONDS);
+                cleanup.get().run();
+                queue.awaitQuiescence()
+                        .toCompletableFuture()
+                        .get(LIFECYCLE_GATE_WAIT_SECONDS, TimeUnit.SECONDS);
+                queue.close();
+            }
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void activationPreparationRetainsCallbackGateAndYieldsForPublication(boolean shared)
+            throws Exception {
+        try (var executor = Executors.newSingleThreadExecutor()) {
+            var queue = new ZLinkSerialExecutionQueue(executor, ZLinkExecutionLanePolicy.spot());
+            if (shared) new ZLinkSerialExecutionQueue.SharedSpotGate(queue);
+            var initialization = new CompletableFuture<Void>();
+            var entered = new CompletableFuture<Void>();
+            var observe = new AtomicReference<Runnable>();
+            var cleanup = new AtomicReference<Runnable>();
+            var finishing = new AtomicReference<CompletionStage<Void>>();
+            var held = new AtomicBoolean();
+            try {
+                var prepared =
+                        queue.prepareActivation(
+                                () -> {
+                                    ZLinkSerialExecutionQueue.propagateCurrent(observe::set)
+                                            .execute(() -> held.set(queue.isCurrent()));
+                                    ZLinkSerialExecutionQueue.propagateCurrent(cleanup::set)
+                                            .execute(
+                                                    () ->
+                                                            finishing.set(
+                                                                    queue
+                                                                            .finishActivationPreparation()));
+                                    entered.complete(null);
+                                    return initialization;
+                                });
+                entered.get(LIFECYCLE_GATE_WAIT_SECONDS, TimeUnit.SECONDS);
+                executor.submit(() -> {}).get(LIFECYCLE_GATE_WAIT_SECONDS, TimeUnit.SECONDS);
+                observe.get().run();
+                assertTrue(
+                        held.get(), "initialization ordinary await must retain its callback turn");
+                initialization.complete(null);
+                prepared.toCompletableFuture().get(LIFECYCLE_GATE_WAIT_SECONDS, TimeUnit.SECONDS);
+                executor.submit(() -> {}).get(LIFECYCLE_GATE_WAIT_SECONDS, TimeUnit.SECONDS);
+                observe.get().run();
+                assertFalse(
+                        held.get(),
+                        "publication infrastructure wait must release the callback turn");
+            } finally {
+                initialization.complete(null);
+                if (cleanup.get() != null) {
+                    cleanup.get().run();
+                    finishing
+                            .get()
+                            .toCompletableFuture()
+                            .get(LIFECYCLE_GATE_WAIT_SECONDS, TimeUnit.SECONDS);
+                }
+                queue.awaitQuiescence()
+                        .toCompletableFuture()
+                        .get(LIFECYCLE_GATE_WAIT_SECONDS, TimeUnit.SECONDS);
+                queue.close();
+            }
+        }
+    }
+
     @Test
     void failedActivationPreparationRejectsPendingApplicationAndCloseWithOriginalFailure()
             throws Exception {

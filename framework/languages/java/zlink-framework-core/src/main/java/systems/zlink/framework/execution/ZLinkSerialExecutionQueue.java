@@ -533,7 +533,8 @@ public final class ZLinkSerialExecutionQueue {
         @Override
         public CompletionStage<Void> get() {
             CompletionStage<Void> execution =
-                    manageCurrent(preparationTerminal.thenCompose(ignored -> operation.get()));
+                    manageCurrentInTurn(
+                            preparationTerminal.thenCompose(ignored -> operation.get()));
             if (sharedSpotGate == null) {
                 return execution.whenComplete((ignored, failure) -> rewritePending(failure));
             }
@@ -983,14 +984,18 @@ public final class ZLinkSerialExecutionQueue {
             } catch (RuntimeException | Error failure) {
                 initialization = CompletableFuture.failedFuture(failure);
             }
-            initialization.whenComplete(
-                    (value, failure) -> {
-                        if (failure == null) prepared.complete(value);
-                        else {
-                            prepared.completeExceptionally(failure);
-                        }
-                    });
-            return terminal;
+            return manageCurrentInTurn(initialization)
+                    .handle(
+                            (value, failure) -> {
+                                if (failure == null) prepared.complete(value);
+                                else {
+                                    prepared.completeExceptionally(failure);
+                                }
+                                return null;
+                            })
+                    // The callback keeps its turn; publication and durable recovery are
+                    // infrastructure waits within the same lifecycle item (execution gate §7).
+                    .thenCompose(ignored -> yieldCurrent(terminal));
         }
     }
 
@@ -2590,7 +2595,8 @@ public final class ZLinkSerialExecutionQueue {
                 throw new systems.zlink.framework.errors.ZLinkFrameworkException(
                         ZLinkFrameworkErrorKind.INVALID_OPERATION,
                         operation
-                                + " yield requires an active SpotWide User Spot or Instance Spot application turn");
+                                + " yield requires an active SpotWide User Spot or Instance Spot"
+                                + " application turn");
             }
             if (!YIELD_ADMITTED.compareAndSet(current.entry, false, true)) {
                 throw new systems.zlink.framework.errors.ZLinkFrameworkException(
