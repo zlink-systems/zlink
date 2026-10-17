@@ -30,7 +30,6 @@ import {
   rewriteActorAuthorityRoute
 } from '../actors/actor-authority-publication';
 import {
-  replayActorHandoffBacklog,
   type ZLinkActorHandoffPacket,
   type ZLinkActorHandoffResult
 } from '../actors/actor-handoff';
@@ -161,7 +160,7 @@ import type {
 } from '../locations/internal-location-contracts';
 import type { ZLinkTrackedInstanceAuthority } from '../locations/spot-location-claims';
 import { decodeRoutingId, encodeRoutingIdStorageHex, routingIdsEqual } from '../routing-id';
-import type { DefaultZLinkSpotManager, ZLinkSpotNodeRuntimeManager } from '../spots';
+import type { DefaultZLinkSpotManager } from '../spots';
 import type { ZLinkSpotActivation } from '../spots/spot-activation-state';
 import { createProviderInstance } from '../spots/spot-provider';
 import { decodeHandoffBacklog } from '../spots/spot-remote-codec';
@@ -234,7 +233,6 @@ interface ZLinkHostRelocationOptions {
   readonly meshNode: (meshName: string) => ZLinkBackendMeshNode | undefined;
   readonly completions: (meshName: string) => ZLinkMeshCompletionTable | undefined;
   readonly spotManager: () => DefaultZLinkSpotManager | undefined;
-  readonly spotNodeRuntime: () => ZLinkSpotNodeRuntimeManager | undefined;
   readonly actorManager: () => DefaultZLinkActorManager | undefined;
   readonly actorTransfer: ZLinkActorTransferRuntime;
   readonly boundSessionRelocation?: {
@@ -265,7 +263,11 @@ interface LocalHidden extends ServiceRelocationHiddenObject {
   readonly actor?: ZLinkActor;
   readonly activation?: ZLinkSpotActivation;
   initialized: boolean;
-  readonly replayResults: ZLinkActorHandoffResult[];
+  replayStart?: Promise<void>;
+  onReplayResult?: (
+    packet: ZLinkActorHandoffPacket,
+    result: ZLinkActorHandoffResult
+  ) => Promise<void>;
   readonly replayPackets: ZLinkActorHandoffPacket[];
   targetAuthorityOwnerGeneration?: bigint;
 }
@@ -3173,8 +3175,36 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       stage.releaseActivation();
       resumeStartedAt = performance.now();
       stage.phase = 'committed';
-      await stage.owner.normalize(stage.staging, authority, signal);
       await stage.owner.publish(stage.staging, authority, signal);
+      // Clear the final relocation publication before admission becomes
+      // externally visible so a later Join cannot reserve against the
+      // previous root. A bounded CAS conflict must not roll back already
+      // committed target ownership or strand its staged object.
+      try {
+        authority = await this.clearTargetRelocationPublication(stage, authority, signal);
+      } catch (error) {
+        console.warn('[zlink.runtime.relocation.publication_clear_failed]', stagingId, error);
+        this.options.metrics?.count('zlink.relocation.publication_clear_failed', 1, {
+          mesh_name: meshName
+        });
+      }
+      for (const [index, participant] of stage.staging.envelope.participants.entries()) {
+        const hidden = stage.staging.hidden.get(participant.key);
+        if (hidden?.actor === undefined || hidden.replayPackets.length === 0) continue;
+        const coordinator = this.targetReplyRelayCoordinator(meshName, stage, authority);
+        hidden.replayStart = stage.finalize;
+        hidden.onReplayResult = (packet, result) =>
+          this.relayTerminalReply(
+            meshName,
+            stage,
+            coordinator,
+            BigInt(index + 1),
+            packet,
+            result,
+            signal
+          );
+      }
+      await stage.owner.normalize(stage.staging, authority, signal);
       // The target may have visited this Actor before and still retain that
       // tenure in its private Actor-client resolver. The target-only CAS is
       // now authoritative, so expire the old projection before OnJoinedActor
@@ -3185,18 +3215,11 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         }
       }
       await this.finalizeActorJoinProfiles(meshName, stage, signal);
-      // Clear the final relocation publication before admission becomes
-      // externally visible so a later Join cannot reserve against the
-      // previous root. A bounded CAS conflict must not roll back already
-      // committed target ownership or strand its staged object.
-      try {
-        await this.clearTargetRelocationPublication(stage, authority, signal);
-      } catch (error) {
-        console.warn('[zlink.runtime.relocation.publication_clear_failed]', stagingId, error);
-        this.options.metrics?.count('zlink.relocation.publication_clear_failed', 1, {
-          mesh_name: meshName
-        });
-      }
+      await this.publishSessionRoutes(stage.staging);
+      stage.phase = 'open';
+      this.terminalTargets.remember(stagingId, stage.offer.prepareFingerprint);
+      this.targetStages.delete(stagingId);
+      this.targetAssemblies.delete(stagingId);
       await stage.owner.openAdmission(stage.staging, signal);
       // S2→S3: owner confirmation to application dispatch opening.
       this.options.metrics?.duration(
@@ -3204,17 +3227,6 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         Math.max(0, performance.now() - resumeStartedAt) / MILLISECONDS_PER_SECOND,
         { mesh_name: meshName }
       );
-      await this.publishSessionRoutes(stage.staging);
-      await this.relayTerminalReplies(
-        meshName,
-        stage,
-        this.targetReplyRelayCoordinator(meshName, stage, authority),
-        signal
-      );
-      stage.phase = 'open';
-      this.terminalTargets.remember(stagingId, stage.offer.prepareFingerprint);
-      this.targetStages.delete(stagingId);
-      this.targetAssemblies.delete(stagingId);
     } catch (error) {
       this.terminalTargets.remember(stagingId, stage.offer.prepareFingerprint);
       this.targetStages.delete(stagingId);
@@ -3400,7 +3412,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     stage: LocalStage,
     primary: ZLinkAuthoritySnapshot,
     signal?: AbortSignal
-  ): Promise<void> {
+  ): Promise<ZLinkAuthoritySnapshot> {
     await this.releaseParticipantAuthorities(
       stage.staging.envelope,
       stage.staging.primaryAuthorityKey.value,
@@ -3411,7 +3423,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     //  committed snapshot decides. A conflict means another owner changed the
     //  row; the caller records it and leaves the committed ownership intact.
     const publication = this.codec.read(primary.payload);
-    if (publication === undefined) return;
+    if (publication === undefined) return primary;
     const result = await this.requireLocationStore().compareExchangeAuthority(
       stage.staging.primaryAuthorityKey,
       primary.storeVersion,
@@ -3425,6 +3437,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     if (result.kind !== 'stored') {
       throw new Error('Relocation target authority normalization CAS failed.');
     }
+    return { ...result, kind: 'snapshot' };
   }
 
   private async handleReplyRelay(
@@ -3645,36 +3658,32 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     };
   }
 
-  private async relayTerminalReplies(
+  private async relayTerminalReply(
     meshName: string,
     stage: LocalStage,
     coordinator: ServiceWireRelocationCoordinatorFence,
+    participantId: bigint,
+    packet: ZLinkActorHandoffPacket,
+    result: ZLinkActorHandoffResult,
     signal?: AbortSignal
   ): Promise<void> {
-    for (const [participantIndex, participant] of stage.staging.envelope.participants.entries()) {
-      const hidden = stage.staging.hidden.get(participant.key);
-      if (hidden?.actor === undefined) continue;
-      for (const [resultIndex, packet] of hidden.replayPackets.entries()) {
-        if (!packet.returnResponse || packet.source === undefined) continue;
-        const result = hidden.replayResults.at(resultIndex);
-        if (result === undefined || result.index !== packet.index) {
-          throw new Error('Relocation request result changed after target dispatch.');
-        }
-        const completion: RelocationTerminalCompletion = {
-          index: packet.index,
-          operationId: packet.messageFollowContext.operationId,
-          source: packet.source,
-          result
-        };
-        await this.sendReplyRelay(
-          meshName,
-          packet.source.nodeRid as RoutingId,
-          maintenanceReplyRelay(stage, coordinator, BigInt(participantIndex + 1), completion),
-          handoffSourceFence(packet.source),
-          signal
-        );
-      }
+    if (!packet.returnResponse || packet.source === undefined) return;
+    if (result.index !== packet.index) {
+      throw new Error('Relocation request result changed after target dispatch.');
     }
+    const completion: RelocationTerminalCompletion = {
+      index: packet.index,
+      operationId: packet.messageFollowContext.operationId,
+      source: packet.source,
+      result
+    };
+    await this.sendReplyRelay(
+      meshName,
+      packet.source.nodeRid as RoutingId,
+      maintenanceReplyRelay(stage, coordinator, participantId, completion),
+      handoffSourceFence(packet.source),
+      signal
+    );
   }
 
   private async exactSourceLeaseExpired(
@@ -4677,7 +4686,6 @@ class LocalTargetPort implements ServiceRelocationTargetObjectPort<LocalHidden> 
         participant,
         actor,
         initialized: false,
-        replayResults: [],
         replayPackets: []
       };
     }
@@ -4710,7 +4718,6 @@ class LocalTargetPort implements ServiceRelocationTargetObjectPort<LocalHidden> 
       participant,
       activation,
       initialized: false,
-      replayResults: [],
       replayPackets: []
     };
   }
@@ -4901,43 +4908,25 @@ class LocalTargetPort implements ServiceRelocationTargetObjectPort<LocalHidden> 
   }
 
   async openAdmission(hidden: LocalHidden): Promise<void> {
-    if (hidden.actor === undefined) return;
-    this.requireActorManager().publishRelocationActor(hidden.actor.context.actorId);
-    if (hidden.replayPackets.length === 0) return;
-    const state = this.requireActorManager().getState(hidden.actor.context.actorId);
-    if (state === undefined) throw new Error('Relocated Actor state is not staged.');
-    const results = await replayActorHandoffBacklog(
-      hidden.replayPackets,
-      (parts, returnResponse, remoteBoundSessionTarget, fallbackActorRef) => {
-        if (state.spotId === undefined) {
-          const runtime = this.options.spotNodeRuntime();
-          if (runtime === undefined) {
-            throw new Error('Relocated Entry Spot Actor dispatch is unavailable.');
-          }
-          return runtime.dispatchEntryActorPacket(
-            'remote',
-            hidden.actor!.context.actorId,
-            parts,
-            returnResponse,
-            remoteBoundSessionTarget,
-            fallbackActorRef
-          );
-        }
-        return this.requireSpotManager().dispatchRoutedActorPacket(
-          'remote',
-          state.spotId,
-          hidden.actor!.context.actorId,
-          parts,
-          returnResponse,
-          remoteBoundSessionTarget,
-          fallbackActorRef
-        );
-      }
-    );
-    hidden.replayResults.push(...results);
+    if (hidden.actor !== undefined) {
+      this.requireActorManager().publishRelocationActor(hidden.actor.context.actorId);
+    }
   }
 
-  async normalize(_hidden: LocalHidden): Promise<void> {}
+  async normalize(hidden: LocalHidden): Promise<void> {
+    if (hidden.actor === undefined || hidden.replayPackets.length === 0) return;
+    if (hidden.replayStart === undefined || hidden.onReplayResult === undefined) {
+      throw new Error('Relocated Actor backlog has no target activation owner.');
+    }
+    this.options.actorTransfer.admitRelocationPrefix(
+      hidden.actor,
+      hidden.participant.objectGeneration,
+      hidden.replayPackets,
+      hidden.replayStart,
+      hidden.onReplayResult
+    );
+    hidden.replayPackets.length = 0;
+  }
 
   async abort(hidden: LocalHidden): Promise<void> {
     if (hidden.actor !== undefined) {

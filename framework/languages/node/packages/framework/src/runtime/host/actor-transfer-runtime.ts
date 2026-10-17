@@ -225,6 +225,30 @@ export class ZLinkActorTransferRuntime {
     );
   }
 
+  /** Relocation activation owns admission; handler terminals are observed independently. */
+  admitRelocationPrefix(
+    actor: ZLinkActor,
+    objectGeneration: bigint,
+    packets: readonly ZLinkActorHandoffPacket[],
+    start: Promise<void>,
+    onResult: (packet: ZLinkActorHandoffPacket, result: ZLinkActorHandoffResult) => Promise<void>
+  ): void {
+    const manager = this.options.spotManager();
+    if (manager === undefined) throw new Error('Relocated Actor has no local FIFO owner.');
+    const admitted = this.options.actorHandoff.admitTransferredPrefix(
+      actor.context.actorId,
+      objectGeneration,
+      packets,
+      (records) => manager.admitSourceActorPacketPrefix(actor.context.actorId, records),
+      this.options.prepareApplicationJob,
+      start,
+      (packet, result) => {
+        void this.observeHandoffReplay(onResult(packet, result));
+      }
+    );
+    void this.observeHandoffReplay(admitted.terminal);
+  }
+
   async completeDeferredActorHandoff(
     actor: ZLinkActor,
     target: ZLinkSpotRouteTarget,
