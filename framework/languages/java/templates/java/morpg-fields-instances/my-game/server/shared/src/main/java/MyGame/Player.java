@@ -50,7 +50,7 @@ public final class Player implements ZLinkActor {
         if (!(completion instanceof ZLinkActorJoinCompletion.Accepted))
             return CompletableFuture.failedFuture(
                     new IllegalStateException("Field join failed: " + completion));
-        return context.spotId().equals(Rules.fieldId(position.x()))
+        return Rules.fieldId(position.x()).equals(context.spotId().orElse(null))
                 ? sendState()
                 : CompletableFuture.completedFuture(null);
     }
