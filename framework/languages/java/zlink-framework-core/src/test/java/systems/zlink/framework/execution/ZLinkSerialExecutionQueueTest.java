@@ -1701,7 +1701,8 @@ final class ZLinkSerialExecutionQueueTest {
                                 () -> {
                                     order.add("first-start");
                                     started.complete(null);
-                                    return remote.thenRun(() -> order.add("first-end"));
+                                    return ZLinkSerialExecutionQueue.yieldCurrent(remote)
+                                            .thenRun(() -> order.add("first-end"));
                                 })
                         .toCompletableFuture();
         started.get(3, TimeUnit.SECONDS);
@@ -1799,7 +1800,7 @@ final class ZLinkSerialExecutionQueueTest {
                 queue.enqueueLifecycleBarrier(
                                 () -> {
                                     order.add("lifecycle");
-                                    return remote;
+                                    return ZLinkSerialExecutionQueue.yieldCurrent(remote);
                                 })
                         .toCompletableFuture();
         close.whenComplete((ignored, failure) -> order.add("continuation"));
@@ -1845,7 +1846,7 @@ final class ZLinkSerialExecutionQueueTest {
                 queue.enqueueLifecycleBarrier(
                                 () -> {
                                     order.add("lifecycle-start");
-                                    return lifecycleRemote;
+                                    return ZLinkSerialExecutionQueue.yieldCurrent(lifecycleRemote);
                                 })
                         .toCompletableFuture();
         lifecycle.whenComplete((ignored, failure) -> order.add("lifecycle-resume"));
@@ -1896,9 +1897,10 @@ final class ZLinkSerialExecutionQueueTest {
         CompletableFuture<Void> close =
                 queue.enqueueLifecycleBarrier(
                                 () ->
-                                        queue.awaitQuiescence(
-                                                        ZLinkSerialExecutionQueue.Quiescence
-                                                                .APPLICATION)
+                                        ZLinkSerialExecutionQueue.yieldCurrent(
+                                                        queue.awaitQuiescence(
+                                                                ZLinkSerialExecutionQueue.Quiescence
+                                                                        .APPLICATION))
                                                 .thenRun(() -> order.add("close")))
                         .toCompletableFuture();
         CompletableFuture<Void> laterLifecycle =
