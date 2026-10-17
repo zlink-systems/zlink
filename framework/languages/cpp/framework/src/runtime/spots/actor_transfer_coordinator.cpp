@@ -490,20 +490,43 @@ actor_transfer_packet_admission_t actor_transfer_coordinator_t::admit_dispatch_p
   const std::string &actor_key,
   const runtime::protocol::actor_route_fence_t *source_fence,
   bool targets_current_authority,
-  handoff_packet_t packet)
+  handoff_packet_t packet,
+  std::function<bool ()> submit,
+  const runtime::protocol::actor_route_fence_t *prepared_authority,
+  std::uint64_t prepared_generation)
 {
     return _lane
       .run ([&, this] {
-          const auto projected = project_dispatch_state_unlocked (
-            actor_key, source_fence, std::chrono::steady_clock::now ());
+          const auto now = std::chrono::steady_clock::now ();
+          const auto projected = project_dispatch_state_unlocked (actor_key, source_fence, now);
+          const auto fresh_source =
+            prepared_authority == nullptr && prepared_generation != 0
+              ? message_follow_source_for_generation_unlocked (actor_key, prepared_generation, now)
+              : std::optional<runtime::protocol::actor_route_fence_t>{};
+          const auto prepared_source = prepared_authority != nullptr ? prepared_authority
+                                       : fresh_source                ? &*fresh_source
+                                                                     : nullptr;
+          const bool prepared_source_committed =
+            prepared_authority != nullptr
+              ? matches_message_follow_source_unlocked (actor_key, *prepared_authority, now)
+              : fresh_source.has_value ();
           const bool targets_committed_source =
-            !targets_current_authority && projected.matches_message_follow_source;
+            prepared_source_committed
+            || (!targets_current_authority && projected.matches_message_follow_source);
           const auto append_result = targets_committed_source
                                        ? handoff_append_result_t::not_moving
                                        : try_append_backlog_unlocked (actor_key, packet);
+          const auto submitted = append_result == handoff_append_result_t::not_moving
+                                     && !targets_committed_source && submit
+                                   ? std::make_optional (submit ())
+                                   : std::optional<bool>{};
           return actor_transfer_packet_admission_t{
-            projected.matches_message_follow_source, projected.transfer_in_progress, append_result,
-            append_result == handoff_append_result_t::appended
+            projected.matches_message_follow_source, submitted,
+            targets_committed_source
+              ? std::make_optional (prepared_source_committed ? *prepared_source : *source_fence)
+              : std::optional<runtime::protocol::actor_route_fence_t>{},
+            append_result,
+            append_result == handoff_append_result_t::appended || submitted
               ? std::optional<handoff_packet_t>{}
               : std::make_optional (std::move (packet))};
       })
@@ -570,21 +593,30 @@ actor_transfer_coordinator_t::message_follow_source_for_generation (const std::s
                                                                     std::uint64_t generation) const
 {
     return _lane
-      .run ([&, this] () -> std::optional<runtime::protocol::actor_route_fence_t> {
-          const auto found = _message_follow_routes.find (actor_key);
-          if (found == _message_follow_routes.end ())
-              return std::nullopt;
-          const auto now = std::chrono::steady_clock::now ();
-          const auto route = std::find_if (
-            found->second.begin (), found->second.end (), [&] (const auto &candidate) {
-                return candidate.remove_at > now
-                       && candidate.source_fence.object_generation == generation;
-            });
-          if (route == found->second.end ())
-              return std::nullopt;
-          return route->source_fence;
+      .run ([&, this] {
+          return message_follow_source_for_generation_unlocked (actor_key, generation,
+                                                                std::chrono::steady_clock::now ());
       })
       .get ();
+}
+
+std::optional<runtime::protocol::actor_route_fence_t>
+actor_transfer_coordinator_t::message_follow_source_for_generation_unlocked (
+  const std::string &actor_key,
+  std::uint64_t generation,
+  std::chrono::steady_clock::time_point now) const
+{
+    const auto found = _message_follow_routes.find (actor_key);
+    if (found == _message_follow_routes.end ())
+        return std::nullopt;
+    const auto route =
+      std::find_if (found->second.begin (), found->second.end (), [&] (const auto &candidate) {
+          return candidate.remove_at > now
+                 && candidate.source_fence.object_generation == generation;
+      });
+    if (route == found->second.end ())
+        return std::nullopt;
+    return route->source_fence;
 }
 
 result_t<std::optional<actor_message_follow_target_t>>
