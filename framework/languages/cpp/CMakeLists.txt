@@ -1155,6 +1155,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
   target_compile_definitions(test_cpp_framework_operation_registry PRIVATE
     ZLINK_COMPLETION_TERMINAL_CONFORMANCE_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/conformance/completion-terminal-v1.json")
   target_link_libraries(test_cpp_framework_operation_registry PRIVATE
+    zlink::cpp
     opentelemetry-cpp::metrics
     Threads::Threads
     nlohmann_json::nlohmann_json)
@@ -1184,6 +1185,12 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     NAME test_cpp_framework_m6a_runtime
     COMMAND test_cpp_framework_m6a_runtime
     LABELS "framework-unit;framework-m6-runtime;topology;mailbox;liveness;raw-binding"
+    TIMEOUT 30)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_pending_hello_liveness
+    COMMAND test_cpp_framework_m6a_runtime --only hello 1
+    LABELS "framework-unit;framework-contract;liveness;raw-binding"
+    TIER unit
     TIMEOUT 30)
   zlink_framework_cpp_add_test(
     NAME test_cpp_framework_owner_rejection_observability
@@ -1306,7 +1313,8 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     tests/Zlink.Framework.UnitTests/test_cpp_framework_route_mesh_placement_conformance.cpp)
   target_compile_features(test_cpp_framework_route_mesh_placement_conformance PRIVATE cxx_std_20)
   target_include_directories(test_cpp_framework_route_mesh_placement_conformance PRIVATE
-    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   target_compile_definitions(test_cpp_framework_route_mesh_placement_conformance PRIVATE
     ZLINK_ROUTE_MESH_PLACEMENT_CONFORMANCE_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/conformance/route-mesh-placement-v1.json")
   target_link_libraries(test_cpp_framework_route_mesh_placement_conformance PRIVATE
@@ -1810,6 +1818,26 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     test_cpp_framework_http_sync_submit
     PROPERTIES
       RESOURCE_LOCK zlink_cpp_framework_http_ports)
+  # Observe native synchronization in the real DI module independently of
+  # whether the Framework package is built as a static or shared library.
+  add_executable(test_cpp_framework_DI_singleton
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_di_singleton.cpp
+    framework/src/runtime/configuration/services.cpp)
+  target_compile_features(test_cpp_framework_DI_singleton PRIVATE cxx_std_20)
+  target_include_directories(test_cpp_framework_DI_singleton PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/include)
+  target_link_libraries(test_cpp_framework_DI_singleton PRIVATE Threads::Threads)
+  zlink_enable_coverage(test_cpp_framework_DI_singleton)
+  if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_link_options(test_cpp_framework_DI_singleton PRIVATE
+      "LINKER:--wrap=pthread_once" "LINKER:--wrap=pthread_mutex_lock")
+  endif()
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_DI_singleton
+    COMMAND test_cpp_framework_DI_singleton
+    LABELS "framework-unit;framework-regression;DI;scope"
+    TIER unit
+    TIMEOUT 0)
   add_zlink_framework_test(
     test_cpp_framework_DI_scope
     tests/Zlink.Framework.UnitTests/test_cpp_framework_di.cpp
@@ -1888,6 +1916,13 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     tests/Zlink.Framework.UnitTests/test_cpp_framework_host_context_hooks.cpp
     "framework-unit;framework-regression;execution")
   target_use_zlink_gtest_main(test_cpp_framework_host_context_hooks)
+  add_zlink_framework_test(
+    test_cpp_framework_startup_lease
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_startup_lease.cpp
+    "framework-unit;framework-regression;framework-location;maintenance")
+  target_use_zlink_gtest_main(test_cpp_framework_startup_lease)
+  target_include_directories(test_cpp_framework_startup_lease PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   target_include_directories(test_cpp_framework_sync_submit PRIVATE
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   add_zlink_framework_test(

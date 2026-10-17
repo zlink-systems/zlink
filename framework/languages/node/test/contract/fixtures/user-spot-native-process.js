@@ -106,6 +106,7 @@ async function start() {
   // The published descriptor carries the endpoint this node bound.
   const descriptor = await waitForPublishedNode();
   process.on('message', onMessage);
+  process.once('disconnect', () => void stop(0));
   process.once('SIGTERM', () => void stop(0));
   process.once('SIGINT', () => void stop(0));
   send({

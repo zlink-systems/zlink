@@ -5,6 +5,8 @@
 #include "runtime/foundation/operation_terminal.hpp"
 #include "runtime/diagnostics/mesh_request_metrics.hpp"
 
+#include <zlink/Contracts/Messaging/message.hpp>
+
 #include <chrono>
 #include <array>
 #include <cstddef>
@@ -30,7 +32,7 @@ class operation_registry_t
 {
   public:
     using clock_t = std::chrono::steady_clock;
-    using callback_t = std::function<void (operation_terminal_t, std::vector<std::uint8_t>)>;
+    using callback_t = std::function<void (operation_terminal_t, zlink::message_t)>;
     using before_dispatch_t = std::function<void ()>;
     // The management budget reads this clock; tests inject a deterministic one.
     using now_t = clock_t::time_point (*) ();
@@ -47,20 +49,18 @@ class operation_registry_t
     bool contains (const call_id_t &id) const;
     std::size_t fail_target (const std::vector<std::uint8_t> &target_routing_id,
                              operation_terminal_t terminal);
-    bool complete (const call_id_t &id, std::vector<std::uint8_t> payload);
+    bool complete (const call_id_t &id, zlink::message_t payload);
     // Packed infrastructure replies retain their delivery terminal and payload
     // for the caller to decode; request_terminal observes their semantic result.
     bool complete (const call_id_t &id,
-                   std::vector<std::uint8_t> payload,
+                   zlink::message_t payload,
                    before_dispatch_t before_dispatch,
                    operation_terminal_t request_terminal = operation_terminal_t::completed);
     bool cancel (const call_id_t &id);
+    bool fail (const call_id_t &id, operation_terminal_t terminal, zlink::message_t payload = {});
     bool fail (const call_id_t &id,
                operation_terminal_t terminal,
-               std::vector<std::uint8_t> payload = {});
-    bool fail (const call_id_t &id,
-               operation_terminal_t terminal,
-               std::vector<std::uint8_t> payload,
+               zlink::message_t payload,
                before_dispatch_t before_dispatch,
                std::optional<operation_terminal_t> request_terminal = {});
     bool unregister (const call_id_t &id);

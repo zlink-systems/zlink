@@ -175,8 +175,9 @@ TEST_P (CppFrameworkHelloExchange, RetainsFirstDescriptorUntilAdmit)
     if (GetParam () == remote_hello_t::after_update)
         ASSERT_NO_FATAL_FAILURE (receive_remote_hello ());
     // A successful send has completed; only the remote ADMIT remains withheld.
-    const auto tick =
-      source.tick_liveness (mesh::service_liveness_registry_t::clock_t::now ()).result ().value ();
+    const auto next_activity = source.liveness ().next_activity ();
+    ASSERT_TRUE (next_activity);
+    const auto tick = source.tick_liveness (*next_activity).result ().value ();
     ASSERT_TRUE (receive ());
     EXPECT_EQ (first, received->parts.front ().to_bytes ());
     if (GetParam () != remote_hello_t::none) {
@@ -266,7 +267,7 @@ TEST (CppFrameworkMeshSelectedRoute, UpdateRequiresAdmittedLifecycle)
                        topology.admit (incoming, {2}, incoming, now, command));
             const auto peer = topology.peer (incoming.node_routing_id);
             if (command == protocol::command::update) {
-                EXPECT_EQ (has_current, peer.has_value ());
+                EXPECT_EQ (has_current, peer != nullptr);
                 if (has_current && peer) {
                     EXPECT_EQ (baseline, peer->descriptor);
                     EXPECT_EQ (std::vector<std::uint8_t> ({1}), peer->connection_id);

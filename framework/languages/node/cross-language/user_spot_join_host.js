@@ -426,7 +426,7 @@ async function userSpotJoinSource() {
         );
         mesh.channel(meshName).server();
         const objects = mesh.objects().server();
-        objects.addEntrySpot(RelocationEntrySpot);
+        objects.addEntrySpot(RelocationEntrySpot, 'cross-lang-relocation-actor-type');
         objects.addActorFactory(
           'cross-lang-relocation-actor-type',
           RelocationActorFactory,

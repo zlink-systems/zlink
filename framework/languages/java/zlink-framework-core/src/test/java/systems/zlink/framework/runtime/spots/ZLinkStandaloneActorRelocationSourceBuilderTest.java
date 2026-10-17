@@ -620,6 +620,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
         mesh.channelName(MESH).server();
         mesh.objects()
                 .server()
+                .addEntrySpot(ActorCreationEntry.class)
                 .addActorFactory(
                         ACTOR_TYPE,
                         TestActor.class,
@@ -966,5 +967,33 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
         java.lang.reflect.Field field = owner.getClass().getDeclaredField(name);
         field.setAccessible(true);
         return field.get(owner);
+    }
+
+    /** An Entry Spot that accepts every Actor type, so the node can create new Actors. */
+    public static final class ActorCreationEntry
+            implements systems.zlink.framework.spots.ZLinkEntrySpot<
+                    systems.zlink.framework.actors.ZLinkActor> {
+        private final systems.zlink.framework.spots.ZLinkEntrySpotContext context;
+
+        public ActorCreationEntry(systems.zlink.framework.spots.ZLinkEntrySpotContext context) {
+            this.context = context;
+        }
+
+        @Override
+        public systems.zlink.framework.spots.ZLinkEntrySpotContext context() {
+            return context;
+        }
+
+        @Override
+        public java.util.concurrent.CompletionStage<Void> onJoinedActor(
+                systems.zlink.framework.actors.ZLinkActor actor) {
+            return java.util.concurrent.CompletableFuture.completedFuture(null);
+        }
+
+        @Override
+        public java.util.concurrent.CompletionStage<Void> onLeaveActor(
+                systems.zlink.framework.actors.ZLinkActor actor) {
+            return java.util.concurrent.CompletableFuture.completedFuture(null);
+        }
     }
 }

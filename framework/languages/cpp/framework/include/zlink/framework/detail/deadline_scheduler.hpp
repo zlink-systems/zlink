@@ -23,6 +23,8 @@ struct deadline_state_t
 
 class deadline_scheduler_t
 {
+    friend struct deadline_scheduler_test_access_t;
+
   public:
     static deadline_scheduler_t &instance ()
     {
@@ -92,11 +94,18 @@ class deadline_scheduler_t
             if (_changed.wait_until (lock, at) == std::cv_status::no_timeout) {
                 continue;
             }
+            dispatch_due (lock, std::chrono::steady_clock::now ());
+        }
+    }
+
+    void dispatch_due (std::unique_lock<std::mutex> &lock,
+                       std::chrono::steady_clock::time_point now)
+    {
+        while (!_deadlines.empty () && _deadlines.top ().at <= now) {
             auto deadline = std::move (const_cast<deadline_t &> (_deadlines.top ()));
             _deadlines.pop ();
-            if (deadline.state->cancelled.exchange (true, std::memory_order_acq_rel)) {
+            if (deadline.state->cancelled.exchange (true, std::memory_order_acq_rel))
                 continue;
-            }
             lock.unlock ();
             deadline.callback ();
             lock.lock ();

@@ -17,6 +17,9 @@ struct object_capability_t
     maintenance_policy_kind_t policy = maintenance_policy_kind_t::disabled;
     bool has_snapshot_adapter = false;
     std::int32_t spot_limit = 0;
+    // Location runtime canonical descriptor: true only for an actor capability whose Actor type
+    // this node's Entry Spot accepts; new Actor placement keeps only such nodes.
+    bool entry_accepted = false;
 };
 
 struct capacity_usage_t

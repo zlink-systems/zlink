@@ -467,7 +467,14 @@ export class ZLinkSpotNodeRuntimeManager {
         ...instanceSpots.map(([stableType, factory]) =>
           objectCapability('instance_spot', stableType, factory)
         ),
-        ...actors.map(([stableType, factory]) => objectCapability('actor', stableType, factory))
+        ...actors.map(([stableType, factory]) =>
+          objectCapability(
+            'actor',
+            stableType,
+            factory,
+            registrationAcceptsNewActor(registration, stableType)
+          )
+        )
       ].sort((left, right) => {
         const kindOrder = left.objectKind.localeCompare(right.objectKind);
         return kindOrder !== 0 ? kindOrder : left.stableType.localeCompare(right.stableType);
@@ -1380,7 +1387,8 @@ function effectiveObjectRole(registration: ZLinkSpotNodeOptions): ZLinkObjectRol
 function objectCapability(
   objectKind: 'actor' | 'user_spot' | 'instance_spot',
   stableType: string,
-  factory: DescriptorFactoryRegistration
+  factory: DescriptorFactoryRegistration,
+  entryAccepted = false
 ) {
   const policy = factory.relocation?.kind ?? 'disabled';
   return {
@@ -1388,8 +1396,25 @@ function objectCapability(
     stableType,
     policy,
     hasSnapshotAdapter: policy === 'snapshot',
-    limit: objectKind === 'actor' ? 0 : (factory.options?.stableTypeLimit ?? 0)
+    limit: objectKind === 'actor' ? 0 : (factory.options?.stableTypeLimit ?? 0),
+    entryAccepted
   };
+}
+
+/**
+ * The one decision for creating a new Actor on this node (Actor model §6.3): the node registered
+ * an Entry Spot type that accepts the Actor type and an Actor factory for it. Publication and the
+ * target refusal both read it.
+ */
+export function registrationAcceptsNewActor(
+  registration: ZLinkSpotNodeOptions,
+  stableType: string
+): boolean {
+  return (
+    registration.entrySpotType !== undefined &&
+    registration.entrySpotActorType === stableType &&
+    effectiveActorRegistrations(registration).some(([type]) => type === stableType)
+  );
 }
 
 function aggregatePlacementCapacity(actorLimit: number, spotLimit: number): number {

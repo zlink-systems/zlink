@@ -130,7 +130,7 @@ test(
       .listen(`inproc://join-authority-${process.pid}`)
       .objects()
       .server()
-      .addEntrySpot(Entry)
+      .addEntrySpot(Entry, 'Player')
       .addActorFactory('Player', PlayerFactory, (f) => f.disableRelocation())
       .addSpotFactory('Table', Table, (f) => f.disableRelocation());
     class TestModule {}
@@ -367,7 +367,7 @@ for (const variant of [
           mesh
             .objects()
             .server()
-            .addEntrySpot(Entry)
+            .addEntrySpot(Entry, 'Player')
             .addActorFactory('Player', PlayerFactory, (f) => f.preserveStateWith(PlayerState))
             .addSpotFactory('Table', Table, (f) => f.preserveStateWith(TableState));
         class TestModule {}

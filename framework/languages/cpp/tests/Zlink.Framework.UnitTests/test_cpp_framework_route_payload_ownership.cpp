@@ -565,6 +565,35 @@ TEST (RoutePayloadOwnership, BoundSessionInternalSendSkipsUserTargetClassificati
     target.stop ();
 }
 
+TEST (RoutePayloadOwnership, UnconnectedObjectClientNodeDirectTargetIsNotFound)
+{
+    // 02-channel-messaging section 8: an Object Client RID is not a Node
+    // direct target. A target the topology does not know is classified from
+    // the Location Store, so the result does not depend on a connection.
+    auto state = test::runtime_failure_fixture<detail::mesh_node_builder_state_t> ("mesh");
+    state->core_context = std::make_shared<zlink::context_t> ();
+    state->routing_id = zlink::routing_id_t::from ("actor-node");
+    state->listen_endpoint = "tcp://127.0.0.1:0";
+    state->listen_port.reset ();
+    state->object_role = object_role_t::server;
+    detail::mesh_node_runtime_t source (state);
+    auto store = std::make_shared<client_node_store_t> ();
+    source.configure_user_spot_operations (store, {});
+    source.start ();
+    const auto client_rid = zlink::routing_id_t::from ("session-node");
+    const std::vector<zlink::message_t> parts{zlink::message_t::from (std::string ("payload"))};
+    EXPECT_EQ (std::move (source.send_to_node (client_rid, parts)).result ().value (),
+               zlink::submit_result_t::not_found);
+    runtime::host::pending_operation_t operation;
+    EXPECT_EQ (std::move (source.request_to_node (client_rid, parts, operation,
+                                                  std::chrono::milliseconds (500)))
+                 .result ()
+                 .value (),
+               zlink::submit_result_t::not_found);
+    EXPECT_EQ (store->lists, 2);
+    source.stop ();
+}
+
 TEST (RoutePayloadOwnership, ServiceWirePartsRetainTheTransferredFrame)
 {
     namespace protocol = runtime::protocol;

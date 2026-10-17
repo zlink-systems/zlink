@@ -75,6 +75,16 @@ class PlacementInstanceSpot {
   }
 }
 
+class PlacementEntrySpot {
+  constructor(context) {
+    this.context = context;
+  }
+
+  async onCreateActor() {
+    return { accepted: true };
+  }
+}
+
 const createdActors = [];
 
 class PlacementActor {
@@ -141,6 +151,7 @@ async function runScenario(lease, scenario, index) {
       .objects().server()
       .addSpotFactory(spotType(node.meshName), PlacementSpot, (factory) => factory.disableRelocation());
     if (node.actorFactory) {
+      server.addEntrySpot(PlacementEntrySpot, 'placement-actor');
       server.addActorFactory('placement-actor', PlacementActorFactory, (factory) => factory.disableRelocation());
     }
     if (node.instanceSpotFactory) {

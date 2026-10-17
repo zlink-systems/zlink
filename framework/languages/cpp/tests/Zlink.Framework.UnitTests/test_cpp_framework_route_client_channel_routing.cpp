@@ -66,7 +66,99 @@ zlink::framework::result_t<void> internal_failure (std::string message)
       zlink::framework::framework_error_kind_t::internal_failure, std::move (message));
 }
 
+struct transport_copy_counter_t
+{
+    explicit transport_copy_counter_t (unsigned &copies) : copies (&copies) {}
+    transport_copy_counter_t (const transport_copy_counter_t &other) : copies (other.copies)
+    {
+        ++*copies;
+    }
+    transport_copy_counter_t (transport_copy_counter_t &&) noexcept = default;
+    unsigned *copies;
+};
+
 } // namespace
+
+TEST (CppFrameworkRouteClientChannelRouting, NodeOperationsRetainTransportWithoutCopyingCallable)
+{
+    using namespace zlink::framework;
+    using runtime::messaging::message_parts_t;
+    serializer_registry_t serializers;
+    add_int_serializer<route_event_t> (serializers, "application/x-route-event");
+    add_int_serializer<route_request_t> (serializers, "application/x-route-request");
+    add_int_serializer<route_reply_t> (serializers, "application/x-route-reply");
+    auto builder = test::runtime_failure_builder ();
+    auto runtime = detail::channel_runtime_t::from (builder.message_bus ());
+    runtime.bind_serializers (serializers);
+    unsigned copies = 0, sends = 0, requests = 0;
+    runtime.bind_mesh_node_transport (
+      "copy-mesh",
+      [counter = transport_copy_counter_t (copies),
+       &sends] (const zlink::routing_id_t &, message_parts_t) -> task_t<result_t<void>> {
+          ++sends;
+          co_return result_t<void>::success ();
+      },
+      [counter = transport_copy_counter_t (copies),
+       &requests] (const zlink::routing_id_t &, message_parts_t,
+                   std::chrono::milliseconds) -> request_task_t<result_t<message_parts_t>> {
+          ++requests;
+          co_return result_t<message_parts_t>::failure (framework_error_kind_t::not_found,
+                                                        "test target is absent");
+      });
+    auto client = builder.route_client (serializers);
+    copies = 0;
+    EXPECT_TRUE (
+      client.send_to_node ("copy-mesh", zlink::routing_id_t::from ("target"), route_event_t{7})
+        .async ()
+        .result ());
+    EXPECT_EQ (sends, 1u);
+    EXPECT_EQ (copies, 0u) << "Send copied the registered transport callable";
+    copies = 0;
+    const auto reply =
+      client.request_to_node ("copy-mesh", zlink::routing_id_t::from ("target"), route_request_t{7})
+        .async<route_reply_t> ()
+        .result ();
+    EXPECT_EQ (reply.error_kind (), framework_error_kind_t::not_found);
+    EXPECT_EQ (requests, 1u);
+    EXPECT_EQ (copies, 0u) << "Request copied the registered transport callable";
+}
+
+TEST (CppFrameworkRouteClientChannelRouting, PendingNodeRequestRetainsReplacedTransport)
+{
+    using namespace zlink::framework;
+    using runtime::messaging::message_parts_t;
+    serializer_registry_t serializers;
+    add_int_serializer<route_request_t> (serializers, "application/x-route-request");
+    add_int_serializer<route_reply_t> (serializers, "application/x-route-reply");
+    auto builder = test::runtime_failure_builder ();
+    auto runtime = detail::channel_runtime_t::from (builder.message_bus ());
+    runtime.bind_serializers (serializers);
+    auto lifetime = std::make_shared<int> ();
+    std::weak_ptr<int> retained = lifetime;
+    task_completion_source_t<result_t<message_parts_t>> physical_reply;
+    runtime.bind_mesh_node_transport (
+      "held-mesh", {},
+      [lifetime,
+       &physical_reply] (const zlink::routing_id_t &, message_parts_t,
+                         std::chrono::milliseconds) -> request_task_t<result_t<message_parts_t>> {
+          co_return co_await physical_reply.task ();
+      });
+    lifetime.reset ();
+    {
+        auto client = builder.route_client (serializers);
+        auto pending =
+          client
+            .request_to_node ("held-mesh", zlink::routing_id_t::from ("target"), route_request_t{7})
+            .async<route_reply_t> ();
+        runtime.bind_mesh_node_transport ("held-mesh", {}, {});
+        EXPECT_FALSE (retained.expired ());
+        physical_reply.complete (
+          result_t<result_t<message_parts_t>>::success (result_t<message_parts_t>::failure (
+            framework_error_kind_t::not_found, "test target is absent")));
+        EXPECT_EQ (pending.result ().error_kind (), framework_error_kind_t::not_found);
+    }
+    EXPECT_TRUE (retained.expired ());
+}
 
 TEST (CppFrameworkRouteClientChannelRouting, OneWaySendDoesNotCreateCorrelation)
 {

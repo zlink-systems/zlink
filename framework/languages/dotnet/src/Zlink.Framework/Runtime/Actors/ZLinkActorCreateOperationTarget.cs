@@ -8,6 +8,7 @@ internal sealed class ZLinkActorOperationTarget(
     ZLinkFrameworkRuntime runtime,
     IZLinkBackendSpotNode node,
     string meshName,
+    ZLinkSpotNodeRegistration registration,
     ZLinkCodecRegistryBuilder codecs
 ) : IActorCreateOperationTarget, IActorDestroyOperationTarget
 {
@@ -68,6 +69,25 @@ internal sealed class ZLinkActorOperationTarget(
             || !ZLinkApplicationPayloadEnvelopeCodec.TryDecode(content, out var application)
         )
             throw Protocol(operation.ActorId, "The immutable Actor creation content is invalid.");
+        if (!registration.EntryAcceptsActor(operation.StableType))
+        {
+            //  A Framework failure before the callback: cancel exactly this
+            //  reservation and return its capacity without a terminal; the
+            //  requester excludes this host run generation (Actor model §6.3,
+            //  Location runtime §7).
+            await authorityStore
+                .AbortAsync(Reservation(operation, key, snapshot), cancellationToken)
+                .ConfigureAwait(false);
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.Unavailable,
+                $"Actor '{operation.ActorId}': no registered Entry Spot type accepts '{operation.StableType}'.",
+                ZLinkRetryAdvice.RetryAfterBackoff
+            )
+            {
+                FrameworkFailureCode = (int)
+                    ServiceWireConstants.FrameworkErrorCode.RouteNotConnected,
+            };
+        }
 
         using var requestPayload = Message.From(application.Payload.Span);
         var request = ZLinkMessage.FromEnvelopePayload(
