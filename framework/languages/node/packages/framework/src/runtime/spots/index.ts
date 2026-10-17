@@ -442,13 +442,9 @@ export class DefaultZLinkSpotManager {
       requestContextClose: (activation, objectGeneration, signal) =>
         this.closeFromContext(activation, objectGeneration, signal),
       registerActivation: async (activation) => {
-        this.activations.register(activation);
+        const published = this.activations.register(activation);
         this.scheduleIdleSweep();
-        if (
-          activation.domain.kind === 'user' &&
-          this.activations.resolve(activation.meshName, activation.spotId) === activation
-        )
-          await activation.serialExecutor.finishPreparation();
+        if (published?.domain.kind === 'user') await published.serialExecutor.finishPreparation();
       },
       //  Spec 15 §4.2 relocation temporary queue: production ingress
       //  consults the same admission attempts registered on Accepted
@@ -887,8 +883,8 @@ export class DefaultZLinkSpotManager {
   ): void {
     const activation = this.activations.activationForClose(meshName, target.targetSpotId);
     if (activation?.objectGeneration === target.objectGeneration) {
-      this.activations.publish(meshName, target.targetSpotId);
-      activation.serialExecutor.openPreparationAdmission();
+      const published = this.activations.publish(meshName, target.targetSpotId);
+      published?.serialExecutor.openPreparationAdmission();
     }
   }
 
@@ -1470,8 +1466,8 @@ export class DefaultZLinkSpotManager {
   }
 
   async publishUserSpot(meshName: string, spotId: RoutingId): Promise<void> {
-    this.activations.publish(meshName, spotId);
-    await this.activations.resolve(meshName, spotId)?.serialExecutor.finishPreparation();
+    const published = this.activations.publish(meshName, spotId);
+    await published?.serialExecutor.finishPreparation();
   }
 
   async abortUserSpotPublication(meshName: string, spotId: RoutingId): Promise<void> {

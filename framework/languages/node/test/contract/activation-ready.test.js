@@ -677,3 +677,29 @@ test('Cold Instance staging is hidden and failed Ready discards initialization C
   assert.equal(authorityCalls, 0);
   assert.equal(manager.activations.activationForClose('mesh', 'unpublished-cold'), undefined);
 });
+
+for (const boundary of ['register', 'publish']) {
+  test(`Ready publication pushes admission without resolve after ${boundary}`, async (t) => {
+    const runtime = owner();
+    t.after(() => runtime.dispose());
+    const registry = runtime.manager.activations;
+    const mutate = registry[boundary].bind(registry);
+    let publications = 0;
+    registry[boundary] = (...args) => {
+      const published = mutate(...args);
+      publications++;
+      const resolve = registry.resolve;
+      registry.resolve = () => assert.fail('Publication must push admission without resolve');
+      queueMicrotask(() => {
+        registry.resolve = resolve;
+      });
+      return published;
+    };
+    await runtime.create();
+    assert.equal(publications, 1);
+    assert.equal(
+      registry.activationForClose('mesh', 'ready-room').serialExecutor.isPreparing,
+      false
+    );
+  });
+}
