@@ -344,7 +344,8 @@ guarantee is not implemented by running callbacks while holding exclusive access
 approach can easily create a structure in which an external callback reacquires the same
 exclusive-access primitive, which [State Ownership And State Lanes §6](../01-execution/06-state-ownership-and-lanes.en.md#6-structuring-so-reentrancy-cannot-arise)
 prohibits. The target preserves the order above and fixes, in one owning turn, the payload
-ownership and Actor FIFO position of each record that has not run. After the required lifecycle
+ownership and owner-queue position of each record that has not run. The takeover of later records
+and the suffix transfer below apply to Actor records. After the required lifecycle
 and Join completion order is met, the target ends the previous move before the first taken-over
 handler starts, and this completion does not wait for the handler terminals of the taken-over
 records. When a taken-over record registers a new Deferred Join, the payload ownership and order

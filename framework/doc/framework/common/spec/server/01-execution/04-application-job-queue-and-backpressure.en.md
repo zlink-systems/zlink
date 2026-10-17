@@ -165,7 +165,7 @@ An `await`, coroutine suspension, continuation, or reply wait after handler star
 not acquire the same permit again. A non-runnable durable backlog such as relocation
 returns its initial reservation after a finite handoff to the payload owner defined by
 that relocation specification, and a record acquires a permit again when it becomes runnable
-at the head of the Actor FIFO. **While the Actor FIFO owns a durable record that has not
+at the head of the owner queue defined by its existing execution contract. **While the Actor FIFO owns a durable record that has not
 started, an application record accepted after it is also taken over, in order, by the same
 payload owner, which returns its initial permit.** This decision and the record's acceptance
 happen in the same owning turn, so no later record waits behind an earlier durable record
