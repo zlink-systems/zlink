@@ -46,7 +46,7 @@ async function main() {
     .listen('tcp://127.0.0.1:0')
     .routingId('shutdown-node')
     .objects().server()
-    .addEntrySpot(EntrySpot)
+    .addEntrySpot(EntrySpot, 'player')
     .addSpotFactory('user', UserSpot, factory => factory.disableRelocation())
     .addInstanceSpotFactory('instance', InstanceSpot, factory => factory.disableRelocation());
   class AppModule {}

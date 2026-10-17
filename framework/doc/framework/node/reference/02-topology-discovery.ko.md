@@ -57,7 +57,7 @@ MeshNode가 Actor·Spot을 어떻게 다루는지(Client만 하는지, Server로
 
 ```ts
 play.objects().server()
-  .addEntrySpot(GameEntrySpot)
+  .addEntrySpot(GameEntrySpot, "player")
   .addSpotFactory("room", RoomSpot, (factory) => {
     factory.executionMode(ZLinkUserSpotExecutionMode.SpotWide);
     factory.preserveStateWith(RoomRelocationAdapter);
@@ -72,7 +72,7 @@ play.objects().server()
 | Modifier | 기본값 | 의미 |
 | --- | --- | --- |
 | `.client()` / `.server()` | 생략하면 `None` | Object Client(참조만) 또는 Object Server(호스팅) 역할 선택. `server()`는 `client()` 기능을 포함하며 둘 다 Location Store가 필수다 |
-| `.addEntrySpot(entrySpotType)` | 없음 | 외부 진입 전용 Entry Spot 타입 등록 |
+| `.addEntrySpot(entrySpotType, actorType)` | 없음 | 외부 진입 전용 Entry Spot 타입 등록. `actorType`은 그 Entry가 받는 Actor stable type이며 `addActorFactory`의 `actorType`과 같은 이름이다. 새 Actor는 이 Entry Spot 타입이 받는 Actor type에 한해 이 node에 만들어진다 |
 | `.addSpotFactory(spotType, implementation, configure)` | 없음 | stable User Spot 타입 등록. `configure`는 `stableTypeLimit`·`executionMode`·`relocationCoordinationMode`에 더해 `disableRelocation()`/`recreateOnRelocation()`/`preserveStateWith(...)` 중 정확히 하나를 호출해야 한다 |
 | `.addInstanceSpotFactory(instanceSpotType, implementation, configure)` | 없음 | cold-activation Instance Spot 타입 등록. `configure`는 `stableTypeLimit`에 더해 relocation 동작 중 정확히 하나를 호출해야 한다 |
 | `.addActorFactory(actorType, factoryType, configure)` | 없음 | stable Actor 타입 등록. `configure`는 relocation 동작 중 정확히 하나를 호출해야 한다(Actor factory에는 `stableTypeLimit`이 없다) |

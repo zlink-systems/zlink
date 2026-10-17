@@ -920,13 +920,8 @@ class degraded_location_host_probe_t final : public zlink::framework::hosted_ser
 {
   public:
     degraded_location_host_probe_t (zlink::framework::app_t &app,
-                                    std::shared_ptr<recovering_location_store_t> store,
-                                    std::chrono::steady_clock::time_point started_at,
-                                    std::chrono::milliseconds renew_timeout) :
-        _app (app),
-        _store (std::move (store)),
-        _started_at (started_at),
-        _renew_timeout (renew_timeout)
+                                    std::shared_ptr<recovering_location_store_t> store) :
+        _app (app), _store (std::move (store))
     {
     }
 
@@ -940,10 +935,9 @@ class degraded_location_host_probe_t final : public zlink::framework::hosted_ser
                                 serializers] () mutable {
             auto &locations = *location_repository;
             auto client = _app.advanced ().zlink ().route_client (*serializers);
-            startup_completed =
-              wait_until ([this] { return _app.is_ready (); }, std::chrono::seconds (1));
-            started_within_timeout =
-              std::chrono::steady_clock::now () - _started_at < _renew_timeout;
+            preparing_without_lease =
+              !_app.is_ready ()
+              && _app.runtime_state () == zlink::framework::framework_runtime_state_t::preparing;
             descriptor_blocked =
               locations.list_mesh_nodes ("degraded-location-host").result ().value ().items.empty ()
               && locations.list_client_servers ("degraded-client-server")
@@ -1040,8 +1034,7 @@ class degraded_location_host_probe_t final : public zlink::framework::hosted_ser
             _worker.join ();
     }
 
-    bool startup_completed = false;
-    bool started_within_timeout = false;
+    bool preparing_without_lease = false;
     bool descriptor_blocked = false;
     bool descriptor_republished = false;
     bool mesh_republished = false;
@@ -1057,8 +1050,6 @@ class degraded_location_host_probe_t final : public zlink::framework::hosted_ser
   private:
     zlink::framework::app_t &_app;
     std::shared_ptr<recovering_location_store_t> _store;
-    std::chrono::steady_clock::time_point _started_at;
-    std::chrono::milliseconds _renew_timeout;
     std::thread _worker;
 };
 
@@ -1101,22 +1092,19 @@ bool verify_degraded_host_republishes_descriptor_after_owner_claim ()
       .enable_publisher (0)
       .set_routing_id (zlink::routing_id_t::from ("degraded-fanout-publisher"));
 
-    const auto started_at = std::chrono::steady_clock::now ();
-    auto probe =
-      std::make_unique<degraded_location_host_probe_t> (app, store, started_at, renew_timeout);
+    auto probe = std::make_unique<degraded_location_host_probe_t> (app, store);
     auto *probe_view = probe.get ();
     app.add_hosted_service (std::move (probe));
     char program[] = "degraded-location-host";
     char *arguments[] = {program, nullptr};
     const auto exit_code = app.run (1, arguments);
-    if (exit_code == 0 && probe_view->startup_completed && probe_view->started_within_timeout
-        && probe_view->descriptor_blocked && probe_view->descriptor_republished
-        && probe_view->factory_blocked && probe_view->factory_resumed
-        && probe_view->message_and_timer_blocked && probe_view->message_and_timer_resumed)
+    if (exit_code == 0 && probe_view->preparing_without_lease && probe_view->descriptor_blocked
+        && probe_view->descriptor_republished && probe_view->factory_blocked
+        && probe_view->factory_resumed && probe_view->message_and_timer_blocked
+        && probe_view->message_and_timer_resumed)
         return true;
     std::cerr << "degraded Location host did not gate and republish its descriptor"
-              << " started-within-timeout=" << probe_view->started_within_timeout
-              << " startup-completed=" << probe_view->startup_completed
+              << " preparing-without-lease=" << probe_view->preparing_without_lease
               << " blocked=" << probe_view->descriptor_blocked
               << " republished=" << probe_view->descriptor_republished
               << " mesh=" << probe_view->mesh_republished
@@ -1460,7 +1448,9 @@ bool verify_degraded_host_blocks_and_resumes_relocation ()
     int exit_code = -1;
     std::thread run_thread ([&] { exit_code = app.run (1, arguments); });
     service_view->wait_started ();
-    const bool startup_completed = ready_view->wait_ready ();
+    const bool preparing_without_lease =
+      !app.is_ready ()
+      && app.runtime_state () == zlink::framework::framework_runtime_state_t::preparing;
     const auto blocked =
       app
         .relocate ({.mode = zlink::framework::relocation_mode_t::planned_maintenance,
@@ -1469,7 +1459,7 @@ bool verify_degraded_host_blocks_and_resumes_relocation ()
         .value ();
     const bool relocation_blocked =
       blocked.outcome == zlink::framework::relocation_outcome_t::blocked
-      && blocked.reason == zlink::framework::relocation_reason_t::store_unavailable;
+      && blocked.reason == zlink::framework::relocation_reason_t::runtime_not_ready;
 
     location_store->recover ();
     auto services = app.advanced ().services ().build_provider ();
@@ -1480,6 +1470,7 @@ bool verify_degraded_host_blocks_and_resumes_relocation ()
                   .value ()
                   .items.empty ();
     });
+    const bool recovery_completed = ready_view->wait_ready ();
     const auto resumed =
       app
         .relocate ({.mode = zlink::framework::relocation_mode_t::planned_maintenance,
@@ -1498,14 +1489,16 @@ bool verify_degraded_host_blocks_and_resumes_relocation ()
     service_view->release ();
     const auto stopped = shutdown.result ().value ();
     run_thread.join ();
-    const bool passed = startup_completed && relocation_blocked && relocation_resumed
-                        && stopped.outcome == zlink::framework::termination_outcome_t::stopped
-                        && exit_code == 0;
+    const bool passed =
+      preparing_without_lease && relocation_blocked && recovery_completed && relocation_resumed
+      && stopped.outcome == zlink::framework::termination_outcome_t::stopped && exit_code == 0;
     if (!passed) {
         std::cerr << "degraded host relocation admission did not close and resume"
-                  << " startup=" << startup_completed
+                  << " preparing-without-lease=" << preparing_without_lease
                   << " blocked-reason=" << static_cast<int> (blocked.reason)
-                  << " blocked=" << relocation_blocked << " resumed=" << relocation_resumed << '\n';
+                  << " blocked=" << relocation_blocked
+                  << " recovery-completed=" << recovery_completed
+                  << " resumed=" << relocation_resumed << '\n';
     }
     return passed;
 }

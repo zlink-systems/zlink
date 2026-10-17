@@ -41,6 +41,98 @@ import java.util.function.Supplier;
 
 final class ZLinkSpotTimerRegistryTest {
     @Test
+    void infrastructureResumeRetainsGateThroughTimerHandlerAwait() throws Exception {
+        var scheduledTick = new AtomicReference<Runnable>();
+        var scheduler =
+                new ScheduledThreadPoolExecutor(1) {
+                    @Override
+                    public ScheduledFuture<?> schedule(
+                            Runnable command, long delay, TimeUnit unit) {
+                        scheduledTick.set(command);
+                        return super.schedule(() -> {}, 1, TimeUnit.HOURS);
+                    }
+                };
+        var executor = Executors.newSingleThreadExecutor();
+        var queue =
+                new systems.zlink.framework.execution.ZLinkSerialExecutionQueue(
+                        executor,
+                        systems.zlink.framework.execution.ZLinkExecutionLanePolicy.spot());
+        var releaseOwner = new CompletableFuture<Void>();
+        var ownerEntered = new CompletableFuture<Void>();
+        var attempted = new CompletableFuture<Void>();
+        var handlerEntered = new CountDownLatch(1);
+        var releaseHandler = new CompletableFuture<Void>();
+        var siblingEntered = new AtomicBoolean();
+        var laneRef =
+                new AtomicReference<
+                        systems.zlink.framework.runtime.internal.execution.ZLinkStateLane>();
+        var registry =
+                new ZLinkSpotTimerRegistry(
+                        "spot",
+                        scheduler,
+                        ignored -> new BlockingTimerHandler(handlerEntered, releaseHandler),
+                        List.of(),
+                        "test",
+                        (timerName, operation) -> {
+                            laneRef.get()
+                                    .runAsync(
+                                            () -> {
+                                                ownerEntered.complete(null);
+                                                releaseOwner.join();
+                                                return null;
+                                            });
+                            ownerEntered.join();
+                            return queue.enqueue(
+                                    () -> {
+                                        var completion = operation.get();
+                                        attempted.complete(null);
+                                        return completion;
+                                    },
+                                    null);
+                        });
+        registry.setSpot(new TestSpot());
+        try {
+            registry.add("timer", Duration.ofDays(1), BlockingTimerHandler.class, null)
+                    .toCompletableFuture()
+                    .get(3, TimeUnit.SECONDS);
+            var field = ZLinkSpotTimerRegistry.class.getDeclaredField("stateLane");
+            field.setAccessible(true);
+            var lane =
+                    (systems.zlink.framework.runtime.internal.execution.ZLinkStateLane)
+                            field.get(registry);
+            laneRef.set(lane);
+            scheduledTick.get().run();
+            attempted.get(3, TimeUnit.SECONDS);
+            queue.enqueue(() -> CompletableFuture.completedFuture(null), null)
+                    .toCompletableFuture()
+                    .get(3, TimeUnit.SECONDS);
+            releaseOwner.complete(null);
+            assertTrue(handlerEntered.await(3, TimeUnit.SECONDS));
+            executor.submit(() -> {}).get(3, TimeUnit.SECONDS);
+            var sibling =
+                    queue.enqueue(
+                            () -> {
+                                siblingEntered.set(true);
+                                return CompletableFuture.completedFuture(null);
+                            },
+                            null);
+            executor.submit(() -> {}).get(3, TimeUnit.SECONDS);
+            boolean overlapped = siblingEntered.get();
+            releaseHandler.complete(null);
+            sibling.toCompletableFuture().get(3, TimeUnit.SECONDS);
+            assertFalse(overlapped, "ordinary timer handler await must retain the resumed gate");
+            assertTrue(siblingEntered.get());
+        } finally {
+            releaseOwner.complete(null);
+            releaseHandler.complete(null);
+            registry.closeAsync().toCompletableFuture().get(3, TimeUnit.SECONDS);
+            scheduler.shutdownNow();
+            queue.close();
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
     void throwingCallbackConsumesItsNominalTick() throws Exception {
         var scheduledTicks = new java.util.concurrent.LinkedBlockingQueue<Runnable>();
         var scheduler =

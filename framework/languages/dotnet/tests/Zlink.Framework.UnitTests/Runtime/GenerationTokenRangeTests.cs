@@ -1,5 +1,4 @@
 using System.Reflection;
-using Zlink.Framework.Runtime.Locations;
 using Zlink.Framework.Runtime.Service;
 
 namespace Zlink.Framework.UnitTests;
@@ -34,12 +33,6 @@ public sealed class GenerationTokenRangeTests
     public void ManagedMeshNodeLifecycleTokenStaysWithinNonzeroU64Range()
     {
         AssertIssuerStaysInRange(typeof(ZLinkManagedMeshNode), "NewNonZeroToken");
-    }
-
-    [Fact]
-    public void LocationAutoConnectHostLifecycleNonceStaysWithinNonzeroU64Range()
-    {
-        AssertIssuerStaysInRange(typeof(ZLinkLocationAutoConnectHost), "CreateLifecycleNonce");
     }
 
     private static void AssertIssuerStaysInRange(Type declaringType, string methodName)

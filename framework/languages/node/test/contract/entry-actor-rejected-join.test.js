@@ -158,7 +158,7 @@ for (const remoteIngress of [false, true]) {
           .routingId(`entry-replay-${role}`)
           .listen('tcp://127.0.0.1:0');
         const objects = mesh.objects().server();
-        objects.addEntrySpot(Entry);
+        objects.addEntrySpot(Entry, 'Player');
         objects.addActorFactory('Player', Factory, (c) => c.recreateOnRelocation());
         objects.addSpotFactory('Region', Spot, (c) => {
           c.recreateOnRelocation();

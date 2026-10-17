@@ -111,7 +111,8 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
         return ZLinkRelocationHandOff.run(
                         lane.client(),
                         prepared.stageRequest(),
-                        () -> prepared.relayCapturedIngress(lane.client(), timeout),
+                        settlement ->
+                                prepared.relayCapturedIngress(lane.client(), timeout, settlement),
                         timeout,
                         restoreDeadline)
                 .handle(
@@ -628,9 +629,6 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
                             if (!attempt.leaveClaimed().compareAndSet(false, true)) {
                                 return CompletableFuture.completedFuture(null);
                             }
-                            attempt.prepared()
-                                    .acceptTargetAuthorityOwnerGeneration(
-                                            left.currentAuthorityOwnerGeneration());
                             return completeSourceLeave(attempt, left);
                         });
     }

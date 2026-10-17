@@ -751,8 +751,8 @@ Transport, target과 Session owner가 수행하는 검증과 그 경계는
 ### `Completed` 조건
 
 `Completed`는 accepted request count와 terminal completion count가 같고 pending relay가 0일 때만 허용한다. Source
-lease가 유효한 동안 ACK를 확인하지 못하면 Retire는 relocation root와 reply bytes를 retention 동안 보존한 채
-`ForceStopped`로 끝난다.
+lease가 유효한 동안 ACK를 확인하지 못한 채 deadline을 넘긴 경우의 결과와 보관 기간은
+[Location runtime §9.3](../05-location-relocation/01-location-runtime.ko.md#93-source가-바뀐-뒤-끝난-request를-처리한다)이 정한다.
 
 ### Root replacement
 

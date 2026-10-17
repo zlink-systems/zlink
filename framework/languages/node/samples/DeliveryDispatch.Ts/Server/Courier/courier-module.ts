@@ -52,7 +52,7 @@ function createCourierActorNodeModule(options: CourierOptions) {
             .listen(spotEndpoint)
             .routingId(nodeId);
           const objectServer = mesh.objects().server();
-          objectServer.addEntrySpot(CourierEntrySpot);
+          objectServer.addEntrySpot(CourierEntrySpot, SampleNames.courierActorType);
           objectServer.addActorFactory(
             SampleNames.courierActorType,
             CourierActorFactory,

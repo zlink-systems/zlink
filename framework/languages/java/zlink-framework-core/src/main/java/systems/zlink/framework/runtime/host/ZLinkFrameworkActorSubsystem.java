@@ -1,6 +1,7 @@
 package systems.zlink.framework.runtime.host;
 
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.ZLinkMessageSerializer;
 import systems.zlink.framework.actors.ZLinkActorClient;
 import systems.zlink.framework.actors.ZLinkActorDirectory;
@@ -14,9 +15,11 @@ import systems.zlink.framework.runtime.actors.ZLinkStoreActorDirectory;
 import systems.zlink.framework.runtime.channels.ZLinkChannelRuntime;
 import systems.zlink.framework.runtime.configuration.ZLinkFrameworkRegistration;
 import systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer;
+import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
 import systems.zlink.framework.runtime.internal.monitoring.ZLinkRuntimeEventDispatcher;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.internal.spots.SpotTransportAddressResolver;
 import systems.zlink.framework.runtime.locations.ZLinkLocationLifecycle;
 import systems.zlink.framework.runtime.locations.ZLinkStoreLocationResolvers;
@@ -24,8 +27,10 @@ import systems.zlink.framework.runtime.spots.ZLinkSpotRuntime;
 import systems.zlink.framework.streams.ZLinkStreamCodec;
 
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletionStage;
+import java.util.function.Consumer;
 
 final class ZLinkFrameworkActorSubsystem {
     private final ZLinkActorRuntime actors;
@@ -153,7 +158,8 @@ final class ZLinkFrameworkActorSubsystem {
                                     actors,
                                     serializer,
                                     spots.activationAdmission(meshActorNode.meshName()),
-                                    meshActorNode::actorRelocationPolicy);
+                                    meshActorNode::actorRelocationPolicy,
+                                    meshActorNode::acceptsNewActor);
                     meshNode.setActorCreateOperationHandler(creation);
                     actors.setCreationSubmitter(creation);
                     actors.setEntrySpotTargetSelector(creation::selectEntrySpotTarget);
@@ -262,7 +268,37 @@ final class ZLinkFrameworkActorSubsystem {
                 actors.setMessageFollowNoticeSender(meshNode::sendMessageFollow);
                 actors.setActorJoinCanonicalMeshNode(meshNode);
                 try {
-                    meshNode.spotNode().setMessageFollowRelayHandler(actors::relayMessageFollow);
+                    meshNode.spotNode()
+                            .setMessageFollowRelayHandler(
+                                    new ZLinkInternalSpotNode.MessageFollowRelayHandler() {
+                                        @Override
+                                        public boolean hasSource(String actorId) {
+                                            return actors.hasMessageFollowSource(actorId);
+                                        }
+
+                                        @Override
+                                        public boolean handle(
+                                                RoutingId sourceNodeRid,
+                                                long sourceNodeGeneration,
+                                                ZLinkServiceM6BWireCodec.ActorMessage header,
+                                                byte[] acceptedJournalRecord,
+                                                List<Message> parts,
+                                                String contentType,
+                                                Consumer<List<Message>> reply,
+                                                Consumer<Throwable> failure,
+                                                Runnable terminalRelease) {
+                                            return actors.relayMessageFollow(
+                                                    sourceNodeRid,
+                                                    sourceNodeGeneration,
+                                                    header,
+                                                    acceptedJournalRecord,
+                                                    parts,
+                                                    contentType,
+                                                    reply,
+                                                    failure,
+                                                    terminalRelease);
+                                        }
+                                    });
                 } catch (UnsupportedOperationException ignored) {
                     // Alternate backends can expose actor runtime without the
                     // raw M6B service relay boundary.

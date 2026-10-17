@@ -268,6 +268,7 @@ export interface ZLinkSpotNodeOptions {
   readonly router?: ZLinkSpotRouterCapabilityOptions;
   readonly pubSub?: ZLinkSpotPubSubCapabilityOptions;
   readonly entrySpotType?: Type<ZLinkEntrySpot>;
+  readonly entrySpotActorType?: string;
   readonly spotFactories?: readonly Type<ZLinkSpot>[];
   readonly spotFactoryRegistrations?: Readonly<
     Record<

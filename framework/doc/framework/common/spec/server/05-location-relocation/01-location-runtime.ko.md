@@ -1352,7 +1352,7 @@ Framework는 각 object의 완료 결과를 object 순서로 저장한다. 같�
 
 Connection 종료나 재연결만으로 완료 결과를 받았다고 판단하지 않는다. Target은 현재 route로
 전달을 계속한다. Source owner lease가 유효한 상태에서 `Relocate` deadline을 넘으면
-`ForceStopped`다. 이 경우 payload와 reply bytes를 24시간 보관한다.
+`ForceStopped`다. 이 경우 relocation root와 payload, reply bytes를 24시간 보관한다.
 
 ### 9.4 Relay-ready accepted 전 취소
 

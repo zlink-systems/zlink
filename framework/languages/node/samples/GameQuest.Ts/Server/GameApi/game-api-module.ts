@@ -68,7 +68,7 @@ function createGameApiModule(instanceId: 'api-a' | 'api-b') {
             .listen(config[actorSpotEndpointKey])
             .setRoutingIdPrefix('gamequest-api');
           const objectServer = mesh.objects().server();
-          objectServer.addEntrySpot(GameQuestEntrySpot);
+          objectServer.addEntrySpot(GameQuestEntrySpot, SampleNames.playerActorType);
           objectServer.addActorFactory(
             SampleNames.playerActorType,
             GameQuestPlayerActorFactory,
