@@ -4,9 +4,12 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.locationprovider.*;
+import systems.zlink.framework.locationprovider.ZLinkStoreCancellation;
 import systems.zlink.framework.locations.ZLinkActivationConcurrency;
 import systems.zlink.framework.locations.ZLinkCapacityUsage;
 import systems.zlink.framework.locations.ZLinkMeshNodeObjectRole;
@@ -175,11 +178,16 @@ class ZLinkProviderDescriptorRepositoryTest {
                         .status());
     }
 
-    // Location runtime §10: a MeshNode NewClaim whose result was lost is sent again with a new
-    // write time; reading the key confirms the first claim instead of rejecting the own row.
-    @Test
-    void repeatedMeshNodeNewClaimAfterLostResponseIsConfirmed() throws Exception {
-        var provider = new ZLinkInMemoryProviderLocationStore();
+    // Location runtime §10: a MeshNode write whose result was lost is sent again with a new
+    // write time; both intents confirm the stored row without another mutation.
+    @ParameterizedTest
+    @EnumSource(
+            value = ZLinkLocationWriteIntent.class,
+            names = {"NEW_CLAIM", "RENEW"})
+    void repeatedMeshNodeWriteAfterLostResponseIsConfirmed(ZLinkLocationWriteIntent intent)
+            throws Exception {
+        var clock = new MutableClock(Instant.parse("2026-09-20T00:00:00Z"));
+        var provider = new CountingStore(clock);
         var owners = new ZLinkProviderOwnerLeaseRepository(provider);
         var descriptors = new ZLinkProviderDescriptorRepository(provider);
         var owner =
@@ -205,24 +213,37 @@ class ZLinkProviderDescriptorRepositoryTest {
                         .get()
                         .status());
 
+        int writesBeforeRetry = provider.writes;
         var retry =
                 descriptors
                         .updateMeshNode(
-                                writtenAt(first, Instant.parse("2026-07-29T00:00:05Z")),
-                                ZLinkLocationWriteIntent.NEW_CLAIM)
+                                writtenAt(first, Instant.parse("2026-07-29T00:00:05Z")), intent)
                         .toCompletableFuture()
                         .get();
         assertEquals(ZLinkLocationWriteStatus.STORED, retry.status());
+        assertEquals(writesBeforeRetry, provider.writes);
+        assertEquals(
+                first,
+                descriptors
+                        .listMeshNodes("game", ZLinkPageRequest.firstPage())
+                        .toCompletableFuture()
+                        .get()
+                        .items()
+                        .getFirst());
 
         assertEquals(
-                ZLinkLocationWriteStatus.REJECTED_CONFLICT,
+                intent == ZLinkLocationWriteIntent.NEW_CLAIM
+                        ? ZLinkLocationWriteStatus.REJECTED_CONFLICT
+                        : ZLinkLocationWriteStatus.IGNORED_STALE,
                 descriptors
-                        .updateMeshNode(descriptor(other, 1), ZLinkLocationWriteIntent.NEW_CLAIM)
+                        .updateMeshNode(descriptor(other, 1), intent)
                         .toCompletableFuture()
                         .get()
                         .status());
         assertEquals(
-                ZLinkLocationWriteStatus.REJECTED_CONFLICT,
+                intent == ZLinkLocationWriteIntent.NEW_CLAIM
+                        ? ZLinkLocationWriteStatus.REJECTED_CONFLICT
+                        : ZLinkLocationWriteStatus.IGNORED_STALE,
                 descriptors
                         .updateMeshNode(
                                 descriptor(
@@ -232,7 +253,23 @@ class ZLinkProviderDescriptorRepositoryTest {
                                         Map.of(),
                                         ZLinkMeshNodeObjectRole.SERVER,
                                         "security-a"),
-                                ZLinkLocationWriteIntent.NEW_CLAIM)
+                                intent)
+                        .toCompletableFuture()
+                        .get()
+                        .status());
+        assertEquals(
+                ZLinkLocationWriteStatus.REJECTED_CONFLICT,
+                descriptors
+                        .updateMeshNode(descriptor(owner, 2), ZLinkLocationWriteIntent.NEW_CLAIM)
+                        .toCompletableFuture()
+                        .get()
+                        .status());
+        clock.advance(Duration.ofMinutes(1));
+        assertEquals(
+                ZLinkLocationWriteStatus.IGNORED_STALE,
+                descriptors
+                        .updateMeshNode(
+                                writtenAt(first, Instant.parse("2026-07-29T00:00:05Z")), intent)
                         .toCompletableFuture()
                         .get()
                         .status());
@@ -494,6 +531,34 @@ class ZLinkProviderDescriptorRepositoryTest {
                 d.ownerId(),
                 d.leaseGeneration(),
                 at);
+    }
+
+    private static final class CountingStore implements ZLinkLocationStore {
+        private final ZLinkLocationStore backing;
+        private int writes;
+
+        private CountingStore(Clock clock) {
+            backing = new ZLinkInMemoryProviderLocationStore(clock);
+        }
+
+        @Override
+        public CompletionStage<ZLinkStoreReadResult> read(
+                ZLinkStoreKey key, ZLinkStoreCancellation cancellation) {
+            return backing.read(key, cancellation);
+        }
+
+        @Override
+        public CompletionStage<ZLinkStoreWriteResult> write(
+                ZLinkStoreWriteRequest request, ZLinkStoreCancellation cancellation) {
+            writes++;
+            return backing.write(request, cancellation);
+        }
+
+        @Override
+        public CompletionStage<ZLinkStoreScanResult> scan(
+                ZLinkStoreScanRequest request, ZLinkStoreCancellation cancellation) {
+            return backing.scan(request, cancellation);
+        }
     }
 
     private static final class MutableClock extends Clock {
