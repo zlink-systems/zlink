@@ -7,6 +7,7 @@ import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.actors.*;
+import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.locationprovider.ZLinkRelocationStore;
 import systems.zlink.framework.locations.*;
 import systems.zlink.framework.runtime.InMemoryRelocationStore;
@@ -37,7 +38,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.Supplier;
 
 final class ZLinkStandaloneActorRelocationSourceBuilderTest {
     private static final ZLinkStoreCancellation NEVER = () -> false;
@@ -550,6 +550,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
                     0,
                     targetReplayed.get(),
                     "standalone Actor records must replay through the Actor staging owner");
+            targetBackend.terminals.toCompletableFuture().get(3, TimeUnit.SECONDS);
             assertEquals(1027, targetBackend.replayedPackets.size());
             for (int index = 0; index < 1_025; index++) {
                 assertEquals("post-freeze-" + index, targetBackend.replayedPackets.get(index));
@@ -802,7 +803,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
                 byte[] state,
                 ZLinkRelocationCancellation cancellation) {
             assertArrayEquals(new byte[] {7, 2, 6}, state);
-            return CompletableFuture.completedFuture(new Object());
+            return CompletableFuture.completedFuture(new ZLinkActorRelocationTestQueue());
         }
 
         @Override
@@ -819,19 +820,41 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
                             : Optional.empty());
         }
 
+        private CompletionStage<Void> terminals = CompletableFuture.completedFuture(null);
+
         @Override
-        public <T> CompletionStage<T> admitApplicationJob(Supplier<CompletionStage<T>> turn) {
-            admittedTurns.incrementAndGet();
-            int active = activeTurns.incrementAndGet();
-            maxActiveTurns.accumulateAndGet(active, Math::max);
-            CompletionStage<T> result;
-            try {
-                result = turn.get();
-            } catch (RuntimeException | Error failure) {
-                activeTurns.decrementAndGet();
-                throw failure;
-            }
-            return result.whenComplete((ignored, failure) -> activeTurns.decrementAndGet());
+        public CompletionStage<List<CompletableFuture<Void>>> admitBacklogPrefix(
+                Object actor,
+                ZLinkStandaloneActorRelocationStagingOwner.Request request,
+                List<ZLinkSerialExecutionQueue.QueuedRecord> records,
+                java.util.function.BiFunction<
+                                ZLinkSerialExecutionQueue.QueuedRecord,
+                                CompletableFuture<Void>,
+                                java.util.function.Supplier<CompletionStage<Void>>>
+                        replay) {
+            return ((ZLinkActorRelocationTestQueue) actor)
+                    .admit(
+                            records,
+                            (record, terminal) -> {
+                                var operation = replay.apply(record, terminal);
+                                return () -> {
+                                    admittedTurns.incrementAndGet();
+                                    int active = activeTurns.incrementAndGet();
+                                    maxActiveTurns.accumulateAndGet(active, Math::max);
+                                    return operation
+                                            .get()
+                                            .whenComplete(
+                                                    (ignored, failure) ->
+                                                            activeTurns.decrementAndGet());
+                                };
+                            })
+                    .thenApply(
+                            accepted -> {
+                                terminals =
+                                        CompletableFuture.allOf(
+                                                accepted.toArray(CompletableFuture[]::new));
+                                return accepted;
+                            });
         }
 
         @Override
@@ -847,12 +870,13 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
                     replayedPackets.isEmpty(),
                     "durable backlog must not run before lifecycle admission");
             assertTrue(admitted.compareAndSet(false, true));
+            ((ZLinkActorRelocationTestQueue) actor).open();
         }
 
         @Override
         public CompletionStage<Void> discard(
                 Object actor, ZLinkStandaloneActorRelocationStagingOwner.Request request) {
-            return CompletableFuture.completedFuture(null);
+            return ((ZLinkActorRelocationTestQueue) actor).discard();
         }
     }
 
