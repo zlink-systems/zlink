@@ -13,6 +13,7 @@
 #include <iostream>
 #include <new>
 #include <stdexcept>
+#include <thread>
 #include <utility>
 
 #if defined(_MSC_VER)
@@ -136,8 +137,14 @@ std::size_t measure_task_wait_resumption ()
     if (ready.wait_for (std::chrono::seconds (5)) != std::future_status::ready)
         throw std::runtime_error ("task waiter did not resume");
     ready.get ();
-    if (!waiter.await_ready ())
-        throw std::runtime_error ("resumed task did not complete");
+    // Submit and completion spec §11: the waiter resumes in its own turn, so its
+    // co_return may finish after the promise above is observed on this thread.
+    const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (5);
+    while (!waiter.await_ready ()) {
+        if (std::chrono::steady_clock::now () >= deadline)
+            throw std::runtime_error ("resumed task did not complete");
+        std::this_thread::yield ();
+    }
     return allocations;
 }
 
