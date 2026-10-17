@@ -1353,9 +1353,8 @@ std::shared_ptr<service::spot_t> detail::spot_node_runtime_t::attach_native_spot
                    })
                    .get ();
     } else {
-        // A creating context is not published yet, so its facade can stay
-        // private until the activation and Location Store claim both succeed.
-        state->native_spot = native;
+        // Keep the facade out of the public native index until activation succeeds.
+        owner->lane.run ([&] { state->native_spot = native; }).get ();
     }
 
     for (const auto &handler : plan.handlers) {
@@ -13001,6 +13000,13 @@ local_spot_create_result_t spot_node_runtime_t::create_spot_context (
                                             std::current_exception ());
           }
       });
+    _state->lane
+      .run ([&] {
+          const auto pending = _state->pending_spot_creations_by_id.find (id_value);
+          if (pending != _state->pending_spot_creations_by_id.end ())
+              pending->second.context = context_state;
+      })
+      .get ();
     spot_create_response_t response = spot_create_response_t::accept ();
     preparation->lifecycle
       ->run ([&] () -> task_t<void> {
@@ -13129,7 +13135,7 @@ local_spot_create_result_t spot_node_runtime_t::create_spot (std::string spot_na
                                  : detail::new_user_spot_id ();
         })
         .get ();
-    return create_spot_context (std::move (spot_name), std::move (spot_id), std::move (request));
+    return get_or_create_spot (std::move (spot_name), std::move (spot_id), std::move (request));
 }
 
 local_spot_create_result_t spot_node_runtime_t::get_or_create_spot (std::string spot_name,
@@ -14609,6 +14615,13 @@ bool spot_node_runtime_t::dispatch_mesh_record (
           _state->lane
             .run ([&] {
                 auto context = find_context_core (spot_id_t (owner.spot_id));
+                if (!context) {
+                    const auto pending = _state->pending_spot_creations_by_id.find (owner.spot_id);
+                    if (pending != _state->pending_spot_creations_by_id.end ()) {
+                        if (auto preparing = pending->second.context.lock ())
+                            context.emplace (spot_context_t (std::move (preparing)));
+                    }
+                }
                 auto native = context ? context->_state->native_spot.lock ()
                                       : std::shared_ptr<service::spot_t>{};
                 if (context && record.spot_route
@@ -14622,20 +14635,38 @@ bool spot_node_runtime_t::dispatch_mesh_record (
         const auto &context = binding.first;
         if (!context)
             return true;
-        const auto dispatched = dispatch_subscription (
+        auto submission = dispatch_subscription (
           *context, record.topic, parts, services, serializers,
           std::move (before_application_handler), record.release_mailbox_reservation,
           record.transferred_owner_byte_cost, &record);
-        if (!dispatched) {
-            const framework_exception_t error (
-              dispatched.error_kind (), dispatched.error () ? dispatched.error ()->what ()
-                                                            : "SPOT subscription dispatch failed");
-            report_spot_dispatch_error (
-              _state, dispatch_error_surface_t::spot_route, dispatch_message_kind_t::send,
-              dispatch_reason_from_error (error.kind ()), dispatch_error_action_t::drop,
-              std::nullopt, record.topic, owner.spot_id, std::nullopt,
-              std::make_exception_ptr (error));
-        }
+        auto dispatched =
+          submission && submission.value ()
+            ? std::move (*submission.value ())
+            : task_t<zlink::message_t> (
+                submission ? result_t<zlink::message_t>::success ({})
+                           : result_t<zlink::message_t>::failure (
+                               submission.error_kind (), submission.error ()
+                                                           ? submission.error ()->what ()
+                                                           : "SPOT subscription dispatch failed"));
+        if (terminal_deferred && deferred_terminal)
+            *terminal_deferred = true;
+        detail::observe_task_terminal (
+          dispatched, [state = _state, topic = record.topic, context_state = context->_state,
+                       deferred_terminal =
+                         std::move (deferred_terminal)] (const result_t<zlink::message_t> &result) {
+              if (!result) {
+                  const framework_exception_t error (
+                    result.error_kind (), result.error () ? result.error ()->what ()
+                                                          : "SPOT subscription dispatch failed");
+                  report_spot_dispatch_error (
+                    state, dispatch_error_surface_t::spot_route, dispatch_message_kind_t::send,
+                    dispatch_reason_from_error (error.kind ()), dispatch_error_action_t::drop,
+                    std::nullopt, topic, std::string (context_state->spot_id), std::nullopt,
+                    std::make_exception_ptr (error));
+              }
+              if (deferred_terminal)
+                  deferred_terminal ();
+          });
         return true;
     }
     const bool route_send = record.kind == service::record_kind_t::spot_send
@@ -15699,17 +15730,7 @@ task_t<actor_join_reply_t> spot_node_runtime_t::run_actor_join_control (
 }
 
 
-result_t<bool> spot_node_runtime_t::dispatch_subscription (const spot_context_t &context,
-                                                           std::string topic,
-                                                           const zlink::message_t &message,
-                                                           service_provider_t &services,
-                                                           serializer_registry_t &serializers) const
-{
-    return dispatch_subscription (context, std::move (topic),
-                                  std::vector<zlink::message_t>{message}, services, serializers);
-}
-
-result_t<bool>
+result_t<std::optional<task_t<zlink::message_t>>>
 spot_node_runtime_t::dispatch_subscription (const spot_context_t &context,
                                             std::string topic,
                                             const std::vector<zlink::message_t> &parts,
@@ -15720,13 +15741,14 @@ spot_node_runtime_t::dispatch_subscription (const spot_context_t &context,
                                             std::size_t transferred_owner_byte_cost,
                                             const service::receive_record_t *multicast) const
 {
+    using submission_t = std::optional<task_t<zlink::message_t>>;
     if (!context._state || !context._state->spot_instance) {
-        return result_t<bool>::failure (framework_error_kind_t::not_found,
-                                        "spot context is not registered");
+        return result_t<submission_t>::failure (framework_error_kind_t::not_found,
+                                                "spot context is not registered");
     }
     if (parts.empty ()) {
-        return result_t<bool>::failure (framework_error_kind_t::protocol_error,
-                                        "spot subscription frame is empty");
+        return result_t<submission_t>::failure (framework_error_kind_t::protocol_error,
+                                                "spot subscription frame is empty");
     }
     /* Fan-out wire envelope (flow-correlation §4.1): the decoded header
      * carries the publisher's flow pair, so every subscriber line — including
@@ -15806,7 +15828,7 @@ spot_node_runtime_t::dispatch_subscription (const spot_context_t &context,
         }
     }
     if (report_decode_failure) {
-        return result_t<bool>::success (false);
+        return result_t<submission_t>::success (std::nullopt);
     }
     if (multicast)
         channel_name = multicast->channel_name;
@@ -15824,31 +15846,22 @@ spot_node_runtime_t::dispatch_subscription (const spot_context_t &context,
           _state, dispatch_error_surface_t::spot_route, dispatch_message_kind_t::send,
           dispatch_error_reason_t::handler_missing, dispatch_error_action_t::drop, packet_name,
           topic, std::string (context._state->spot_id));
-        return result_t<bool>::success (false);
+        return result_t<submission_t>::success (std::nullopt);
     }
     spot_inbound_message_t inbound;
     inbound.content_type = std::move (content_type);
     inbound.channel_name = std::move (channel_name);
     if (multicast && multicast->metadata
         && !detail::mesh_metadata_codec_t::decode (*multicast->metadata, inbound.values))
-        return result_t<bool>::failure (framework_error_kind_t::protocol_error,
-                                        "logical multicast metadata is invalid");
-    auto result =
-      registry
-        .invoke_erased (spot_handler_kind_t::subscription, *packet_name, topic,
-                        std::type_index (typeid (void)), context._state->spot_instance.get (),
-                        nullptr, services, serializers, message, std::move (inbound), true, {}, {},
-                        {}, spot_handler_registry_t::actor_queue_dispatch_t::acquire,
-                        std::move (before_application_handler), {},
-                        std::move (transfer_owner_reservation), transferred_owner_byte_cost)
-        .result ();
-    if (!result) {
-        const auto *error = result.error ();
-        const framework_exception_t exception (
-          result.error_kind (), error != nullptr ? error->what () : "spot subscription failed");
-        return detail::result_access_t::failure<bool> (exception);
-    }
-    return result_t<bool>::success (true);
+        return result_t<submission_t>::failure (framework_error_kind_t::protocol_error,
+                                                "logical multicast metadata is invalid");
+    return result_t<submission_t>::success (
+      registry.invoke_erased (spot_handler_kind_t::subscription, *packet_name, topic,
+                              std::type_index (typeid (void)), context._state->spot_instance.get (),
+                              nullptr, services, serializers, message, std::move (inbound), true,
+                              {}, {}, {}, spot_handler_registry_t::actor_queue_dispatch_t::acquire,
+                              std::move (before_application_handler), {},
+                              std::move (transfer_owner_reservation), transferred_owner_byte_cost));
 }
 
 

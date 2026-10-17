@@ -10,6 +10,7 @@
 #include "runtime/locations/in_memory_store_providers.hpp"
 #include <gtest/gtest.h>
 #include <algorithm>
+#include <atomic>
 #include <concepts>
 #include <future>
 #include <latch>
@@ -46,11 +47,14 @@ struct subscriber_t
     std::vector<std::string> topics;
     std::vector<int> values;
     int other_calls = 0;
+    std::shared_ptr<std::atomic_size_t> received_calls;
     void receive (const fw::publish_message_context_t &context, const event_t &event)
     {
         channels.push_back (context.channel_name.value_or (""));
         topics.push_back (context.topic);
         values.push_back (event.value);
+        if (received_calls)
+            received_calls->fetch_add (1, std::memory_order_release);
     }
     void receive_other (const fw::publish_message_context_t &context, const event_t &event)
     {
@@ -86,6 +90,8 @@ class SpotSubscribe : public testing::Test
         node->lane.run ([this] { node->spot_contexts_by_id.clear (); }).get ();
     }
 
+    void verify_pre_ready (bool reject, bool fail_initialize);
+
     fw::result_t<bool> deliver (const std::string &target_channel,
                                 const std::string &topic,
                                 const std::string &packet_name = event_t::packet_name)
@@ -98,8 +104,18 @@ class SpotSubscribe : public testing::Test
         header.content_type = messaging::envelope_codec_t::default_content_type;
         auto parts = messaging::envelope_codec_t{}.encode_raw_body_parts (
           header, zlink::message_t::from (std::string ("{\"value\":1}")));
-        return detail::spot_node_runtime_t (node).dispatch_subscription (
+        auto submitted = detail::spot_node_runtime_t (node).dispatch_subscription (
           context, topic, parts.items (), provider, serializers);
+        if (!submitted)
+            return fw::result_t<bool>::failure (submitted.error_kind (),
+                                                submitted.error ()->what ());
+        if (!submitted.value ())
+            return fw::result_t<bool>::success (false);
+        const auto completed = submitted.value ()->result ();
+        if (!completed)
+            return fw::result_t<bool>::failure (completed.error_kind (),
+                                                completed.error ()->what ());
+        return fw::result_t<bool>::success (true);
     }
 
     std::shared_ptr<detail::spot_node_builder_state_t> node;
@@ -236,6 +252,7 @@ TEST_F (SpotSubscribe, ContextFrameKeepsNamedChannelThroughLocalDelivery)
         ASSERT_TRUE (native->dispatch_ready (receive).result ());
     }
     EXPECT_EQ (1u, received);
+    state->drain_serial ();
     EXPECT_EQ ((std::vector<std::string>{channel}), subscriber->channels);
     EXPECT_EQ ((std::vector<std::string>{topic}), subscriber->topics);
     EXPECT_EQ ((std::vector<int>{1}), subscriber->values);
@@ -327,6 +344,196 @@ TEST_F (SpotSubscribe, DuplicateRegistrationIsRejected)
     }
     EXPECT_EQ (1u, context.handlers ().descriptors ().size ());
 }
+
+void SpotSubscribe::verify_pre_ready (bool reject, bool fail_initialize)
+{
+    namespace host = fw::runtime::host;
+    namespace mesh = fw::runtime::mesh;
+    constexpr auto topic = "pre-ready";
+    fw::logging_builder_t logging;
+    logging.use_file ("pre-ready-multicast.flow").set_min_level (fw::log_level_t::debug);
+    node->dispatch.message_flow (fw::message_flow_log_mode_t::detailed);
+    detail::dispatch_options_access_t::set_logger (node->dispatch,
+                                                   logging.create_logger ("pre-ready-multicast"));
+    node->worker_executor = std::make_shared<fw::runtime::offload_executor_t> (1);
+    node->channel_runtime = std::make_shared<detail::channel_runtime_state_t> ();
+    node->channel_runtime->serializers = &serializers;
+    auto native = std::make_shared<host::public_host_runtime_t> (host::host_options_t{
+      .mesh =
+        mesh::raw_mesh_node_options_t{
+          .descriptor = {.mesh_name = "mesh",
+                         .node_routing_id = zlink::routing_id_t::from ("publisher").to_bytes (),
+                         .lifecycle_generation = 1,
+                         .descriptor_revision = 1,
+                         .advertised_endpoint = "tcp://127.0.0.1:0",
+                         .channels = {{channel, 100}}},
+          .dispatch = node->dispatch,
+          .runtime_failures = std::make_shared<fw::runtime::runtime_failure_collector_t> ()},
+      .object_stable_types = {"framework.spot"}});
+    native->start ();
+    detail::spot_node_runtime_t runtime (node);
+    runtime.attach_native_node (native);
+    namespace stateful = fw::runtime::stateful;
+    const stateful::object_ref_t reference{
+      stateful::object_kind_t::user_spot, "pre-ready-spot", 7, 1, "mesh", "publisher"};
+    const auto reservation =
+      native->objects ().begin_reserved_object (reference, "framework.spot", {});
+    ASSERT_TRUE (reservation.factory_owner);
+    std::function<fw::task_t<void> (bool)> preparation_terminal;
+    fw::task_completion_source_t<void> entered;
+    auto started = entered.task ();
+    fw::task_completion_source_t<fw::spot_create_response_t> release_create;
+    fw::task_completion_source_t<void> release_initialize;
+    std::shared_ptr<detail::spot_context_state_t> preparing;
+    std::weak_ptr<subscriber_t> instance;
+    auto received_calls = std::make_shared<std::atomic_size_t> (0);
+    detail::spot_lifecycle_callbacks_t lifecycle;
+    lifecycle.create_spot_context_instance = [&] (fw::spot_context_t value,
+                                                  fw::service_provider_t &) {
+        preparing = detail::spot_context_access_t::state (value);
+        auto created = std::make_shared<subscriber_t> ();
+        created->received_calls = received_calls;
+        instance = created;
+        // The public factory adapter calls Configure before returning the instance.
+        value.handlers ().add_subscribe<&subscriber_t::receive> (channel, topic);
+        return created;
+    };
+    lifecycle.on_create = [&] (void *, const zlink::message_t &, fw::serializer_registry_t &) {
+        if (!fail_initialize) {
+            entered.complete (fw::result_t<void>::success ());
+            return release_create.task ();
+        }
+        return fw::task_t<fw::spot_create_response_t> (
+          fw::result_t<fw::spot_create_response_t>::success (
+            fw::spot_create_response_t::accept ()));
+    };
+    lifecycle.on_initialize = [&] (void *) -> fw::task_t<void> {
+        if (fail_initialize) {
+            entered.complete (fw::result_t<void>::success ());
+            co_await release_initialize.task ();
+            throw std::runtime_error ("fixture initialization failure");
+        }
+        co_return;
+    };
+    node->spot_lifecycles.emplace ("pre-ready", std::move (lifecycle));
+    node->spot_factories.emplace ("pre-ready", std::type_index (typeid (subscriber_t)));
+    auto creating = std::async (std::launch::async, [&] {
+        try {
+            return runtime.get_or_create_spot (
+              "pre-ready", fw::spot_id_t ("pre-ready-spot"), {}, reference.object_generation,
+              reference.mesh_name, reference.authority_owner_generation, &preparation_terminal);
+        }
+        catch (const std::exception &error) {
+            entered.complete (fw::result_t<void>::failure (
+              fw::framework_error_kind_t::internal_failure, error.what ()));
+            throw;
+        }
+    });
+    const std::shared_ptr<void> release_on_exit (nullptr, [&] (void *) {
+        release_create.complete (fw::result_t<fw::spot_create_response_t>::success (
+          fw::spot_create_response_t::accept ()));
+        release_initialize.complete (fw::result_t<void>::success ());
+    });
+    started.result ().value ();
+    messaging::envelope_header_t header;
+    header.kind = messaging::message_kind_t::publish;
+    header.channel_name = channel;
+    header.topic = topic;
+    header.message_name = event_t::packet_name;
+    header.content_type = messaging::envelope_codec_t::default_content_type;
+    auto parts = messaging::envelope_codec_t{}.encode_raw_body_parts (
+      header, zlink::message_t::from (std::string ("{\"value\":37}")));
+    auto entry = native->entry_spot ();
+    const auto published =
+      entry.publish (channel, topic, std::move (parts).take_items ()).result ();
+    std::size_t received = 0;
+    const auto receive = [&] (const auto &owner, const auto &record,
+                              std::vector<zlink::message_t> frames) {
+        ++received;
+        auto decoded =
+          fw::runtime::decode_mesh_record_header (record, frames, true, node->dispatch);
+        EXPECT_TRUE (decoded);
+        if (decoded)
+            EXPECT_TRUE (runtime.dispatch_mesh_record (owner, record, frames, decoded.value (),
+                                                       provider, serializers));
+    };
+    const auto dispatched = native->dispatch_ready (receive).result ();
+    EXPECT_FALSE (native->objects ().find (reference.kind, reference.key));
+    const auto queued_before_ready =
+      preparing->serial_queue->pending_count (fw::runtime::serial_work_lane_t::application);
+    const auto calls_before_ready = received_calls->load (std::memory_order_acquire);
+    release_create.complete (fw::result_t<fw::spot_create_response_t>::success (
+      reject ? fw::spot_create_response_t::reject () : fw::spot_create_response_t::accept ()));
+    release_initialize.complete (fw::result_t<void>::success ());
+    bool initialization_failed = false;
+    std::optional<detail::local_spot_create_result_t> created;
+    try {
+        created.emplace (creating.get ());
+    }
+    catch (const std::exception &error) {
+        initialization_failed = true;
+        EXPECT_NE (std::string::npos,
+                   std::string (error.what ()).find ("fixture initialization failure"));
+    }
+    if (!reject && !fail_initialize && created) {
+        EXPECT_FALSE (native->objects ().find (reference.kind, reference.key));
+        EXPECT_EQ (0u, received_calls->load (std::memory_order_acquire));
+        EXPECT_EQ (1u, preparing->serial_queue->pending_count (
+                         fw::runtime::serial_work_lane_t::application));
+        EXPECT_EQ (stateful::stateful_error_t::none,
+                   native->objects ().commit_create (reservation.attempt));
+        EXPECT_TRUE (preparation_terminal);
+        if (preparation_terminal)
+            EXPECT_TRUE (preparation_terminal (true).result ());
+    }
+    preparing->serial_queue->drain ();
+    EXPECT_TRUE (published);
+    EXPECT_TRUE (dispatched);
+    EXPECT_EQ (1u, received);
+    EXPECT_EQ (1u, queued_before_ready)
+      << "received multicast must remain in the Spot application queue";
+    EXPECT_EQ (0u, calls_before_ready);
+    EXPECT_EQ (fail_initialize, initialization_failed);
+    EXPECT_EQ (
+      0u, preparing->serial_queue->pending_count (fw::runtime::serial_work_lane_t::application));
+    EXPECT_EQ (0u, node->lane.run ([&] { return preparing->callback_depth; }).get ());
+    if (reject || fail_initialize) {
+        EXPECT_EQ (0u, received_calls->load (std::memory_order_acquire));
+        EXPECT_TRUE (instance.expired ());
+        EXPECT_TRUE (
+          native->objects ().multicast_local_targets (channel, topic).result ().value ().empty ());
+        EXPECT_FALSE (
+          node->lane.run ([&] { return node->spot_contexts_by_id.contains ("pre-ready-spot"); })
+            .get ());
+        if (created)
+            EXPECT_EQ (fw::spot_create_state_t::rejected, created->state);
+    } else {
+        EXPECT_EQ (1u, received_calls->load (std::memory_order_acquire));
+        EXPECT_TRUE (
+          node->lane.run ([&] { return node->spot_contexts_by_id.contains ("pre-ready-spot"); })
+            .get ());
+        EXPECT_EQ ((std::vector<int>{37}), instance.lock ()->values);
+        EXPECT_TRUE (created);
+        if (created)
+            EXPECT_EQ (fw::spot_create_state_t::created, created->state);
+    }
+    preparing->spot_serial_executor->close ();
+    native->close ();
+}
+
+TEST_F (SpotSubscribe, MulticastDuringCreationRunsExactlyOnceAfterReady)
+{
+    verify_pre_ready (false, false);
+}
+TEST_F (SpotSubscribe, MulticastDuringRejectedCreationIsReleasedWithoutHandler)
+{
+    verify_pre_ready (true, false);
+}
+TEST_F (SpotSubscribe, MulticastDuringFailedInitializationIsReleasedWithoutHandler)
+{
+    verify_pre_ready (false, true);
+}
+
 class membership_entry_t final : public fw::entry_spot_t<fw::actor_t>
 {
   public:
