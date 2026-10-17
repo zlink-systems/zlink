@@ -1021,7 +1021,6 @@ void public_host_runtime_t::configure_late_session_route_update (
 
 void public_host_runtime_t::start ()
 {
-    std::function<void ()> maintenance_started;
     _lifecycle_configuration_lane
       .run ([&] {
           if (_started || _closing) {
@@ -1029,11 +1028,8 @@ void public_host_runtime_t::start ()
           }
           _transport->start ();
           _started = true;
-          maintenance_started = _maintenance_started;
       })
       .get ();
-    if (maintenance_started)
-        maintenance_started ();
 }
 
 void public_host_runtime_t::close () noexcept
