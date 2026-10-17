@@ -84,7 +84,8 @@ class raw_stateful_dispatch_t
                                    std::vector<std::uint8_t> target_routing_id,
                                    std::uint64_t target_generation,
                                    std::uint64_t target_lease_generation,
-                                   std::chrono::milliseconds window);
+                                   std::chrono::milliseconds window,
+                                   std::optional<std::uint64_t> target_authority_generation);
     std::pair<stateful_error_t, std::optional<stateful_delivery_t>>
     try_claim (const object_ref_t &owner);
     task_t<stateful_error_t>

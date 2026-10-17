@@ -237,7 +237,7 @@ class spot_node_builder_state_t
         spot_id_t source_spot_id;
         std::uint64_t source_spot_generation = 0;
         spot_id_t target_spot_id;
-        runtime::protocol::actor_route_fence_t target_fence;
+        runtime::protocol::relocation_target_fence_t target_identity;
         std::chrono::steady_clock::time_point not_before;
         // True once submit_remote_actor_leave has validated and accepted the
         // OnLeave command for this transfer (idempotency guard against a
@@ -1993,13 +1993,17 @@ class spot_node_runtime_t
     // spec 28: an indeterminate reconcile deadline must remain unavailable
     // with an explicit failure, never silently parked and never reopened
     // for blind local replay.
-    task_t<void> fast_fail_reconcile_backlog (actor_ref_t actor_ref, std::string actor_key);
+    task_t<void> fast_fail_reconcile_backlog (
+      actor_ref_t actor_ref,
+      std::string actor_key,
+      std::optional<runtime::protocol::actor_route_fence_t> source_fence = std::nullopt);
     task_t<void>
     complete_remote_actor_transfer (const actor_ref_t &source_actor,
                                     const actor_ref_t &target_actor,
                                     spot_route_t target_route,
                                     runtime::protocol::actor_route_fence_t source_fence,
-                                    runtime::protocol::actor_route_fence_t target_fence,
+                                    runtime::protocol::relocation_target_fence_t target_identity,
+                                    std::optional<std::uint64_t> follow_authority_generation,
                                     std::string transfer_id = {});
     // Emits an internal transfer lifecycle boundary through the configured
     // public message-flow observer. The transfer id is both the correlation
