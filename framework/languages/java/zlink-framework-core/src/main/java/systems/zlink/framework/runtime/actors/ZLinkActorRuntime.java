@@ -1306,16 +1306,8 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                                         new ZLinkConfigurationException(
                                                 "target runtime already owns actor: " + actorId));
                             }
-                            ZLinkBackendActorRef actorRef = preparedActorRef;
-                            if (actorRef == null) {
-                                Message createRequest = Message.from(new byte[0]);
-                                try {
-                                    actorRef = spotNode.createActor(actorId, createRequest);
-                                } catch (RuntimeException failure) {
-                                    createRequest.close();
-                                    throw failure;
-                                }
-                            }
+                            ZLinkBackendActorRef actorRef =
+                                    prepareTransferredActorRef(actorId, preparedActorRef);
                             return attemptPrepareRelocatedActor(
                                     actorId,
                                     actorType,
@@ -1326,6 +1318,29 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                                     cancellation,
                                     actorRef);
                         });
+    }
+
+    private ZLinkBackendActorRef prepareTransferredActorRef(
+            String actorId, ZLinkBackendActorRef expected) {
+        ZLinkBackendActorRef existing = spotNode.actorLookup(actorId);
+        if (existing != null) {
+            if (!existing.equals(expected)) {
+                throw new ZLinkConfigurationException(
+                        "target raw Actor identity differs: " + actorId);
+            }
+            return existing;
+        }
+        Message createRequest = Message.from(new byte[0]);
+        try {
+            // Relocation §4.5: prepare raw identity before the Ready CAS. A returning Actor
+            // keeps its exact raw identity while the existing move gate holds execution.
+            return expected == null
+                    ? spotNode.createActor(actorId, createRequest)
+                    : spotNode.createActor(actorId, expected.generation(), createRequest);
+        } catch (RuntimeException failure) {
+            createRequest.close();
+            throw failure;
+        }
     }
 
     private CompletionStage<PreparedTransferredActor> attemptPrepareRelocatedActor(
@@ -1569,16 +1584,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             ZLinkMessage transferState,
             Class<? extends ZLinkActorFactory> factoryType,
             ZLinkBackendActorRef reentryActorRef) {
-        ZLinkBackendActorRef actorRef = reentryActorRef;
-        if (actorRef == null) {
-            Message nativeCreateRequest = Message.from(new byte[0]);
-            try {
-                actorRef = spotNode.createActor(actorId, nativeCreateRequest);
-            } catch (RuntimeException error) {
-                nativeCreateRequest.close();
-                throw error;
-            }
-        }
+        ZLinkBackendActorRef actorRef = prepareTransferredActorRef(actorId, reentryActorRef);
         DefaultActorContext context = new DefaultActorContext(actorRef);
         ZLinkBackendActorRef finalActorRef = actorRef;
         context.beginMove();

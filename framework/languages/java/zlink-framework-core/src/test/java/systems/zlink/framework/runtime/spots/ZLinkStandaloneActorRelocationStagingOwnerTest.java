@@ -391,6 +391,41 @@ final class ZLinkStandaloneActorRelocationStagingOwnerTest {
         assertEquals(1, backend.operations.stream().filter("replay"::equals).count());
     }
 
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void timerPreparationFailureDiscardsPreparedActorBeforeReleasingAdmission(boolean synchronous) {
+        var preparationFailure = new IllegalStateException("timer preparation failed");
+        var discardFailure = new IllegalStateException("discard failed");
+        FakeBackend backend =
+                new FakeBackend() {
+                    @Override
+                    public CompletionStage<Void> stageTimers(
+                            ZLinkStandaloneActorRelocationStagingOwner.Request request,
+                            byte[] envelope) {
+                        if (synchronous) throw preparationFailure;
+                        return CompletableFuture.failedFuture(preparationFailure);
+                    }
+                };
+        var discard = new CompletableFuture<Void>();
+        backend.discardResult = discard;
+        var admission = new ZLinkActivationAdmission(1);
+        var owner = new ZLinkStandaloneActorRelocationStagingOwner(backend, admission);
+        var relocationId = UUID.randomUUID();
+        byte[] root =
+                ZLinkCanonicalActorRelocationEnvelope.encode(
+                        relocationId, "actor-a", 7, 11, true, new byte[] {4, 5}, List.of());
+        var result = owner.stage(request(relocationId, true), root).toCompletableFuture();
+        assertEquals(List.of("prepare", "discard"), backend.operations);
+        assertFalse(
+                result.isDone(), "the prepared resource must settle before admission is released");
+        assertEquals(1, admission.snapshot().active());
+        discard.completeExceptionally(discardFailure);
+        var terminal = assertThrows(java.util.concurrent.CompletionException.class, result::join);
+        assertSame(preparationFailure, terminal.getCause());
+        assertArrayEquals(new Throwable[] {discardFailure}, preparationFailure.getSuppressed());
+        assertEquals(0, admission.snapshot().active());
+    }
+
     @Test
     void actorStaysHiddenUntilDurableBacklogIsSealedAndPublished() {
         FakeBackend backend = new FakeBackend();

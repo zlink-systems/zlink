@@ -6,6 +6,7 @@ import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.runtime.actors.ZLinkActorDispatchTarget.QueuedTurn;
 import systems.zlink.framework.runtime.actors.ZLinkActorRuntime;
+import systems.zlink.framework.runtime.handlers.ZLinkHandlerStages;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.internal.drain.AsyncDrainProbe;
@@ -89,20 +90,30 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
         } catch (ZLinkFrameworkException full) {
             return CompletableFuture.failedFuture(full);
         }
-        return backend.prepare(request, decoded.state(), NOT_CANCELLED)
-                .thenCompose(
-                        prepared ->
-                                backend.stageTimers(request, decoded.timerEnvelope())
-                                        .thenApply(
-                                                ignored ->
-                                                        new Staged(
-                                                                this, request, decoded, prepared,
-                                                                permit)))
+        return ZLinkHandlerStages.fromStageSupplier(
+                        () -> backend.prepare(request, decoded.state(), NOT_CANCELLED))
                 .whenComplete(
-                        (staged, failure) -> {
-                            if (failure != null) {
-                                permit.close();
-                            }
+                        (prepared, failure) -> {
+                            if (failure != null) permit.close();
+                        })
+                .thenCompose(
+                        prepared -> {
+                            var staged = new Staged(this, request, decoded, prepared, permit);
+                            return ZLinkHandlerStages.fromStageSupplier(
+                                            () ->
+                                                    backend.stageTimers(
+                                                            request, decoded.timerEnvelope()))
+                                    .thenApply(ignored -> staged)
+                                    .exceptionallyCompose(
+                                            failure ->
+                                                    SpotActivationBase.finishCleanup(
+                                                                    failure,
+                                                                    ZLinkHandlerStages
+                                                                            .fromStageSupplier(
+                                                                                    () ->
+                                                                                            discard(
+                                                                                                    staged)))
+                                                            .thenApply(ignored -> null));
                         });
     }
 
@@ -613,7 +624,6 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
                             assert captureDiscardedIngress(staged, debugDiscardNames);
                             staged.ingressClosed = true;
                             staged.terminal = true;
-                            staged.restorePermit.close();
                             List<PendingIngress> captured =
                                     new ArrayList<>(
                                             staged.relayedIngress.size()
@@ -644,9 +654,11 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
                 ingress.failure().accept(aborted);
             }
         }
-        return backend.discard(staged.actor(), staged.request())
+        return ZLinkHandlerStages.fromStageSupplier(
+                        () -> backend.discard(staged.actor(), staged.request()))
                 .whenComplete(
                         (ignored, failure) -> {
+                            staged.restorePermit.close();
                             if (failure == null) {
                                 for (String name : debugDiscardNames) {
                                     assert staged.debugProbe.complete(name);
