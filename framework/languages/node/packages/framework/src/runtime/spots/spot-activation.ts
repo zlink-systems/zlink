@@ -30,7 +30,7 @@ import {
 } from '../../contracts';
 import type { Message } from '../../contracts/Common/Message';
 import type { ZLinkMessageFollowOrigin } from '../foundation/service-runtime-contracts';
-import { throwIfAborted } from '../abort';
+import { awaitWithAbort, isAbortError, throwIfAborted } from '../abort';
 import { ZLinkConfigurationException } from '../configuration';
 import {
   ZLinkFrameworkInternalErrorKind,
@@ -402,6 +402,7 @@ export class ZLinkSpotActivationLifecycle {
     signal?: AbortSignal,
     serialOwner?: ZLinkSpotActivation
   ): Promise<ZLinkSpotActivation> {
+    throwIfAborted(signal);
     const serial = serialOwner?.serial ?? new ZLinkSpotSerialTurnExecutor(true, spotId);
     const serialExecutor = new ZLinkSpotSerialExecutor(
       serial,
@@ -479,6 +480,7 @@ export class ZLinkSpotActivationLifecycle {
     try {
       if (serialOwner === undefined) serialExecutor.beginPreparation();
       await serial.postBarrierTurn(async () => {
+        throwIfAborted(signal);
         await instance.configure?.();
         await addSpotTimerRegistrations(
           timers,
@@ -493,11 +495,15 @@ export class ZLinkSpotActivationLifecycle {
             signal
           }
         );
-        await instance!.onInitialize?.();
+        throwIfAborted(signal);
+        await awaitWithAbort(Promise.resolve(instance!.onInitialize?.()), signal);
       });
+      throwIfAborted(signal);
       await this.options.registerActivation(activation);
       return activation;
     } catch (error) {
+      const cancelled = isAbortError(error);
+      if (cancelled && serialOwner === undefined) serial.closeAdmission();
       const preparation = await Promise.allSettled([this.discardPreparation(activation)]);
       const cleanup = await Promise.allSettled([
         timers.dispose(),
@@ -506,6 +512,7 @@ export class ZLinkSpotActivationLifecycle {
       const cleanupErrors = [...preparation, ...cleanup]
         .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
         .map((result) => result.reason);
+      if (cancelled && cleanupErrors.length === 0) throw error;
       throw new AggregateError(
         [error, ...cleanupErrors],
         `Instance Spot '${instanceType}' materialization failed for '${String(spotId)}'.`
@@ -562,6 +569,7 @@ export class ZLinkSpotActivationLifecycle {
     signal?: AbortSignal,
     authority?: ZLinkNativeSpotAuthority
   ): Promise<ZLinkLocalSpotCreateResult> {
+    throwIfAborted(signal);
     const executionMode =
       this.options.userSpotExecutionMode?.(meshName, spotType) ??
       ZLinkUserSpotExecutionMode.SpotWide;
@@ -719,12 +727,8 @@ export class ZLinkSpotActivationLifecycle {
       const cleanupErrors: unknown[] = [];
       try {
         if (activation !== undefined) {
-          await this.cleanupActivation(
-            activation,
-            locationClaim.meshName,
-            lifecycleStarted,
-            signal
-          );
+          if (!lifecycleStarted)
+            await this.cleanupActivation(activation, locationClaim.meshName, false);
         } else {
           const partialCleanup = await Promise.allSettled([
             timers.dispose(),
@@ -964,6 +968,7 @@ export class ZLinkSpotActivationLifecycle {
       activation.serialExecutor.beginPreparation();
       let createResponse: ZLinkSpotCreateResponse | undefined;
       await activation.serial.postBarrierTurn(async () => {
+        throwIfAborted(signal);
         await activation.spot.configure?.();
         nativeDispatch?.configureSubscriptions(activation.handlers.snapshot());
         await addSpotTimerRegistrations(
@@ -979,20 +984,28 @@ export class ZLinkSpotActivationLifecycle {
             signal
           }
         );
-        createResponse = await activation.spot.onCreate?.(
-          wrapFrameworkPayloadMessage(
-            request,
-            this.options.messageSerializers,
-            frameworkPayloadContentType(request)
-          )
+        throwIfAborted(signal);
+        createResponse = await awaitWithAbort(
+          Promise.resolve(
+            activation.spot.onCreate?.(
+              wrapFrameworkPayloadMessage(
+                request,
+                this.options.messageSerializers,
+                frameworkPayloadContentType(request)
+              )
+            )
+          ),
+          signal
         );
         if (createResponse?.accepted === false) {
           return;
         }
-        await activation.spot.onInitialize?.();
+        throwIfAborted(signal);
+        await awaitWithAbort(Promise.resolve(activation.spot.onInitialize?.()), signal);
       });
+      throwIfAborted(signal);
       if (createResponse?.accepted === false) {
-        await this.cleanupActivation(activation, locationClaim.meshName, false, signal);
+        await this.cleanupActivation(activation, locationClaim.meshName, false);
         return {
           spotId: activation.spotId,
           state: ZLinkSpotCreateState.Rejected,
@@ -1006,8 +1019,10 @@ export class ZLinkSpotActivationLifecycle {
         reply: this.decodeCreateReply(createResponse?.reply)
       };
     } catch (error) {
+      const cancelled = isAbortError(error);
+      if (cancelled) activation.serial.closeAdmission();
       try {
-        await this.cleanupActivation(activation, locationClaim.meshName, true, signal);
+        await this.cleanupActivation(activation, locationClaim.meshName, !cancelled);
       } catch (cleanupError) {
         throw new AggregateError(
           [error, cleanupError],

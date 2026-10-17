@@ -703,3 +703,234 @@ for (const boundary of ['register', 'publish']) {
     );
   });
 }
+
+const cancellationCases = [];
+for (const mode of [
+  framework.ZLinkUserSpotExecutionMode.SpotWide,
+  framework.ZLinkUserSpotExecutionMode.PerActor
+])
+  for (const phase of ['create', 'initialize'])
+    for (const native of [false, true])
+      cancellationCases.push({ mode, phase, native, instance: false });
+cancellationCases.push({
+  mode: framework.ZLinkUserSpotExecutionMode.SpotWide,
+  phase: 'initialize',
+  native: false,
+  instance: true
+});
+for (const { mode, phase, native, instance } of cancellationCases) {
+  test(
+    `Preparation cancellation releases ownership: ${mode}/${phase}/native=${native}/instance=${instance}`,
+    { timeout: 10000 },
+    async (t) => {
+      const entered = deferred();
+      const release = deferred();
+      const controller = new AbortController();
+      const timerClock = clock();
+      let activation;
+      let timer;
+      let close;
+      let closing = 0;
+      let authorityCalls = 0;
+      let initialized = 0;
+      let ticks = 0;
+      let messages = 0;
+      let nativeDisposes = 0;
+      let activeAdmissions = 0;
+      class Tick {
+        handle() {
+          ticks++;
+        }
+      }
+      async function hold(room) {
+        timer = await room.context.addTimer('cancel-ready', 100, Tick);
+        close = room.context.close();
+        close.catch(() => undefined);
+        activation = manager.closeOperations.get(`mesh\0${String(room.context.spotId)}`).activation;
+        entered.resolve();
+        await release.promise;
+      }
+      class Room {
+        async onCreate() {
+          if (phase === 'create') await hold(this);
+          return { accepted: true };
+        }
+        async onInitialize() {
+          initialized++;
+          if (phase === 'initialize') await hold(this);
+        }
+        onClosing() {
+          closing++;
+        }
+      }
+      const manager = new framework.DefaultZLinkSpotManager(
+        {
+          detachedTaskRunner: new ZLinkRuntimeTaskRunner(
+            new ZLinkRuntimeTaskErrorSink(),
+            new AbortController().signal
+          ),
+          spotFactories: [Room],
+          instanceSpotFactories: new Map([['mesh', new Map([['cancel', Room]])]]),
+          userSpotExecutionMode: () => mode,
+          activationAdmission: {
+            acquire: async () => {
+              activeAdmissions++;
+              return () => {
+                activeAdmissions--;
+              };
+            }
+          },
+          beginUserClosingAuthority: async (_mesh, _spot, _generation, onCommitted) => {
+            authorityCalls++;
+            onCommitted();
+            return { release: async () => undefined };
+          },
+          beginInstanceClosingAuthority: async (_mesh, _spot, onCommitted) => {
+            authorityCalls++;
+            onCommitted();
+            return { release: async () => undefined };
+          },
+          createNativeSpot: native
+            ? (_mesh, spotId) => ({
+                routingId: spotId,
+                lifecycleGeneration: 1n,
+                setDispatchHandler() {},
+                setSubscription() {},
+                subscribe() {
+                  return false;
+                },
+                recvActorLifecycle() {
+                  return null;
+                },
+                drainReply() {
+                  return 0;
+                },
+                drainChannelReply() {
+                  return 0;
+                },
+                recvRoute() {
+                  return false;
+                },
+                onSendReady() {},
+                async dispose() {
+                  nativeDisposes++;
+                }
+              })
+            : undefined
+        },
+        timerClock
+      );
+      let settled = false;
+      const creation = instance
+        ? manager.materializeInstance(
+            'mesh',
+            'cancel',
+            'cancel-cold',
+            1n,
+            controller.signal,
+            'first-terminal'
+          )
+        : manager.create('mesh', Room, undefined, controller.signal);
+      const creationOutcome = creation.then(
+        (value) => {
+          settled = true;
+          return { value };
+        },
+        (error) => {
+          settled = true;
+          return { error };
+        }
+      );
+      t.after(async () => {
+        release.resolve();
+        await creationOutcome;
+        await close?.catch(() => undefined);
+        if (activation) {
+          await activation.timers.dispose();
+          await activation.serialExecutor.finishPreparation();
+          await activation.serialExecutor.close();
+          manager.activations.finishClose('mesh', activation.spotId);
+        }
+      });
+      await Promise.race([
+        entered.promise,
+        creationOutcome.then((outcome) => {
+          throw outcome.error ?? new Error('Creation finished before the held callback');
+        })
+      ]);
+      assert.equal(activation.serialExecutor.isPreparing, true);
+      if (instance) assert.equal(activeAdmissions, 1);
+      timerClock.fire();
+      const application = activation.serial.execute(() => {
+        messages++;
+      });
+      const applicationOutcome = application.then(
+        (value) => ({ value }),
+        (error) => ({ error })
+      );
+      for (let i = 0; i < 10000 && activation.executionBarrier.admissionWaiters.length < 2; i++)
+        await Promise.resolve();
+      assert.ok(activation.executionBarrier.admissionWaiters.length >= 2);
+      assert.equal(ticks, 0);
+      assert.equal(messages, 0);
+      controller.abort();
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(settled, true, 'creation must terminate without releasing the held callback');
+      const outcome = await creationOutcome;
+      assert.equal(outcome.error?.name, 'AbortError');
+      assert.equal(activation.serialExecutor.isPreparing, false);
+      assert.equal(activeAdmissions, 0);
+      assert.equal(await close, false);
+      assert.equal(timer.isDisposed, true);
+      assert.ok((await applicationOutcome).error);
+      assert.equal(authorityCalls, 0);
+      assert.equal(closing, 0);
+      assert.equal(ticks, 0);
+      assert.equal(messages, 0);
+      assert.equal(initialized, phase === 'create' ? 0 : 1);
+      assert.equal(nativeDisposes, native ? 1 : 0);
+      assert.equal(manager.activations.resolve('mesh', activation.spotId), undefined);
+      release.resolve();
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(manager.activations.resolve('mesh', activation.spotId), undefined);
+      assert.equal(authorityCalls, 0);
+      assert.equal(messages, 0);
+      assert.equal(ticks, 0);
+      assert.equal(initialized, phase === 'create' ? 0 : 1);
+    }
+  );
+}
+
+for (const instance of [false, true]) {
+  test(`Pre-cancelled preparation does not construct an activation: instance=${instance}`, async () => {
+    const cancellation = new AbortController();
+    cancellation.abort();
+    let constructed = 0;
+    let nativeCreated = 0;
+    class Room {
+      constructor() {
+        constructed++;
+      }
+    }
+    const manager = new framework.DefaultZLinkSpotManager({
+      detachedTaskRunner: new ZLinkRuntimeTaskRunner(
+        new ZLinkRuntimeTaskErrorSink(),
+        new AbortController().signal
+      ),
+      spotFactories: [Room],
+      instanceSpotFactories: new Map([['mesh', new Map([['cancel', Room]])]]),
+      createNativeSpot: () => {
+        nativeCreated++;
+        return undefined;
+      }
+    });
+    await assert.rejects(
+      instance
+        ? manager.materializeInstance('mesh', 'cancel', 'pre-cancelled', 1n, cancellation.signal)
+        : manager.create('mesh', Room, undefined, cancellation.signal),
+      { name: 'AbortError' }
+    );
+    assert.equal(constructed, 0);
+    assert.equal(nativeCreated, 0);
+  });
+}
