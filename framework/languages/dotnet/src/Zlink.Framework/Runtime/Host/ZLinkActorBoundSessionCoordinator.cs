@@ -1308,7 +1308,7 @@ internal sealed class ZLinkActorBoundSessionCoordinator
             {
                 try
                 {
-                    _ = Zlink.Framework.Runtime.Messaging.ZLinkActorReplyDecoder.Decode<bool>(
+                    Zlink.Framework.Runtime.Messaging.ZLinkActorReplyDecoder.DecodeTerminal(
                         parts,
                         binding.Context.Runtime.Flow.CaptureEnabled
                     );

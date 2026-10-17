@@ -64,6 +64,130 @@ const fixtures = JSON.parse(
   )
 );
 
+for (const transport of ['mesh', 'no-bind']) {
+  for (const scenario of ['current', 'stale', 'malformed', 'left', 'callback-error']) {
+    test(`native disconnect terminal wire body (${transport}): ${scenario}`, async () => {
+      const framework = require('../../packages/framework/dist/internal');
+      const {
+        SubmitResult
+      } = require('../../packages/framework/dist/runtime/backend/runtime-values');
+      const {
+        ZLinkRuntimeTaskRunner,
+        ZLinkRuntimeTaskErrorSink
+      } = require('../../packages/framework/dist/runtime/execution');
+      const state = new ZLinkActorRuntimeState('actor');
+      state.installBoundSessionBinding({
+        routerChannelId: 'route',
+        targetNodeRid: 'node-a',
+        spotId: 'entry',
+        sessionNodeRid: 'node-a',
+        sessionRid: 'session',
+        sessionOwnerNodeGeneration: 2n,
+        sessionOwnerId: 'owner',
+        sessionOwnerLeaseGeneration: 1n,
+        bindingGeneration: scenario === 'stale' ? 8n : 7n
+      });
+      let callbacks = 0;
+      const dispatch = new ZLinkSpotActorPacketDispatch({
+        spot: {},
+        spotId: () => 'entry',
+        registry: {},
+        resolveActor: () => ({ context: new DefaultZLinkActorContext(state) }),
+        actorLeft: () => scenario === 'left',
+        onDisconnectActor: async () => {
+          callbacks++;
+          if (scenario === 'callback-error') throw new Error('disconnect callback failed');
+        }
+      });
+      const manager = new framework.DefaultZLinkSpotManager({
+        spotFactories: [],
+        detachedTaskRunner: new ZLinkRuntimeTaskRunner(
+          new ZLinkRuntimeTaskErrorSink(),
+          new AbortController().signal
+        ),
+        dispatchEntryActorPacket: (...args) => dispatch.dispatch(...args)
+      });
+      const parts = [
+        new ZLinkBufferMessage(
+          protocol.encodeStreamHeader({
+            kind: protocol.ZLinkStreamMessageKind.Request,
+            codec: protocol.ZLinkStreamCodec.Raw,
+            flags: protocol.ZLinkStreamHeaderFlags.HasRequestSeq,
+            requestSeq: 7n,
+            name: 'zlink.framework.actor.session_disconnected',
+            metadata: new Map()
+          })
+        ),
+        new ZLinkBufferMessage(
+          scenario === 'malformed' ? Buffer.alloc(0) : Buffer.from(fixtures.canonical[0].hex, 'hex')
+        )
+      ];
+      const replies = [];
+      try {
+        if (transport === 'no-bind') {
+          const {
+            ZLinkSpotActorPacketDrain
+          } = require('../../packages/framework/dist/runtime/spots/spot-actor-packet-drain');
+          const drain = new ZLinkSpotActorPacketDrain({
+            actorPacketHandler: (delivery) => dispatch.dispatchDelivery(delivery),
+            waitIdle: async () => undefined,
+            replyActorNoBind: (_info, reply) => {
+              const frame = protocol.decodeStreamFrame(reply[0].data());
+              replies.push([Buffer.from(frame.header), Buffer.from(frame.payload)]);
+              for (const part of reply) part.close();
+            }
+          });
+          const received = parts.map((message, index) => ({
+            info: {
+              actor: { nodeRid: 'actor-node', actorId: 'actor', generation: 1n },
+              sourceNodeRid: 'node-a',
+              sourceSessionRid: 'session',
+              requestId: 7n,
+              flags: 1
+            },
+            message,
+            more: index === 0
+          }));
+          await drain.drain({ recvActorPart: () => received.shift() ?? null });
+          drain.dispose();
+        } else {
+          await manager.dispatchMeshActor(
+            'remote',
+            'actors',
+            {
+              spotId: null,
+              actor: { nodeRid: 'actor-node', actorId: 'actor', generation: 1n }
+            },
+            {
+              kind: framework.ReceiveKind.ActorRequest,
+              sourceBindingGeneration: 0n,
+              parts,
+              reply: (reply) => {
+                replies.push(reply.map((part) => Buffer.from(part)));
+                return SubmitResult.Ok;
+              }
+            }
+          );
+        }
+        assert.equal(callbacks, ['current', 'callback-error'].includes(scenario) ? 1 : 0);
+        assert.equal(replies.length, 1);
+        const [header, body] = replies[0];
+        if (scenario === 'callback-error')
+          assert.match(body.toString(), /disconnect callback failed/);
+        else assert.equal(body.length, 0, body.toString());
+        assert.equal(
+          protocol.decodeStreamHeader(header).kind,
+          scenario === 'callback-error'
+            ? protocol.ZLinkStreamMessageKind.Error
+            : protocol.ZLinkStreamMessageKind.Response
+        );
+      } finally {
+        for (const part of parts) part.close();
+      }
+    });
+  }
+}
+
 for (const vector of fixtures.canonical) {
   test(`disconnect shared golden ${vector.name}`, () => {
     const rid = decodeRoutingId(vector.sessionOwnerNodeRidHex, vector.sessionOwnerNodeRidHex);
@@ -133,7 +257,7 @@ for (const [name, node, ownerGeneration, bindingGeneration, expected] of [
       metadata: new Map()
     });
     // The delivery's transport coordinates deliberately name a forwarding node.
-    await dispatch.dispatchDelivery({
+    const response = await dispatch.dispatchDelivery({
       origin: 'remote',
       actorId: 'actor',
       sourceSessionRid: 'follow-hop-session',
@@ -143,6 +267,7 @@ for (const [name, node, ownerGeneration, bindingGeneration, expected] of [
         new ZLinkBufferMessage(Buffer.from(fixtures.canonical[0].hex, 'hex'))
       ]
     });
+    assert.equal(response, undefined);
     assert.equal(callbacks, expected);
     assert.equal(errors.length, 0);
   });

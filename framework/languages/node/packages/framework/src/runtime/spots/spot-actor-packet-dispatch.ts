@@ -19,6 +19,8 @@ import type { Message } from '../../contracts/Common/Message';
 import {
   ZLinkFrameworkException,
   ZLinkFrameworkErrorKind,
+  ZLinkMessage,
+  ZLinkEncodedPayload,
   zlinkMessageMetadata
 } from '../../contracts';
 import {
@@ -52,6 +54,10 @@ import type { ZLinkSerialWorkOptions } from '../execution/serial-execution-queue
 import { zlinkMetadataByteLength, zlinkSerialWorkOptions } from '../execution/serial-work-size';
 import type { ZLinkMessageFollowOrigin } from '../foundation/service-runtime-contracts';
 import { releaseApplicationJobPermitBeforeHandler } from '../application-jobs/application-job-queue-scope';
+
+const emptyDisconnectedReply = ZLinkMessage.fromEncoded(
+  ZLinkEncodedPayload.fromOwned(Buffer.alloc(0))
+);
 
 export interface ZLinkActorResponseOptions {
   readonly metadata: ReadonlyMap<string, string>;
@@ -212,11 +218,13 @@ export class ZLinkSpotActorPacketDispatch {
             ? ZLinkDispatchErrorAction.ReplyError
             : ZLinkDispatchErrorAction.Drop;
         this.trace(ZLinkMessageFlowOutcome.Received, actorId, header, messageKind);
-        if (
-          this.options.actorLeft?.(actorId) === true &&
-          header.name === ZLINK_REMOTE_ACTOR_SESSION_DISCONNECTED_PACKET
-        ) {
-          return undefined;
+        const disconnected = header.name === ZLINK_REMOTE_ACTOR_SESSION_DISCONNECTED_PACKET;
+        const disconnectedReply =
+          disconnected && header.kind === ZLinkStreamMessageKind.Request
+            ? emptyDisconnectedReply
+            : undefined;
+        if (this.options.actorLeft?.(actorId) === true && disconnected) {
+          return disconnectedReply;
         }
         const routed = await this.options.routeBeforeLocal?.(delivery);
         if (routed?.handled === true) {
@@ -237,7 +245,7 @@ export class ZLinkSpotActorPacketDispatch {
             requestTerminal
           );
         }
-        if (header.name === ZLINK_REMOTE_ACTOR_SESSION_DISCONNECTED_PACKET) {
+        if (disconnected) {
           const identity = decodeSessionDisconnected(messageToBytes(parts[1]));
           if (identity === undefined) {
             if (this.options.dispatchErrors?.captureEnabled() === true)
@@ -250,7 +258,7 @@ export class ZLinkSpotActorPacketDispatch {
                 ),
                 'warning'
               );
-            return undefined;
+            return disconnectedReply;
           }
           const current =
             actor.context instanceof DefaultZLinkActorContext
@@ -262,9 +270,9 @@ export class ZLinkSpotActorPacketDispatch {
               current.sessionOwnerNodeGeneration !== identity.sessionOwnerNodeGeneration ||
               current.bindingGeneration !== identity.bindingGeneration)
           )
-            return undefined;
+            return disconnectedReply;
           await this.options.onDisconnectActor(actor);
-          return undefined;
+          return disconnectedReply;
         }
         const decodePayload = this.createPayloadDecoder(parts[1], header);
         return this.dispatchActorPacket(
