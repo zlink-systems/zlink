@@ -213,7 +213,7 @@ final class ZLinkActorEntrySpotJoinCall implements ZLinkActorJoinCall {
         try (var ignored =
                 systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationContext
                         .enterApplicationExecution(null)) {
-            return bounded.execute()
+            return ZLinkSerialExecutionQueue.yieldCurrent(bounded.execute())
                     .handle(
                             (result, error) -> {
                                 if (error != null) {

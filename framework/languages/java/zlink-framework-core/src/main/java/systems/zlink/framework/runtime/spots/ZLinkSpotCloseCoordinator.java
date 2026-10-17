@@ -138,7 +138,9 @@ final class ZLinkSpotCloseCoordinator {
         } catch (Throwable failure) {
             operation = CompletableFuture.failedFuture(failure);
         }
-        ZLinkSerialExecutionQueue.yieldCurrent(operation)
+        (step.onClosing()
+                        ? ZLinkSerialExecutionQueue.manageCurrent(operation)
+                        : ZLinkSerialExecutionQueue.yieldCurrent(operation))
                 .whenComplete(
                         (ignored, failure) -> {
                             assert debugProbe.complete("spot-close-step:" + position);
