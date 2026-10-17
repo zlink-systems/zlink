@@ -87,7 +87,10 @@ DI 시 주입한 **execution scheduler** 하나에 현재 turn을 연결한다.
   어디서 재개할지 정한다.
 - **Framework는 DI 등록 시 callback completion scheduler를 주입한다.** Callback은 원래 Spot 실행 줄의
   새 turn으로 들어간다.
-- DI server builder의 `Yield`는 주입된 turn을 반납하고 같은 실행 줄의 새 turn에서 재개한다.
+- DI server builder의 `Yield`는 요청 생성 함수를 scheduler에 넘긴다. Framework는
+  [execution gate §3](../server/01-execution/02-handler-turn-and-execution-gate.ko.md#3-yield-시-gate와-claim)의 Yield
+  수락을 통과한 뒤에만 그 함수를 호출한다. 거부된 호출은 요청을 만들거나 보내지 않는다. 수락된 호출은
+  주입된 turn을 반납하고 같은 실행 줄의 새 turn에서 재개한다.
 
 C++ HTTP client는 같은 scheduler seam을 `coroutines(resume_scheduler)`와
 `framework_resume_scheduler_t`로 표현한다.

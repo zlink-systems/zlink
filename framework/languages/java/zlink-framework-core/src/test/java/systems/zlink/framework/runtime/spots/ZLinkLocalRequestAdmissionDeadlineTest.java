@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import systems.zlink.contracts.core.RoutingId;
@@ -17,6 +18,7 @@ import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess;
+import systems.zlink.framework.runtime.internal.calls.ZLinkRequestStages;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
 import systems.zlink.framework.spots.ZLinkEntrySpot;
@@ -31,8 +33,11 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ForkJoinPool;
+import java.util.concurrent.ForkJoinTask;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 final class ZLinkLocalRequestAdmissionDeadlineTest {
     private static final int IMMEDIATE_FAILURE_REQUEST_COUNT = 128;
@@ -382,6 +387,56 @@ final class ZLinkLocalRequestAdmissionDeadlineTest {
                 assertFalse(result.toCompletableFuture().isDone());
                 heldReply.complete("reply");
                 assertEquals("reply", result.toCompletableFuture().get(2, TimeUnit.SECONDS));
+            } finally {
+                heldReply.complete("reply");
+            }
+        }
+    }
+
+    @ParameterizedTest
+    @CsvSource({"false, false", "false, true", "true, false", "true, true"})
+    void pendingAdmissionJdkCombinatorRunsOutsideTheOwner(boolean actor, boolean any)
+            throws Exception {
+        heldReply = new CompletableFuture<>();
+        try (var runtime = startAdmissionRuntime()) {
+            try {
+                createLocalTargets(runtime);
+                var queue = applicationQueue(runtime);
+                var ownerThread = new CompletableFuture<Thread>();
+                var continuationThread = new CompletableFuture<Thread>();
+                var continuationPool = new AtomicReference<ForkJoinPool>();
+                ZLinkRequestStage<String> result;
+                CompletionStage<?> continuation;
+                try (var held =
+                        queue.acquire(ZLinkApplicationJobQueue.Origin.REMOTE)
+                                .toCompletableFuture()
+                                .join()) {
+                    result = submitLocal(runtime, actor, Duration.ofSeconds(1), true);
+                    ZLinkRequestStages.ownerAdmission(result)
+                            .whenComplete(
+                                    (ignored, failure) ->
+                                            ownerThread.complete(Thread.currentThread()));
+                    var view = result.admitted().toCompletableFuture();
+                    assertFalse(view.isDone());
+                    var combined =
+                            any
+                                    ? CompletableFuture.anyOf(view, new CompletableFuture<>())
+                                    : CompletableFuture.allOf(view);
+                    continuation =
+                            combined.whenComplete(
+                                    (ignored, failure) -> {
+                                        continuationPool.set(ForkJoinTask.getPool());
+                                        continuationThread.complete(Thread.currentThread());
+                                    });
+                }
+                // Wait on separate signals so the observing thread cannot help run the
+                // combinator's completion. The held permit fixes registration before admission.
+                assertNotSame(ownerThread.join(), continuationThread.join());
+                continuation.toCompletableFuture().join();
+                assertSame(ForkJoinPool.commonPool(), continuationPool.get());
+                assertFalse(result.toCompletableFuture().isDone());
+                heldReply.complete("reply");
+                assertEquals("reply", result.toCompletableFuture().join());
             } finally {
                 heldReply.complete("reply");
             }
