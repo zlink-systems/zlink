@@ -718,13 +718,47 @@ cancellationCases.push({
   native: false,
   instance: true
 });
-for (const { mode, phase, native, instance } of cancellationCases) {
+cancellationCases.push({
+  mode: framework.ZLinkUserSpotExecutionMode.SpotWide,
+  phase: 'create',
+  native: false,
+  instance: false,
+  lateFailure: true
+});
+cancellationCases.push({
+  mode: framework.ZLinkUserSpotExecutionMode.SpotWide,
+  phase: 'initialize',
+  native: false,
+  instance: true,
+  lateFailure: true
+});
+for (const { mode, phase, native, instance, lateFailure = false } of cancellationCases) {
   test(
-    `Preparation cancellation releases ownership: ${mode}/${phase}/native=${native}/instance=${instance}`,
+    `Preparation cancellation releases ownership: ${mode}/${phase}/native=${native}/instance=${instance}/lateFailure=${lateFailure}`,
     { timeout: 10000 },
     async (t) => {
       const entered = deferred();
       const release = deferred();
+      const scopeEntered = deferred();
+      const scopeRelease = deferred();
+      let scopeStarted = 0;
+      let scopeDisposed = 0;
+      let callbackExited = false;
+      let callbackSignal;
+      const {
+        resolveLifecycleHandler
+      } = require('../../packages/framework/dist/runtime/handlers/handler-instance-scope');
+      class ScopedResource {
+        use() {
+          assert.equal(scopeDisposed, 0);
+        }
+        async dispose() {
+          scopeStarted++;
+          scopeEntered.resolve();
+          await scopeRelease.promise;
+          scopeDisposed++;
+        }
+      }
       const controller = new AbortController();
       const timerClock = clock();
       let activation;
@@ -742,22 +776,28 @@ for (const { mode, phase, native, instance } of cancellationCases) {
           ticks++;
         }
       }
-      async function hold(room) {
+      async function hold(room, signal) {
+        callbackSignal = signal;
+        const resource = await resolveLifecycleHandler(room, ScopedResource);
         timer = await room.context.addTimer('cancel-ready', 100, Tick);
         close = room.context.close();
         close.catch(() => undefined);
         activation = manager.closeOperations.get(`mesh\0${String(room.context.spotId)}`).activation;
         entered.resolve();
         await release.promise;
+        resource.use();
+        assert.equal(timer.isDisposed, false);
+        callbackExited = true;
+        if (lateFailure) throw new Error('callback failed after request cancellation');
       }
       class Room {
-        async onCreate() {
-          if (phase === 'create') await hold(this);
+        async onCreate(_request, signal) {
+          if (phase === 'create') await hold(this, signal);
           return { accepted: true };
         }
-        async onInitialize() {
+        async onInitialize(signal) {
           initialized++;
-          if (phase === 'initialize') await hold(this);
+          if (phase === 'initialize') await hold(this, signal);
         }
         onClosing() {
           closing++;
@@ -843,6 +883,7 @@ for (const { mode, phase, native, instance } of cancellationCases) {
       );
       t.after(async () => {
         release.resolve();
+        scopeRelease.resolve();
         await creationOutcome;
         await close?.catch(() => undefined);
         if (activation) {
@@ -875,8 +916,38 @@ for (const { mode, phase, native, instance } of cancellationCases) {
       assert.equal(messages, 0);
       controller.abort();
       await new Promise((resolve) => setImmediate(resolve));
-      assert.equal(settled, true, 'creation must terminate without releasing the held callback');
+      assert.equal(timer.isDisposed, false, 'timer must remain alive until callback terminal');
+      assert.equal(scopeStarted, 0, 'scope disposal must wait for callback terminal');
+      assert.equal(scopeDisposed, 0);
+      assert.equal(nativeDisposes, 0);
+      assert.equal(activation.serialExecutor.isPreparing, true);
+      assert.equal(activation.serial.applicationAdmissionRefusal(false), undefined);
+      assert.equal(callbackSignal, controller.signal);
+      assert.equal(callbackSignal.aborted, true);
+      assert.equal(settled, false);
+      if (instance) assert.equal(activeAdmissions, 1);
+      assert.equal(authorityCalls, 0);
+      assert.equal(closing, 0);
+      assert.equal(ticks, 0);
+      assert.equal(messages, 0);
+      release.resolve();
+      await scopeEntered.promise;
+      assert.equal(callbackExited, true);
+      assert.equal(scopeDisposed, 0);
+      assert.equal(
+        activation.serialExecutor.isPreparing,
+        true,
+        'cleanup remains in the preparation lifecycle'
+      );
+      assert.equal(nativeDisposes, 0);
+      assert.equal(authorityCalls, 0);
+      assert.equal(ticks, 0);
+      assert.equal(messages, 0);
+      scopeRelease.resolve();
       const outcome = await creationOutcome;
+      assert.equal(settled, true);
+      assert.equal(scopeStarted, 1);
+      assert.equal(scopeDisposed, 1);
       assert.equal(outcome.error?.name, 'AbortError');
       assert.equal(activation.serialExecutor.isPreparing, false);
       assert.equal(activeAdmissions, 0);
@@ -932,5 +1003,51 @@ for (const instance of [false, true]) {
     );
     assert.equal(constructed, 0);
     assert.equal(nativeCreated, 0);
+  });
+}
+
+for (const instance of [false, true]) {
+  test(`Initialization callback can cooperatively observe abort: instance=${instance}`, async () => {
+    const entered = deferred();
+    const controller = new AbortController();
+    let callbackTerminal = false;
+    let observed;
+    async function hold(signal) {
+      observed = signal;
+      entered.resolve();
+      try {
+        await new Promise((resolve, reject) => {
+          signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+        });
+      } finally {
+        callbackTerminal = true;
+      }
+    }
+    class Room {
+      async onCreate(_request, signal) {
+        if (!instance) await hold(signal);
+        return { accepted: true };
+      }
+      async onInitialize(signal) {
+        if (instance) await hold(signal);
+      }
+    }
+    const manager = new framework.DefaultZLinkSpotManager({
+      detachedTaskRunner: new ZLinkRuntimeTaskRunner(
+        new ZLinkRuntimeTaskErrorSink(),
+        new AbortController().signal
+      ),
+      spotFactories: [Room],
+      instanceSpotFactories: new Map([['mesh', new Map([['cancel', Room]])]])
+    });
+    const creation = instance
+      ? manager.materializeInstance('mesh', 'cancel', 'cooperative', 1n, controller.signal)
+      : manager.create('mesh', Room, undefined, controller.signal);
+    await entered.promise;
+    controller.abort();
+    await assert.rejects(creation, { name: 'AbortError' });
+    assert.equal(observed, controller.signal);
+    assert.equal(callbackTerminal, true);
+    assert.deepEqual(manager.activations.activeActivations(), []);
   });
 }

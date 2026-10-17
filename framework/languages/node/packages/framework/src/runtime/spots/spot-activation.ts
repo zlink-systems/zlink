@@ -30,7 +30,7 @@ import {
 } from '../../contracts';
 import type { Message } from '../../contracts/Common/Message';
 import type { ZLinkMessageFollowOrigin } from '../foundation/service-runtime-contracts';
-import { awaitWithAbort, isAbortError, throwIfAborted } from '../abort';
+import { createAbortError, isAbortError, throwIfAborted } from '../abort';
 import { ZLinkConfigurationException } from '../configuration';
 import {
   ZLinkFrameworkInternalErrorKind,
@@ -496,25 +496,34 @@ export class ZLinkSpotActivationLifecycle {
           }
         );
         throwIfAborted(signal);
-        await awaitWithAbort(Promise.resolve(instance!.onInitialize?.()), signal);
+        await instance!.onInitialize?.(signal);
       });
       throwIfAborted(signal);
       await this.options.registerActivation(activation);
       return activation;
     } catch (error) {
-      const cancelled = isAbortError(error);
+      const failure = signal?.aborted === true ? createAbortError() : error;
+      const cancelled = isAbortError(failure);
       if (cancelled && serialOwner === undefined) serial.closeAdmission();
-      const preparation = await Promise.allSettled([this.discardPreparation(activation)]);
-      const cleanup = await Promise.allSettled([
-        timers.dispose(),
-        disposeLifecycleHandlers(instance, this.options.detachedTaskRunner)
-      ]);
-      const cleanupErrors = [...preparation, ...cleanup]
-        .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
-        .map((result) => result.reason);
-      if (cancelled && cleanupErrors.length === 0) throw error;
+      const cleanupErrors: unknown[] = [];
+      try {
+        await serialExecutor.finishPreparation(async () => {
+          const cleanup = await Promise.allSettled([
+            timers.dispose(),
+            disposeLifecycleHandlers(instance, this.options.detachedTaskRunner)
+          ]);
+          cleanupErrors.push(
+            ...cleanup
+              .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
+              .map((result) => result.reason)
+          );
+        });
+      } catch (cleanupError) {
+        cleanupErrors.push(cleanupError);
+      }
+      if (cancelled && cleanupErrors.length === 0) throw failure;
       throw new AggregateError(
-        [error, ...cleanupErrors],
+        [failure, ...cleanupErrors],
         `Instance Spot '${instanceType}' materialization failed for '${String(spotId)}'.`
       );
     }
@@ -898,7 +907,7 @@ export class ZLinkSpotActivationLifecycle {
       undefined,
       ZLinkSpotCloseReason.ExplicitClose,
       undefined,
-      true
+      !activation.serialExecutor.isPreparing
     );
   }
 
@@ -985,15 +994,11 @@ export class ZLinkSpotActivationLifecycle {
           }
         );
         throwIfAborted(signal);
-        createResponse = await awaitWithAbort(
-          Promise.resolve(
-            activation.spot.onCreate?.(
-              wrapFrameworkPayloadMessage(
-                request,
-                this.options.messageSerializers,
-                frameworkPayloadContentType(request)
-              )
-            )
+        createResponse = await activation.spot.onCreate?.(
+          wrapFrameworkPayloadMessage(
+            request,
+            this.options.messageSerializers,
+            frameworkPayloadContentType(request)
           ),
           signal
         );
@@ -1001,7 +1006,7 @@ export class ZLinkSpotActivationLifecycle {
           return;
         }
         throwIfAborted(signal);
-        await awaitWithAbort(Promise.resolve(activation.spot.onInitialize?.()), signal);
+        await activation.spot.onInitialize?.(signal);
       });
       throwIfAborted(signal);
       if (createResponse?.accepted === false) {
@@ -1019,17 +1024,18 @@ export class ZLinkSpotActivationLifecycle {
         reply: this.decodeCreateReply(createResponse?.reply)
       };
     } catch (error) {
-      const cancelled = isAbortError(error);
+      const failure = signal?.aborted === true ? createAbortError() : error;
+      const cancelled = isAbortError(failure);
       if (cancelled) activation.serial.closeAdmission();
       try {
         await this.cleanupActivation(activation, locationClaim.meshName, !cancelled);
       } catch (cleanupError) {
         throw new AggregateError(
-          [error, cleanupError],
+          [failure, cleanupError],
           `Spot '${activation.spotId}' creation cleanup failed.`
         );
       }
-      throw error;
+      throw failure;
     }
   }
 
@@ -1054,17 +1060,27 @@ export class ZLinkSpotActivationLifecycle {
     };
     this.cleanupStates.set(activation, state);
     if (state.inFlight !== undefined) return await state.inFlight;
-    state.inFlight = this.runCleanup(
-      activation,
-      locationMeshName,
-      notifyClosing,
-      reason,
-      state,
-      deadline,
-      owningLifecycle
-    ).finally(() => {
-      state.inFlight = undefined;
-    });
+    let result: unknown;
+    const cleanup = async (ownsLifecycle: boolean) => {
+      result = await this.runCleanup(
+        activation,
+        locationMeshName,
+        notifyClosing,
+        reason,
+        state,
+        deadline,
+        ownsLifecycle
+      );
+    };
+    state.inFlight = (
+      !owningLifecycle && activation.serialExecutor.isPreparing
+        ? activation.serialExecutor.finishPreparation(() => cleanup(true))
+        : cleanup(owningLifecycle)
+    )
+      .then(() => result)
+      .finally(() => {
+        state.inFlight = undefined;
+      });
     return await state.inFlight;
   }
 
@@ -1072,11 +1088,7 @@ export class ZLinkSpotActivationLifecycle {
     if (!activation.serialExecutor.isPreparing) return;
     // Clear timer generations before opening admission, so an already due
     // dispatch can finish without invoking application code.
-    try {
-      await activation.timers.dispose();
-    } finally {
-      await activation.serialExecutor.finishPreparation();
-    }
+    await activation.serialExecutor.finishPreparation(() => activation.timers.dispose());
   }
 
   private async runCleanup(
@@ -1106,13 +1118,6 @@ export class ZLinkSpotActivationLifecycle {
         errors.push(error);
       }
     };
-    if (activation.serialExecutor.isPreparing)
-      await cleanup(
-        () => this.discardPreparation(activation),
-        () => {
-          state.timersDisposed = true;
-        }
-      );
     if (notifyClosing && !state.closingAttempted) {
       state.closingAttempted = true;
       try {
