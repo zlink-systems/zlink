@@ -2920,7 +2920,10 @@ class provider_location_repository_t final : public location_repository_t
               previous_lease && previous_lease->value.expires_at
               && *previous_lease->value.expires_at > previous_lease->value.store_now
               && owner_generation (previous_lease->value.bytes) == stored_lease;
-            if (intent == location_write_intent_t::new_claim && previous_owner_live) {
+            if (intent == location_write_intent_t::new_claim
+                || (intent == location_write_intent_t::renew
+                    && record.at (location_record_fields::descriptor)
+                         .contains (location_record_fields::meshName))) {
                 auto previous = stored;
                 auto requested = record;
                 previous.at (location_record_fields::descriptor)
@@ -2931,13 +2934,15 @@ class provider_location_repository_t final : public location_repository_t
                   .erase (location_record_fields::updatedAt);
                 requested.at (location_record_fields::descriptor)
                   .erase (location_record_fields::updatedAtEpochMs);
-                co_return previous == requested
-                  ? location_write_result_t::stored (
+                if (previous == requested)
+                    co_return location_write_result_t::stored (
                       static_cast<std::int64_t> (provider_generation_known ? provider_generation
                                                                            : 1),
-                      found->value.store_now)
-                  : location_write_result_t{location_write_status_t::rejected_conflict, 0, {}};
+                      found->value.store_now);
             }
+            if (intent == location_write_intent_t::new_claim && previous_owner_live)
+                co_return location_write_result_t{
+                  location_write_status_t::rejected_conflict, 0, {}};
             if (intent == location_write_intent_t::takeover && previous_owner_live)
                 co_return location_write_result_t{location_write_status_t::ignored_stale, 0, {}};
             if (intent == location_write_intent_t::renew) {
