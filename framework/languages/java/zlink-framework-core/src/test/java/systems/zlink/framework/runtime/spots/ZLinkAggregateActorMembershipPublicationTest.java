@@ -75,8 +75,8 @@ final class ZLinkAggregateActorMembershipPublicationTest {
             owner.publishHidden(backlog, Map.of(ACTOR_ID, TARGET_OWNER_GENERATION))
                     .toCompletableFuture()
                     .join();
-            owner.openAdmission(staged);
             owner.drainDurableBacklog(backlog).toCompletableFuture().join();
+            owner.openAdmission(staged).toCompletableFuture().join();
 
             var actors = spots.actorSessions().runtime();
             var actor = actors.localActor(ACTOR_ID).orElseThrow();
