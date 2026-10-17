@@ -2511,6 +2511,9 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                         : detail::factory_relocation_kind_t::disabled;
                     const auto has_state_adapter =
                       relocation == detail::factory_relocation_kind_t::preserve_state;
+                    const auto entry_accepted =
+                      co_await detail::spot_node_runtime_t (registration->spot_state)
+                        .entry_accepts_actor (stable_type);
                     descriptor.object_capabilities.push_back (object_capability_t{
                       .object_kind = placement_object_kind_t::actor,
                       .stable_type = stable_type,
@@ -2519,9 +2522,7 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                                   ? maintenance_policy_kind_t::recreate
                                   : maintenance_policy_kind_t::disabled,
                       .has_snapshot_adapter = has_state_adapter,
-                      .entry_accepted =
-                        co_await detail::spot_node_runtime_t (registration->spot_state)
-                          .entry_accepts_actor (stable_type)});
+                      .entry_accepted = entry_accepted});
                 }
                 for (const auto &stable_type : registration->spot_state->snapshot.spot_names) {
                     if (registration->spot_state->snapshot.entry_spot_name == stable_type)
