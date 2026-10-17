@@ -540,6 +540,10 @@ subscription을 따로 검사한다.
 5. 일치하는 각 Spot의 application queue에는 같은 message data를 가리키는 참조를
    제출한다.
 
+일치한 Spot이 아직 [Ready](../00-foundation/02-glossary.ko.md#ready)가 아니면 그 Spot의 execution gate가
+Ready까지 message를 보류한다. Ready가 되기 전에 Spot 생성이 실패하거나 Spot이 폐기되면 보류한
+message는 handler를 실행하지 않고 정리한다.
+
 같은 node의 여러 Spot에 전달할 때 Spot 수만큼 payload를 다시 encode하거나
 복사하지 않는다. Message data는 처리 중에 변경할 수 없으며, 각 queue는 같은
 data를 가리킨다. 마지막 queue가 이 data를 더 이상 사용하지 않으면 Framework가
