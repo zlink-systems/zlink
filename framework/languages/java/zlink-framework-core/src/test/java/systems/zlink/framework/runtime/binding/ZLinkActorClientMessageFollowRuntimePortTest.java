@@ -29,6 +29,7 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkPlacementAllocati
 import systems.zlink.framework.runtime.internal.locations.ZLinkPlacementCapacityBundle;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceMessageFollowWireCodec;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceNodeDescriptor;
 import systems.zlink.framework.runtime.locations.ZLinkActorAuthorityPayloadCodec;
 import systems.zlink.framework.runtime.locations.ZLinkRegisteredLocationStores;
 import systems.zlink.framework.runtime.locations.ZLinkStoreLocationResolvers;
@@ -55,6 +56,7 @@ final class ZLinkActorClientMessageFollowRuntimePortTest {
     private static final RoutingId SOURCE_RID = RoutingId.from("runtime-port-source");
     private static final RoutingId TARGET_RID = RoutingId.from("runtime-port-target");
     private static final RoutingId CLIENT_RID = RoutingId.from("runtime-port-client");
+    private static final Duration PEER_ADMISSION_TIMEOUT = Duration.ofSeconds(2);
 
     @Test
     void targetJoinedSendFollowsExactCommittedSourceAndRefreshesTheNextCall() throws Exception {
@@ -98,14 +100,14 @@ final class ZLinkActorClientMessageFollowRuntimePortTest {
             source.start();
             target.start();
             clientNode.start();
-            source.connectPeer(clientEndpoint, CLIENT_RID);
-            target.connectPeer(clientEndpoint, CLIENT_RID);
-            clientNode.connectPeer(sourceEndpoint, SOURCE_RID);
-            clientNode.connectPeer(targetEndpoint, TARGET_RID);
-            awaitAdmitted(source, CLIENT_RID);
-            awaitAdmitted(target, CLIENT_RID);
-            awaitAdmitted(clientNode, SOURCE_RID);
-            awaitAdmitted(clientNode, TARGET_RID);
+            // MeshNode §7.1: admission belongs to the selected route. Await its owner's
+            // completion; two peers() snapshots can straddle a Core route replacement.
+            CompletableFuture.allOf(
+                            preparePeer(source, clientNode),
+                            preparePeer(target, clientNode),
+                            preparePeer(clientNode, source),
+                            preparePeer(clientNode, target))
+                    .get(PEER_ADMISSION_TIMEOUT.toNanos(), TimeUnit.NANOSECONDS);
 
             ZLinkBackendActorRef sourceActor;
             ZLinkBackendActorRef targetActor;
@@ -504,29 +506,15 @@ final class ZLinkActorClientMessageFollowRuntimePortTest {
         throw new IllegalStateException("shared relocation fixture was not found: " + relativePath);
     }
 
-    private static void awaitAdmitted(ZLinkJavaRawMeshNode node, RoutingId peerRid)
-            throws Exception {
-        long deadline = System.nanoTime() + Duration.ofSeconds(2).toNanos();
-        while (node.peers().stream()
-                        .noneMatch(
-                                peer ->
-                                        peer.routingId().equals(peerRid)
-                                                && peer.state()
-                                                        == systems.zlink.framework.runtime.internal
-                                                                .binding.spot.MeshPeerState
-                                                                .ADMITTED)
-                && System.nanoTime() < deadline) {
-            Thread.sleep(1);
-        }
-        assertTrue(
-                node.peers().stream()
-                        .anyMatch(
-                                peer ->
-                                        peer.routingId().equals(peerRid)
-                                                && peer.state()
-                                                        == systems.zlink.framework.runtime.internal
-                                                                .binding.spot.MeshPeerState
-                                                                .ADMITTED));
+    private static CompletableFuture<Void> preparePeer(
+            ZLinkJavaRawMeshNode node, ZLinkJavaRawMeshNode peer) {
+        return node.preparePeerConnectionAsync(
+                        peer.advertisedEndpoint(),
+                        peer.routingId(),
+                        peer.lifecycleGeneration(),
+                        ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY,
+                        PEER_ADMISSION_TIMEOUT)
+                .toCompletableFuture();
     }
 
     private record PrimeRoute() {}
