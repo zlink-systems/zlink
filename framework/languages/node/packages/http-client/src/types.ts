@@ -32,7 +32,8 @@ export type DownloadSink = (chunk: Uint8Array) => void;
 
 /** Completion scheduling seam supplied by a framework server integration. */
 export interface ZLinkHttpExecutionTurn {
-  yieldPromise<T>(pending: Promise<T>): Promise<T>;
+  /** Invokes the request factory only after the framework admits this Yield. */
+  yieldPromise<T>(operation: () => Promise<T>): Promise<T>;
   post(callback: () => void): void;
 }
 
