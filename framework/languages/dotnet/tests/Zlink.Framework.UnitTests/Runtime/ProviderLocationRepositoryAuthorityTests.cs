@@ -1093,6 +1093,115 @@ public sealed class ProviderLocationRepositoryAuthorityTests
         Assert.Equal(ZLinkLocationWriteStatus.RejectedConflict, changed.Status);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RepeatedMeshNodeNewClaimWithDifferentWriteTimeIsStored(bool inMemory)
+    {
+        var time = new ManualTimeProvider();
+        IZLinkLocationRepository repository = inMemory
+            ? new ZLinkInMemoryLocationStore(time)
+            : new ZLinkProviderLocationRepository(new ZLinkInMemoryProviderLocationStore(time));
+        var owner = await ClaimAsync(repository, "new-claim-retry-owner");
+        var other = await ClaimAsync(repository, "new-claim-retry-other");
+        var descriptor = Descriptor("new-claim-retry-target", owner);
+
+        Assert.Equal(
+            ZLinkLocationWriteStatus.Stored,
+            (
+                await repository.UpdateMeshNodeAsync(descriptor, ZLinkLocationWriteIntent.NewClaim)
+            ).Status
+        );
+
+        time.Advance(TimeSpan.FromSeconds(1));
+        var retry = await repository.UpdateMeshNodeAsync(
+            descriptor with
+            {
+                UpdatedAt = time.GetUtcNow(),
+            },
+            ZLinkLocationWriteIntent.NewClaim
+        );
+        Assert.Equal(ZLinkLocationWriteStatus.Stored, retry.Status);
+
+        var takeover = await repository.UpdateMeshNodeAsync(
+            descriptor with
+            {
+                UpdatedAt = time.GetUtcNow(),
+            },
+            ZLinkLocationWriteIntent.Takeover
+        );
+        Assert.Equal(ZLinkLocationWriteStatus.IgnoredStale, takeover.Status);
+
+        var changed = await repository.UpdateMeshNodeAsync(
+            descriptor with
+            {
+                Endpoint = "tcp://127.0.0.1:7999",
+            },
+            ZLinkLocationWriteIntent.NewClaim
+        );
+        Assert.Equal(ZLinkLocationWriteStatus.RejectedConflict, changed.Status);
+
+        var foreign = await repository.UpdateMeshNodeAsync(
+            descriptor with
+            {
+                OwnerId = other.OwnerId,
+                LeaseGeneration = other.LeaseGeneration,
+            },
+            ZLinkLocationWriteIntent.NewClaim
+        );
+        Assert.Equal(ZLinkLocationWriteStatus.RejectedConflict, foreign.Status);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RepeatedMeshNodeSameRevisionRenewWithDifferentWriteTimeIsStored(bool inMemory)
+    {
+        var time = new ManualTimeProvider();
+        IZLinkLocationRepository repository = inMemory
+            ? new ZLinkInMemoryLocationStore(time)
+            : new ZLinkProviderLocationRepository(new ZLinkInMemoryProviderLocationStore(time));
+        var owner = await ClaimAsync(repository, "renew-retry-owner");
+        var other = await ClaimAsync(repository, "renew-retry-other");
+        var descriptor = Descriptor("renew-retry-target", owner);
+
+        Assert.Equal(
+            ZLinkLocationWriteStatus.Stored,
+            (
+                await repository.UpdateMeshNodeAsync(descriptor, ZLinkLocationWriteIntent.NewClaim)
+            ).Status
+        );
+
+        time.Advance(TimeSpan.FromSeconds(1));
+        var retry = await repository.UpdateMeshNodeAsync(
+            descriptor with
+            {
+                UpdatedAt = time.GetUtcNow(),
+            },
+            ZLinkLocationWriteIntent.Renew
+        );
+        Assert.Equal(ZLinkLocationWriteStatus.Stored, retry.Status);
+
+        var changed = await repository.UpdateMeshNodeAsync(
+            descriptor with
+            {
+                Endpoint = "tcp://127.0.0.1:7999",
+            },
+            ZLinkLocationWriteIntent.Renew
+        );
+        Assert.Equal(ZLinkLocationWriteStatus.IgnoredStale, changed.Status);
+
+        var foreign = await repository.UpdateMeshNodeAsync(
+            descriptor with
+            {
+                OwnerId = other.OwnerId,
+                LeaseGeneration = other.LeaseGeneration,
+            },
+            ZLinkLocationWriteIntent.Renew
+        );
+        Assert.Equal(ZLinkLocationWriteStatus.IgnoredStale, foreign.Status);
+    }
+
     [Fact]
     public async Task ReplacedDescriptorLifecycleReleasesReservedCapacity()
     {
