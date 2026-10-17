@@ -508,6 +508,9 @@ final class ZLinkUserSpotRetireSourceBuilderTest {
                                         ZLinkRelocationTransitionClient.class.getClassLoader(),
                                         new Class<?>[] {ZLinkRelocationTransitionClient.class},
                                         (proxy, method, arguments) -> {
+                                            if (method.isDefault())
+                                                return java.lang.reflect.InvocationHandler
+                                                        .invokeDefault(proxy, method, arguments);
                                             if (method.getName().equals("settle"))
                                                 return settlement;
                                             if (method.getName().equals("publish"))
