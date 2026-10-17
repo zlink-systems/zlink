@@ -1617,28 +1617,30 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
 
   private pump(): void {
     if (this.closed || this.pumpTask !== undefined) return;
-    const runtime = this.requireRuntime();
-    // Install the owned task before running callbacks that can signal readiness again.
-    this.pumpTask = Promise.resolve().then(async () => {
-      try {
-        do {
-          const ready = this.readable;
-          this.readable = 0;
-          const more = await runtime.pumpBatch((ready & 1) !== 0, (ready & 2) !== 0);
-          if (more) {
-            // Yield only after actual progress, retaining readiness across the
-            // existing batch limits until receive reports no data.
-            this.readable |= 1;
-            await yieldToIO();
-          }
-        } while (!this.closed && this.readable !== 0);
-      } catch (error) {
-        runtime.reportInfrastructureFailure(error);
-      } finally {
-        this.pumpTask = undefined;
-        this.scheduleMaintenance();
-      }
-    });
+    this.pumpTask = this.runPump(this.requireRuntime());
+  }
+
+  private async runPump(runtime: RawServiceMeshRuntime): Promise<void> {
+    // Publish pumpTask before any callback can signal readiness or begin close.
+    await undefined;
+    try {
+      do {
+        const ready = this.readable;
+        this.readable = 0;
+        const more = await runtime.pumpBatch((ready & 1) !== 0, (ready & 2) !== 0);
+        if (more) {
+          // Yield only after actual progress, retaining readiness across the
+          // existing batch limits until receive reports no data.
+          this.readable |= 1;
+          await yieldToIO();
+        }
+      } while (!this.closed && this.readable !== 0);
+    } catch (error) {
+      runtime.reportInfrastructureFailure(error);
+    } finally {
+      this.pumpTask = undefined;
+      this.scheduleMaintenance();
+    }
   }
 
   private notifyReady(): void {
