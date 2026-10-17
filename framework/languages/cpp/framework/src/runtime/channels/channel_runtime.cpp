@@ -51,14 +51,12 @@ std::optional<channel_runtime_state_t::spot_mesh_send_t>
 spot_mesh_sender (const std::shared_ptr<channel_runtime_state_t> &state,
                   const std::string &mesh_name)
 {
-    return state->lane
-      .run_checked ([&] {
-          const auto found = state->spot_mesh_senders.find (mesh_name);
-          return found == state->spot_mesh_senders.end ()
-                   ? std::nullopt
-                   : std::optional<channel_runtime_state_t::spot_mesh_send_t> (found->second);
-      })
-      .get ();
+    const auto index =
+      std::atomic_load_explicit (&state->node_transports, std::memory_order_acquire);
+    const auto found = index->spot_mesh_senders.find (mesh_name);
+    return found == index->spot_mesh_senders.end ()
+             ? std::nullopt
+             : std::optional<channel_runtime_state_t::spot_mesh_send_t> (found->second);
 }
 
 using node_transport_t = std::variant<std::monostate,
@@ -720,9 +718,11 @@ void channel_runtime_t::bind_spot_mesh_transport (
 {
     _state->lane
       .run_checked ([&] {
-          _state->spot_mesh_senders.insert_or_assign (mesh_name, std::move (send));
-          _state->spot_mesh_requesters.insert_or_assign (std::move (mesh_name),
-                                                         std::move (request));
+          _state->spot_mesh_requesters.insert_or_assign (mesh_name, std::move (request));
+          _state->publish_node_transports ([&] (auto &index) {
+              // Publish after requester preparation; a CAS retry copies the same sender.
+              index.spot_mesh_senders.insert_or_assign (mesh_name, send);
+          });
       })
       .get ();
 }
