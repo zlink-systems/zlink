@@ -18,6 +18,7 @@
 #include <chrono>
 #include <memory>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -76,6 +77,17 @@ struct transport_copy_counter_t
     transport_copy_counter_t (transport_copy_counter_t &&) noexcept = default;
     unsigned *copies;
 };
+
+template <typename Predicate> bool wait_until (Predicate predicate)
+{
+    const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (5);
+    while (!predicate ()) {
+        if (std::chrono::steady_clock::now () >= deadline)
+            return false;
+        std::this_thread::yield ();
+    }
+    return true;
+}
 
 } // namespace
 
@@ -157,7 +169,9 @@ TEST (CppFrameworkRouteClientChannelRouting, PendingNodeRequestRetainsReplacedTr
             framework_error_kind_t::not_found, "test target is absent")));
         EXPECT_EQ (pending.result ().error_kind (), framework_error_kind_t::not_found);
     }
-    EXPECT_TRUE (retained.expired ());
+    // Submit and completion spec §11 permits independent completion before the
+    // producer stack returns. Observing the result does not join transport cleanup.
+    EXPECT_TRUE (wait_until ([&] { return retained.expired (); }));
 }
 
 TEST (CppFrameworkRouteClientChannelRouting, OneWaySendDoesNotCreateCorrelation)
