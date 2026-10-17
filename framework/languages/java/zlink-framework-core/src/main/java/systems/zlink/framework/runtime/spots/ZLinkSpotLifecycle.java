@@ -220,12 +220,17 @@ final class ZLinkSpotLifecycle {
         if (current == null) countChanged.run();
         recordSpotCount(USER_SPOT_METRIC_KIND, 1);
         recordSpotCreated(USER_SPOT_METRIC_KIND);
-        return CompletableFuture.completedFuture(null);
+        return activation.context.finishActivationPreparation();
     }
 
     CompletionStage<Void> discardReserved(PreparedUserSpot prepared) {
         if (!prepared.existing() && prepared.created().activation() != null) {
-            return prepared.created().activation().closeAsync();
+            SpotActivation activation = prepared.created().activation();
+            return activation
+                    .context
+                    .discardActivationPreparation()
+                    .thenCompose(ignored -> activation.context.releaseRelocationPreparation())
+                    .thenCompose(ignored -> activation.closeAsync());
         }
         return CompletableFuture.completedFuture(null);
     }
@@ -237,17 +242,7 @@ final class ZLinkSpotLifecycle {
 
     CompletionStage<Void> completeRelocationReady(PreparedUserSpot prepared) {
         requireNewPrepared(prepared);
-        return activationFactory
-                .initializeRelocation(prepared.created().activation())
-                .thenCompose(
-                        ignored ->
-                                prepared.created()
-                                        .activation()
-                                        .context
-                                        .runRelocationReadyCompletion(
-                                                systems.zlink.framework.spots
-                                                        .ZLinkSpotRelocationReadyOutcome
-                                                        .RELOCATED));
+        return activationFactory.initializeRelocation(prepared.created().activation());
     }
 
     CompletionStage<Object> beginReservedIngressHold(PreparedUserSpot prepared) {
@@ -255,13 +250,8 @@ final class ZLinkSpotLifecycle {
         return prepared.created()
                 .activation()
                 .context
-                .trySealRelocation()
-                .thenApply(
-                        seal ->
-                                seal.orElseThrow(
-                                        () ->
-                                                new IllegalStateException(
-                                                        "reserved relocation target ingress could not be sealed")));
+                .relocationPreparationSeal()
+                .thenApply(seal -> seal);
     }
 
     CompletionStage<Void> resumeReservedIngress(PreparedUserSpot prepared, Object ingressHold) {

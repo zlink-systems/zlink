@@ -556,6 +556,11 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
                 new UnsupportedOperationException("Instance activation recovery is unavailable"));
     }
 
+    default CompletionStage<Void> instanceActivationRecoveryCompleted(
+            ZLinkServiceM6BWireCodec.InstanceRouteFence route, Throwable failure) {
+        return CompletableFuture.completedFuture(null);
+    }
+
     @FunctionalInterface
     interface InstanceSpotActivationHandler {
         default <T> CompletionStage<T> admit(java.util.function.Supplier<CompletionStage<T>> work) {
@@ -592,9 +597,16 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
                 ZLinkServiceM6BWireCodec.InstanceRouteFence route,
                 ZLinkBackendSpot backendSpot,
                 long deadlineUnixMs,
-                java.util.function.Consumer<ZLinkBackendSpot> restoreFirst) {
+                java.util.function.BiFunction<
+                                ZLinkBackendSpot, CompletableFuture<Void>, CompletionStage<Void>>
+                        restoreFirst) {
             return activate(stableType, route, backendSpot, deadlineUnixMs)
-                    .thenRun(() -> restoreFirst.accept(backendSpot));
+                    .thenRun(() -> restoreFirst.apply(backendSpot, new CompletableFuture<>()));
+        }
+
+        default CompletionStage<Void> recovered(
+                ZLinkServiceM6BWireCodec.InstanceRouteFence route, Throwable failure) {
+            return CompletableFuture.completedFuture(null);
         }
 
         default CompletionStage<Void> admitExisting(

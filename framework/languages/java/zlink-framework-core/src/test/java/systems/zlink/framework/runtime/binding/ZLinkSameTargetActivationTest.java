@@ -66,7 +66,7 @@ final class ZLinkSameTargetActivationTest {
                                     "room",
                                     1,
                                     Long.MAX_VALUE,
-                                    spot -> {
+                                    (spot, admission) -> {
                                         restoreThread.complete(Thread.currentThread());
                                         return CompletableFuture.completedFuture(null);
                                     })
@@ -75,7 +75,7 @@ final class ZLinkSameTargetActivationTest {
                                     "room",
                                     Long.MAX_VALUE,
                                     () -> CompletableFuture.completedFuture(1L),
-                                    spot -> {
+                                    (spot, admission) -> {
                                         restoreThread.complete(Thread.currentThread());
                                         return CompletableFuture.completedFuture(null);
                                     });
@@ -222,7 +222,7 @@ final class ZLinkSameTargetActivationTest {
                         "room",
                         1,
                         Long.MAX_VALUE,
-                        spot -> {
+                        (spot, admission) -> {
                             admitted.add(1);
                             return CompletableFuture.completedFuture(null);
                         });
@@ -232,7 +232,7 @@ final class ZLinkSameTargetActivationTest {
                         "room",
                         1,
                         Long.MAX_VALUE,
-                        spot -> {
+                        (spot, admission) -> {
                             admitted.add(2);
                             return CompletableFuture.completedFuture(null);
                         });
@@ -242,7 +242,7 @@ final class ZLinkSameTargetActivationTest {
                         "room",
                         1,
                         Long.MAX_VALUE,
-                        spot -> {
+                        (spot, admission) -> {
                             admitted.add(3);
                             return CompletableFuture.completedFuture(null);
                         });
@@ -265,7 +265,9 @@ final class ZLinkSameTargetActivationTest {
         var registry =
                 new ZLinkJavaInstanceSpotRegistry(new ZLinkStateLane(Runnable::run), Runnable::run);
         registry.register("room", (id, generation) -> backendSpot(generation));
-        var first = registry.activate("spot", "room", 1, Long.MAX_VALUE, spot -> firstTerminal);
+        var first =
+                registry.activate(
+                        "spot", "room", 1, Long.MAX_VALUE, (spot, admission) -> firstTerminal);
         var joined = registry.activate("spot", "room", 1).toCompletableFuture();
         assertTrue(joined.isDone(), "Ready join waited for the earlier Store terminal");
         var terminals = registry.terminals().toCompletableFuture();

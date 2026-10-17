@@ -789,16 +789,31 @@ final class ZLinkDefaultSpotContextTest {
 
         DefaultInstanceSpotContext instanceContext(ZLinkWorkerPool workerPool) {
             ZLinkScannedHandlerCatalog scannedHandlers = new ZLinkScannedHandlerCatalog(List.of());
-            return new DefaultInstanceSpotContext(
-                    this,
-                    workerPool,
-                    new ZLinkSpotHandlerLoader(
-                            scannedHandlers,
-                            new ZLinkSpotActorHandlerCatalog(scannedHandlers, null),
-                            handlerType -> null),
-                    "instance-mesh",
-                    RoutingId.from("node-a"),
-                    backendSpot);
+            var context =
+                    new DefaultInstanceSpotContext(
+                            this,
+                            workerPool,
+                            new ZLinkSpotHandlerLoader(
+                                    scannedHandlers,
+                                    new ZLinkSpotActorHandlerCatalog(scannedHandlers, null),
+                                    handlerType -> null),
+                            "instance-mesh",
+                            RoutingId.from("node-a"),
+                            backendSpot);
+            systems.zlink.framework.spots.ZLinkInstanceSpot spot = () -> context;
+            var activation =
+                    new ZLinkInstanceSpotActivation(null, null, spot, backendSpot, context);
+            activation.setAuthorityFence("owner", 1, 1, 1);
+            activation.closeCoordinator(
+                    () ->
+                            new ZLinkSpotCloseCoordinator(
+                                    () ->
+                                            closeInstanceSpot(
+                                                    context.spotId(), context.objectGeneration()),
+                                    List.of(),
+                                    ignored -> {}));
+            context.bind(spot, activation);
+            return context;
         }
 
         @Override
