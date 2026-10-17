@@ -2302,7 +2302,17 @@ public final class ZLinkSerialExecutionQueue {
                                     application,
                                     actorDispatch,
                                     flow,
-                                    command));
+                                    () -> {
+                                        SerialTurn turn = currentTurn();
+                                        try (var job =
+                                                ZLinkApplicationJobContext.enterQueued(
+                                                        turn == null || turn.entry == null
+                                                                ? null
+                                                                : turn.entry
+                                                                        .applicationJobOwnership)) {
+                                            command.run();
+                                        }
+                                    }));
         };
     }
 
@@ -2353,14 +2363,7 @@ public final class ZLinkSerialExecutionQueue {
                                 application);
                 ZLinkFlowContext.Scope ignored =
                         flow == null ? () -> {} : ZLinkFlowContext.enter(flow)) {
-            SerialTurn turn = currentTurn();
-            try (var job =
-                    ZLinkApplicationJobContext.enterQueued(
-                            turn == null || turn.entry == null
-                                    ? null
-                                    : turn.entry.applicationJobOwnership)) {
-                command.run();
-            }
+            command.run();
         }
     }
 
