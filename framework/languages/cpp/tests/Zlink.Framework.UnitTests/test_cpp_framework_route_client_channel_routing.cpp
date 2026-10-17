@@ -637,7 +637,8 @@ TEST (CppFrameworkRouteClientChannelRouting, PendingSpotSendRetainsTransportThro
           framework_error_kind_t::shutting_down, "target admission closed")));
         EXPECT_EQ (pending.result ().error_kind (), framework_error_kind_t::shutting_down);
     }
-    EXPECT_TRUE (retained.expired ());
+    // Same Submit and completion §11 rule as PendingNodeRequestRetainsReplacedTransport.
+    EXPECT_TRUE (wait_until ([&] { return retained.expired (); }));
 }
 
 TEST (CppFrameworkRouteClientChannelRouting, MissingSpotTransportRemainsUnavailable)
