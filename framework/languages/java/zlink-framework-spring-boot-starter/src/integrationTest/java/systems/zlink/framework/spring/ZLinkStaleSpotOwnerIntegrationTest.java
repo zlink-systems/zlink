@@ -40,9 +40,6 @@ final class ZLinkStaleSpotOwnerIntegrationTest {
     private static final String USER_SPOT_ID = "slot:P";
     private static final String INSTANCE_ID = "slot-hall-jackpot/MAJOR_GRAND";
     private static final String MESH = "slots";
-    private static final String AUTHORITY_PREFIX = "authority\0";
-    private static final String CAPACITY_PREFIX = "zlink:v11:capacity:";
-    private static final int SCAN_PAGE_SIZE = 100;
     private static final int WAIT_SECONDS = 10;
 
     @ParameterizedTest
@@ -63,18 +60,26 @@ final class ZLinkStaleSpotOwnerIntegrationTest {
                         fixture.authority(ZLinkAuthorityKeyCodec.spot(USER_SPOT_ID))
                                 .objectGeneration();
                 fixture.assertMembership(spotGeneration);
-                retained = fixture.snapshot();
+                retained = ZLinkEndedOwnerStoreFixture.snapshot(fixture.store);
             }
-            fixture.restore(retained);
+            ZLinkEndedOwnerStoreFixture.restore(fixture.store, retained);
             fixture.assertEnded(USER_SPOT_ID);
             try (var restarted = start(fixture)) {
-                var before = fixture.authority(ZLinkAuthorityKeyCodec.spot(USER_SPOT_ID));
                 if (spotFirst) {
-                    unavailable(() -> getUserSpot(restarted));
-                    assertEquals(
-                            before.storeVersion(),
+                    // Location runtime §6.1: the Spot's only member also lost its owner, so the
+                    // Spot is re-created and the member is released with it (Missing).
+                    getUserSpot(restarted);
+                    assertTrue(
                             fixture.authority(ZLinkAuthorityKeyCodec.spot(USER_SPOT_ID))
-                                    .storeVersion());
+                                            .objectGeneration()
+                                    > spotGeneration);
+                    assertInstanceOf(
+                            systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityMissing
+                                    .class,
+                            fixture.repository
+                                    .read(ZLinkAuthorityKeyCodec.actor(ACTOR_ID), () -> false)
+                                    .toCompletableFuture()
+                                    .get());
                 }
                 getActor(restarted);
                 assertTrue(
@@ -103,9 +108,9 @@ final class ZLinkStaleSpotOwnerIntegrationTest {
             try (var original = start(fixture)) {
                 generation = instance(original);
                 fixture.steadyInstance.get(WAIT_SECONDS, TimeUnit.SECONDS);
-                retained = fixture.snapshot();
+                retained = ZLinkEndedOwnerStoreFixture.snapshot(fixture.store);
             }
-            fixture.restore(retained);
+            ZLinkEndedOwnerStoreFixture.restore(fixture.store, retained);
             fixture.assertEnded(INSTANCE_ID);
             try (var restarted = start(fixture)) {
                 var key = ZLinkAuthorityKeyCodec.spot(INSTANCE_ID);
@@ -289,7 +294,8 @@ final class ZLinkStaleSpotOwnerIntegrationTest {
                                                                         && put.key()
                                                                                 .value()
                                                                                 .startsWith(
-                                                                                        AUTHORITY_PREFIX)))
+                                                                                        ZLinkEndedOwnerStoreFixture
+                                                                                                .AUTHORITY_PREFIX)))
                                     return CompletableFuture.completedFuture(result);
                                 return repository
                                         .read(
@@ -337,49 +343,6 @@ final class ZLinkStaleSpotOwnerIntegrationTest {
                             .orElseThrow();
             assertEquals(USER_SPOT_ID, member.currentSpotId());
             assertEquals(generation, member.currentSpotGeneration());
-        }
-
-        List<ZLinkStoreScanItem> snapshot() throws Exception {
-            var items = new ArrayList<ZLinkStoreScanItem>();
-            ZLinkStoreScanCursor cursor = null;
-            do {
-                var page =
-                        assertInstanceOf(
-                                        ZLinkStoreScanPageResult.class,
-                                        store.scan(
-                                                        new ZLinkStoreScanRequest(
-                                                                "", cursor, SCAN_PAGE_SIZE),
-                                                        () -> false)
-                                                .toCompletableFuture()
-                                                .get())
-                                .value();
-                for (var item : page.items()) {
-                    // Preserve shutdown-deleted authority and its capacity accounting, but no
-                    // lease.
-                    if (item.key().value().startsWith(AUTHORITY_PREFIX)
-                            || item.key().value().startsWith(CAPACITY_PREFIX)) items.add(item);
-                }
-                cursor = page.nextCursor();
-            } while (cursor != null);
-            assertFalse(items.isEmpty());
-            return items;
-        }
-
-        void restore(List<ZLinkStoreScanItem> items) throws Exception {
-            for (var item : items)
-                assertInstanceOf(
-                        ZLinkStoreWriteApplied.class,
-                        store.write(
-                                        new ZLinkStoreWriteRequest(
-                                                List.of(),
-                                                List.of(
-                                                        new ZLinkStorePut(
-                                                                item.key(),
-                                                                item.value().bytes(),
-                                                                null))),
-                                        () -> false)
-                                .toCompletableFuture()
-                                .get());
         }
 
         public void close() throws Exception {

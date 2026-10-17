@@ -649,12 +649,12 @@ class framework_runtime_status_source_t
                 // remains available through the source snapshot.
             }
         }
-        result.observed_at = std::chrono::system_clock::now ();
         {
             std::lock_guard lock (_mutex);
-            if (!_last || !same_runtime_status (*_last, result))
-                ++_sequence;
-            result.sequence = _sequence;
+            if (_last && same_runtime_status (*_last, result))
+                return *_last;
+            result.observed_at = std::chrono::system_clock::now ();
+            result.sequence = ++_sequence;
             _last = result;
         }
         return result;

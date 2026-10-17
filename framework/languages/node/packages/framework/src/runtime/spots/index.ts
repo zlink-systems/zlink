@@ -210,6 +210,11 @@ export interface ZLinkSpotManagerOptions {
     actor: ZLinkActor,
     handoffBacklog?: readonly ZLinkActorHandoffPacket[]
   ) => Promise<void>;
+  readonly admitEntryActorPacketPrefix?: (
+    meshName: string,
+    actorId: string,
+    records: readonly ZLinkActorHandoffPrefixRecord[]
+  ) => ZLinkActorHandoffPrefixAdmission;
   readonly executeEntryActor?: <T>(
     meshName: string,
     actorId: string,
@@ -1598,6 +1603,24 @@ export class DefaultZLinkSpotManager {
       throw new ZLinkConfigurationException(`Spot '${spotId}' is not active.`);
     }
     return this.activationLifecycle.admitActorPacketPrefix(activation, actorId, records);
+  }
+
+  /** Resolves the current Actor FIFO owner for both Entry and User membership. */
+  admitSourceActorPacketPrefix(
+    actorId: string,
+    records: readonly ZLinkActorHandoffPrefixRecord[]
+  ): ZLinkActorHandoffPrefixAdmission {
+    const owner = this.options.actorDispatchOwnerResolver?.(actorId);
+    if (owner?.actorRef === undefined) {
+      throw new ZLinkConfigurationException(`Actor '${actorId}' has no local FIFO owner.`);
+    }
+    if (owner.spotId === undefined) {
+      if (this.options.admitEntryActorPacketPrefix === undefined) {
+        throw new ZLinkConfigurationException(`Actor '${actorId}' has no Entry FIFO port.`);
+      }
+      return this.options.admitEntryActorPacketPrefix(owner.actorRef.meshName, actorId, records);
+    }
+    return this.admitRoutedActorPacketPrefix(owner.spotId, actorId, records);
   }
 
   async dispatchRoutedSpotSend(
