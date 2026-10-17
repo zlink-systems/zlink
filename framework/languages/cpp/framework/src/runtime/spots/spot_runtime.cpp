@@ -14152,26 +14152,37 @@ void spot_node_runtime_t::bind_location_lifecycle (runtime::location_lifecycle_t
 
 std::vector<actor_ref_t> spot_node_runtime_t::local_actor_refs () const
 {
-    return _state->lane.run_checked ([this] { return local_actor_refs_on_lane (); }).get ();
+    auto refs = local_actor_refs_async ().result ();
+    return std::move (refs.value ());
 }
 
-std::vector<actor_ref_t> spot_node_runtime_t::local_actor_refs_on_lane () const
+task_t<std::vector<actor_ref_t>> spot_node_runtime_t::local_actor_refs_async () const
 {
-    std::vector<actor_ref_t> refs;
-    refs.reserve (_state->actor_spot_ids.size ());
-    const auto node_rid = detail::effective_spot_node_rid (_state->snapshot);
-    for (const auto &[key, spot_id] : _state->actor_spot_ids) {
-        const auto split = key.find (':');
-        if (split == std::string::npos)
-            continue;
-        const auto generation = _state->actor_generations.find (key);
-        if (generation == _state->actor_generations.end () || generation->second == 0)
-            continue;
-        refs.push_back (::zlink::framework::detail::actor_ref_access_t::make (
-          node_rid_t::from_string (node_rid), key.substr (0, split), key.substr (split + 1),
-          generation->second));
-    }
-    return refs;
+    const auto state = _state;
+    const auto native =
+      co_await state->lane.run_task ([state] { return state->native_node.lock (); });
+    if (!native)
+        co_return std::vector<actor_ref_t>{};
+    auto inventory = co_await native->objects ().actor_inventory ();
+    co_return co_await state->lane.run_task ([state, inventory = std::move (inventory)] {
+        std::vector<actor_ref_t> refs;
+        refs.reserve (inventory.size ());
+        const auto node_rid = detail::effective_spot_node_rid (state->snapshot);
+        for (const auto &actor : inventory) {
+            if (actor.owner.node_id != node_rid
+                || (actor.state != runtime::stateful::object_state_t::ready
+                    && actor.state != runtime::stateful::object_state_t::moving))
+                continue;
+            auto ref = ::zlink::framework::detail::actor_ref_access_t::make (
+              node_rid_t::from_string (actor.owner.node_id), actor.stable_type, actor.owner.key,
+              actor.owner.object_generation);
+            const auto instance = state->actor_instances.find (actor_key (ref));
+            if (instance == state->actor_instances.end () || !instance->second)
+                continue;
+            refs.push_back (std::move (ref));
+        }
+        return refs;
+    });
 }
 
 std::optional<zlink::message_t>
@@ -14543,11 +14554,11 @@ std::size_t spot_node_runtime_t::active_user_spot_count_on_lane () const
 
 task_t<std::pair<std::size_t, std::size_t>> spot_node_runtime_t::monitoring_counts_async () const
 {
-    return _state->lane.run_task ([state = _state] {
-        const spot_node_runtime_t owner (state);
-        return std::pair{owner.local_actor_refs_on_lane ().size (),
-                         owner.active_user_spot_count_on_lane ()};
-    });
+    const auto state = _state;
+    const auto actors = co_await local_actor_refs_async ();
+    const auto spot_count = co_await state->lane.run_task (
+      [state] { return spot_node_runtime_t (state).active_user_spot_count_on_lane (); });
+    co_return std::pair{actors.size (), spot_count};
 }
 
 bool spot_node_runtime_t::dispatch_mesh_record (

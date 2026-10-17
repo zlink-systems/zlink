@@ -2084,7 +2084,7 @@ class spot_node_runtime_t
     }
 
   private:
-    std::vector<actor_ref_t> local_actor_refs_on_lane () const;
+    task_t<std::vector<actor_ref_t>> local_actor_refs_async () const;
     std::size_t active_user_spot_count_on_lane () const;
     std::optional<std::string> spot_name_for_unlocked (const spot_id_t &spot_id) const;
 
