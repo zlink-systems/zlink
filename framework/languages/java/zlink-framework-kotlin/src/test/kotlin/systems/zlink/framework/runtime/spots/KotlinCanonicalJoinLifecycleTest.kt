@@ -13,6 +13,7 @@ import systems.zlink.framework.actors.ZLinkActor
 import systems.zlink.framework.kotlin.ZLinkSuspendingSpot
 import systems.zlink.framework.messaging.ZLinkMessage
 import systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationContext
+import systems.zlink.framework.runtime.spots.ZLinkActorJoinLifecycleAdmissionTest.COMPLETION_SECONDS
 import systems.zlink.framework.spots.ZLinkSpotActorJoinResult
 import systems.zlink.framework.spots.ZLinkSpotContext
 
@@ -83,9 +84,5 @@ class KotlinCanonicalJoinLifecycleTest {
         override suspend fun onJoinedActorSuspending(actor: ZLinkActor) {}
 
         override suspend fun onLeaveActorSuspending(actor: ZLinkActor) {}
-    }
-
-    private companion object {
-        const val COMPLETION_SECONDS = 5L
     }
 }

@@ -38,6 +38,7 @@ import java.util.function.Function;
 final class ZLinkActorJoinLifecycleAdmissionTest {
     private static final RoutingId NODE = RoutingId.from("admission-node");
     private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(1);
+    static final long COMPLETION_SECONDS = 5;
 
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
@@ -56,15 +57,21 @@ final class ZLinkActorJoinLifecycleAdmissionTest {
                     };
             try {
                 var first = canonicalFirst ? fixture.canonical(1) : fixture.local();
-                entered.get(5, TimeUnit.SECONDS);
+                entered.get(COMPLETION_SECONDS, TimeUnit.SECONDS);
                 var second = canonicalFirst ? fixture.local() : fixture.canonical(2);
                 fixture.drainInfrastructure();
                 assertEquals(1, fixture.room.calls.size(), "second callback entered a held turn");
                 assertFalse(first.toCompletableFuture().isDone());
                 assertFalse(second.toCompletableFuture().isDone());
                 release.complete(ZLinkSpotActorJoinResult.accept());
-                assertTrue(first.toCompletableFuture().get(5, TimeUnit.SECONDS).accepted());
-                assertTrue(second.toCompletableFuture().get(5, TimeUnit.SECONDS).accepted());
+                assertTrue(
+                        first.toCompletableFuture()
+                                .get(COMPLETION_SECONDS, TimeUnit.SECONDS)
+                                .accepted());
+                assertTrue(
+                        second.toCompletableFuture()
+                                .get(COMPLETION_SECONDS, TimeUnit.SECONDS)
+                                .accepted());
                 assertEquals(
                         canonicalFirst
                                 ? List.of("remote-1", "local")
@@ -82,13 +89,18 @@ final class ZLinkActorJoinLifecycleAdmissionTest {
             fixture.room.callback =
                     id -> CompletableFuture.completedFuture(ZLinkSpotActorJoinResult.reject());
             assertFalse(
-                    fixture.canonical(1).toCompletableFuture().get(5, TimeUnit.SECONDS).accepted());
+                    fixture.canonical(1)
+                            .toCompletableFuture()
+                            .get(COMPLETION_SECONDS, TimeUnit.SECONDS)
+                            .accepted());
             var failure = new IllegalStateException("callback failure");
             fixture.room.callback = id -> CompletableFuture.failedFuture(failure);
             var result = fixture.canonical(2).toCompletableFuture();
             assertSame(
                     failure,
-                    assertThrows(ExecutionException.class, () -> result.get(5, TimeUnit.SECONDS))
+                    assertThrows(
+                                    ExecutionException.class,
+                                    () -> result.get(COMPLETION_SECONDS, TimeUnit.SECONDS))
                             .getCause());
         }
     }
@@ -120,7 +132,7 @@ final class ZLinkActorJoinLifecycleAdmissionTest {
                                     return CompletableFuture.completedFuture(null);
                                 })
                         .toCompletableFuture()
-                        .get(5, TimeUnit.SECONDS);
+                        .get(COMPLETION_SECONDS, TimeUnit.SECONDS);
                 fixture.drainInfrastructure();
                 assertEquals(
                         0, fixture.room.calls.size(), "capacity must precede user callback entry");
@@ -128,12 +140,15 @@ final class ZLinkActorJoinLifecycleAdmissionTest {
                 permits.removeFirst().close();
                 permits.removeFirst().close();
                 fixture.drainInfrastructure();
-                entered.get(5, TimeUnit.SECONDS);
+                entered.get(COMPLETION_SECONDS, TimeUnit.SECONDS);
                 assertEquals(1, fixture.room.calls.size());
                 assertFalse(submitted.get(1).toCompletableFuture().isDone());
                 release.complete(ZLinkSpotActorJoinResult.accept());
                 for (var result : submitted)
-                    assertTrue(result.toCompletableFuture().get(5, TimeUnit.SECONDS).accepted());
+                    assertTrue(
+                            result.toCompletableFuture()
+                                    .get(COMPLETION_SECONDS, TimeUnit.SECONDS)
+                                    .accepted());
                 assertEquals(List.of("remote-1", "remote-2"), fixture.room.calls);
             } finally {
                 release.complete(ZLinkSpotActorJoinResult.accept());
@@ -158,13 +173,17 @@ final class ZLinkActorJoinLifecycleAdmissionTest {
                 assertEquals(0, fixture.jobs.snapshot().capacityWaiters());
                 var waiting = fixture.canonical(1).toCompletableFuture();
                 assertEquals(1, fixture.jobs.snapshot().capacityWaiters());
-                fixture.host.beginDrain().toCompletableFuture().get(5, TimeUnit.SECONDS);
+                fixture.host
+                        .beginDrain()
+                        .toCompletableFuture()
+                        .get(COMPLETION_SECONDS, TimeUnit.SECONDS);
                 permits.forEach(ZLinkApplicationJobQueue.Permit::close);
                 permits.clear();
                 fixture.drainInfrastructure();
                 var failure =
                         assertThrows(
-                                ExecutionException.class, () -> waiting.get(5, TimeUnit.SECONDS));
+                                ExecutionException.class,
+                                () -> waiting.get(COMPLETION_SECONDS, TimeUnit.SECONDS));
                 assertEquals(
                         systems.zlink.framework.errors.ZLinkFrameworkErrorKind.SHUTTING_DOWN,
                         assertInstanceOf(
@@ -202,7 +221,7 @@ final class ZLinkActorJoinLifecycleAdmissionTest {
                     .getOrCreate("room-a", "room")
                     .submit()
                     .toCompletableFuture()
-                    .get(5, TimeUnit.SECONDS);
+                    .get(COMPLETION_SECONDS, TimeUnit.SECONDS);
             host = (ZLinkSpotRuntime) framework.spotManager();
             activation = host.spotLifecycle().spotActivationFor("room-a");
             room = roomType.cast(activation.spot());
@@ -291,7 +310,7 @@ final class ZLinkActorJoinLifecycleAdmissionTest {
                     .context
                     .enqueueInfrastructureDispatch(() -> CompletableFuture.completedFuture(null))
                     .toCompletableFuture()
-                    .get(5, TimeUnit.SECONDS);
+                    .get(COMPLETION_SECONDS, TimeUnit.SECONDS);
         }
 
         List<ZLinkApplicationJobQueue.Permit> exhaustCapacity() {
