@@ -668,7 +668,7 @@ test('GameQuest TypeScript sample uses framework channel topology', () => {
   assert.match(apiModule, /\.listen\(config\[actorSpotEndpointKey\]\)[\s\S]*\.setRoutingIdPrefix\('gamequest-api'\)/);
   assert.match(questModule, /QuestEventProcessor/);
   assert.match(apiModule, /\.addRouteMesh\(SampleNames\.playerQuestSpotMesh\)/);
-  assert.match(apiModule, /\.addEntrySpot\(GameQuestEntrySpot\)/);
+  assert.match(apiModule, /\.addEntrySpot\(GameQuestEntrySpot, SampleNames\.playerActorType\)/);
   assert.match(questModule, /\.addInstanceSpotFactory\(\s*SampleNames\.playerQuestSpotType,\s*PlayerQuestSpot,/);
   assert.doesNotMatch(questModule, /questMissionInstanceChannel|addHandlerGroup\('quest-owner'\)/);
   assert.doesNotMatch(questModule, /\.add(?:Send|Request)Handler\(/);
@@ -2010,7 +2010,7 @@ test('Bingo TypeScript sample exposes spot actor contracts explicitly', () => {
     [collapsed, 'interface ZLinkEntrySpot<TActor extends ZLinkActor = ZLinkActor>'],
     [playModule, '.addActorFactory(SampleNames.playerActorType, PlayerActorFactory,'],
     [playModule, '.addRouteMesh(SampleNames.roomSpotNode'],
-    [playModule, '.addEntrySpot(BingoEntrySpot)'],
+    [playModule, '.addEntrySpot(BingoEntrySpot, SampleNames.playerActorType)'],
     [playModule, '.addSpotFactory(SampleNames.roomSpotType, BingoRoomSpot,'],
     [roomSpot, 'implements ZLinkSpot<PlayerActor>'],
     // node spec `04-spots.ko.md:65` declares onActorJoin(actorId: string, request).

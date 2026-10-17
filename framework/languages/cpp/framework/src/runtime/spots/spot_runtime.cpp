@@ -7578,6 +7578,21 @@ std::optional<spot_id_t> spot_node_runtime_t::resolve_entry_spot_id () const
       .get ();
 }
 
+task_t<bool> spot_node_runtime_t::entry_accepts_actor (std::string stable_type) const
+{
+    return _state->lane.run_task ([state = _state, stable_type = std::move (stable_type)] {
+        const auto factory = state->actor_factories.find (stable_type);
+        if (factory == state->actor_factories.end () || !state->snapshot.entry_spot_name)
+            return false;
+        const auto entry_id = state->spot_ids_by_name.find (*state->snapshot.entry_spot_name);
+        if (entry_id == state->spot_ids_by_name.end ())
+            return false;
+        const auto entry = state->spot_contexts_by_id.find (std::string (entry_id->second));
+        return entry != state->spot_contexts_by_id.end () && entry->second._state
+               && entry->second._state->actor_admissions.contains (factory->second.actor_type);
+    });
+}
+
 void spot_node_runtime_t::set_message_follow_duration (std::chrono::milliseconds duration)
 {
     _state->lane.run ([&] { _state->message_follow_duration = duration; }).get ();

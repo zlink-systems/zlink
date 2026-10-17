@@ -144,7 +144,14 @@ final class ZLinkActorCreationCoordinatorTargetSelectionTest {
         var serializer = new ZLinkJsonMessageSerializer();
         var actors = new ZLinkActorRuntime(spot, Map.of(), Duration.ofSeconds(1), serializer);
         return new ZLinkActorCreationCoordinator(
-                "mesh", node, repository, actors, serializer, new ZLinkActivationAdmission(1));
+                "mesh",
+                node,
+                repository,
+                actors,
+                serializer,
+                new ZLinkActivationAdmission(1),
+                ignored -> null,
+                stableType -> true);
     }
 
     @Test

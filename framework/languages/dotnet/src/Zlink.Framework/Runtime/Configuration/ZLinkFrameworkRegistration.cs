@@ -444,6 +444,25 @@ internal sealed class ZLinkSpotNodeRegistration
 
     public Type? EntrySpotType { get; set; }
 
+    /// <summary>
+    /// Whether the registered Entry Spot type accepts the Actor that the
+    /// <paramref name="actorType"/> factory creates (an
+    /// <c>IZLinkEntrySpot&lt;TActor&gt;</c> whose TActor the factory's Actor
+    /// is). Only such a node creates a new Actor of that type (Actor model §6.3).
+    /// </summary>
+    internal bool EntryAcceptsActor(string actorType) =>
+        EntrySpotType is { } entrySpotType
+        && ActorFactories.TryGetValue(actorType, out var factory)
+        && entrySpotType
+            .GetInterfaces()
+            .Any(contract =>
+                contract.IsGenericType
+                && contract.GetGenericTypeDefinition() == typeof(IZLinkEntrySpot<>)
+                && contract
+                    .GetGenericArguments()[0]
+                    .IsAssignableFrom(factory.Relocation.InstanceType)
+            );
+
     public ZLinkMeshNodeObjectRole ObjectRole { get; set; }
 
     public bool ObjectRoleSelected { get; set; }
