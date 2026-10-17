@@ -626,11 +626,10 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     stateful::stateful_error_t destroy_application_actor (std::string_view actor_id,
                                                           std::uint64_t object_generation);
     stateful::stream_session_registry_t &sessions () noexcept;
-    void configure_maintenance (
-      stateful::maintenance_provider_set_t providers,
-      stateful::relocation_limits_t limits = {},
-      stateful::maintenance_runtime_t::observer_t relocation_observer = {},
-      stateful::host_maintenance_runtime_t::observer_t termination_observer = {});
+    void
+    configure_maintenance (stateful::maintenance_provider_set_t providers,
+                           stateful::relocation_limits_t limits = {},
+                           stateful::maintenance_runtime_t::observer_t relocation_observer = {});
     void configure_relocation (
       std::shared_ptr<stateful::authority_relocation_port_t> authority,
       std::shared_ptr<stateful::relocation_store_port_t> relocations,
@@ -1166,7 +1165,6 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
         std::vector<std::pair<mesh::service_mailbox_record_t, std::uint64_t>> waiting;
     };
     std::map<std::string, user_spot_terminal_record_t> _user_spot_terminals;
-    std::function<void ()> _maintenance_started;
     std::function<void ()> _maintenance_closing;
     runtime::offload_executor_t _relocation_session_terminal_lane_executor;
     mutable runtime::state_lane_t _relocation_session_terminal_lane{
