@@ -109,7 +109,9 @@ internal sealed class ZLinkSpotActivationFactory(
                     : ZLinkSpotCreateResponse.Accept();
             }
             if (invokeCreate)
-                await activation._serial.PrepareActivationAsync(Initialize).ConfigureAwait(false);
+                await activation
+                    ._serial.PrepareActivationAsync(Initialize, cancellationToken)
+                    .ConfigureAwait(false);
             else
             {
                 await activation._serial.BeginTargetPreparationAsync().ConfigureAwait(false);
@@ -202,7 +204,9 @@ internal sealed class ZLinkSpotActivationFactory(
                     .ConfigureAwait(false);
             }
             else
-                await activation._serial.PrepareActivationAsync(Initialize).ConfigureAwait(false);
+                await activation
+                    ._serial.PrepareActivationAsync(Initialize, cancellationToken)
+                    .ConfigureAwait(false);
             return activation;
         }
         catch (Exception initializationFailure)

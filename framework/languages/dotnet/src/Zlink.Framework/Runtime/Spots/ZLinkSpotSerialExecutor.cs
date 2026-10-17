@@ -131,7 +131,10 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
         );
     }
 
-    internal async ValueTask PrepareActivationAsync(Func<CancellationToken, ValueTask> initialize)
+    internal async ValueTask PrepareActivationAsync(
+        Func<CancellationToken, ValueTask> initialize,
+        CancellationToken cancellationToken
+    )
     {
         var preparation = new ActivationPreparation();
         if (Interlocked.CompareExchange(ref _preparation, preparation, null) is not null)
@@ -144,7 +147,10 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
                 {
                     try
                     {
-                        await initialize(ct).ConfigureAwait(false);
+                        using var initialization = cancellationToken.CanBeCanceled
+                            ? CancellationTokenSource.CreateLinkedTokenSource(ct, cancellationToken)
+                            : null;
+                        await initialize(initialization?.Token ?? ct).ConfigureAwait(false);
                         preparation.Prepared.TrySetResult();
                     }
                     catch (Exception failure)
@@ -165,7 +171,7 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
                     return true;
                 }
             ) ?? throw new InvalidOperationException("Activation lifecycle admission is closed.");
-        await preparation.Prepared.Task.ConfigureAwait(false);
+        await preparation.Prepared.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
     }
 
     internal Task FinishActivationPreparation(bool waitForFirstTerminal = false)

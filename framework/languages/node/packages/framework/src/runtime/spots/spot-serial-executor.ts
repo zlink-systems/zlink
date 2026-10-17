@@ -34,7 +34,7 @@ export class ZLinkSpotSerialExecutor {
   private closePromise: Promise<void> | undefined;
   private preparation?: {
     readonly seal: ZLinkExecutionBarrierSeal;
-    readonly complete: () => void;
+    readonly complete: (terminal?: () => Promise<void>) => void;
     readonly execution: Promise<void>;
   };
 
@@ -64,15 +64,21 @@ export class ZLinkSpotSerialExecutor {
       throw new Error('Activation preparation requires one unowned execution barrier.');
     const barrier = this.executionBarrier;
     const seal = barrier.seal(kind);
-    let complete!: () => void;
-    const terminal = new Promise<void>((resolve) => {
+    let complete!: (terminal?: () => Promise<void>) => void;
+    const terminal = new Promise<(() => Promise<void>) | undefined>((resolve) => {
       complete = resolve;
     });
     // The staging seal itself owns target preparation. No normal preparation
     // item is admitted in addition to this lifecycle owner.
-    const execution = this.spotSerial.executeControlLifecycleOperation(() => terminal, {
-      canExecuteApplication: (record) => record.context === undefined || !barrier.isCurrent(seal)
-    });
+    const execution = this.spotSerial.executeControlLifecycleOperation(
+      async () => {
+        const finish = await terminal;
+        await finish?.();
+      },
+      {
+        canExecuteApplication: (record) => record.context === undefined || !barrier.isCurrent(seal)
+      }
+    );
     this.preparation = { seal, complete, execution };
   }
 
@@ -80,10 +86,13 @@ export class ZLinkSpotSerialExecutor {
     if (this.preparation !== undefined) this.executionBarrier!.abort(this.preparation.seal);
   }
 
-  async finishPreparation(): Promise<void> {
+  async finishPreparation(terminal?: () => Promise<void>): Promise<void> {
     const preparation = this.preparation;
-    if (preparation === undefined) return;
-    preparation.complete();
+    if (preparation === undefined) {
+      await terminal?.();
+      return;
+    }
+    preparation.complete(terminal);
     try {
       await preparation.execution;
     } finally {
