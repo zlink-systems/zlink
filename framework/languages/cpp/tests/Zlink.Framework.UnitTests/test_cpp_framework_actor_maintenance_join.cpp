@@ -1248,6 +1248,140 @@ TEST (ActorMaintenanceJoin, PreservesEarlierIdentityWhenRestoreIsRejected)
     EXPECT_EQ (*current, previous);
 }
 
+TEST (ActorMaintenanceJoin, RemoteJoinReturnsToPreviousSourceNode)
+{
+    observations_t evidence;
+    observations = &evidence;
+    auto store = std::make_shared<fw::runtime::in_memory_location_store_t> ();
+    auto relocations = std::make_shared<fw::runtime::in_memory_relocation_store_t> ();
+    host_t first, second;
+    release_callbacks_t release{evidence};
+    configure (first, first_rid, store, relocations);
+    first.start ();
+    ASSERT_TRUE (ready (first));
+    auto services = first.app.advanced ().services ().build_provider ();
+    auto &spots = services.get_required<fw::spot_manager_t> ();
+    ASSERT_TRUE (spots.get_or_create (fw::spot_id_t (local_spot), room_type).async ().result ());
+    ASSERT_TRUE (spots.get_or_create (fw::spot_id_t (source_spot), room_type).async ().result ());
+    ASSERT_TRUE (services.get_required<fw::actor_manager_t> ()
+                   .get_or_create (fw::actor_id_t (actor_id), actor_type)
+                   .async ()
+                   .result ());
+    auto &client = services.get_required<fw::actor_client_t> ();
+    ASSERT_TRUE (move_to (client, evidence, local_spot, 1));
+    ASSERT_TRUE (std::holds_alternative<fw::actor_join_accepted_t> (evidence.completions.at (0)));
+    configure (second, second_rid, store, relocations);
+    second.start ();
+    ASSERT_TRUE (ready (second));
+    ASSERT_TRUE (peer_ready (services.get_required<fw::route_mesh_runtime_t> ()));
+    services.get_required<fw::route_mesh_runtime_options_t> ().mesh (mesh_name).placement_weight (
+      0);
+    auto second_services = second.app.advanced ().services ().build_provider ();
+    ASSERT_TRUE (second_services.get_required<fw::spot_manager_t> ()
+                   .get_or_create (fw::spot_id_t (current_spot), room_type)
+                   .async ()
+                   .result ());
+    ASSERT_TRUE (move_to (client, evidence, current_spot, 2));
+    ASSERT_TRUE (std::holds_alternative<fw::actor_join_accepted_t> (evidence.completions.at (1)));
+    EXPECT_EQ (evidence.completion_owners.at (1), second_rid);
+    // Return through the public Deferred Join immediately after Accepted.
+    // Source OnLeave and stale instance destruction remain independent.
+    ASSERT_TRUE (
+      move_to (second_services.get_required<fw::actor_client_t> (), evidence, source_spot, 3));
+    ASSERT_TRUE (std::holds_alternative<fw::actor_join_accepted_t> (evidence.completions.at (2)))
+      << (std::get_if<fw::actor_join_failed_t> (&evidence.completions.at (2))
+            ? static_cast<int> (
+                std::get<fw::actor_join_failed_t> (evidence.completions.at (2)).error_kind)
+            : -1);
+    EXPECT_EQ (evidence.completion_owners.at (2), first_rid);
+}
+
+TEST (ActorMaintenanceJoin, ReturnAdmissionWaitsOutsideTargetLifecycleForSourceTerminal)
+{
+    observations_t evidence;
+    observations = &evidence;
+    host_t host;
+    release_callbacks_t release{evidence};
+    configure (host, first_rid, std::make_shared<fw::runtime::in_memory_location_store_t> (),
+               std::make_shared<fw::runtime::in_memory_relocation_store_t> ());
+    host.start ();
+    ASSERT_TRUE (ready (host));
+    auto services = host.app.advanced ().services ().build_provider ();
+    ASSERT_TRUE (services.get_required<fw::actor_manager_t> ()
+                   .get_or_create (fw::actor_id_t (actor_id), actor_type)
+                   .async ()
+                   .result ());
+    const auto created = services.get_required<fw::spot_manager_t> ()
+                           .get_or_create (fw::spot_id_t (source_spot), room_type)
+                           .async ()
+                           .result ();
+    ASSERT_TRUE (created);
+    const auto state =
+      fw::detail::mesh_node_runtime_t::registrations (host.app.advanced ().zlink ())
+        .front ()
+        ->spot_state;
+    const auto key = std::string (actor_type) + ":" + actor_id;
+    ASSERT_TRUE (
+      state->actor_transfer_coordinator.try_begin_source_remote (key, "previous-source"));
+    struct finish_source_t
+    {
+        std::shared_ptr<fw::detail::spot_node_builder_state_t> state;
+        std::string key;
+        ~finish_source_t () { state->actor_transfer_coordinator.complete_move (key); }
+    };
+    auto admitted = std::make_shared<fw::task_completion_source_t<void>> ();
+    auto admission = admitted->task ();
+    finish_source_t finish{state, key};
+    // Only the coordinator state is fixed here. The target lifecycle and the
+    // source-terminal observer use their production dispatch paths.
+    fw::detail::spot_node_runtime_t (state).dispatch_wire_actor_join_admission (
+      fw::spot_id_t (source_spot), actor_id,
+      [admitted] () -> fw::task_t<void> {
+          admitted->complete (fw::result_t<void>::success ());
+          co_return;
+      },
+      [admitted] {
+          admitted->complete (fw::result_t<void>::failure (fw::framework_error_kind_t::unavailable,
+                                                           "return admission was rejected"));
+      });
+    auto target = state->lane
+                    .run ([&] {
+                        return fw::detail::spot_context_access_t::state (
+                          state->spot_contexts_by_id.at (source_spot));
+                    })
+                    .get ();
+    ASSERT_TRUE (
+      target->run_serial_task ("source-terminal-probe", [] () -> fw::task_t<void> { co_return; })
+        .result ());
+    EXPECT_FALSE (admission.await_ready ())
+      << "return admission must remain outside the target lifecycle until the old source ends";
+    EXPECT_TRUE (state->actor_transfer_coordinator.finish_move_replay (key).completed);
+    EXPECT_TRUE (admission.result ());
+
+    // A target may close while admission is still waiting outside its turn.
+    // The same lifecycle submission must reject after source completion.
+    ASSERT_TRUE (state->actor_transfer_coordinator.try_begin_source_remote (key, "closing-source"));
+    auto after_close = std::make_shared<fw::task_completion_source_t<void>> ();
+    auto closing_admission = after_close->task ();
+    fw::detail::spot_node_runtime_t (state).dispatch_wire_actor_join_admission (
+      fw::spot_id_t (source_spot), actor_id,
+      [after_close] () -> fw::task_t<void> {
+          after_close->complete (fw::result_t<void>::success ());
+          co_return;
+      },
+      [after_close] {
+          after_close->complete (fw::result_t<void>::failure (
+            fw::framework_error_kind_t::unavailable, "return target closed"));
+      });
+    ASSERT_TRUE (
+      services.get_required<fw::spot_manager_t> ().close (created.value ().spot).result ());
+    EXPECT_FALSE (closing_admission.await_ready ());
+    EXPECT_TRUE (state->actor_transfer_coordinator.finish_move_replay (key).completed);
+    const auto closed = closing_admission.result ();
+    ASSERT_FALSE (closed);
+    EXPECT_EQ (closed.error_kind (), fw::framework_error_kind_t::unavailable);
+}
+
 TEST (ActorMaintenanceJoin, SameNodeMembershipPreservesReturnedActorUntilSourceCleanup)
 {
     observations_t evidence;
