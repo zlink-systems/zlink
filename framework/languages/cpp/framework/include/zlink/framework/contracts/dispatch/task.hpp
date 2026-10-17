@@ -101,6 +101,8 @@ class serial_turn_t
     // turn for lifecycle fences such as relocation readiness.
     virtual bool is_after_active_phase () const noexcept = 0;
     virtual bool allows_yield () const noexcept = 0;
+    // Execution gate §3: admission belongs to this turn, before submission.
+    virtual bool claim_yield () = 0;
     virtual result_t<void> defer (std::function<void ()> work,
                                   std::function<void ()> cancel = {}) = 0;
     virtual void cancel_deferred () noexcept = 0;
@@ -180,7 +182,6 @@ inline result_t<void> defer_current_serial_turn (std::function<void ()> work,
     return turn->defer (std::move (work), std::move (cancel));
 }
 
-template <typename T> task_t<T> unsupported_yield_task ();
 
 /* 코루틴 일시 중단 중 실행 문맥 전달(flow-correlation MFLOW-EXT-014).
  * Framework 라이브러리가 hook 쌍을 원자적으로 등록한다. 재개 범위가 끝나면
@@ -668,9 +669,9 @@ std::optional<result_t<T>> observe_task_result_for (const task_t<T> &task,
 
 template <typename T>
 task_t<T> with_task_resume_scheduler (task_t<T> task, task_scheduler_t scheduler);
-// Yield: the awaiting handler keeps the current turn until it suspends on
-// this task. A result that is ready before then continues in that turn.
-template <typename T> task_t<T> release_turn_on_suspend (task_t<T> task);
+// Claim the calling turn before starting work. Suspension retains the existing
+// handoff to a new turn; an already-ready result stays in the current turn.
+template <typename T, typename TStart> task_t<T> yield_call (TStart &&start);
 
 inline task_scheduler_t task_suspend_scheduler (const std::unique_ptr<task_scheduler_t> &resume,
                                                 bool release_turn)
@@ -784,7 +785,7 @@ template <typename T> class task_t
 
     template <typename U>
     friend task_t<U> detail::with_task_resume_scheduler (task_t<U>, detail::task_scheduler_t);
-    template <typename U> friend task_t<U> detail::release_turn_on_suspend (task_t<U>);
+    template <typename U, typename TStart> friend task_t<U> detail::yield_call (TStart &&);
     friend class task_completion_source_t<T>;
     template <typename U> friend class request_task_t;
     template <typename U>
@@ -852,7 +853,7 @@ template <> class task_t<void>
 
     template <typename U>
     friend task_t<U> detail::with_task_resume_scheduler (task_t<U>, detail::task_scheduler_t);
-    template <typename U> friend task_t<U> detail::release_turn_on_suspend (task_t<U>);
+    template <typename U, typename TStart> friend task_t<U> detail::yield_call (TStart &&);
     friend class task_completion_source_t<void>;
     template <typename U> friend class request_task_t;
     template <typename U>
@@ -903,17 +904,18 @@ task_t<T> with_task_resume_scheduler (task_t<T> task, task_scheduler_t scheduler
     return task;
 }
 
-template <typename T> task_t<T> release_turn_on_suspend (task_t<T> task)
+template <typename T, typename TStart> task_t<T> yield_call (TStart &&start)
 {
+    const auto turn = capture_current_serial_turn ();
+    if (!turn || !turn->claim_yield ()) {
+        return task_t<T> (
+          result_t<T>::failure (framework_error_kind_t::invalid_operation,
+                                "yield requires an open SpotWide User Spot or Instance Spot turn "
+                                "without a previous Yield call"));
+    }
+    task_t<T> task = std::forward<TStart> (start) ();
     task._release_turn_on_suspend = true;
     return task;
-}
-
-template <typename T> task_t<T> unsupported_yield_task ()
-{
-    return task_t<T> (result_t<T>::failure (
-      framework_error_kind_t::not_configured,
-      "yield is available only in a SpotWide User Spot or Instance Spot callback"));
 }
 
 

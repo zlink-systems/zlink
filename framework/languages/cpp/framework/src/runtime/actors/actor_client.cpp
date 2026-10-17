@@ -181,10 +181,7 @@ task_t<actor_create_result_t> actor_create_call_t::async ()
 
 task_t<actor_create_result_t> actor_create_call_t::yield ()
 {
-    if (!detail::current_serial_turn_allows_yield ()) {
-        return detail::unsupported_yield_task<actor_create_result_t> ();
-    }
-    return detail::release_turn_on_suspend (async ());
+    return detail::yield_call<actor_create_result_t> ([this] { return async (); });
 }
 
 actor_manager_t::actor_manager_t () : _state (std::make_shared<detail::actor_manager_state_t> ())
@@ -321,7 +318,7 @@ request_task_t<message_t> actor_request_call_t::async_message ()
 
 task_t<message_t> actor_request_call_t::yield_message ()
 {
-    return detail::release_turn_on_suspend<message_t> (start (true));
+    return detail::yield_call<message_t> ([this] { return start (true); });
 }
 
 request_task_t<message_t> actor_request_call_t::start (bool release_turn)
@@ -337,9 +334,6 @@ request_task_t<message_t> actor_request_call_t::start (bool release_turn)
               framework_error_kind_t::invalid_operation,
               "awaited request to the current Actor cannot complete while its FIFO claim is held"));
         }
-    }
-    if (release_turn && !detail::current_serial_turn_allows_yield ()) {
-        return request_task_t<message_t> (detail::unsupported_yield_task<message_t> ().result ());
     }
     // A Yield releases the turn where the handler suspends (task.hpp); until
     // then the reply decoding resumes in the held turn like an async call.
