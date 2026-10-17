@@ -2484,6 +2484,7 @@ internal sealed class RelocationBehaviorTrace
     internal int OrdinarySendCount;
     internal int OrdinarySendBatchSize { get; init; }
     internal Func<BehaviorActor, ValueTask>? OnTargetJoined { get; set; }
+    internal Func<BehaviorActor, ValueTask>? OnPublicJoinCompleted { get; set; }
 
     // The source Actor state capture and the target Actor restore wait for
     // these tasks. The source unit is sealed and holds member ingress while
@@ -2989,7 +2990,7 @@ internal sealed class BehaviorActor(
         else
             Assert.IsType<ZLinkActorJoinCompletion.Failed>(completion);
         trace.RecordPublicJoinCompletion(node.Name);
-        return ValueTask.CompletedTask;
+        return trace.OnPublicJoinCompleted?.Invoke(this) ?? ValueTask.CompletedTask;
     }
 }
 

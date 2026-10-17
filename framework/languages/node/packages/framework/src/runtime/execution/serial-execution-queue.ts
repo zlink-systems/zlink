@@ -11,6 +11,8 @@ export type ZLinkSerialWorkLane = 'application' | 'lifecycle';
 
 export interface ZLinkSerialWorkOptions {
   readonly onAdmitted?: () => void;
+  /** Transfers an unstarted durable record out of this FIFO in the owner turn. */
+  readonly onWithdrawable?: (withdraw: () => boolean) => void;
   readonly lane?: ZLinkSerialWorkLane;
   readonly payloadBytes?: number;
   readonly metadataBytes?: number;
@@ -174,6 +176,12 @@ export class ZLinkSerialExecutionQueue {
     }
   }
 
+  get hasPendingDurableApplication(): boolean {
+    // Every application record accepted behind durable work inherits durable
+    // ownership, so the tail answers this without scanning the FIFO.
+    return this.application.records.at(-1)?.preparation !== undefined;
+  }
+
   get hasPendingWork(): boolean {
     return (
       this.consumer?.running === true ||
@@ -272,6 +280,18 @@ export class ZLinkSerialExecutionQueue {
       throw error;
     }
     options.onAdmitted?.();
+    options.onWithdrawable?.(() => {
+      const index = target.records.indexOf(record as SerialWorkRecord<unknown>);
+      if (index < 0) return false;
+      target.records.splice(index, 1);
+      record.preparationController?.abort(
+        new Error('Durable record transferred to another handoff.')
+      );
+      record.preparation?.cancel();
+      resolve(undefined as T);
+      release();
+      return true;
+    });
     this.scheduleDrain();
     return result;
   }

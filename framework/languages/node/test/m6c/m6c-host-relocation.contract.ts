@@ -52,6 +52,7 @@ import {
 } from '../../packages/framework/src/runtime/foundation/service-relocation-runtime';
 import { encodeAuthorityKey } from '../../packages/framework/src/runtime/locations/authority-key-codec';
 import { ZLinkActorTransferRuntime } from '../../packages/framework/src/runtime/host/actor-transfer-runtime';
+import { ZLinkActorSerialExecutor } from '../../packages/framework/src/runtime/actors/actor-mailbox';
 import { ZLinkActorSessionBindingRegistry } from '../../packages/framework/src/runtime/streams/actor-session-binding-registry';
 import { ZLinkBoundSessionService } from '../../packages/framework/src/runtime/streams/bound-session-service';
 import { encodeActorAuthorityIdentity } from '../../packages/framework/src/runtime/actors/actor-authority-publication';
@@ -1531,21 +1532,18 @@ test('ActorJoin target invalidates a previous-owner Actor route before lifecycle
   } as never);
   const internals = runtime as unknown as {
     commitTargetReservation: () => Promise<ZLinkAuthoritySnapshot>;
-    relayTerminalReplies: () => Promise<void>;
     targetReplyRelayCoordinator: () => unknown;
-    clearTargetRelocationPublication: () => Promise<void>;
+    clearTargetRelocationPublication: () => Promise<ZLinkAuthoritySnapshot>;
     finalizeTargetStage: (meshName: string, stagingId: string, stage: unknown) => Promise<void>;
   };
   internals.commitTargetReservation = async () => {
     events.push('cas');
     return authority;
   };
-  internals.relayTerminalReplies = async () => {
-    events.push('replies:relay');
-  };
   internals.targetReplyRelayCoordinator = () => ({});
   internals.clearTargetRelocationPublication = async () => {
     events.push('publication:clear');
+    return authority;
   };
   const envelope = {
     aggregateId: '00000000-0000-0000-0000-000000000021',
@@ -1592,17 +1590,16 @@ test('ActorJoin target invalidates a previous-owner Actor route before lifecycle
 
   assert.deepEqual(events, [
     'cas',
-    'queue:merged',
     'route:closed',
+    'publication:clear',
+    'queue:merged',
     'actorRoute:invalidated',
     'onJoined',
     'sourceLeave:submit',
     'sourceLeave:warning',
     'accepted',
-    'publication:clear',
-    'dispatch:open',
     'command44',
-    'replies:relay'
+    'dispatch:open'
   ]);
 });
 
@@ -1673,7 +1670,6 @@ test('target admission opens after one publication-clear conflict and a later cl
   } as never);
   const internals = runtime as unknown as {
     commitTargetReservation: () => Promise<ZLinkAuthoritySnapshot>;
-    relayTerminalReplies: () => Promise<void>;
     targetReplyRelayCoordinator: () => unknown;
     clearTargetRelocationPublication: (
       stage: unknown,
@@ -1682,7 +1678,6 @@ test('target admission opens after one publication-clear conflict and a later cl
     finalizeTargetStage: (meshName: string, stagingId: string, stage: unknown) => Promise<void>;
   };
   internals.commitTargetReservation = async () => current;
-  internals.relayTerminalReplies = async () => {};
   internals.targetReplyRelayCoordinator = () => ({});
   const envelope = {
     aggregateId: publication.aggregateId,
@@ -1786,11 +1781,11 @@ test('public ActorJoin profile crosses the Host Prepare READY DATA CUTOVER owner
         'onJoined',
         'sourceLeave:submit',
         'accepted:completed',
+        'command44',
         'dispatch:open',
         'replay:B1',
         'replay:B2',
-        'replay:D1',
-        'command44'
+        'replay:D1'
       ]
     );
     assert.equal(
@@ -3256,6 +3251,21 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
     }
   };
   const targetSpotManager = {
+    admitSourceActorPacketPrefix(_actorId: string, records: readonly any[]) {
+      const terminals = targetMailbox.admitDurablePrefix(
+        records.map((record) => ({
+          operation: (executeChild: any) =>
+            record.drain((parts: readonly Message[]) =>
+              executeChild(() => {
+                events.push(`replay:${Buffer.from(parts[1]!.data()).toString()}`);
+              })
+            ),
+          preparation: record.preparation,
+          workOptions: { onWithdrawable: record.onWithdrawable }
+        }))
+      );
+      return { terminal: Promise.all(terminals).then(() => undefined) };
+    },
     beginActorJoinRelocation: DefaultZLinkSpotManager.prototype.beginActorJoinRelocation,
     formalRemoteActorAdmissions: admissions,
     formalRemoteTransfers: { delete() {} },
@@ -3493,6 +3503,24 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
     actorManager: () => sourceActorManager,
     actorTransfer: sourceActorTransfer
   } as never);
+  const targetMailbox = new ZLinkActorSerialExecutor(actorId, 'entry-target');
+  const targetTransfer = new ZLinkActorTransferRuntime({
+    actorHandoff: new ZLinkActorHandoffCoordinator({
+      routedTransport: {} as never,
+      requestSource: () => ({
+        meshName: 'mesh-a',
+        objectGeneration: 5n,
+        ownerId: 'target-owner',
+        ownerLeaseGeneration: 14n,
+        nodeRid: 'target',
+        nodeGeneration: 6n,
+        authorityOwnerGeneration: 12n
+      }),
+      validateReplySource: () => true
+    }),
+    spotManager: () => targetSpotManager,
+    reportPostCommitError: (error: unknown) => deliveryErrors.push(error)
+  } as never);
   targetRuntime = new ZLinkHostServiceRelocationRuntime({
     ...common,
     requestPeerReconcile: options.requestPeerReconcile,
@@ -3501,17 +3529,9 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
     localDescriptor: () => targetDescriptor,
     meshNode: () => targetNode,
     spotManager: () => targetSpotManager,
-    spotNodeRuntime: () => ({
-      async dispatchEntryActorPacket(
-        _origin: 'local' | 'remote',
-        _actorId: string,
-        parts: readonly Message[]
-      ) {
-        events.push(`replay:${Buffer.from(parts[1]!.data()).toString()}`);
-      }
-    }),
     actorManager: () => targetActorManager,
     actorTransfer: {
+      admitRelocationPrefix: targetTransfer.admitRelocationPrefix.bind(targetTransfer),
       async publishRoutedActorOwnership() {
         assert.notEqual(targetState?.boundSession, undefined);
         events.push('command44');
@@ -3751,6 +3771,7 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
     async targetIdle() {
       await waitUntil(() => (targetRuntime as any).targetStages.size === 0);
       await Promise.all(targetDeliveries);
+      await targetMailbox.execute(() => undefined);
       assert.deepEqual(deliveryErrors, []);
     },
     async deliverCutoverAgain() {
@@ -3810,6 +3831,7 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
       admissions.delete(relocationId);
       if (canonicalHandoffId !== undefined) admissions.delete(canonicalHandoffId);
       await Promise.all([...targetDeliveries, ...sourceDeliveries]);
+      await targetMailbox.close();
       sourceCanonicalRuntime.close();
       targetCanonicalRuntime.close();
       await sourceRuntime.dispose();

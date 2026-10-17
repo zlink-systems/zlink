@@ -3134,7 +3134,7 @@ export class DefaultZLinkSpotManager {
             if (activation === undefined) {
               throw new Error(`Actor Join relocation '${relocationId}' target mailbox is missing.`);
             }
-            return activation.executeActor(actor.context.actorId, operation);
+            return activation.executeActor(actor.context.actorId, operation, { lane: 'lifecycle' });
           };
       await this.options.actorTransferRuntime.deliverDeferredJoinCompletion(
         lifecycleFailure === undefined

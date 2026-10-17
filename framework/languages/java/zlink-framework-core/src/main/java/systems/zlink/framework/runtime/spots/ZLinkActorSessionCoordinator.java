@@ -220,6 +220,21 @@ final class ZLinkActorSessionCoordinator {
                 .publishPreparedTransferredActor(actor, targetSpotId, authorityOwnerGeneration);
     }
 
+    CompletionStage<java.util.List<CompletableFuture<Void>>> admitRelocationPrefix(
+            ZLinkActorRuntime.PreparedTransferredActor prepared,
+            systems.zlink.framework.runtime.actors.ZLinkActorDispatchTarget target,
+            java.util.List<systems.zlink.framework.execution.ZLinkSerialExecutionQueue.QueuedRecord>
+                    records,
+            java.util.function.BiFunction<
+                            systems.zlink.framework.execution.ZLinkSerialExecutionQueue
+                                    .QueuedRecord,
+                            CompletableFuture<Void>,
+                            java.util.function.Supplier<CompletionStage<Void>>>
+                    replay,
+            systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue jobs) {
+        return requireActors().admitRelocationPrefix(prepared, target, records, replay, jobs);
+    }
+
     void openRelocatedActorAdmission(ZLinkActorRuntime.PreparedTransferredActor actor) {
         requireActors().completePreparedTransferredActor(actor);
     }

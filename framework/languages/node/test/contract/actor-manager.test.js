@@ -3258,7 +3258,10 @@ test('precommit abort reopens source admission and replays backlog before one-wa
                 events.push(`replay:${parts[1].data().toString()}`);
               })),
             preparation: record.preparation,
-            workOptions: { payloadBytes: record.payloadBytes }
+            workOptions: {
+              payloadBytes: record.payloadBytes,
+              onWithdrawable: record.onWithdrawable
+            }
           }))
         );
         prefixTerminal = Promise.all(terminals).then(() => undefined);

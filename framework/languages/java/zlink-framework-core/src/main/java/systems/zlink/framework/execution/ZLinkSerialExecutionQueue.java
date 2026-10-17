@@ -13,11 +13,13 @@ import java.lang.invoke.VarHandle;
 import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
@@ -67,7 +69,7 @@ public final class ZLinkSerialExecutionQueue {
     private final ZLinkSerialExecutionQueue timerOwner;
     private final int lifecycleBurstLimit;
     private final long ownerTimeBudgetNanos;
-    private final ArrayDeque<Entry> applicationPending = new ArrayDeque<>();
+    private Deque<Entry> applicationPending = new ArrayDeque<>();
     // A resumed application turn is kept separate so it can pass a relocation
     // boundary without inserting at the front of the application FIFO.
     private final ArrayDeque<Entry> continuationPending = new ArrayDeque<>();
@@ -110,6 +112,8 @@ public final class ZLinkSerialExecutionQueue {
             throw new IllegalStateException("shared gate must be bound before queue admission");
         }
         sharedSpotGate = Objects.requireNonNull(gate, "gate");
+        if (lanePolicy instanceof ZLinkExecutionLanePolicy.ActorDelivery)
+            applicationPending = new ConcurrentLinkedDeque<>();
         publishedApplication = new ConcurrentLinkedQueue<>();
         publishedContinuation = new ConcurrentLinkedQueue<>();
         publishedLifecycle = new ConcurrentLinkedQueue<>();
@@ -319,15 +323,64 @@ public final class ZLinkSerialExecutionQueue {
         }
     }
 
+    private void takeDurable(Entry entry) {
+        if (entry.applicationJobOwnership != null) entry.applicationJobOwnership.takeDurable();
+    }
+
+    private void watchDurableCancellation(Entry entry) {
+        entry.result.whenComplete(
+                (ignored, failure) -> {
+                    if (entry.result.isCancelled())
+                        underSharedSpotGateAsync(
+                                () -> {
+                                    cancelPending(entry);
+                                    return null;
+                                });
+                });
+    }
+
+    private void cancelPending(Entry entry) {
+        boolean schedule;
+        synchronized (this) {
+            if (active == entry) return;
+            materializePublished();
+            boolean removed = applicationPending.remove(entry);
+            if (relocation != null)
+                removed |= relocation.captured.remove(entry) | relocation.held.remove(entry);
+            if (!removed) return;
+            decrementOutstanding();
+            schedule = requestDrainLocked();
+        }
+        try {
+            release(entry);
+            entry.relocationRelease.run();
+        } finally {
+            scheduleDrainIfNeeded(schedule, null);
+        }
+    }
+
     private void publish(Entry entry) {
-        if (sharedSpotGate == null) {
+        boolean durable = false;
+        if (lanePolicy instanceof ZLinkExecutionLanePolicy.ActorDelivery
+                && entry.lane == Lane.APPLICATION
+                && !entry.continuation) {
+            Entry tail = applicationPending.peekLast();
+            durable =
+                    tail != null
+                            && tail.applicationJobOwnership != null
+                            && tail.applicationJobOwnership.isDurable();
+        }
+        if (sharedSpotGate == null
+                || lanePolicy instanceof ZLinkExecutionLanePolicy.ActorDelivery
+                        && entry.lane == Lane.APPLICATION
+                        && !entry.continuation) {
+            if (durable) takeDurable(entry);
             switch (entry.lane) {
                 case APPLICATION -> applicationPending.addLast(entry);
                 case LIFECYCLE -> lifecyclePending.addLast(entry);
             }
             return;
         }
-        if (entry.applicationJobOwnership != null) entry.applicationJobOwnership.markQueued();
         if (entry.continuation) {
             publishedContinuation.add(entry);
         } else if (entry.lane == Lane.LIFECYCLE) {
@@ -347,6 +400,7 @@ public final class ZLinkSerialExecutionQueue {
 
     private CompletionStage<Void> runSharedHead(ZLinkSerialExecutionQueue gateOwner) {
         materializePublished();
+        preparePendingHead();
         SharedSpotGate.BoundarySet sharedBoundary = sharedSpotGate.pendingBoundary;
         if (sharedBoundary != null && sharedBoundary.members().containsKey(this)) {
             CompletionStage<Void> reached = sharedSpotGate.reachBoundaryIfReady();
@@ -383,7 +437,7 @@ public final class ZLinkSerialExecutionQueue {
 
     private void rejectSharedHead(RuntimeException failure) {
         materializePublished();
-        Entry entry = takeNextForDrainLocked();
+        Entry entry = takeNextForDrainLocked(false);
         if (entry == null) return;
         entry.result.completeExceptionally(failure);
         finishShared(entry);
@@ -909,6 +963,69 @@ public final class ZLinkSerialExecutionQueue {
         return result.result();
     }
 
+    /** Atomically transfers a non-executing relocation prefix into its existing owner FIFO. */
+    public CompletionStage<java.util.List<CompletableFuture<Void>>> admitDurablePrefix(
+            List<QueuedRecord> records,
+            java.util.function.BiFunction<
+                            QueuedRecord, CompletableFuture<Void>, Supplier<CompletionStage<Void>>>
+                    replay,
+            systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue jobs) {
+        return underSharedSpotGateAsync(
+                () -> {
+                    List<CompletableFuture<Void>> terminals =
+                            records.stream().map(record -> new CompletableFuture<Void>()).toList();
+                    List<Entry> acceptedEntries = new ArrayList<>(records.size());
+                    boolean schedule = false;
+                    try {
+                        List<Supplier<CompletionStage<Void>>> operations =
+                                new ArrayList<>(records.size());
+                        for (int index = 0; index < records.size(); index++)
+                            operations.add(
+                                    Objects.requireNonNull(
+                                            replay.apply(records.get(index), terminals.get(index)),
+                                            "replay operation"));
+                        synchronized (this) {
+                            CompletionStage<Void> rejection = admissionFailureLocked();
+                            if (rejection != null) rejection.toCompletableFuture().join();
+                            if (records.size() > Long.MAX_VALUE - nextSequence)
+                                throw new IllegalStateException("queue sequence exhausted");
+                            if (relocation != null
+                                    && records.size() > Long.MAX_VALUE - relocation.acceptanceEpoch)
+                                throw new IllegalStateException(
+                                        "relocation ingress epoch exhausted");
+                            for (int index = 0; index < records.size(); index++) {
+                                var record = records.get(index);
+                                EnqueueResult accepted;
+                                try (var scope = ZLinkApplicationJobContext.enterDurable(jobs)) {
+                                    byte[] payload = record.payload();
+                                    accepted =
+                                            enqueueAccepted(
+                                                    payload,
+                                                    payload.length,
+                                                    operations.get(index),
+                                                    () -> {},
+                                                    null,
+                                                    null,
+                                                    terminals.get(index));
+                                }
+                                schedule |= accepted.scheduleDrain();
+                                acceptedEntries.add(accepted.entry());
+                            }
+                        }
+                    } catch (RuntimeException | Error failure) {
+                        terminals.forEach(terminal -> terminal.completeExceptionally(failure));
+                        throw failure;
+                    }
+                    for (Entry entry : acceptedEntries) {
+                        watchDurableCancellation(entry);
+                        settleOwnership(entry);
+                        completeAdmission(entry);
+                    }
+                    scheduleDrainIfNeeded(schedule, null);
+                    return List.copyOf(terminals);
+                });
+    }
+
     public CompletionStage<Void> enqueueRelocatable(
             byte[] record,
             Supplier<CompletionStage<Void>> operation,
@@ -1063,6 +1180,18 @@ public final class ZLinkSerialExecutionQueue {
             Runnable relocationRelease,
             Object message,
             CompletableFuture<Void> admission) {
+        return enqueueAccepted(
+                record, payloadBytes, operation, relocationRelease, message, admission, null);
+    }
+
+    private EnqueueResult enqueueAccepted(
+            byte[] record,
+            long payloadBytes,
+            Supplier<CompletionStage<Void>> operation,
+            Runnable relocationRelease,
+            Object message,
+            CompletableFuture<Void> admission,
+            CompletableFuture<Void> terminal) {
         Objects.requireNonNull(operation, "operation");
         validatePayloadBytes(payloadBytes);
         if (relocated) {
@@ -1074,7 +1203,8 @@ public final class ZLinkSerialExecutionQueue {
         }
         if (relocation != null) {
             return new EnqueueResult(
-                    holdRelocationIngress(record, operation, relocationRelease, message, admission),
+                    holdRelocationIngress(
+                            record, operation, relocationRelease, message, admission, terminal),
                     false);
         }
         Entry entry =
@@ -1083,7 +1213,7 @@ public final class ZLinkSerialExecutionQueue {
                         record,
                         operation,
                         relocationRelease,
-                        new CompletableFuture<>(),
+                        terminal == null ? new CompletableFuture<>() : terminal,
                         ZLinkFlowContext.current(),
                         null,
                         Lane.APPLICATION,
@@ -1101,13 +1231,24 @@ public final class ZLinkSerialExecutionQueue {
             Runnable relocationRelease,
             Object message,
             CompletableFuture<Void> admission) {
+        return holdRelocationIngress(
+                record, operation, relocationRelease, message, admission, null);
+    }
+
+    private Entry holdRelocationIngress(
+            byte[] record,
+            Supplier<CompletionStage<Void>> operation,
+            Runnable relocationRelease,
+            Object message,
+            CompletableFuture<Void> admission,
+            CompletableFuture<Void> terminal) {
         Entry entry =
                 new Entry(
                         nextSequence++,
                         record,
                         operation,
                         relocationRelease,
-                        new CompletableFuture<>(),
+                        terminal == null ? new CompletableFuture<>() : terminal,
                         ZLinkFlowContext.current(),
                         null,
                         Lane.APPLICATION,
@@ -1148,17 +1289,46 @@ public final class ZLinkSerialExecutionQueue {
         if (relocation.acceptanceEpoch == Long.MAX_VALUE) {
             throw new IllegalStateException("relocation ingress epoch exhausted");
         }
-        if (sharedSpotGate != null && entry.applicationJobOwnership != null) {
-            entry.applicationJobOwnership.markQueued();
-        }
         relocation.held.addLast(entry);
         relocation.acceptanceEpoch++;
+        if (entry.lane == Lane.APPLICATION && !entry.continuation) takeDurable(entry);
     }
 
     private void release(Entry entry) {
         if (entry.applicationJobOwnership != null) {
             entry.applicationJobOwnership.close();
         }
+    }
+
+    private void settleOwnership(Entry entry) {
+        if (entry == null || entry.applicationJobOwnership == null) return;
+        Object settled = entry.applicationJobOwnership.settleAdmission();
+        if (settled
+                instanceof
+                systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue.Permit)
+            watchDurableCancellation(entry);
+        if (settled != null) wakeHead(entry);
+    }
+
+    private Entry preparePendingHead() {
+        Entry head;
+        if (sharedSpotGate != null) {
+            if (active != null) return null;
+            head = nextCandidate();
+        } else {
+            synchronized (this) {
+                if (active != null) return null;
+                head = nextCandidate();
+            }
+        }
+        if (head == null
+                || head.lane != Lane.APPLICATION
+                || head.continuation
+                || head.applicationJobOwnership == null
+                || !head.applicationJobOwnership.isDurable()) return head;
+        if (head.result.isCancelled()) cancelPending(head);
+        else head.applicationJobOwnership.prepareRunnable(() -> wakeHead(head));
+        return head;
     }
 
     private static void validatePayloadBytes(long payloadBytes) {
@@ -1173,38 +1343,25 @@ public final class ZLinkSerialExecutionQueue {
                 || !lifecyclePending.isEmpty();
     }
 
-    private Entry takeNext() {
+    /** One selection rule shared by capacity preparation and dequeue commit. */
+    private Entry nextCandidate() {
         if (suspendedLifecycle != null) {
             Entry ownerContinuation = null;
             Entry applicationContinuation = null;
             for (Entry candidate : continuationPending) {
                 if (candidate.origin == suspendedLifecycle) {
-                    if (ownerContinuation == null) {
-                        ownerContinuation = candidate;
-                    }
-                } else if (applicationContinuation == null) {
-                    applicationContinuation = candidate;
-                }
-                if (ownerContinuation != null && applicationContinuation != null) {
-                    break;
-                }
+                    if (ownerContinuation == null) ownerContinuation = candidate;
+                } else if (applicationContinuation == null) applicationContinuation = candidate;
+                if (ownerContinuation != null && applicationContinuation != null) break;
             }
             if (ownerContinuation != null
                     && (suspendedLifecycle.operation instanceof LifecycleTransition
-                            || (applicationContinuation == null && applicationPending.isEmpty())
-                            || lifecycleStreak < lifecycleBurstLimit)) {
-                lifecycleStreak++;
-                continuationPending.remove(ownerContinuation);
-                return ownerContinuation;
-            }
-            if (suspendedLifecycle.operation instanceof LifecycleTransition) {
-                return null;
-            }
-            if (applicationContinuation != null || !applicationPending.isEmpty()) {
-                lifecycleStreak = 0;
-                return takeApplication(applicationContinuation);
-            }
-            return null;
+                            || applicationContinuation == null && applicationPending.isEmpty()
+                            || lifecycleStreak < lifecycleBurstLimit)) return ownerContinuation;
+            if (suspendedLifecycle.operation instanceof LifecycleTransition) return null;
+            return applicationContinuation != null || !applicationPending.isEmpty()
+                    ? nextApplication(applicationContinuation)
+                    : null;
         }
         boolean lifecycleReady = !lifecyclePending.isEmpty();
         boolean continuationReady = !continuationPending.isEmpty();
@@ -1213,38 +1370,65 @@ public final class ZLinkSerialExecutionQueue {
                         || continuationReady && !isLifecycleTurn(continuationPending.peekFirst());
         if (lifecycleReady
                 && (lifecyclePending.peekFirst().relocationBoundary != null
-                        || lifecyclePending.peekFirst().operation instanceof LifecycleTransition)) {
-            if (continuationReady) {
-                lifecycleStreak = 0;
-                return continuationPending.removeFirst();
-            }
-            return lifecyclePending.removeFirst();
-        }
-        if (lifecycleReady && (!applicationReady || lifecycleStreak < lifecycleBurstLimit)) {
-            lifecycleStreak++;
-            return lifecyclePending.removeFirst();
-        }
-        if (continuationReady && isLifecycleTurn(continuationPending.peekFirst())) {
-            lifecycleStreak = 0;
-            return continuationPending.removeFirst();
-        }
-        if (continuationReady || applicationReady) {
-            lifecycleStreak = 0;
-            return takeApplication(continuationPending.peekFirst());
-        }
-        lifecycleStreak = 0;
-        return lifecyclePending.removeFirst();
+                        || lifecyclePending.peekFirst().operation instanceof LifecycleTransition))
+            return continuationReady
+                    ? continuationPending.peekFirst()
+                    : lifecyclePending.peekFirst();
+        if (lifecycleReady && (!applicationReady || lifecycleStreak < lifecycleBurstLimit))
+            return lifecyclePending.peekFirst();
+        if (continuationReady && isLifecycleTurn(continuationPending.peekFirst()))
+            return continuationPending.peekFirst();
+        return continuationReady || applicationReady
+                ? nextApplication(continuationPending.peekFirst())
+                : lifecyclePending.peekFirst();
     }
 
-    /** Selects the oldest eligible application record, including a resumed application turn. */
-    private Entry takeApplication(Entry continuation) {
-        Entry application = applicationPending.peekFirst();
-        if (continuation != null
-                && (application == null || continuation.sequence < application.sequence)) {
-            continuationPending.remove(continuation);
-            return continuation;
+    private Entry takeNext(boolean requireRunnable) {
+        Entry entry = nextCandidate();
+        if (entry == null) return null;
+        if (requireRunnable
+                && entry.lane == Lane.APPLICATION
+                && !entry.continuation
+                && entry.applicationJobOwnership != null
+                && entry.applicationJobOwnership.isDurable()
+                && !entry.applicationJobOwnership.isRunnable()) return null;
+        if (entry.continuation) continuationPending.remove(entry);
+        else if (entry.lane == Lane.LIFECYCLE) lifecyclePending.removeFirst();
+        else applicationPending.removeFirst();
+        if (suspendedLifecycle != null && entry.origin == suspendedLifecycle) {
+            lifecycleStreak++;
+        } else if (entry.lane == Lane.LIFECYCLE && !entry.continuation) {
+            if (entry.relocationBoundary == null
+                    && !(entry.operation instanceof LifecycleTransition)) lifecycleStreak++;
+        } else {
+            lifecycleStreak = 0;
         }
-        return applicationPending.removeFirst();
+        return entry;
+    }
+
+    private Entry nextApplication(Entry continuation) {
+        Entry application = applicationPending.peekFirst();
+        return continuation != null
+                        && (application == null || continuation.sequence < application.sequence)
+                ? continuation
+                : application;
+    }
+
+    private void wakeHead(Entry entry) {
+        underSharedSpotGateAsync(
+                () -> {
+                    boolean schedule;
+                    if (sharedSpotGate != null) {
+                        schedule = applicationPending.peekFirst() == entry;
+                    } else {
+                        synchronized (this) {
+                            schedule =
+                                    applicationPending.peekFirst() == entry && requestDrainLocked();
+                        }
+                    }
+                    scheduleDrainIfNeeded(schedule, null);
+                    return null;
+                });
     }
 
     private boolean requestDrainLocked() {
@@ -1275,6 +1459,9 @@ public final class ZLinkSerialExecutionQueue {
 
     private boolean requestDrainLocked(Entry published) {
         if (sharedSpotGate == null) return requestDrainLocked();
+        if (lanePolicy instanceof ZLinkExecutionLanePolicy.ActorDelivery
+                && published.lane == Lane.APPLICATION
+                && !published.continuation) return applicationPending.peekFirst() == published;
         if (published.continuation) return publishedContinuation.peek() == published;
         return (published.lane == Lane.LIFECYCLE ? publishedLifecycle : publishedApplication).peek()
                 == published;
@@ -1289,8 +1476,7 @@ public final class ZLinkSerialExecutionQueue {
     }
 
     private void scheduleDrainIfNeeded(boolean scheduleDrain, Entry entry) {
-        if (sharedSpotGate == null && entry != null && entry.applicationJobOwnership != null)
-            entry.applicationJobOwnership.markQueued();
+        settleOwnership(entry);
         completeAdmission(entry);
         if (!scheduleDrain) {
             return;
@@ -1301,14 +1487,23 @@ public final class ZLinkSerialExecutionQueue {
         }
         submitWorker(
                 () -> {
-                    Entry next;
-                    synchronized (this) {
-                        drainScheduled = false;
-                        next = takeNextForDrainLocked();
-                    }
+                    Entry next = prepareNextForDrain();
                     if (next != null) drainBatch(next);
                 },
                 this::rejectDrain);
+    }
+
+    /** Keeps the existing drain claim while host acquisition runs outside the monitor. */
+    private Entry prepareNextForDrain() {
+        while (true) {
+            Entry prepared = preparePendingHead();
+            synchronized (this) {
+                Entry next = takeNextForDrainLocked();
+                if (next == null && active == null && nextCandidate() != prepared) continue;
+                drainScheduled = false;
+                return next;
+            }
+        }
     }
 
     private void submitWorker(Runnable work, Consumer<RuntimeException> reject) {
@@ -1335,7 +1530,7 @@ public final class ZLinkSerialExecutionQueue {
         Entry entry;
         synchronized (this) {
             drainScheduled = false;
-            entry = takeNextForDrainLocked();
+            entry = takeNextForDrainLocked(false);
         }
         if (entry != null) {
             entry.result.completeExceptionally(rejected);
@@ -1428,6 +1623,10 @@ public final class ZLinkSerialExecutionQueue {
     }
 
     private Entry takeNextForDrainLocked() {
+        return takeNextForDrainLocked(true);
+    }
+
+    private Entry takeNextForDrainLocked(boolean requireRunnable) {
         if (active != null || !hasPending()) {
             return null;
         }
@@ -1437,7 +1636,7 @@ public final class ZLinkSerialExecutionQueue {
                 && continuationPending.isEmpty()) {
             return null;
         }
-        Entry entry = takeNext();
+        Entry entry = takeNext(requireRunnable);
         if (entry == null) {
             return null;
         }
@@ -1454,6 +1653,7 @@ public final class ZLinkSerialExecutionQueue {
         List<CompletableFuture<Void>> quiescent = List.of();
         boolean scheduleDrain = false;
         Entry next = null;
+        boolean continueDrain = false;
         synchronized (this) {
             if (active != entry) {
                 return null;
@@ -1470,7 +1670,8 @@ public final class ZLinkSerialExecutionQueue {
                 turnClaimedAtNanos = 0;
             }
             if (continueBatch && !yieldToExecutor) {
-                next = takeNextForDrainLocked();
+                continueDrain = true;
+                drainScheduled = true;
             } else {
                 scheduleDrain = requestDrainLocked();
             }
@@ -1479,6 +1680,7 @@ public final class ZLinkSerialExecutionQueue {
         scheduleDrainIfNeeded(scheduleDrain, null);
         completeBoundary(entry);
         quiescent.forEach(waiter -> waiter.complete(null));
+        if (continueDrain) next = prepareNextForDrain();
         return next;
     }
 
@@ -1610,7 +1812,7 @@ public final class ZLinkSerialExecutionQueue {
      */
     public CompletionStage<Optional<RelocationSeal>> trySealRelocation(
             RelocationBoundary boundary) {
-        return underSharedSpotGateAsync(() -> trySealRelocationDirect(boundary));
+        return underSharedSpotGateAsync(() -> settleSeal(trySealRelocationDirect(boundary)));
     }
 
     private synchronized Optional<RelocationSeal> trySealRelocationDirect(
@@ -1668,7 +1870,7 @@ public final class ZLinkSerialExecutionQueue {
     /** Seals this queue while the captured turn is still the active turn. */
     public CompletionStage<Optional<RelocationSeal>> trySealRelocation(
             ActiveTurnSealHandle handle) {
-        return underSharedSpotGateAsync(() -> trySealRelocationDirect(handle));
+        return underSharedSpotGateAsync(() -> settleSeal(trySealRelocationDirect(handle)));
     }
 
     private synchronized Optional<RelocationSeal> trySealRelocationDirect(
@@ -1692,6 +1894,18 @@ public final class ZLinkSerialExecutionQueue {
         }
     }
 
+    private Optional<RelocationSeal> settleSeal(Optional<RelocationSeal> seal) {
+        List<Entry> captured;
+        synchronized (this) {
+            captured =
+                    seal.isPresent() && matches(seal.orElseThrow())
+                            ? List.copyOf(relocation.captured)
+                            : List.of();
+        }
+        captured.forEach(this::settleOwnership);
+        return seal;
+    }
+
     private Optional<RelocationSeal> sealNowLocked() {
         // Admission and the publication tail are cut by this producer boundary.
         // The shared gate owns the detached prefix and its capture.
@@ -1710,6 +1924,12 @@ public final class ZLinkSerialExecutionQueue {
         RelocationSeal seal =
                 new RelocationSeal(serial, captured.stream().map(Entry::queuedRecord).toList());
         relocation = new RelocationState(serial, seal, captured);
+        captured.forEach(
+                entry -> {
+                    takeDurable(entry);
+                    if (entry.applicationJobOwnership != null)
+                        entry.applicationJobOwnership.suspendRunnable();
+                });
         return Optional.of(seal);
     }
 
@@ -1866,6 +2086,8 @@ public final class ZLinkSerialExecutionQueue {
                         entry.flow == null ? () -> {} : ZLinkFlowContext.enter(entry.flow);
                 ZLinkApplicationJobContext.Scope applicationJob =
                         ZLinkApplicationJobContext.enterQueued(entry.applicationJobOwnership)) {
+            if (entry.applicationJobOwnership != null)
+                entry.applicationJobOwnership.requireRunnable();
             CompletionStage<Void> execution =
                     Objects.requireNonNull(entry.operation.get(), "operation result");
             // A relocation boundary is itself the turn a relocation seal owns; it stays active

@@ -149,6 +149,74 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
 
     internal bool HasSharedConsumer => _sharedOwner is not null;
 
+    internal bool HasPendingDurableApplication
+    {
+        get
+        {
+            lock (_admissionGate)
+                return _applicationQueue.PendingTail is { Next: not null, Preparation: not null }
+                    || _sharedOwner is not null
+                        && _applicationQueue.PendingTail?.Preparation is not null;
+        }
+    }
+
+    internal ZLinkSerialPostAdmission TryPostDurableApplication(
+        Func<CancellationToken, ValueTask> callback,
+        Func<CancellationToken, ValueTask> prepare,
+        Action cancel,
+        out ZLinkSerialWorkItem item,
+        Func<bool>? ready = null,
+        Action<Exception>? errorReporter = null
+    )
+    {
+        Func<CancellationToken, ValueTask>? drain;
+        lock (_admissionGate)
+        {
+            if (Volatile.Read(ref _completed) != 0 || _applicationAdmissionClosed)
+            {
+                item = null!;
+                return ZLinkSerialPostAdmission.Closed;
+            }
+            item = new ZLinkSerialWorkItem(callback, ready: ready)
+            {
+                Preparation = new ZLinkSerialWorkPreparation(prepare, cancel, NotifyReadiness),
+                ErrorReporter = errorReporter,
+            };
+            CommitWorkItemUnderLock(_applicationQueue, item, ZLinkSerialWorkLane.Application);
+            drain = ReserveDrainUnderLock();
+        }
+        PublishDrain(drain);
+        return ZLinkSerialPostAdmission.Accepted;
+    }
+
+    internal ValueTask<bool> WithdrawAsync(ZLinkSerialWorkItem item)
+    {
+        if (_sharedOwner is not null)
+            return RunOnSharedGateAsync(() => WithdrawOnGate(item));
+        bool withdrawn;
+        lock (_admissionGate)
+            withdrawn = WithdrawOnGate(item);
+        if (withdrawn)
+            SchedulePendingWork();
+        return ValueTask.FromResult(withdrawn);
+    }
+
+    private bool WithdrawOnGate(ZLinkSerialWorkItem item)
+    {
+        if (_sharedOwner is not null)
+            ImportSharedPublished();
+        if (
+            !_applicationQueue.TryDequeueMatching(
+                candidate => ReferenceEquals(candidate, item),
+                out _
+            )
+        )
+            return false;
+        item.Preparation?.Cancel();
+        item.ReleaseForRelocation(_reportHandlerException);
+        return true;
+    }
+
     internal void BindExecutionOwner(Func<ZLinkSerialExecutionQueue?> provider)
     {
         ArgumentNullException.ThrowIfNull(provider);
@@ -375,6 +443,18 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
                 item = null!;
                 return ZLinkSerialPostAdmission.Closed;
             }
+            // Publication and durable inheritance use the same admission boundary.
+            // Ordinary Actor admission adds no lock, preparation or delegate.
+            if (
+                _applicationQueue.PendingTail?.Preparation is not null
+                && ZLinkApplicationJobQueueInvocation.CurrentScope
+                    is { Lease.IsReleased: false } scope
+            )
+                candidate.Preparation = new ZLinkSerialWorkPreparation(
+                    scope.ReacquireAsync,
+                    scope.ReleaseDurablePermit,
+                    NotifyReadiness
+                );
             CommitWorkItemUnderLock(_applicationQueue, candidate, ZLinkSerialWorkLane.Application);
             item = candidate;
             drain = ReserveDrainUnderLock();
@@ -1165,7 +1245,10 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
     internal void NotifyReadiness()
     {
         if (_sharedOwner is null)
+        {
+            SchedulePendingWork();
             return;
+        }
         lock (_admissionGate)
             if (_readyItem is not null)
                 PublishSharedNotificationUnderLock();
@@ -1588,9 +1671,9 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
         (_sharedOwner is null || _readyItem is null || _active is null || !item.ReservationHeld)
         && (
             (!item.ReservationHeld && item.Mailbox is null)
-            || _applicationQueue.Head?.Ready?.Invoke() != false
+            || _applicationQueue.Head?.IsReady != false
         )
-        && item.Ready?.Invoke() != false
+        && item.IsReady
         && (
             _activeLifecycle is not { } owner
             || _applicationStartAllowed?.Invoke(owner) != false

@@ -798,7 +798,6 @@ export class ZLinkFrameworkRuntimeHost
       meshNode: (meshName) => this.spotNodeRuntime?.meshNode(meshName),
       completions: (meshName) => this.spotNodeRuntime?.meshCompletionTable(meshName),
       spotManager: () => this.spotManager,
-      spotNodeRuntime: () => this.spotNodeRuntime,
       actorManager: () => this.actorManager,
       actorTransfer: this.actorTransferRuntime,
       boundSessionRelocation: {

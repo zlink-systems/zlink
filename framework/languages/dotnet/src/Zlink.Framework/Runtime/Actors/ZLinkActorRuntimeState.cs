@@ -301,6 +301,10 @@ internal sealed class ZLinkActorRuntimeState(
     internal ZLinkActorSerialExecutor.BarrierReservation ReserveHandoffRestoreBarrier() =>
         _dispatchMailbox.ReserveBarrier();
 
+    internal IReadOnlyList<Task> AdmitDurablePrefix(
+        IReadOnlyList<ZLinkActorDurableRecord> records
+    ) => _dispatchMailbox.AdmitDurablePrefix(records);
+
     public void EnsureDeferredJoinIdentity(IZLinkActor actor, ulong objectGeneration)
     {
         if (
@@ -318,6 +322,7 @@ internal sealed class ZLinkActorRuntimeState(
     public void ReleaseDeferredJoinBarrier()
     {
         Volatile.Write(ref _deferredJoinPending, 0);
+        _dispatchMailbox.NotifyReadiness();
     }
 
     public void BeginReservedCreation()
@@ -1604,6 +1609,7 @@ internal sealed class ZLinkActorRuntimeState(
             && ReferenceEquals(ownership.State, this)
         )
         {
+            await Handoff.WithdrawDeferredSuffixAsync().ConfigureAwait(false);
             return await ExecuteLockedAsync(
                     () =>
                     {
@@ -1617,7 +1623,10 @@ internal sealed class ZLinkActorRuntimeState(
                 .ConfigureAwait(false);
         }
 
-        using var turn = await _dispatchMailbox.EnterAsync(cancellationToken).ConfigureAwait(false);
+        using var turn = await _dispatchMailbox
+            .EnterLifecycleAsync(cancellationToken)
+            .ConfigureAwait(false);
+        await Handoff.WithdrawDeferredSuffixAsync().ConfigureAwait(false);
         return await ExecuteLockedAsync(
                 () =>
                 {
@@ -1693,7 +1702,9 @@ internal sealed class ZLinkActorRuntimeState(
         CancellationToken cancellationToken
     )
     {
-        using var turn = await _dispatchMailbox.EnterAsync(cancellationToken).ConfigureAwait(false);
+        using var turn = await _dispatchMailbox
+            .EnterLifecycleAsync(cancellationToken)
+            .ConfigureAwait(false);
         if (
             ContextInvalidated
             || NativeActorRef is not { Generation: var currentGeneration }

@@ -232,7 +232,7 @@ internal sealed class ZLinkDeferredActorJoin(
                         $"deferred_join_target_wait_failed kind={failure} {exception}"
                     );
                 }
-                barrier = actorState.ReserveDeferredJoinBarrierAfterTarget();
+                barrier ??= actorState.ReserveDeferredJoinBarrierAfterTarget();
             }
 
             if (barrier is not { } reservedBarrier)
@@ -243,6 +243,7 @@ internal sealed class ZLinkDeferredActorJoin(
             // outcome, including an elapsed deadline, completes inside that
             // turn. The reservation is therefore always claimed and released.
             using var turn = await reservedBarrier.ClaimAsync().ConfigureAwait(false);
+            await actorState.Handoff.WithdrawDeferredSuffixAsync().ConfigureAwait(false);
             // Re-enter the flow captured at registration, but only while the
             // live level still allows capture (spec 27 §4): an On→Off flip
             // before the deferred join runs must not re-install flow context.

@@ -88,7 +88,7 @@ export class ZLinkSpotSerialExecutor {
             )
           ),
         preparation: record.preparation,
-        workOptions: { payloadBytes: record.payloadBytes }
+        workOptions: { payloadBytes: record.payloadBytes, onWithdrawable: record.onWithdrawable }
       }))
     );
     const terminal = Promise.allSettled(terminals).then((outcomes) => {
