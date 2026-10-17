@@ -100,13 +100,16 @@ public final class ZLinkSuspendInvocationContext {
     }
 
     public static void requireYieldAllowed(String operation) {
-        ApplicationExecution execution = APPLICATION_EXECUTION.get();
-        if (execution == null || !execution.yieldAllowed()) {
-            throw invalid(
-                    operation
-                            + " yield is only valid in a SpotWide User Spot "
-                            + "or Instance Spot application callback");
+        Object turn = SERIAL_EXECUTION_TURN.get();
+        if (!(turn instanceof YieldAdmission admission)) {
+            throw invalid(operation + " yield requires an active application turn");
         }
+        admission.requireYieldAllowed(operation);
+    }
+
+    /** Admission belongs to the serial turn; coroutine adapters only propagate its carrier. */
+    public interface YieldAdmission {
+        void requireYieldAllowed(String operation);
     }
 
     public static <T> T rejectYield(String operation) {

@@ -8328,7 +8328,7 @@ int main (int argc, char **argv)
     const auto unsupported_yield_result = unsupported_yield.yield ().result ();
     if (unsupported_yield_result
         || unsupported_yield_result.error_kind ()
-             != zlink::framework::framework_error_kind_t::not_configured
+             != zlink::framework::framework_error_kind_t::invalid_operation
         || unsupported_submit_count.load () != 0) {
         return 30;
     }
