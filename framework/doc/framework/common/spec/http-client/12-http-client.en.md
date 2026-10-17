@@ -107,8 +107,11 @@ Spot turn information.** Framework connects the current turn to the single
 - **Framework injects the callback completion scheduler at DI
   registration.** The callback enters as a new turn of the original
   Spot execution queue.
-- The DI server builder's `Yield` returns the injected turn and resumes in a
-  new turn on the same execution line.
+- The DI server builder's `Yield` passes a request factory to the scheduler.
+  Framework calls that factory only after the call passes Yield admission in
+  [execution gate §3](../server/01-execution/02-handler-turn-and-execution-gate.en.md#3-gate-and-claim-on-yield).
+  A rejected call neither creates nor sends the request. An admitted call
+  returns the injected turn and resumes in a new turn on the same execution line.
 
 The C++ HTTP client expresses the same scheduler seam with
 `coroutines(resume_scheduler)` and `framework_resume_scheduler_t`.
