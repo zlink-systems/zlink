@@ -853,8 +853,9 @@ reason once.**
 - **Unconfirmed records.** Records whose cleanup cannot be confirmed by the end time follow the lifecycle
   and recovery conditions in Location Runtime §§6.1 and 11. Passing the end time alone does not guarantee
   automatic reclamation by another host.
-- **Termination reason.** An exception originating in the callback, or forced termination due to an
-  unconfirmed Store result under §13, yields `ForceStopped/TeardownFailed`. In the absence of those
+- **Termination reason.** An actual failure observed in a cleanup stage (callback, scope release, Store
+  deletion, transport cleanup), or forced termination due to an unconfirmed Store result under §13, yields
+  `ForceStopped/TeardownFailed`, and a later deadline expiry does not change it. In the absence of those
   failures, a wait or observation ended by the shutdown deadline or the end time yields
   `ForceStopped/DeadlineExceeded`. Cancellation or timeout caused by the Framework's deadline expiry is
   not classified as an exception originating in the callback. Only cleanup completed without failure

@@ -100,11 +100,14 @@ async function runShutdownStep(
 }
 
 function isShutdownAbort(error: unknown): boolean {
+  if (hasTeardownFailure(error)) return false;
   if (isAbortError(error)) return true;
   return error instanceof AggregateError && error.errors.every((nested) => isShutdownAbort(nested));
 }
 
 export function hasTeardownFailure(error: unknown): boolean {
+  if (error instanceof Error && error.cause !== undefined && hasTeardownFailure(error.cause))
+    return true;
   if (error instanceof AggregateError) return error.errors.some(hasTeardownFailure);
   if (error instanceof ZLinkFrameworkException) {
     const kind = internalFrameworkErrorKind(error);

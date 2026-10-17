@@ -530,30 +530,20 @@ internal sealed class ZLinkDrainCoordinator : IDisposable
             teardownBound.Cancel();
         else
             teardownBound.CancelAfter(remaining);
+        Exception? teardownFailure = null;
         try
         {
             await _executor.ForceStopAsync(reason, teardownBound.Token).ConfigureAwait(false);
         }
-        catch (ZLinkDrainForceException failure)
-        {
-            reason = HasTeardownFailure(failure.InnerException!, teardownBound.Token)
-                ? failure.Reason
-                : ZLinkDrainForceReason.DeadlineExceeded;
-        }
-        catch (OperationCanceledException error)
-            when (teardownBound.IsCancellationRequested
-                && error.CancellationToken == teardownBound.Token
-            )
-        {
-            reason = ZLinkDrainForceReason.DeadlineExceeded;
-        }
         catch (Exception error)
         {
+            teardownFailure = error;
             _logger?.LogError(error, "ZLink forced drain teardown failed.");
-            reason = HasTeardownFailure(error, teardownBound.Token)
-                ? ZLinkDrainForceReason.TeardownFailed
-                : ZLinkDrainForceReason.DeadlineExceeded;
         }
+        if (teardownFailure is not null && HasTeardownFailure(teardownFailure, teardownBound.Token))
+            reason = teardownFailure is ZLinkDrainForceException forced
+                ? forced.Reason
+                : ZLinkDrainForceReason.TeardownFailed;
         return new ForceStopped(reason, hasCommitted, committedUnitCount);
     }
 
@@ -562,8 +552,12 @@ internal sealed class ZLinkDrainCoordinator : IDisposable
 
     private static bool HasTeardownFailure(Exception error, CancellationToken teardownToken)
     {
+        if (error is ZLinkDrainForceException forced)
+            return HasTeardownFailure(forced.InnerException!, teardownToken);
         if (error is AggregateException aggregate)
             return aggregate.InnerExceptions.Any(inner => HasTeardownFailure(inner, teardownToken));
+        if (error.InnerException is { } cause && HasTeardownFailure(cause, teardownToken))
+            return true;
         if (
             error is OperationCanceledException canceled
             && teardownToken.IsCancellationRequested

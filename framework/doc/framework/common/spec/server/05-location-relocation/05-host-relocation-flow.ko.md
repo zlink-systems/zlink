@@ -769,8 +769,9 @@ application 작업을 받지 않도록 바꾸는 동작을 [admission seal](../0
 - **확인하지 못한 record.** 종료 시각까지 정리 결과를 확인하지 못한 record의 후속 처리는 Location runtime
   §6.1·§11의 lifecycle과 recovery 조건을 따른다. 종료 시각이 지났다는 것만으로 다른 host의 자동 회수를
   보장하지 않는다.
-- **종료 reason.** Callback 자체의 예외와 §13의 Store 결과 미확인에 따른 강제 종료는
-  `ForceStopped/TeardownFailed`다. 그런 실패가 없고 shutdown deadline이나 종료 시각 때문에 대기·관찰이
+- **종료 reason.** 정리 단계(callback, scope 해제, Store 삭제, transport 정리)에서 관찰한 실제 실패와 §13의
+  Store 결과 미확인에 따른 강제 종료는 `ForceStopped/TeardownFailed`이며, 이 판정은 뒤이은 기한 만료로 바뀌지 않는다.
+  그런 실패가 없고 shutdown deadline이나 종료 시각 때문에 대기·관찰이
   끝나면 `ForceStopped/DeadlineExceeded`다. Framework가 기한 만료로 만든 취소·timeout은 callback 자체의
   예외로 분류하지 않는다. 실패 없이 shutdown deadline 안에 정리가 끝난 경우만 `Stopped/None`이다.
 

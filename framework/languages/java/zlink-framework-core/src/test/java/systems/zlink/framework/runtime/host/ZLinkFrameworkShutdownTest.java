@@ -20,7 +20,10 @@ import java.util.concurrent.TimeoutException;
 final class ZLinkFrameworkShutdownTest {
     @Test
     void callbackFailureSuppressedOnDeadlineKeepsTeardownClassification() {
-        var deadline = new CompletionException(new ZLinkFrameworkShutdown.DeadlineExpired());
+        var deadline =
+                new CompletionException(
+                        new systems.zlink.framework.runtime.internal.execution
+                                .ZLinkTeardownDeadlineExceededException());
         deadline.addSuppressed(new TimeoutException("callback failure"));
         assertEquals(true, ZLinkFrameworkShutdown.hasTeardownFailure(deadline));
     }

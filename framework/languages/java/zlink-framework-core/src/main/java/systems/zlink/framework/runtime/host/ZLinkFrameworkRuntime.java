@@ -2223,13 +2223,8 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                                 drained.complete(
                                         failure == null
                                                 ? new InternalDrained()
-                                                : new InternalForceStopped(
-                                                        ZLinkFrameworkShutdown.hasTeardownFailure(
-                                                                        failure)
-                                                                ? InternalDrainForceReason
-                                                                        .TEARDOWN_FAILED
-                                                                : InternalDrainForceReason
-                                                                        .DEADLINE_EXCEEDED,
+                                                : forcedStopResult(
+                                                        InternalDrainForceReason.DEADLINE_EXCEEDED,
                                                         failure));
                             }
                             if (failure != null) {
@@ -2510,10 +2505,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
         traceDrainStage("owner_cleanup", closeAsync())
                 .whenComplete(
                         (ignored, failure) -> {
-                            if (ZLinkFrameworkShutdown.hasTeardownFailure(failure)) {
-                                completeForcedStop(
-                                        InternalDrainForceReason.TEARDOWN_FAILED, failure);
-                            } else if (failure != null
+                            if (failure != null
                                     || !Instant.now().isBefore(currentLifecycleDeadline())) {
                                 completeForcedStop(
                                         InternalDrainForceReason.DEADLINE_EXCEEDED, failure);
@@ -2553,19 +2545,32 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
             return;
         }
         if (spots != null) spots.terminateOwnedWaits();
-        InternalDrainForceReason reason = initialReason;
         ZLinkRuntimeMetrics.increment(
                 "zlink.drain.forced", Map.of("kind", streams == null ? "runtime" : "session"));
         CompletionStage<Void> notification =
                 streams == null
                         ? CompletableFuture.completedFuture(null)
-                        : streams.notifyServerDrain();
-        InternalDrainForceReason requestedReason = reason;
+                        : ZLinkFrameworkShutdown.atStage(
+                                "server_stream", streams::notifyServerDrain);
         notification
-                .handle((ignored, failure) -> null)
-                .thenCompose(ignored -> closeAsync())
+                .handle((ignored, failure) -> failure)
+                .thenCompose(
+                        notificationFailure ->
+                                closeAsync()
+                                        .handle(
+                                                (ignored, failure) -> {
+                                                    if (notificationFailure == null) return failure;
+                                                    if (failure == null) return notificationFailure;
+                                                    var combined =
+                                                            new CompletionException(
+                                                                    notificationFailure);
+                                                    combined.addSuppressed(failure);
+                                                    return combined;
+                                                }))
                 .whenComplete(
-                        (ignored, failure) -> {
+                        (observedFailure, unexpectedFailure) -> {
+                            Throwable failure =
+                                    unexpectedFailure != null ? unexpectedFailure : observedFailure;
                             Throwable terminalFailure =
                                     initialFailure != null ? initialFailure : failure;
                             if (initialFailure != null
@@ -2574,25 +2579,21 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                                 terminalFailure = new CompletionException(initialFailure);
                                 terminalFailure.addSuppressed(failure);
                             }
-                            completeForcedStop(
-                                    ZLinkFrameworkShutdown.hasTeardownFailure(failure)
-                                            ? InternalDrainForceReason.TEARDOWN_FAILED
-                                            : requestedReason,
-                                    terminalFailure);
+                            completeForcedStop(initialReason, terminalFailure);
                         });
     }
 
     private void completeForcedStop(InternalDrainForceReason reason, Throwable failure) {
-        Throwable cause = unwrapCompletionFailure(failure);
-        if (cause instanceof ZLinkFrameworkShutdown.Failure staged) {
-            cause = unwrapCompletionFailure(staged.getCause());
-        }
-        drained.complete(
-                new InternalForceStopped(
-                        cause instanceof TimeoutException
-                                ? InternalDrainForceReason.DEADLINE_EXCEEDED
-                                : reason,
-                        failure));
+        drained.complete(forcedStopResult(reason, failure));
+    }
+
+    private static InternalForceStopped forcedStopResult(
+            InternalDrainForceReason reason, Throwable failure) {
+        return new InternalForceStopped(
+                ZLinkFrameworkShutdown.hasTeardownFailure(failure)
+                        ? InternalDrainForceReason.TEARDOWN_FAILED
+                        : reason,
+                failure);
     }
 
     private void closeHandlerExecutor() {
