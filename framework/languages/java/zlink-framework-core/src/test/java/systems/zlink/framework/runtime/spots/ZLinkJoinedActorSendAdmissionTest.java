@@ -188,6 +188,74 @@ final class ZLinkJoinedActorSendAdmissionTest {
         }
     }
 
+    @ParameterizedTest
+    @CsvSource({"PER_ACTOR", "SPOT_WIDE"})
+    void stagedForwardArrivingAfterJoinedCallbackUsesCommittedFence(
+            ZLinkUserSpotExecutionMode executionMode) throws Exception {
+        probe.forwardRelease = new CompletableFuture<>();
+        var locations = new ZLinkInMemoryLocationStore();
+        var relocations = new InMemoryRelocationStore();
+        try (var source =
+                        start(
+                                options(
+                                        "late-source",
+                                        locations,
+                                        relocations,
+                                        null,
+                                        false,
+                                        executionMode));
+                var target =
+                        start(
+                                options(
+                                        "late-target",
+                                        locations,
+                                        relocations,
+                                        source.listenerStatus(ZLinkListenerKind.ROUTE_MESH, "game")
+                                                .endpoint(),
+                                        true,
+                                        executionMode))) {
+            TABLE_CLIENT.set(source.actorClient());
+            target.spotManager()
+                    .getOrCreate("table-1", "table")
+                    .submit()
+                    .toCompletableFuture()
+                    .get(WAIT_SECONDS, TimeUnit.SECONDS);
+            source.actorManager()
+                    .create(PLAYER, "player")
+                    .submit()
+                    .toCompletableFuture()
+                    .get(WAIT_SECONDS, TimeUnit.SECONDS);
+            assertEquals(
+                    "scheduled",
+                    source.actorClient()
+                            .requestToActor(PLAYER, new JoinRequest("table-1"))
+                            .timeout(Duration.ofSeconds(WAIT_SECONDS))
+                            .submit(String.class)
+                            .toCompletableFuture()
+                            .get(WAIT_SECONDS, TimeUnit.SECONDS));
+            probe.forwarding.get(WAIT_SECONDS, TimeUnit.SECONDS);
+            assertInstanceOf(
+                    ZLinkActorJoinCompletion.Accepted.class,
+                    joinCompleted.get(WAIT_SECONDS, TimeUnit.SECONDS));
+            assertFalse(pingHandled.isDone());
+            completionRelease.complete(null);
+            probe.published.get(WAIT_SECONDS, TimeUnit.SECONDS);
+            probe.forwardRelease.complete(null);
+            var seen = probe.ingress.get(WAIT_SECONDS, TimeUnit.SECONDS);
+            assertFalse(seen.relocationOwnerAccepted(), "temporary stage must already be released");
+            assertEquals(
+                    seen.currentAuthority(),
+                    seen.received().authorityOwnerGeneration(),
+                    "late forwarding must carry the committed target generation: " + seen);
+            assertEquals(seen.currentLease(), seen.received().ownerLeaseGeneration());
+            pingHandled.get(WAIT_SECONDS, TimeUnit.SECONDS);
+            assertEquals(List.of("joined", "send admitted", "completed", "ping"), EVENTS);
+        } finally {
+            probe.forwardRelease.complete(null);
+            completionRelease.complete(null);
+        }
+    }
+
     @Test
     void sendWithoutHandlerFailsAdmissionAsNotFound() throws Exception {
         try (var runtime = start(options("send-missing-handler", null, null, null, true))) {

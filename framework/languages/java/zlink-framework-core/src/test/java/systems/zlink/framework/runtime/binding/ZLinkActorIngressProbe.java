@@ -1,25 +1,35 @@
 package systems.zlink.framework.runtime.binding;
 
+import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdapterProvider;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.internal.backend.ZLinkMeshBackendAdapter;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
+import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicReference;
 
 /** Observes real backend fences without replacing admission or dispatch decisions. */
 public final class ZLinkActorIngressProbe {
+    private static final int COMMAND_OFFSET = 3;
+
     public record Ingress(
             ZLinkServiceM6BWireCodec.ActorRouteFence forwarded,
             ZLinkServiceM6BWireCodec.ActorRouteFence received,
             long currentAuthority,
             long currentLease,
             boolean relocationOwnerAccepted) {}
+
+    public final CompletableFuture<Void> forwarding = new CompletableFuture<>();
+    public CompletableFuture<Void> forwardRelease = CompletableFuture.completedFuture(null);
+    public final CompletableFuture<Void> published = new CompletableFuture<>();
 
     private final String actorId;
 
@@ -53,10 +63,41 @@ public final class ZLinkActorIngressProbe {
                 Proxy.newProxyInstance(
                         ZLinkInternalMeshNode.class.getClassLoader(),
                         new Class<?>[] {ZLinkInternalMeshNode.class},
-                        (proxy, method, args) ->
-                                method.getName().equals("spotNode")
-                                        ? observed
-                                        : invoke(method, mesh, args));
+                        (proxy, method, args) -> {
+                            if (method.getName().equals("spotNode")) return observed;
+                            if (method.getName().equals("setCanonicalRelocationControlHandler")
+                                    && args[0] != null) {
+                                var handler =
+                                        (ZLinkInternalMeshNode.CanonicalRelocationControlHandler)
+                                                args[0];
+                                args =
+                                        new Object[] {
+                                            (ZLinkInternalMeshNode
+                                                            .CanonicalRelocationControlHandler)
+                                                    (source, sequence, command) ->
+                                                            handler.handle(
+                                                                            source, sequence,
+                                                                            command)
+                                                                    .whenComplete(
+                                                                            (reply, failure) -> {
+                                                                                // CUTOVER
+                                                                                // completion
+                                                                                // includes target
+                                                                                // publication and
+                                                                                // stage release.
+                                                                                if (failure == null
+                                                                                        && command[
+                                                                                                        COMMAND_OFFSET]
+                                                                                                == ServiceWireConstants
+                                                                                                        .COMMAND_RELOCATION_CUTOVER)
+                                                                                    published
+                                                                                            .complete(
+                                                                                                    null);
+                                                                            })
+                                        };
+                            }
+                            return invoke(method, mesh, args);
+                        });
     }
 
     private ZLinkInternalSpotNode observeSpot(ZLinkInternalSpotNode raw) {
@@ -67,6 +108,10 @@ public final class ZLinkActorIngressProbe {
                         (proxy, method, args) -> {
                             if (method.getName().equals("forwardMessageFollowActor")) {
                                 forwarded.set((ZLinkServiceM6BWireCodec.ActorRouteFence) args[1]);
+                                forwarding.complete(null);
+                                Object[] captured = args;
+                                return forwardRelease.thenCompose(
+                                        ignored -> forward(method, raw, captured));
                             }
                             if (method.getName().equals("setRelocationStagingIngressHandler")
                                     && args[0] != null) {
@@ -101,6 +146,18 @@ public final class ZLinkActorIngressProbe {
                     }
                     return result;
                 });
+    }
+
+    @SuppressWarnings("unchecked")
+    private static CompletionStage<List<Message>> forward(
+            Method method, Object raw, Object[] args) {
+        try {
+            return (CompletionStage<List<Message>>) method.invoke(raw, args);
+        } catch (InvocationTargetException failure) {
+            return CompletableFuture.failedFuture(failure.getCause());
+        } catch (IllegalAccessException failure) {
+            return CompletableFuture.failedFuture(failure);
+        }
     }
 
     private static Object invoke(Method method, Object target, Object[] args) throws Throwable {

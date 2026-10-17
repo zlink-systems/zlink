@@ -172,6 +172,87 @@ final class ZLinkRelocationMessageFollowOwnerGenerationTest {
         }
     }
 
+    @Test
+    void pendingCommittedFenceHoldsIngressAndAbortReleasesOwnership() {
+        var source = route("node-a", 11, 3, 1);
+        var target = route("node-b", 12, 10, 2);
+        var forwarded = new ArrayList<ZLinkServiceM6BWireCodec.ActorRouteFence>();
+        var runtime = runtime(target, forwarded);
+        try {
+            var committed = new CompletableFuture<ZLinkServiceM6BWireCodec.ActorRouteFence>();
+            runtime.stageRelocationMessageFollowAsync(source, target.actor(), committed)
+                    .toCompletableFuture()
+                    .join();
+            var released = new java.util.concurrent.atomic.AtomicInteger();
+            var failures = new ArrayList<Throwable>();
+            var header =
+                    new ZLinkServiceM6BWireCodec.ActorMessage(
+                            false, 0, null, 1, 42, 0, null, source);
+            assertTrue(
+                    runtime.relayMessageFollow(
+                            RoutingId.from("client"),
+                            17,
+                            header,
+                            new byte[0],
+                            List.of(Message.from("header"), Message.from("payload")),
+                            null,
+                            null,
+                            failures::add,
+                            released::incrementAndGet));
+            assertTrue(forwarded.isEmpty());
+            assertEquals(0, released.get());
+            committed.complete(target);
+            assertEquals(List.of(target), forwarded);
+            assertEquals(1, released.get());
+            assertTrue(failures.isEmpty());
+            runtime.abortRelocationMessageFollow(source);
+            var abortFence = new CompletableFuture<ZLinkServiceM6BWireCodec.ActorRouteFence>();
+            runtime.stageRelocationMessageFollowAsync(source, target.actor(), abortFence)
+                    .toCompletableFuture()
+                    .join();
+            assertTrue(
+                    runtime.relayMessageFollow(
+                            RoutingId.from("client"),
+                            17,
+                            header,
+                            new byte[0],
+                            List.of(Message.from("header"), Message.from("payload")),
+                            null,
+                            null,
+                            failures::add,
+                            released::incrementAndGet));
+            runtime.abortRelocationMessageFollow(source);
+            assertEquals(2, released.get());
+            assertEquals(1, failures.size());
+            abortFence.complete(target);
+            assertEquals(
+                    List.of(target), forwarded, "a late commit must not revive aborted ingress");
+            var closingFence = new CompletableFuture<ZLinkServiceM6BWireCodec.ActorRouteFence>();
+            runtime.stageRelocationMessageFollowAsync(source, target.actor(), closingFence)
+                    .toCompletableFuture()
+                    .join();
+            assertTrue(
+                    runtime.relayMessageFollow(
+                            RoutingId.from("client"),
+                            17,
+                            header,
+                            new byte[0],
+                            List.of(Message.from("header"), Message.from("payload")),
+                            null,
+                            null,
+                            failures::add,
+                            released::incrementAndGet));
+            runtime.close();
+            assertEquals(3, released.get());
+            assertEquals(2, failures.size());
+            closingFence.complete(target);
+            assertEquals(List.of(target), forwarded);
+
+        } finally {
+            runtime.close();
+        }
+    }
+
     private static void confirm(
             ZLinkActorRuntime runtime, ZLinkServiceM6BWireCodec.ActorRouteFence source)
             throws Exception {

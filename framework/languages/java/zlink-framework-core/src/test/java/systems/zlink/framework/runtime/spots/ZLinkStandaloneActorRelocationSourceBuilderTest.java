@@ -176,12 +176,14 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
                                         }
                                         throw new AssertionError("unexpected control request");
                                     });
-            prepared.relayCapturedIngress(relayClient, Duration.ofSeconds(5))
+            prepared.relayCapturedIngress(
+                            relayClient, Duration.ofSeconds(5), new CompletableFuture<>())
                     .toCompletableFuture()
                     .get();
             int firstRelayCount = relays.get();
             assertEquals(1, acceptedRelays.get());
-            prepared.relayCapturedIngress(relayClient, Duration.ofSeconds(5))
+            prepared.relayCapturedIngress(
+                            relayClient, Duration.ofSeconds(5), new CompletableFuture<>())
                     .toCompletableFuture()
                     .get();
             assertEquals(firstRelayCount, relays.get());
@@ -299,7 +301,8 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
                                             throw new AssertionError("unexpected control request");
                                         });
                 CompletableFuture<Void> relay =
-                        prepared.relayCapturedIngress(client, Duration.ofSeconds(5))
+                        prepared.relayCapturedIngress(
+                                        client, Duration.ofSeconds(5), new CompletableFuture<>())
                                 .toCompletableFuture();
                 assertFalse(relay.isDone());
                 CompletableFuture<Void> expired =
@@ -498,7 +501,11 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
             assertFalse(lateAccepted.isDone());
             assertEquals(0, released.get());
             assertFalse(lateReleased.get());
-            prepared.relayCapturedIngress(sourceMachine.get(), timeout).toCompletableFuture().get();
+            var settlement =
+                    new CompletableFuture<ZLinkRelocationTransitionClient.AuthoritySettlement>();
+            prepared.relayCapturedIngress(sourceMachine.get(), timeout, settlement)
+                    .toCompletableFuture()
+                    .get();
             assertTrue(relayProbe(prepared).pending().isEmpty());
 
             byte[] stagedTargetRecord =
@@ -557,6 +564,14 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
             assertEquals("post-freeze-late", targetBackend.replayedPackets.get(1_025));
             assertEquals("target-staged", targetBackend.replayedPackets.getLast());
             assertEquals(List.of("target-staged-reply"), targetIngressReplies);
+            settlement.complete(
+                    new ZLinkRelocationTransitionClient.AuthoritySettlement(
+                            ZLinkRelocationTransitionClient.Settlement.TARGET_COMMITTED,
+                            (ZLinkAuthoritySnapshot)
+                                    repository
+                                            .read(ZLinkAuthorityKeyCodec.actor("actor-b"), NEVER)
+                                            .toCompletableFuture()
+                                            .get()));
             prepared.completeSourceQueueCommit().toCompletableFuture().get();
             CompletableFuture.allOf(accepted.toArray(CompletableFuture[]::new))
                     .get(3, TimeUnit.SECONDS);
