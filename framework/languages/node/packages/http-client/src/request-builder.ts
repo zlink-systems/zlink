@@ -360,7 +360,7 @@ class ZLinkFrameworkHttpRequestBuilder extends ZLinkHttpRequestBuilder {
         )
       );
     }
-    return this.executionTurn.yieldPromise(this.executeTyped<T>());
+    return this.executionTurn.yieldPromise(() => this.executeTyped<T>());
   }
 }
 
