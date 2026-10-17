@@ -6401,9 +6401,9 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                 reportDispatchError(
                         DispatchFailureReport.of(
                                         ZLinkDispatchErrorSurface.SPOT_ACTOR,
-                                        request
-                                                ? ZLinkDispatchMessageKind.ACTOR_REQUEST
-                                                : ZLinkDispatchMessageKind.ACTOR_SEND,
+                                        // Dropped with a successful reply (binding §7), so the
+                                        // one-way severity policy applies (Warning).
+                                        ZLinkDispatchMessageKind.ACTOR_SEND,
                                         ZLinkDispatchErrorReason.INVALID_FRAME,
                                         ZLinkDispatchErrorAction.DROP)
                                 .packetName(packetHeader.packetName())
