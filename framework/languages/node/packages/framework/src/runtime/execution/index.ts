@@ -242,7 +242,13 @@ export function captureZLinkExecutionTurn(): ZLinkCapturedExecutionTurn | undefi
   return {
     yieldPromise: <T>(operation: () => Promise<T>) => {
       const turn = requireZLinkYieldTurn(current.turn);
-      return turn.yieldFrameworkPromise(operation());
+      let pending: Promise<T>;
+      try {
+        pending = operation();
+      } catch (error) {
+        pending = Promise.reject(error);
+      }
+      return turn.yieldFrameworkPromise(pending);
     },
     post: (callback: () => void) => {
       void current.executor.post(callback);

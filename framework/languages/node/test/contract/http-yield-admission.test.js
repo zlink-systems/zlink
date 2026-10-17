@@ -65,37 +65,66 @@ test('HTTP turn seam invokes factories after admission and admits the next resum
   }
 });
 
-test('HTTP factory throw preserves the current gate and consumes its Yield admission', async () => {
+test('HTTP factory throw finishes through Yield before its catch and the next Yield', async () => {
   const serial = new ZLinkSpotSerialTurnExecutor(true, 'http-owner');
   const scheduler = createIntegrationHttpExecutionScheduler({});
   const failure = new Error('request factory failed');
   const release = deferred();
-  const attempted = deferred();
+  const blockerStarted = deferred();
   const events = [];
+  let synchronousFailure;
+  let caught = false;
+  let calls = 0;
   try {
     const owner = serial.execute(async () => {
       const turn = scheduler.capture();
-      assert.throws(
-        () =>
-          turn.yieldPromise(() => {
-            throw failure;
-          }),
-        (error) => error === failure
-      );
+      let pending;
+      try {
+        pending = turn.yieldPromise(() => {
+          calls++;
+          throw failure;
+        });
+      } catch (error) {
+        synchronousFailure = error;
+        pending = Promise.reject(error);
+      }
       assert.throws(() => turn.yieldPromise(() => assert.fail('rejected factory ran')), {
         kind: ZLinkFrameworkErrorKind.InvalidOperation
       });
-      events.push('owner');
-      attempted.resolve();
-      await release.promise;
+      try {
+        await pending;
+        assert.fail('factory failure must reject the Yield');
+      } catch (error) {
+        assert.equal(error, failure);
+        caught = true;
+        events.push('catch');
+      }
+      assert.equal(await turn.yieldPromise(() => Promise.resolve('resumed')), 'resumed');
       events.push('end');
     });
-    const next = serial.execute(() => events.push('next'));
-    await attempted.promise;
-    assert.deepEqual(events, ['owner']);
-    release.resolve();
-    await Promise.all([owner, next]);
-    assert.deepEqual(events, ['owner', 'end', 'next']);
+    const blocker = serial.execute(async () => {
+      events.push('blocker');
+      blockerStarted.resolve();
+      await release.promise;
+      events.push('blocker:end');
+    });
+    const completed = Promise.allSettled([owner, blocker]);
+    try {
+      await blockerStarted.promise;
+      assert.equal(synchronousFailure, undefined, 'factory throw must become a rejected Promise');
+      assert.equal(caught, false, 'failure catch must wait for the gate');
+      assert.deepEqual(events, ['blocker']);
+    } finally {
+      release.resolve();
+      await completed;
+    }
+    assert.equal((await completed)[0].status, 'fulfilled');
+    assert.equal(calls, 1);
+    assert.deepEqual(events, ['blocker', 'blocker:end', 'catch', 'end']);
+    assert.equal(
+      await serial.execute(() => scheduler.capture().yieldPromise(() => Promise.resolve('next'))),
+      'next'
+    );
   } finally {
     serial.closeAdmission();
     await serial.whenIdle();
