@@ -19,9 +19,9 @@ import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6AWireCodec
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
 import systems.zlink.framework.runtime.messaging.ZLinkJsonMessageSerializer;
+import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderCodec;
 import systems.zlink.framework.spots.*;
-import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
