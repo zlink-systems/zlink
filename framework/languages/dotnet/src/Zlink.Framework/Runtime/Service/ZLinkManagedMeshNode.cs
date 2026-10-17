@@ -2335,15 +2335,35 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         if ((domains & MeshReadyDomains.All) == 0)
             return ValueTask.FromResult(false);
 
+        var comparer = Comparer<(
+            MeshReadyDomains Domain,
+            MeshOwnerKind OwnerKind,
+            string Identity
+        )>.Create(
+            static (left, right) =>
+            {
+                var domainOrder = (
+                    left.Domain == MeshReadyDomains.Infrastructure ? 0 : 1
+                ).CompareTo(right.Domain == MeshReadyDomains.Infrastructure ? 0 : 1);
+                if (domainOrder != 0)
+                    return domainOrder;
+                var ownerOrder = Comparer<MeshOwnerKind>.Default.Compare(
+                    left.OwnerKind,
+                    right.OwnerKind
+                );
+                return ownerOrder != 0
+                    ? ownerOrder
+                    : StringComparer.Ordinal.Compare(left.Identity, right.Identity);
+            }
+        );
         Volatile.Write(ref _readyPosted, 0);
         foreach (
             var entry in _readyMailboxes
                 .Where(entry => entry.Value && (entry.Key.Domain & domains) != 0)
-                .OrderBy(static entry =>
-                    entry.Key.Domain == MeshReadyDomains.Infrastructure ? 0 : 1
+                .OrderBy(
+                    static entry => (entry.Key.Domain, entry.Key.OwnerKind, entry.Key.Identity),
+                    comparer
                 )
-                .ThenBy(static entry => entry.Key.OwnerKind)
-                .ThenBy(static entry => entry.Key.Identity, StringComparer.Ordinal)
         )
         {
             if (batch.Count >= batch.MaximumRecords)

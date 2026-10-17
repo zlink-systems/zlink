@@ -260,6 +260,101 @@ public sealed class ConnectorJsonProfileTests
         Assert.ThrowsAny<JsonException>(() => Payload("{\"state\":\"1\"}").FromJson<EnumPayload>());
     }
 
+    [Theory]
+    [InlineData("plain-duplicate", "{\"seq\":1,\"seq\":2}", true)]
+    [InlineData("escaped-current", "{\"seq\":1,\"s\\u0065q\":2}", true)]
+    [InlineData("escaped-previous", "{\"s\\u0065q\":1,\"seq\":2}", true)]
+    [InlineData("both-escaped", "{\"\\u0073eq\":1,\"s\\u0065q\":2}", true)]
+    [InlineData("unicode", "{\"é\":1,\"\\u00e9\":2}", true)]
+    [InlineData("surrogate-pair", "{\"😀\":1,\"\\ud83d\\ude00\":2}", true)]
+    [InlineData("unknown-nested-duplicate", "{\"seq\":1,\"unknown\":{\"x\":1,\"x\":2}}", true)]
+    [InlineData("array-nested-duplicate", "[{\"x\":1,\"x\":2}]", true)]
+    [InlineData("nested-separate-name", "{\"x\":{\"x\":1}}", false)]
+    [InlineData("sibling-separate-name", "[{\"x\":1},{\"x\":2}]", false)]
+    [InlineData("case-sensitive", "{\"x\":1,\"X\":2}", false)]
+    [InlineData("unicode-no-normalization", "{\"é\":1,\"e\\u0301\":2}", false)]
+    [InlineData("bom", "\uFEFF{}", true)]
+    [InlineData("infinite-unknown", "{\"unknown\":1e400}", true)]
+    [InlineData("finite", "{\"x\":1.25e10}", false)]
+    [InlineData("trailing-comma", "{\"x\":1,}", true)]
+    [InlineData("comment", "{/*comment*/\"x\":1}", true)]
+    [InlineData("empty-key-duplicate", "{\"\":1,\"\":2}", true)]
+    [InlineData("trailing-data", "{} {}", true)]
+    [InlineData("root-scalar", "123", false)]
+    [InlineData("root-array", "[1,[2],{\"x\":3}]", false)]
+    [InlineData("sibling-properties", "{\"a\":{\"x\":1},\"b\":{\"x\":2},\"x\":3}", false)]
+    [InlineData("duplicate-after-child", "{\"x\":{\"a\":1},\"x\":2}", true)]
+    public void Connector_and_server_preserve_document_validation(
+        string name,
+        string json,
+        bool reject
+    )
+    {
+        _ = name;
+        if (reject)
+        {
+            Assert.ThrowsAny<JsonException>(() => Payload(json).FromJson<JsonElement>());
+            Assert.ThrowsAny<JsonException>(() =>
+                ZLinkFrameworkJsonPayloadCodec.Deserialize<JsonElement>(
+                    Encoding.UTF8.GetBytes(json)
+                )
+            );
+        }
+        else
+        {
+            var connector = Payload(json).FromJson<JsonElement>();
+            var server = ZLinkFrameworkJsonPayloadCodec.Deserialize<JsonElement>(
+                Encoding.UTF8.GetBytes(json)
+            );
+            Assert.Equal(json, connector.GetRawText());
+            Assert.Equal(json, server.GetRawText());
+        }
+    }
+
+    [Theory]
+    [InlineData("{}", true)]
+    [InlineData("{\"seq\":1,\"unknown\":2}", false)]
+    public void Connector_and_server_preserve_required_validation(string json, bool reject)
+    {
+        if (reject)
+        {
+            Assert.ThrowsAny<JsonException>(() => Payload(json).FromJson<RequiredSequence>());
+            Assert.ThrowsAny<JsonException>(() =>
+                ZLinkFrameworkJsonPayloadCodec.Deserialize<RequiredSequence>(
+                    Encoding.UTF8.GetBytes(json)
+                )
+            );
+        }
+        else
+        {
+            Assert.Equal(1, Payload(json).FromJson<RequiredSequence>().Seq);
+            Assert.Equal(
+                1,
+                ZLinkFrameworkJsonPayloadCodec
+                    .Deserialize<RequiredSequence>(Encoding.UTF8.GetBytes(json))!
+                    .Seq
+            );
+        }
+    }
+
+    [Theory]
+    [InlineData(64, false)]
+    [InlineData(65, true)]
+    public void Connector_and_server_preserve_reader_depth_limit(int depth, bool reject)
+    {
+        var json =
+            string.Concat(Enumerable.Repeat("{\"x\":", depth)) + "0" + new string('}', depth);
+        Connector_and_server_preserve_document_validation("object-depth", json, reject);
+        json = new string('[', depth) + "0" + new string(']', depth);
+        Connector_and_server_preserve_document_validation("array-depth", json, reject);
+    }
+
+    public sealed class RequiredSequence
+    {
+        [JsonRequired]
+        public int Seq { get; set; }
+    }
+
     private static ZlinkStreamEncodedPayload Payload(string json) =>
         new(ZlinkStreamCodec.Json, Encoding.UTF8.GetBytes(json));
 

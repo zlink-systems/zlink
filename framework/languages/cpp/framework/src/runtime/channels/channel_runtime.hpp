@@ -213,14 +213,15 @@ class channel_runtime_state_t
         mesh_node_request_t request;
     };
     using mesh_node_transport_ptr_t = std::shared_ptr<const mesh_node_transport_t>;
-    // Node direct transports by name, published when a route channel is
-    // initialized or a MeshNode transport is bound and read with one atomic
-    // load on submit (08-messaging-hot-path E2: prepared at change time). A
+    // Node direct and Spot send transports by name, published when a route channel
+    // is initialized or a MeshNode or Spot transport is bound. Submit reads with
+    // one atomic load (08-messaging-hot-path E2: prepared at change time). A
     // route channel name takes precedence and is resolved on the lane.
     struct node_transport_index_t
     {
         std::set<std::string> route_channels;
         std::map<std::string, mesh_node_transport_ptr_t> mesh_nodes;
+        std::map<std::string, spot_mesh_send_t> spot_mesh_senders;
     };
     std::shared_ptr<const node_transport_index_t> node_transports =
       std::make_shared<const node_transport_index_t> ();
@@ -245,7 +246,6 @@ class channel_runtime_state_t
     std::map<std::string, client_server_send_t> client_server_senders;
     std::map<std::string, client_server_request_t> client_server_requesters;
     std::map<std::string, fanout_publish_t> fanout_publishers;
-    std::map<std::string, spot_mesh_send_t> spot_mesh_senders;
     std::map<std::string, spot_mesh_request_t> spot_mesh_requesters;
     instance_spot_send_t instance_spot_sender;
     instance_spot_request_t instance_spot_requester;

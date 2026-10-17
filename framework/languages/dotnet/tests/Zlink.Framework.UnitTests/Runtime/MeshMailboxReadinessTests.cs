@@ -1,4 +1,7 @@
+using System.Collections;
 using System.Collections.Concurrent;
+using System.Reflection;
+using System.Runtime.CompilerServices;
 using Zlink.Framework.Runtime.Dispatch;
 using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Service;
@@ -266,6 +269,165 @@ public sealed class MeshMailboxReadinessTests
             }
         }
         Assert.Equal(0, Drain(node));
+    }
+
+    [Fact]
+    public void ReadyOrderingPreservesAllKeysAndStableTies()
+    {
+        using var fixture = new ReadyRegistryFixture();
+        foreach (
+            var domain in new[] { MeshReadyDomains.Application, MeshReadyDomains.Infrastructure }
+        )
+        foreach (var kind in Enum.GetValues<MeshOwnerKind>())
+        foreach (var identity in new[] { "b", "a", "A" })
+            fixture.Add(kind, identity, domain);
+        for (ulong generation = 8; generation > 0; generation--)
+            fixture.Add(MeshOwnerKind.Actor, "tie", MeshReadyDomains.Application, generation);
+
+        // Preserve registry enumeration order for equal keys, including generations.
+        var expected = fixture
+            .Ready.Keys.Cast<object>()
+            .OrderBy(entry =>
+                fixture.KeyValue<MeshReadyDomains>(entry, "Domain")
+                == MeshReadyDomains.Infrastructure
+                    ? 0
+                    : 1
+            )
+            .ThenBy(entry => fixture.KeyValue<MeshOwnerKind>(entry, "OwnerKind"))
+            .ThenBy(entry => fixture.KeyValue<string>(entry, "Identity"), StringComparer.Ordinal)
+            .Select(entry => fixture.KeyValue<string>(entry, "SpotId"))
+            .ToArray();
+        using var batch = new MeshReadyBatch();
+        Assert.False(fixture.Node.DrainReady(MeshReadyDomains.All, batch));
+        Assert.Equal(expected, Enumerable.Range(0, batch.Count).Select(i => batch[i].SpotId));
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
+    public void ReadyLimitAppliesAfterGlobalOrdering(int limit)
+    {
+        using var fixture = new ReadyRegistryFixture();
+        fixture.Add(MeshOwnerKind.Node, "a", MeshReadyDomains.Application);
+        fixture.Add(MeshOwnerKind.Node, "z", MeshReadyDomains.Infrastructure);
+        using var batch = new MeshReadyBatch { MaximumRecords = limit };
+        Assert.Equal(limit < 2, fixture.Node.DrainReady(MeshReadyDomains.All, batch));
+        Assert.Equal(Math.Min(limit, 2), batch.Count);
+        Assert.Equal(batch.Count, fixture.Ready.Values.Cast<bool>().Count(ready => !ready));
+        if (limit > 0)
+            Assert.Equal(MeshReadyDomains.Infrastructure, batch[0].Domain);
+        if (limit > 1)
+            Assert.Equal(MeshReadyDomains.Application, batch[1].Domain);
+    }
+
+    [Fact]
+    public void StaleReadySnapshotCannotReserveAnOwnerAgain()
+    {
+        using var fixture = new ReadyRegistryFixture();
+        var stale = fixture.Add(MeshOwnerKind.Node, "a", MeshReadyDomains.Application);
+        var next = fixture.Add(MeshOwnerKind.Node, "b", MeshReadyDomains.Application);
+        // Enumeration and sorting do not hash keys. The next hash happens inside
+        // TryUpdate, after its input snapshot has been sorted. Reserve the first
+        // candidate there to deterministically reproduce a competing reservation.
+        fixture.BeforeLookup = () => fixture.Ready[stale] = false;
+        using var batch = new MeshReadyBatch { MaximumRecords = 1 };
+        Assert.False(fixture.Node.DrainReady(MeshReadyDomains.All, batch));
+        Assert.Equal(1, batch.Count);
+        Assert.Equal(fixture.KeyValue<string>(next, "SpotId"), batch[0].SpotId);
+        Assert.False((bool)fixture.Ready[stale]!);
+        Assert.Null(fixture.BeforeLookup);
+    }
+
+    // Framework-only fixture: no native context, transport, or worker is started.
+    private sealed class ReadyRegistryFixture : IDisposable
+    {
+        private const BindingFlags Fields = BindingFlags.Instance | BindingFlags.NonPublic;
+        private readonly Type _keyType;
+        private readonly IDictionary _owned;
+        private readonly ILookupHook _hook;
+        internal ZLinkManagedMeshNode Node { get; }
+        internal IDictionary Ready { get; }
+        internal Action? BeforeLookup
+        {
+            get => _hook.BeforeLookup;
+            set => _hook.BeforeLookup = value;
+        }
+
+        internal ReadyRegistryFixture()
+        {
+            Node = (ZLinkManagedMeshNode)
+                RuntimeHelpers.GetUninitializedObject(typeof(ZLinkManagedMeshNode));
+            var readyField = typeof(ZLinkManagedMeshNode).GetField("_readyMailboxes", Fields)!;
+            var ownedField = typeof(ZLinkManagedMeshNode).GetField("_ownedMailboxes", Fields)!;
+            _keyType = readyField.FieldType.GenericTypeArguments[0];
+            var comparer = Activator.CreateInstance(
+                typeof(LookupHook<>).MakeGenericType(_keyType)
+            )!;
+            _hook = (ILookupHook)comparer;
+            Ready = (IDictionary)Activator.CreateInstance(readyField.FieldType, comparer)!;
+            _owned = (IDictionary)Activator.CreateInstance(ownedField.FieldType)!;
+            readyField.SetValue(Node, Ready);
+            ownedField.SetValue(Node, _owned);
+        }
+
+        internal object Add(
+            MeshOwnerKind kind,
+            string identity,
+            MeshReadyDomains domain,
+            ulong generation = 0
+        )
+        {
+            var key = Activator.CreateInstance(
+                _keyType,
+                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
+                null,
+                [
+                    kind,
+                    identity,
+                    generation,
+                    domain,
+                    $"{domain}:{kind}:{identity}:{generation}",
+                    default(ActorRef),
+                ],
+                null
+            )!;
+            Ready.Add(key, true);
+            _owned.Add(key, new ZLinkMeshNodeOwnedMailbox(_ => { }, _ => { }));
+            return key;
+        }
+
+        internal T KeyValue<T>(object key, string name) =>
+            (T)_keyType.GetProperty(name)!.GetValue(key)!;
+
+        public void Dispose()
+        {
+            foreach (ZLinkMeshNodeOwnedMailbox mailbox in _owned.Values)
+                mailbox.Dispose();
+        }
+    }
+
+    private interface ILookupHook
+    {
+        Action? BeforeLookup { get; set; }
+    }
+
+    private sealed class LookupHook<TKey> : IEqualityComparer<TKey>, ILookupHook
+        where TKey : notnull
+    {
+        public Action? BeforeLookup { get; set; }
+
+        public bool Equals(TKey? left, TKey? right) =>
+            EqualityComparer<TKey>.Default.Equals(left, right);
+
+        public int GetHashCode(TKey key)
+        {
+            var callback = BeforeLookup;
+            BeforeLookup = null;
+            callback?.Invoke();
+            return EqualityComparer<TKey>.Default.GetHashCode(key);
+        }
     }
 
     private static ZLinkMeshQueuedRecord NewRecord(IDisposable? payloadOwner = null) =>
