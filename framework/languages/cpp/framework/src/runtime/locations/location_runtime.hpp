@@ -396,7 +396,8 @@ class location_runtime_t
         const auto result = co_await await_result (operation->observation.task ());
         if (!result) {
             if (result.error () == nullptr)
-                std::rethrow_exception (result.exception ());
+                co_return detail::propagate_failure<bool> (
+                  result, "Location descriptor publication failed");
             record_store_error ();
             co_await _lane.run_task (
               [this, message = std::string (result.error ()->what ())] () mutable {
