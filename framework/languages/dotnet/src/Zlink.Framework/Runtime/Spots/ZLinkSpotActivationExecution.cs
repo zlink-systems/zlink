@@ -789,7 +789,7 @@ internal abstract partial class ZLinkSpotActivation
         // Close. Its terminal now includes the first durable message record.
         var recorded = recordTerminal is null
             ? null
-            : _serial.FinishActivationPreparation(async token =>
+            : _serial.RecordActivationTerminalAsync(async token =>
             {
                 await completion.Task.ConfigureAwait(false);
                 await recordTerminal(token).ConfigureAwait(false);

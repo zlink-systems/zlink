@@ -10,8 +10,7 @@ internal sealed class ZLinkSpotActivationFactory(
     ZLinkSpotNodeRegistration registration,
     IZLinkBackendSpotNode node,
     string spotChannelName,
-    ZLinkTimerScheduler timerScheduler,
-    Func<ZLinkSpotActivation, bool>? isPublished = null
+    ZLinkTimerScheduler timerScheduler
 )
 {
     public async ValueTask<ZLinkSpotActivationCreateResult> CreateAsync(
@@ -110,12 +109,7 @@ internal sealed class ZLinkSpotActivationFactory(
                     : ZLinkSpotCreateResponse.Accept();
             }
             if (invokeCreate)
-                await activation
-                    ._serial.PrepareActivationAsync(
-                        Initialize,
-                        () => isPublished?.Invoke(activation) ?? true
-                    )
-                    .ConfigureAwait(false);
+                await activation._serial.PrepareActivationAsync(Initialize).ConfigureAwait(false);
             else
             {
                 await activation._serial.BeginTargetPreparationAsync().ConfigureAwait(false);
@@ -208,12 +202,7 @@ internal sealed class ZLinkSpotActivationFactory(
                     .ConfigureAwait(false);
             }
             else
-                await activation
-                    ._serial.PrepareActivationAsync(
-                        Initialize,
-                        () => isPublished?.Invoke(activation) ?? true
-                    )
-                    .ConfigureAwait(false);
+                await activation._serial.PrepareActivationAsync(Initialize).ConfigureAwait(false);
             return activation;
         }
         catch (Exception initializationFailure)

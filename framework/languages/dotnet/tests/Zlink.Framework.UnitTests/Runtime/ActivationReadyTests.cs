@@ -12,6 +12,83 @@ public sealed class ActivationReadyTests
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(10);
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Cold_preparation_opens_only_on_publication_and_holds_lifecycle_until_terminal(
+        bool recordBeforePublication
+    )
+    {
+        using var errors = new ZLinkRuntimeErrorSink();
+        await using var executor = new ZLinkSpotSerialExecutor(
+            null!,
+            () => false,
+            CancellationToken.None,
+            errors
+        );
+        await executor.PrepareActivationAsync(_ => ValueTask.CompletedTask);
+        var terminalEntered = Signal();
+        var releaseTerminal = Signal();
+        Task RecordTerminal() =>
+            executor.RecordActivationTerminalAsync(async _ =>
+            {
+                terminalEntered.TrySetResult();
+                await releaseTerminal.Task;
+            });
+        var terminal = recordBeforePublication ? RecordTerminal() : null;
+        var applicationEntered = Signal();
+        var application = executor
+            .ExecuteAsync(
+                (_, _) =>
+                {
+                    applicationEntered.TrySetResult();
+                    return ValueTask.CompletedTask;
+                },
+                CancellationToken.None
+            )
+            .AsTask();
+        var close = executor.PostLifecycleOperation((_, _) => ValueTask.FromResult(true))!;
+        try
+        {
+            await executor.RunIngressAsync(() => { });
+            Assert.False(applicationEntered.Task.IsCompleted);
+            Assert.False(terminalEntered.Task.IsCompleted);
+            Assert.False(close.IsCompleted);
+            await executor.FinishActivationPreparation(waitForFirstTerminal: true);
+            await applicationEntered.Task.WaitAsync(Timeout);
+            Assert.False(close.IsCompleted);
+            terminal ??= RecordTerminal();
+            await terminalEntered.Task.WaitAsync(Timeout);
+            Assert.False(close.IsCompleted);
+        }
+        finally
+        {
+            releaseTerminal.TrySetResult();
+            await executor.FinishActivationPreparation().WaitAsync(Timeout);
+        }
+        await terminal!.WaitAsync(Timeout);
+        await application.WaitAsync(Timeout);
+        Assert.True(await close.WaitAsync(Timeout));
+    }
+
+    [Fact]
+    public async Task Published_cold_preparation_can_be_discarded_before_first_dispatch()
+    {
+        using var errors = new ZLinkRuntimeErrorSink();
+        await using var executor = new ZLinkSpotSerialExecutor(
+            null!,
+            () => false,
+            CancellationToken.None,
+            errors
+        );
+        await executor.PrepareActivationAsync(_ => ValueTask.CompletedTask);
+        await executor.FinishActivationPreparation(waitForFirstTerminal: true);
+        var close = executor.PostLifecycleOperation((_, _) => ValueTask.FromResult(true))!;
+        Assert.False(close.IsCompleted);
+        await executor.FinishActivationPreparation().WaitAsync(Timeout);
+        Assert.True(await close.WaitAsync(Timeout));
+    }
+
+    [Theory]
     [InlineData(ZLinkUserSpotExecutionMode.SpotWide, false)]
     [InlineData(ZLinkUserSpotExecutionMode.PerActor, false)]
     [InlineData(ZLinkUserSpotExecutionMode.SpotWide, true)]
@@ -148,11 +225,7 @@ public sealed class ActivationReadyTests
             errors,
             executionMode: mode
         );
-        var published = Signal();
-        await executor.PrepareActivationAsync(
-            _ => ValueTask.CompletedTask,
-            () => published.Task.IsCompleted
-        );
+        await executor.PrepareActivationAsync(_ => ValueTask.CompletedTask);
         var time = new ReadyTime();
         await using var scheduler = new ZLinkTimerScheduler(time);
         var period = TimeSpan.FromMilliseconds(100);
@@ -206,7 +279,6 @@ public sealed class ActivationReadyTests
         Assert.False(close.IsCompleted);
         if (cancel)
             await timer.CancelAsync();
-        published.TrySetResult();
         await executor.FinishActivationPreparation().WaitAsync(Timeout);
         Assert.True(await close.WaitAsync(Timeout));
         if (cancel)

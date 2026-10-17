@@ -100,7 +100,6 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
             || !item.ReservationHeld
             || preparation.Terminal.Task.IsCompletedSuccessfully
                 && preparation.Terminal.Task.Result is not null
-                && preparation.IsPublished()
         )
         && (
             Volatile.Read(ref _relocationBarrier)?.Kind != ZLinkExecutionSealKind.Close
@@ -132,12 +131,9 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
         );
     }
 
-    internal async ValueTask PrepareActivationAsync(
-        Func<CancellationToken, ValueTask> initialize,
-        Func<bool> isPublished
-    )
+    internal async ValueTask PrepareActivationAsync(Func<CancellationToken, ValueTask> initialize)
     {
-        var preparation = new ActivationPreparation(isPublished);
+        var preparation = new ActivationPreparation();
         if (Interlocked.CompareExchange(ref _preparation, preparation, null) is not null)
             throw new InvalidOperationException(
                 "Activation preparation already has a lifecycle owner."
@@ -172,13 +168,31 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
         await preparation.Prepared.Task.ConfigureAwait(false);
     }
 
-    internal async Task FinishActivationPreparation(
-        Func<CancellationToken, ValueTask>? terminal = null
-    )
+    internal Task FinishActivationPreparation(bool waitForFirstTerminal = false)
     {
         if (Volatile.Read(ref _preparation) is not { } preparation)
-            return;
-        preparation.Terminal.TrySetResult(terminal);
+            return Task.CompletedTask;
+        if (waitForFirstTerminal)
+        {
+            preparation.Terminal.TrySetResult(preparation.RunFirstTerminalAsync);
+            SchedulePendingApplications();
+            return Task.CompletedTask;
+        }
+        preparation.FirstTerminal.TrySetResult(null);
+        preparation.Terminal.TrySetResult(null);
+        return CompleteActivationPreparationAsync(preparation);
+    }
+
+    internal Task RecordActivationTerminalAsync(Func<CancellationToken, ValueTask> terminal)
+    {
+        if (Volatile.Read(ref _preparation) is not { } preparation)
+            return Task.CompletedTask;
+        preparation.FirstTerminal.TrySetResult(terminal);
+        return CompleteActivationPreparationAsync(preparation);
+    }
+
+    private async Task CompleteActivationPreparationAsync(ActivationPreparation preparation)
+    {
         SchedulePendingApplications();
         try
         {
@@ -191,14 +205,22 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
         }
     }
 
-    private sealed class ActivationPreparation(Func<bool> isPublished)
+    private sealed class ActivationPreparation
     {
-        internal Func<bool> IsPublished { get; } = isPublished;
         internal TaskCompletionSource Prepared { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal TaskCompletionSource<Func<CancellationToken, ValueTask>?> Terminal { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource<Func<CancellationToken, ValueTask>?> FirstTerminal { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal Task Execution { get; set; } = Task.CompletedTask;
+
+        internal async ValueTask RunFirstTerminalAsync(CancellationToken ct)
+        {
+            var terminal = await FirstTerminal.Task.ConfigureAwait(false);
+            if (terminal is not null)
+                await terminal(ct).ConfigureAwait(false);
+        }
     }
 
     public async ValueTask DisposeAsync()
