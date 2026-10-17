@@ -400,6 +400,11 @@ export class DefaultZLinkActorManager implements ZLinkActorManager {
 
   async findActor(actorId: string, signal?: AbortSignal): Promise<ZLinkActor | undefined> {
     throwIfAborted(signal);
+    return this.resolveLocalActor(actorId);
+  }
+
+  /** @internal Uses the relocation owner's publication boundary for local dispatch. */
+  resolveLocalActor(actorId: string): ZLinkActor | undefined {
     if (this.relocationStaged.has(actorId)) return undefined;
     return this.states.get(actorId)?.actor;
   }
