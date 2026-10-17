@@ -55,8 +55,6 @@ inline std::string to_service_wire_admission_identity (std::string_view descript
 class location_auto_connect_host_service_t final : public hosted_service_t,
                                                    public hosted_service_lifecycle_t
 {
-    friend struct location_auto_connect_test_access_t;
-
   public:
     location_auto_connect_host_service_t (
       std::shared_ptr<runtime_failure_collector_t> failures,
@@ -244,8 +242,7 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
         for (auto &loop : _loops) {
             for (const auto &mesh_node : _mesh_nodes)
                 if (mesh_node && mesh_node->mesh_name () == loop.mesh_name)
-                    mesh_node->configure_peer_reconcile (
-                      _runtime->peer_reconcile_requester (loop.mesh_name));
+                    mesh_node->configure_peer_reconcile (_runtime->peer_reconcile_requester ());
             loop.recovering_from_store_failure = !_runtime->owner_lease_usable ();
         }
         const auto observed = _runtime->owner_lease_observation ();
@@ -349,15 +346,6 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
 
     void run_loop (std::optional<std::chrono::steady_clock::time_point> observed)
     {
-        run_loop (observed, [this] (auto previous, const auto &stopped) {
-            _runtime->wait_for_owner_lease_change (previous, stopped,
-                                                   _runtime->options ().polling_interval);
-        });
-    }
-
-    template <typename Wait>
-    void run_loop (std::optional<std::chrono::steady_clock::time_point> observed, Wait wait)
-    {
         auto stopped = _stop_requested.task ();
         std::vector<std::pair<loop_t *, std::vector<mesh_node_descriptor_t>>> snapshots;
         snapshots.reserve (_loops.size ());
@@ -390,7 +378,8 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
                 }
             }
             snapshots.clear ();
-            wait (observed, stopped);
+            _runtime->wait_for_owner_lease_change (observed, stopped,
+                                                   _runtime->options ().polling_interval);
         }
     }
 

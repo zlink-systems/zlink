@@ -22,7 +22,6 @@
 #include <memory>
 #include <mutex>
 #include <random>
-#include <set>
 #include <stop_token>
 #include <thread>
 #include <utility>
@@ -81,7 +80,7 @@ class location_runtime_t
         std::atomic_bool stop = false;
         std::mutex gate;
         std::condition_variable wake;
-        std::set<std::pair<std::string, std::vector<std::uint8_t>>> pending_peer_reconciles;
+        bool pending_peer_reconcile = false;
         std::shared_ptr<heartbeat_attempt_t> current;
     };
 
@@ -422,17 +421,17 @@ class location_runtime_t
           ->admission_deadline;
     }
 
-    auto peer_reconcile_requester (std::string mesh) const
+    auto peer_reconcile_requester () const
     {
-        return [owner = std::weak_ptr{std::atomic_load_explicit (&_heartbeat_state,
-                                                                 std::memory_order_acquire)},
-                mesh = std::move (mesh)] (const std::vector<std::uint8_t> &peer) {
-            if (auto heartbeat = owner.lock ()) {
-                std::lock_guard lock (heartbeat->gate);
-                heartbeat->pending_peer_reconciles.emplace (mesh, peer);
-                heartbeat->wake.notify_all ();
-            }
-        };
+        return
+          [owner = std::weak_ptr{std::atomic_load_explicit (
+             &_heartbeat_state, std::memory_order_acquire)}] (const std::vector<std::uint8_t> &) {
+              if (auto heartbeat = owner.lock ()) {
+                  std::lock_guard lock (heartbeat->gate);
+                  heartbeat->pending_peer_reconcile = true;
+                  heartbeat->wake.notify_all ();
+              }
+          };
     }
 
     void wake_owner_lease_observers () const
@@ -448,31 +447,20 @@ class location_runtime_t
                                       const task_t<void> &stopped,
                                       std::chrono::milliseconds polling_interval) const
     {
-        wait_for_owner_lease_change (
-          observed, stopped, polling_interval,
-          [] (auto &condition, auto &lock, auto interval, auto predicate) {
-              runtime::infrastructure_wait_guard::condition_wait_for (
-                condition, lock, interval, predicate, "location/discovery-input",
-                runtime::infrastructure_wait_guard::wait_relation_t::own_input);
-          });
-    }
-
-    template <typename Wait>
-    void wait_for_owner_lease_change (std::optional<std::chrono::steady_clock::time_point> observed,
-                                      const task_t<void> &stopped,
-                                      std::chrono::milliseconds polling_interval,
-                                      Wait wait) const
-    {
         if (auto heartbeat =
               std::atomic_load_explicit (&_heartbeat_state, std::memory_order_acquire);
             heartbeat && !heartbeat->stop.load (std::memory_order_acquire)) {
             std::unique_lock lock (heartbeat->gate);
-            wait (heartbeat->wake, lock, polling_interval, [&] {
-                return stopped.await_ready () || heartbeat->stop.load (std::memory_order_acquire)
-                       || owner_lease_observation () != observed
-                       || !heartbeat->pending_peer_reconciles.empty ();
-            });
-            heartbeat->pending_peer_reconciles.clear ();
+            runtime::infrastructure_wait_guard::condition_wait_for (
+              heartbeat->wake, lock, polling_interval,
+              [&] {
+                  return stopped.await_ready () || heartbeat->stop.load (std::memory_order_acquire)
+                         || owner_lease_observation () != observed
+                         || heartbeat->pending_peer_reconcile;
+              },
+              "location/discovery-input",
+              runtime::infrastructure_wait_guard::wait_relation_t::own_input);
+            heartbeat->pending_peer_reconcile = false;
         } else {
             (void) detail::observe_task_result_for (stopped, polling_interval, std::stop_token{});
         }

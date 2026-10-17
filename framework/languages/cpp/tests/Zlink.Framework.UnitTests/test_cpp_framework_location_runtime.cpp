@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <atomic>
 #include <future>
+#include <latch>
 #include <stop_token>
 #include <thread>
 
@@ -41,13 +42,6 @@ struct location_runtime_test_access_t
                                 });
         return delay;
     }
-    static void enable_discovery_wait (location_runtime_t &runtime)
-    {
-        runtime.renew_owner_lease_once ();
-        std::atomic_store_explicit (&runtime._heartbeat_state,
-                                    std::make_shared<location_runtime_t::heartbeat_owner_t> (),
-                                    std::memory_order_release);
-    }
     static state_lane_t &lane (location_runtime_t &runtime) { return runtime._lane; }
     static auto snapshot (const location_runtime_t &runtime)
     {
@@ -69,36 +63,6 @@ struct location_runtime_test_access_t
         return location_runtime_t::owner_lease_usable (*snapshot (runtime), now);
     }
 };
-struct location_auto_connect_test_access_t
-{
-    template <typename Wait, typename Connected>
-    static void run (location_auto_connect_host_service_t &service,
-                     location_runtime_t &runtime,
-                     live_location_reader_t &store,
-                     Wait wait,
-                     Connected connected)
-    {
-        service._runtime = &runtime;
-        service._live_store = &store;
-        service.add_loop (
-          "wake-mesh", {}, {}, {}, false, [connected] (const auto &) { connected (); },
-          [] (const auto &) {});
-        service.run_loop (
-          runtime.owner_lease_observation (), [&] (auto observed, const auto &stopped) {
-              runtime.wait_for_owner_lease_change (
-                observed, stopped, runtime.options ().polling_interval,
-                [&] (auto &, auto &lock, auto, auto predicate) { wait (lock, predicate); });
-          });
-    }
-    static void request (location_auto_connect_host_service_t &service)
-    {
-        service._runtime->peer_reconcile_requester ("wake-mesh") (requested_peer_rid.to_bytes ());
-    }
-    static void stop (location_auto_connect_host_service_t &service)
-    {
-        service._stop_requested.complete (result_t<void>::success ());
-    }
-};
 } // namespace zlink::framework::runtime
 
 namespace
@@ -117,20 +81,27 @@ const location_options_t asynchronous_heartbeat_options{
 class requested_peer_store_t final : public in_memory_location_repository_t
 {
   public:
-    unsigned reads = 0;
-    bool visible = false;
+    std::atomic<unsigned> reads = 0;
+    std::atomic<bool> visible = false;
+    std::promise<void> first_read;
+    std::latch release_first_read{1};
     zlink::framework::location_owner_token_t owner;
+
     zlink::framework::task_t<
       zlink::framework::location_page_t<zlink::framework::mesh_node_descriptor_t>>
     list_mesh_nodes (std::string mesh, zlink::framework::location_page_request_t = {}) override
     {
-        ++reads;
+        const bool include_peer = visible.load ();
+        if (++reads == 1) {
+            first_read.set_value ();
+            release_first_read.wait ();
+        }
         zlink::framework::location_page_t<zlink::framework::mesh_node_descriptor_t> page;
-        if (visible) {
+        if (include_peer) {
             zlink::framework::mesh_node_descriptor_t descriptor;
             descriptor.mesh_name = std::move (mesh);
             descriptor.rid = zlink::framework::runtime::requested_peer_rid;
-            descriptor.endpoint = "tcp://127.0.0.1:12345";
+            descriptor.endpoint = "inproc://requested-peer";
             descriptor.lifecycle_generation = 1;
             descriptor.descriptor_revision = 1;
             descriptor.owner_id = owner.owner_id;
@@ -142,52 +113,90 @@ class requested_peer_store_t final : public in_memory_location_repository_t
     }
 };
 
-void check_discovery_reconcile_without_periodic_wait (bool change_owner_lease)
+void check_discovery_reconcile_without_periodic_wait (bool request_during_initial_read)
 {
     using namespace zlink::framework;
     using namespace zlink::framework::runtime;
-    for (const bool request_after_initial_predicate : {false, true}) {
-        SCOPED_TRACE (request_after_initial_predicate);
-        requested_peer_store_t store;
-        location_runtime_t runtime (store);
-        location_runtime_test_access_t::enable_discovery_wait (runtime);
-        store.owner = runtime.current_owner_token ().value ();
-        live_location_reader_t live_store (store, runtime.options ());
-        handler_registry_t handlers;
-        serializer_registry_t serializers;
-        location_auto_connect_host_service_t service (
-          std::make_shared<runtime_failure_collector_t> (), message_bus_t{}, {}, handlers,
-          serializers);
-        unsigned waits = 0;
-        unsigned periodic_waits = 0;
-        unsigned connected = 0;
-        location_auto_connect_test_access_t::run (
-          service, runtime, live_store,
-          [&] (auto &lock, auto predicate) {
-              if (++waits == 1) {
-                  EXPECT_EQ (1u, store.reads);
-                  if (request_after_initial_predicate)
-                      EXPECT_FALSE (predicate ());
-                  lock.unlock ();
-                  store.visible = true;
-                  location_auto_connect_test_access_t::request (service);
-                  if (change_owner_lease)
-                      location_runtime_test_access_t::set_deadline (
-                        runtime,
-                        *runtime.owner_lease_observation () + std::chrono::milliseconds (1));
-                  lock.lock ();
-                  if (predicate ())
-                      return;
-                  ++periodic_waits;
-              }
-              location_auto_connect_test_access_t::stop (service);
-          },
-          [&] { ++connected; });
-        EXPECT_EQ (0u, periodic_waits);
-        EXPECT_EQ (2u, store.reads);
-        EXPECT_EQ (1u, connected);
-        EXPECT_EQ (2u, waits);
+    auto store = std::make_shared<requested_peer_store_t> ();
+    location_options_t options;
+    options.polling_interval = std::chrono::hours (1);
+    options.owner_lease_renew_interval = std::chrono::hours (1);
+    options.owner_lease_ttl = std::chrono::hours (3);
+    auto runtime = std::make_shared<location_runtime_t> (*store, options);
+    runtime->start (zlink::routing_id_t::from ("a-local"));
+    store->owner = runtime->current_owner_token ().value ();
+
+    auto builder = test::runtime_failure_builder ();
+    builder.route_channel ("wake-mesh").set_routing_id (zlink::routing_id_t::from ("a-local"));
+    auto manager = zlink::framework::detail::channel_runtime_manager_t::from (builder);
+    manager.initialize_route_channels (builder);
+    auto &route = manager.get_route_channel ("wake-mesh");
+    service_collection_t services;
+    services.add_factory<location_repository_t> (
+      [store] (service_provider_t &) {
+          return std::static_pointer_cast<location_repository_t> (store);
+      },
+      service_lifetime_t::singleton);
+    services.add_factory<live_location_reader_t> (
+      [store, options] (service_provider_t &) {
+          return std::make_shared<live_location_reader_t> (*store, options);
+      },
+      service_lifetime_t::singleton);
+    services.add_factory<location_runtime_t> ([runtime] (service_provider_t &) { return runtime; },
+                                              service_lifetime_t::singleton);
+    auto provider = services.build_provider ();
+    handler_registry_t handlers;
+    serializer_registry_t serializers;
+    std::promise<void> initial_publication;
+    auto initially_published = initial_publication.get_future ();
+    std::promise<bool> connected;
+    auto connection_observed = connected.get_future ();
+    auto first_read = store->first_read.get_future ();
+    const auto request = runtime->peer_reconcile_requester ();
+    unsigned publications = 0;
+    location_auto_connect_host_service_t service (
+      std::make_shared<runtime_failure_collector_t> (), builder.message_bus (),
+      zlink::framework::detail::channel_runtime_t::from (builder.message_bus ())
+        .channel_snapshots (),
+      handlers, serializers, {}, {}, {}, {}, [&] (location_write_intent_t) {
+          if (++publications == 1) {
+              initial_publication.set_value ();
+          } else if (publications == 2) {
+              // The callback precedes reconcile. A second request schedules an
+              // observation tick after the first requested tick has connected.
+              request (requested_peer_rid.to_bytes ());
+          } else if (publications == 3) {
+              const auto targets = route.list_connection_targets ();
+              connected.set_value (targets.size () == 1 && targets.front ().peer_rid
+                                   && *targets.front ().peer_rid == requested_peer_rid
+                                   && targets.front ().endpoint == "inproc://requested-peer");
+          }
+          return true;
+      });
+    service.start (provider).result ().value ();
+    const auto initial_read_status = first_read.wait_for (heartbeat_observation_timeout);
+    store->visible.store (true);
+    if (request_during_initial_read)
+        request (requested_peer_rid.to_bytes ());
+    store->release_first_read.count_down ();
+    ASSERT_EQ (std::future_status::ready, initial_read_status);
+    ASSERT_EQ (std::future_status::ready,
+               initially_published.wait_for (heartbeat_observation_timeout));
+    if (!request_during_initial_read) {
+        // This bounded observation detects an unsolicited reconcile during the
+        // window; it cannot establish that none would occur at a later time.
+        EXPECT_EQ (std::future_status::timeout,
+                   connection_observed.wait_for (admission_observation_timeout));
+        EXPECT_EQ (1u, store->reads.load ());
+        EXPECT_TRUE (route.list_connection_targets ().empty ());
+        request (requested_peer_rid.to_bytes ());
     }
+    const auto observed = connection_observed.wait_for (heartbeat_observation_timeout);
+    EXPECT_EQ (std::future_status::ready, observed);
+    if (observed == std::future_status::ready)
+        EXPECT_TRUE (connection_observed.get ());
+    service.stop ();
+    runtime->stop ();
 }
 
 TEST (ZLinkFrameworkLocationRuntime, PeerRequestRunsReconcileWithoutPeriodicWait)
@@ -195,7 +204,7 @@ TEST (ZLinkFrameworkLocationRuntime, PeerRequestRunsReconcileWithoutPeriodicWait
     check_discovery_reconcile_without_periodic_wait (false);
 }
 
-TEST (ZLinkFrameworkLocationRuntime, OwnerLeaseChangeRunsReconcileWithoutPeriodicWait)
+TEST (ZLinkFrameworkLocationRuntime, PeerRequestBeforeWaitRunsReconcileWithoutPeriodicWait)
 {
     check_discovery_reconcile_without_periodic_wait (true);
 }
