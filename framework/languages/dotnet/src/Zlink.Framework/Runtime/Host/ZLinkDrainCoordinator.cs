@@ -556,6 +556,8 @@ internal sealed class ZLinkDrainCoordinator : IDisposable
             return HasTeardownFailure(forced.InnerException!, teardownToken);
         if (error is AggregateException aggregate)
             return aggregate.InnerExceptions.Any(inner => HasTeardownFailure(inner, teardownToken));
+        if (error.InnerException is { } cause && HasTeardownFailure(cause, teardownToken))
+            return true;
         if (
             error is OperationCanceledException canceled
             && teardownToken.IsCancellationRequested

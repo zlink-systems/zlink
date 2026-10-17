@@ -23,6 +23,55 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
     private static readonly TimeSpan ClassificationCleanupTimeout = TimeSpan.FromMilliseconds(25);
 
     [Theory]
+    [InlineData(0, true)]
+    [InlineData(1, true)]
+    [InlineData(2, true)]
+    [InlineData(3, false)]
+    [InlineData(4, false)]
+    public async Task Deadline_Cancellation_Inspects_The_Entire_Cleanup_Cause_Chain(
+        int nesting,
+        bool hasActualFailure
+    )
+    {
+        var probe = new DrainExecutionProbe();
+        var executor = new ZLinkFrameworkDrainExecutor(
+            new AuditRuntimeFailureReporter(),
+            probe.Operations with
+            {
+                ForceStopRuntime = async token =>
+                {
+                    try
+                    {
+                        await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                    }
+                    catch (OperationCanceledException) when (token.IsCancellationRequested) { }
+                    var failure = new InvalidOperationException("resource cleanup failed");
+                    Exception? cause = nesting switch
+                    {
+                        0 => failure,
+                        1 => new AggregateException(new OperationCanceledException(token), failure),
+                        2 => new OperationCanceledException("nested deadline", failure, token),
+                        3 => new AggregateException(new OperationCanceledException(token)),
+                        _ => null,
+                    };
+                    throw new OperationCanceledException("teardown deadline", cause, token);
+                },
+            },
+            new ZLinkLocationOptions { OwnerLeaseRenewTimeout = ClassificationCleanupTimeout }
+        );
+        using var coordinator = new ZLinkDrainCoordinator(new ZLinkDrainAdmissionGate(), executor);
+        var result = Assert.IsType<ForceStopped>(
+            await coordinator.ForceStopAsync(ZLinkDrainForceReason.DeadlineExceeded)
+        );
+        Assert.Equal(
+            hasActualFailure
+                ? ZLinkDrainForceReason.TeardownFailed
+                : ZLinkDrainForceReason.DeadlineExceeded,
+            result.Reason
+        );
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public async Task Shutdown_Without_Actual_Failure_Reports_Completion_Or_Deadline(bool expires)
