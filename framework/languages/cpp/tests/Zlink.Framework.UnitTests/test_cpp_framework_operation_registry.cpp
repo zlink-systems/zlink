@@ -63,38 +63,17 @@ template <typename Predicate> bool wait_until (Predicate predicate)
     return true;
 }
 
-void verify_completion_turn_batches ()
+void verify_independent_completion_turns (std::size_t producer_count)
 {
     constexpr std::size_t count = 256;
-    foundation::operation_registry_t ordered;
-    std::vector<std::size_t> observed (count);
-    std::atomic_size_t completed{0};
-    for (std::size_t index = 0; index < count; ++index) {
-        assert (ordered.register_operation (
-          foundation::call_id_t{21, index + 1},
-          foundation::operation_registry_t::clock_t::time_point::max (),
-          [&, index] (foundation::operation_terminal_t terminal, auto) {
-              assert (terminal == foundation::operation_terminal_t::completed);
-              const auto position = completed.load (std::memory_order_relaxed);
-              observed[position] = index;
-              completed.store (position + 1, std::memory_order_release);
-          }));
-    }
-    for (std::size_t index = 0; index < count; ++index)
-        assert (ordered.complete (foundation::call_id_t{21, index + 1}, {}));
-    assert (wait_until ([&] { return completed.load (std::memory_order_acquire) == count; }));
-    for (std::size_t index = 0; index < count; ++index)
-        assert (observed[index] == index);
-    assert (ordered.shutdown () == 0);
-
-    foundation::operation_registry_t concurrent;
+    constexpr std::uint64_t operation_group = 21;
+    foundation::operation_registry_t registry;
     std::array<std::atomic_size_t, count> delivered{};
-    std::barrier begin (5), halfway (5);
+    std::atomic_size_t completed{0};
     std::latch consumer_entered (1), consume (1);
-    std::array<std::size_t, 4> next{};
     for (std::size_t index = 0; index < count; ++index) {
-        assert (concurrent.register_operation (
-          foundation::call_id_t{22, index + 1},
+        assert (registry.register_operation (
+          foundation::call_id_t{operation_group, index + 1},
           foundation::operation_registry_t::clock_t::time_point::max (),
           [&, index] (foundation::operation_terminal_t terminal, auto) {
               assert (terminal == foundation::operation_terminal_t::completed);
@@ -102,36 +81,130 @@ void verify_completion_turn_batches ()
                   consumer_entered.count_down ();
                   consume.wait ();
               }
-              const auto producer = index % next.size ();
-              assert (index == next[producer]++ * next.size () + producer);
               delivered[index].fetch_add (1, std::memory_order_release);
+              completed.fetch_add (1, std::memory_order_release);
           }));
     }
+    assert (registry.complete (foundation::call_id_t{operation_group, 1}, {}));
+    consumer_entered.wait ();
+    std::barrier begin (static_cast<std::ptrdiff_t> (producer_count + 1));
     std::vector<std::thread> producers;
-    for (std::size_t producer = 0; producer < 4; ++producer) {
+    for (std::size_t producer = 0; producer < producer_count; ++producer) {
         producers.emplace_back ([&, producer] {
             begin.arrive_and_wait ();
-            for (std::size_t index = producer; index < count; index += 4) {
-                if (index / 4 == count / 8)
-                    halfway.arrive_and_wait ();
-                assert (concurrent.complete (foundation::call_id_t{22, index + 1}, {}));
-            }
+            for (std::size_t index = producer + 1; index < count; index += producer_count)
+                assert (registry.complete (foundation::call_id_t{operation_group, index + 1}, {}));
         });
     }
     begin.arrive_and_wait ();
-    consumer_entered.wait ();
-    halfway.arrive_and_wait ();
-    consume.count_down ();
     for (auto &producer : producers)
         producer.join ();
-    assert (concurrent.shutdown () == 0);
+    // Messaging hot path §4.4: unrelated callbacks progress independently of
+    // the first callback's return. Submit and completion §11 requires new turns,
+    // not registry-wide FIFO or per-producer callback order.
+    const bool independent =
+      wait_until ([&] { return completed.load (std::memory_order_acquire) == count - 1; });
+    assert (delivered.front ().load (std::memory_order_acquire) == 0);
+    for (std::size_t index = 0; index < count; ++index)
+        assert (!registry.complete (foundation::call_id_t{operation_group, index + 1}, {}));
+    // Release and drain before asserting so a serial-drain probe can finish.
+    consume.count_down ();
+    assert (registry.shutdown () == 0);
+    assert (independent);
+    // Submit and completion §10: atomic terminal take delivers exactly once.
+    assert (completed.load (std::memory_order_acquire) == count);
     for (const auto &calls : delivered)
         assert (calls.load (std::memory_order_acquire) == 1);
 }
 
+void verify_shutdown_during_completion_publication ()
+{
+    foundation::operation_registry_t registry;
+    const auto deadline = foundation::operation_registry_t::clock_t::time_point::max ();
+    std::latch publication_entered (1), publish (1), finish_callback (1);
+    std::atomic_bool closed{false}, callback_entered{false}, shutdown_returned{false};
+    std::atomic_size_t delivered{0};
+    assert (registry.register_operation (
+      id (1), deadline, [&] (foundation::operation_terminal_t terminal, auto) {
+          assert (terminal == foundation::operation_terminal_t::completed);
+          callback_entered.store (true, std::memory_order_release);
+          finish_callback.wait ();
+          delivered.fetch_add (1, std::memory_order_release);
+      }));
+    assert (registry.register_operation (
+      id (2), deadline, [&] (foundation::operation_terminal_t terminal, auto) {
+          assert (terminal == foundation::operation_terminal_t::shutdown);
+          closed.store (true, std::memory_order_release);
+      }));
+    std::thread producer ([&] {
+        assert (registry.complete (id (1), {}, [&] {
+            publication_entered.count_down ();
+            publish.wait ();
+        }));
+    });
+    publication_entered.wait ();
+    std::thread shutdown ([&] {
+        assert (registry.shutdown () == 1);
+        assert (delivered.load (std::memory_order_acquire) == 1);
+        shutdown_returned.store (true, std::memory_order_release);
+    });
+    // Submit and completion §10–11: the reservation survives atomic take and
+    // publication after close; shutdown drains it through callback destruction.
+    assert (wait_until ([&] { return closed.load (std::memory_order_acquire); }));
+    assert (!shutdown_returned.load (std::memory_order_acquire));
+    publish.count_down ();
+    producer.join ();
+    assert (wait_until ([&] { return callback_entered.load (std::memory_order_acquire); }));
+    assert (!shutdown_returned.load (std::memory_order_acquire));
+    finish_callback.count_down ();
+    const bool drained =
+      wait_until ([&] { return shutdown_returned.load (std::memory_order_acquire); });
+    assert (drained);
+    shutdown.join ();
+    assert (delivered.load (std::memory_order_acquire) == 1);
+    assert (registry.shutdown () == 0);
+}
+
+void verify_completion_payload_storage ()
+{
+    // Payload ownership and codec §2: move the native payload into its completion turn;
+    // a heap-backed message (as in the raw route port contract) retains storage.
+    constexpr std::size_t payload_size = 4096;
+    constexpr std::uint8_t payload_value = 0x5a;
+    for (const auto terminal : {foundation::operation_terminal_t::completed,
+                                foundation::operation_terminal_t::transport_failed}) {
+        foundation::operation_registry_t registry;
+        auto payload =
+          zlink::message_t::from (std::vector<std::uint8_t> (payload_size, payload_value));
+        const void *storage = payload.data ();
+        std::atomic_size_t delivered{0};
+        assert (registry.register_operation (
+          id (1), foundation::operation_registry_t::clock_t::time_point::max (),
+          [&, storage] (foundation::operation_terminal_t observed, zlink::message_t received) {
+              assert (observed == terminal);
+              assert (received.data () == storage);
+              assert (received.size () == payload_size);
+              const auto *bytes = received.data ();
+              for (std::size_t index = 0; index < payload_size; ++index)
+                  assert (bytes[index] == std::byte{payload_value});
+              delivered.fetch_add (1, std::memory_order_release);
+          }));
+        if (terminal == foundation::operation_terminal_t::completed)
+            assert (registry.complete (id (1), std::move (payload)));
+        else
+            assert (registry.fail (id (1), terminal, std::move (payload)));
+        payload.close ();
+        assert (registry.shutdown () == 0);
+        assert (delivered.load (std::memory_order_acquire) == 1);
+    }
+}
+
 int main ()
 {
-    verify_completion_turn_batches ();
+    verify_independent_completion_turns (1);
+    verify_independent_completion_turns (4);
+    verify_shutdown_during_completion_publication ();
+    verify_completion_payload_storage ();
     const auto &fixture = completion_terminal_fixture ();
     assert (fixture.at ("fixture") == "zlink.framework.completion-terminal");
     assert (fixture.at ("version") == 1);
