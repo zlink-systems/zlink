@@ -1306,7 +1306,8 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     tests/Zlink.Framework.UnitTests/test_cpp_framework_route_mesh_placement_conformance.cpp)
   target_compile_features(test_cpp_framework_route_mesh_placement_conformance PRIVATE cxx_std_20)
   target_include_directories(test_cpp_framework_route_mesh_placement_conformance PRIVATE
-    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   target_compile_definitions(test_cpp_framework_route_mesh_placement_conformance PRIVATE
     ZLINK_ROUTE_MESH_PLACEMENT_CONFORMANCE_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/conformance/route-mesh-placement-v1.json")
   target_link_libraries(test_cpp_framework_route_mesh_placement_conformance PRIVATE
