@@ -310,9 +310,12 @@ public class ZLinkEndedActorOwnerIntegrationTest {
                                 child.process.exitValue(),
                                 "Owner must end through process crash");
                         var lease = store.read(ownerKey, () -> false).toCompletableFuture().get();
-                        if (lease instanceof ZLinkStoreReadFound found) {
+                        if (lease instanceof ZLinkStoreReadFound found)
                             leaseExpiry = found.value().expiresAt();
+                        // A local timer can finish before the provider clock reaches expiry.
+                        while (lease instanceof ZLinkStoreReadFound found) {
                             Assertions.assertNotNull(leaseExpiry);
+                            Assertions.assertEquals(leaseExpiry, found.value().expiresAt());
                             var remaining = Duration.between(found.value().storeNow(), leaseExpiry);
                             Assertions.assertTrue(remaining.isPositive());
                             CompletableFuture.runAsync(
