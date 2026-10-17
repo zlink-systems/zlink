@@ -158,7 +158,12 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
 
     CompletionStage<Optional<byte[]>> replayActor(
             Staged staged, ZLinkActorAcceptedJournal.Record record) {
-        requireActive(staged);
+        // The Actor FIFO can execute an accepted record after the temporary stage has ended.
+        Objects.requireNonNull(staged, "staged");
+        if (staged.owner != this) {
+            throw new IllegalStateException(
+                    "Actor relocation target attempt belongs to another owner");
+        }
         Objects.requireNonNull(record, "record");
         if (!record.actorId().equals(staged.request().actorId())) {
             return CompletableFuture.failedFuture(
@@ -187,7 +192,18 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
                                 "Actor relocation target attempt fence is not active");
                     }
                     if (staged.ingressClosed) {
-                        return false;
+                        if (!staged.published) return false;
+                        var ingress = new PendingIngress(acceptedJournalRecord, reply, failure);
+                        backend.enqueueIngress(
+                                        staged.request(),
+                                        ingress.record(),
+                                        () -> replayIngress(staged, ingress))
+                                .whenComplete(
+                                        (ignored, dispatchFailure) -> {
+                                            if (dispatchFailure != null && failure != null)
+                                                failure.accept(unwrap(dispatchFailure));
+                                        });
+                        return true;
                     }
                     assert staged.debugProbe.expect(
                                     "temporary:actor:"
@@ -834,6 +850,11 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
         CompletionStage<Optional<byte[]>> replay(
                 Object actor, Request request, ZLinkActorAcceptedJournal.Record record);
 
+        CompletionStage<Void> enqueueIngress(
+                Request request,
+                byte[] acceptedJournalRecord,
+                Supplier<CompletionStage<Void>> turn);
+
         default <T> CompletionStage<T> admitApplicationJob(Supplier<CompletionStage<T>> turn) {
             return Objects.requireNonNull(turn, "turn").get();
         }
@@ -913,6 +934,19 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
                     request.targetSpotId(),
                     (ZLinkActorRuntime.PreparedTransferredActor) actor,
                     record);
+        }
+
+        @Override
+        public CompletionStage<Void> enqueueIngress(
+                Request request,
+                byte[] acceptedJournalRecord,
+                Supplier<CompletionStage<Void>> turn) {
+            return spots.enqueueActorDispatch(
+                    request.actorId(),
+                    () -> acceptedJournalRecord,
+                    acceptedJournalRecord.length,
+                    turn,
+                    () -> {});
         }
 
         @Override
