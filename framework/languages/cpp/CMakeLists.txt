@@ -2023,6 +2023,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_use_zlink_gtest_main(test_cpp_framework_spot_close_conformance)
   target_link_libraries(test_cpp_framework_spot_close_conformance PRIVATE
     zlink::framework
+    zlink::stream_connector
     nlohmann_json::nlohmann_json)
   target_include_directories(test_cpp_framework_spot_close_conformance PRIVATE
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/include
