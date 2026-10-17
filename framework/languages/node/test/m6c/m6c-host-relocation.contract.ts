@@ -2830,8 +2830,11 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
   const sourceCleanupRefs: unknown[] = [];
   const sourceLeaveSpotIds: unknown[] = [];
   const sourceActorManager = {
-    async completeRelocationSource(_actorId: string, sourceRef: unknown) {
-      sourceCleanupRefs.push(sourceRef);
+    detachRelocationSource(state: typeof sourceState) {
+      sourceCleanupRefs.push(state.nativeActorRef);
+    },
+    async completeCoreRelocationSource(_actorId: string, state: typeof sourceState) {
+      assert.equal(state, sourceState);
       events.push('source:removed');
       sourceLeaveDone();
       if (options.sourceRetirementFailure !== undefined) throw options.sourceRetirementFailure;
@@ -3676,7 +3679,10 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
     relocate,
     releaseAccepted,
     releaseSourceLeave,
-    sourceLeaveIdle: () => sourceLeaveIdle,
+    sourceLeaveIdle: async () => {
+      await sourceLeaveIdle;
+      await sourceRuntime.drainActorJoinSources();
+    },
     sourceCleanupRefs,
     sourceCommits,
     sourceHandoff,

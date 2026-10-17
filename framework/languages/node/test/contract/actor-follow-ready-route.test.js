@@ -136,7 +136,7 @@ for (const operation of ['join', 'user_spot', 'instance_spot']) {
         isSpotClosing: () => false,
         async completeRelocationSource() {}
       }),
-      actorManager: () => ({ async completeRelocationSource() {} }),
+      actorManager: () => ({ detachRelocationSource() {}, async completeRelocationSource() {} }),
       liveDescriptors: async () => [{ rid: 'target', lifecycleGeneration: 11n }],
       locationStore: () => ({
         async readAuthority(key) {

@@ -357,6 +357,7 @@ interface SourceActorJoinProfile {
   >;
   readonly ready: Promise<void>;
   readonly resolveReady: (failure?: ServiceRelocationPostCommitError) => void;
+  retirement?: Promise<void>;
 }
 
 interface PendingRelocationReplyRelay {
@@ -526,6 +527,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         this.completeActorJoinSourceCleanup(input.state.actorId);
       } else {
         this.sourceActorJoinProfiles.delete(input.relocationId);
+        resolveReady();
         throw error;
       }
     }
@@ -578,7 +580,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     this.pendingSessionRelocations.clear();
     this.terminalSessionRelocations.clear();
     this.failedSessionRouteSubmits.clear();
-    this.sourceActorJoinProfiles.clear();
+    await this.drainActorJoinSources();
     this.terminalActorJoinSourceLeaves.clear();
     await this.options.boundSessionRelocation?.clear?.();
     this.relocationAuthorityKeys.clear();
@@ -638,19 +640,47 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
   completeActorJoinSourceCleanup(actorId: string): void {
     for (const [relocationId, profile] of this.sourceActorJoinProfiles) {
       if (profile.state.actorId !== actorId) continue;
-      this.sourceActorJoinProfiles.delete(relocationId);
-      this.terminalActorJoinSourceLeaves.remember(relocationId, actorId);
-      void this.finalizeActorJoinSource(profile);
+      void this.retireActorJoinSource(relocationId, profile);
     }
   }
 
-  private async finalizeActorJoinSource(profile: SourceActorJoinProfile): Promise<void> {
+  /** Drains the exact source scopes before their Spot lifecycle owners stop. */
+  async drainActorJoinSources(meshName?: string): Promise<void> {
+    await Promise.all(
+      [...this.sourceActorJoinProfiles].map(([relocationId, profile]) =>
+        meshName === undefined || profile.state.meshName === meshName
+          ? this.retireActorJoinSource(relocationId, profile)
+          : undefined
+      )
+    );
+  }
+
+  private retireActorJoinSource(
+    relocationId: string,
+    profile: SourceActorJoinProfile
+  ): Promise<void> {
+    return (profile.retirement ??= this.finalizeActorJoinSource(profile, relocationId).finally(
+      () => {
+        if (this.sourceActorJoinProfiles.get(relocationId) === profile) {
+          this.sourceActorJoinProfiles.delete(relocationId);
+          this.terminalActorJoinSourceLeaves.remember(relocationId, profile.state.actorId);
+        }
+      }
+    ));
+  }
+
+  private async finalizeActorJoinSource(
+    profile: SourceActorJoinProfile,
+    relocationId: string
+  ): Promise<void> {
     const failures: unknown[] = [];
     try {
       await profile.ready;
     } catch (error) {
       failures.push(error);
     }
+    // A pre-commit failure removed this attempt and restored the source.
+    if (this.sourceActorJoinProfiles.get(relocationId) !== profile) return;
     try {
       await this.options.actorTransfer.completeRelocationSourceLeave(
         profile.actor,
@@ -662,7 +692,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     try {
       await this.options
         .actorManager()
-        ?.completeRelocationSource(profile.state.actorId, profile.sourceActorRef);
+        ?.completeCoreRelocationSource(profile.state.actorId, profile.state);
     } catch (error) {
       failures.push(error);
     }
@@ -2276,12 +2306,14 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         } catch (error) {
           failures.push(error);
         }
-        if (!retainSourceForActorJoin) {
-          try {
+        try {
+          if (retainSourceForActorJoin) {
+            this.requireActorManager().detachRelocationSource(state);
+          } else {
             await this.requireActorManager().completeRelocationSource(state.actorId);
-          } catch (error) {
-            failures.push(error);
           }
+        } catch (error) {
+          failures.push(error);
         }
         if (failures.length > 0)
           throw failures.length === 1
@@ -3450,9 +3482,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     if (profile.state.actorId !== input.actorId || !input.succeeded) {
       throw new Error(`Actor Join relocation '${input.transferId}' source leave identity changed.`);
     }
-    this.sourceActorJoinProfiles.delete(input.transferId);
-    this.terminalActorJoinSourceLeaves.remember(input.transferId, input.actorId);
-    void this.finalizeActorJoinSource(profile);
+    void this.retireActorJoinSource(input.transferId, profile);
     return true;
   }
 

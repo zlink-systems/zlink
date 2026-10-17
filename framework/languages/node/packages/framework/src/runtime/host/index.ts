@@ -1880,6 +1880,7 @@ export class ZLinkFrameworkRuntimeHost
   }
 
   private async performMeshShutdown(meshName: string, signal: AbortSignal): Promise<void> {
+    await awaitWithDrainSignal(this.serviceRelocation.drainActorJoinSources(meshName), signal);
     await this.spotManager?.drainForShutdown(meshName, signal, this.runtimeDeadline);
     await awaitWithDrainSignal(this.streamRuntime?.notifyServerDrain(meshName), signal);
   }
