@@ -119,6 +119,140 @@ final class ZLinkRelocationMessageFollowOwnerGenerationTest {
         }
     }
 
+    @Test
+    void stagedTenureIsEligibleBeforeCommitAndAbsentTenureKeepsCallerOwnership() {
+        var source = route("node-a", 11, 3, 1);
+        var target = route("node-b", 12, 4, 2);
+        var forwarded = new ArrayList<ZLinkServiceM6BWireCodec.ActorRouteFence>();
+        var runtime = runtime(target, forwarded);
+        try {
+            var failures = new ArrayList<Throwable>();
+            var released = new java.util.concurrent.atomic.AtomicInteger();
+            var header =
+                    new ZLinkServiceM6BWireCodec.ActorMessage(
+                            false, 0, null, 1, 43, 0, null, source);
+            var ordinary = List.of(Message.from("header"), Message.from("payload"));
+            assertFalse(
+                    runtime.relayMessageFollow(
+                            RoutingId.from("client"),
+                            17,
+                            header,
+                            new byte[0],
+                            ordinary,
+                            null,
+                            null,
+                            failures::add,
+                            released::incrementAndGet));
+            assertEquals(0, released.get());
+            assertEquals(7, ordinary.get(1).size());
+            ordinary.forEach(Message::close);
+
+            assertFalse(runtime.hasMessageFollowSource(source.actor().actorId()));
+            runtime.stageRelocationMessageFollow(source, target);
+            assertTrue(runtime.hasMessageFollowSource(source.actor().actorId()));
+            assertFalse(runtime.hasMessageFollowSource("no-tenure-actor"));
+            assertTrue(
+                    runtime.relayMessageFollow(
+                            RoutingId.from("client"),
+                            17,
+                            header,
+                            new byte[0],
+                            List.of(Message.from("header"), Message.from("payload")),
+                            null,
+                            null,
+                            failures::add,
+                            released::incrementAndGet));
+            assertEquals(List.of(target), forwarded);
+            assertEquals(1, released.get());
+            assertTrue(failures.isEmpty(), failures.toString());
+            runtime.abortRelocationMessageFollow(source);
+            assertFalse(runtime.hasMessageFollowSource(source.actor().actorId()));
+        } finally {
+            runtime.close();
+        }
+    }
+
+    @Test
+    void pendingCommittedFenceHoldsIngressAndAbortReleasesOwnership() {
+        var source = route("node-a", 11, 3, 1);
+        var target = route("node-b", 12, 10, 2);
+        var forwarded = new ArrayList<ZLinkServiceM6BWireCodec.ActorRouteFence>();
+        var runtime = runtime(target, forwarded);
+        try {
+            var committed = new CompletableFuture<ZLinkServiceM6BWireCodec.ActorRouteFence>();
+            runtime.stageRelocationMessageFollowAsync(source, target.actor(), committed)
+                    .toCompletableFuture()
+                    .join();
+            var released = new java.util.concurrent.atomic.AtomicInteger();
+            var failures = new ArrayList<Throwable>();
+            var header =
+                    new ZLinkServiceM6BWireCodec.ActorMessage(
+                            false, 0, null, 1, 42, 0, null, source);
+            assertTrue(
+                    runtime.relayMessageFollow(
+                            RoutingId.from("client"),
+                            17,
+                            header,
+                            new byte[0],
+                            List.of(Message.from("header"), Message.from("payload")),
+                            null,
+                            null,
+                            failures::add,
+                            released::incrementAndGet));
+            assertTrue(forwarded.isEmpty());
+            assertEquals(0, released.get());
+            committed.complete(target);
+            assertEquals(List.of(target), forwarded);
+            assertEquals(1, released.get());
+            assertTrue(failures.isEmpty());
+            runtime.abortRelocationMessageFollow(source);
+            var abortFence = new CompletableFuture<ZLinkServiceM6BWireCodec.ActorRouteFence>();
+            runtime.stageRelocationMessageFollowAsync(source, target.actor(), abortFence)
+                    .toCompletableFuture()
+                    .join();
+            assertTrue(
+                    runtime.relayMessageFollow(
+                            RoutingId.from("client"),
+                            17,
+                            header,
+                            new byte[0],
+                            List.of(Message.from("header"), Message.from("payload")),
+                            null,
+                            null,
+                            failures::add,
+                            released::incrementAndGet));
+            runtime.abortRelocationMessageFollow(source);
+            assertEquals(2, released.get());
+            assertEquals(1, failures.size());
+            abortFence.complete(target);
+            assertEquals(
+                    List.of(target), forwarded, "a late commit must not revive aborted ingress");
+            var closingFence = new CompletableFuture<ZLinkServiceM6BWireCodec.ActorRouteFence>();
+            runtime.stageRelocationMessageFollowAsync(source, target.actor(), closingFence)
+                    .toCompletableFuture()
+                    .join();
+            assertTrue(
+                    runtime.relayMessageFollow(
+                            RoutingId.from("client"),
+                            17,
+                            header,
+                            new byte[0],
+                            List.of(Message.from("header"), Message.from("payload")),
+                            null,
+                            null,
+                            failures::add,
+                            released::incrementAndGet));
+            runtime.close();
+            assertEquals(3, released.get());
+            assertEquals(2, failures.size());
+            closingFence.complete(target);
+            assertEquals(List.of(target), forwarded);
+
+        } finally {
+            runtime.close();
+        }
+    }
+
     private static void confirm(
             ZLinkActorRuntime runtime, ZLinkServiceM6BWireCodec.ActorRouteFence source)
             throws Exception {
