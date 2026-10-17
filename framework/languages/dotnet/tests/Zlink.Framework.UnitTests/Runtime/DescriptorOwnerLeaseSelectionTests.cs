@@ -587,6 +587,7 @@ public sealed partial class EntrySpotActorDispatchTests
         var node = new CapturingSpotNode();
         var (runtime, _) = await CreateStartedRuntimeAsync(
             node,
+            entrySpotType: typeof(AcceptingProbeEntrySpot),
             preseedActorOwnership: false,
             locationStoreWrapper: inner => failingStore = new(inner)
         );
@@ -612,7 +613,8 @@ public sealed partial class EntrySpotActorDispatchTests
                                     "probe",
                                     ZLinkObjectMaintenancePolicyKind.Disabled,
                                     false,
-                                    0
+                                    0,
+                                    EntryAccepted: true
                                 ),
                             ],
                         },
@@ -855,7 +857,8 @@ public sealed partial class EntrySpotActorDispatchTests
                         actorType,
                         ZLinkObjectMaintenancePolicyKind.Disabled,
                         false,
-                        0
+                        0,
+                        EntryAccepted: true
                     ),
                 ],
         };
@@ -885,6 +888,7 @@ public sealed partial class EntrySpotActorDispatchTests
         var node = new CapturingSpotNode();
         var (runtime, _) = await CreateStartedRuntimeAsync(
             node,
+            entrySpotType: userSpot ? null : typeof(AcceptingProbeEntrySpot),
             includeActorFactory: !userSpot,
             userSpotType: userSpot ? typeof(EmptyUserSpot) : null,
             preseedActorOwnership: false,
@@ -985,7 +989,8 @@ public sealed partial class EntrySpotActorDispatchTests
                                         "probe",
                                         ZLinkObjectMaintenancePolicyKind.Disabled,
                                         false,
-                                        0
+                                        0,
+                                        EntryAccepted: true
                                     ),
                                 ],
                             },

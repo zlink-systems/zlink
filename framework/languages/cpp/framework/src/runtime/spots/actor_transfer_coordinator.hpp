@@ -2,6 +2,8 @@
 #pragma once
 
 #include "runtime/execution/state_lane.hpp"
+#include <atomic>
+#include <limits>
 
 #include <zlink/framework/contracts/actors/actor.hpp>
 #include <zlink/framework/contracts/errors/result.hpp>
@@ -86,7 +88,6 @@ struct expired_actor_admission_t
 struct actor_transfer_cleanup_snapshot_t
 {
     std::vector<expired_actor_admission_t> expired_admissions;
-    std::vector<std::pair<std::string, std::string>> source_remote_transfers;
     std::vector<std::string> blocked_dispatch_keys;
 };
 
@@ -380,6 +381,11 @@ class actor_transfer_coordinator_t
     cleanup_expired_async (std::chrono::steady_clock::time_point now,
                            std::vector<std::string> blocked_candidates);
     std::size_t pending_count () const;
+    // True when an admission expiry, a reconcile, or a Message Follow route
+    // removal may be due at now. The coordinator keeps an early bound of its
+    // next due instant (spec 08 section 4.2); next_activity skips its lane
+    // turn when no deadline exists.
+    bool due (std::chrono::steady_clock::time_point now) const noexcept;
     std::optional<std::chrono::steady_clock::time_point> next_activity () const;
     void set_activity_handler (std::function<void ()> handler);
 
@@ -448,6 +454,18 @@ class actor_transfer_coordinator_t
 
     runtime::offload_executor_t _lane_executor;
     mutable runtime::state_lane_t _lane{_lane_executor};
+    // Earliest due instant, written on the lane. A lane turn that adds a
+    // deadline resets it to due_now; the next scan publishes the bound again.
+    static constexpr std::chrono::steady_clock::rep due_now =
+      std::numeric_limits<std::chrono::steady_clock::rep>::min ();
+    static constexpr std::chrono::steady_clock::rep never_due =
+      std::numeric_limits<std::chrono::steady_clock::rep>::max ();
+    mutable std::atomic<std::chrono::steady_clock::rep> _next_due{due_now};
+    void wake_management_on_lane () const noexcept
+    {
+        _next_due.store (due_now, std::memory_order_release);
+    }
+    std::chrono::steady_clock::rep next_due_on_lane () const;
     std::function<void ()> _activity_handler;
     std::map<std::string, move_state_t> _moves;
     std::map<std::string, pending_actor_admission_t> _admissions;

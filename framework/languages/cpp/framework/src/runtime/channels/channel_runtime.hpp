@@ -22,6 +22,7 @@
 #include <cstdint>
 #include <functional>
 #include <map>
+#include <set>
 #include <memory>
 #include <optional>
 #include <string>
@@ -206,14 +207,45 @@ class channel_runtime_state_t
     std::map<std::string, std::shared_ptr<channel_native_client_t>> native_clients;
     std::map<std::string, std::shared_ptr<channel_native_publisher_t>> native_publishers;
     std::map<std::string, std::shared_ptr<route_channel_runtime_t>> route_channels;
-    std::map<std::string, mesh_node_send_t> mesh_node_senders;
-    std::map<std::string, mesh_node_request_t> mesh_node_requesters;
+    struct mesh_node_transport_t
+    {
+        mesh_node_send_t send;
+        mesh_node_request_t request;
+    };
+    using mesh_node_transport_ptr_t = std::shared_ptr<const mesh_node_transport_t>;
+    // Node direct and Spot send transports by name, published when a route channel
+    // is initialized or a MeshNode or Spot transport is bound. Submit reads with
+    // one atomic load (08-messaging-hot-path E2: prepared at change time). A
+    // route channel name takes precedence and is resolved on the lane.
+    struct node_transport_index_t
+    {
+        std::set<std::string> route_channels;
+        std::map<std::string, mesh_node_transport_ptr_t> mesh_nodes;
+        std::map<std::string, spot_mesh_send_t> spot_mesh_senders;
+    };
+    std::shared_ptr<const node_transport_index_t> node_transports =
+      std::make_shared<const node_transport_index_t> ();
+    // Route channel initialization runs outside the state lane and binding
+    // runs on it, so a publication retries until it replaces the index it
+    // copied; no change is lost.
+    void publish_node_transports (const std::function<void (node_transport_index_t &)> &change)
+    {
+        auto current = std::atomic_load_explicit (&node_transports, std::memory_order_acquire);
+        for (;;) {
+            auto next = std::make_shared<node_transport_index_t> (*current);
+            change (*next);
+            if (std::atomic_compare_exchange_weak_explicit (
+                  &node_transports, &current,
+                  std::shared_ptr<const node_transport_index_t> (std::move (next)),
+                  std::memory_order_acq_rel, std::memory_order_acquire))
+                return;
+        }
+    }
     std::map<std::string, mesh_channel_send_t> mesh_channel_senders;
     std::map<std::string, mesh_channel_request_t> mesh_channel_requesters;
     std::map<std::string, client_server_send_t> client_server_senders;
     std::map<std::string, client_server_request_t> client_server_requesters;
     std::map<std::string, fanout_publish_t> fanout_publishers;
-    std::map<std::string, spot_mesh_send_t> spot_mesh_senders;
     std::map<std::string, spot_mesh_request_t> spot_mesh_requesters;
     instance_spot_send_t instance_spot_sender;
     instance_spot_request_t instance_spot_requester;

@@ -2915,7 +2915,31 @@ class provider_location_repository_t final : public location_repository_t
             const auto stored_owner = record_owner_id (stored);
             const auto stored_lease = record_lease_generation (stored);
             const auto previous_owner = co_await _store.read (key_owner (stored_owner));
-            const auto previous_owner_live = std::holds_alternative<store_found_t> (previous_owner);
+            const auto *previous_lease = std::get_if<store_found_t> (&previous_owner);
+            const auto previous_owner_live =
+              previous_lease && previous_lease->value.expires_at
+              && *previous_lease->value.expires_at > previous_lease->value.store_now
+              && owner_generation (previous_lease->value.bytes) == stored_lease;
+            if (intent == location_write_intent_t::new_claim
+                || (intent == location_write_intent_t::renew
+                    && record.at (location_record_fields::descriptor)
+                         .contains (location_record_fields::meshName))) {
+                auto previous = stored;
+                auto requested = record;
+                previous.at (location_record_fields::descriptor)
+                  .erase (location_record_fields::updatedAt);
+                previous.at (location_record_fields::descriptor)
+                  .erase (location_record_fields::updatedAtEpochMs);
+                requested.at (location_record_fields::descriptor)
+                  .erase (location_record_fields::updatedAt);
+                requested.at (location_record_fields::descriptor)
+                  .erase (location_record_fields::updatedAtEpochMs);
+                if (previous == requested)
+                    co_return location_write_result_t::stored (
+                      static_cast<std::int64_t> (provider_generation_known ? provider_generation
+                                                                           : 1),
+                      found->value.store_now);
+            }
             if (intent == location_write_intent_t::new_claim && previous_owner_live)
                 co_return location_write_result_t{
                   location_write_status_t::rejected_conflict, 0, {}};
@@ -3526,7 +3550,8 @@ class provider_location_repository_t final : public location_repository_t
                {location_record_fields::stableType, item.stable_type},
                {location_record_fields::policy, maintenance_policy_name (item.policy)},
                {location_record_fields::hasSnapshotAdapter, item.has_snapshot_adapter},
-               {location_record_fields::limit, item.spot_limit}});
+               {location_record_fields::limit, item.spot_limit},
+               {location_record_fields::entryAccepted, item.entry_accepted}});
         json_t spot_types = json_t::array ();
         for (const auto &item : value.capacity.spot_types)
             spot_types.push_back (
@@ -3588,7 +3613,7 @@ class provider_location_repository_t final : public location_repository_t
             return lhs.object_kind == rhs.object_kind && lhs.stable_type == rhs.stable_type
                    && lhs.policy == rhs.policy
                    && lhs.has_snapshot_adapter == rhs.has_snapshot_adapter
-                   && lhs.spot_limit == rhs.spot_limit;
+                   && lhs.spot_limit == rhs.spot_limit && lhs.entry_accepted == rhs.entry_accepted;
         };
         return std::equal (left.object_capabilities.begin (), left.object_capabilities.end (),
                            right.object_capabilities.begin (), capabilities_equal)
@@ -3934,7 +3959,8 @@ class provider_location_repository_t final : public location_repository_t
                parse_maintenance_policy (
                  item.at (location_record_fields::policy).get<std::string> ()),
                item.at (location_record_fields::hasSnapshotAdapter).get<bool> (),
-               item.at (location_record_fields::limit).get<std::int32_t> ()});
+               item.at (location_record_fields::limit).get<std::int32_t> (),
+               item.value (location_record_fields::entryAccepted, false)});
         result.object_role =
           parse_object_role (value.at (location_record_fields::objectRole).get<std::string> ());
         result.placement_weight = value.at (location_record_fields::placementWeight).get<int> ();

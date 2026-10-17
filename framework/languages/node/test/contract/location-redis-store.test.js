@@ -1366,6 +1366,161 @@ test('redis-backed repository completes Actor creation from a canonical authorit
   }
 });
 
+for (const liveMember of [false, true]) {
+  test(`redis-backed ended User Spot re-creation ${liveMember ? 'keeps a live member' : 'releases ended-owner members'}`, async (t) => {
+    const fixture = await redisFixture(t);
+    if (fixture === undefined) return;
+    const {
+      encodeServiceUserSpotAuthorityPayload
+    } = require('../../packages/framework/dist/runtime/foundation/service-authority-payload-codec');
+    const {
+      encodeActorAuthorityPayload
+    } = require('../../packages/framework/dist/runtime/actors/actor-authority-payload-codec');
+    const prefix = testPrefix(`ended-spot-members-${liveMember}`);
+    const store = new redisLocations.ZLinkRedisLocationStore({ url: fixture.url, keyPrefix: prefix });
+    const repository = new frameworkInternal.ZLinkLocationStoreRepository(store);
+    try {
+      const publish = async (ownerId, nodeRid) => {
+        const claimed = await repository.claimOwnerLease(ownerId, 60_000);
+        if (claimed.kind !== 'claimed') throw new Error('owner lease claim failed');
+        const target = {
+          meshName: 'main',
+          nodeRid,
+          nodeLifecycleGeneration: 1n,
+          owner: claimed.token
+        };
+        const descriptor = aggregateDescriptor(target, 1);
+        descriptor.populationCapacity.actors.limit = 1;
+        descriptor.objectCapabilities = [
+          { ...descriptor.objectCapabilities[0], policy: 'disabled', hasSnapshotAdapter: false },
+          {
+            objectKind: 'actor',
+            stableType: 'player',
+            policy: 'disabled',
+            hasSnapshotAdapter: false,
+            limit: 1
+          }
+        ];
+        assert.equal(
+          (await repository.updateMeshNode(
+            descriptor,
+            frameworkInternal.ZLinkLocationWriteIntent.NewClaim
+          )).status,
+          frameworkInternal.ZLinkLocationWriteStatus.Stored
+        );
+        return target;
+      };
+      const old = await publish('owner-old', 'node-old');
+      const next = await publish('owner-new', 'node-new');
+      const spotId = 'ended-spot';
+      const spotRequest = target => ({
+        key: { kind: 'user_spot', globalId: spotId },
+        intent: {
+          stableType: 'lobby',
+          requestContentReference: `request:${spotId}`,
+          requestSha256: Buffer.alloc(32, 1),
+          requestEncodedSize: 16n
+        },
+        target,
+        creatingPayload: Buffer.from('creating'),
+        capacity: userSpotCapacity(1),
+        actorRelocationPolicy: 'disabled'
+      });
+      const reserved = await repository.reserve(spotRequest(old));
+      if (reserved.kind !== 'reserved') throw new Error('Spot reservation failed');
+      const spot = await repository.commit({
+        key: { kind: 'user_spot', globalId: spotId },
+        reservationId: reserved.reservationId,
+        expectedStoreVersion: reserved.creating.storeVersion.value,
+        target: old,
+        readyPayload: encodeServiceUserSpotAuthorityPayload({
+          state: 'ready',
+          stableType: 'lobby',
+          spotId,
+          ownerId: old.owner.ownerId,
+          ownerLeaseGeneration: old.owner.leaseGeneration,
+          ownerMeshName: 'main',
+          ownerNodeRid: 'node-old',
+          ownerNodeGeneration: 1n
+        })
+      });
+      if (spot.kind !== 'committed') throw new Error('Spot commit failed');
+      const memberTarget = liveMember ? next : old;
+      const actorRequest = {
+        key: { kind: 'actor', globalId: 'member' },
+        intent: {
+          stableType: 'player',
+          requestContentReference: 'request:member',
+          requestSha256: Buffer.alloc(32, 2),
+          requestEncodedSize: 16n
+        },
+        target: memberTarget,
+        creatingPayload: Buffer.from('creating'),
+        capacity: { actors: 1, spots: 0 },
+        actorRelocationPolicy: 'disabled'
+      };
+      const member = await repository.reserve(actorRequest);
+      if (member.kind !== 'reserved') throw new Error('member reservation failed');
+      const created = await repository.completeCreation({
+        key: actorRequest.key,
+        reservationId: member.reservationId,
+        expectedStoreVersion: member.creating.storeVersion.value,
+        target: memberTarget,
+        completion: {
+          kind: 'created',
+          readyPayload: encodeActorAuthorityPayload({
+            state: 'ready',
+            stableType: 'player',
+            actorId: 'member',
+            currentSpotId: spotId,
+            currentSpotGeneration: spot.ready.objectGeneration,
+            currentSpotKind: framework.ZLinkSpotKind.User,
+            ownerId: memberTarget.owner.ownerId,
+            ownerLeaseGeneration: memberTarget.owner.leaseGeneration,
+            meshName: 'main',
+            nodeRid: memberTarget.nodeRid,
+            nodeGeneration: 1n
+          }),
+          terminal: {
+            operation: {
+              sourceNodeRid: memberTarget.nodeRid,
+              sourceNodeGeneration: 1n,
+              operationId: { high: 3n, low: 1n }
+            },
+            terminalEnvelope: Buffer.from('member-terminal'),
+            operationDeadline: new Date(Date.now() + 60_000)
+          }
+        }
+      });
+      assert.equal(created.kind, 'created');
+      await repository.releaseOwnerLease(old.owner);
+      const memberKey = encodeAuthorityKey('actor', 'member');
+      if (liveMember) {
+        await assert.rejects(
+          repository.reserve(spotRequest(next)),
+          error => error instanceof framework.ZLinkFrameworkException
+            && error.kind === framework.ZLinkFrameworkErrorKind.Unavailable
+        );
+        const retained = await repository.readAuthority(encodeAuthorityKey('user_spot', spotId));
+        assert.equal(retained.kind, 'snapshot');
+        assert.equal(retained.storeVersion.value, spot.ready.storeVersion.value);
+        assert.equal((await repository.readAuthority(memberKey)).kind, 'snapshot');
+        return;
+      }
+      const recreated = await repository.reserve(spotRequest(next));
+      assert.equal(recreated.kind, 'reserved');
+      assert.ok(recreated.creating.objectGeneration > spot.ready.objectGeneration);
+      assert.equal((await repository.readAuthority(memberKey)).kind, 'missing');
+      const again = await repository.reserve({ ...actorRequest, target: next });
+      assert.equal(again.kind, 'reserved');
+    } finally {
+      await store.dispose();
+      await cleanup(fixture.client, prefix);
+      await fixture.client.quit();
+    }
+  });
+}
+
 test('redis-backed production repository writes the golden canonical descriptor bodies', async (t) => {
   const fixture = await redisFixture(t);
   if (fixture === undefined) return;

@@ -77,6 +77,7 @@ public final class ZLinkLocationDescriptorCodec {
                             encoded.put("Policy", capability.policy().value());
                             encoded.put("HasSnapshotAdapter", capability.hasSnapshotAdapter());
                             encoded.put("SpotLimit", capability.spotLimit());
+                            encoded.put("EntryAccepted", capability.entryAccepted());
                             capabilities.add(encoded);
                         });
         node.set("ObjectCapabilities", capabilities);
@@ -360,7 +361,8 @@ public final class ZLinkLocationDescriptorCodec {
                                             text(capability, "StableType"),
                                             maintenancePolicy(capability.path("Policy").asInt()),
                                             capability.path("HasSnapshotAdapter").asBoolean(),
-                                            capability.path("SpotLimit").asInt()));
+                                            capability.path("SpotLimit").asInt(),
+                                            capability.path("EntryAccepted").asBoolean()));
                         });
         JsonNode encodedCapacity = node.path("Capacity");
         List<ZLinkSpotTypeCapacity> spotTypes = new ArrayList<>();

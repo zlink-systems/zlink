@@ -83,6 +83,7 @@ final class ZLinkProviderDescriptorRepository {
     private static final String FIELD_LEASE_GENERATION = "leaseGeneration";
     private static final String FIELD_LIFECYCLE_GENERATION = "lifecycleGeneration";
     private static final String FIELD_LIMIT = "limit";
+    private static final String FIELD_ENTRY_ACCEPTED = "entryAccepted";
     private static final String FIELD_MAINTENANCE_WAVE = "maintenanceWave";
     private static final String FIELD_MESH_NAME = "meshName";
     private static final String FIELD_OBJECT_CAPABILITIES = "objectCapabilities";
@@ -575,6 +576,7 @@ final class ZLinkProviderDescriptorRepository {
                             encoded.put(
                                     FIELD_HAS_SNAPSHOT_ADAPTER, capability.hasSnapshotAdapter());
                             encoded.put(FIELD_LIMIT, capability.spotLimit());
+                            encoded.put(FIELD_ENTRY_ACCEPTED, capability.entryAccepted());
                             capabilities.add(encoded);
                         });
         node.set(FIELD_OBJECT_CAPABILITIES, capabilities);
@@ -661,7 +663,10 @@ final class ZLinkProviderDescriptorRepository {
                                                 capability
                                                         .path(FIELD_HAS_SNAPSHOT_ADAPTER)
                                                         .asBoolean(),
-                                                capability.path(FIELD_LIMIT).asInt())));
+                                                capability.path(FIELD_LIMIT).asInt(),
+                                                capability
+                                                        .path(FIELD_ENTRY_ACCEPTED)
+                                                        .asBoolean())));
         JsonNode capacityNode = descriptor.path(FIELD_CAPACITY);
         List<ZLinkSpotTypeCapacity> spotTypes = new ArrayList<>();
         capacityNode

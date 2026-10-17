@@ -5,6 +5,7 @@
 
 #include <zlink/framework.hpp>
 #include "runtime/locations/in_memory_store_providers.hpp"
+#include "runtime/mesh/mesh_node_runtime.hpp"
 
 #include <nlohmann/json.hpp>
 
@@ -14,6 +15,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdio>
+#include <exception>
 #include <fstream>
 #include <functional>
 #include <iostream>
@@ -654,6 +656,63 @@ bool zero_weight_at_startup (const nlohmann::json &lease)
     return ok;
 }
 
+bool concurrent_actor_handle_lookup (const nlohmann::json &lease)
+{
+    hold.reset ({});
+    const auto nodes = nlohmann::json::array ({{{"meshName", "handle-lookup"},
+                                                {"actorLimit", 0},
+                                                {"spotLimit", 0},
+                                                {"activationConcurrency", 128},
+                                                {"actorFactory", true},
+                                                {"instanceSpotFactory", false}}});
+    host_t host;
+    configure_host (host, lease, nodes, "2036-handle-lookup");
+    auto &builder = host.app.advanced ().zlink ();
+    for (const auto &registration : fw::detail::mesh_node_runtime_t::registrations (builder))
+        registration->core_context = std::make_shared<zlink::context_t> ();
+    auto mesh = fw::detail::mesh_node_runtime_t::from (builder, "handle-lookup");
+    // from() constructs a runtime; start this instance instead of the application host.
+    mesh->start ();
+    const fw::node_rid_t node ("2036-handle-lookup-handle-lookup");
+    const fw::actor_ref_t missing (fw::actor_id_t ("missing-actor"), 1, "handle-lookup", node);
+    std::barrier start (2);
+    bool created = false;
+    bool rejected_missing = false;
+    std::atomic<bool> creation_finished{false};
+    // Visit the inserted tree node without publishing its memory to the reader.
+    // A relaxed flag orders the test phases, while the registry must supply the
+    // happens-before relation. The missing lookup submits no join operation.
+    std::thread lookup ([&] {
+        start.arrive_and_wait ();
+        while (!creation_finished.load (std::memory_order_relaxed))
+            std::this_thread::yield ();
+        fw::runtime::host::pending_operation_t operation;
+        const auto submitted = mesh->submit_application_actor_entry_spot_join (
+          missing, node, zlink::message_t{}, operation_timeout, operation,
+          [] (fw::result_t<fw::detail::actor_join_reply_t>) {});
+        rejected_missing =
+          !submitted && submitted.error_kind () == fw::framework_error_kind_t::not_found;
+    });
+    std::thread creation ([&] {
+        start.arrive_and_wait ();
+        try {
+            const auto actor =
+              mesh->create_actor ("placement-actor", "created-actor", {}, operation_timeout);
+            created = actor.ref ().actor_id () == fw::actor_id_t ("created-actor");
+        }
+        catch (const std::exception &error) {
+            std::cerr << "[2036] Actor creation failed: " << error.what () << '\n';
+        }
+        creation_finished.store (true, std::memory_order_relaxed);
+    });
+    lookup.join ();
+    creation.join ();
+    mesh->stop ();
+    std::cout << "[2036] concurrent Actor handle lookup: created=" << created
+              << " missing rejected=" << rejected_missing << '\n';
+    return created && rejected_missing;
+}
+
 bool concurrent_actor_creation (const nlohmann::json &lease)
 {
     constexpr int actor_count = 64;
@@ -729,6 +788,8 @@ int main (int argc, char **argv)
         return 1;
     if (argc == 2 && std::string_view (argv[1]) == "--1304-concurrent")
         return concurrent_actor_creation (fixture.at ("ownerLease")) ? 0 : 1;
+    if (argc == 2 && std::string_view (argv[1]) == "--2036-handle-lookup")
+        return concurrent_actor_handle_lookup (fixture.at ("ownerLease")) ? 0 : 1;
     int index = 0;
     int failures = 0;
     int scenarios = 0;
@@ -741,6 +802,8 @@ int main (int argc, char **argv)
     if (!zero_weight_at_startup (fixture.at ("ownerLease")))
         ++failures;
     if (!concurrent_actor_creation (fixture.at ("ownerLease")))
+        ++failures;
+    if (!concurrent_actor_handle_lookup (fixture.at ("ownerLease")))
         ++failures;
     return failures == 0 ? 0 : 1;
 }

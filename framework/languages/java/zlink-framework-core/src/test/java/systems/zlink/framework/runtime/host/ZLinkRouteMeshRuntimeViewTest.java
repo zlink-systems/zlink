@@ -447,6 +447,7 @@ final class ZLinkRouteMeshRuntimeViewTest {
                         "view-room",
                         ZLinkFrameworkLocationRuntimeTest.LocationSpot.class,
                         factory -> factory.disableRelocation())
+                .addEntrySpot(ActorCreationEntry.class)
                 .addActorFactory(
                         "view-player",
                         ZLinkFrameworkLocationRuntimeTest.LocationActor.class,
@@ -696,5 +697,33 @@ final class ZLinkRouteMeshRuntimeViewTest {
             @Override
             public void onComplete() {}
         };
+    }
+
+    /** An Entry Spot that accepts every Actor type, so the node can create new Actors. */
+    public static final class ActorCreationEntry
+            implements systems.zlink.framework.spots.ZLinkEntrySpot<
+                    systems.zlink.framework.actors.ZLinkActor> {
+        private final systems.zlink.framework.spots.ZLinkEntrySpotContext context;
+
+        public ActorCreationEntry(systems.zlink.framework.spots.ZLinkEntrySpotContext context) {
+            this.context = context;
+        }
+
+        @Override
+        public systems.zlink.framework.spots.ZLinkEntrySpotContext context() {
+            return context;
+        }
+
+        @Override
+        public java.util.concurrent.CompletionStage<Void> onJoinedActor(
+                systems.zlink.framework.actors.ZLinkActor actor) {
+            return java.util.concurrent.CompletableFuture.completedFuture(null);
+        }
+
+        @Override
+        public java.util.concurrent.CompletionStage<Void> onLeaveActor(
+                systems.zlink.framework.actors.ZLinkActor actor) {
+            return java.util.concurrent.CompletableFuture.completedFuture(null);
+        }
     }
 }

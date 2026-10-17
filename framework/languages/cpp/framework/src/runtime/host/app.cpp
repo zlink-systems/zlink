@@ -317,7 +317,7 @@ class app_state_t
     ~app_state_t ()
     {
         delays.stop_and_join ();
-        wait_relocation_preflights ();
+        wait_relocation_cleanup ();
         if (application_job_queue)
             application_job_queue->stop ();
         if (relocation_operation.worker.joinable ())
@@ -346,6 +346,20 @@ class app_state_t
         for (const auto &service : hosted_services) {
             service->start (provider).result ().value ();
             started.push_back (service.get ());
+        }
+    }
+
+    // Location runtime §5 allows startup to finish before owner-bound publication.
+    static task_t<void> enter_serving_after_publication (std::shared_ptr<app_state_access_t> access,
+                                                         task_t<bool> published)
+    {
+        if (co_await published) {
+            std::shared_lock lock (access->mutex);
+            if (auto *state = access->state) {
+                auto expected = framework_runtime_state_t::preparing;
+                (void) state->runtime_state.compare_exchange_strong (
+                  expected, framework_runtime_state_t::serving, std::memory_order_acq_rel);
+            }
         }
     }
 
@@ -454,6 +468,20 @@ class app_state_t
         std::vector<std::shared_ptr<relocation_waiter_t>> waiters;
         std::thread worker;
 
+        // Caller holds mutex. Cancellation belongs to the returned waiter;
+        // the source operation still owns its accepted terminal result.
+        task_t<relocation_result_t>
+        register_terminal_waiter_locked (std::shared_ptr<relocation_waiter_t> &waiter)
+        {
+            if (!started || terminal)
+                return task_t<relocation_result_t> (
+                  result_t<relocation_result_t>::success (result));
+            waiter = std::make_shared<relocation_waiter_t> ();
+            auto task = waiter->task ();
+            waiters.push_back (waiter);
+            return task;
+        }
+
         ~relocation_operation_t ()
         {
             if (worker.joinable ())
@@ -482,6 +510,9 @@ class app_state_t
 
     std::shared_ptr<std::atomic_bool> draining = std::make_shared<std::atomic_bool> (false);
     std::atomic<framework_runtime_state_t> runtime_state = framework_runtime_state_t::preparing;
+    std::function<task_t<bool> ()> startup_publication = [] {
+        return task_t<bool> (result_t<bool>::success (true));
+    };
     std::shared_ptr<app_state_access_t> status_access;
     std::mutex termination_teardown_mutex;
     delay_owner_t delays{termination_teardown_mutex};
@@ -522,10 +553,21 @@ class app_state_t
         app_state_t *_state;
     };
 
-    void wait_relocation_preflights ()
+    void wait_relocation_cleanup ()
     {
-        std::unique_lock lock (termination_teardown_mutex);
-        termination_teardown_changed.wait (lock, [&] { return active_relocation_preflights == 0; });
+        {
+            std::unique_lock lock (termination_teardown_mutex);
+            termination_teardown_changed.wait (lock,
+                                               [&] { return active_relocation_preflights == 0; });
+        }
+        std::shared_ptr<relocation_waiter_t> waiter;
+        auto terminal = [&] {
+            std::lock_guard lock (relocation_operation.mutex);
+            return relocation_operation.register_terminal_waiter_locked (waiter);
+        }();
+        // Timers are already stopped. Observe the accepted source owner's
+        // cutoff cleanup before hosted services release its native resources.
+        (void) terminal.result ();
     }
 
     service_collection_t services;
@@ -1010,7 +1052,7 @@ app_t::~app_t ()
 {
     if (_state) {
         _state->delays.stop_and_join ();
-        _state->wait_relocation_preflights ();
+        _state->wait_relocation_cleanup ();
     }
 }
 
@@ -2148,7 +2190,8 @@ void app_t::_apply_zlink_framework ()
                   std::chrono::milliseconds timeout)
             -> request_task_t<result_t<runtime::messaging::message_parts_t>> {
               detail::host::pending_operation_t operation;
-              auto submission = mesh->request_to_node (target, parts.items (), operation, timeout);
+              auto submission =
+                mesh->request_to_node (target, std::move (parts).take_items (), operation, timeout);
               auto admitted = co_await detail::request_admission_source_t{};
               mesh->observe_request_failure (operation, admitted, "MeshNode request");
               const auto submitted = co_await submission;
@@ -2413,7 +2456,7 @@ void app_t::_apply_zlink_framework ()
                       ? native.transport ().register_local_operation (
                           deadline,
                           [completion] (runtime::foundation::operation_terminal_t terminal,
-                                        const std::vector<std::uint8_t> &) {
+                                        const zlink::message_t &) {
                               completion->complete (result_t<reply_t>::failure (
                                 terminal == runtime::foundation::operation_terminal_t::timed_out
                                   ? framework_error_kind_t::deadline_exceeded
@@ -2867,15 +2910,19 @@ void app_t::_apply_zlink_framework ()
           },
           service_lifetime_t::singleton);
     }
-    add_hosted_service (std::make_unique<runtime::location_auto_connect_host_service_t> (
+    auto auto_connect_service = std::make_unique<runtime::location_auto_connect_host_service_t> (
       _state->monitoring->runtime_failures, _state->zlink.message_bus (), channel_snapshot,
       _state->handlers, _state->serializers, options.runtime_client_server_advertise_hosts (),
       options.runtime_fanout_advertise_hosts (), options.route_mesh_client_channels (), mesh_nodes,
-      [mesh_node_service] {
+      [mesh_node_service] (location_write_intent_t intent) {
           return mesh_node_service == nullptr
-                 || mesh_node_service->republish_after_store_recovery ();
+                 || mesh_node_service->republish_after_store_recovery (intent);
       },
-      std::move (client_server_runtime), std::move (fanout_runtime), _state->listener_statuses));
+      std::move (client_server_runtime), std::move (fanout_runtime), _state->listener_statuses);
+    _state->startup_publication = [service = auto_connect_service.get ()] {
+        return service->descriptors_published ();
+    };
+    add_hosted_service (std::move (auto_connect_service));
     if (detail::has_inbound_channel (channel_snapshot)) {
         add_hosted_service (std::make_unique<runtime::channel_host_service_t> (
           _state->monitoring->runtime_failures, _state->zlink.message_bus (), channel_snapshot,
@@ -2971,9 +3018,8 @@ try {
         runtime::configure_handler_coroutine_executor (
           _state->framework_options ? _state->framework_options->handler_coroutine_workers () : 0);
         _state->start_hosted_services (provider, started);
-        auto expected = framework_runtime_state_t::preparing;
-        (void) _state->runtime_state.compare_exchange_strong (
-          expected, framework_runtime_state_t::serving, std::memory_order_acq_rel);
+        (void) detail::app_state_t::enter_serving_after_publication (
+          _state->status_access, _state->startup_publication ());
         try {
             runtime::runtime_metrics_t drain_metrics (_state->monitoring);
             if (drain_metrics.enabled ()) {
@@ -2995,7 +3041,7 @@ try {
     catch (...) {
         _state->runtime_state.store (framework_runtime_state_t::error, std::memory_order_release);
         _state->delays.stop_and_join ();
-        _state->wait_relocation_preflights ();
+        _state->wait_relocation_cleanup ();
         _state->stop_hosted_services (started);
         _state->close_framework_resources (provider);
         {
@@ -3008,7 +3054,7 @@ try {
     }
 
     _state->delays.stop_and_join ();
-    _state->wait_relocation_preflights ();
+    _state->wait_relocation_cleanup ();
     _state->stop_hosted_services (started);
     _state->close_framework_resources (provider);
     {
@@ -3531,9 +3577,7 @@ task_t<relocation_result_t> app_t::relocate_async (relocation_options_t options,
                 detail::observe_task_completion (*running, [running] (const result_t<void> &) {});
             });
         }
-        waiter = std::make_shared<detail::app_state_t::relocation_waiter_t> ();
-        task = waiter->task ();
-        operation.waiters.push_back (waiter);
+        task = operation.register_terminal_waiter_locked (waiter);
     }
     waiter->arm (wait_cancellation);
     preflight_guard.release ();
@@ -3887,7 +3931,7 @@ task_t<termination_result_t> app_t::shutdown (std::chrono::milliseconds deadline
             operation.started = true;
             operation.deadline = deadline;
             operation.deadline_at = std::chrono::system_clock::now () + deadline;
-            _state->delays.request_stop ();
+            _state->delays.request_stop (std::chrono::steady_clock::now () + deadline);
             _state->runtime_state.store (framework_runtime_state_t::draining,
                                          std::memory_order_release);
             _state->draining->store (true, std::memory_order_release);
@@ -3905,7 +3949,7 @@ task_t<termination_result_t> app_t::shutdown (std::chrono::milliseconds deadline
 void app_t::run_shared_shutdown (detail::app_state_t &state) noexcept
 {
     const auto started_at = std::chrono::steady_clock::now ();
-    const auto deadline_at = started_at + state.termination_operation.deadline;
+    const auto deadline_at = state.delays.stop_deadline ().value ();
     auto monitoring = detail::monitoring_runtime_t (state.monitoring);
     auto emit_state = [&] (detail::drain_state_t drain_state) {
         try {

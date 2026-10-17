@@ -834,10 +834,10 @@ governs validation by the transport, target, and Session owner and defines their
 ### The `Completed` Condition
 
 `Completed` is allowed only when the accepted request count equals the
-terminal completion count and pending relay is 0. If the ACK cannot be
-confirmed while the source lease is still valid, Retire ends as
-`ForceStopped`, preserving the relocation root and reply bytes for the
-retention period.
+terminal completion count and pending relay is 0. When the deadline passes
+before the ACK is confirmed while the source lease is still valid,
+[Location runtime §9.3](../05-location-relocation/01-location-runtime.en.md#93-handling-a-request-that-finished-after-the-source-changed)
+defines the outcome and the retention period.
 
 ### Root Replacement
 

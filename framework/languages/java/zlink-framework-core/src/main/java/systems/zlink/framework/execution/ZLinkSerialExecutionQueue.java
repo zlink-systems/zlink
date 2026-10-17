@@ -1933,52 +1933,21 @@ public final class ZLinkSerialExecutionQueue {
                         try {
                             queue.executor.execute(
                                     () -> {
-                                        ZLinkSerialExecutionQueue previous = CURRENT.get();
-                                        CompletableFuture<Void> previousGate = CURRENT_GATE.get();
-                                        CURRENT.set(queue);
-                                        if (gate == null) {
-                                            CURRENT_GATE.remove();
-                                        } else {
-                                            CURRENT_GATE.set(gate);
-                                        }
-                                        try (var serial =
-                                                        systems.zlink.framework.runtime.internal
-                                                                .handlers
-                                                                .ZLinkSuspendInvocationContext
-                                                                .enterSerialExecutionTurn(
-                                                                        serialContext);
-                                                var actor =
-                                                        systems.zlink.framework.runtime.internal
-                                                                .handlers
-                                                                .ZLinkSuspendInvocationContext
-                                                                .enterActorDispatch(actorDispatch);
-                                                var execution =
-                                                        systems.zlink.framework.runtime.internal
-                                                                .handlers
-                                                                .ZLinkSuspendInvocationContext
-                                                                .enterApplicationExecution(
-                                                                        application);
-                                                ZLinkFlowContext.Scope ignored =
-                                                        flow == null
-                                                                ? () -> {}
-                                                                : ZLinkFlowContext.enter(flow)) {
-                                            if (error != null) {
-                                                managed.completeExceptionally(error);
-                                            } else {
-                                                managed.complete(value);
-                                            }
-                                        } finally {
-                                            if (previous == null) {
-                                                CURRENT.remove();
-                                            } else {
-                                                CURRENT.set(previous);
-                                            }
-                                            if (previousGate == null) {
-                                                CURRENT_GATE.remove();
-                                            } else {
-                                                CURRENT_GATE.set(previousGate);
-                                            }
-                                        }
+                                        runWithContext(
+                                                queue,
+                                                gate,
+                                                null,
+                                                serialContext,
+                                                application,
+                                                actorDispatch,
+                                                flow,
+                                                () -> {
+                                                    if (error != null) {
+                                                        managed.completeExceptionally(error);
+                                                    } else {
+                                                        managed.complete(value);
+                                                    }
+                                                });
                                     });
                         } catch (RuntimeException rejected) {
                             managed.completeExceptionally(rejected);
@@ -1998,35 +1967,18 @@ public final class ZLinkSerialExecutionQueue {
                                         turn.entry,
                                         () -> {
                                             updateCarrier(serialContext, currentTurn());
-                                            try (var serial =
-                                                            systems.zlink.framework.runtime.internal
-                                                                    .handlers
-                                                                    .ZLinkSuspendInvocationContext
-                                                                    .enterSerialExecutionTurn(
-                                                                            serialContext);
-                                                    var actor =
-                                                            systems.zlink.framework.runtime.internal
-                                                                    .handlers
-                                                                    .ZLinkSuspendInvocationContext
-                                                                    .enterActorDispatch(
-                                                                            actorDispatch);
-                                                    var execution =
-                                                            systems.zlink.framework.runtime.internal
-                                                                    .handlers
-                                                                    .ZLinkSuspendInvocationContext
-                                                                    .enterApplicationExecution(
-                                                                            application);
-                                                    ZLinkFlowContext.Scope ignored =
-                                                            flow == null
-                                                                    ? () -> {}
-                                                                    : ZLinkFlowContext.enter(
-                                                                            flow)) {
-                                                if (error != null) {
-                                                    managed.completeExceptionally(error);
-                                                } else {
-                                                    managed.complete(value);
-                                                }
-                                            }
+                                            runWithInvocationContext(
+                                                    serialContext,
+                                                    application,
+                                                    actorDispatch,
+                                                    flow,
+                                                    () -> {
+                                                        if (error != null) {
+                                                            managed.completeExceptionally(error);
+                                                        } else {
+                                                            managed.complete(value);
+                                                        }
+                                                    });
                                             return CompletableFuture.completedFuture(null);
                                         });
                         continuation.whenComplete(
@@ -2253,6 +2205,57 @@ public final class ZLinkSerialExecutionQueue {
         return ready;
     }
 
+    /** Captures the owner queue for callbacks that run in independent application turns. */
+    public static Executor captureCurrentCallbackExecutor() {
+        SerialTurn turn = currentTurn();
+        ZLinkSerialExecutionQueue queue = turn == null ? null : turn.queue;
+        var application =
+                systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationContext
+                        .currentApplicationExecution();
+        String actorDispatch =
+                systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationContext
+                        .currentActorDispatch();
+        ZLinkFlowContext.State flow = ZLinkFlowContext.current();
+        return command -> {
+            Objects.requireNonNull(command, "command");
+            CompletionStage<Void> completion;
+            try {
+                if (queue == null) {
+                    command.run();
+                    completion = CompletableFuture.completedFuture(null);
+                } else {
+                    completion =
+                            queue.enqueue(
+                                    () -> {
+                                        runWithInvocationContext(
+                                                systems.zlink.framework.runtime.internal.handlers
+                                                        .ZLinkSuspendInvocationContext
+                                                        .currentSerialExecutionTurn(),
+                                                application,
+                                                actorDispatch,
+                                                flow,
+                                                command);
+                                        return CompletableFuture.completedFuture(null);
+                                    },
+                                    null);
+                }
+            } catch (RuntimeException | Error failure) {
+                completion = CompletableFuture.failedFuture(failure);
+            }
+            completion.whenComplete(
+                    (ignored, failure) -> {
+                        if (failure != null) {
+                            java.util.logging.Logger.getLogger(
+                                            ZLinkSerialExecutionQueue.class.getName())
+                                    .log(
+                                            java.util.logging.Level.SEVERE,
+                                            "Framework callback completion failed",
+                                            failure);
+                        }
+                    });
+        };
+    }
+
     public static Executor propagateCurrent(Executor executor) {
         Objects.requireNonNull(executor, "executor");
         return command -> {
@@ -2268,6 +2271,7 @@ public final class ZLinkSerialExecutionQueue {
             String actorDispatch =
                     systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationContext
                             .currentActorDispatch();
+            ZLinkFlowContext.State flow = ZLinkFlowContext.current();
             executor.execute(
                     () ->
                             runWithContext(
@@ -2277,7 +2281,18 @@ public final class ZLinkSerialExecutionQueue {
                                     serialTurn,
                                     application,
                                     actorDispatch,
-                                    command));
+                                    flow,
+                                    () -> {
+                                        SerialTurn turn = currentTurn();
+                                        try (var job =
+                                                ZLinkApplicationJobContext.enterQueued(
+                                                        turn == null || turn.entry == null
+                                                                ? null
+                                                                : turn.entry
+                                                                        .applicationJobOwnership)) {
+                                            command.run();
+                                        }
+                                    }));
         };
     }
 
@@ -2290,6 +2305,7 @@ public final class ZLinkSerialExecutionQueue {
                             .ApplicationExecution
                     application,
             String actorDispatch,
+            ZLinkFlowContext.State flow,
             Runnable command) {
         ZLinkSerialExecutionQueue previous = CURRENT.get();
         CompletableFuture<Void> previousGate = CURRENT_GATE.get();
@@ -2297,6 +2313,23 @@ public final class ZLinkSerialExecutionQueue {
         setOrRemove(CURRENT, queue);
         setOrRemove(CURRENT_GATE, gate);
         setOrRemove(CURRENT_RELEASE_DEFERRED, deferred);
+        try {
+            runWithInvocationContext(serialTurn, application, actorDispatch, flow, command);
+        } finally {
+            setOrRemove(CURRENT, previous);
+            setOrRemove(CURRENT_GATE, previousGate);
+            setOrRemove(CURRENT_RELEASE_DEFERRED, previousDeferred);
+        }
+    }
+
+    private static void runWithInvocationContext(
+            Object serialTurn,
+            systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationContext
+                            .ApplicationExecution
+                    application,
+            String actorDispatch,
+            ZLinkFlowContext.State flow,
+            Runnable command) {
         try (var serial =
                         systems.zlink.framework.runtime.internal.handlers
                                 .ZLinkSuspendInvocationContext.enterSerialExecutionTurn(
@@ -2307,19 +2340,10 @@ public final class ZLinkSerialExecutionQueue {
                 var execution =
                         systems.zlink.framework.runtime.internal.handlers
                                 .ZLinkSuspendInvocationContext.enterApplicationExecution(
-                                application)) {
-            SerialTurn turn = currentTurn();
-            try (var job =
-                    ZLinkApplicationJobContext.enterQueued(
-                            turn == null || turn.entry == null
-                                    ? null
-                                    : turn.entry.applicationJobOwnership)) {
-                command.run();
-            }
-        } finally {
-            setOrRemove(CURRENT, previous);
-            setOrRemove(CURRENT_GATE, previousGate);
-            setOrRemove(CURRENT_RELEASE_DEFERRED, previousDeferred);
+                                application);
+                ZLinkFlowContext.Scope ignored =
+                        flow == null ? () -> {} : ZLinkFlowContext.enter(flow)) {
+            command.run();
         }
     }
 
