@@ -301,6 +301,8 @@ class stateful_object_runtime_t
     create_result_t activate_instance (create_request_t request,
                                        const std::function<bool (const object_ref_t &)> &factory);
     std::optional<object_ref_t> find (object_kind_t kind, const std::string &key) const;
+    bool contains (const object_ref_t &reference) const;
+    task_t<bool> contains_async (object_ref_t reference) const;
     // Observes the existing source seal; does not resolve Store authority.
     bool finalized_relocation_source (object_kind_t kind,
                                       const std::string &key,

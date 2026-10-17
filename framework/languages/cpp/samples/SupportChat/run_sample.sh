@@ -17,7 +17,7 @@ REDIS_CONTAINER_NAME=""
 mkdir -p "$LOG_DIR" "$FLOW_LOG_DIR"
 
 cleanup() {
-  local code=$?
+  local code=${1:-$?}
   zlink_cpp_sample_stop_processes "${PIDS[@]}"
   if [[ -n "$REDIS_CONTAINER_NAME" ]]; then zlink_redis_remove_by_id "$REDIS_CONTAINER_NAME" || true; fi
   zlink_sample_close_run_dir "$RUN_DIR" "$code" "SupportChat"

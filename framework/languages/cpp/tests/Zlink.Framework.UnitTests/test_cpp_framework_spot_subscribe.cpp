@@ -3,9 +3,18 @@
 #include "runtime/dispatch/offload_executor.hpp"
 #include "runtime/diagnostics/dispatch_options_access.hpp"
 #include "runtime/messaging/envelope_codec.hpp"
+#include "runtime/mesh/mesh_node_host_service.hpp"
 #include "runtime/spots/spot_runtime.hpp"
+#include "runtime/channels/channel_runtime.hpp"
+#include "runtime/execution/serial_execution_queue.hpp"
 #include "runtime/locations/in_memory_store_providers.hpp"
 #include <gtest/gtest.h>
+#include <algorithm>
+#include <concepts>
+#include <future>
+#include <latch>
+#include <thread>
+#include <utility>
 #include <zlink/framework.hpp>
 
 namespace
@@ -23,15 +32,25 @@ struct event_t
 };
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE (event_t, value)
 
+template <typename TContext>
+concept accepts_implicit_publish =
+  requires (TContext &context, event_t event) { context.publish (std::string{}, event); };
+static_assert (!accepts_implicit_publish<fw::spot_context_t>);
+static_assert (std::same_as<decltype (std::declval<fw::spot_context_t &> ().publish (
+                              std::string{}, std::string{}, event_t{})),
+                            fw::publish_call_t>);
+
 struct subscriber_t
 {
     std::vector<std::string> channels;
     std::vector<std::string> topics;
+    std::vector<int> values;
     int other_calls = 0;
-    void receive (const fw::publish_message_context_t &context, const event_t &)
+    void receive (const fw::publish_message_context_t &context, const event_t &event)
     {
         channels.push_back (context.channel_name.value_or (""));
         topics.push_back (context.topic);
+        values.push_back (event.value);
     }
     void receive_other (const fw::publish_message_context_t &context, const event_t &event)
     {
@@ -60,6 +79,11 @@ class SpotSubscribe : public testing::Test
     void subscribe (const std::string &target_channel, const std::string &topic)
     {
         context.handlers ().add_subscribe<&subscriber_t::receive> (target_channel, topic);
+    }
+
+    void TearDown () override
+    {
+        node->lane.run ([this] { node->spot_contexts_by_id.clear (); }).get ();
     }
 
     fw::result_t<bool> deliver (const std::string &target_channel,
@@ -96,7 +120,7 @@ TEST_F (SpotSubscribe, RuntimeTopicReachesNamedChannel)
     EXPECT_EQ ((std::vector<std::string>{topic}), subscriber->topics);
 }
 
-TEST_F (SpotSubscribe, PublisherFrameKeepsNamedChannelThroughLocalDelivery)
+TEST_F (SpotSubscribe, ContextFrameKeepsNamedChannelThroughLocalDelivery)
 {
     namespace host = fw::runtime::host;
     namespace mesh = fw::runtime::mesh;
@@ -127,19 +151,71 @@ TEST_F (SpotSubscribe, PublisherFrameKeepsNamedChannelThroughLocalDelivery)
     native->start ();
     detail::spot_node_runtime_t runtime (node);
     runtime.attach_native_node (native);
+    auto native_subscriber = std::make_shared<detail::service::spot_t> (
+      native->get_or_create_spot (std::string (state->spot_id)));
+    node->lane
+      .run ([&] {
+          state->native_spot = native_subscriber;
+          node->spot_contexts_by_id.emplace (state->spot_id,
+                                             detail::spot_context_access_t::create (state));
+      })
+      .get ();
     const auto topic = std::string ("spot:") + std::to_string (7);
     subscribe (channel, topic);
-    fw::spot_publisher_client_t publisher (runtime.manager (), serializers);
-    ASSERT_TRUE (publisher.publish (channel, topic, event_t{1}).async ().result ());
+    node->channel_runtime = std::make_shared<detail::channel_runtime_state_t> ();
+    node->channel_runtime->serializers = &serializers;
+    std::weak_ptr<detail::spot_context_state_t> source_lifetime;
+    std::optional<fw::task_t<void>> publication;
+    {
+        // Occupy the existing multicast workers so the temporary call dies
+        // before the worker can submit its frame. No timing wait is needed.
+        const auto worker_count = std::max<std::size_t> (2, std::thread::hardware_concurrency ());
+        std::latch finished (static_cast<std::ptrdiff_t> (worker_count));
+        std::promise<void> release;
+        const auto released = release.get_future ().share ();
+        struct release_guard_t
+        {
+            std::promise<void> &release;
+            std::latch &finished;
+            std::ptrdiff_t remaining;
+            ~release_guard_t ()
+            {
+                finished.count_down (remaining);
+                release.set_value ();
+                finished.wait ();
+            }
+        } guard{release, finished, static_cast<std::ptrdiff_t> (worker_count)};
+        for (std::size_t index = 0; index < worker_count; ++index) {
+            fw::publish_call_t occupied ([&finished, released] (const auto &) {
+                released.wait ();
+                finished.count_down ();
+                return fw::result_t<void>::success ();
+            });
+            ASSERT_TRUE (occupied.async ().result ());
+            --guard.remaining;
+        }
+        publication.emplace ([&] {
+            auto source = std::make_shared<detail::spot_context_state_t> ();
+            source->node = node;
+            source->channel_runtime = node->channel_runtime;
+            source_lifetime = source;
+            auto publisher_context = detail::spot_context_access_t::create (source);
+            return publisher_context.publish (channel, topic, event_t{1}).async ();
+        }());
+        EXPECT_FALSE (source_lifetime.expired ());
+    }
+    ASSERT_TRUE (publication->result ());
     std::size_t received = 0;
-    const auto receive = [&] (const auto &, const auto &record,
+    const auto receive = [&] (const auto &owner, const auto &record,
                               std::vector<zlink::message_t> parts) {
         ++received;
-        auto delivered = runtime.dispatch_subscription (
-          context, topic, parts, provider, serializers, record.before_application_handler);
-        EXPECT_TRUE (delivered);
-        if (delivered)
-            EXPECT_TRUE (delivered.value ());
+        auto header = fw::runtime::decode_mesh_record_header (record, parts, true, node->dispatch);
+        EXPECT_TRUE (header) << (header.error () ? header.error ()->what () : "");
+        if (!header)
+            return;
+        EXPECT_TRUE (runtime.dispatch_mesh_record (owner, record, parts, header.value (), provider,
+                                                   serializers, {}, nullptr,
+                                                   record.before_application_handler));
     };
     // Submit/completion §6: source commit precedes target submission. Hold its
     // existing supply permit to expose that ordering without a timing wait.
@@ -162,7 +238,33 @@ TEST_F (SpotSubscribe, PublisherFrameKeepsNamedChannelThroughLocalDelivery)
     EXPECT_EQ (1u, received);
     EXPECT_EQ ((std::vector<std::string>{channel}), subscriber->channels);
     EXPECT_EQ ((std::vector<std::string>{topic}), subscriber->topics);
+    EXPECT_EQ ((std::vector<int>{1}), subscriber->values);
     native->close ();
+}
+
+TEST_F (SpotSubscribe, ContextPublishChecksRelocationReadinessAtSubmission)
+{
+    state->channel_runtime = std::make_shared<detail::channel_runtime_state_t> ();
+    state->channel_runtime->serializers = &serializers;
+    state->relocation_coordination_mode =
+      fw::spot_relocation_coordination_mode_t::application_signaled;
+    state->relocation_boundary_active = true;
+    state->serial_queue = std::make_shared<fw::runtime::serial_execution_queue_t> (
+      *state->serial_executor, fw::runtime::serial_execution_queue_options_t{},
+      fw::runtime::serial_execution_queue_t::error_handler_t{},
+      fw::runtime::serial_lane_policy_t::spot_wide ());
+    std::optional<fw::result_t<void>> result;
+    const auto ran = state->run_serial_sync ("publish-after-relocation-ready", [&] {
+        auto call = context.publish (channel, "runtime-topic", event_t{1});
+        context.relocation_ready ().defer ();
+        result = call.async ().result ();
+    });
+    state->complete_relocation_ready (fw::spot_relocation_ready_outcome_t::continued);
+    state->serial_queue->drain ();
+    ASSERT_TRUE (ran);
+    ASSERT_TRUE (result);
+    EXPECT_FALSE (*result);
+    EXPECT_EQ (fw::framework_error_kind_t::invalid_operation, result->error_kind ());
 }
 
 TEST_F (SpotSubscribe, OtherChannelDoesNotInvokeSameTopic)

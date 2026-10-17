@@ -20,6 +20,7 @@
 #include "runtime/protocol/service_wire_codec.hpp"
 
 #include <service_wire_pilot_codec.hpp>
+#include <service_wire_codec.hpp>
 
 #include <zlink/Contracts/Core/byte_count.hpp>
 #include <zlink/Contracts/Core/context.hpp>
@@ -922,6 +923,28 @@ task_t<zlink::submit_result_t> raw_mesh_node_owner_t::send_to_node_result (
 {
     co_return co_await send_with_header_result (
       target_routing_id, protocol::encode_node_send_header (), application_payload);
+}
+
+task_t<zlink::submit_result_t> raw_mesh_node_owner_t::send_logical_multicast (
+  const std::vector<std::uint8_t> &target_routing_id,
+  const std::string &channel_name,
+  const std::string &topic,
+  const std::string &source_spot_id,
+  const protocol::application_payload_t &application_payload,
+  const std::vector<std::uint8_t> &metadata)
+{
+    namespace wire = protocol::generated::detail;
+    wire::logicalMulticast_23_t command;
+    command.flags = metadata.empty () ? 0 : static_cast<std::uint8_t> (protocol::flag::metadata);
+    command.channelName.value = channel_name;
+    command.topic.value = topic;
+    command.sourceSpotId.value = source_spot_id;
+    wire::writer_t header;
+    if (wire::encode_head_logicalMulticast_23 (header, command) != wire::error_code::ok)
+        throw protocol::service_wire_error_t ("invalid logical multicast header");
+    co_return co_await send_with_header_result (
+      target_routing_id, std::move (header.data), application_payload, {}, true,
+      metadata.empty () ? std::nullopt : std::make_optional (metadata));
 }
 
 task_t<bool>
@@ -3296,6 +3319,35 @@ raw_mesh_node_owner_t::pump_one (service_liveness_registry_t::clock_t::time_poin
                 }
                 co_return raw_mesh_pump_result_t::infrastructure;
             }
+        }
+        if (header.kind == protocol::command::logicalMulticast) {
+            namespace wire = protocol::generated::detail;
+            wire::logicalMulticast_23_t multicast;
+            wire::reader_t reader (protocol::message_bytes (received->parts.front ()));
+            if (wire::decode_head_logicalMulticast_23 (reader, multicast) != wire::error_code::ok
+                || received->parts.size ()
+                     != ((multicast.flags & static_cast<std::uint8_t> (protocol::flag::metadata))
+                             == 0
+                           ? 2u
+                           : 3u))
+                co_return raw_mesh_pump_result_t::protocol_error;
+            if ((multicast.flags & static_cast<std::uint8_t> (protocol::flag::metadata)) != 0) {
+                wire::metadata_frame_t metadata;
+                wire::reader_t metadata_reader (protocol::message_bytes (received->parts[1]));
+                if (wire::decode_value_metadata_frame (metadata_reader, metadata)
+                      != wire::error_code::ok
+                    || !metadata_reader.empty ())
+                    co_return raw_mesh_pump_result_t::protocol_error;
+            }
+            (void) protocol::decode_application_payload (
+              protocol::message_bytes (received->parts.back ()), false);
+            co_return enqueue_received (
+              service_mailbox_record_t{
+                service_mailbox_t::application_owner (host::owner_kind_t::node),
+                service_mailbox_domain_t::application, std::move (received->parts),
+                std::move (received->source_routing_id), received->reply_token, std::nullopt,
+                admitted->descriptor.lifecycle_generation},
+              raw_mesh_pump_result_t::application);
         }
         if ((header.kind != protocol::command::nodeSend
              && header.kind != protocol::command::nodeRequest

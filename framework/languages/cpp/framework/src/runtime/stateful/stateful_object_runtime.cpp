@@ -473,6 +473,19 @@ std::optional<object_ref_t> stateful_object_runtime_t::find (object_kind_t kind,
       .get ();
 }
 
+bool stateful_object_runtime_t::contains (const object_ref_t &reference) const
+{
+    return contains_async (reference).result ().value ();
+}
+
+task_t<bool> stateful_object_runtime_t::contains_async (object_ref_t reference) const
+{
+    return _lane.run_task ([this, reference = std::move (reference)] {
+        stateful_error_t error = stateful_error_t::none;
+        return find_record_locked (reference, error) != nullptr;
+    });
+}
+
 std::pair<stateful_error_t, membership_token_t>
 stateful_object_runtime_t::begin_membership_move (const object_ref_t &actor,
                                                   const object_ref_t &target_spot)

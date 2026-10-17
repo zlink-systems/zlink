@@ -1726,18 +1726,16 @@ class spot_node_runtime_t
                                           const zlink::message_t &message,
                                           service_provider_t &services,
                                           serializer_registry_t &serializers) const;
-    result_t<bool> dispatch_subscription (const spot_context_t &context,
-                                          std::string topic,
-                                          const std::vector<zlink::message_t> &parts,
-                                          service_provider_t &services,
-                                          serializer_registry_t &serializers,
-                                          std::function<void ()> before_application_handler = {},
-                                          std::function<void ()> transfer_owner_reservation = {},
-                                          std::size_t transferred_owner_byte_cost = 0) const;
-    result_t<std::size_t> dispatch_multicast (std::string topic,
-                                              const std::vector<zlink::message_t> &parts,
-                                              service_provider_t &services,
-                                              serializer_registry_t &serializers) const;
+    result_t<bool>
+    dispatch_subscription (const spot_context_t &context,
+                           std::string topic,
+                           const std::vector<zlink::message_t> &parts,
+                           service_provider_t &services,
+                           serializer_registry_t &serializers,
+                           std::function<void ()> before_application_handler = {},
+                           std::function<void ()> transfer_owner_reservation = {},
+                           std::size_t transferred_owner_byte_cost = 0,
+                           const service::receive_record_t *multicast = nullptr) const;
     bool dispatch_mesh_record (
       const service::ready_record_t &owner,
       const service::receive_record_t &record,
