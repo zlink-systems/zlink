@@ -230,7 +230,7 @@ export function requireZLinkYieldTurn(capturedTurn?: ZLinkSpotSerialTurn): ZLink
 }
 
 export interface ZLinkCapturedExecutionTurn {
-  yieldPromise<T>(pending: Promise<T>): Promise<T>;
+  yieldPromise<T>(operation: () => Promise<T>): Promise<T>;
   post(callback: () => void): void;
 }
 
@@ -240,7 +240,10 @@ export function captureZLinkExecutionTurn(): ZLinkCapturedExecutionTurn | undefi
     return undefined;
   }
   return {
-    yieldPromise: <T>(pending: Promise<T>) => current.turn.yieldPromise(pending),
+    yieldPromise: <T>(operation: () => Promise<T>) => {
+      const turn = requireZLinkYieldTurn(current.turn);
+      return turn.yieldFrameworkPromise(operation());
+    },
     post: (callback: () => void) => {
       void current.executor.post(callback);
     }
