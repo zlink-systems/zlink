@@ -37,6 +37,17 @@ interface ZLinkRelocationTransitionClient {
     CompletionStage<Settlement> settle(
             RoutingId targetNodeRid, ZLinkSpotRetireControl.Fence fence, Instant preserveAt);
 
+    /** Carries the exact authority read that confirmed target ownership. */
+    default CompletionStage<AuthoritySettlement> settleAuthority(
+            RoutingId targetNodeRid, ZLinkSpotRetireControl.Fence fence, Instant preserveAt) {
+        return settle(targetNodeRid, fence, preserveAt)
+                .thenApply(outcome -> new AuthoritySettlement(outcome, null));
+    }
+
+    record AuthoritySettlement(
+            Settlement outcome,
+            systems.zlink.framework.runtime.internal.locations.ZLinkAuthoritySnapshot target) {}
+
     CompletionStage<Void> abort(
             RoutingId targetNodeRid, ZLinkSpotRetireControl.Fence fence, Duration timeout);
 

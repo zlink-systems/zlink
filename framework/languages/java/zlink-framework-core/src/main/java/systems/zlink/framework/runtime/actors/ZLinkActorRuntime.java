@@ -1818,9 +1818,10 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
 
     public CompletionStage<Void> stageRelocationMessageFollowAsync(
             ZLinkServiceM6BWireCodec.ActorRouteFence source,
-            ZLinkServiceM6BWireCodec.ActorRouteFence target) {
+            ZLinkBackendActorRef targetActor,
+            CompletionStage<ZLinkServiceM6BWireCodec.ActorRouteFence> targetFence) {
         return handoff.stageRelocationRouteAsync(
-                messageFollowRoute(source), messageFollowRoute(target), target);
+                messageFollowRoute(source), targetActor, targetFence);
     }
 
     public void commitRelocationMessageFollow(ZLinkServiceM6BWireCodec.ActorRouteFence source) {
@@ -2989,6 +2990,10 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         messageFollowNoticeSender = sender;
     }
 
+    public boolean hasMessageFollowSource(String actorId) {
+        return handoff.hasMessageFollowSource(actorId);
+    }
+
     /**
      * Relays one stale raw Actor record through the committed typed Actor route. The caller
      * transfers the received parts and admission lease only when this method returns true.
@@ -3016,15 +3021,19 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             return false;
         }
         ZLinkBackendActorRef staleActor = header.target().actor();
+        // Presence includes staged tenures: the source installs its forward before the cut.
+        // Keep this read on the handoff lane; an absent tenure needs no route allocation.
+        ZLinkActorTransferHandoff.MessageFollowSource sameActor =
+                handoff.messageFollowSource(staleActor.actorId(), false).orElse(null);
+        if (sameActor == null) {
+            return false;
+        }
         ZLinkServiceMessageFollowWireCodec.ActorRoute sourceRoute =
                 messageFollowSourceRoute(header);
         ZLinkActorTransferHandoff.MessageFollowSource followSource =
                 handoff.messageFollowSource(sourceRoute).orElse(null);
         if (followSource == null) {
-            ZLinkActorTransferHandoff.MessageFollowSource sameActor =
-                    handoff.messageFollowSource(staleActor.actorId()).orElse(null);
-            if (sameActor != null
-                    && sameActor.sourceActorRef().generation() != staleActor.generation()) {
+            if (sameActor.sourceActorRef().generation() != staleActor.generation()) {
                 return rejectRetainedMessageFollowIngress(
                         parts,
                         failure,
@@ -3039,15 +3048,12 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             if (isCurrentLocalRoute(header.target())) {
                 return false;
             }
-            if (sameActor != null) {
-                return rejectRetainedMessageFollowIngress(
-                        parts,
-                        failure,
-                        ZLinkFrameworkErrorKind.UNAVAILABLE,
-                        "Message Follow source fence is unavailable or stale",
-                        terminalRelease);
-            }
-            return false;
+            return rejectRetainedMessageFollowIngress(
+                    parts,
+                    failure,
+                    ZLinkFrameworkErrorKind.UNAVAILABLE,
+                    "Message Follow source fence is unavailable or stale",
+                    terminalRelease);
         }
         if (!followSource.matchesSourceRoute(sourceRoute)
                 || followSource.targetActorRef().generation() != staleActor.generation()) {
@@ -3058,7 +3064,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                     "Message Follow source fence is unavailable or stale",
                     terminalRelease);
         }
-        if (followSource.rawTargetRoute() != null) {
+        if (followSource.targetReady() != null) {
             return relayRawMessageFollow(
                     sourceNodeRid,
                     sourceNodeGeneration,
@@ -3241,31 +3247,38 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                     "Message Follow hop limit exceeded",
                     terminalRelease);
         }
-        if (messageFollowRoute(followSource.rawTargetRoute()).equals(sourceRoute)) {
-            return rejectRetainedMessageFollowIngress(
-                    parts,
-                    failure,
-                    ZLinkFrameworkErrorKind.UNAVAILABLE,
-                    "Message Follow loop detected",
-                    terminalRelease);
-        }
-        Optional<ZLinkMessageFollowSuppressionRegistry.Claim> noticeClaim =
-                !followSource.committed() || messageFollowNoticeSender == null
-                        ? Optional.empty()
-                        : followSource.beginMessageFollowNotice(sourceRoute);
         long payloadBytes = parts.stream().mapToLong(Message::size).sum();
         handoff.followWithQueueSnapshot(
                         followSource,
                         header.target().actor().generation(),
                         payloadBytes,
                         () ->
-                                spotNode.forwardMessageFollowActor(
-                                        header, followSource.rawTargetRoute(), parts))
+                                followSource
+                                        .targetReady()
+                                        .exceptionally(
+                                                notReady -> {
+                                                    parts.forEach(Message::close);
+                                                    throw new CompletionException(notReady);
+                                                })
+                                        .thenCompose(
+                                                ignored -> {
+                                                    var target = followSource.rawTargetRoute();
+                                                    if (messageFollowRoute(target)
+                                                            .equals(sourceRoute)) {
+                                                        parts.forEach(Message::close);
+                                                        return CompletableFuture.failedFuture(
+                                                                new ZLinkFrameworkException(
+                                                                        ZLinkFrameworkErrorKind
+                                                                                .UNAVAILABLE,
+                                                                        "Message Follow loop detected"));
+                                                    }
+                                                    return spotNode.forwardMessageFollowActor(
+                                                            header, target, parts);
+                                                }))
                 .whenComplete(
                         (result, relayFailure) -> {
                             try {
                                 if (relayFailure != null) {
-                                    noticeClaim.ifPresent(followSource::abortMessageFollowNotice);
                                     onFailure.accept(unwrapCompletionFailure(relayFailure));
                                     return;
                                 }
@@ -3277,6 +3290,15 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                                         replies.forEach(Message::close);
                                     }
                                 }
+                                var noticeClaim =
+                                        !followSource.committed()
+                                                        || messageFollowNoticeSender == null
+                                                ? Optional
+                                                        .<ZLinkMessageFollowSuppressionRegistry
+                                                                        .Claim>
+                                                                empty()
+                                                : followSource.beginMessageFollowNotice(
+                                                        sourceRoute);
                                 if (noticeClaim.isPresent()) {
                                     sendMessageFollowNotice(
                                             messageFollowNoticeSender,
@@ -3311,7 +3333,9 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                 || targetRoute.objectGeneration() != staleHeader.target().actor().generation()
                 || !targetRoute.targetNodeRid().equals(followSource.targetActorRef().nodeRid())
                 || targetRoute.targetNodeGeneration()
-                        != followSource.targetAddress().targetNodeGeneration()) {
+                        != (followSource.targetAddress() == null
+                                ? followSource.rawTargetRoute().targetNodeGeneration()
+                                : followSource.targetAddress().targetNodeGeneration())) {
             LOGGER.warning(
                     "Message Follow target route fence changed before notice "
                             + "for actor "
@@ -3407,7 +3431,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                 staleHeader.target().ownerLeaseGeneration());
     }
 
-    private static ZLinkServiceMessageFollowWireCodec.ActorRoute messageFollowRoute(
+    static ZLinkServiceMessageFollowWireCodec.ActorRoute messageFollowRoute(
             ZLinkServiceM6BWireCodec.ActorRouteFence route) {
         return new ZLinkServiceMessageFollowWireCodec.ActorRoute(
                 route.actor().actorId(),

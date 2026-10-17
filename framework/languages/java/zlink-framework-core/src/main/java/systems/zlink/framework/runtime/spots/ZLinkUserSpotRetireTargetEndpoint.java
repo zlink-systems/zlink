@@ -981,7 +981,7 @@ final class ZLinkUserSpotRetireTargetEndpoint
                                                                 prepared -> {
                                                                     target.published().set(true);
                                                                     return ZLinkSerialExecutionQueue
-                                                                            .yieldCurrent(
+                                                                            .manageCurrent(
                                                                                     actorJoin
                                                                                             .notifyTargetJoined(
                                                                                                     target
@@ -1012,7 +1012,7 @@ final class ZLinkUserSpotRetireTargetEndpoint
                                                         .thenCompose(
                                                                 failure ->
                                                                         ZLinkSerialExecutionQueue
-                                                                                .yieldCurrent(
+                                                                                .manageCurrent(
                                                                                         actorJoin
                                                                                                 .notifyTargetCompletion(
                                                                                                         target

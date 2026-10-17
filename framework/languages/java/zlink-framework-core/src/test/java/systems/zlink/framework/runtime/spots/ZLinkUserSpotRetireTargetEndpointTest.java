@@ -1075,6 +1075,14 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
         }
 
         @Override
+        public CompletionStage<Void> enqueueIngress(
+                ZLinkStandaloneActorRelocationStagingOwner.Request request,
+                byte[] acceptedJournalRecord,
+                java.util.function.Supplier<CompletionStage<Void>> turn) {
+            return turn.get();
+        }
+
+        @Override
         public CompletionStage<Object> prepare(
                 ZLinkStandaloneActorRelocationStagingOwner.Request request,
                 byte[] state,
