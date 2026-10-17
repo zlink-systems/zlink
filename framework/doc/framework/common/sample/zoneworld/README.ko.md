@@ -132,7 +132,7 @@ store는 resource 표에서 설명하며 이동·publish 시간 순서는 §7 se
   `allow_empty_zone_set`, `allowsEmptyZoneSet`). 이 경로에서는 `attempt`가 `8`에 이르고
   census가 비어 있으면 재시도를 멈추고 ready를 알린다. 일반 startup에서는 이 경로를 쓰지
   않는다.
-- zoneworld.mesh는 ChannelName, Spot·Actor direct message와 Logical Multicast를 운반한다.
+- zoneworld.mesh는 ChannelName `zoneworld.zones`의 message, Spot·Actor direct message와 Logical Multicast를 운반한다. Zone Spot은 `zoneworld.zones`에 참여해 구독·발행한다.
 - zoneworld.broadcast는 mesh와 독립된 classic fanout publisher/subscriber 연결이다.
 - NodeId와 transport RID는 별도 domain이다.
 - Client에는 Gateway와 Ops endpoint만 제공하며 ZoneNode endpoint를 노출하지 않는다.
