@@ -240,8 +240,8 @@ bool recursive_resolution_retries ()
     try {
         provider.get_required<singleton_t> ();
     }
-    catch (const std::logic_error &) {
-        rejected = true;
+    catch (const framework_exception_t &error) {
+        rejected = error.kind () == framework_error_kind_t::invalid_operation;
     }
     catch (const std::runtime_error &error) {
         std::cout << "old recursion: " << error.what () << '\n';
@@ -284,8 +284,8 @@ bool indirect_recursive_resolution_retries ()
     try {
         provider.get_required<singleton_t> ();
     }
-    catch (const std::logic_error &) {
-        rejected = true;
+    catch (const framework_exception_t &error) {
+        rejected = error.kind () == framework_error_kind_t::invalid_operation;
     }
     catch (const std::runtime_error &error) {
         std::cout << "old indirect recursion: " << error.what () << '\n';

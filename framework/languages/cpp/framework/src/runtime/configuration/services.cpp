@@ -4,7 +4,6 @@
 
 #include <atomic>
 #include <mutex>
-#include <stdexcept>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -188,7 +187,8 @@ class service_registry_t
         // Reject a synchronous cycle before call_once can wait for this thread.
         for (auto *active = singleton_resolution_t::current; active; active = active->previous) {
             if (active->descriptor == &descriptor) {
-                throw std::logic_error ("recursive singleton resolution");
+                throw framework_exception_t (framework_error_kind_t::invalid_operation,
+                                             "recursive singleton resolution");
             }
         }
         std::call_once (descriptor.initialization, [&] {
