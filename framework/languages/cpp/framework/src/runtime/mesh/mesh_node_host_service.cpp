@@ -2026,8 +2026,7 @@ void execute_actor_create_operation_target (
         }
         const auto actor = created.value ();
         auto finish_creation = [node, actor, completion, activation_admission] (
-                                 host::actor_create_operation_result_t result,
-                                 bool ready) mutable {
+                                 host::actor_create_operation_result_t result, bool ready) mutable {
             activation_admission.reset ();
             if (!ready)
                 node->settle_application_actor_creation (actor, false);
@@ -2037,8 +2036,8 @@ void execute_actor_create_operation_target (
         };
         host::pending_operation_t join_operation;
         const auto joined = node->submit_application_actor_entry_spot_join (
-          actor, node_rid_t::from_string (status.routing_id ().to_string ()),
-          creation_request, timeout, join_operation,
+          actor, node_rid_t::from_string (status.routing_id ().to_string ()), creation_request,
+          timeout, join_operation,
           [request, actor, finish_creation,
            publish] (result_t<detail::actor_join_reply_t> joined) mutable {
               host::actor_create_operation_result_t result;
@@ -2088,10 +2087,9 @@ void execute_actor_create_operation_target (
                        });
           });
         if (!joined)
-            publish (std::nullopt, std::nullopt, std::nullopt,
-                     [finish_creation, failed] (bool) mutable {
-                         finish_creation (failed (), false);
-                     });
+            publish (
+              std::nullopt, std::nullopt, std::nullopt,
+              [finish_creation, failed] (bool) mutable { finish_creation (failed (), false); });
     });
 }
 

@@ -8218,7 +8218,6 @@ bool verify_relocation_membership_pending_releases_root_turn ()
     return !captured_while_node_pending && captured.load () && result && continued.load () == 1
            && spot->serial_queue->pending_count () == 0;
 }
-
 bool verify_teardown_observes_actor_handoff_terminal ()
 {
     using namespace zlink::framework;
@@ -8316,7 +8315,6 @@ int main (int argc, char **argv)
                    && verify_relocation_readiness_root_rejection ()
                  ? EXIT_SUCCESS
                  : EXIT_FAILURE;
-
 
     if (argc == 2 && std::string_view (argv[1]) == "--source-mesh-stopped-management")
         return verify_remote_actor_cutover_completion_is_target_owned (true, true, true)
