@@ -6,6 +6,7 @@
 #include "runtime/mesh/mesh_node_runtime.hpp"
 #include "runtime/locations/authority_key_codec.hpp"
 #include "runtime/execution/serial_execution_queue.hpp"
+#include "runtime/diagnostics/dispatch_options_access.hpp"
 #include "runtime/spots/spot_runtime.hpp"
 #include <zlink/stream_connector.hpp>
 #include <gtest/gtest.h>
@@ -60,6 +61,7 @@ struct observations_t
     int entry_joined = 0;
     int entry_left = 0;
     fw::task_completion_source_t<void> release_leave;
+    bool probe_admission_observed = false;
     std::optional<std::size_t> completion_to_hold;
     fw::task_completion_source_t<void> release_completion;
 } *observations;
@@ -1349,6 +1351,7 @@ class ActorDeferredJoinFailure : public testing::TestWithParam<std::tuple<bool, 
 TEST_P (ActorDeferredJoinFailure, FailureAndRejectionPreserveSourceActor)
 {
     observations_t evidence;
+    evidence.completion_to_hold = 1;
     evidence.fail_remote_factory =
       std::string_view (std::get<1> (GetParam ())) == factory_failed_spot;
     observations = &evidence;
@@ -1357,6 +1360,21 @@ TEST_P (ActorDeferredJoinFailure, FailureAndRejectionPreserveSourceActor)
     host_t first, second;
     release_callbacks_t release{evidence};
     configure (first, first_rid, store, relocations);
+    fw::detail::dispatch_options_access_t::set_observer_for_tests (
+      first.app.add_zlink_framework ().configure_dispatch (),
+      [&evidence] (const fw::message_flow_event_t &event) {
+          if (event.packet_name != probe_t::packet_name)
+              return;
+          const bool parked = event.detail_stage == "relay_actor_packet.try_append_backlog"
+                              && event.outcome == fw::message_flow_outcome_t::admitted;
+          if (!parked && event.detail_stage != "invoke_erased.post_serial")
+              return;
+          {
+              std::lock_guard lock (evidence.mutex);
+              evidence.probe_admission_observed = true;
+          }
+          evidence.changed.notify_all ();
+      });
     first.start ();
     ASSERT_TRUE (ready (first));
     auto services = first.app.advanced ().services ().build_provider ();
@@ -1409,10 +1427,20 @@ TEST_P (ActorDeferredJoinFailure, FailureAndRejectionPreserveSourceActor)
                                              : fw::framework_error_kind_t::internal_failure);
         }
     }
-    auto probe = client.request (fw::actor_id_t (actor_id), probe_t{17})
-                   .timeout (wait_budget)
-                   .async<probe_t> ()
-                   .result ();
+    // Keep completion's barrier active until the public probe reaches source
+    // admission. Existing Detailed flow events fix the order without a sleep.
+    auto pending_probe = client.request (fw::actor_id_t (actor_id), probe_t{17})
+                           .timeout (wait_budget)
+                           .async<probe_t> ();
+    bool reached_admission;
+    {
+        std::unique_lock lock (evidence.mutex);
+        reached_admission = evidence.changed.wait_for (
+          lock, wait_budget, [&] { return evidence.probe_admission_observed; });
+    }
+    evidence.release_completion.complete (fw::result_t<void>::success ());
+    ASSERT_TRUE (reached_admission);
+    auto probe = pending_probe.result ();
     ASSERT_TRUE (probe) << "kind=" << static_cast<int> (probe.error_kind ())
                         << " message=" << (probe.error () ? probe.error ()->what () : "");
     EXPECT_EQ (probe.value ().value, 17);

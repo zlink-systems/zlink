@@ -235,6 +235,7 @@ class test_serial_turn_t final : public zlink::framework::detail::serial_turn_t
         return true;
     }
     bool released () const override { return released_value; }
+    bool claim_yield () override { return !released_value && !std::exchange (yield_claimed, true); }
     zlink::framework::detail::task_scheduler_t resume_scheduler () override
     {
         return [] (std::function<void ()> work) { work (); };
@@ -252,6 +253,7 @@ class test_serial_turn_t final : public zlink::framework::detail::serial_turn_t
 
   private:
     bool released_value = false;
+    bool yield_claimed = false;
     std::stop_token cancellation;
 };
 

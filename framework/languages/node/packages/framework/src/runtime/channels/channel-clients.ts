@@ -589,7 +589,7 @@ class DefaultZLinkRequestCall implements ZLinkChannelRequestCall {
       undefined,
       this.message
     );
-    return turn.yieldPromise(pending);
+    return turn.yieldFrameworkPromise(pending);
   }
 }
 

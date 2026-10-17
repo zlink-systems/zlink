@@ -3,8 +3,12 @@ package systems.zlink.framework.runtime.locations;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.EnumSource;
 
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.locations.ZLinkActivationConcurrency;
@@ -668,6 +672,157 @@ class ZLinkInMemoryLocationStoreTest {
                                 () -> false)
                         .toCompletableFuture()
                         .get());
+    }
+
+    @ParameterizedTest
+    @EnumSource(
+            value = ZLinkLocationWriteIntent.class,
+            names = {"NEW_CLAIM", "RENEW"})
+    void repeatedMeshNodeWriteDoesNotMutateDescriptor(ZLinkLocationWriteIntent intent)
+            throws Exception {
+        var store = new ZLinkInMemoryLocationStore(Clock.fixed(NOW, ZoneOffset.UTC));
+        var owner =
+                assertInstanceOf(
+                                ZLinkOwnerLeaseClaimed.class,
+                                store.claimOwnerLease("repeat-owner", Duration.ofSeconds(30))
+                                        .toCompletableFuture()
+                                        .get())
+                        .token();
+        var first = meshNodeDescriptor(owner, 1, "tcp://127.0.0.1:7000");
+        assertEquals(
+                ZLinkLocationWriteStatus.STORED,
+                store.updateMeshNode(first, ZLinkLocationWriteIntent.NEW_CLAIM)
+                        .toCompletableFuture()
+                        .get()
+                        .status());
+        var stored = onlyMeshNode(store);
+        var stamp = store.getMeshNodeChangeStamp("mesh").toCompletableFuture().get();
+        var retry =
+                store.updateMeshNode(
+                                copyDescriptorFields(
+                                        first,
+                                        NOW.plusSeconds(1),
+                                        first.entrySpotId(),
+                                        first.activationConcurrency()),
+                                intent)
+                        .toCompletableFuture()
+                        .get();
+        assertEquals(ZLinkLocationWriteStatus.STORED, retry.status());
+        assertEquals(stamp, store.getMeshNodeChangeStamp("mesh").toCompletableFuture().get());
+        assertEquals(stored, onlyMeshNode(store));
+        assertEquals(
+                ZLinkLocationWriteStatus.REJECTED_CONFLICT,
+                store.updateMeshNode(
+                                meshNodeDescriptor(owner, 2, "tcp://127.0.0.1:7000"),
+                                ZLinkLocationWriteIntent.NEW_CLAIM)
+                        .toCompletableFuture()
+                        .get()
+                        .status());
+        assertEquals(
+                ZLinkLocationWriteStatus.REJECTED_CONFLICT,
+                store.updateMeshNode(
+                                meshNodeDescriptor(owner, 1, "tcp://127.0.0.1:7001"),
+                                ZLinkLocationWriteIntent.NEW_CLAIM)
+                        .toCompletableFuture()
+                        .get()
+                        .status());
+        var other =
+                assertInstanceOf(
+                                ZLinkOwnerLeaseClaimed.class,
+                                store.claimOwnerLease("repeat-other", Duration.ofSeconds(30))
+                                        .toCompletableFuture()
+                                        .get())
+                        .token();
+        assertEquals(
+                ZLinkLocationWriteStatus.REJECTED_CONFLICT,
+                store.updateMeshNode(
+                                meshNodeDescriptor(other, 1, "tcp://127.0.0.1:7000"),
+                                ZLinkLocationWriteIntent.NEW_CLAIM)
+                        .toCompletableFuture()
+                        .get()
+                        .status());
+        store.releaseOwnerLease(owner).toCompletableFuture().get();
+        assertEquals(
+                ZLinkLocationWriteStatus.IGNORED_STALE,
+                store.updateMeshNode(
+                                copyDescriptorFields(
+                                        first,
+                                        NOW.plusSeconds(1),
+                                        first.entrySpotId(),
+                                        first.activationConcurrency()),
+                                intent)
+                        .toCompletableFuture()
+                        .get()
+                        .status());
+    }
+
+    @ParameterizedTest
+    @CsvSource({"NEW_CLAIM,true", "NEW_CLAIM,false", "RENEW,true", "RENEW,false"})
+    void repeatedMeshNodeWriteRejectsChangedEntrySpotOrActivationConcurrency(
+            ZLinkLocationWriteIntent intent, boolean changeEntrySpot) throws Exception {
+        var store = new ZLinkInMemoryLocationStore(Clock.fixed(NOW, ZoneOffset.UTC));
+        var owner =
+                assertInstanceOf(
+                                ZLinkOwnerLeaseClaimed.class,
+                                store.claimOwnerLease(
+                                                "changed-repeat-owner", Duration.ofSeconds(30))
+                                        .toCompletableFuture()
+                                        .get())
+                        .token();
+        var first = meshNodeDescriptor(owner, 1, "tcp://127.0.0.1:7000");
+        store.updateMeshNode(first, ZLinkLocationWriteIntent.NEW_CLAIM).toCompletableFuture().get();
+        var stored = onlyMeshNode(store);
+        var stamp = store.getMeshNodeChangeStamp("mesh").toCompletableFuture().get();
+        var changed =
+                changeEntrySpot
+                        ? copyDescriptorFields(
+                                first,
+                                NOW.plusSeconds(1),
+                                Optional.of("changed-entry-00000000-0000-4000-8000-000000000001"),
+                                first.activationConcurrency())
+                        : copyDescriptorFields(
+                                first,
+                                NOW.plusSeconds(1),
+                                first.entrySpotId(),
+                                new ZLinkActivationConcurrency(
+                                        0, first.activationConcurrency().limit() + 1));
+        if (intent == ZLinkLocationWriteIntent.NEW_CLAIM) {
+            assertEquals(
+                    ZLinkLocationWriteStatus.REJECTED_CONFLICT,
+                    store.updateMeshNode(changed, intent).toCompletableFuture().get().status());
+        } else {
+            assertThrows(
+                    IllegalArgumentException.class, () -> store.updateMeshNode(changed, intent));
+        }
+        assertEquals(stored, onlyMeshNode(store));
+        assertEquals(stamp, store.getMeshNodeChangeStamp("mesh").toCompletableFuture().get());
+    }
+
+    private static ZLinkMeshNodeDescriptor copyDescriptorFields(
+            ZLinkMeshNodeDescriptor d,
+            Instant at,
+            Optional<String> entrySpotId,
+            ZLinkActivationConcurrency activationConcurrency) {
+        return new ZLinkMeshNodeDescriptor(
+                d.meshName(),
+                d.rid(),
+                d.lifecycleGeneration(),
+                d.descriptorRevision(),
+                d.endpoint(),
+                d.channelWeights(),
+                d.applicationVersion(),
+                d.objectCapabilities(),
+                d.objectRole(),
+                entrySpotId,
+                d.placementWeight(),
+                d.capacity(),
+                activationConcurrency,
+                d.maintenanceWave(),
+                d.state(),
+                d.securityIdentity(),
+                d.ownerId(),
+                d.leaseGeneration(),
+                at);
     }
 
     @Test
