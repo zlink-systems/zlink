@@ -318,7 +318,8 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
         try (var ignored =
                 systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationContext
                         .enterApplicationExecution(null)) {
-            return bounded.execute(operationId, deadlineNanos)
+            return ZLinkSerialExecutionQueue.yieldCurrent(
+                            bounded.execute(operationId, deadlineNanos))
                     .handle(
                             (result, error) -> {
                                 if (error != null) {

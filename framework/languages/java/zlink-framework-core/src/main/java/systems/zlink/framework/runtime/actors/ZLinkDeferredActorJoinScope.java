@@ -2,6 +2,7 @@ package systems.zlink.framework.runtime.actors;
 
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -199,12 +200,14 @@ final class ZLinkDeferredActorJoinScope {
                 barrier =
                         actorMailbox.apply(
                                 () ->
-                                        activation.thenCompose(
-                                                active ->
-                                                        active
-                                                                ? operation.get()
-                                                                : CompletableFuture.completedFuture(
-                                                                        null)));
+                                        ZLinkSerialExecutionQueue.yieldCurrent(activation)
+                                                .thenCompose(
+                                                        active ->
+                                                                active
+                                                                        ? operation.get()
+                                                                        : CompletableFuture
+                                                                                .completedFuture(
+                                                                                        null)));
             } catch (RuntimeException error) {
                 int claimIndex = state.claimedActorIds.lastIndexOf(actorId);
                 state.claimedActorIds.remove(claimIndex);
