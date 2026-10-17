@@ -10,6 +10,7 @@ import systems.zlink.framework.actors.*;
 import systems.zlink.framework.locationprovider.ZLinkRelocationStore;
 import systems.zlink.framework.locations.*;
 import systems.zlink.framework.runtime.InMemoryRelocationStore;
+import systems.zlink.framework.runtime.actors.ZLinkActorDispatchTarget.QueuedTurn;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
@@ -671,6 +672,27 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
     private static ZLinkUserSpotAggregateStagingOwner unusedSpotStaging() {
         return new ZLinkUserSpotAggregateStagingOwner(
                 new ZLinkUserSpotAggregateStagingOwner.StagingBackend() {
+                    @Override
+                    public CompletionStage<QueuedTurn> prepareIngress(Object actor) {
+                        return CompletableFuture.failedFuture(
+                                new AssertionError("unused aggregate Actor dispatch"));
+                    }
+
+                    @Override
+                    public CompletionStage<Void> enqueueIngress(
+                            Object spot,
+                            List<QueuedTurn> dispatches,
+                            String lane,
+                            byte[] record,
+                            java.util.function.Supplier<CompletionStage<Void>> turn,
+                            CompletableFuture<Void> admission) {
+                        var failure =
+                                new AssertionError(
+                                        "Actor-only fixture must not dispatch aggregate backlog");
+                        admission.completeExceptionally(failure);
+                        return CompletableFuture.failedFuture(failure);
+                    }
+
                     private AssertionError unused() {
                         return new AssertionError(
                                 "User Spot staging must not handle an Actor root");
@@ -821,12 +843,39 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
         private final AtomicInteger activeTurns = new AtomicInteger();
         private final AtomicInteger maxActiveTurns = new AtomicInteger();
 
+        private final CompletableFuture<Void> moving = new CompletableFuture<>();
+        private final ZLinkManualExecutor executor = new ZLinkManualExecutor();
+
+        @Override
+        public CompletionStage<QueuedTurn> prepareIngress(
+                Object actor, ZLinkStandaloneActorRelocationStagingOwner.Request request) {
+            return CompletableFuture.completedFuture(
+                    executor.actorDispatch(request.actorId(), actor, moving));
+        }
+
         @Override
         public CompletionStage<Void> enqueueIngress(
+                QueuedTurn dispatch,
                 ZLinkStandaloneActorRelocationStagingOwner.Request request,
-                byte[] acceptedJournalRecord,
-                java.util.function.Supplier<CompletionStage<Void>> turn) {
-            return turn.get();
+                byte[] record,
+                Supplier<CompletionStage<Void>> turn,
+                CompletableFuture<Void> admission) {
+            admittedTurns.incrementAndGet();
+            return dispatch.target()
+                    .executeActorLazyRecord(
+                            dispatch.activation(),
+                            () -> record,
+                            record.length,
+                            () -> {
+                                int active = activeTurns.incrementAndGet();
+                                maxActiveTurns.accumulateAndGet(active, Math::max);
+                                return turn.get()
+                                        .whenComplete(
+                                                (ignored, failure) ->
+                                                        activeTurns.decrementAndGet());
+                            },
+                            () -> {},
+                            admission);
         }
 
         @Override
@@ -853,21 +902,6 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
         }
 
         @Override
-        public <T> CompletionStage<T> admitApplicationJob(Supplier<CompletionStage<T>> turn) {
-            admittedTurns.incrementAndGet();
-            int active = activeTurns.incrementAndGet();
-            maxActiveTurns.accumulateAndGet(active, Math::max);
-            CompletionStage<T> result;
-            try {
-                result = turn.get();
-            } catch (RuntimeException | Error failure) {
-                activeTurns.decrementAndGet();
-                throw failure;
-            }
-            return result.whenComplete((ignored, failure) -> activeTurns.decrementAndGet());
-        }
-
-        @Override
         public void publish(
                 Object actor, ZLinkStandaloneActorRelocationStagingOwner.Request request) {
             assertTrue(published.compareAndSet(false, true));
@@ -880,6 +914,8 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
                     replayedPackets.isEmpty(),
                     "durable backlog must not run before lifecycle admission");
             assertTrue(admitted.compareAndSet(false, true));
+            moving.complete(null);
+            executor.drain();
         }
 
         @Override

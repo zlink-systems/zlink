@@ -13,6 +13,7 @@ import systems.zlink.framework.actors.ZLinkActorJoinOperationId;
 import systems.zlink.framework.locations.*;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.runtime.InMemoryRelocationStore;
+import systems.zlink.framework.runtime.actors.ZLinkActorDispatchTarget.QueuedTurn;
 import systems.zlink.framework.runtime.actors.ZLinkActorRuntime;
 import systems.zlink.framework.runtime.actors.ZLinkSessionRelocationPeerClient;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
@@ -108,6 +109,10 @@ final class ZLinkActorJoinPrewarmIngressTest {
             //  between Accepted and PREPARE (migrated atomically when the
             //  real stage installed) ahead of the one that landed
             //  straight in the real stage after install.
+            CompletableFuture.allOf(
+                            harness.recordingBackend.queuedTerminals.toArray(
+                                    CompletableFuture[]::new))
+                    .get(5, TimeUnit.SECONDS);
             assertEquals(List.of("EARLY", "AFTER_INSTALL"), harness.recordingBackend.replayed);
         }
     }
@@ -441,6 +446,27 @@ final class ZLinkActorJoinPrewarmIngressTest {
     private static ZLinkUserSpotAggregateStagingOwner unusedSpotStaging() {
         return new ZLinkUserSpotAggregateStagingOwner(
                 new ZLinkUserSpotAggregateStagingOwner.StagingBackend() {
+                    @Override
+                    public CompletionStage<QueuedTurn> prepareIngress(Object actor) {
+                        return CompletableFuture.failedFuture(
+                                new AssertionError("unused aggregate Actor dispatch"));
+                    }
+
+                    @Override
+                    public CompletionStage<Void> enqueueIngress(
+                            Object spot,
+                            List<QueuedTurn> dispatches,
+                            String lane,
+                            byte[] record,
+                            java.util.function.Supplier<CompletionStage<Void>> turn,
+                            CompletableFuture<Void> admission) {
+                        var failure =
+                                new AssertionError(
+                                        "Actor-only fixture must not dispatch aggregate backlog");
+                        admission.completeExceptionally(failure);
+                        return CompletableFuture.failedFuture(failure);
+                    }
+
                     private <T> CompletionStage<T> unused() {
                         return CompletableFuture.failedFuture(
                                 new AssertionError("Spot aggregate path is unused"));
@@ -526,6 +552,7 @@ final class ZLinkActorJoinPrewarmIngressTest {
         private final ZLinkRelocationAdapterRegistry adapters;
         private final ZLinkSpotRuntime spots;
         final List<String> replayed = new CopyOnWriteArrayList<>();
+        final List<CompletableFuture<Void>> queuedTerminals = new CopyOnWriteArrayList<>();
 
         RecordingActorBackend(
                 systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode targetNode,
@@ -539,16 +566,35 @@ final class ZLinkActorJoinPrewarmIngressTest {
         }
 
         @Override
+        public CompletionStage<QueuedTurn> prepareIngress(
+                Object actor, ZLinkStandaloneActorRelocationStagingOwner.Request request) {
+            return spots.actorSessions()
+                    .runtime()
+                    .prepareTransferredActorDispatch(
+                            (systems.zlink.framework.runtime.actors.ZLinkActorRuntime
+                                            .PreparedTransferredActor)
+                                    actor);
+        }
+
+        @Override
         public CompletionStage<Void> enqueueIngress(
+                QueuedTurn dispatch,
                 ZLinkStandaloneActorRelocationStagingOwner.Request request,
                 byte[] acceptedJournalRecord,
-                java.util.function.Supplier<CompletionStage<Void>> turn) {
-            return spots.enqueueActorDispatch(
-                    request.actorId(),
-                    () -> acceptedJournalRecord,
-                    acceptedJournalRecord.length,
-                    turn,
-                    () -> {});
+                java.util.function.Supplier<CompletionStage<Void>> turn,
+                CompletableFuture<Void> admission) {
+            var terminal =
+                    spots.actorSessions()
+                            .runtime()
+                            .submitActorDispatchLazyRecord(
+                                    dispatch,
+                                    () -> acceptedJournalRecord,
+                                    acceptedJournalRecord.length,
+                                    turn,
+                                    () -> {},
+                                    admission);
+            queuedTerminals.add(terminal.toCompletableFuture());
+            return terminal;
         }
 
         @Override

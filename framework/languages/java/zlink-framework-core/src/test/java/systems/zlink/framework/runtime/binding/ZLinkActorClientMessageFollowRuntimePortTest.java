@@ -98,6 +98,9 @@ final class ZLinkActorClientMessageFollowRuntimePortTest {
             source.start();
             target.start();
             clientNode.start();
+            source.refreshLocalAuthorityFence().toCompletableFuture().join();
+            target.refreshLocalAuthorityFence().toCompletableFuture().join();
+            clientNode.refreshLocalAuthorityFence().toCompletableFuture().join();
             source.connectPeer(clientEndpoint, CLIENT_RID);
             target.connectPeer(clientEndpoint, CLIENT_RID);
             clientNode.connectPeer(sourceEndpoint, SOURCE_RID);
@@ -227,7 +230,7 @@ final class ZLinkActorClientMessageFollowRuntimePortTest {
                                     assertTrue(
                                             target.spotNode()
                                                     .sendToActor(
-                                                            targetActor,
+                                                            targetRoute,
                                                             parts,
                                                             SendFlags.DONT_WAIT));
                                 } finally {

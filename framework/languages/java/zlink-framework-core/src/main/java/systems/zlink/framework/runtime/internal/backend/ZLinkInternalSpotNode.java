@@ -376,11 +376,12 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
             int flags,
             List<Message> parts);
 
-    boolean sendToActor(ZLinkBackendActorRef actor, List<Message> parts, SendFlags flags);
+    boolean sendToActor(
+            ZLinkServiceM6BWireCodec.ActorRouteFence actor, List<Message> parts, SendFlags flags);
 
-    /** Submits one remote Actor send through binding-owned admission. */
+    /** Submits an Actor send through its owning ingress admission. */
     default CompletionStage<Void> sendToActorAsync(
-            ZLinkBackendActorRef actor, List<Message> parts) {
+            ZLinkServiceM6BWireCodec.ActorRouteFence actor, List<Message> parts) {
         try {
             return sendToActor(actor, parts, SendFlags.DONT_WAIT)
                     ? CompletableFuture.completedFuture(null)
@@ -558,7 +559,7 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
             CompletableFuture<Void> requestAdmission);
 
     CompletionStage<List<Message>> requestToActor(
-            ZLinkBackendActorRef actor,
+            ZLinkServiceM6BWireCodec.ActorRouteFence actor,
             List<Message> parts,
             SendFlags flags,
             Duration timeout,

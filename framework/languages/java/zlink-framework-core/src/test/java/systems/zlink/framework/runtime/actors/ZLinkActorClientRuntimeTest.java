@@ -44,6 +44,7 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkPlacementAllocati
 import systems.zlink.framework.runtime.internal.locations.ZLinkPlacementAllocationState;
 import systems.zlink.framework.runtime.internal.locations.ZLinkPlacementCapacityBundle;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkRequestMetricProbe;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.locations.ZLinkRegisteredLocationStores;
 import systems.zlink.framework.runtime.locations.ZLinkStoreLocationResolvers;
 import systems.zlink.framework.runtime.messaging.OneWayTestStatus;
@@ -216,6 +217,11 @@ final class ZLinkActorClientRuntimeTest {
         assertEquals("actor-1", node.sentActor.actorId());
         assertEquals(7, node.sentActor.generation());
         assertEquals("actor-1", node.requestedActor.actorId());
+        assertEquals(node.sentActor, node.sentRoute.actor());
+        assertEquals(3, node.sentRoute.targetNodeGeneration());
+        assertEquals(5, node.sentRoute.authorityOwnerGeneration());
+        assertEquals(1, node.sentRoute.ownerLeaseGeneration());
+        assertEquals(node.sentRoute, node.requestedRoute);
         assertEquals("send-1", node.sentMetadata.get("trace-id"));
         assertEquals("request-1", node.requestedMetadata.get("trace-id"));
         assertEquals("pong", pong.value());
@@ -542,11 +548,12 @@ final class ZLinkActorClientRuntimeTest {
                                     new RecordingSpotNode() {
 
                                         public CompletionStage<List<Message>> requestToActor(
-                                                ZLinkBackendActorRef actor,
+                                                ZLinkServiceM6BWireCodec.ActorRouteFence target,
                                                 List<Message> parts,
                                                 SendFlags flags,
                                                 Duration timeout,
                                                 CompletableFuture<Void> requestAdmission) {
+
                                             return ZLinkTestAdmissionFactory.acceptedRequest(
                                                     CompletableFuture.failedFuture(failure),
                                                     requestAdmission);
@@ -838,6 +845,8 @@ final class ZLinkActorClientRuntimeTest {
         private final List<Message> reply;
         ZLinkBackendActorRef sentActor;
         ZLinkBackendActorRef requestedActor;
+        ZLinkServiceM6BWireCodec.ActorRouteFence sentRoute;
+        ZLinkServiceM6BWireCodec.ActorRouteFence requestedRoute;
         Map<String, String> sentMetadata = Map.of();
         Map<String, String> requestedMetadata = Map.of();
         ZLinkStreamCodec sentCodec;
@@ -1002,7 +1011,10 @@ final class ZLinkActorClientRuntimeTest {
 
         @Override
         public boolean sendToActor(
-                ZLinkBackendActorRef actor, List<Message> parts, SendFlags flags) {
+                ZLinkServiceM6BWireCodec.ActorRouteFence target,
+                List<Message> parts,
+                SendFlags flags) {
+            ZLinkBackendActorRef actor = target.actor();
             sendAttempts++;
             if (sendFailure != null) {
                 throw new ZlinkSubmitException(sendFailure);
@@ -1011,6 +1023,7 @@ final class ZLinkActorClientRuntimeTest {
                 return false;
             }
             sentActor = actor;
+            sentRoute = target;
             ZLinkStreamHeader header = ZLinkStreamHeaderCodec.decodeOrPlain(parts.get(0).data());
             sentMetadata = header.metadata();
             sentCodec = header.codec();
@@ -1021,12 +1034,14 @@ final class ZLinkActorClientRuntimeTest {
         }
 
         public CompletionStage<List<Message>> requestToActor(
-                ZLinkBackendActorRef actor,
+                ZLinkServiceM6BWireCodec.ActorRouteFence target,
                 List<Message> parts,
                 SendFlags flags,
                 Duration timeout,
                 CompletableFuture<Void> requestAdmission) {
+            ZLinkBackendActorRef actor = target.actor();
             requestedActor = actor;
+            requestedRoute = target;
             requestedMetadata =
                     ZLinkStreamHeaderCodec.decodeOrPlain(parts.get(0).data()).metadata();
             return ZLinkTestAdmissionFactory.acceptedRequest(
@@ -1064,8 +1079,9 @@ final class ZLinkActorClientRuntimeTest {
 
         @Override
         public CompletionStage<Void> sendToActorAsync(
-                ZLinkBackendActorRef actor, List<Message> parts) {
-            return sendToActor(actor, parts, SendFlags.DONT_WAIT)
+                ZLinkServiceM6BWireCodec.ActorRouteFence target, List<Message> parts) {
+
+            return sendToActor(target, parts, SendFlags.DONT_WAIT)
                     ? CompletableFuture.completedFuture(null)
                     : systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls.adaptOneWay(
                             CompletableFuture.failedFuture(
@@ -1083,11 +1099,12 @@ final class ZLinkActorClientRuntimeTest {
         }
 
         public CompletionStage<List<Message>> requestToActor(
-                ZLinkBackendActorRef actor,
+                ZLinkServiceM6BWireCodec.ActorRouteFence target,
                 List<Message> parts,
                 SendFlags flags,
                 Duration timeout,
                 CompletableFuture<Void> requestAdmission) {
+
             requestAttempts++;
             return ZLinkTestAdmissionFactory.acceptedRequest(
                     CompletableFuture.failedFuture(new ZlinkRequestException(result)),

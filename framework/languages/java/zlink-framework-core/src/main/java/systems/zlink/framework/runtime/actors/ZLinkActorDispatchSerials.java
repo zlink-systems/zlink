@@ -4,6 +4,7 @@ import systems.zlink.framework.configuration.ZLinkUserSpotExecutionMode;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.execution.ZLinkExecutionLanePolicy;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
+import systems.zlink.framework.runtime.actors.ZLinkActorDispatchTarget.QueuedTurn;
 import systems.zlink.framework.runtime.handlers.ZLinkHandlerStages;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.relocation.ZLinkRetainedSerialQueueCommit;
@@ -321,8 +322,9 @@ final class ZLinkActorDispatchSerials {
                 turn,
                 admission,
                 accepted ->
-                        turn.target.executeActor(
-                                turn.activation, payloadBytes, turnOperation, accepted));
+                        turn.target()
+                                .executeActor(
+                                        turn.activation(), payloadBytes, turnOperation, accepted));
     }
 
     CompletionStage<Void> enqueue(
@@ -344,14 +346,15 @@ final class ZLinkActorDispatchSerials {
                 admission,
                 accepted ->
                         acceptedJournalRecord == null || acceptedJournalRecord.length == 0
-                                ? turn.target.executeActor(
-                                        turn.activation, 0, turnOperation, accepted)
-                                : turn.target.executeActor(
-                                        turn.activation,
-                                        acceptedJournalRecord,
-                                        turnOperation,
-                                        relocationRelease,
-                                        accepted));
+                                ? turn.target()
+                                        .executeActor(turn.activation(), 0, turnOperation, accepted)
+                                : turn.target()
+                                        .executeActor(
+                                                turn.activation(),
+                                                acceptedJournalRecord,
+                                                turnOperation,
+                                                relocationRelease,
+                                                accepted));
     }
 
     CompletionStage<Void> enqueueLazyRecord(
@@ -383,13 +386,14 @@ final class ZLinkActorDispatchSerials {
                 turn,
                 admission,
                 accepted ->
-                        turn.target.executeActorLazyRecord(
-                                turn.activation,
-                                acceptedJournalRecord,
-                                acceptedJournalRecordSizeHint,
-                                turnOperation,
-                                relocationRelease,
-                                accepted));
+                        turn.target()
+                                .executeActorLazyRecord(
+                                        turn.activation(),
+                                        acceptedJournalRecord,
+                                        acceptedJournalRecordSizeHint,
+                                        turnOperation,
+                                        relocationRelease,
+                                        accepted));
     }
 
     CompletionStage<Void> awaitTeardown(String actorId) {
@@ -637,12 +641,6 @@ final class ZLinkActorDispatchSerials {
                             });
                 });
     }
-
-    record QueuedTurn(
-            String actorId,
-            ZLinkActorDispatchTarget target,
-            Object incarnation,
-            ZLinkActorSerialExecutor activation) {}
 
     private record TeardownSetup(
             CompletionStage<Void> teardown,

@@ -9,6 +9,7 @@ import systems.zlink.framework.actors.ZLinkRelocationCancellation;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
+import systems.zlink.framework.runtime.actors.ZLinkActorDispatchTarget.QueuedTurn;
 import systems.zlink.framework.runtime.internal.drain.AsyncDrainProbe;
 import systems.zlink.framework.runtime.mesh.ZLinkActivationAdmission;
 import systems.zlink.framework.spots.ZLinkSpot;
@@ -23,6 +24,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Supplier;
 
 final class ZLinkUserSpotAggregateStagingOwnerTest {
     @Test
@@ -79,7 +81,8 @@ final class ZLinkUserSpotAggregateStagingOwnerTest {
                             public CompletionStage<Void> completeSpot(
                                     ZLinkSpotAcceptedJournal.Record record,
                                     long sequence,
-                                    List<byte[]> reply) {
+                                    List<byte[]> reply,
+                                    Throwable failure) {
                                 throw new AssertionError("unexpected Spot reply");
                             }
 
@@ -87,7 +90,8 @@ final class ZLinkUserSpotAggregateStagingOwnerTest {
                             public CompletionStage<Void> completeActor(
                                     ZLinkActorAcceptedJournal.Record record,
                                     long sequence,
-                                    Optional<byte[]> reply) {
+                                    Optional<byte[]> reply,
+                                    Throwable failure) {
                                 assertEquals(1, sequence);
                                 assertEquals(41L, record.replyRouteId().orElseThrow());
                                 assertArrayEquals(new byte[] {9}, reply.orElseThrow());
@@ -258,12 +262,101 @@ final class ZLinkUserSpotAggregateStagingOwnerTest {
                         .toCompletableFuture()
                         .join();
         owner.publishHidden(backlog, Map.of("actor-a", 11L, "actor-b", 12L));
-        owner.openAdmission(staged);
-
-        assertThrows(
-                CompletionException.class,
-                () -> owner.drainDurableBacklog(backlog).toCompletableFuture().join());
+        owner.drainDurableBacklog(backlog).toCompletableFuture().join();
+        owner.openAdmission(staged).toCompletableFuture().join();
         assertEquals(List.of(1L, 2L, 3L), submitted);
+    }
+
+    @Test
+    void failedSpotResumeKeepsActorMoveCompletionClosed() {
+        var backend = new FakeBackend();
+        var failure = new IllegalStateException("Spot resume failed");
+        backend.resumeResult = CompletableFuture.failedFuture(failure);
+        var owner = new ZLinkUserSpotAggregateStagingOwner(backend);
+        var request = request();
+        var staged = owner.stage(request, () -> false).toCompletableFuture().join();
+        var handled = new java.util.concurrent.atomic.AtomicInteger();
+        var backlog =
+                owner.closeDurableBacklog(
+                                staged,
+                                request,
+                                (lane, record) -> {
+                                    handled.incrementAndGet();
+                                    return CompletableFuture.completedFuture(null);
+                                })
+                        .toCompletableFuture()
+                        .join();
+        owner.publishHidden(backlog, Map.of()).toCompletableFuture().join();
+        owner.drainDurableBacklog(backlog).toCompletableFuture().join();
+        var opening = owner.openAdmission(staged).toCompletableFuture();
+        assertSame(failure, assertThrows(CompletionException.class, opening::join).getCause());
+        assertTrue(
+                backend.operations.stream()
+                        .noneMatch(operation -> operation.startsWith("complete:")));
+        assertEquals(0, handled.get(), "resume failure must not release accepted Actor handlers");
+    }
+
+    @Test
+    void backendFailureBeforeQueueAdmissionSettlesPublicationAndIngress() {
+        var backend = new FakeBackend();
+        var rejected = new IllegalStateException("queue target unavailable");
+        backend.enqueueFailure = CompletableFuture.failedFuture(rejected);
+        var owner = new ZLinkUserSpotAggregateStagingOwner(backend);
+        var request = request();
+        var staged = owner.stage(request, () -> false).toCompletableFuture().join();
+        var observed = new java.util.concurrent.atomic.AtomicReference<Throwable>();
+        owner.acceptSpotIngress(
+                staged,
+                ZLinkAcceptedJournalTestRecords.spot(
+                        "room-a", "room-a", 0, "spot.send", Map.of(), new byte[] {1}),
+                null,
+                observed::set);
+        var backlog =
+                owner.closeDurableBacklog(
+                                staged,
+                                request,
+                                (lane, record) -> CompletableFuture.completedFuture(null))
+                        .toCompletableFuture()
+                        .join();
+        owner.publishHidden(backlog, Map.of()).toCompletableFuture().join();
+        var adopted = owner.drainDurableBacklog(backlog).toCompletableFuture();
+        assertTrue(adopted.isCompletedExceptionally());
+        assertSame(rejected, assertThrows(CompletionException.class, adopted::join).getCause());
+        assertSame(rejected, observed.get());
+    }
+
+    @Test
+    void failedPreparationRetainsFrozenBacklog() throws Exception {
+        var rejected = new IllegalStateException("prepared incarnation unavailable");
+        FakeBackend backend = new FakeBackend();
+        backend.preparationFailure = rejected;
+        var owner = new ZLinkUserSpotAggregateStagingOwner(backend);
+        var request = request();
+        var staged = owner.stage(request, () -> false).toCompletableFuture().join();
+        var observed = new java.util.concurrent.atomic.AtomicReference<Throwable>();
+        owner.acceptSpotIngress(
+                staged,
+                ZLinkAcceptedJournalTestRecords.spot(
+                        "room-a", "room-a", 0, "spot.send", Map.of(), new byte[] {1}),
+                null,
+                observed::set);
+        var backlog =
+                owner.closeDurableBacklog(
+                                staged,
+                                request,
+                                (lane, record) -> CompletableFuture.completedFuture(null))
+                        .toCompletableFuture()
+                        .join();
+        owner.publishHidden(backlog, Map.of()).toCompletableFuture().join();
+        var adopted = owner.drainDurableBacklog(backlog).toCompletableFuture();
+        assertSame(rejected, assertThrows(CompletionException.class, adopted::join).getCause());
+        assertNull(observed.get());
+        var field = staged.getClass().getDeclaredField("durableBacklog");
+        field.setAccessible(true);
+        assertSame(
+                backlog,
+                field.get(staged),
+                "unadopted frozen payload must retain its existing backlog owner");
     }
 
     @Test
@@ -292,11 +385,10 @@ final class ZLinkUserSpotAggregateStagingOwnerTest {
                         .toCompletableFuture()
                         .join();
         owner.publishHidden(backlog, Map.of());
-        owner.openAdmission(staged);
-
         assertThrows(
                 CompletionException.class,
                 () -> owner.drainDurableBacklog(backlog).toCompletableFuture().join());
+        owner.openAdmission(staged).toCompletableFuture().join();
         assertEquals(1, rejected.get());
         assertEquals(1, backend.operations.stream().filter("replay:spot"::equals).count());
     }
@@ -329,7 +421,10 @@ final class ZLinkUserSpotAggregateStagingOwnerTest {
                 .join();
 
         assertEquals(List.of("actor-a", "actor-b", "spot"), backend.live);
-        assertEquals("replay:actor:actor-a:3", backend.operations.getLast());
+        assertEquals("complete:actor-b", backend.operations.getLast());
+        assertTrue(
+                backend.operations.indexOf("complete:actor-a")
+                        > backend.operations.indexOf("replay:actor:actor-a:3"));
         assertEquals(1, backend.operations.stream().filter("relocation-ready"::equals).count());
         assertTrue(
                 backend.operations.indexOf("relocation-ready")
@@ -507,8 +602,8 @@ final class ZLinkUserSpotAggregateStagingOwnerTest {
                         .toCompletableFuture()
                         .join();
         owner.publishHidden(backlog, Map.of("actor-a", 11L, "actor-b", 12L));
-        owner.openAdmission(staged);
         owner.drainDurableBacklog(backlog).toCompletableFuture().join();
+        owner.openAdmission(staged).toCompletableFuture().join();
 
         assertTrue(backend.operations.contains("publish-target:actor-a:room-a:11"));
         assertTrue(backend.operations.contains("publish-target:actor-b:room-a:12"));
@@ -571,23 +666,81 @@ final class ZLinkUserSpotAggregateStagingOwnerTest {
 
     private static final class FakeBackend
             implements ZLinkUserSpotAggregateStagingOwner.StagingBackend {
+        private Throwable preparationFailure;
         private final List<String> operations = new ArrayList<>();
         private final List<String> live = new ArrayList<>();
         private String failActor;
         private int admissionCount;
+        private CompletionStage<Void> enqueueFailure;
+        private CompletionStage<Void> resumeResult = CompletableFuture.completedFuture(null);
         private int rejectAdmissionAt;
         private boolean allowSpotReplay;
         private CompletionStage<Void> discardActorResult = CompletableFuture.completedFuture(null);
         private CompletionStage<Void> discardSpotResult = CompletableFuture.completedFuture(null);
         private CompletionStage<Void> publishSpotResult = CompletableFuture.completedFuture(null);
 
+        private final CompletableFuture<Void> moving = new CompletableFuture<>();
+        private final ZLinkManualExecutor executor = new ZLinkManualExecutor();
+        private final ZLinkSerialExecutionQueue fifo =
+                new ZLinkSerialExecutionQueue(
+                        executor,
+                        systems.zlink.framework.execution.ZLinkExecutionLanePolicy.generic());
+
+        {
+            fifo.enqueueLifecycleBarrier(() -> moving);
+        }
+
         @Override
-        public <T> CompletionStage<T> admitApplicationJob(
-                java.util.function.Supplier<CompletionStage<T>> turn) {
-            if (++admissionCount == rejectAdmissionAt) {
+        public CompletionStage<QueuedTurn> prepareIngress(Object actor) {
+            if (preparationFailure != null)
+                return CompletableFuture.failedFuture(preparationFailure);
+            return CompletableFuture.completedFuture(
+                    executor.actorDispatch((String) actor, actor, moving));
+        }
+
+        @Override
+        public CompletionStage<Void> enqueueIngress(
+                Object preparedSpot,
+                List<QueuedTurn> dispatches,
+                String laneId,
+                byte[] record,
+                Supplier<CompletionStage<Void>> turn,
+                CompletableFuture<Void> admission) {
+            if (enqueueFailure != null) return enqueueFailure;
+            if (++admissionCount == rejectAdmissionAt)
                 throw new IllegalStateException("backlog admission rejected");
+            if (laneId.startsWith("actor:")) {
+                var dispatch =
+                        dispatches.stream()
+                                .filter(
+                                        turnHandle ->
+                                                turnHandle
+                                                        .actorId()
+                                                        .equals(
+                                                                laneId.substring(
+                                                                        "actor:".length())))
+                                .findFirst()
+                                .orElseThrow();
+                return dispatch.target()
+                        .executeActorLazyRecord(
+                                dispatch.activation(),
+                                () -> record,
+                                record.length,
+                                turn,
+                                () -> {},
+                                admission);
             }
-            return turn.get();
+            return fifo.enqueueRelocatableLazyRecord(
+                    () -> record, record.length, turn, () -> {}, admission);
+        }
+
+        @Override
+        public CompletionStage<Void> resumeIngress(Object preparedSpot, Object hold) {
+            return resumeResult.thenRun(
+                    () -> {
+                        moving.complete(null);
+                        executor.drain();
+                    });
         }
 
         @Override
@@ -719,6 +872,24 @@ final class ZLinkUserSpotAggregateStagingOwnerTest {
         private final List<Object> discardedSpotInstances = new ArrayList<>();
         private int restoreSpotCalls;
         private int restoreSpotFailuresRemaining;
+
+        @Override
+        public CompletionStage<QueuedTurn> prepareIngress(Object actor) {
+            return CompletableFuture.failedFuture(new AssertionError("restore-only fixture"));
+        }
+
+        @Override
+        public CompletionStage<Void> enqueueIngress(
+                Object spot,
+                List<QueuedTurn> dispatches,
+                String lane,
+                byte[] record,
+                Supplier<CompletionStage<Void>> turn,
+                CompletableFuture<Void> admission) {
+            var failure = new AssertionError("restore-only fixture must not dispatch backlog");
+            admission.completeExceptionally(failure);
+            return CompletableFuture.failedFuture(failure);
+        }
 
         @Override
         public CompletionStage<Object> prepareSpot(

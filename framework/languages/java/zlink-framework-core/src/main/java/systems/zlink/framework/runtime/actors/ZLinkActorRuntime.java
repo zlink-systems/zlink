@@ -3934,7 +3934,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             String actorId,
             Supplier<CompletionStage<Void>> operation,
             CompletableFuture<Void> admission,
-            java.util.function.Function<ZLinkActorDispatchSerials.QueuedTurn, CompletionStage<Void>>
+            java.util.function.Function<ZLinkActorDispatchTarget.QueuedTurn, CompletionStage<Void>>
                     enqueue) {
         if (dispatches.isCurrent(actorId)) {
             // The current turn of this Actor runs the dispatch in place: accepting it here is
@@ -3971,7 +3971,32 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                 });
     }
 
-    private CompletionStage<ZLinkActorDispatchSerials.QueuedTurn> prepareManagedActorDispatch(
+    public CompletionStage<ZLinkActorDispatchTarget.QueuedTurn> prepareTransferredActorDispatch(
+            PreparedTransferredActor prepared) {
+        Objects.requireNonNull(prepared, "prepared");
+        prepared.requireOwner(this);
+        return prepareManagedActorDispatch(prepared.actorId, null)
+                .thenApply(
+                        turn -> {
+                            if (turn.incarnation() != prepared.context)
+                                throw new IllegalStateException(
+                                        "prepared Actor dispatch incarnation differs");
+                            return turn;
+                        });
+    }
+
+    public CompletionStage<Void> submitActorDispatchLazyRecord(
+            ZLinkActorDispatchTarget.QueuedTurn turn,
+            Supplier<byte[]> record,
+            long size,
+            Supplier<CompletionStage<Void>> operation,
+            Runnable release,
+            CompletableFuture<Void> admission) {
+        Objects.requireNonNull(turn, "turn");
+        return dispatches.enqueueLazyRecord(turn, record, size, operation, release, admission);
+    }
+
+    private CompletionStage<ZLinkActorDispatchTarget.QueuedTurn> prepareManagedActorDispatch(
             String actorId, ZLinkActorDispatchTarget target) {
         return actorRegistry
                 .containsAsync(actorId)

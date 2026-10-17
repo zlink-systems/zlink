@@ -2210,8 +2210,11 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
     }
 
     CompletionStage<ZLinkSpotRelocationReplyRoutes.Ack> deliverCanonicalRelocationReply(
-            ZLinkSpotRelocationReplyRoutes.CanonicalRoute route, List<byte[]> parts) {
-        return relocationReplyRoutes.deliverCanonical(route, parts);
+            ZLinkSpotRelocationReplyRoutes.CanonicalRoute route,
+            List<byte[]> parts,
+            int terminalResult,
+            int failureCode) {
+        return relocationReplyRoutes.deliverCanonical(route, parts, terminalResult, failureCode);
     }
 
     public String userSpotMeshName(String spotId) {
@@ -4679,8 +4682,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                 };
         CompletionStage<ZLinkSpotActorJoinResult> targetStage;
         if (targetSurface instanceof ZLinkSpot<?>) {
-            targetStage =
-                    spotLifecycle.spotActivationFor(targetSpotId).admitLocalActorJoin(operation);
+            targetStage = spotLifecycle.spotActivationFor(targetSpotId).admitActorJoin(operation);
         } else {
             CompletableFuture<ZLinkSpotActorJoinResult> response = new CompletableFuture<>();
             targetStage =
@@ -5101,6 +5103,14 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
 
     <T> CompletionStage<T> admitNewApplicationJob(
             SpotDispatchLine destination, Supplier<CompletionStage<T>> operation) {
+        return admitNewApplicationJob(
+                destination, ZLinkApplicationJobQueue.Origin.LOCAL, operation);
+    }
+
+    <T> CompletionStage<T> admitNewApplicationJob(
+            SpotDispatchLine destination,
+            ZLinkApplicationJobQueue.Origin origin,
+            Supplier<CompletionStage<T>> operation) {
         Objects.requireNonNull(operation, "operation");
         try {
             ensureOwnerAdmissionOpen();
@@ -5108,7 +5118,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             return CompletableFuture.failedFuture(rejected);
         }
         return applicationJobQueue.acquireAndPublish(
-                ZLinkApplicationJobQueue.Origin.LOCAL,
+                origin,
                 task ->
                         destination.enqueueInfrastructureDispatch(
                                 () -> {
@@ -6821,7 +6831,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                         null));
     }
 
-    private void reportDispatchError(DispatchFailureReport failure) {
+    void reportDispatchError(DispatchFailureReport failure) {
         dispatchErrors.report(
                 failure.surface,
                 failure.messageKind,

@@ -1,8 +1,12 @@
 package systems.zlink.framework.runtime.spots;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertSame;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
@@ -23,6 +27,64 @@ import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 
 final class ZLinkAcceptedJournalReplayerTest {
+    @ParameterizedTest
+    @CsvSource({"spot,false", "actor,false", "actor,true"})
+    void failureReachesTheExistingReplyOwnerAndPreservesTheQueuedTerminal(
+            String lane, boolean relayFails) {
+        var original = new IllegalStateException("adopted handler failed");
+        var relayFailure = new IllegalStateException("reply relay failed");
+        var spotHandler = new CompletableFuture<List<byte[]>>();
+        var actorHandler = new CompletableFuture<Optional<byte[]>>();
+        var relay = new CompletableFuture<Void>();
+        var observed = new java.util.concurrent.atomic.AtomicReference<Throwable>();
+        var replayer =
+                new ZLinkAcceptedJournalReplayer(
+                        record -> spotHandler,
+                        record -> actorHandler,
+                        new ZLinkAcceptedJournalReplayer.ReplyRelay() {
+                            @Override
+                            public CompletionStage<Void> completeSpot(
+                                    ZLinkSpotAcceptedJournal.Record request,
+                                    long sequence,
+                                    List<byte[]> reply,
+                                    Throwable failure) {
+                                observed.set(failure);
+                                return relay;
+                            }
+
+                            @Override
+                            public CompletionStage<Void> completeActor(
+                                    ZLinkActorAcceptedJournal.Record request,
+                                    long sequence,
+                                    Optional<byte[]> reply,
+                                    Throwable failure) {
+                                observed.set(failure);
+                                return relay;
+                            }
+                        });
+        byte[] record =
+                lane.equals("spot")
+                        ? ZLinkAcceptedJournalTestRecords.spot(
+                                "source", "room-a", 41, "query", Map.of(), new byte[0])
+                        : ZLinkAcceptedJournalTestRecords.actor(
+                                "actor-a", 41, "query", Map.of(), new byte[0]);
+        var terminal =
+                replayer.replayFrozen(lane.equals("spot") ? "spot" : "actor:actor-a", record)
+                        .toCompletableFuture();
+        assertFalse(terminal.isDone());
+        if (lane.equals("spot")) spotHandler.completeExceptionally(original);
+        else actorHandler.completeExceptionally(original);
+        assertSame(original, observed.get());
+        assertFalse(
+                terminal.isDone(), "the original terminal must retain its reply-owner completion");
+        if (relayFails) relay.completeExceptionally(relayFailure);
+        else relay.complete(null);
+        assertSame(original, assertThrows(CompletionException.class, terminal::join).getCause());
+        assertArrayEquals(
+                relayFails ? new Throwable[] {relayFailure} : new Throwable[0],
+                original.getSuppressed());
+    }
+
     @Test
     void decodesSpotRequestAndRelaysReplyAfterDispatch() {
         List<String> order = new ArrayList<>();
@@ -54,7 +116,8 @@ final class ZLinkAcceptedJournalReplayerTest {
                             public CompletionStage<Void> completeSpot(
                                     ZLinkSpotAcceptedJournal.Record request,
                                     long acceptedSequence,
-                                    List<byte[]> reply) {
+                                    List<byte[]> reply,
+                                    Throwable failure) {
                                 order.add("reply:" + request.requestSequence().orElseThrow());
                                 assertEquals(1, acceptedSequence);
                                 assertArrayEquals(new byte[] {9}, reply.get(0));
@@ -65,7 +128,8 @@ final class ZLinkAcceptedJournalReplayerTest {
                             public CompletionStage<Void> completeActor(
                                     ZLinkActorAcceptedJournal.Record request,
                                     long acceptedSequence,
-                                    Optional<byte[]> reply) {
+                                    Optional<byte[]> reply,
+                                    Throwable failure) {
                                 return CompletableFuture.failedFuture(
                                         new AssertionError("unexpected Actor reply"));
                             }
@@ -111,7 +175,8 @@ final class ZLinkAcceptedJournalReplayerTest {
                             public CompletionStage<Void> completeSpot(
                                     ZLinkSpotAcceptedJournal.Record request,
                                     long acceptedSequence,
-                                    List<byte[]> reply) {
+                                    List<byte[]> reply,
+                                    Throwable failure) {
                                 return CompletableFuture.failedFuture(
                                         new AssertionError("unexpected Spot reply"));
                             }
@@ -120,7 +185,8 @@ final class ZLinkAcceptedJournalReplayerTest {
                             public CompletionStage<Void> completeActor(
                                     ZLinkActorAcceptedJournal.Record request,
                                     long acceptedSequence,
-                                    Optional<byte[]> reply) {
+                                    Optional<byte[]> reply,
+                                    Throwable failure) {
                                 assertEquals(1, acceptedSequence);
                                 assertArrayEquals(new byte[] {7}, reply.orElseThrow());
                                 return CompletableFuture.completedFuture(null);

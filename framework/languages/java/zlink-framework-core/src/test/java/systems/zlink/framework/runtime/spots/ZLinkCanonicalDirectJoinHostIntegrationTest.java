@@ -22,6 +22,7 @@ import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.locations.ZLinkPageRequest;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.runtime.InMemoryRelocationStore;
+import systems.zlink.framework.runtime.actors.ZLinkActorDispatchTarget.QueuedTurn;
 import systems.zlink.framework.runtime.actors.ZLinkActorRuntime;
 import systems.zlink.framework.runtime.actors.ZLinkSessionRelocationPeerClient;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
@@ -786,6 +787,8 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
             assertEquals(
                     1, targetCommits.get(), "only the target canonical owner may commit authority");
             link.targetCompletion.get(4, TimeUnit.SECONDS);
+            CompletableFuture.allOf(targetBackend.queuedTerminals.toArray(CompletableFuture[]::new))
+                    .get(4, TimeUnit.SECONDS);
             assertEquals(
                     List.of("B1", "B2", "D1"),
                     EVENTS.stream()
@@ -797,7 +800,9 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
             assertBefore("target.accepted", "client.push.submitted");
             assertBefore("target.accepted", "target.open");
             assertBefore("target.open", "replay:B1");
-            assertBefore("replay:D1", "command44");
+            assertBefore("enqueue:D1", "target.joined");
+            assertBefore("command44", "target.normalize");
+            assertBefore("target.normalize", "target.open");
             assertBefore("command44", "client.push.terminal");
             assertBefore("client.push.terminal", "target.normalize");
             link.checkCanonicalBindingRetries().toCompletableFuture().get(1, TimeUnit.SECONDS);
@@ -1087,6 +1092,27 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
     private static ZLinkUserSpotAggregateStagingOwner unusedSpotStaging() {
         return new ZLinkUserSpotAggregateStagingOwner(
                 new ZLinkUserSpotAggregateStagingOwner.StagingBackend() {
+                    @Override
+                    public CompletionStage<QueuedTurn> prepareIngress(Object actor) {
+                        return CompletableFuture.failedFuture(
+                                new AssertionError("unused aggregate Actor dispatch"));
+                    }
+
+                    @Override
+                    public CompletionStage<Void> enqueueIngress(
+                            Object spot,
+                            List<QueuedTurn> dispatches,
+                            String lane,
+                            byte[] record,
+                            java.util.function.Supplier<CompletionStage<Void>> turn,
+                            CompletableFuture<Void> admission) {
+                        var failure =
+                                new AssertionError(
+                                        "Actor-only fixture must not dispatch aggregate backlog");
+                        admission.completeExceptionally(failure);
+                        return CompletableFuture.failedFuture(failure);
+                    }
+
                     private <T> CompletionStage<T> unused() {
                         return CompletableFuture.failedFuture(
                                 new AssertionError("Spot aggregate path is unused"));
@@ -1601,6 +1627,7 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
         private final ZLinkRelocationAdapterRegistry adapters;
         private final ZLinkSpotRuntime spots;
         private final AtomicBoolean open = new AtomicBoolean();
+        private final List<CompletableFuture<Void>> queuedTerminals = new CopyOnWriteArrayList<>();
 
         private RecordingTargetBackend(
                 RoutingId targetRid,
@@ -1616,16 +1643,40 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
         }
 
         @Override
+        public CompletionStage<QueuedTurn> prepareIngress(
+                Object actor, ZLinkStandaloneActorRelocationStagingOwner.Request request) {
+            return spots.actorSessions()
+                    .runtime()
+                    .prepareTransferredActorDispatch(
+                            (systems.zlink.framework.runtime.actors.ZLinkActorRuntime
+                                            .PreparedTransferredActor)
+                                    actor);
+        }
+
+        @Override
         public CompletionStage<Void> enqueueIngress(
+                QueuedTurn dispatch,
                 ZLinkStandaloneActorRelocationStagingOwner.Request request,
                 byte[] acceptedJournalRecord,
-                java.util.function.Supplier<CompletionStage<Void>> turn) {
-            return spots.enqueueActorDispatch(
-                    request.actorId(),
-                    () -> acceptedJournalRecord,
-                    acceptedJournalRecord.length,
-                    turn,
-                    () -> {});
+                java.util.function.Supplier<CompletionStage<Void>> turn,
+                CompletableFuture<Void> admission) {
+            var terminal =
+                    spots.actorSessions()
+                            .runtime()
+                            .submitActorDispatchLazyRecord(
+                                    dispatch,
+                                    () -> acceptedJournalRecord,
+                                    acceptedJournalRecord.length,
+                                    turn,
+                                    () -> {},
+                                    admission);
+            queuedTerminals.add(terminal.toCompletableFuture());
+            EVENTS.add(
+                    "enqueue:"
+                            + ZLinkActorAcceptedJournal.decode(acceptedJournalRecord)
+                                    .header()
+                                    .packetName());
+            return terminal;
         }
 
         @Override
@@ -1705,8 +1756,8 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
         @Override
         public void openAdmission(Object actor) {
             EVENTS.add("target.open");
-            actors.openRelocatedActorAdmission((ZLinkActorRuntime.PreparedTransferredActor) actor);
             open.set(true);
+            actors.openRelocatedActorAdmission((ZLinkActorRuntime.PreparedTransferredActor) actor);
         }
 
         @Override

@@ -732,37 +732,65 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
     }
 
     @Override
-    public boolean sendToActor(ZLinkBackendActorRef actor, List<Message> parts, SendFlags flags) {
-        if (!routingId().equals(actor.nodeRid())) {
+    public boolean sendToActor(
+            ZLinkServiceM6BWireCodec.ActorRouteFence target, List<Message> parts, SendFlags flags) {
+        if (!routingId().equals(target.actor().nodeRid())) {
             return false;
         }
-        return dispatchLocalActor(actor, parts, 0, 0, null) != null;
+        return !sendToActorAsync(target, parts).toCompletableFuture().isCompletedExceptionally();
     }
 
     @Override
-    public CompletionStage<Void> sendToActorAsync(ZLinkBackendActorRef actor, List<Message> parts) {
-        if (!routingId().equals(actor.nodeRid())) {
-            return owner.sendActor(actor, parts);
+    public CompletionStage<Void> sendToActorAsync(
+            ZLinkServiceM6BWireCodec.ActorRouteFence target, List<Message> parts) {
+        if (!routingId().equals(target.actor().nodeRid())) {
+            return owner.sendActor(target, parts);
         }
         CompletableFuture<Void> admission = new CompletableFuture<>();
-        CompletionStage<Void> dispatched = dispatchLocalActor(actor, parts, 0, 0, admission);
-        return actorAdmission(dispatched, admission);
+        return actorAdmission(dispatchLocalOrdinaryActor(target, parts, 0, admission), admission);
     }
 
     @Override
     public CompletionStage<List<Message>> requestToActor(
+            ZLinkServiceM6BWireCodec.ActorRouteFence target,
+            List<Message> parts,
+            SendFlags flags,
+            Duration timeout,
+            CompletableFuture<Void> requestAdmission) {
+        if (!routingId().equals(target.actor().nodeRid())) {
+            return owner.requestActor(target, parts, timeout, requestAdmission);
+        }
+        return requestLocalActor(
+                (requestId, admission) ->
+                        dispatchLocalOrdinaryActor(target, parts, requestId, admission),
+                timeout,
+                requestAdmission);
+    }
+
+    CompletionStage<List<Message>> requestExactActor(
             ZLinkBackendActorRef actor,
             List<Message> parts,
             SendFlags flags,
             Duration timeout,
             CompletableFuture<Void> requestAdmission) {
         if (!routingId().equals(actor.nodeRid())) {
-            return owner.requestActor(actor, parts, timeout, requestAdmission);
+            return owner.requestExactActor(actor, parts, timeout, requestAdmission);
         }
         if (actor == null || !actors.containsKey(actor.actorId())) {
             return CompletableFuture.failedFuture(new IllegalStateException("actor is not local"));
         }
-        long requestId = nextActorRequestSequence.getAndIncrement();
+        return requestLocalActor(
+                (requestId, admission) -> dispatchLocalActor(actor, parts, requestId, 1, admission),
+                timeout,
+                requestAdmission);
+    }
+
+    private CompletionStage<List<Message>> requestLocalActor(
+            java.util.function.BiFunction<Long, CompletableFuture<Void>, CompletionStage<Void>>
+                    dispatch,
+            Duration timeout,
+            CompletableFuture<Void> requestAdmission) {
+        Long requestId = nextActorRequestSequence.getAndIncrement();
         CompletableFuture<List<Message>> completion = new CompletableFuture<>();
         actorRequests.put(requestId, completion);
         if (timeout != null && !timeout.isNegative() && !timeout.isZero()) {
@@ -775,8 +803,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                                 }
                             });
         }
-        CompletionStage<Void> dispatched =
-                dispatchLocalActor(actor, parts, requestId, 1, requestAdmission);
+        CompletionStage<Void> dispatched = dispatch.apply(requestId, requestAdmission);
         if (dispatched == null) {
             actorRequests.remove(requestId);
             return CompletableFuture.failedFuture(
@@ -905,7 +932,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
             return true;
         }
         if (streamHeader != null && streamHeader.requestSequence().isPresent()) {
-            requestToActor(actor, parts, SendFlags.DONT_WAIT, Duration.ofSeconds(30), null)
+            requestExactActor(actor, parts, SendFlags.DONT_WAIT, Duration.ofSeconds(30), null)
                     .whenComplete(
                             (reply, failure) -> {
                                 if (failure == null) {
@@ -1055,7 +1082,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                     parts,
                     timeout);
         }
-        return requestToActor(actor, parts, SendFlags.DONT_WAIT, timeout, null);
+        return requestExactActor(actor, parts, SendFlags.DONT_WAIT, timeout, null);
     }
 
     private void replyBoundStreamSession(
@@ -1724,6 +1751,35 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
             Consumer<List<Message>> reply,
             Consumer<Throwable> failure,
             Runnable terminalRelease) {
+        return dispatchActorIngress(
+                        source,
+                        header,
+                        acceptedJournalRecord,
+                        parts,
+                        contentType,
+                        reply,
+                        failure,
+                        terminalRelease,
+                        null,
+                        0)
+                != null;
+    }
+
+    private CompletionStage<Void> dispatchActorIngress(
+            ZLinkInternalMeshNode.PeerAuthorityFence source,
+            ZLinkServiceM6BWireCodec.ActorMessage header,
+            Supplier<byte[]> acceptedJournalRecord,
+            List<Message> parts,
+            String contentType,
+            Consumer<List<Message>> reply,
+            Consumer<Throwable> failure,
+            Runnable terminalRelease,
+            CompletableFuture<Void> requestAdmission,
+            long localRequestId) {
+        if (!routingId().equals(header.target().actor().nodeRid())
+                || header.target().targetNodeGeneration() != owner.lifecycleGeneration()) {
+            return null;
+        }
         RoutingId sourceNodeRid = source.sourceNodeRid();
         long sourceNodeGeneration = source.sourceNodeGeneration();
         ZLinkBackendActorRef actor = header.target().actor();
@@ -1738,11 +1794,13 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                         contentType,
                         reply,
                         failure)) {
-            terminalRelease.run();
-            return true;
+            if (terminalRelease != null) terminalRelease.run();
+            if (requestAdmission != null) requestAdmission.complete(null);
+            return CompletableFuture.completedFuture(null);
         }
         ZLinkInternalSpotNode.MessageFollowRelayHandler relay = messageFollowRelayHandler;
         if (relay != null
+                && relay.hasSource(actor.actorId())
                 && tryRelayActor(
                         relay,
                         sourceNodeRid,
@@ -1753,19 +1811,22 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                         contentType,
                         reply,
                         failure,
-                        terminalRelease)) {
-            return true;
+                        terminalRelease == null
+                                ? () -> parts.forEach(Message::close)
+                                : terminalRelease)) {
+            if (requestAdmission != null) requestAdmission.complete(null);
+            return CompletableFuture.completedFuture(null);
         }
         NativeActorStay nativeStay = actor == null ? null : actors.get(actor.actorId());
         if (nativeStay == null) {
-            return false;
+            return null;
         }
         ZLinkBackendActorRef currentActor = nativeStay.actor();
         long currentAuthority = nativeStay.authority().authorityOwnerGeneration();
         long currentOwnerLease = nativeStay.authority().ownerLeaseGeneration();
         if (currentAuthority != header.target().authorityOwnerGeneration()
                 || currentOwnerLease != header.target().ownerLeaseGeneration()) {
-            return false;
+            return null;
         }
         if (header.boundSession() != null) {
             BindingEntry current = actorBindings.get(actor.actorId());
@@ -1778,24 +1839,30 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                                     header.boundSession().sourceBindingGeneration())
                     || current.binding().sessionOwnerNodeGeneration() != sourceNodeGeneration
                     || !current.accept(header.boundSession().sourceSessionSequence())) {
-                return false;
+                return null;
             }
         }
         String targetSpotId = nativeStay.spotId();
         ZLinkJavaRawSpot target = spots.get(targetSpotId);
         if (target == null) {
-            return false;
+            return null;
         }
-        long requestId = header.request() ? nextActorRequestSequence.getAndIncrement() : 0;
-        if (header.request()) {
+        long requestId =
+                header.request()
+                        ? localRequestId != 0
+                                ? localRequestId
+                                : nextActorRequestSequence.getAndIncrement()
+                        : 0;
+        if (header.request() && localRequestId == 0) {
             actorRemoteReplies.put(requestId, reply);
         }
         List<ZLinkBackendActorReceived> messages = new ArrayList<>(parts.size());
         if (parts.isEmpty()) {
-            terminalRelease.run();
-            reportActorIngressFailure(
-                    target.enqueueActor(messages, null), header, requestId, reply, failure);
-            return true;
+            if (terminalRelease != null) terminalRelease.run();
+            CompletionStage<Void> dispatched = target.enqueueActor(messages, requestAdmission);
+            if (terminalRelease != null)
+                reportActorIngressFailure(dispatched, header, requestId, reply, failure);
+            return dispatched;
         }
         //  A relocation cut can finish between the forward lookup above and the
         //  Actor queue admission below. The queue then rejects the arrival with
@@ -1816,13 +1883,16 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                                         reply,
                                         failure)
                         : null;
-        AtomicInteger remainingTerminals = new AtomicInteger(parts.size());
-        Runnable partTerminal =
-                () -> {
-                    if (remainingTerminals.decrementAndGet() == 0) {
-                        terminalRelease.run();
-                    }
-                };
+        Runnable partTerminal = () -> {};
+        if (terminalRelease != null) {
+            AtomicInteger remainingTerminals = new AtomicInteger(parts.size());
+            partTerminal =
+                    () -> {
+                        if (remainingTerminals.decrementAndGet() == 0) terminalRelease.run();
+                    };
+        }
+        Optional<Long> requestSequence =
+                localRequestId == 0 ? Optional.ofNullable(header.correlation()) : Optional.empty();
         for (int index = 0; index < parts.size(); index++) {
             messages.add(
                     index == 0
@@ -1832,7 +1902,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                                     header.boundSession() == null
                                             ? null
                                             : header.boundSession().sourceSessionRid(),
-                                    Optional.ofNullable(header.correlation()),
+                                    requestSequence,
                                     requestId,
                                     header.request() ? 1 : 0,
                                     parts.get(index),
@@ -1847,7 +1917,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                                     header.boundSession() == null
                                             ? null
                                             : header.boundSession().sourceSessionRid(),
-                                    Optional.ofNullable(header.correlation()),
+                                    requestSequence,
                                     requestId,
                                     header.request() ? 1 : 0,
                                     parts.get(index),
@@ -1856,9 +1926,10 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                                     contentType,
                                     partTerminal));
         }
-        reportActorIngressFailure(
-                target.enqueueActor(messages, null), header, requestId, reply, failure);
-        return true;
+        CompletionStage<Void> dispatched = target.enqueueActor(messages, requestAdmission);
+        if (terminalRelease != null)
+            reportActorIngressFailure(dispatched, header, requestId, reply, failure);
+        return dispatched;
     }
 
     private boolean tryRelayActor(
@@ -2871,6 +2942,62 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
 
     private static void closeRemoteInstancePayload(List<Message> parts) {
         parts.forEach(Message::close);
+    }
+
+    private CompletionStage<Void> dispatchLocalOrdinaryActor(
+            ZLinkServiceM6BWireCodec.ActorRouteFence target,
+            List<Message> parts,
+            long requestId,
+            CompletableFuture<Void> requestAdmission) {
+        var source = owner.localAuthorityFence();
+        if (source == null) {
+            return CompletableFuture.failedFuture(
+                    new ZlinkSubmitException(SubmitResult.NOT_CONNECTED));
+        }
+        var header = owner.localActorMessage(target, routingId(), null, 0, 0, requestId);
+        byte[] acceptedRecord = owner.encodeLocalActorAccepted(header, parts);
+        List<Message> copied = ZLinkJavaRawSpot.copy(parts);
+        CompletionStage<Void> dispatched;
+        try {
+            dispatched =
+                    dispatchActorIngress(
+                            source,
+                            header,
+                            () -> acceptedRecord,
+                            copied,
+                            ZLinkChannelContentTypeFrame.decode(parts),
+                            requestId == 0
+                                    ? null
+                                    : replies -> {
+                                        var request = actorRequests.remove(requestId);
+                                        if (request != null) request.complete(replies);
+                                        else replies.forEach(Message::close);
+                                    },
+                            failure -> {
+                                boolean rejectedBeforeAdmission =
+                                        requestAdmission != null
+                                                && requestAdmission.completeExceptionally(failure);
+                                if (requestId == 0
+                                        && !rejectedBeforeAdmission
+                                        && (requestAdmission == null
+                                                || !requestAdmission.isCompletedExceptionally())) {
+                                    LOGGER.log(
+                                            Level.WARNING,
+                                            "actor message follow relay failed",
+                                            failure);
+                                }
+                                var request = actorRequests.remove(requestId);
+                                if (request != null) request.completeExceptionally(failure);
+                            },
+                            null,
+                            requestAdmission,
+                            requestId);
+        } catch (RuntimeException failure) {
+            copied.forEach(Message::close);
+            throw failure;
+        }
+        if (dispatched == null) copied.forEach(Message::close);
+        return dispatched;
     }
 
     private CompletionStage<Void> dispatchLocalActor(

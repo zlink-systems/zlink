@@ -1753,16 +1753,20 @@ final class EntrySpotActorDispatchTests {
 
         @Override
         public boolean sendToActor(
-                ZLinkBackendActorRef actor, List<Message> parts, SendFlags flags) {
+                ZLinkServiceM6BWireCodec.ActorRouteFence target,
+                List<Message> parts,
+                SendFlags flags) {
+
             throw new UnsupportedOperationException();
         }
 
         public CompletionStage<List<Message>> requestToActor(
-                ZLinkBackendActorRef actor,
+                ZLinkServiceM6BWireCodec.ActorRouteFence target,
                 List<Message> parts,
                 SendFlags flags,
                 Duration timeout,
                 CompletableFuture<Void> requestAdmission) {
+
             throw new UnsupportedOperationException();
         }
 

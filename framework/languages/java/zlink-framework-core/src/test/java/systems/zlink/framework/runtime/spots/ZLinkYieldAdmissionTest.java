@@ -17,7 +17,6 @@ import systems.zlink.framework.execution.ZLinkWorkerPool;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationContext;
 
 import java.time.Duration;
-import java.util.ArrayDeque;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -26,7 +25,7 @@ import java.util.concurrent.atomic.AtomicReference;
 final class ZLinkYieldAdmissionTest {
     @Test
     void secondYieldRejectsBeforeActualIoSubmission() {
-        var executor = new ManualExecutor();
+        var executor = new ZLinkManualExecutor();
         var queue = new ZLinkSerialExecutionQueue(executor, ZLinkExecutionLanePolicy.spot());
         var firstRemote = new CompletableFuture<Integer>();
         var submissions = new AtomicInteger();
@@ -72,7 +71,7 @@ final class ZLinkYieldAdmissionTest {
 
     @Test
     void reentrantYieldRejectsWhileFirstSubmissionIsStillRunning() {
-        var executor = new ManualExecutor();
+        var executor = new ZLinkManualExecutor();
         var queue = new ZLinkSerialExecutionQueue(executor, ZLinkExecutionLanePolicy.spot());
         var submissions = new AtomicInteger();
         var rejected = new AtomicReference<Throwable>();
@@ -118,7 +117,7 @@ final class ZLinkYieldAdmissionTest {
 
     @Test
     void closedTurnCarrierRejectsBeforeActualIoSubmission() {
-        var executor = new ManualExecutor();
+        var executor = new ZLinkManualExecutor();
         var queue = new ZLinkSerialExecutionQueue(executor, ZLinkExecutionLanePolicy.spot());
         var tail = new AtomicReference<Runnable>();
         var submissions = new AtomicInteger();
@@ -163,7 +162,7 @@ final class ZLinkYieldAdmissionTest {
 
     @Test
     void resumedNewTurnMayYieldAgain() {
-        var executor = new ManualExecutor();
+        var executor = new ZLinkManualExecutor();
         var queue = new ZLinkSerialExecutionQueue(executor, ZLinkExecutionLanePolicy.spot());
         var first = new CompletableFuture<Integer>();
         var second = new CompletableFuture<Integer>();
@@ -207,7 +206,7 @@ final class ZLinkYieldAdmissionTest {
 
     @Test
     void releasedOriginalCarrierRejectsWhileHandlerOriginIsPending() {
-        var executor = new ManualExecutor();
+        var executor = new ZLinkManualExecutor();
         var queue = new ZLinkSerialExecutionQueue(executor, ZLinkExecutionLanePolicy.spot());
         var remote = new CompletableFuture<Integer>();
         var tail = new AtomicReference<Runnable>();
@@ -264,7 +263,7 @@ final class ZLinkYieldAdmissionTest {
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
     void readyResultStillResumesInANewQueueTurn(boolean shared) {
-        var executor = new ManualExecutor();
+        var executor = new ZLinkManualExecutor();
         var queue = new ZLinkSerialExecutionQueue(executor, ZLinkExecutionLanePolicy.spot());
         if (shared) new ZLinkSerialExecutionQueue.SharedSpotGate(queue);
         var order = new java.util.ArrayList<String>();
@@ -316,7 +315,7 @@ final class ZLinkYieldAdmissionTest {
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
     void lifecycleBurstYieldsToResumedApplicationTurn(boolean shared) {
-        var executor = new ManualExecutor();
+        var executor = new ZLinkManualExecutor();
         var queue =
                 new ZLinkSerialExecutionQueue(
                         executor,
@@ -364,8 +363,8 @@ final class ZLinkYieldAdmissionTest {
 
     @Test
     void deferredLifecycleCallbackKeepsItsTurnUntilActualCallbackYields() {
-        var executor = new ManualExecutor();
-        var callbacks = new ManualExecutor();
+        var executor = new ZLinkManualExecutor();
+        var callbacks = new ZLinkManualExecutor();
         var queue = new ZLinkSerialExecutionQueue(executor, ZLinkExecutionLanePolicy.spot());
         var callbackResult = new CompletableFuture<Void>();
         var remote = new CompletableFuture<Integer>();
@@ -457,35 +456,5 @@ final class ZLinkYieldAdmissionTest {
         assertEquals(
                 ZLinkFrameworkErrorKind.INVALID_OPERATION,
                 ((ZLinkFrameworkException) error).kind());
-    }
-
-    private static final class ManualExecutor extends java.util.concurrent.AbstractExecutorService {
-        public void shutdown() {}
-
-        public java.util.List<Runnable> shutdownNow() {
-            return java.util.List.of();
-        }
-
-        public boolean isShutdown() {
-            return false;
-        }
-
-        public boolean isTerminated() {
-            return false;
-        }
-
-        public boolean awaitTermination(long value, java.util.concurrent.TimeUnit unit) {
-            return true;
-        }
-
-        private final ArrayDeque<Runnable> tasks = new ArrayDeque<>();
-
-        public void execute(Runnable task) {
-            tasks.add(task);
-        }
-
-        void drain() {
-            while (!tasks.isEmpty()) tasks.remove().run();
-        }
     }
 }

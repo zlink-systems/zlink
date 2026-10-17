@@ -367,7 +367,7 @@ final class ZLinkJavaRawMeshNode
                                                 () ->
                                                         new IllegalStateException(
                                                                 "local MeshNode authority"
-                                                                        + " descriptor is not live")));
+                                                                    + " descriptor is not live")));
     }
 
     ZLinkInternalMeshNode.PeerAuthorityFence localAuthorityFence() {
@@ -450,6 +450,26 @@ final class ZLinkJavaRawMeshNode
                 || ownerLeaseGeneration <= 0) {
             return null;
         }
+        return localActorMessage(
+                new ZLinkServiceM6BWireCodec.ActorRouteFence(
+                        actor,
+                        descriptor.lifecycleGeneration(),
+                        ownerGeneration,
+                        ownerLeaseGeneration),
+                sourceNodeRid,
+                sourceSessionRid,
+                sourceBindingGeneration,
+                sourceSessionSequence,
+                requestId);
+    }
+
+    ZLinkServiceM6BWireCodec.ActorMessage localActorMessage(
+            ZLinkServiceM6BWireCodec.ActorRouteFence target,
+            RoutingId sourceNodeRid,
+            RoutingId sourceSessionRid,
+            long sourceBindingGeneration,
+            long sourceSessionSequence,
+            long requestId) {
         var boundSession =
                 sourceSessionRid == null
                         ? null
@@ -464,11 +484,7 @@ final class ZLinkJavaRawMeshNode
                 operation.getLeastSignificantBits(),
                 0,
                 null,
-                new ZLinkServiceM6BWireCodec.ActorRouteFence(
-                        actor,
-                        descriptor.lifecycleGeneration(),
-                        ownerGeneration,
-                        ownerLeaseGeneration),
+                target,
                 boundSession);
     }
 
@@ -2363,20 +2379,13 @@ final class ZLinkJavaRawMeshNode
         }
     }
 
-    CompletionStage<Void> sendActor(ZLinkBackendActorRef actor, List<Message> parts) {
+    CompletionStage<Void> sendActor(
+            ZLinkServiceM6BWireCodec.ActorRouteFence target, List<Message> parts) {
+        ZLinkBackendActorRef actor = target.actor();
         Optional<ZLinkServiceTopologyRegistry.Peer> peer =
                 topology == null ? Optional.empty() : topology.peerFromOwner(actor.nodeRid());
-        ZLinkJavaRawSpotNode spots = (ZLinkJavaRawSpotNode) spotNode();
-        long authorityOwnerGeneration = spots.actorAuthorityOwnerGeneration(actor);
-        long ownerLeaseGeneration = spots.actorAuthorityOwnerLeaseGeneration(actor);
-        if (peer.isEmpty()
-                || actor.generation() <= 0
-                || authorityOwnerGeneration <= 0
-                || ownerLeaseGeneration <= 0) {
-            return CompletableFuture.failedFuture(
-                    new ZlinkSubmitException(SubmitResult.NOT_CONNECTED));
-        }
-        if (!isReadyPeer(peer.orElseThrow())) {
+        if (peer.isEmpty() || !isReadyPeer(peer.orElseThrow())) {
+
             return CompletableFuture.failedFuture(
                     new ZlinkSubmitException(SubmitResult.NOT_CONNECTED));
         }
@@ -2391,11 +2400,7 @@ final class ZLinkJavaRawMeshNode
                                 operation.getLeastSignificantBits(),
                                 0,
                                 null,
-                                new ZLinkServiceM6BWireCodec.ActorRouteFence(
-                                        actor,
-                                        peer.orElseThrow().descriptor().lifecycleGeneration(),
-                                        authorityOwnerGeneration,
-                                        ownerLeaseGeneration)),
+                                target),
                         wire.encodeFrameworkMultipartFrame(parts));
         return port.send(requireStarted(), actor.nodeRid(), frames);
     }
@@ -3182,7 +3187,7 @@ final class ZLinkJavaRawMeshNode
         return now + duration;
     }
 
-    CompletionStage<List<Message>> requestActor(
+    CompletionStage<List<Message>> requestExactActor(
             ZLinkBackendActorRef actor,
             List<Message> parts,
             Duration timeout,
@@ -3201,6 +3206,31 @@ final class ZLinkJavaRawMeshNode
                             ZLinkFrameworkErrorKind.UNAVAILABLE,
                             "remote Actor route is not connected"));
         }
+        return requestActor(
+                new ZLinkServiceM6BWireCodec.ActorRouteFence(
+                        actor,
+                        peer.orElseThrow().descriptor().lifecycleGeneration(),
+                        authorityOwnerGeneration,
+                        ownerLeaseGeneration),
+                parts,
+                timeout,
+                requestAdmission);
+    }
+
+    CompletionStage<List<Message>> requestActor(
+            ZLinkServiceM6BWireCodec.ActorRouteFence target,
+            List<Message> parts,
+            Duration timeout,
+            CompletableFuture<Void> requestAdmission) {
+        ZLinkBackendActorRef actor = target.actor();
+        Optional<ZLinkServiceTopologyRegistry.Peer> peer =
+                topology == null ? Optional.empty() : topology.peerFromOwner(actor.nodeRid());
+        if (peer.isEmpty()) {
+            return CompletableFuture.failedFuture(
+                    new ZLinkFrameworkException(
+                            ZLinkFrameworkErrorKind.UNAVAILABLE,
+                            "remote Actor route is not connected"));
+        }
         long correlation = allocateCorrelation();
         UUID operationId = UUID.randomUUID();
         List<byte[]> frames =
@@ -3213,11 +3243,7 @@ final class ZLinkJavaRawMeshNode
                                 operationId.getLeastSignificantBits(),
                                 0,
                                 null,
-                                new ZLinkServiceM6BWireCodec.ActorRouteFence(
-                                        actor,
-                                        peer.orElseThrow().descriptor().lifecycleGeneration(),
-                                        authorityOwnerGeneration,
-                                        ownerLeaseGeneration)),
+                                target),
                         wire.encodeFrameworkMultipartFrame(parts));
         ZLinkServiceOperationRegistry.Operation<ZLinkBackendReceived> operation =
                 operations.register(operationId, timeout);
@@ -6626,11 +6652,7 @@ final class ZLinkJavaRawMeshNode
             replyActorFailure(inbound, header, 104, 12);
             return false;
         }
-        if (header.request() != (inbound.requestSequence() != null)
-                || !header.target().actor().nodeRid().equals(routingId)
-                || localDescriptor == null
-                || header.target().targetNodeGeneration()
-                        != localDescriptor.lifecycleGeneration()) {
+        if (header.request() != (inbound.requestSequence() != null)) {
             replyActorFailure(inbound, header, 102, 1);
             return false;
         }
