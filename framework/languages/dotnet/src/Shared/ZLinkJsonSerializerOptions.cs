@@ -135,6 +135,23 @@ internal static class ZLinkJsonSerializerOptions
     }
 #endif
 
+    private static bool IsCanonicalDecimalInteger(string? encoded)
+    {
+        if (string.IsNullOrEmpty(encoded))
+            return false;
+        if (encoded == "0")
+            return true;
+        var firstDigit = encoded[0] == '-' ? 1 : 0;
+        if (firstDigit == encoded.Length || encoded[firstDigit] < '1' || encoded[firstDigit] > '9')
+            return false;
+        for (var index = firstDigit + 1; index < encoded.Length; index++)
+        {
+            if (encoded[index] < '0' || encoded[index] > '9')
+                return false;
+        }
+        return true;
+    }
+
     // Store opaque-record envelope DTOs (Runtime/Locations) reuse these two
     // converters directly for the canonical decimal-string generation
     // fields pinned by 21-location-runtime.md#2.4, so they can't stay
@@ -151,17 +168,12 @@ internal static class ZLinkJsonSerializerOptions
                 throw new JsonException("Signed 64-bit integers must be decimal strings.");
             var encoded = reader.GetString();
             if (
-                encoded is null
+                !IsCanonicalDecimalInteger(encoded)
                 || !long.TryParse(
                     encoded,
                     System.Globalization.NumberStyles.AllowLeadingSign,
                     System.Globalization.CultureInfo.InvariantCulture,
                     out var value
-                )
-                || !string.Equals(
-                    encoded,
-                    value.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                    StringComparison.Ordinal
                 )
             )
                 throw new JsonException("Signed 64-bit integer string is not canonical.");
@@ -190,17 +202,12 @@ internal static class ZLinkJsonSerializerOptions
                 throw new JsonException("Unsigned 64-bit integers must be decimal strings.");
             var encoded = reader.GetString();
             if (
-                encoded is null
+                !IsCanonicalDecimalInteger(encoded)
                 || !ulong.TryParse(
                     encoded,
                     System.Globalization.NumberStyles.None,
                     System.Globalization.CultureInfo.InvariantCulture,
                     out var value
-                )
-                || !string.Equals(
-                    encoded,
-                    value.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                    StringComparison.Ordinal
                 )
             )
                 throw new JsonException("Unsigned 64-bit integer string is not canonical.");
