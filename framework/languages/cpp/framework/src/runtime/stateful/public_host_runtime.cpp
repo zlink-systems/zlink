@@ -3640,23 +3640,23 @@ bool public_host_runtime_t::try_finalize_relocation_target (const relocation_att
     if (!stamped)
         return false;
 
-    // Native Actor authority adoption is specific to User-Spot Join.
-    // Every relocation prepares its carried Session routes before command 44
-    // can expose the target to Session ingress.
+    // Raw identities were installed during target preparation. Reflect the
+    // Store-assigned authority before lifecycle opens; User-Spot Join also
+    // adopts that authority in its prepared application Actor.
     const auto join_prepare = _actor_join_relocation_prepare_validator
                                 ? _actor_join_relocation_prepare_validator (attempt.prepare)
                                 : std::optional<bool>{};
     const auto canonical_user_spot_join = join_prepare && *join_prepare;
-    if (canonical_user_spot_join) {
-        for (const auto &target : attempt.targets) {
-            if (target.kind == stateful::object_kind_t::actor
+    for (const auto &target : attempt.targets) {
+        if (target.kind != stateful::object_kind_t::actor)
+            continue;
+        if (advance_local_actor_authority (target) != stateful::stateful_error_t::none
+            || (canonical_user_spot_join
                 && (!_actor_join_committed_authority_adopter
                     || !_actor_join_committed_authority_adopter (
                       target, attempt.prepare.target.target_node_generation,
-                      attempt.prepare.target.target_owner_lease_generation))) {
-                return false;
-            }
-        }
+                      attempt.prepare.target.target_owner_lease_generation))))
+            return false;
     }
     for (const auto &route_state : attempt.session_routes) {
         const auto &route = route_state.route;
@@ -3667,32 +3667,6 @@ bool public_host_runtime_t::try_finalize_relocation_target (const relocation_att
     }
 
     try {
-        const auto actor_indexes_current =
-          _spot_actor_index_lane
-            .run ([&] {
-                // Publish only this restore's exact identity. Check the whole
-                // aggregate before inserting so no prior incarnation is replaced.
-                for (const auto &target : attempt.targets) {
-                    if (target.kind != stateful::object_kind_t::actor)
-                        continue;
-                    const auto current = _actors.find (target.key);
-                    if (current != _actors.end () && current->second.second != target)
-                        return false;
-                }
-                for (std::size_t index = 0; index != attempt.targets.size (); ++index) {
-                    const auto &target = attempt.targets[index];
-                    if (target.kind == stateful::object_kind_t::actor)
-                        _actors.try_emplace (target.key, attempt.wire_objects[index].stable_type,
-                                             target);
-                }
-                return true;
-            })
-            .get ();
-        if (!actor_indexes_current) {
-            discard_attempt ();
-            return false;
-        }
-
         /* Identity and S2 authority are visible before lifecycle opens. The
          * existing execution gate holds ingress until restore becomes Ready.
          * Submit command 44 first so a joined callback's Session push remains
@@ -3882,15 +3856,46 @@ void public_host_runtime_t::activate_relocation_assembly (
         attempt.session_routes.emplace_back ();
         attempt.session_routes.back ().route = route;
     }
-    const auto inserted =
-      _relocation_session_terminal_lane
-        .run ([&] {
-            if (_options.mesh.shutdown_admission_seal->load (std::memory_order_acquire))
-                return false;
-            lower_relocation_next_due_on_lane (relocation_due_now);
-            return _relocation_target_attempts.try_emplace (key, std::move (attempt)).second;
-        })
-        .get ();
+    bool inserted = false;
+    try {
+        inserted =
+          _spot_actor_index_lane
+            .run ([&] {
+                // Relocation §4.3/§4.5: materialize raw identities before
+                // Ready authority can route local ingress here. The
+                // existing recovering gate still prevents execution.
+                // Validate the whole unit before inserting any Actor.
+                for (const auto &target : attempt.targets) {
+                    if (target.kind != stateful::object_kind_t::actor)
+                        continue;
+                    const auto current = _actors.find (target.key);
+                    if (current != _actors.end () && current->second.second != target)
+                        return false;
+                }
+                for (std::size_t index = 0; index != attempt.targets.size (); ++index) {
+                    const auto &target = attempt.targets[index];
+                    if (target.kind == stateful::object_kind_t::actor)
+                        _actors.try_emplace (target.key, attempt.wire_objects[index].stable_type,
+                                             target);
+                }
+                return true;
+            })
+            .get ()
+          && _relocation_session_terminal_lane
+               .run ([&] {
+                   if (_options.mesh.shutdown_admission_seal->load (std::memory_order_acquire))
+                       return false;
+                   lower_relocation_next_due_on_lane (relocation_due_now);
+                   return _relocation_target_attempts.try_emplace (key, std::move (attempt)).second;
+               })
+               .get ();
+    }
+    catch (...) {
+        std::vector<relocation_target_attempt_t> cleanup;
+        cleanup.push_back (std::move (attempt));
+        discard_relocation_target_attempts (std::move (cleanup));
+        throw;
+    }
     if (!inserted) {
         std::vector<relocation_target_attempt_t> cleanup;
         cleanup.push_back (std::move (attempt));
