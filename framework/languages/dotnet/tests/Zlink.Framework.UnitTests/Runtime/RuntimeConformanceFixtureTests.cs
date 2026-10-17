@@ -703,10 +703,15 @@ public sealed class RuntimeConformanceFixtureTests
                     .Server();
                 PlacementSpotTypes[index](objects, $"placement-spot-{meshName}");
                 if (nodes[index].GetProperty("actorFactory").GetBoolean())
+                {
+                    //  A node creates new Actors only when its Entry Spot type
+                    //  accepts the Actor type (Actor model §6.3).
+                    PlacementEntrySpotTypes[index](objects);
                     objects.AddActorFactory<PlacementActor, PlacementActorFactory>(
                         "placement-actor",
                         static factory => factory.DisableRelocation()
                     );
+                }
                 if (nodes[index].GetProperty("instanceSpotFactory").GetBoolean())
                     objects.AddInstanceSpotFactory<PlacementInstanceSpot>(
                         "placement-instance",
@@ -982,6 +987,36 @@ public sealed class RuntimeConformanceFixtureTests
     private sealed class FirstPlacementSpot(IZLinkSpotContext context) : PlacementSpot(context);
 
     private sealed class SecondPlacementSpot(IZLinkSpotContext context) : PlacementSpot(context);
+
+    // Entry Spot types are unique per host, so each Actor-creating fixture
+    // MeshNode gets its own type.
+    private static readonly Action<IZLinkMeshObjectServerBuilder>[] PlacementEntrySpotTypes =
+    [
+        static objects => objects.AddEntrySpot<FirstPlacementEntrySpot>(),
+        static objects => objects.AddEntrySpot<SecondPlacementEntrySpot>(),
+    ];
+
+    private abstract class PlacementEntrySpot(IZLinkEntrySpotContext context)
+        : IZLinkEntrySpot<PlacementActor>
+    {
+        public IZLinkEntrySpotContext Context { get; } = context;
+
+        public ValueTask OnJoinedActorAsync(
+            PlacementActor actor,
+            CancellationToken cancellationToken
+        ) => ValueTask.CompletedTask;
+
+        public ValueTask OnLeaveActorAsync(
+            PlacementActor actor,
+            CancellationToken cancellationToken
+        ) => ValueTask.CompletedTask;
+    }
+
+    private sealed class FirstPlacementEntrySpot(IZLinkEntrySpotContext context)
+        : PlacementEntrySpot(context);
+
+    private sealed class SecondPlacementEntrySpot(IZLinkEntrySpotContext context)
+        : PlacementEntrySpot(context);
 
     private sealed class PlacementInstanceSpot(IZLinkInstanceSpotContext context)
         : IZLinkInstanceSpot

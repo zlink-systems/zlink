@@ -590,7 +590,10 @@ test('spot manager exposes exact single-use stable-type calls and generation-fen
   assert.match(spotCreateCall, /yield\(signal\?: AbortSignal\): Promise<ZLinkSpotCreateResult>/);
   assert.equal(interfaceExtends(spotGetOrCreateCall, 'ZLinkSpotCreateCall'), true);
   assert.doesNotMatch(spotManager, /Type<TSpot>|meshName: string,\s*spotType/);
-  assert.match(objectServerBuilder, /addEntrySpot<TEntrySpot extends ZLinkEntrySpot>/);
+  assert.match(
+    objectServerBuilder,
+    /addEntrySpot<TEntrySpot extends ZLinkEntrySpot>\(\s*entrySpotType: Type<TEntrySpot>,\s*actorType: string\s*\)/
+  );
   assert.doesNotMatch(meshNodeBuilder, /configureEntrySpot/);
   assert.doesNotMatch(declarations, /ZLinkEntrySpotOptions/);
 });

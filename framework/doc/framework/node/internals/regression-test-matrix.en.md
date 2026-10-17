@@ -170,7 +170,7 @@ not wait for remote receipt or handler execution completion.
 | Item | Layer | Pass Criteria |
 |------|------|-----------|
 | duplicate Spot factory type | `unit` | startup validation exception |
-| duplicate `addEntrySpot(EntrySpotClass)` | `unit` | startup validation exception on duplicate Entry Spot[^entry-spot] registry registration within the same MeshNode |
+| duplicate `addEntrySpot(EntrySpotClass, actorType)` | `unit` | startup validation exception on duplicate Entry Spot[^entry-spot] registry registration within the same MeshNode |
 | `addRouteMesh(meshName)` + `addEntrySpot(...)` | `integration-single-process` | the MeshNode builder finishes Entry Spot and Spot factory registration in one go |
 | registering a local MeshNode with no location store | `integration-single-process` | starts a MeshNode runtime using only manual peer connections |
 | `create(spotType)` | `integration-single-process` | `spotId` and `Created` status stay consistent |

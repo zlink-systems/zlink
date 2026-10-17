@@ -57,6 +57,7 @@ test('capacity rows serialize spotTypes in UTF-16 ordinal key order', async () =
         stableType,
         policy: 'snapshot' as const,
         hasSnapshotAdapter: true,
+        entryAccepted: false,
         limit: 1
       })),
       state: ZLinkFrameworkRuntimeState.Serving,

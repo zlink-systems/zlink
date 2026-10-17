@@ -304,7 +304,7 @@ test('Nest Actor decorators dispatch selected methods through public Actor clien
   mesh
     .objects()
     .server()
-    .addEntrySpot(EntrySpot)
+    .addEntrySpot(EntrySpot, 'player')
     .addSpotFactory(RoomSpot.name, RoomSpot, (factory) => factory.disableRelocation())
     .addActorFactory('player', PlayerFactory, (factory) => factory.disableRelocation());
   mesh.channel('nest-audit-method').client();

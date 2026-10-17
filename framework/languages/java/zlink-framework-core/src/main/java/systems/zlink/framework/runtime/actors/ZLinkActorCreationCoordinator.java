@@ -48,6 +48,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
+import java.util.function.Predicate;
 import java.util.function.Supplier;
 
 /** Owns the durable Actor creation reservation and terminal publication path. */
@@ -65,6 +66,7 @@ public final class ZLinkActorCreationCoordinator
     private final ZLinkMessageSerializer serializer;
     private final ZLinkActivationAdmission activationAdmission;
     private final Function<String, RelocationPolicy> actorRelocationPolicy;
+    private final Predicate<String> acceptsNewActor;
     private final ZLinkActorAuthorityPayloadCodec authorities =
             new ZLinkActorAuthorityPayloadCodec();
     private final ZLinkServiceM6AWireCodec payloads = new ZLinkServiceM6AWireCodec();
@@ -78,18 +80,9 @@ public final class ZLinkActorCreationCoordinator
             ZLinkLocationRepository locations,
             ZLinkActorRuntime actors,
             ZLinkMessageSerializer serializer,
-            ZLinkActivationAdmission activationAdmission) {
-        this(meshName, node, locations, actors, serializer, activationAdmission, ignored -> null);
-    }
-
-    public ZLinkActorCreationCoordinator(
-            String meshName,
-            ZLinkInternalMeshNode node,
-            ZLinkLocationRepository locations,
-            ZLinkActorRuntime actors,
-            ZLinkMessageSerializer serializer,
             ZLinkActivationAdmission activationAdmission,
-            Function<String, RelocationPolicy> actorRelocationPolicy) {
+            Function<String, RelocationPolicy> actorRelocationPolicy,
+            Predicate<String> acceptsNewActor) {
         this.meshName = Objects.requireNonNull(meshName, "meshName");
         this.node = Objects.requireNonNull(node, "node");
         this.locations = Objects.requireNonNull(locations, "locations");
@@ -99,6 +92,7 @@ public final class ZLinkActorCreationCoordinator
                 Objects.requireNonNull(activationAdmission, "activationAdmission");
         this.actorRelocationPolicy =
                 Objects.requireNonNull(actorRelocationPolicy, "actorRelocationPolicy");
+        this.acceptsNewActor = Objects.requireNonNull(acceptsNewActor, "acceptsNewActor");
     }
 
     @Override
@@ -108,19 +102,22 @@ public final class ZLinkActorCreationCoordinator
             ZLinkMessage createRequest,
             boolean getOrCreate,
             Duration timeout) {
+        var operation = newOperation();
+        long deadline = Math.addExact(System.currentTimeMillis(), timeout.toMillis());
+        byte[] requestEnvelope = encodeCreateRequest(createRequest);
+        return resumeOrCreate(
+                operation, actorId, actorType, requestEnvelope, getOrCreate, deadline, Set.of());
+    }
+
+    private ZLinkCreationOperationIdentity newOperation() {
         UUID id = UUID.randomUUID();
         long high = id.getMostSignificantBits() & Long.MAX_VALUE;
         long low = id.getLeastSignificantBits() & Long.MAX_VALUE;
         if (high == 0 && low == 0) {
             low = 1;
         }
-        var operation =
-                new ZLinkCreationOperationIdentity(
-                        node.status().routingId(), node.status().lifecycleGeneration(), high, low);
-        long deadline = Math.addExact(System.currentTimeMillis(), timeout.toMillis());
-        byte[] requestEnvelope = encodeCreateRequest(createRequest);
-        return resumeOrCreate(
-                operation, actorId, actorType, requestEnvelope, getOrCreate, deadline, Set.of());
+        return new ZLinkCreationOperationIdentity(
+                node.status().routingId(), node.status().lifecycleGeneration(), high, low);
     }
 
     private CompletionStage<ZLinkActorCreateResult> resumeOrCreate(
@@ -141,24 +138,72 @@ public final class ZLinkActorCreationCoordinator
                             if (System.currentTimeMillis() >= deadline) {
                                 return admissionUnavailable("Actor create deadline expired");
                             }
-                            return selectTarget(actorType, deadline, excludedTargets)
+                            if (!getOrCreate) {
+                                return createOnNewTarget(
+                                        operation,
+                                        actorId,
+                                        actorType,
+                                        requestEnvelope,
+                                        false,
+                                        deadline,
+                                        excludedTargets);
+                            }
+                            // A live Ready Actor is found without the new-Actor candidate
+                            // condition (Actor model section 6.3; Location runtime section 7).
+                            return locations
+                                    .read(ZLinkAuthorityKeyCodec.actor(actorId), OPEN)
                                     .thenCompose(
-                                            target -> {
-                                                return resolveEntrySpot(target)
-                                                        .thenCompose(
-                                                                entry ->
-                                                                        reserveAndSubmit(
-                                                                                operation,
-                                                                                actorId,
-                                                                                actorType,
-                                                                                requestEnvelope,
-                                                                                getOrCreate,
-                                                                                deadline,
-                                                                                target,
-                                                                                entry,
-                                                                                excludedTargets));
-                                            });
+                                            current ->
+                                                    current
+                                                                    instanceof
+                                                                    ZLinkAuthoritySnapshot snapshot
+                                                            ? isReady(snapshot, actorId, actorType)
+                                                                    .thenApply(
+                                                                            ready ->
+                                                                                    ready
+                                                                                            ? snapshot
+                                                                                            : null)
+                                                            : CompletableFuture.completedFuture(
+                                                                    null))
+                                    .thenCompose(
+                                            snapshot ->
+                                                    snapshot != null
+                                                            ? existing(snapshot, actorId, actorType)
+                                                            : createOnNewTarget(
+                                                                    operation,
+                                                                    actorId,
+                                                                    actorType,
+                                                                    requestEnvelope,
+                                                                    true,
+                                                                    deadline,
+                                                                    excludedTargets));
                         });
+    }
+
+    private CompletionStage<ZLinkActorCreateResult> createOnNewTarget(
+            ZLinkCreationOperationIdentity operation,
+            String actorId,
+            String actorType,
+            byte[] requestEnvelope,
+            boolean getOrCreate,
+            long deadline,
+            Set<ZLinkMeshNodeDescriptorKey> excludedTargets) {
+        return selectTarget(actorType, deadline, excludedTargets, true)
+                .thenCompose(
+                        target ->
+                                resolveEntrySpot(target)
+                                        .thenCompose(
+                                                entry ->
+                                                        reserveAndSubmit(
+                                                                operation,
+                                                                actorId,
+                                                                actorType,
+                                                                requestEnvelope,
+                                                                getOrCreate,
+                                                                deadline,
+                                                                target,
+                                                                entry,
+                                                                excludedTargets)));
     }
 
     private CompletionStage<ZLinkActorCreateResult> reserveAndSubmit(
@@ -263,10 +308,20 @@ public final class ZLinkActorCreationCoordinator
                                             target.rid(), intent, remainingTimeout(deadline))
                                     .thenCompose(
                                             response ->
-                                                    completedResult(
+                                                    completedOrExcluded(
                                                             response.terminalEnvelope(),
-                                                            target.meshName(),
-                                                            target.rid()))
+                                                            target,
+                                                            () ->
+                                                                    resumeOrCreate(
+                                                                            newOperation(),
+                                                                            actorId,
+                                                                            actorType,
+                                                                            requestEnvelope,
+                                                                            getOrCreate,
+                                                                            deadline,
+                                                                            excluding(
+                                                                                    excludedTargets,
+                                                                                    target))))
                                     .exceptionallyCompose(
                                             failure -> {
                                                 return locations
@@ -277,13 +332,21 @@ public final class ZLinkActorCreationCoordinator
                                                                                         instanceof
                                                                                         ZLinkCreationTerminalFound
                                                                                                 found
-                                                                                ? completedResult(
+                                                                                ? completedOrExcluded(
                                                                                         found
                                                                                                 .terminalEnvelope(),
-                                                                                        target
-                                                                                                .meshName(),
-                                                                                        target
-                                                                                                .rid())
+                                                                                        target,
+                                                                                        () ->
+                                                                                                resumeOrCreate(
+                                                                                                        newOperation(),
+                                                                                                        actorId,
+                                                                                                        actorType,
+                                                                                                        requestEnvelope,
+                                                                                                        getOrCreate,
+                                                                                                        deadline,
+                                                                                                        excluding(
+                                                                                                                excludedTargets,
+                                                                                                                target)))
                                                                                 : CompletableFuture
                                                                                         .failedFuture(
                                                                                                 unwrap(
@@ -292,12 +355,63 @@ public final class ZLinkActorCreationCoordinator
                         });
     }
 
+    /**
+     * A target that registers no Entry Spot type accepting the Actor type refuses before the
+     * factory runs (Actor model section 6.3); the requester then excludes that host run generation,
+     * as for a failed Reserve, and picks another candidate.
+     */
+    private CompletionStage<ZLinkActorCreateResult> completedOrExcluded(
+            byte[] envelope,
+            ZLinkMeshNodeDescriptor target,
+            Supplier<CompletionStage<ZLinkActorCreateResult>> retry) {
+        try {
+            var terminal =
+                    wire.decodeCreationOperationTerminal(envelope, target.meshName(), target.rid());
+            if (terminal.terminalResult() == RequestResult.INTERNAL_ERROR.value()
+                    && terminal.failureCode()
+                            == ServiceWireConstants.FRAMEWORK_ERROR_ROUTE_NOT_CONNECTED) {
+                return retry.get();
+            }
+        } catch (RuntimeException undecodable) {
+            //  completedResult reports the undecodable terminal as ProtocolError.
+        }
+        return completedResult(envelope, target.meshName(), target.rid());
+    }
+
     private static Duration remainingTimeout(long deadlineUnixMs) {
         long remainingMillis = deadlineUnixMs - System.currentTimeMillis();
         if (remainingMillis <= 0) {
             return Duration.ofNanos(1);
         }
         return Duration.ofMillis(remainingMillis);
+    }
+
+    private CompletionStage<Boolean> isReady(
+            ZLinkAuthoritySnapshot snapshot, String actorId, String actorType) {
+        if (authorities
+                .decode(snapshot.payload())
+                .filter(authority -> isReady(authority, actorId, actorType))
+                .isEmpty()) {
+            return CompletableFuture.completedFuture(false);
+        }
+        return locations
+                .readOwnerLease(snapshot.ownerId())
+                .thenApply(
+                        owner ->
+                                owner instanceof ZLinkOwnerLeaseFound found
+                                        && found.token().ownerId().equals(snapshot.ownerId())
+                                        && found.token().leaseGeneration()
+                                                == snapshot.ownerLeaseGeneration()
+                                        && found.leaseExpiresAt().isAfter(found.storeNow()));
+    }
+
+    private static boolean isReady(
+            ZLinkActorAuthorityPayloadCodec.ActorAuthority authority,
+            String actorId,
+            String actorType) {
+        return authority.state() == ZLinkActorAuthorityPayloadCodec.State.READY
+                && authority.actorId().equals(actorId)
+                && authority.stableType().equals(actorType);
     }
 
     private CompletionStage<ZLinkActorCreateResult> existing(
@@ -310,9 +424,7 @@ public final class ZLinkActorCreationCoordinator
                                         frameworkFailure(
                                                 ZLinkFrameworkErrorKind.INTERNAL_FAILURE,
                                                 "Actor authority payload is invalid"));
-        if (authority.state() != ZLinkActorAuthorityPayloadCodec.State.READY
-                || !authority.actorId().equals(actorId)
-                || !authority.stableType().equals(actorType)) {
+        if (!isReady(authority, actorId, actorType)) {
             return failed("Actor authority is not Ready");
         }
         return CompletableFuture.completedFuture(
@@ -386,6 +498,16 @@ public final class ZLinkActorCreationCoordinator
                                         stale.getMessage() == null
                                                 ? "Actor reservation is stale"
                                                 : stale.getMessage());
+                            }
+                            if (!acceptsNewActor.test(request.intent().stableType())) {
+                                return failReserved(
+                                        request,
+                                        operation,
+                                        reservation,
+                                        RequestResult.INTERNAL_ERROR.value(),
+                                        (int)
+                                                ServiceWireConstants
+                                                        .FRAMEWORK_ERROR_ROUTE_NOT_CONNECTED);
                             }
                             var pending = snapshot.pendingCreation().orElseThrow();
                             byte[] stored;
@@ -601,12 +723,21 @@ public final class ZLinkActorCreationCoordinator
             ZLinkCreationOperationIdentity operation,
             ZLinkObjectReservation reservation,
             String message) {
-        byte[] envelope =
-                terminalEnvelope(
-                        null,
-                        null,
-                        RequestResult.INTERNAL_ERROR.value(),
-                        (int) ServiceWireConstants.FRAMEWORK_ERROR_ACTOR_CREATE_FAILED);
+        return failReserved(
+                request,
+                operation,
+                reservation,
+                RequestResult.INTERNAL_ERROR.value(),
+                (int) ServiceWireConstants.FRAMEWORK_ERROR_ACTOR_CREATE_FAILED);
+    }
+
+    private CompletionStage<ZLinkInternalMeshNode.ActorCreateResponse> failReserved(
+            ZLinkInternalMeshNode.ActorCreateRequest request,
+            ZLinkCreationOperationIdentity operation,
+            ZLinkObjectReservation reservation,
+            int terminalResult,
+            int failureCode) {
+        byte[] envelope = terminalEnvelope(null, null, terminalResult, failureCode);
         ZLinkCreationOperationTerminal terminal =
                 terminal(
                         operation,
@@ -734,7 +865,15 @@ public final class ZLinkActorCreationCoordinator
     }
 
     private CompletionStage<ZLinkMeshNodeDescriptor> selectTarget(
-            String actorType, long deadline, Set<ZLinkMeshNodeDescriptorKey> excludedTargets) {
+            String actorType,
+            long deadline,
+            Set<ZLinkMeshNodeDescriptorKey> excludedTargets,
+            boolean newActor) {
+        Predicate<ZLinkObjectCapability> placesActor =
+                capability ->
+                        capability.objectKind() == ZLinkPlacementObjectKind.ACTOR
+                                && capability.stableType().equals(actorType)
+                                && (!newActor || capability.entryAccepted());
         return ZLinkStoreLocationResolvers.listMeshNodes(locations, meshName)
                 .toCompletableFuture()
                 .orTimeout(
@@ -761,16 +900,7 @@ public final class ZLinkActorCreationCoordinator
                                                                     && candidate
                                                                             .objectCapabilities()
                                                                             .stream()
-                                                                            .anyMatch(
-                                                                                    capability ->
-                                                                                            capability
-                                                                                                                    .objectKind()
-                                                                                                            == ZLinkPlacementObjectKind
-                                                                                                                    .ACTOR
-                                                                                                    && capability
-                                                                                                            .stableType()
-                                                                                                            .equals(
-                                                                                                                    actorType))
+                                                                            .anyMatch(placesActor)
                                                                     && isExactReadyTarget(
                                                                             candidate,
                                                                             localStatus,
@@ -799,14 +929,7 @@ public final class ZLinkActorCreationCoordinator
                                                                 candidate
                                                                         .objectCapabilities()
                                                                         .stream())
-                                                .anyMatch(
-                                                        capability ->
-                                                                capability.objectKind()
-                                                                                == ZLinkPlacementObjectKind
-                                                                                        .ACTOR
-                                                                        && capability
-                                                                                .stableType()
-                                                                                .equals(actorType));
+                                                .anyMatch(placesActor);
                                 if (capacityKnown) {
                                     return CompletableFuture.failedFuture(
                                             frameworkFailure(
@@ -822,7 +945,8 @@ public final class ZLinkActorCreationCoordinator
                                                         selectTarget(
                                                                 actorType,
                                                                 deadline,
-                                                                excludedTargets));
+                                                                excludedTargets,
+                                                                newActor));
                             }
                             Optional<ZLinkMeshNodeDescriptor> localTarget =
                                     localCandidate(candidates, node.status().routingId());
@@ -886,7 +1010,7 @@ public final class ZLinkActorCreationCoordinator
         } catch (ArithmeticException overflow) {
             deadline = Long.MAX_VALUE;
         }
-        return selectTarget(actorType, deadline, Set.of())
+        return selectTarget(actorType, deadline, Set.of(), false)
                 .thenCompose(
                         target ->
                                 target.entrySpotId()

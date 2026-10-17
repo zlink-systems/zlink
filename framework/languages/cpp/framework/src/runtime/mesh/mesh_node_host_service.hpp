@@ -100,7 +100,8 @@ class mesh_node_host_service_t final : public hosted_service_t, public hosted_se
     void visit_relocation_nodes (
       const std::function<void (const std::shared_ptr<detail::mesh_node_runtime_t> &)> &visitor)
       const override;
-    bool republish_after_store_recovery ();
+    bool republish_after_store_recovery (
+      location_write_intent_t intent = location_write_intent_t::new_claim);
 
   private:
     struct actor_destroy_callback_gate_t;
@@ -123,7 +124,10 @@ class mesh_node_host_service_t final : public hosted_service_t, public hosted_se
                                                 std::optional<message_t> request,
                                                 std::chrono::milliseconds timeout,
                                                 creation_operation_identity_t operation);
-    task_t<actor_create_result_t>
+    //  Empty when the target answered routeNotConnected: it has no Entry Spot accepting the
+    //  type and ended the creation before the factory (Actor model §6.3). The caller then
+    //  excludes that target and chooses another candidate.
+    task_t<std::optional<actor_create_result_t>>
     complete_remote_actor_creation (std::shared_ptr<detail::mesh_node_runtime_t> source,
                                     mesh_node_descriptor_t target,
                                     protocol::actor_create_header_t command,
@@ -176,7 +180,6 @@ class mesh_node_host_service_t final : public hosted_service_t, public hosted_se
     service_provider_t *_services = nullptr;
     std::shared_ptr<location_repository_t> _location_store;
     location_runtime_t *_location_runtime = nullptr;
-    std::optional<location_owner_token_t> _location_owner;
     std::vector<mesh_node_descriptor_key_t> _published_mesh_nodes;
     std::vector<mesh_node_descriptor_t> _published_mesh_descriptors;
     std::mutex _descriptor_publish_mutex;
