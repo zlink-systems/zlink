@@ -59,22 +59,7 @@ export class ZLinkSpotActorAdmissionCoordinator {
       remoteBoundSessionTarget,
       fallbackActorRef,
       undefined,
-      messageFollowOrigin,
-      (
-        replayedParts,
-        replayReturnResponse,
-        replayRemoteBoundSessionTarget,
-        replayFallbackActorRef
-      ) =>
-        this.dispatchActorPacketDirect(
-          origin,
-          activation,
-          actorId,
-          replayedParts,
-          replayReturnResponse,
-          replayRemoteBoundSessionTarget,
-          replayFallbackActorRef
-        )
+      messageFollowOrigin
     );
     if (handoff !== undefined) return await handoff;
     return await this.dispatchActorPacketDirect(
@@ -192,38 +177,21 @@ export class ZLinkSpotActorAdmissionCoordinator {
     actorId: string,
     records: readonly ZLinkActorHandoffPrefixRecord[]
   ): ZLinkActorHandoffPrefixAdmission {
-    const terminals = activation.admitActorDurablePrefix(
+    return activation.admitActorPacketPrefix(
       actorId,
-      records.map((record) => ({
-        operation: (executeChild) =>
-          record.drain((parts, returnResponse, remoteBoundSessionTarget, fallbackActorRef) =>
-            executeChild((actorSerial) =>
-              this.dispatchActorPacketInActorTurn(
-                currentApplicationJobOrigin(),
-                activation,
-                actorSerial,
-                actorId,
-                parts,
-                returnResponse,
-                remoteBoundSessionTarget,
-                fallbackActorRef
-              )
-            )
-          ),
-        preparation: record.preparation,
-        workOptions: { payloadBytes: record.payloadBytes }
-      }))
+      records,
+      (actorSerial, parts, returnResponse, remoteBoundSessionTarget, fallbackActorRef) =>
+        this.dispatchActorPacketInActorTurn(
+          currentApplicationJobOrigin(),
+          activation,
+          actorSerial,
+          actorId,
+          parts,
+          returnResponse,
+          remoteBoundSessionTarget,
+          fallbackActorRef
+        )
     );
-    const terminal = Promise.allSettled(terminals).then((outcomes) => {
-      const errors = outcomes.flatMap((outcome) =>
-        outcome.status === 'rejected' ? [outcome.reason] : []
-      );
-      if (errors.length === 1) throw errors[0];
-      if (errors.length > 1) {
-        throw new AggregateError(errors, `Actor '${actorId}' durable prefix replay failed.`);
-      }
-    });
-    return { terminal };
   }
 
   private dispatchActorPacketInActorTurn(

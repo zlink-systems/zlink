@@ -24,6 +24,8 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ForkJoinPool;
+import java.util.concurrent.ForkJoinTask;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
@@ -200,7 +202,8 @@ final class ZLinkServiceOperationRegistryTest {
             var callback =
                     send.thenRun(
                             () -> {
-                                assertSame(dispatcherWorker(), Thread.currentThread());
+                                assertSame(ForkJoinPool.commonPool(), ForkJoinTask.getPool());
+                                assertTrue(ZLinkServiceCompletionDispatcher.isCurrentCompletion());
                                 assertFalse(Thread.holdsLock(gate));
                                 var request = registry.register(Duration.ofSeconds(1));
                                 assertTrue(registry.discard(request.id()));
@@ -261,16 +264,6 @@ final class ZLinkServiceOperationRegistryTest {
                     assertEquals(0, registry.pendingCount());
                 }
             }
-        }
-    }
-
-    private static Thread dispatcherWorker() {
-        try {
-            var worker = ZLinkServiceCompletionDispatcher.class.getDeclaredField("worker");
-            worker.setAccessible(true);
-            return (Thread) worker.get(ZLinkServiceCompletionDispatcher.INSTANCE);
-        } catch (ReflectiveOperationException failure) {
-            throw new AssertionError(failure);
         }
     }
 
@@ -823,19 +816,26 @@ final class ZLinkServiceOperationRegistryTest {
         try (ZLinkServiceOperationRegistry registry =
                 new ZLinkServiceOperationRegistry(scheduler)) {
             var operation = registry.register(Duration.ofSeconds(1));
-            var callbackThread = new java.util.concurrent.CompletableFuture<String>();
-            String callerThread = Thread.currentThread().getName();
+            var callbackThread = new CompletableFuture<Thread>();
+            var completionPool = new AtomicReference<ForkJoinPool>();
+            var completionContext = new AtomicReference<Boolean>();
+            Thread callerThread = Thread.currentThread();
             operation
                     .completion()
                     .whenComplete(
-                            (ignored, failure) ->
-                                    callbackThread.complete(Thread.currentThread().getName()));
+                            (ignored, failure) -> {
+                                completionPool.set(ForkJoinTask.getPool());
+                                completionContext.set(
+                                        ZLinkServiceCompletionDispatcher.isCurrentCompletion());
+                                callbackThread.complete(Thread.currentThread());
+                            });
 
             assertTrue(registry.complete(operation.id(), "reply"));
-            String actualThread = callbackThread.orTimeout(1, TimeUnit.SECONDS).join();
+            Thread actualThread = callbackThread.orTimeout(1, TimeUnit.SECONDS).join();
             assertEquals("reply", operation.completion().join());
             assertNotEquals(callerThread, actualThread);
-            assertEquals("zlink-jvm-service-completion", actualThread);
+            assertSame(ForkJoinPool.commonPool(), completionPool.get());
+            assertTrue(completionContext.get());
         } finally {
             scheduler.shutdownNow();
         }

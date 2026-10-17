@@ -3245,6 +3245,9 @@ test('precommit abort reopens source admission and replays backlog before one-wa
     spotManager: () => ({
       async beginActorTransfer() { events.push('begin-transfer'); },
       async cancelActorTransfer() { events.push('cancel-transfer'); },
+      admitSourceActorPacketPrefix(actorId, records) {
+        return this.admitRoutedActorPacketPrefix(undefined, actorId, records);
+      },
       admitRoutedActorPacketPrefix(_spotId, _actorId, records) {
         events.push('prefix-admitted');
         const terminals = mailbox.admitDurablePrefix(

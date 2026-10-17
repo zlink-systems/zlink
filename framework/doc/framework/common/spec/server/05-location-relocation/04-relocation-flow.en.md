@@ -343,15 +343,15 @@ required lifecycle callbacks.
 guarantee is not implemented by running callbacks while holding exclusive access.** That
 approach can easily create a structure in which an external callback reacquires the same
 exclusive-access primitive, which [State Ownership And State Lanes §6](../01-execution/06-state-ownership-and-lanes.en.md#6-structuring-so-reentrancy-cannot-arise)
-prohibits. This guarantee is provided by a linearization point in one of the following
-two forms.
-
-- Before opening dispatch, fix placeholder ownership claims for the backlog share in an
-  owning turn; fill individual execution claims outside exclusive access, then settle
-  the placeholders in the same owning turn while opening ordinary admission.
-- Or switch to ordinary dispatch only when the backlog is observed atomically to be
-  empty — ordinary ingress cannot get ahead of backlog turns posted before that
-  observation.
+prohibits. The target preserves the order above and fixes, in one owning turn, the payload
+ownership and owner-queue position of each record that has not run. The takeover of later records
+and the suffix transfer below apply to Actor records. After the required lifecycle
+and Join completion order is met, the target ends the previous move before the first taken-over
+handler starts, and this completion does not wait for the handler terminals of the taken-over
+records. When a taken-over record registers a new Deferred Join, the payload ownership and order
+of the suffix that has not started are transferred atomically to the next handoff at that
+barrier's boundary. A running or finished record is not part of the suffix, and the next handoff
+does not wait for the handler terminals of the whole earlier prefix.
 
 Permit acquisition and return for runnable backlog turns follow [Application job queue §3](../01-execution/04-application-job-queue-and-backpressure.en.md#3-ordinary-ingress-permit-order). Items waiting for a permit remain owned by the backlog payload owner. A timer keeps its original timer lifecycle and follows the relevant ingress rule
 when its callback turn becomes runnable.

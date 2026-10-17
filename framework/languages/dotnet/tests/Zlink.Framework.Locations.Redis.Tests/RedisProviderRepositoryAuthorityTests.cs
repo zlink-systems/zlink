@@ -108,6 +108,184 @@ public sealed class RedisProviderRepositoryAuthorityTests(RedisTestFixture fixtu
         Assert.Equal(targetDescriptor.Rid, observed.Allocation.Descriptor.Rid);
     }
 
+    [SkippableTheory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task EndedUserSpotReleasesEndedOwnerMembers(bool liveMember)
+    {
+        Skip.IfNot(fixture.RedisAvailable, fixture.SkipReason);
+        await using var store = fixture.CreateStore(out _);
+        var repository = new ZLinkProviderLocationRepository(store);
+        var oldOwner = await ClaimAsync(repository, "spot-old-owner");
+        var oldDescriptor = SpotDescriptor("source", oldOwner);
+        Assert.Equal(
+            ZLinkLocationWriteStatus.Stored,
+            (
+                await repository.UpdateMeshNodeAsync(
+                    oldDescriptor,
+                    ZLinkLocationWriteIntent.NewClaim
+                )
+            ).Status
+        );
+        var newOwner = await ClaimAsync(repository, "spot-new-owner");
+        var newDescriptor = SpotDescriptor("target", newOwner);
+        Assert.Equal(
+            ZLinkLocationWriteStatus.Stored,
+            (
+                await repository.UpdateMeshNodeAsync(
+                    newDescriptor,
+                    ZLinkLocationWriteIntent.NewClaim
+                )
+            ).Status
+        );
+        var spotId = $"redis-spot-{Guid.NewGuid():N}";
+        var spot = Assert.IsType<ZLinkObjectReserveResult.Reserved>(
+            await repository.ReserveAsync(SpotReservation(spotId, oldDescriptor, oldOwner))
+        );
+        Assert.IsType<ZLinkObjectCommitResult.Committed>(
+            await repository.CommitAsync(
+                spot.Reservation,
+                Zlink.Framework.Runtime.Spots.ZLinkUserSpotAuthorityPayloadCodec.Encode(
+                    new Zlink.Framework.Runtime.Spots.ZLinkUserSpotAuthorityPayload(
+                        Zlink.Framework.Runtime.Spots.ZLinkUserSpotAuthorityState.Ready,
+                        "player",
+                        spotId,
+                        oldOwner.OwnerId,
+                        checked((ulong)oldOwner.LeaseGeneration),
+                        "play",
+                        oldDescriptor.Rid,
+                        1
+                    )
+                )
+            )
+        );
+        var memberId = $"redis-member-{Guid.NewGuid():N}";
+        var (memberDescriptor, memberOwner) = liveMember
+            ? (newDescriptor, newOwner)
+            : (oldDescriptor, oldOwner);
+        var member = Assert.IsType<ZLinkObjectReserveResult.Reserved>(
+            await repository.ReserveAsync(Reservation(memberId, memberDescriptor, memberOwner))
+        );
+        Assert.IsType<ZLinkObjectCommitResult.Committed>(
+            await repository.CommitAsync(
+                member.Reservation,
+                Zlink.Framework.Runtime.Actors.ZLinkActorAuthorityPayloadCodec.Encode(
+                    new Zlink.Framework.Runtime.Actors.ZLinkActorAuthorityPayload(
+                        Zlink.Framework.Runtime.Actors.ZLinkActorAuthorityState.Ready,
+                        "player",
+                        memberId,
+                        spotId,
+                        spot.Reservation.ObjectGeneration,
+                        ZLinkSpotKind.User,
+                        memberOwner.OwnerId,
+                        checked((ulong)memberOwner.LeaseGeneration),
+                        "play",
+                        memberDescriptor.Rid,
+                        1
+                    )
+                )
+            )
+        );
+        await repository.ReleaseOwnerLeaseAsync(oldOwner);
+        var next = SpotReservation(spotId, newDescriptor, newOwner) with
+        {
+            ObjectRelocationPolicy = Zlink
+                .Framework
+                .Runtime
+                .Configuration
+                .ZLinkObjectRelocationRegistration
+                .DisabledPolicy,
+        };
+
+        if (liveMember)
+        {
+            var error =
+                await Assert.ThrowsAsync<Zlink.Framework.Contracts.Errors.ZLinkFrameworkException>(
+                    async () =>
+                        await repository.ReserveAsync(next)
+                );
+            Assert.Equal(
+                Zlink.Framework.Contracts.Errors.ZLinkFrameworkErrorKind.Unavailable,
+                error.Kind
+            );
+            Assert.Equal(
+                spot.Reservation.ObjectGeneration,
+                Assert
+                    .IsType<ZLinkAuthorityReadResult.Found>(
+                        await repository.ReadAuthorityAsync(next.Key)
+                    )
+                    .Snapshot.ObjectGeneration
+            );
+            Assert.IsType<ZLinkAuthorityReadResult.Found>(
+                await repository.ReadAuthorityAsync(member.Reservation.Key)
+            );
+            return;
+        }
+        var recreated = Assert.IsType<ZLinkObjectReserveResult.Reserved>(
+            await repository.ReserveAsync(next)
+        );
+        Assert.True(recreated.Reservation.ObjectGeneration > spot.Reservation.ObjectGeneration);
+        Assert.IsType<ZLinkAuthorityReadResult.Missing>(
+            await repository.ReadAuthorityAsync(member.Reservation.Key)
+        );
+        var again = Assert.IsType<ZLinkObjectReserveResult.Reserved>(
+            await repository.ReserveAsync(Reservation(memberId, newDescriptor, newOwner))
+        );
+        Assert.True(again.Reservation.ObjectGeneration > member.Reservation.ObjectGeneration);
+    }
+
+    private static ZLinkMeshNodeDescriptor SpotDescriptor(
+        string node,
+        ZLinkLocationOwnerToken owner
+    )
+    {
+        var descriptor = Descriptor(node, owner);
+        return descriptor with
+        {
+            ObjectCapabilities =
+            [
+                .. descriptor.ObjectCapabilities.Select(capability =>
+                    capability.ObjectKind == ZLinkPlacementObjectKind.UserSpot
+                        ? capability with
+                        {
+                            Limit = 10,
+                        }
+                        : capability
+                ),
+            ],
+            Capacity = descriptor.Capacity with
+            {
+                Spots = new ZLinkPopulationCapacity(0, 0, 10),
+                SpotTypes =
+                [
+                    new ZLinkSpotTypeCapacity(
+                        ZLinkPlacementObjectKind.UserSpot,
+                        "player",
+                        0,
+                        0,
+                        10
+                    ),
+                ],
+            },
+        };
+    }
+
+    private static ZLinkObjectReservationRequest SpotReservation(
+        string spotId,
+        ZLinkMeshNodeDescriptor descriptor,
+        ZLinkLocationOwnerToken owner
+    ) =>
+        Reservation(spotId, descriptor, owner) with
+        {
+            ObjectKind = ZLinkPlacementObjectKind.UserSpot,
+            Key = ZLinkAuthorityKeyCodec.EncodeSpot(spotId),
+            Capacity = new ZLinkCapacityVector(
+                0,
+                1,
+                new ZLinkSpotTypeCapacityDelta(ZLinkPlacementObjectKind.UserSpot, "player", 1)
+            ),
+        };
+
     private static async ValueTask<ZLinkLocationOwnerToken> ClaimAsync(
         IZLinkLocationRepository repository,
         string ownerId

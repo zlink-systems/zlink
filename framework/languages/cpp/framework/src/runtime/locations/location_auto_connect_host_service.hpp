@@ -17,7 +17,7 @@
 #include <zlink/framework/contracts/configuration/module.hpp>
 
 #include <algorithm>
-#include <atomic>
+#include <semaphore>
 #include <chrono>
 #include <cstdlib>
 #include <exception>
@@ -235,7 +235,6 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
               });
         }
 
-        _stop.store (false, std::memory_order_release);
         if (!_loops.empty ())
             detail::channel_runtime_t::from (_bus).mark_auto_connect_active ();
         for (auto &loop : _loops) {
@@ -251,9 +250,12 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
 
     void stop () noexcept override
     {
-        _stop.store (true, std::memory_order_release);
+        // Each loop consumes one stop signal; wake interrupts its polling wait.
+        _stop.release (std::count_if (_loops.begin (), _loops.end (),
+                                      [] (const auto &loop) { return loop.thread.joinable (); }));
         for (auto &loop : _loops)
-            loop.wake->release ();
+            if (loop.thread.joinable ())
+                loop.wake->release ();
         if (_client_server && _runtime_failures->capture ([&] { _client_server->stop (); })) {
             _client_server_started = false;
             _client_server.reset ();
@@ -348,7 +350,7 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
 
     void run_loop (loop_t &loop)
     {
-        while (!_stop.load (std::memory_order_acquire)) {
+        while (!_stop.try_acquire ()) {
             try {
                 tick (loop);
             }
@@ -612,7 +614,7 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
     location_repository_t *_store = nullptr;
     live_location_reader_t *_live_store = nullptr;
     store_location_resolvers_t *_route_cache = nullptr;
-    std::atomic_bool _stop{false};
+    std::counting_semaphore<> _stop{0};
     std::vector<loop_t> _loops;
     std::shared_ptr<client_server::client_server_location_runtime_t> _client_server;
     bool _client_server_started = false;

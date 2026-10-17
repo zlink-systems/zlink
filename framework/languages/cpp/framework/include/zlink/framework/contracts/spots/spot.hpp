@@ -1654,37 +1654,32 @@ class spot_handler_registry_t
                                                  std::type_index reply_type,
                                                  invoker_t invoker);
 
-    task_t<zlink::message_t>
-    invoke_erased (spot_handler_kind_t kind,
-                   std::string_view packet_name,
-                   std::string_view topic,
-                   std::type_index actor_type,
-                   void *spot,
-                   void *actor,
-                   service_provider_t &services,
-                   serializer_registry_t &serializers,
-                   zlink::message_t message,
-                   spot_inbound_message_t metadata = {},
-                   bool serial_dispatch = true,
-                   std::string actor_execution_key = {},
-                   std::string actor_execution_spot_id = {},
-                   std::function<std::optional<result_t<zlink::message_t>> (
-                     const zlink::message_t &, const spot_inbound_message_t &)> before_invoke = {},
-                   actor_queue_dispatch_t actor_queue_dispatch = actor_queue_dispatch_t::acquire,
-                   std::function<void ()> before_application_handler = {},
-                   std::function<void ()> after_application_admission = {},
-                   std::function<void ()> transfer_owner_reservation = {},
-                   std::size_t transferred_owner_byte_cost = 0,
-                   std::function<void ()> application_admission_terminal = {},
-                   // Opt-in relocation admission fence for ordinary Actor
-                   // ingress. When non-null, the Actor FIFO post is refused
-                   // atomically if a relocation handoff barrier is already
-                   // reserved on that queue, and the flag is set so the caller
-                   // can re-admit the packet into the transfer backlog instead
-                   // of letting it execute on the old owner after capture.
-                   // Only written during this synchronous call.
-                   bool *actor_handoff_fence_refused = nullptr,
-                   std::shared_ptr<const void> retained_message = {}) const;
+    task_t<zlink::message_t> invoke_erased (
+      spot_handler_kind_t kind,
+      std::string_view packet_name,
+      std::string_view topic,
+      std::type_index actor_type,
+      void *spot,
+      void *actor,
+      service_provider_t &services,
+      serializer_registry_t &serializers,
+      zlink::message_t message,
+      spot_inbound_message_t metadata = {},
+      bool serial_dispatch = true,
+      std::string actor_execution_key = {},
+      std::string actor_execution_spot_id = {},
+      std::function<std::optional<result_t<zlink::message_t>> (
+        const zlink::message_t &, const spot_inbound_message_t &)> before_invoke = {},
+      actor_queue_dispatch_t actor_queue_dispatch = actor_queue_dispatch_t::acquire,
+      std::function<void ()> before_application_handler = {},
+      std::function<void ()> after_application_admission = {},
+      std::function<void ()> transfer_owner_reservation = {},
+      std::size_t transferred_owner_byte_cost = 0,
+      std::function<void ()> application_admission_terminal = {},
+      // Runs only during synchronous admission. Empty result means
+      // no queue submission; the caller owns the admission outcome.
+      std::function<std::optional<bool> (std::function<bool ()>)> admit_actor_queue = {},
+      std::shared_ptr<const void> retained_message = {}) const;
 
     void register_actor_admission_erased (std::type_index actor_type,
                                           detail::spot_actor_admission_callbacks_t callbacks);
