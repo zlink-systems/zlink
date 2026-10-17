@@ -2130,6 +2130,8 @@ class spot_node_runtime_t
     deliver_actor_join_completion (const actor_ref_t &actor_ref,
                                    const actor_join_completion_t &completion,
                                    std::optional<spot_id_t> source_spot_id = std::nullopt);
+    result_t<void> open_local_actor_handoff (const actor_ref_t &actor_ref);
+    void cancel_local_actor_handoff (const actor_ref_t &actor_ref);
     // In-flight handoff (spot-actor §10): drains the packets preserved while the
     // actor was moving, in arrival order. The commit path calls this once to fill
     // the commit request and once more after the ack for packets that raced it.
@@ -2227,13 +2229,14 @@ class spot_node_runtime_t
     // target events without parsing runtime logs. Hot-path callers that build
     // marker/transfer-id strings must gate on actor_transfer_marker_enabled()
     // so an off/errors mode pays no allocation (spec 26 §4).
-    bool actor_transfer_marker_enabled () const noexcept;
-    void
-    emit_actor_transfer_marker (std::string marker,
-                                const actor_ref_t &actor_ref,
-                                std::string transfer_id,
-                                std::optional<spot_id_t> spot_id = std::nullopt,
-                                std::optional<node_rid_t> target_node_rid = std::nullopt) const;
+    bool actor_transfer_marker_enabled (
+      message_flow_result_t result = message_flow_result_t::succeeded) const noexcept;
+    void emit_actor_transfer_marker (std::string marker,
+                                     const actor_ref_t &actor_ref,
+                                     std::string transfer_id,
+                                     std::optional<spot_id_t> spot_id = std::nullopt,
+                                     std::optional<node_rid_t> target_node_rid = std::nullopt,
+                                     std::exception_ptr exception = nullptr) const;
     task_t<actor_join_reply_t> join_actor_to_entry_spot_erased (
       const actor_ref_t &actor_ref,
       node_rid_t spot_node_rid,
@@ -2405,7 +2408,6 @@ class spot_node_runtime_t
         std::string node_rid;
         spot_id_t source_spot_id;
         std::chrono::milliseconds message_follow_duration{0};
-        bool has_root_services = false;
     };
 
     actor_join_state_snapshot_t actor_join_state_snapshot (const actor_ref_t &actor_ref,
