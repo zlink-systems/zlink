@@ -237,7 +237,7 @@ class spot_node_builder_state_t
         spot_id_t source_spot_id;
         std::uint64_t source_spot_generation = 0;
         spot_id_t target_spot_id;
-        runtime::protocol::actor_route_fence_t target_fence;
+        runtime::protocol::relocation_target_fence_t target_identity;
         std::chrono::steady_clock::time_point not_before;
         // True once submit_remote_actor_leave has validated and accepted the
         // OnLeave command for this transfer (idempotency guard against a
@@ -629,6 +629,12 @@ class spot_serial_executor_t
 
     bool uses_spot_execution_gate () const noexcept { return _spot_policy.allows_turn_yield (); }
 
+    actor_executor_ptr_t prepare_actor_executor (const std::string &actor_id)
+    {
+        auto executor = find_actor_executor_snapshot (actor_id);
+        return executor ? executor : actor_executor (actor_id);
+    }
+
     bool execute_actor (const std::string &actor_id,
                         std::string name,
                         queue_t::async_work_t work,
@@ -636,26 +642,30 @@ class spot_serial_executor_t
                         bool current_turn = false,
                         std::function<void ()> rejected = {})
     {
-        if (current_turn && _spot_queue && uses_spot_execution_gate ()) {
-            auto spot_options = options;
-            spot_options.transfer_owner_reservation = {};
-            // The Actor handoff fence belongs to the per-Actor queue boundary
-            // only; the Spot execution-gate hop never carries it.
-            spot_options.refuse_when_actor_handoff_fenced = false;
-            spot_options.actor_handoff_fence_refused = nullptr;
-            return _spot_queue->try_post_async (std::move (name), std::move (work),
-                                                std::move (spot_options));
-        }
+        const auto executor = current_turn && uses_spot_execution_gate ()
+                                ? actor_executor_ptr_t{}
+                                : prepare_actor_executor (actor_id);
+        return execute_actor (executor, std::move (name), std::move (work), std::move (options),
+                              current_turn, std::move (rejected));
+    }
 
-        auto executor = find_actor_executor_snapshot (actor_id);
-        if (!executor)
-            executor = actor_executor (actor_id);
+    bool execute_actor (const actor_executor_ptr_t &executor,
+                        std::string name,
+                        queue_t::async_work_t work,
+                        runtime::serial_work_options_t options = {},
+                        bool current_turn = false,
+                        std::function<void ()> rejected = {})
+    {
+        if (current_turn && _spot_queue && uses_spot_execution_gate ()) {
+            options.transfer_owner_reservation = {};
+            return _spot_queue->try_post_async (std::move (name), std::move (work),
+                                                std::move (options));
+        }
         if (!executor)
             return false;
         if (!uses_spot_execution_gate ())
             return executor->execute_actor (std::move (name), std::move (work),
                                             std::move (options));
-
         return executor->execute_actor (
           std::move (name),
           [gate = _spot_queue, work = std::move (work),
@@ -710,9 +720,7 @@ class spot_serial_executor_t
                                std::function<void ()> cancel,
                                runtime::serial_work_options_t options = {})
     {
-        auto executor = find_actor_executor_snapshot (actor_id);
-        if (!executor)
-            executor = actor_executor (actor_id);
+        auto executor = prepare_actor_executor (actor_id);
         if (!executor)
             return result_t<actor_queue_submission_t>::failure (
               framework_error_kind_t::shutting_down, "Actor handoff queue is unavailable");
@@ -1990,13 +1998,17 @@ class spot_node_runtime_t
     // spec 28: an indeterminate reconcile deadline must remain unavailable
     // with an explicit failure, never silently parked and never reopened
     // for blind local replay.
-    task_t<void> fast_fail_reconcile_backlog (actor_ref_t actor_ref, std::string actor_key);
+    task_t<void> fast_fail_reconcile_backlog (
+      actor_ref_t actor_ref,
+      std::string actor_key,
+      std::optional<runtime::protocol::actor_route_fence_t> source_fence = std::nullopt);
     task_t<void>
     complete_remote_actor_transfer (const actor_ref_t &source_actor,
                                     const actor_ref_t &target_actor,
                                     spot_route_t target_route,
                                     runtime::protocol::actor_route_fence_t source_fence,
-                                    runtime::protocol::actor_route_fence_t target_fence,
+                                    runtime::protocol::relocation_target_fence_t target_identity,
+                                    std::optional<std::uint64_t> follow_authority_generation,
                                     std::string transfer_id = {});
     // Emits an internal transfer lifecycle boundary through the configured
     // public message-flow observer. The transfer id is both the correlation
