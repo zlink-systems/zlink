@@ -810,35 +810,6 @@ bool actor_transfer_coordinator_t::matches_source_remote_transfer (
       .get ();
 }
 
-bool actor_transfer_coordinator_t::try_submit_source_leave (const std::string &actor_key,
-                                                            const std::string &transfer_id)
-{
-    return _lane
-      .run ([&, this] {
-          const auto found = _moves.find (actor_key);
-          if (found == _moves.end () || found->second.phase != actor_move_phase_t::source_remote
-              || found->second.transfer_id != transfer_id || found->second.source_leave_submitted) {
-              return false;
-          }
-          found->second.source_leave_submitted = true;
-          return true;
-      })
-      .get ();
-}
-
-bool actor_transfer_coordinator_t::source_leave_submitted (const std::string &actor_key,
-                                                           const std::string &transfer_id) const
-{
-    return _lane
-      .run ([&, this] {
-          const auto found = _moves.find (actor_key);
-          return found != _moves.end () && found->second.phase == actor_move_phase_t::source_remote
-                 && found->second.transfer_id == transfer_id
-                 && found->second.source_leave_submitted;
-      })
-      .get ();
-}
-
 bool actor_transfer_coordinator_t::admit_attempt (const std::string &actor_key,
                                                   const std::string &transfer_id,
                                                   std::vector<handoff_packet_t> &discarded_backlog)
