@@ -17,6 +17,164 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
     private const string AdmissionTestServerHost = "127.0.0.2";
 
     [Fact]
+    public Task Unawaited_ClientServer_Update_Failure_Is_Reported_Once_Without_Unobserved_Task() =>
+        AssertNoUnobservedSubmitFailuresAsync(SubmitUpdateToMissingClientAsync);
+
+    [Fact]
+    public Task ClientServer_Requests_Then_Immediate_Client_Stop_Leave_No_Unobserved_Submit_Failures() =>
+        AssertNoUnobservedSubmitFailuresAsync(RequestAndStopClientsAsync);
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public Task Unreturned_Binding_Request_Failures_Leave_No_Unobserved_Tasks(bool asynchronous) =>
+        AssertNoUnobservedSubmitFailuresAsync(() => RequestMissingClientAsync(asynchronous));
+
+    [System.Runtime.CompilerServices.MethodImpl(
+        System.Runtime.CompilerServices.MethodImplOptions.NoInlining
+    )]
+    private static async Task RequestMissingClientAsync(bool asynchronous)
+    {
+        await using var server = CreateServer(0);
+        var runtime = server.GetRequiredService<ZLinkFrameworkRuntime>();
+        await runtime.StartAsync(CancellationToken.None);
+        try
+        {
+            var state = await runtime.EnsureStartedStateAsync(CancellationToken.None);
+            var router = (IRouterSocket)GetServerBundle(state, "work").Socket;
+            using var message = Message.From("request");
+            var operation = router.Request(RoutingId.From("departed-client")).Message(message);
+            Assert.Throws<ZlinkSubmitException>(() =>
+            {
+                if (asynchronous)
+                    _ = operation.Async();
+                else
+                    _ = operation.Submit();
+            });
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    private static async Task AssertNoUnobservedSubmitFailuresAsync(Func<Task> run)
+    {
+        var unobserved = new ConcurrentQueue<Exception>();
+        void OnUnobserved(object? sender, UnobservedTaskExceptionEventArgs args)
+        {
+            foreach (var error in args.Exception.Flatten().InnerExceptions)
+                if (error is ZlinkSubmitException)
+                    unobserved.Enqueue(error);
+        }
+
+        TaskScheduler.UnobservedTaskException += OnUnobserved;
+        try
+        {
+            await run();
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
+            Assert.Empty(unobserved);
+        }
+        finally
+        {
+            TaskScheduler.UnobservedTaskException -= OnUnobserved;
+        }
+    }
+
+    [System.Runtime.CompilerServices.MethodImpl(
+        System.Runtime.CompilerServices.MethodImplOptions.NoInlining
+    )]
+    private static async Task RequestAndStopClientsAsync()
+    {
+        var store = new ZLinkInMemoryProviderLocationStore();
+        await using var server = CreateAutomaticServer(store, string.Empty);
+        var serverHost = server
+            .GetServices<IHostedService>()
+            .OfType<ZLinkFrameworkHostedService>()
+            .Single();
+        await serverHost.StartAsync(CancellationToken.None);
+        try
+        {
+            for (var cycle = 0; cycle < 5; cycle++)
+                await Task.WhenAll(
+                    Enumerable
+                        .Range(0, 10)
+                        .Select(async _ =>
+                        {
+                            await using var client = CreateAutomaticClient(store);
+                            var clientHost = client
+                                .GetServices<IHostedService>()
+                                .OfType<ZLinkFrameworkHostedService>()
+                                .Single();
+                            await clientHost.StartAsync(CancellationToken.None);
+                            try
+                            {
+                                var reply = await client
+                                    .GetRequiredService<IZLinkRouteClient>()
+                                    .RequestToChannel("work", new EchoRequest("ok"))
+                                    .Async<EchoReply>();
+                                Assert.Equal("ok", reply.Value);
+                            }
+                            finally
+                            {
+                                await clientHost.StopAsync(CancellationToken.None);
+                            }
+                        })
+                );
+        }
+        finally
+        {
+            await serverHost.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [System.Runtime.CompilerServices.MethodImpl(
+        System.Runtime.CompilerServices.MethodImplOptions.NoInlining
+    )]
+    private static async Task SubmitUpdateToMissingClientAsync()
+    {
+        await using var server = CreateServer(0);
+        var runtime = server.GetRequiredService<ZLinkFrameworkRuntime>();
+        await runtime.StartAsync(CancellationToken.None);
+        using var errorSink = new ZLinkRuntimeErrorSink();
+        var failures = new ConcurrentQueue<Exception>();
+        var reported = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        errorSink.UnhandledCallbackException += error =>
+        {
+            failures.Enqueue(error);
+            reported.TrySetResult();
+        };
+        try
+        {
+            var state = await runtime.EnsureStartedStateAsync(CancellationToken.None);
+            var bundle = GetServerBundle(state, "work");
+            var identity = new ZLinkClientServerServerIdentity(
+                "work",
+                RoutingId.From("test-server"),
+                1,
+                "plaintext",
+                100,
+                1024,
+                "tcp://127.0.0.1:1",
+                errorSink
+            );
+            await identity.AttachRouterAsync((IRouterSocket)bundle.Socket);
+            // Preserve an admitted peer after its physical route has gone away.
+            // A mandatory send fails synchronously before returning SendSubmission.
+            await identity.AdmitPeerAsync(RoutingId.From("departed-client"), 1024, 1);
+            await identity.SetWeightAsync(50);
+            await reported.Task;
+            Assert.IsType<ZlinkSubmitException>(Assert.Single(failures));
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
     public async Task CurrentSpotChannelPublicRequest_AdmitsBeforeReply()
     {
         await using var server = CreateBlockingServer(0);
