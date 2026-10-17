@@ -3690,23 +3690,23 @@ bool public_host_runtime_t::try_finalize_relocation_target (const relocation_att
     if (!stamped)
         return false;
 
-    // Native Actor authority adoption is specific to User-Spot Join.
-    // Every relocation prepares its carried Session routes before command 44
-    // can expose the target to Session ingress.
+    // Raw identities were installed during target preparation. Reflect the
+    // Store-assigned authority before lifecycle opens; User-Spot Join also
+    // adopts that authority in its prepared application Actor.
     const auto join_prepare = _actor_join_relocation_prepare_validator
                                 ? _actor_join_relocation_prepare_validator (attempt.prepare)
                                 : std::optional<bool>{};
     const auto canonical_user_spot_join = join_prepare && *join_prepare;
-    if (canonical_user_spot_join) {
-        for (const auto &target : attempt.targets) {
-            if (target.kind == stateful::object_kind_t::actor
+    for (const auto &target : attempt.targets) {
+        if (target.kind != stateful::object_kind_t::actor)
+            continue;
+        if (advance_local_actor_authority (target) != stateful::stateful_error_t::none
+            || (canonical_user_spot_join
                 && (!_actor_join_committed_authority_adopter
                     || !_actor_join_committed_authority_adopter (
                       target, attempt.prepare.target.target_node_generation,
-                      attempt.prepare.target.target_owner_lease_generation))) {
-                return false;
-            }
-        }
+                      attempt.prepare.target.target_owner_lease_generation))))
+            return false;
     }
     for (const auto &route_state : attempt.session_routes) {
         const auto &route = route_state.route;
@@ -3717,32 +3717,6 @@ bool public_host_runtime_t::try_finalize_relocation_target (const relocation_att
     }
 
     try {
-        const auto actor_indexes_current =
-          _spot_actor_index_lane
-            .run ([&] {
-                // Publish only this restore's exact identity. Check the whole
-                // aggregate before inserting so no prior incarnation is replaced.
-                for (const auto &target : attempt.targets) {
-                    if (target.kind != stateful::object_kind_t::actor)
-                        continue;
-                    const auto current = _actors.find (target.key);
-                    if (current != _actors.end () && current->second.second != target)
-                        return false;
-                }
-                for (std::size_t index = 0; index != attempt.targets.size (); ++index) {
-                    const auto &target = attempt.targets[index];
-                    if (target.kind == stateful::object_kind_t::actor)
-                        _actors.try_emplace (target.key, attempt.wire_objects[index].stable_type,
-                                             target);
-                }
-                return true;
-            })
-            .get ();
-        if (!actor_indexes_current) {
-            discard_attempt ();
-            return false;
-        }
-
         // Membership §4.2 steps 7-8: lifecycle and queue opening precede command 44.
         const auto committed = attempt.targets.size () == 1
                                  ? _objects.commit_relocation_restore (attempt.targets.front (),
@@ -4157,6 +4131,27 @@ task_t<bool> public_host_runtime_t::activate_relocation_assembly (
   std::shared_ptr<const pending_relocation_assembly_t> pending,
   std::shared_ptr<relocation_assembly_staging_t> staging)
 {
+    const auto actor_indexes_current = co_await _spot_actor_index_lane.run_task ([&] {
+        // Relocation §4.3/§4.5: register raw identities during target preparation.
+        // The existing recovering gate prevents execution before Ready authority.
+        // Validate the whole unit before inserting any Actor.
+        for (const auto &target : staging->targets) {
+            if (target.kind != stateful::object_kind_t::actor)
+                continue;
+            const auto current = _actors.find (target.key);
+            if (current != _actors.end () && current->second.second != target)
+                return false;
+        }
+        for (std::size_t index = 0; index != staging->targets.size (); ++index) {
+            const auto &target = staging->targets[index];
+            if (target.kind == stateful::object_kind_t::actor)
+                _actors.try_emplace (target.key, staging->wire_objects[index].stable_type, target);
+        }
+        return true;
+    });
+    if (!actor_indexes_current)
+        throw framework_exception_t (framework_error_kind_t::invalid_operation,
+                                     "Relocation target Actor identity is already registered");
     const auto inserted = co_await _relocation_session_terminal_lane.run_task ([&] {
         const auto found = _relocation_target_attempts.find (key);
         if (_options.mesh.shutdown_admission_seal->load (std::memory_order_acquire)
