@@ -373,7 +373,7 @@ final class ZLinkSpotActivationFactory {
                 };
         return (ownerQueue == null
                         ? context.prepareActivation(initialize)
-                        : ZLinkSerialExecutionQueue.yieldCurrent(
+                        : ZLinkSerialExecutionQueue.manageCurrent(
                                 context.runLifecycleExecution(initialize)
                                         .exceptionallyCompose(
                                                 failure ->
