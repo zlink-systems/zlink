@@ -2325,6 +2325,7 @@ bool verify_application_signaled_relocation (bool shutdown_during_move = false)
                   << " move=" << static_cast<int> (moved.outcome)
                   << " reason=" << static_cast<int> (moved.reason)
                   << " stopped=" << static_cast<int> (stopped.outcome)
+                  << " termination-reason=" << static_cast<int> (stopped.reason)
                   << " ready-sent=" << source_service_view->ready_sent.load ()
                   << " service-error=" << source_service_view->error << " passed=" << passed
                   << '\n';
