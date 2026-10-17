@@ -887,11 +887,13 @@ class provider_location_repository_t final : public location_repository_t
             stale_owner_condition = version_condition (owner_key, found->value.version);
         }
         std::vector<authority_entry_t> members;
+        std::optional<store_condition_t> authority_lock_condition;
+        std::vector<store_condition_t> member_lock_conditions;
         if (active) {
             if (owner_live)
                 co_return stale_authority_reclaim_result_t::owner_live;
-            const auto mutation_locked =
-              co_await authority_mutation_locked_async (object_key (request->key));
+            const auto mutation_locked = co_await authority_mutation_locked_async (
+              object_key (request->key), &authority_lock_condition.emplace ());
             if ((actor && actor->has_relocation_state) || mutation_locked)
                 throw framework_exception_t (framework_error_kind_t::unavailable,
                                              "Object authority requires relocation recovery");
@@ -924,6 +926,7 @@ class provider_location_repository_t final : public location_repository_t
                     if (!page) {
                         cursor.reset ();
                         members.clear ();
+                        member_lock_conditions.clear ();
                         continue;
                     }
                     for (const auto &entry : page->items) {
@@ -939,14 +942,16 @@ class provider_location_repository_t final : public location_repository_t
                           entry.snapshot.allocation.state != placement_allocation_state_t::active
                           || member->state != actor_authority_state_t::ready
                           || member->has_relocation_state;
+                        store_condition_t lock_condition;
                         if (!member_unavailable)
-                            member_unavailable =
-                              co_await authority_mutation_locked_async (entry.key.value);
+                            member_unavailable = co_await authority_mutation_locked_async (
+                              entry.key.value, &lock_condition);
                         if (member_unavailable)
                             throw framework_exception_t (
                               framework_error_kind_t::unavailable,
                               "User Spot still has a relocating or unactivated member");
                         members.push_back (entry);
+                        member_lock_conditions.push_back (std::move (lock_condition));
                     }
                     cursor = page->next_cursor;
                     if (!cursor)
@@ -984,6 +989,10 @@ class provider_location_repository_t final : public location_repository_t
           {version_condition (authority_key, stored_authority.value.version),
            std::move (stale_owner_condition), std::move (descriptor_condition)},
           {store_delete_t{authority_key}}};
+        if (authority_lock_condition)
+            write_request.conditions.push_back (std::move (*authority_lock_condition));
+        for (auto &condition : member_lock_conditions)
+            write_request.conditions.push_back (std::move (condition));
         // §6.1: each ended-owner member is released in the same batch, fenced by its
         // authority version and the observed (invalid) state of its own owner lease.
         const auto *spot_owner = std::get_if<store_found_t> (&owner);
@@ -2389,10 +2398,16 @@ class provider_location_repository_t final : public location_repository_t
         }
     }
 
-    task_t<std::optional<aggregate_lock_t>> read_aggregate_lock_async (std::string authority_key)
+    task_t<std::optional<aggregate_lock_t>>
+    read_aggregate_lock_async (std::string authority_key,
+                               store_condition_t *observed_condition = nullptr)
     {
-        auto value = co_await _store.read (key_aggregate_lock (authority_key));
+        auto key = key_aggregate_lock (authority_key);
+        auto value = co_await _store.read (observed_condition ? key : std::move (key));
         const auto *found = std::get_if<store_found_t> (&value);
+        if (observed_condition)
+            *observed_condition =
+              found ? version_condition (key, found->value.version) : missing_condition (key);
         if (!found)
             co_return std::nullopt;
         auto lock = decode_aggregate_lock (found->value.bytes);
@@ -2434,9 +2449,10 @@ class provider_location_repository_t final : public location_repository_t
         co_return decode_authority (entry.before, raw_version, store_now);
     }
 
-    task_t<bool> authority_mutation_locked_async (std::string authority_key)
+    task_t<bool> authority_mutation_locked_async (std::string authority_key,
+                                                  store_condition_t *observed_condition = nullptr)
     {
-        const auto lock = co_await read_aggregate_lock_async (authority_key);
+        const auto lock = co_await read_aggregate_lock_async (authority_key, observed_condition);
         if (!lock
             || (lock->status != aggregate_status::prepared
                 && lock->status != aggregate_status::committing))

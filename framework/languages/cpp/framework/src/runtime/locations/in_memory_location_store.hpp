@@ -482,14 +482,7 @@ class in_memory_location_repository_t : public location_repository_t
                     authority_compare_exchange_result_t{authority_conflict_t{std::move (current)}});
               }
 
-              if (std::any_of (_aggregates.begin (), _aggregates.end (), [&] (const auto &entry) {
-                      return entry.second.status == aggregate_status_t::prepared
-                             && std::any_of (entry.second.request.participants.begin (),
-                                             entry.second.request.participants.end (),
-                                             [&] (const auto &participant) {
-                                                 return participant.key.value == key.value;
-                                             });
-                  }))
+              if (authority_mutation_locked_on_lane (key.value))
                   return completed (
                     authority_compare_exchange_result_t{authority_conflict_t{found->second}});
 
@@ -1347,6 +1340,17 @@ class in_memory_location_repository_t : public location_repository_t
         return true;
     }
 
+    bool authority_mutation_locked_on_lane (const std::string &key) const
+    {
+        return std::any_of (_aggregates.begin (), _aggregates.end (), [&] (const auto &entry) {
+            return entry.second.status == aggregate_status_t::prepared
+                   && std::any_of (
+                     entry.second.request.participants.begin (),
+                     entry.second.request.participants.end (),
+                     [&] (const auto &participant) { return participant.key.value == key; });
+        });
+    }
+
     bool release_ended_reservation_on_lane (const std::string &key,
                                             const authority_snapshot_t &snapshot,
                                             clock_t::time_point now,
@@ -1360,16 +1364,12 @@ class in_memory_location_repository_t : public location_repository_t
         if (active && owner_live)
             return false;
         std::vector<std::string> members;
-        for (const auto &[id, aggregate] : _aggregates)
-            if (aggregate.status == aggregate_status_t::prepared)
-                for (const auto &participant : aggregate.request.participants)
-                    if (participant.key.value == key) {
-                        if (active)
-                            throw framework_exception_t (
-                              framework_error_kind_t::unavailable,
-                              "Object authority requires aggregate recovery");
-                        return false;
-                    }
+        if (authority_mutation_locked_on_lane (key)) {
+            if (active)
+                throw framework_exception_t (framework_error_kind_t::unavailable,
+                                             "Object authority requires aggregate recovery");
+            return false;
+        }
         if (active) {
             const auto actor = decode_direct_actor_authority_payload (snapshot.payload);
             if (actor && actor->has_relocation_state)
@@ -1430,7 +1430,7 @@ class in_memory_location_repository_t : public location_repository_t
     // Location runtime §6.1: every Actor membership of the old User Spot incarnation must
     // belong to an ended-owner member (steady Ready, activated, outside any aggregate, owner
     // lease invalid). The release must fit one provider batch; the key set mirrors the
-    // provider repository batch (authority, owner lease, descriptor and capacity records).
+    // provider repository batch (authority, aggregate lock, owner lease, descriptor and capacity).
     std::vector<std::string> ended_spot_members_on_lane (const std::string &spot_key,
                                                          const authority_snapshot_t &spot,
                                                          const std::string &spot_id,
@@ -1439,7 +1439,8 @@ class in_memory_location_repository_t : public location_repository_t
         const auto node = [] (const object_creation_target_t &target) {
             return mesh_node_key (target.mesh_name, std::string (target.node_rid.value ()));
         };
-        std::set<std::string> batch_keys{"authority:" + spot_key, "owner:" + spot.owner.owner_id,
+        std::set<std::string> batch_keys{"authority:" + spot_key, "aggregate-lock:" + spot_key,
+                                         "owner:" + spot.owner.owner_id,
                                          "descriptor:" + node (spot.allocation.target),
                                          "capacity:" + node (spot.allocation.target)};
         std::vector<std::string> members;
@@ -1449,14 +1450,9 @@ class in_memory_location_repository_t : public location_repository_t
                 || member->current_spot_id != spot_id
                 || member->current_spot_generation != spot.object_generation)
                 continue;
-            bool aggregate_locked = false;
-            for (const auto &[id, aggregate] : _aggregates)
-                if (aggregate.status == aggregate_status_t::prepared)
-                    for (const auto &participant : aggregate.request.participants)
-                        aggregate_locked = aggregate_locked || participant.key.value == member_key;
             if (authority.allocation.state != placement_allocation_state_t::active
                 || member->state != actor_authority_state_t::ready || member->has_relocation_state
-                || aggregate_locked)
+                || authority_mutation_locked_on_lane (member_key))
                 throw framework_exception_t (
                   framework_error_kind_t::unavailable,
                   "User Spot still has a relocating or unactivated member");
@@ -1466,6 +1462,7 @@ class in_memory_location_repository_t : public location_repository_t
                   "User Spot still has a member with a live owner lease");
             members.push_back (member_key);
             batch_keys.insert ("authority:" + member_key);
+            batch_keys.insert ("aggregate-lock:" + member_key);
             batch_keys.insert ("owner:" + authority.owner.owner_id);
             batch_keys.insert ("capacity:" + node (authority.allocation.target));
         }

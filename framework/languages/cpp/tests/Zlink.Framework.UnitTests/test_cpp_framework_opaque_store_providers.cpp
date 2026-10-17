@@ -1180,10 +1180,16 @@ TEST_P (EndedSpotMemberReleaseTest, ReleasesOnlyEndedOwnerMembers)
                                           ? static_cast<location_repository_t &> (provider)
                                           : static_cast<location_repository_t &> (memory);
     const auto scenario = std::get<1> (GetParam ());
-    // Batch keys: Spot authority, owner lease, descriptor and capacity plus one authority per
-    // member (all members share the Spot's owner and node). 2,044 members fill 2,048 keys.
-    const std::size_t members_wanted = scenario == "batchFits"    ? 2044u
-                                       : scenario == "batchBound" ? 2045u
+    const bool member_only_race =
+      scenario == "memberOnlyAggregatePrepared" || scenario == "memberOnlyAggregateReplaced";
+    const bool aggregate_race = scenario == "memberAggregatePrepared" || member_only_race;
+    const bool separate_aggregate_spot = scenario == "aggregate" || member_only_race;
+    // Shared owner/node: Spot authority and lock, owner lease, descriptor and capacity,
+    // plus each member's authority and lock. The nearest fitting batch has 2,047 keys;
+    // one more member exceeds the Store's 2,048 unique-key limit (§4).
+    const auto fitting_members = (location_store_limits::write_keys - 5u) / 2u;
+    const std::size_t members_wanted = scenario == "batchFits"    ? fitting_members
+                                       : scenario == "batchBound" ? fitting_members + 1u
                                                                   : 1u;
     const auto claim = [&] (const std::string &owner_id) {
         return std::get<owner_lease_claimed_t> (
@@ -1212,9 +1218,9 @@ TEST_P (EndedSpotMemberReleaseTest, ReleasesOnlyEndedOwnerMembers)
         descriptor.object_capabilities.push_back ({placement_object_kind_t::user_spot, "room",
                                                    maintenance_policy_kind_t::disabled, false, 0});
         descriptor.capacity.actors.limit = static_cast<std::int32_t> (members_wanted + 2);
-        descriptor.capacity.spots.limit = scenario == "aggregate" ? 2 : 1;
+        descriptor.capacity.spots.limit = separate_aggregate_spot ? 2 : 1;
         descriptor.capacity.spot_types.push_back (
-          {placement_object_kind_t::user_spot, "room", {scenario == "aggregate" ? 2u : 1u, 0, 0}});
+          {placement_object_kind_t::user_spot, "room", {separate_aggregate_spot ? 2u : 1u, 0, 0}});
         ASSERT_EQ (repository.update_mesh_node (descriptor, location_write_intent_t::new_claim)
                      .result ()
                      .value ()
@@ -1223,6 +1229,8 @@ TEST_P (EndedSpotMemberReleaseTest, ReleasesOnlyEndedOwnerMembers)
     };
     publish ("member-spot-source", old_owner);
     publish ("member-spot-target", new_owner);
+    if (aggregate_race)
+        publish ("member-spot-aggregate-target", claim ("member-aggregate-target"));
     const object_creation_target_t source{
       "member-spot-mesh", node_rid_t::from_string ("member-spot-source"), 1, old_owner};
     const object_creation_target_t target{
@@ -1305,7 +1313,8 @@ TEST_P (EndedSpotMemberReleaseTest, ReleasesOnlyEndedOwnerMembers)
         add_member ("member-moving", source, true, true);
     if (scenario == "unactivated")
         add_member ("member-unactivated", source, false);
-    if (scenario == "aggregate") {
+    std::optional<authority_snapshot_t> separate_spot;
+    if (separate_aggregate_spot) {
         // A member can be locked by an aggregate other than this Spot's aggregate.
         // Include a separate Spot so the member lock is the rejection being tested.
         auto aggregate_spot_request = request;
@@ -1320,30 +1329,33 @@ TEST_P (EndedSpotMemberReleaseTest, ReleasesOnlyEndedOwnerMembers)
                       encode_user_spot_authority_payload (aggregate_spot_payload)})
             .result ()
             .value ());
-        const auto member = std::get<authority_snapshot_t> (
-          repository.read_authority (actor_authority_key ("member-a")).result ().value ());
-        aggregate_prepare_request_t aggregate;
-        aggregate.aggregate_id.value[0] = std::byte{2};
-        aggregate.aggregate_generation = 1;
-        aggregate.participants = {{actor_authority_key ("member-a"),
-                                   member.store_version,
-                                   authority_generation_transition_t::new_owner,
-                                   member.payload,
-                                   {}},
-                                  {spot_authority_key (aggregate_spot_request.key.global_id),
-                                   committed.ready.store_version,
-                                   authority_generation_transition_t::new_owner,
-                                   committed.ready.payload,
-                                   {}}};
-        aggregate.target_descriptor = {"member-spot-mesh",
-                                       zlink::routing_id_t::from ("member-spot-target")};
-        aggregate.target_descriptor_lifecycle_generation = 1;
-        aggregate.target_owner = new_owner;
-        aggregate.capacity_bundle.actor_slots = 1;
-        aggregate.capacity_bundle.spot_slots = 1;
-        aggregate.capacity_bundle.spot_type = request.capacity_bundle.spot_type;
-        ASSERT_TRUE (std::holds_alternative<aggregate_prepared_t> (
-          repository.prepare_aggregate (aggregate).result ().value ()));
+        separate_spot = committed.ready;
+        if (scenario == "aggregate") {
+            const auto member = std::get<authority_snapshot_t> (
+              repository.read_authority (actor_authority_key ("member-a")).result ().value ());
+            aggregate_prepare_request_t aggregate;
+            aggregate.aggregate_id.value[0] = std::byte{2};
+            aggregate.aggregate_generation = 1;
+            aggregate.participants = {{actor_authority_key ("member-a"),
+                                       member.store_version,
+                                       authority_generation_transition_t::new_owner,
+                                       member.payload,
+                                       {}},
+                                      {spot_authority_key (aggregate_spot_request.key.global_id),
+                                       committed.ready.store_version,
+                                       authority_generation_transition_t::new_owner,
+                                       committed.ready.payload,
+                                       {}}};
+            aggregate.target_descriptor = {"member-spot-mesh",
+                                           zlink::routing_id_t::from ("member-spot-target")};
+            aggregate.target_descriptor_lifecycle_generation = 1;
+            aggregate.target_owner = new_owner;
+            aggregate.capacity_bundle.actor_slots = 1;
+            aggregate.capacity_bundle.spot_slots = 1;
+            aggregate.capacity_bundle.spot_type = request.capacity_bundle.spot_type;
+            ASSERT_TRUE (std::holds_alternative<aggregate_prepared_t> (
+              repository.prepare_aggregate (aggregate).result ().value ()));
+        }
     }
     for (std::size_t index = 0; member_ids.size () < members_wanted; ++index)
         add_member ("member-bulk-" + std::to_string (index), source, true);
@@ -1412,10 +1424,112 @@ TEST_P (EndedSpotMemberReleaseTest, ReleasesOnlyEndedOwnerMembers)
               std::get<object_reserved_t> (co_await repository.reserve (concurrent));
         };
     }
+    std::optional<aggregate_prepare_result_t> raced_aggregate;
+    std::optional<store_found_t> source_capacity_before_aggregate;
+    std::vector<std::pair<store_key_t, store_found_t>> aggregate_sources;
+    if (aggregate_race) {
+        mesh_node_descriptor_t descriptor;
+        descriptor.mesh_name = source.mesh_name;
+        descriptor.rid = zlink::routing_id_t::from (std::string (source.node_rid.value ()));
+        opaque.before_read_key = capacity_key (descriptor);
+        source_capacity_before_aggregate =
+          std::get<store_found_t> (opaque.inner.read (opaque.before_read_key).result ().value ());
+        const auto member = std::get<authority_snapshot_t> (
+          repository.read_authority (actor_authority_key ("member-a")).result ().value ());
+        // Canonical authority preimages are public Store identity (§3.4).
+        for (const auto &key :
+             {store_key_t{std::string ("authority") + '\0' + "actor" + '\0' + "member-a"},
+              store_key_t{std::string ("authority") + '\0' + "spot" + '\0' + "member-spot"}})
+            aggregate_sources.emplace_back (
+              key, std::get<store_found_t> (opaque.inner.read (key).result ().value ()));
+        aggregate_prepare_request_t aggregate;
+        aggregate.aggregate_id.value[0] = std::byte{3};
+        aggregate.aggregate_generation = 1;
+        aggregate.participants = {
+          {actor_authority_key ("member-a"),
+           member.store_version,
+           authority_generation_transition_t::new_owner,
+           member.payload,
+           {}},
+          {spot_authority_key (member_only_race ? "aggregate-spot" : "member-spot"),
+           member_only_race ? separate_spot->store_version : spot.store_version,
+           authority_generation_transition_t::new_owner,
+           member_only_race ? separate_spot->payload : spot.payload,
+           {}}};
+        const auto nodes = repository.list_mesh_nodes (source.mesh_name).result ().value ().items;
+        const auto node = std::find_if (nodes.begin (), nodes.end (), [] (const auto &value) {
+            return value.rid.to_string () == "member-spot-aggregate-target";
+        });
+        ASSERT_NE (node, nodes.end ());
+        aggregate.target_descriptor = {node->mesh_name, node->rid};
+        aggregate.target_descriptor_lifecycle_generation = node->lifecycle_generation;
+        aggregate.target_owner = {node->owner_id, node->lease_generation};
+        aggregate.capacity_bundle = {
+          1, 1, spot_type_capacity_delta_t{placement_object_kind_t::user_spot, "room", 1}};
+        if (scenario == "memberOnlyAggregateReplaced") {
+            // Persisted committed aggregate locks may remain until a later prepare replaces
+            // them. Build canonical records through prepare, release its pending capacity,
+            // then seed that terminal Store snapshot without changing either authority.
+            const auto prepared = repository.prepare_aggregate (aggregate).result ().value ();
+            const auto *fence = std::get_if<aggregate_prepared_t> (&prepared);
+            ASSERT_NE (fence, nullptr);
+            std::vector<store_scan_item_t> terminal_records;
+            for (const auto prefix : {"zlink:v11:aggregate:", "zlink:v11:aggregate-lock:"}) {
+                const auto page = std::get<store_scan_page_t> (
+                  opaque.inner.scan ({prefix, std::nullopt, location_page_item_limit})
+                    .result ()
+                    .value ());
+                ASSERT_FALSE (page.next_cursor);
+                terminal_records.insert (terminal_records.end (), page.items.begin (),
+                                         page.items.end ());
+            }
+            ASSERT_EQ (terminal_records.size (), 3u);
+            ASSERT_EQ (repository.abort_aggregate (fence->fence).result ().value (),
+                       aggregate_abort_result_t::aborted);
+            for (const auto &record : terminal_records) {
+                auto terminal =
+                  nlohmann::json::parse (record.value.bytes.begin (), record.value.bytes.end ());
+                terminal[location_record_fields::status] = aggregate_status::committed;
+                ASSERT_TRUE (std::holds_alternative<store_write_applied_t> (
+                  opaque.inner
+                    .write ({{}, {store_put_t{record.key, bytes (terminal.dump ()), std::nullopt}}})
+                    .result ()
+                    .value ()));
+            }
+            aggregate.aggregate_id.value[0] = std::byte{4};
+        }
+        // Reclaim has checked both locks before its first source-capacity read.
+        // Preparing on a separate live target must preserve both source participants.
+        opaque.before_read = [&, aggregate] () -> task_t<void> {
+            raced_aggregate = co_await repository.prepare_aggregate (aggregate);
+        };
+    }
     opaque.armed = scenario == "deadPage" || scenario == "deadExpired";
     opaque.expire_next_page = scenario == "deadExpired";
     request.target = target;
     const auto result = repository.reserve (request).result ();
+    if (aggregate_race) {
+        ASSERT_TRUE (raced_aggregate);
+        ASSERT_TRUE (std::holds_alternative<aggregate_prepared_t> (*raced_aggregate));
+        EXPECT_FALSE (result);
+        if (!result)
+            EXPECT_EQ (result.error_kind (), framework_error_kind_t::unavailable);
+        for (const auto &[key, previous] : aggregate_sources) {
+            const auto read = opaque.inner.read (key).result ().value ();
+            const auto *unchanged = std::get_if<store_found_t> (&read);
+            EXPECT_NE (unchanged, nullptr);
+            if (unchanged) {
+                EXPECT_EQ (unchanged->value.version.value, previous.value.version.value);
+                EXPECT_EQ (unchanged->value.bytes, previous.value.bytes);
+            }
+        }
+        const auto capacity =
+          std::get<store_found_t> (opaque.inner.read (opaque.before_read_key).result ().value ());
+        EXPECT_EQ (capacity.value.version.value,
+                   source_capacity_before_aggregate->value.version.value);
+        EXPECT_EQ (capacity.value.bytes, source_capacity_before_aggregate->value.bytes);
+        return;
+    }
     if (scenario == "dead" || scenario == "deadPage" || scenario == "deadExpired"
         || scenario == "batchFits" || scenario == "memberReclaimed") {
         ASSERT_TRUE (result) << (result.error () ? result.error ()->what () : "untyped failure");
@@ -1511,6 +1625,9 @@ INSTANTIATE_TEST_SUITE_P (ProviderAndInMemory, EndedSpotMemberReleaseTest, ::tes
                               inputs.emplace_back (true, "deadExpired");
                               inputs.emplace_back (true, "memberReclaimed");
                               inputs.emplace_back (true, "memberCapacityCorrupt");
+                              inputs.emplace_back (true, "memberAggregatePrepared");
+                              inputs.emplace_back (true, "memberOnlyAggregatePrepared");
+                              inputs.emplace_back (true, "memberOnlyAggregateReplaced");
                               return inputs;
                           }()));
 
