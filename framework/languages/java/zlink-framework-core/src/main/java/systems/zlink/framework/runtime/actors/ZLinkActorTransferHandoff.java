@@ -287,7 +287,11 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
     }
 
     Optional<MessageFollowSource> messageFollowSource(String actorId) {
-        return inStateLane(() -> Optional.ofNullable(newestSource(actorId, true)));
+        return messageFollowSource(actorId, true);
+    }
+
+    Optional<MessageFollowSource> messageFollowSource(String actorId, boolean committedOnly) {
+        return inStateLane(() -> Optional.ofNullable(newestSource(actorId, committedOnly)));
     }
 
     Optional<MessageFollowSource> messageFollowSource(
@@ -620,7 +624,8 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
                                         () -> {
                                             if (packet.fail(
                                                     new IllegalStateException(
-                                                            "Actor runtime closed during transfer."))) {
+                                                            "Actor runtime closed during"
+                                                                    + " transfer."))) {
                                                 packet.close();
                                             }
                                         }));

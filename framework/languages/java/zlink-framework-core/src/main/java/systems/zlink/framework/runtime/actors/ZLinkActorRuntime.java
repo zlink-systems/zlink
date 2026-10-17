@@ -3119,15 +3119,19 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             return false;
         }
         ZLinkBackendActorRef staleActor = header.target().actor();
+        // Presence includes staged tenures: the source installs its forward before the cut.
+        // Keep this read on the handoff lane; an absent tenure needs no route allocation.
+        ZLinkActorTransferHandoff.MessageFollowSource sameActor =
+                handoff.messageFollowSource(staleActor.actorId(), false).orElse(null);
+        if (sameActor == null) {
+            return false;
+        }
         ZLinkServiceMessageFollowWireCodec.ActorRoute sourceRoute =
                 messageFollowSourceRoute(header);
         ZLinkActorTransferHandoff.MessageFollowSource followSource =
                 handoff.messageFollowSource(sourceRoute).orElse(null);
         if (followSource == null) {
-            ZLinkActorTransferHandoff.MessageFollowSource sameActor =
-                    handoff.messageFollowSource(staleActor.actorId()).orElse(null);
-            if (sameActor != null
-                    && sameActor.sourceActorRef().generation() != staleActor.generation()) {
+            if (sameActor.sourceActorRef().generation() != staleActor.generation()) {
                 return rejectRetainedMessageFollowIngress(
                         parts,
                         failure,
@@ -3142,15 +3146,12 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             if (isCurrentLocalRoute(header.target())) {
                 return false;
             }
-            if (sameActor != null) {
-                return rejectRetainedMessageFollowIngress(
-                        parts,
-                        failure,
-                        ZLinkFrameworkErrorKind.UNAVAILABLE,
-                        "Message Follow source fence is unavailable or stale",
-                        terminalRelease);
-            }
-            return false;
+            return rejectRetainedMessageFollowIngress(
+                    parts,
+                    failure,
+                    ZLinkFrameworkErrorKind.UNAVAILABLE,
+                    "Message Follow source fence is unavailable or stale",
+                    terminalRelease);
         }
         if (!followSource.matchesSourceRoute(sourceRoute)
                 || followSource.targetActorRef().generation() != staleActor.generation()) {
