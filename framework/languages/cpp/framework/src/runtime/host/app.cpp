@@ -4066,14 +4066,6 @@ void app_t::run_shared_shutdown (detail::app_state_t &state) noexcept
             std::this_thread::sleep_for (std::chrono::milliseconds (50));
         if (outbound_pending ()) {
             force (shutdown_force_reason_t::deadline_exceeded);
-        } else {
-            for (const auto &service : state.hosted_services) {
-                auto *lifecycle = detail::lifecycle_of (service.get ());
-                if (lifecycle && !lifecycle->wait_for_accepted_callbacks_until (deadline_at)) {
-                    force (shutdown_force_reason_t::deadline_exceeded);
-                    break;
-                }
-            }
         }
     }
 
