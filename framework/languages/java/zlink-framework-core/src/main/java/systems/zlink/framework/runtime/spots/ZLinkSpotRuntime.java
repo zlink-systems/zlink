@@ -4079,8 +4079,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             ActorPacketFrames.Header packetHeader,
             ZLinkBackendActorReceived headerPart,
             Message payload,
-            ZLinkSpotRelocationReplyRoutes.LazyRegistration relocationReply,
-            String replyFailureMessage) {
+            ZLinkSpotRelocationReplyRoutes.LazyRegistration relocationReply) {
         try {
             return dispatchActorPacketToHandlerBody(
                     outbound,
@@ -4090,8 +4089,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                     packetHeader,
                     headerPart,
                     payload,
-                    relocationReply,
-                    replyFailureMessage);
+                    relocationReply);
         } catch (RuntimeException failure) {
             return CompletableFuture.failedFuture(failure);
         }
@@ -4105,8 +4103,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             ActorPacketFrames.Header packetHeader,
             ZLinkBackendActorReceived headerPart,
             Message payload,
-            ZLinkSpotRelocationReplyRoutes.LazyRegistration relocationReply,
-            String replyFailureMessage) {
+            ZLinkSpotRelocationReplyRoutes.LazyRegistration relocationReply) {
         var actorFlow = ZLinkFlowContext.current();
         boolean noBindRequest = isNoBindActorRequest(packetHeader, headerPart);
         boolean actorIsRequest = handler.kind() == ZLinkScannedHandlerKind.ACTOR_REQUEST;
@@ -4220,30 +4217,15 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                     streamCodecFor(handler.replyType()))) {
                                 frameBytes = frame.toByteArray();
                             }
-                            if (noBindRequest) {
-                                try (Message frame = Message.from(frameBytes)) {
-                                    primaryNode.replyActorNoBind(
-                                            new ZLinkBackendActorRef(
-                                                    headerPart.actor().nodeRid(),
-                                                    actor.context().actorId(),
-                                                    headerPart.actor().generation()),
-                                            headerPart.sourceNodeRid(),
-                                            headerPart.sourceSessionRid(),
-                                            headerPart.requestId(),
-                                            headerPart.flags(),
-                                            List.of(frame));
-                                }
-                                return CompletableFuture.completedFuture(null);
-                            }
-                            return sendActorBoundSessionWithRetry(
-                                    primaryNode,
-                                    new ZLinkBackendActorRef(
-                                            headerPart.actor().nodeRid(),
-                                            actor.context().actorId(),
-                                            headerPart.actor().generation()),
-                                    actor.context().actorId(),
-                                    frameBytes,
-                                    replyFailureMessage);
+                            return sendActorReplyFrame(
+                                    actorId,
+                                    headerPart.actor(),
+                                    headerPart.sourceNodeRid(),
+                                    headerPart.sourceSessionRid(),
+                                    headerPart.requestId(),
+                                    headerPart.flags(),
+                                    noBindRequest,
+                                    frameBytes);
                         })
                 .whenComplete(
                         (ignored, error) -> {
@@ -4296,7 +4278,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                 Message frame = ActorPacketFrames.encodeReply(packetHeader, payload)) {
             frameBytes = frame.toByteArray();
         }
-        return sendRelocatedActorReplyFrame(
+        return sendActorReplyFrame(
                 actorId,
                 actorRef,
                 sourceNodeRid,
@@ -4322,7 +4304,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         try (Message frame = ActorPacketFrames.encodeError(packetHeader, error)) {
             frameBytes = frame.toByteArray();
         }
-        return sendRelocatedActorReplyFrame(
+        return sendActorReplyFrame(
                 actorId,
                 actorRef,
                 sourceNodeRid,
@@ -4333,7 +4315,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                 frameBytes);
     }
 
-    private CompletionStage<Void> sendRelocatedActorReplyFrame(
+    private CompletionStage<Void> sendActorReplyFrame(
             String actorId,
             ZLinkBackendActorRef actorRef,
             RoutingId sourceNodeRid,
@@ -4355,11 +4337,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             return CompletableFuture.completedFuture(null);
         }
         return sendActorBoundSessionWithRetry(
-                primaryNode,
-                actorRef,
-                actorId,
-                frameBytes,
-                "relocated Actor bound Session reply failed");
+                primaryNode, actorRef, actorId, frameBytes, "Actor bound Session reply failed");
     }
 
     private ZLinkStreamCodec streamCodecFor(Class<?> payloadType) {
@@ -6407,55 +6385,81 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             ZLinkBackendActorReceived bodyPart,
             ZLinkActor actor,
             boolean pendingHeader) {
-        if (ZLinkActorSpotRoutePackets.SESSION_DISCONNECTED_PACKET_NAME.equals(
+        if (!ZLinkActorSpotRoutePackets.SESSION_DISCONNECTED_PACKET_NAME.equals(
                 packetHeader.packetName())) {
-            byte[] identity = bodyPart == null ? new byte[0] : bodyPart.message().toByteArray();
-            return actorSessions
-                    .runtime()
-                    .notifyDisconnected(actor, identity)
-                    .handle(
-                            (ignored, error) -> {
-                                try {
-                                    if (error != null && dispatchErrors.errorsEnabled()) {
-                                        reportDispatchError(
-                                                DispatchFailureReport.of(
-                                                                ZLinkDispatchErrorSurface
-                                                                        .SPOT_ACTOR,
-                                                                ZLinkDispatchMessageKind.ACTOR_SEND,
-                                                                systems.zlink.framework.runtime
-                                                                        .diagnostics
-                                                                        .ZLinkDispatchErrorReporter
-                                                                        .reasonFrom(
-                                                                                unwrapCompletion(
-                                                                                        error),
-                                                                                0),
-                                                                ZLinkDispatchErrorAction.DROP)
-                                                        .packetName(packetHeader.packetName())
-                                                        .actorId(actor.context().actorId())
-                                                        .sourceRid(headerPart.sourceNodeRid())
-                                                        .error(error));
-                                    }
-                                    if (packetHeader.requestSeq().isPresent()) {
-                                        // The acknowledgement marks the exact callback's
-                                        // terminal boundary. Callback failure is diagnostic;
-                                        // it does not restore the previous binding.
-                                        try (Message acknowledgement = Message.from(new byte[0])) {
-                                            primaryNode.replyActorNoBind(
-                                                    headerPart.actor(),
-                                                    headerPart.sourceNodeRid(),
-                                                    headerPart.sourceSessionRid(),
-                                                    headerPart.requestId(),
-                                                    headerPart.flags(),
-                                                    List.of(acknowledgement));
-                                        }
-                                    }
-                                } finally {
-                                    closePendingActorHeader(headerPart, pendingHeader);
-                                }
-                                return null;
-                            });
+            return null;
         }
-        return null;
+        boolean request = packetHeader.requestSeq().isPresent();
+        systems.zlink.framework.runtime.actors.ZLinkSessionDisconnected identity = null;
+        try {
+            identity =
+                    systems.zlink.framework.runtime.actors.ZLinkSessionDisconnected.decode(
+                            bodyPart == null ? new byte[0] : bodyPart.message().toByteArray());
+        } catch (ZLinkFrameworkException malformed) {
+            if (dispatchErrors.errorsEnabled()) {
+                reportDispatchError(
+                        DispatchFailureReport.of(
+                                        ZLinkDispatchErrorSurface.SPOT_ACTOR,
+                                        request
+                                                ? ZLinkDispatchMessageKind.ACTOR_REQUEST
+                                                : ZLinkDispatchMessageKind.ACTOR_SEND,
+                                        ZLinkDispatchErrorReason.INVALID_FRAME,
+                                        ZLinkDispatchErrorAction.DROP)
+                                .packetName(packetHeader.packetName())
+                                .actorId(actor.context().actorId())
+                                .sourceRid(headerPart.sourceNodeRid())
+                                .error(malformed));
+            }
+        }
+        CompletionStage<Void> notification =
+                identity == null
+                        ? CompletableFuture.completedFuture(null)
+                        : actorSessions.runtime().notifyDisconnected(actor, identity);
+        return notification
+                .handle(
+                        (ignored, error) -> {
+                            if (error != null && dispatchErrors.errorsEnabled()) {
+                                reportDispatchError(
+                                        DispatchFailureReport.of(
+                                                        ZLinkDispatchErrorSurface.SPOT_ACTOR,
+                                                        request
+                                                                ? ZLinkDispatchMessageKind
+                                                                        .ACTOR_REQUEST
+                                                                : ZLinkDispatchMessageKind
+                                                                        .ACTOR_SEND,
+                                                        ZLinkDispatchErrorReporter.reasonFrom(
+                                                                unwrapCompletion(error), 0),
+                                                        request
+                                                                ? ZLinkDispatchErrorAction
+                                                                        .REPLY_ERROR
+                                                                : ZLinkDispatchErrorAction.DROP)
+                                                .packetName(packetHeader.packetName())
+                                                .actorId(actor.context().actorId())
+                                                .sourceRid(headerPart.sourceNodeRid())
+                                                .error(error));
+                            }
+                            if (!request) return CompletableFuture.<Void>completedFuture(null);
+                            try (Message payload = Message.from(new byte[0]);
+                                    Message frame =
+                                            error == null
+                                                    ? ActorPacketFrames.encodeReply(
+                                                            packetHeader,
+                                                            payload,
+                                                            packetHeader.packetName(),
+                                                            ZLinkStreamCodec.RAW)
+                                                    : ActorPacketFrames.encodeError(
+                                                            packetHeader, error)) {
+                                return sendActorReplyFrame(
+                                        actor.context().actorId(), headerPart.actor(),
+                                        headerPart.sourceNodeRid(), headerPart.sourceSessionRid(),
+                                        headerPart.requestId(), headerPart.flags(),
+                                        isNoBindActorRequest(packetHeader, headerPart),
+                                                frame.toByteArray());
+                            }
+                        })
+                .thenCompose(stage -> stage)
+                .whenComplete(
+                        (ignored, error) -> closePendingActorHeader(headerPart, pendingHeader));
     }
 
     boolean isActorInfrastructureControl(List<ZLinkBackendActorReceived> actorMessages) {
@@ -6632,8 +6636,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                     packetHeader,
                                     headerCopy,
                                     payloadCopy,
-                                    registered,
-                                    "actor bound session reply failed");
+                                    registered);
                         }
                     };
             queued =

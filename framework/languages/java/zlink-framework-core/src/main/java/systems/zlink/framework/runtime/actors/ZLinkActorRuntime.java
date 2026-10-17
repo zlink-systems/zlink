@@ -4178,14 +4178,9 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         actorJoinCanonicalMeshNode = meshNode;
     }
 
-    /** Decodes and fences the notification in the Actor turn (Session-Actor binding §7). */
-    public CompletionStage<Void> notifyDisconnected(ZLinkActor actor, byte[] payload) {
-        return submitActorDispatch(
-                actor.context().actorId(),
-                () -> notifyDisconnectedOnLane(actor, ZLinkSessionDisconnected.decode(payload)));
-    }
-
-    CompletionStage<Void> notifyDisconnected(ZLinkActor actor, ZLinkSessionDisconnected identity) {
+    /** Compares the notification identity in the Actor turn (Session-Actor binding §7). */
+    public CompletionStage<Void> notifyDisconnected(
+            ZLinkActor actor, ZLinkSessionDisconnected identity) {
         return submitActorDispatch(
                 actor.context().actorId(), () -> notifyDisconnectedOnLane(actor, identity));
     }
