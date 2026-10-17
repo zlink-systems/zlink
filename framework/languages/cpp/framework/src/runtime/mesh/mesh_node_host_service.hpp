@@ -139,7 +139,6 @@ class mesh_node_host_service_t final : public hosted_service_t, public hosted_se
                                     creation_operation_identity_t operation);
     task_t<actor_create_result_t>
     complete_local_actor_creation (task_t<zlink::framework::detail::actor_join_reply_t> joining,
-                                   std::shared_ptr<void> activation_admission,
                                    mesh_node_descriptor_t target,
                                    actor_ref_t created,
                                    actor_id_t actor_id,
