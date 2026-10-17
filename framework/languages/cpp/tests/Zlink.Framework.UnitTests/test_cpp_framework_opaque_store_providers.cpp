@@ -4314,6 +4314,140 @@ TEST (ZLinkFrameworkOpaqueStoreProviders, NewClaimReplayPreservesDescriptorAcros
     }
 }
 
+TEST (ZLinkFrameworkOpaqueStoreProviders, RepeatedMeshWriteConfirmsEitherIntentWithoutMutation)
+{
+    lost_descriptor_reply_store_t provider;
+    provider_location_repository_t provider_repository (provider);
+    in_memory_location_repository_t memory_repository;
+    for (location_repository_t *repository :
+         {static_cast<location_repository_t *> (&provider_repository),
+          static_cast<location_repository_t *> (&memory_repository)}) {
+        SCOPED_TRACE (repository == &provider_repository ? "provider" : "in-memory");
+        const auto owner =
+          std::get<owner_lease_claimed_t> (
+            repository->claim_owner_lease ("repeated-owner", 30s).result ().value ())
+            .token;
+        mesh_node_descriptor_t descriptor;
+        descriptor.mesh_name = "repeated-mesh";
+        descriptor.rid = zlink::routing_id_t::from ("repeated-node");
+        descriptor.lifecycle_generation = 1;
+        descriptor.descriptor_revision = 1;
+        descriptor.endpoint = "tcp://127.0.0.1:7001";
+        descriptor.security_identity = "default";
+        descriptor.owner_id = owner.owner_id;
+        descriptor.lease_generation = owner.lease_generation;
+        ASSERT_EQ (location_write_status_t::stored,
+                   repository->update_mesh_node (descriptor, location_write_intent_t::new_claim)
+                     .result ()
+                     .value ()
+                     .status);
+        // Confirm both the initial claim and an applied higher-revision renewal.
+        for (const auto revision : {1u, 2u}) {
+            descriptor.descriptor_revision = revision;
+            if (revision == 2) {
+                descriptor.placement_weight += 1;
+                ASSERT_EQ (location_write_status_t::stored,
+                           repository->update_mesh_node (descriptor, location_write_intent_t::renew)
+                             .result ()
+                             .value ()
+                             .status);
+            }
+            const auto before =
+              repository->list_mesh_nodes (descriptor.mesh_name).result ().value ().items.at (0);
+            const auto writes = provider.descriptor_writes;
+            for (const auto intent :
+                 {location_write_intent_t::new_claim, location_write_intent_t::renew}) {
+                SCOPED_TRACE (static_cast<int> (intent));
+                descriptor.updated_at = before.updated_at + 1ms;
+                EXPECT_EQ (
+                  location_write_status_t::stored,
+                  repository->update_mesh_node (descriptor, intent).result ().value ().status);
+            }
+            EXPECT_EQ (writes, provider.descriptor_writes);
+            EXPECT_EQ (before.updated_at, repository->list_mesh_nodes (descriptor.mesh_name)
+                                            .result ()
+                                            .value ()
+                                            .items.at (0)
+                                            .updated_at);
+        }
+        ASSERT_TRUE (std::holds_alternative<owner_lease_released_t> (
+          repository->release_owner_lease (owner).result ().value ()));
+        for (const auto intent :
+             {location_write_intent_t::new_claim, location_write_intent_t::renew})
+            EXPECT_EQ (location_write_status_t::ignored_stale,
+                       repository->update_mesh_node (descriptor, intent).result ().value ().status);
+    }
+}
+
+TEST (ZLinkFrameworkOpaqueStoreProviders, RepeatedMeshWriteRejectsOtherDescriptorChanges)
+{
+    lost_descriptor_reply_store_t provider;
+    provider_location_repository_t provider_repository (provider);
+    in_memory_location_repository_t memory_repository;
+    for (location_repository_t *repository :
+         {static_cast<location_repository_t *> (&provider_repository),
+          static_cast<location_repository_t *> (&memory_repository)}) {
+        SCOPED_TRACE (repository == &provider_repository ? "provider" : "in-memory");
+        const auto owner =
+          std::get<owner_lease_claimed_t> (
+            repository->claim_owner_lease ("changed-owner", 30s).result ().value ())
+            .token;
+        const auto other = std::get<owner_lease_claimed_t> (
+                             repository->claim_owner_lease ("other-owner", 30s).result ().value ())
+                             .token;
+        mesh_node_descriptor_t descriptor;
+        descriptor.mesh_name = "changed-mesh";
+        descriptor.rid = zlink::routing_id_t::from ("changed-node");
+        descriptor.lifecycle_generation = 1;
+        descriptor.descriptor_revision = 2;
+        descriptor.endpoint = "tcp://127.0.0.1:7001";
+        descriptor.security_identity = "default";
+        descriptor.owner_id = owner.owner_id;
+        descriptor.lease_generation = owner.lease_generation;
+        ASSERT_EQ (location_write_status_t::stored,
+                   repository->update_mesh_node (descriptor, location_write_intent_t::new_claim)
+                     .result ()
+                     .value ()
+                     .status);
+        const auto before =
+          repository->list_mesh_nodes (descriptor.mesh_name).result ().value ().items.at (0);
+        const std::vector<std::pair<std::string, std::function<void (mesh_node_descriptor_t &)>>>
+          changes{{"owner",
+                   [&] (auto &next) {
+                       next.owner_id = other.owner_id;
+                       next.lease_generation = other.lease_generation;
+                   }},
+                  {"lease", [] (auto &next) { ++next.lease_generation; }},
+                  {"lifecycle", [] (auto &next) { ++next.lifecycle_generation; }},
+                  {"revision", [] (auto &next) { --next.descriptor_revision; }},
+                  {"endpoint", [] (auto &next) { next.endpoint = "tcp://127.0.0.1:7002"; }},
+                  {"security", [] (auto &next) { next.security_identity = "other"; }},
+                  {"weight", [] (auto &next) { ++next.placement_weight; }},
+                  {"state", [] (auto &next) { next.state = framework_runtime_state_t::serving; }},
+                  {"maintenance", [] (auto &next) { next.maintenance_wave = "wave"; }}};
+        const auto writes = provider.descriptor_writes;
+        for (const auto &[name, change] : changes) {
+            SCOPED_TRACE (name);
+            auto next = descriptor;
+            next.updated_at = before.updated_at + 1ms;
+            change (next);
+            for (const auto intent :
+                 {location_write_intent_t::new_claim, location_write_intent_t::renew})
+                EXPECT_NE (location_write_status_t::stored,
+                           repository->update_mesh_node (next, intent).result ().value ().status);
+        }
+        EXPECT_EQ (writes, provider.descriptor_writes);
+        const auto after =
+          repository->list_mesh_nodes (descriptor.mesh_name).result ().value ().items.at (0);
+        EXPECT_EQ (before.updated_at, after.updated_at);
+        EXPECT_EQ (before.descriptor_revision, after.descriptor_revision);
+        EXPECT_EQ (before.endpoint, after.endpoint);
+        EXPECT_EQ (before.placement_weight, after.placement_weight);
+        EXPECT_EQ (before.state, after.state);
+        EXPECT_EQ (before.maintenance_wave, after.maintenance_wave);
+    }
+}
+
 TEST (ZLinkFrameworkOpaqueStoreProviders, NewClaimIgnoresPreviousOwnerLeaseGeneration)
 {
     in_memory_location_store_t provider;
