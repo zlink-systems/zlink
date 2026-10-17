@@ -3205,8 +3205,21 @@ void spot_context_state_t::defer_relocation_ready ()
         throw framework_exception_t (framework_error_kind_t::not_configured,
                                      "relocation readiness is already deferred");
     }
-    // Application jobs after this boundary wait for its completion (Spot model §5.1).
-    auto reserved = serial_queue->reserve_barrier_next ("relocation-ready", true);
+    // Collect membership when this lifecycle item reaches its FIFO position:
+    // earlier Join callbacks have settled and later ones remain behind it.
+    auto reserved = serial_queue->reserve_barrier_next (
+      "relocation-ready", true, runtime::serial_work_lane_t::lifecycle,
+      [self = shared_from_this ()] {
+          return self->state_lane_owner ()->lane.run_task ([self] {
+              std::vector<std::shared_ptr<runtime::serial_execution_queue_t>> queues;
+              const auto coordinator = self->ensure_spot_serial_executor ();
+              for (const auto &[key, membership] : self->node->actor_spot_ids) {
+                  if (membership == self->spot_id)
+                      queues.push_back (coordinator->actor_executor (key)->queue ());
+              }
+              return queues;
+          });
+      });
     if (!reserved) {
         throw framework_exception_t (reserved.error_kind (),
                                      "relocation readiness barrier queue is closed");
