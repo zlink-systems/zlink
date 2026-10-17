@@ -78,13 +78,17 @@ class ZLinkMessageFlowTracerTest {
     }
 
     @Test
-    void flowCaptureIsSuppressedOnlyAtOff() {
-        //  Spec 27 §4: only Off skips flow creation/installation; Errors still
-        //  captures so failure records keep their flow identifiers.
+    void flowCaptureIsOnOnlyAtNormalAndDetailed() {
+        //  04-flow-correlation.ko.md:91 (§4): message-flow tracing is on at Normal and
+        //  Detailed; Off and Errors skip flow creation/installation/propagation.
+        //  03-message-flow-tracing.ko.md:201: Errors still records dispatch
+        //  errors, backpressure and drops.
         assertFalse(tracer(options(ZLinkMessageFlowLogMode.OFF)).captureEnabled());
-        assertTrue(tracer(options(ZLinkMessageFlowLogMode.ERRORS)).captureEnabled());
+        assertFalse(tracer(options(ZLinkMessageFlowLogMode.ERRORS)).captureEnabled());
         assertTrue(tracer(options(ZLinkMessageFlowLogMode.NORMAL)).captureEnabled());
         assertTrue(tracer(options(ZLinkMessageFlowLogMode.DETAILED)).captureEnabled());
+        assertFalse(tracer(options(ZLinkMessageFlowLogMode.OFF)).dispatchErrorsEnabled());
+        assertTrue(tracer(options(ZLinkMessageFlowLogMode.ERRORS)).dispatchErrorsEnabled());
     }
 
     @Test

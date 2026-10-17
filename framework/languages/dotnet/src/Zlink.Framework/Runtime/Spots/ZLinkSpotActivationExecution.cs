@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Numerics;
 using Systems.Zlink.Framework.Runtime.Protocol;
+using Zlink.Framework.Runtime.Actors;
 using Zlink.Framework.Runtime.Diagnostics;
 using Zlink.Framework.Runtime.Identifiers;
 using Zlink.Framework.Runtime.Locations;
@@ -8,9 +9,12 @@ using static Zlink.Framework.Runtime.Execution.ZLinkStateLaneWait;
 
 namespace Zlink.Framework.Runtime.Spots;
 
+// CapturedMembers are the member Actors whose handoff capture this seal
+// started; an abort of the seal returns their held frames to the source.
 internal sealed record ZLinkSpotRelocationSeal(
     ZLinkSpotExecutionRelocationSeal QueueSeal,
-    IReadOnlyList<ZLinkRelocationLogicalTimer> LogicalTimers
+    IReadOnlyList<ZLinkRelocationLogicalTimer> LogicalTimers,
+    IReadOnlyList<ZLinkActorRuntimeState> CapturedMembers
 );
 
 internal sealed record ZLinkSpotRelocationApplicationState(
@@ -520,11 +524,42 @@ internal abstract partial class ZLinkSpotActivation
             )
         )
             return;
+        var requestSource = received.RequestSource;
+        if (
+            requestSource is null
+            && received.SourceNodeRid is { } sourceNodeRid
+            && _runtime.Registration.Locations.ResolveStore() is { } store
+        )
+        {
+            try
+            {
+                requestSource = await ZLinkRequestSourceFenceResolver
+                    .ResolveAsync(
+                        _runtime.GetSpotNodeRuntime(NodeRid).Node,
+                        store,
+                        RuntimeMeshName.Value,
+                        sourceNodeRid,
+                        received.SourceNodeGeneration,
+                        _stopSource.Token
+                    )
+                    .ConfigureAwait(false);
+            }
+            catch (Exception error)
+            {
+                _dispatcher.RejectApplicationRouteForFailure(
+                    received,
+                    ChannelName,
+                    error,
+                    _runtime.Flow.CaptureEnabled
+                );
+                return;
+            }
+        }
         var operationAdmission = (
             await _runtime.TryAdmitInboundOperationAsync(received.CanReply).ConfigureAwait(false)
         ).EnterInbound();
         ZLinkRuntimeTaskRunner.WithoutExecutionContextFlow(() =>
-            QueueApplicationRouteSerialized(received, operationAdmission)
+            QueueApplicationRouteSerialized(received, operationAdmission, requestSource)
         );
     }
 
@@ -1572,7 +1607,8 @@ internal abstract partial class ZLinkSpotActivation
 
     private bool QueueApplicationRouteSerialized(
         ZLinkBackendRouteReceived received,
-        ZLinkInboundOperationAdmission operationAdmission
+        ZLinkInboundOperationAdmission operationAdmission,
+        ZLinkServiceWireCodec.RequestSourceFence? requestSource
     )
     {
         var replyRouteId = 0UL;
@@ -1598,7 +1634,8 @@ internal abstract partial class ZLinkSpotActivation
         {
             acceptedJournalLength = ZLinkSpotAcceptedJournal.MeasureEncodedLength(
                 received,
-                replyRouteId
+                replyRouteId,
+                requestSource
             );
         }
         catch
@@ -1608,7 +1645,7 @@ internal abstract partial class ZLinkSpotActivation
             throw;
         }
         Func<ReadOnlyMemory<byte>> acceptedJournalFactory = () =>
-            ZLinkSpotAcceptedJournal.Encode(received, replyRouteId);
+            ZLinkSpotAcceptedJournal.Encode(received, replyRouteId, requestSource);
 
         var state = received.InstanceIntent
             ? new DurableActivationDispatch(
@@ -1873,8 +1910,22 @@ internal abstract partial class ZLinkSpotActivation
     {
         IReadOnlyList<ZLinkRelocationLogicalTimer>? boundaryTimers = null;
         ZLinkSpotExecutionRelocationSeal? queueSeal = null;
+        // A seal that refuses member Actor claims is the unit seal of those
+        // members too (host relocation §7, relocation 04 §4.2). Their handoff
+        // capture starts before the Spot refuses their claims, so a member
+        // frame accepted after this point is held for the handoff instead of
+        // being refused by the sealed Spot. The Spot turn gate, not the Actor
+        // mailbox, already orders member turns against this seal.
+        var capturedMembers = new List<ZLinkActorRuntimeState>();
         try
         {
+            if (!allowActorClaims)
+                foreach (var member in _actors.Snapshot())
+                {
+                    var state = _runtime.GetOrCreateActorState(member.Context.ActorId);
+                    state.Handoff.BeginCapture();
+                    capturedMembers.Add(state);
+                }
             queueSeal = await _serial
                 .SealRelocationAsync(
                     allowActorClaims,
@@ -1901,7 +1952,7 @@ internal abstract partial class ZLinkSpotActivation
                     "SPOT relocation timer boundary snapshot was not created."
                 );
             if (allowActorClaims)
-                return new ZLinkSpotRelocationSeal(queueSeal, []);
+                return new ZLinkSpotRelocationSeal(queueSeal, [], []);
             var logicalTimers = await _timers
                 .SnapshotFrozenRelocationAfterDispatchesAsync(cancellationToken)
                 .ConfigureAwait(false);
@@ -1925,13 +1976,17 @@ internal abstract partial class ZLinkSpotActivation
                         : timer;
                 })
                 .ToArray();
-            return new ZLinkSpotRelocationSeal(queueSeal, logicalTimers);
+            return new ZLinkSpotRelocationSeal(queueSeal, logicalTimers, capturedMembers);
         }
         catch
         {
             if (queueSeal is not null)
                 await _serial.TryAbortRelocationAsync(queueSeal).ConfigureAwait(false);
             _timers.Resume();
+            foreach (var state in capturedMembers)
+                await _runtime
+                    .RestoreStandaloneActorRelocationSourceAsync(state)
+                    .ConfigureAwait(false);
             throw;
         }
     }
@@ -2495,7 +2550,7 @@ internal abstract partial class ZLinkSpotActivation
     {
         var logicalTimers = _timers.FreezeRelocation();
         if (await _serial.TrySealRelocationAsync().ConfigureAwait(false) is { } queueSeal)
-            return new ZLinkSpotRelocationSeal(queueSeal, logicalTimers);
+            return new ZLinkSpotRelocationSeal(queueSeal, logicalTimers, []);
         _timers.Resume();
         return null;
     }
@@ -2509,7 +2564,7 @@ internal abstract partial class ZLinkSpotActivation
             await _serial.TrySealPerActorShellRelocationAsync().ConfigureAwait(false) is
             { } queueSeal
         )
-            return new ZLinkSpotRelocationSeal(queueSeal, logicalTimers);
+            return new ZLinkSpotRelocationSeal(queueSeal, logicalTimers, []);
         _timers.Resume();
         return null;
     }

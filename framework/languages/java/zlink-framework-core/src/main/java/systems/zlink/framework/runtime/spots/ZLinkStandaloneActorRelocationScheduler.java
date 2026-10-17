@@ -38,7 +38,7 @@ final class ZLinkStandaloneActorRelocationScheduler {
         return ZLinkRelocationHandOff.run(
                         client,
                         request,
-                        () -> source.relayCapturedIngress(client, timeout),
+                        settlement -> source.relayCapturedIngress(client, timeout, settlement),
                         timeout,
                         restoreDeadline)
                 .handle(

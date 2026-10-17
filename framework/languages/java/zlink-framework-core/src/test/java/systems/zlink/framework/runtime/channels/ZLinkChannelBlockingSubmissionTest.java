@@ -63,36 +63,40 @@ final class ZLinkChannelBlockingSubmissionTest {
     }
 
     @Test
-    void completionContinuationRejectsBlockingRequestAndDispatcherDeliversNextCompletion()
+    void outsideCompletionContinuationAllowsBlockingRequestAndIndependentCompletion()
             throws Exception {
         try (Fixture first = new Fixture();
                 Fixture nested = new Fixture();
                 Fixture next = new Fixture()) {
+            var entered = new CountDownLatch(1);
             var continuation =
                     first.request
                             .submit(Reply.class)
-                            .thenRun(
-                                    () ->
-                                            assertInvalid(
-                                                    assertThrows(
-                                                            ZLinkFrameworkException.class,
-                                                            () ->
-                                                                    nested.request.submit_sync(
-                                                                            Reply.class))))
+                            .thenApply(
+                                    ignored -> {
+                                        entered.countDown();
+                                        return nested.request.submit_sync(Reply.class);
+                                    })
                             .toCompletableFuture();
             var following = next.request.submit(Reply.class).toCompletableFuture();
-            first.complete();
-            continuation.get(3, TimeUnit.SECONDS);
-            assertEquals(0, nested.submissions.get());
-            next.complete();
-            assertEquals(new Reply("accepted"), following.get(3, TimeUnit.SECONDS));
-            nested.complete();
-            assertEquals(new Reply("accepted"), nested.request.submit_sync(Reply.class));
+            try {
+                first.complete();
+                assertTrue(entered.await(3, TimeUnit.SECONDS));
+                assertTrue(nested.submitted.await(3, TimeUnit.SECONDS));
+                next.complete();
+                assertEquals(new Reply("accepted"), following.get(3, TimeUnit.SECONDS));
+                assertFalse(continuation.isDone(), "nested reply is still pending");
+                nested.complete();
+                assertEquals(new Reply("accepted"), continuation.get(3, TimeUnit.SECONDS));
+                assertEquals(1, nested.submissions.get());
+            } finally {
+                nested.complete();
+            }
         }
     }
 
     @Test
-    void completionContinuationRejectsFlowControlBeforeChangingMode() throws Exception {
+    void outsideCompletionContinuationAllowsSynchronousFlowControl() throws Exception {
         try (Fixture first = new Fixture();
                 Fixture next = new Fixture()) {
             AtomicInteger changes = new AtomicInteger();
@@ -115,14 +119,8 @@ final class ZLinkChannelBlockingSubmissionTest {
                             .submit(Reply.class)
                             .thenRun(
                                     () -> {
-                                        assertInvalid(
-                                                assertThrows(
-                                                        ZLinkFrameworkException.class,
-                                                        () ->
-                                                                control.setMessageFlowMode(
-                                                                        ZLinkMessageFlowLogMode
-                                                                                .NORMAL)));
-                                        assertEquals(0, changes.get());
+                                        control.setMessageFlowMode(ZLinkMessageFlowLogMode.NORMAL);
+                                        assertEquals(1, changes.get());
                                     })
                             .toCompletableFuture();
             first.complete();
@@ -131,7 +129,7 @@ final class ZLinkChannelBlockingSubmissionTest {
             next.complete();
             assertEquals(new Reply("accepted"), following.get(3, TimeUnit.SECONDS));
             control.setMessageFlowMode(ZLinkMessageFlowLogMode.NORMAL);
-            assertEquals(1, changes.get());
+            assertEquals(2, changes.get());
         }
     }
 
@@ -423,6 +421,9 @@ final class ZLinkChannelBlockingSubmissionTest {
                                     getClass().getClassLoader(),
                                     new Class<?>[] {ZLinkInternalSpotNode.class},
                                     (proxy, method, args) -> {
+                                        if (method.getName().equals("sourceTransportLane")) {
+                                            return null;
+                                        }
                                         if (method.getName().equals("name")) {
                                             return "orders";
                                         }

@@ -199,6 +199,18 @@ checksum이 도착하면 기존 조립을 재사용하지도 덮어쓰지도 않
 
 Temporary queue와 saved-work 구간은 dispatch 전 ordered durable backlog이며, 유한한 handoff 뒤 payload를 소유한다. Staging ingress와 runnable callback의 permit 반환·재획득은 [Application job queue §3](../01-execution/04-application-job-queue-and-backpressure.ko.md#3-ordinary-ingress-permit-순서)을 따른다.
 
+**Target은 relay 수신 준비 완료를 알리기 전에 옮겨 오는 binding의 Session owner와 ready route를 확보한다.**
+Relocation envelope의 `sessionBindings`(§4.2) 항목 중 Session owner가 target과 다른 node인 항목마다,
+target은 그 Session owner node와 [ready](../00-foundation/02-glossary.ko.md#ready) route가 있는지 확인한다.
+Session owner가 target node 자신이면 확보할 route가 없다. 없으면 자신의 auto-connect
+owner에 그 peer의 즉시 reconcile을 요청하고([MeshNode §7.1](../03-spot-actor/03-mesh-node.ko.md#71-peer-연결)),
+route가 ready가 될 때까지 relay 수신 준비 완료를 보내지 않는다. 이 대기의 기한은 command 40이 실어 오는
+source operation deadline(`deadlineUnixMs`)이며, target은 새 timer나 retry를 만들지 않는다. Target attempt의
+continuation에서 기다리며 infrastructure 수신 loop나 application handler turn을 점유하지 않는다. 그 deadline이나
+target 종료로 대기가 끝나면 relay 수신 준비 완료 대신 명시적 실패 reply를 보내고 조립 중인 staging을 정리한다. Source는 아직 owner이므로 §9의 명시적 실패와
+같이 source queue와 matching Session seal을 복원한다. Target이 이 준비를 끝낸 뒤 commit해야 commit 뒤의 첫
+Actor→Session push가 route 부재로 실패하지 않는다.
+
 Temporary queue와 Restore가 준비되면 target은 source에 **relay 수신 준비 완료**를 알린다. 이
 통지는 relocation 완료가 아니다. Location Store owner는 아직 source이며 target은 application
 handler를 실행하지 않는다. Target은 staged payload마다 target-side retained-byte owner를
@@ -293,13 +305,12 @@ CAS가 성공하면 target은 다음 순서의 ordered durable backlog를 확정
 배타적 접근을 쥔 채 callback을 실행하는 방식으로 구현하지 않는다.** 그 방식은 외부
 callback이 같은 배타적 접근 primitive를 다시 획득하는 구조가 되기 쉬우며
 [상태 소유와 state lane §6](../01-execution/06-state-ownership-and-lanes.ko.md#6-재진입을-만들지-않는-구조)이
-금지한다. 이 보장은 다음 두 형태 중 하나의 선형화점으로 만든다.
-
-- dispatch 개방 전에 backlog 몫의 placeholder ownership claim을 소유 turn 안에서
-  확정하고, 개별 execution claim은 배타적 접근 밖에서 채운 뒤 같은 소유 turn에서
-  placeholder를 정산하면서 ordinary admission을 연다.
-- 또는 backlog가 비었음을 원자적으로 관측한 시점에만 ordinary dispatch로 전환한다 —
-  관측 전에 게시된 backlog turn보다 ordinary ingress가 앞설 수 없다.
+금지한다. Target은 위 순서를 보존해 미실행 record마다 payload 소유권과 해당 owner queue 위치를
+한 소유 turn에서 확정한다. 아래의 후속 record 인수와 suffix 이전은 Actor record에 적용한다. 필요한 lifecycle과 Join completion 순서를 충족한 뒤 인수한 첫 handler가
+시작하기 전에 이전 move를 끝내며, 이 완료는 인수한 record의 handler terminal을 기다리지 않는다.
+인수한 record가 새 Deferred Join을 등록하면, 그 barrier의 경계에서 아직 시작하지 않은 suffix의
+payload 소유권과 순서를 다음 handoff로 원자적으로 넘긴다. 실행 중이거나 끝난 record는 suffix에
+들지 않고, 다음 handoff는 이전 prefix 전체의 handler terminal을 기다리지 않는다.
 
 Dispatch가 runnable해진 backlog turn의 permit 취득과 반환은 [Application job queue §3](../01-execution/04-application-job-queue-and-backpressure.ko.md#3-ordinary-ingress-permit-순서)을 따른다. 기다리는 item은 backlog payload owner가 계속 소유한다. Timer는 원래 timer
 lifecycle을 유지하고 callback turn이 runnable할 때 해당 ingress 규칙을 따른다.

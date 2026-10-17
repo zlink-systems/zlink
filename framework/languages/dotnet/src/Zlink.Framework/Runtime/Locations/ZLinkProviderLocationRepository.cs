@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Runtime.ExceptionServices;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 
 namespace Zlink.Framework.Runtime.Locations;
@@ -592,6 +593,20 @@ internal sealed partial class ZLinkProviderLocationRepository(IZLinkLocationStor
                 .ReadAsync(OwnerKey(storedOwner), cancellationToken)
                 .ConfigureAwait(false);
             var storedOwnerLive = storedOwnerLease is ZLinkStoreReadResult.Found;
+            var isMeshNodeRetry =
+                descriptor is ZLinkMeshNodeDescriptor
+                && intent is ZLinkLocationWriteIntent.NewClaim or ZLinkLocationWriteIntent.Renew;
+            if (
+                (isMeshNodeRetry || intent == ZLinkLocationWriteIntent.NewClaim && storedOwnerLive)
+                && ZLinkLocationDescriptorComparison.SameExceptWriteTime(
+                    record.Descriptor,
+                    descriptor
+                )
+            )
+                return ZLinkLocationWriteResult.Stored(
+                    VersionOf(found.Value.Version),
+                    found.Value.StoreNow
+                );
             if (intent == ZLinkLocationWriteIntent.NewClaim && storedOwnerLive)
                 return ZLinkLocationWriteResult.RejectedConflict;
             if (intent == ZLinkLocationWriteIntent.Takeover && storedOwnerLive)

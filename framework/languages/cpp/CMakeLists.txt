@@ -53,7 +53,7 @@ else()
 endif()
 if(NOT EXISTS "${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp/service_wire_constants.hpp"
     OR NOT EXISTS "${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp/service_wire_pilot_codec.hpp")
-  message(FATAL_ERROR "Missing generated protocol headers; prepare the C++ source archive with cmake/prepare-source-archive.cmake")
+  message(FATAL_ERROR "Missing generated protocol headers; build the C++ source archive with scripts/package-source.py")
 endif()
 option(ZLINK_FRAMEWORK_CPP_USE_SYSTEM_BOOST
   "Use packaged Boost instead of the repository's vendored Boost" ${_zlink_use_system_boost})
@@ -1681,6 +1681,11 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     tests/Zlink.Framework.UnitTests/test_cpp_framework_deliverydispatch_readiness.cpp
     "framework-unit;framework-regression")
   add_zlink_framework_test(
+    test_cpp_framework_runtime_status_publication
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_runtime_status_publication.cpp
+    "framework-unit;framework-contract;framework-host;framework-observability"
+    unit)
+  add_zlink_framework_test(
     test_cpp_framework_app_host
     tests/Zlink.Framework.UnitTests/test_cpp_framework_app_host.cpp
     "framework-unit;framework-host;framework-config;framework-http;framework-http-e2e")
@@ -1843,6 +1848,11 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     test_cpp_framework_async_task
     tests/Zlink.Framework.UnitTests/test_cpp_framework_async_task.cpp
     "framework-unit;framework-regression;async")
+  add_zlink_framework_test(
+    test_cpp_framework_yield_admission
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_yield_admission.cpp
+    "framework-unit;framework-contract;framework-regression;execution;yield"
+    unit)
   add_zlink_framework_test(
     test_cpp_framework_executor_owner
     tests/Zlink.Framework.UnitTests/test_cpp_framework_executor_owner.cpp
@@ -2038,6 +2048,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_use_zlink_gtest_main(test_cpp_framework_spot_close_conformance)
   target_link_libraries(test_cpp_framework_spot_close_conformance PRIVATE
     zlink::framework
+    zlink::stream_connector
     nlohmann_json::nlohmann_json)
   target_include_directories(test_cpp_framework_spot_close_conformance PRIVATE
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/include

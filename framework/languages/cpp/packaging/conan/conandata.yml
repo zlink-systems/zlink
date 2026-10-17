@@ -1,4 +1,5 @@
-# Replace the inherited digest with the newly published source archive digest.
+# scripts/dev/release-check.sh --write framework cpp writes the one entry below from the archive
+# that framework/languages/cpp/scripts/package-source.py builds before the tag.
 sources:
   "0.30.1":
     url: "https://github.com/zlink-systems/zlink/releases/download/framework-cpp/v0.30.1/zlink-framework-cpp-0.30.1.tar.gz"

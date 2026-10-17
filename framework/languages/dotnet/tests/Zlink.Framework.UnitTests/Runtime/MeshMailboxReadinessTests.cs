@@ -22,8 +22,10 @@ public sealed class MeshMailboxReadinessTests
             Assert.True(
                 mailbox.TryEnqueue(NewRecord(new ZLinkApplicationJobQueueRecordOwner(null, first)))
             );
-            Assert.True(TryClaim(mailbox, out var available));
-            Assert.Equal(1, available);
+            using var batch = new MeshReceiveBatch();
+            Assert.True(Drain(mailbox, batch));
+            Assert.Equal(1, batch.Count);
+            Assert.Same(first, batch.GetApplicationJobAdmission(0));
 
             Assert.True(queue.TryAcquire(out var second, ZLinkApplicationJobOrigin.Remote));
             Assert.NotNull(second);
@@ -31,18 +33,11 @@ public sealed class MeshMailboxReadinessTests
             Assert.True(
                 mailbox.TryEnqueue(NewRecord(new ZLinkApplicationJobQueueRecordOwner(null, second)))
             );
-            using var batch = new MeshReceiveBatch();
-            Assert.True(Drain(mailbox, batch));
-            Assert.Equal(1, batch.Count);
-            Assert.Same(first, batch.GetApplicationJobAdmission(0));
             batch.Reset();
             Assert.False(Drain(mailbox, batch));
             Assert.Equal(1, mailbox.Count);
-            Assert.False(TryClaim(mailbox, out _));
             Assert.True(Release(mailbox));
 
-            Assert.True(TryClaim(mailbox, out available));
-            Assert.Equal(1, available);
             Assert.True(Drain(mailbox, batch));
             Assert.Equal(1, batch.Count);
             Assert.Same(second, batch.GetApplicationJobAdmission(0));
@@ -65,19 +60,14 @@ public sealed class MeshMailboxReadinessTests
         {
             for (var index = 0; index < 65; index++)
                 Assert.True(mailbox.TryEnqueue(NewRecord()));
-            Assert.True(TryClaim(mailbox, out var available));
-            Assert.Equal(65, available);
-            Assert.False(TryClaim(mailbox, out _));
             using var batch = new MeshReceiveBatch();
             Assert.True(Drain(mailbox, batch));
             Assert.Equal(64, batch.Count);
             Assert.Equal(1, queued);
-            Assert.False(TryClaim(mailbox, out _));
             Assert.True(Release(mailbox));
-            Assert.True(TryClaim(mailbox, out available));
-            Assert.Equal(1, available);
             batch.Reset();
             Assert.True(Drain(mailbox, batch));
+            Assert.Equal(1, batch.Count);
             Assert.Equal(0, queued);
             Assert.False(Release(mailbox));
         }
@@ -106,7 +96,6 @@ public sealed class MeshMailboxReadinessTests
                     {
                         consumerStarted.Set();
                         using var batch = new MeshReceiveBatch();
-                        Assert.True(TryClaim(mailbox!, out var claimedCount));
                         Assert.True(Drain(mailbox!, batch));
                     });
                 Assert.True(consumerStarted.Wait(TimeSpan.FromSeconds(3)));
@@ -222,6 +211,63 @@ public sealed class MeshMailboxReadinessTests
         Assert.False(claim.Receive(received, RecvFlags.DontWait));
     }
 
+    [Fact]
+    public async Task ReadyOwnersAreReservedOnceInIdentityOrderAndKeepRecordFifo()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = new ZLinkManagedMeshNode(context, "ready-order");
+        node.SetRoutingId(RoutingId.From("ready-order-node"));
+        var actors = new[] { "c", "a", "b" }.Select(actorId => node.CreateActor(actorId)).ToArray();
+        Drain(node);
+        // Idle owners must not participate in readiness or claim turns.
+        for (var index = 0; index < 32; index++)
+            node.CreateActor($"idle-{index}");
+        Drain(node);
+        foreach (var actor in actors)
+            for (byte value = 1; value <= 2; value++)
+            {
+                using var payload = Message.From(new[] { value });
+                Assert.Equal(SubmitResult.Ok, node.SendToActor(actor, [payload]));
+            }
+
+        using var ready = new MeshReadyBatch();
+        Assert.False(node.DrainReady(MeshReadyDomains.Application, ready, RecvFlags.DontWait));
+        Assert.Equal(
+            new[] { "a", "b", "c" },
+            Enumerable.Range(0, ready.Count).Select(index => ready[index].Actor.ActorId)
+        );
+        // Reservation is exclusive even before the first receive claims its prefix.
+        using var competing = new MeshReadyBatch();
+        Assert.False(node.DrainReady(MeshReadyDomains.Application, competing, RecvFlags.DontWait));
+        Assert.Equal(0, competing.Count);
+        for (var index = 0; index < ready.Count; index++)
+        {
+            using var claim = ready.TakeClaim(index);
+            using var received = new MeshReceiveBatch();
+            Assert.True(claim.Receive(received, RecvFlags.DontWait));
+            Assert.Equal(2, received.Count);
+            using var whileReceiving = new MeshReadyBatch();
+            Assert.False(
+                node.DrainReady(MeshReadyDomains.Application, whileReceiving, RecvFlags.DontWait)
+            );
+            Assert.Equal(0, whileReceiving.Count);
+            for (var record = 0; record < received.Count; record++)
+            {
+                var parts = received.RetainMessage(record);
+                try
+                {
+                    Assert.Equal((byte)(record + 1), parts[0].ToArray()[0]);
+                }
+                finally
+                {
+                    foreach (var part in parts)
+                        part.Dispose();
+                }
+            }
+        }
+        Assert.Equal(0, Drain(node));
+    }
+
     private static ZLinkMeshQueuedRecord NewRecord(IDisposable? payloadOwner = null) =>
         new(
             MeshReceiveRecord.CompletionFailure(default, RequestResult.Ok),
@@ -230,22 +276,14 @@ public sealed class MeshMailboxReadinessTests
             payloadOwner: payloadOwner
         );
 
-    private static bool TryClaim(ZLinkMeshNodeOwnedMailbox mailbox, out int available)
-    {
-        var claim = mailbox.TryClaimAsync(claim: true).AsTask().GetAwaiter().GetResult();
-        available = claim.Count;
-        return claim.Ready;
-    }
-
     private static bool Drain(ZLinkMeshNodeOwnedMailbox mailbox, MeshReceiveBatch batch) =>
-        mailbox.DrainAsync(batch, 64).AsTask().GetAwaiter().GetResult();
+        mailbox.ClaimAndDrainAsync(batch, 64).AsTask().GetAwaiter().GetResult();
 
     // An idle mailbox lane runs the posted release before Release returns.
     private static bool Release(ZLinkMeshNodeOwnedMailbox mailbox)
     {
-        var recordsRemain = false;
-        mailbox.Release(() => recordsRemain = true);
-        return recordsRemain;
+        mailbox.Release();
+        return mailbox.HasRecords;
     }
 
     private static int Drain(ZLinkManagedMeshNode node)

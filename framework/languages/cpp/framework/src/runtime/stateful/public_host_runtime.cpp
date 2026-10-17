@@ -944,12 +944,14 @@ void public_host_runtime_t::forward_relocation_application (
   const std::vector<std::uint8_t> &target_routing_id,
   std::uint64_t target_generation,
   std::uint64_t target_lease_generation,
-  std::chrono::milliseconds window)
+  std::chrono::milliseconds window,
+  std::optional<std::uint64_t> target_authority_generation)
 {
     if (!_stateful_dispatch)
         return;
     auto pending = std::make_shared<task_t<bool>> (_stateful_dispatch->forward_accepted (
-      owner, record, target_routing_id, target_generation, target_lease_generation, window));
+      owner, record, target_routing_id, target_generation, target_lease_generation, window,
+      target_authority_generation));
     detail::observe_task_completion (
       *pending, [host = shared_from_this (), pending] (const result_t<bool> &) {});
 }
@@ -3337,24 +3339,6 @@ void public_host_runtime_t::start_relocation_session_route_submission (relocatio
     detail::observe_task_completion (*pending, [pending] (const result_t<void> &) {});
 }
 
-bool public_host_runtime_t::relocation_target_authority_committed_strict (
-  const relocation_target_attempt_t &attempt) const noexcept
-{
-    if (!_relocation_authority || attempt.targets.empty ())
-        return false;
-    try {
-        for (const auto &target : attempt.targets) {
-            const auto current = _relocation_authority->read (target.kind, target.key);
-            if (!current || current->target != target)
-                return false;
-        }
-        return true;
-    }
-    catch (...) {
-        return false;
-    }
-}
-
 bool public_host_runtime_t::submit_relocation_target_authority (
   relocation_target_attempt_t &attempt) noexcept
 {
@@ -3464,9 +3448,6 @@ bool public_host_runtime_t::submit_relocation_target_authority (
             return true;
         }
 
-        if (relocation_target_authority_committed_strict (attempt))
-            return adopt_store_fences ();
-
         if (!_aggregate_relocation_authority)
             return false;
         if (!attempt.authority_fence) {
@@ -3476,8 +3457,7 @@ bool public_host_runtime_t::submit_relocation_target_authority (
               attempt.restore_identity.inventory_digest,
               attempt.prepare.coordinator.expected_authority_store_version);
             if (prepared.status != stateful::aggregate_publish_status_t::prepared)
-                return relocation_target_authority_committed_strict (attempt)
-                       && adopt_store_fences ();
+                return false;
             attempt.authority_fence = prepared.fence;
             const relocation_attempt_key_t key{attempt.prepare.relocation.high,
                                                attempt.prepare.relocation.low,
@@ -3491,10 +3471,37 @@ bool public_host_runtime_t::submit_relocation_target_authority (
               })
               .get ();
         }
+        /* The committed aggregate record identifies this move; adopt the
+         * Store-assigned owner generation of every staged participant. */
         const auto committed = _aggregate_relocation_authority->commit (*attempt.authority_fence);
-        return (committed.status == stateful::aggregate_publish_status_t::committed
-                && adopt_store_fences ())
-               || adopt_store_fences ();
+        if (committed.status != stateful::aggregate_publish_status_t::committed)
+            return false;
+        std::vector<stateful::object_ref_t> adopted;
+        adopted.reserve (attempt.targets.size ());
+        for (std::size_t index = 0; index != attempt.targets.size (); ++index) {
+            const auto &staged = attempt.targets[index];
+            const auto placement = std::find_if (
+              committed.current.begin (), committed.current.end (), [&] (const auto &candidate) {
+                  return candidate.target.kind == staged.kind && candidate.target.key == staged.key;
+              });
+            if (placement == committed.current.end ()
+                || placement->target.object_generation != staged.object_generation
+                || placement->target.mesh_name != staged.mesh_name
+                || placement->target.node_id != staged.node_id
+                || placement->target.authority_owner_generation
+                     <= attempt.sources[index].authority_owner_generation
+                || placement->target_owner.owner_id != target_owner.owner_id
+                || placement->target_owner.lease_generation != target_owner.lease_generation)
+                return false;
+            if (placement->target != staged
+                && _objects.reconcile_relocation_restore_authority (staged, placement->target,
+                                                                    attempt.restore_identity)
+                     != stateful::stateful_error_t::none)
+                return false;
+            adopted.push_back (placement->target);
+        }
+        attempt.targets = std::move (adopted);
+        return true;
     }
     catch (...) {
         return false;
@@ -3637,10 +3644,9 @@ bool public_host_runtime_t::try_finalize_relocation_target (const relocation_att
     if (!stamped)
         return false;
 
-    // ZLJR-backed User-Spot Join owns a bound-Session prewarm at the
-    // target. A recovery-free maintenance/whole-node import has no joined
-    // Actor runtime to prewarm; it still submits its one-way Session route
-    // below, but must retain the generic import path.
+    // Native Actor authority adoption is specific to User-Spot Join.
+    // Every relocation prepares its carried Session routes before command 44
+    // can expose the target to Session ingress.
     const auto join_prepare = _actor_join_relocation_prepare_validator
                                 ? _actor_join_relocation_prepare_validator (attempt.prepare)
                                 : std::optional<bool>{};
@@ -3655,13 +3661,13 @@ bool public_host_runtime_t::try_finalize_relocation_target (const relocation_att
                 return false;
             }
         }
-        for (const auto &route_state : attempt.session_routes) {
-            const auto &route = route_state.route;
-            if (!_bound_session_operations.prepare_relocation_target_route
-                || !_bound_session_operations.prepare_relocation_target_route (
-                  route, attempt.prepare.target.target_owner_lease_generation))
-                return false;
-        }
+    }
+    for (const auto &route_state : attempt.session_routes) {
+        const auto &route = route_state.route;
+        if (!_bound_session_operations.prepare_relocation_target_route
+            || !_bound_session_operations.prepare_relocation_target_route (
+              route, attempt.prepare.target.target_owner_lease_generation))
+            return false;
     }
 
     try {

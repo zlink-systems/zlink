@@ -6,7 +6,9 @@
 #include "runtime/mesh/mesh_node_runtime.hpp"
 #include "runtime/locations/authority_key_codec.hpp"
 #include "runtime/execution/serial_execution_queue.hpp"
+#include "runtime/diagnostics/dispatch_options_access.hpp"
 #include "runtime/spots/spot_runtime.hpp"
+#include <zlink/stream_connector.hpp>
 #include <gtest/gtest.h>
 #include <algorithm>
 #include <condition_variable>
@@ -59,6 +61,7 @@ struct observations_t
     int entry_joined = 0;
     int entry_left = 0;
     fw::task_completion_source_t<void> release_leave;
+    bool probe_admission_observed = false;
     std::optional<std::size_t> completion_to_hold;
     fw::task_completion_source_t<void> release_completion;
 } *observations;
@@ -80,6 +83,18 @@ struct ready_t
     int value{};
 };
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE (ready_t, value)
+struct view_request_t
+{
+    static constexpr const char *packet_name = "maintenance-join-view-request";
+    int value{};
+};
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE (view_request_t, value)
+struct view_t
+{
+    static constexpr const char *packet_name = "maintenance-join-view";
+    int instance{};
+};
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE (view_t, instance)
 class actor_t final : public fw::actor_t
 {
   public:
@@ -145,6 +160,11 @@ class entry_t final : public fw::entry_spot_t<actor_t>
     {
         _context.handlers ().add_actor_send<&entry_t::move> ();
         _context.handlers ().add_actor_request<&entry_t::probe> ();
+        _context.handlers ().add_actor_send<&entry_t::view> ();
+    }
+    fw::task_t<void> view (actor_t &actor, fw::message_context_t &, const view_request_t &)
+    {
+        co_await actor.context ().bound_session ().send (view_t{actor.instance}).async ();
     }
     probe_t probe (actor_t &actor, fw::message_context_t &, const probe_t &request)
     {
@@ -180,7 +200,12 @@ class room_t final : public fw::spot_t<actor_t>
     {
         _context.handlers ().add_actor_send<&room_t::move> ();
         _context.handlers ().add_actor_request<&room_t::probe> ();
+        _context.handlers ().add_actor_send<&room_t::view> ();
         _context.handlers ().add_handler<&room_t::ready> ();
+    }
+    fw::task_t<void> view (actor_t &actor, fw::message_context_t &, const view_request_t &)
+    {
+        co_await actor.context ().bound_session ().send (view_t{actor.instance}).async ();
     }
     fw::task_t<void> ready (const ready_t &)
     {
@@ -317,6 +342,106 @@ void configure (host_t &host,
         actor_type, std::make_shared<factory_t> (),
         [] (auto &factory) { factory.recreate_on_relocation (); });
 }
+// A Session owner that binds the member Actor on its first packet and relays
+// every packet to it, as an application Session does.
+class relay_session_t final : public fw::packet_stream_session_t
+{
+  public:
+    explicit relay_session_t (fw::actor_manager_t &actors) : _actors (actors) {}
+    fw::task_t<void> on_connected (fw::stream_t &) override { co_return; }
+    fw::task_t<void> on_disconnected (fw::stream_t &) override { co_return; }
+    fw::task_t<void> on_error (fw::stream_t &, const fw::stream_error_t &) override { co_return; }
+    fw::task_t<void> on_packet (fw::stream_t &stream,
+                                const fw::session_message_context_t &dispatch,
+                                const zlink::message_t &payload) override
+    {
+        auto bound = stream.actors ().bound ();
+        if (bound.empty ()) {
+            const auto ensured =
+              co_await _actors.get_or_create (fw::actor_id_t (actor_id), actor_type)
+                .in_mesh (mesh_name)
+                .async ();
+            const auto ref = std::visit (
+              [] (const auto &result) -> fw::actor_ref_t {
+                  if constexpr (requires { result.actor; })
+                      return result.actor;
+                  else
+                      throw std::runtime_error ("Actor creation rejected");
+              },
+              ensured);
+            co_await stream.actors ().bind_or_get (ref).async ();
+            bound = stream.actors ().bound ();
+        }
+        co_await bound.front ().relay (std::string (dispatch.packet_name), payload);
+    }
+
+  private:
+    fw::actor_manager_t &_actors;
+};
+constexpr auto session_rid = "join-session";
+constexpr auto stream_name = "maintenance-join-stream";
+void configure_session (host_t &host,
+                        std::shared_ptr<fw::location_store_t> store,
+                        std::shared_ptr<fw::relocation_store_t> relocations)
+{
+    auto &options = host.app.add_zlink_framework ();
+    options.configure_locations ().route_cache_max_age = 0ms;
+    options.set_message_follow_duration (source_follow_duration);
+    host.app.logging ()
+      .use_file (std::string (session_rid) + ".flow")
+      .set_min_level (fw::log_level_t::debug);
+    options.configure_dispatch ().message_flow (fw::message_flow_log_mode_t::detailed);
+    options.add_location_store (store);
+    options.add_relocation_store (relocations);
+    options.add_route_mesh (mesh_name)
+      .set_object_role (fw::object_role_t::client)
+      .set_routing_id (zlink::routing_id_t::from (session_rid))
+      .listen ("tcp://127.0.0.1:0");
+    options.add_stream_node (stream_name)
+      .bind ("tcp://127.0.0.1:0")
+      .register_session<relay_session_t> ();
+}
+// One client connection that keeps every received View in arrival order.
+class view_client_t
+{
+  public:
+    explicit view_client_t (std::string endpoint)
+    {
+        zlink::stream_connector::connector_options_t options;
+        options.endpoint = std::move (endpoint);
+        options.dispatch_mode = zlink::stream_connector::dispatch_mode_t::immediate;
+        options.reconnect.enabled = false;
+        _connector = zlink::stream_connector::connector_factory_t::create (options);
+        _subscription = _connector.on<view_t> ([this] (const auto &message) {
+            {
+                std::lock_guard lock (_mutex);
+                _views.push_back (message.payload.instance);
+            }
+            _changed.notify_all ();
+        });
+    }
+    ~view_client_t () { (void) _connector.close (); }
+    bool connect () { return static_cast<bool> (_connector.connect ()); }
+    // Sends one View request on this connection and returns the View it produced.
+    std::optional<int> view ()
+    {
+        std::unique_lock lock (_mutex);
+        const auto before = _views.size ();
+        lock.unlock ();
+        _connector.send (view_request_t{}).submit ();
+        lock.lock ();
+        if (!_changed.wait_for (lock, wait_budget, [&] { return _views.size () > before; }))
+            return std::nullopt;
+        return _views[before];
+    }
+
+  private:
+    zlink::stream_connector::connector_t _connector;
+    zlink::stream_connector::subscription_t _subscription;
+    std::mutex _mutex;
+    std::condition_variable _changed;
+    std::vector<int> _views;
+};
 bool ready (host_t &host)
 {
     const auto deadline = std::chrono::steady_clock::now () + wait_budget;
@@ -341,13 +466,19 @@ bool move_to (fw::actor_client_t &sender,
     return evidence.changed.wait_for (lock, wait_budget,
                                       [&] { return evidence.completions.size () >= count; });
 }
-bool peer_ready (fw::route_mesh_runtime_t &routes)
+bool peer_ready (fw::route_mesh_runtime_t &routes, std::string_view peer_rid = {})
 {
+    const auto ready = [&] {
+        const auto snapshot = routes.snapshot (mesh_name);
+        return std::any_of (snapshot.peers.begin (), snapshot.peers.end (), [&] (const auto &peer) {
+            return peer.state == fw::peer_state_t::ready
+                   && (peer_rid.empty () || peer.node_rid.to_string () == peer_rid);
+        });
+    };
     const auto deadline = std::chrono::steady_clock::now () + wait_budget;
-    while (routes.snapshot (mesh_name).ready_peer_count == 0
-           && std::chrono::steady_clock::now () < deadline)
+    while (!ready () && std::chrono::steady_clock::now () < deadline)
         std::this_thread::yield ();
-    return routes.snapshot (mesh_name).ready_peer_count > 0;
+    return ready ();
 }
 
 TEST (ActorMaintenanceJoin, HostShutdownClosesOccupiedUserSpot)
@@ -593,8 +724,114 @@ TEST_P (ActorHostRelocation, AfterRemoteActorJoin)
     const auto result = relocation.result_for (wait_budget);
     ASSERT_TRUE (result.has_value ());
     ASSERT_TRUE (*result);
-    EXPECT_EQ (result->value ().outcome, fw::relocation_outcome_t::relocated)
+    ASSERT_EQ (result->value ().outcome, fw::relocation_outcome_t::relocated)
       << "reason=" << static_cast<int> (result->value ().reason);
+    // Relocation flow §4.6: once the aggregate relocation commits, a request to the
+    // relocated Actor reaches the target activation and replies.
+    const auto reply = entry_services.get_required<fw::actor_client_t> ()
+                         .request (fw::actor_id_t (actor_id), probe_t{instance_probe})
+                         .timeout (wait_budget)
+                         .async<probe_t> ()
+                         .result ();
+    ASSERT_TRUE (reply) << "kind=" << static_cast<int> (reply.error_kind ())
+                        << " error=" << (reply.error () ? reply.error ()->what () : "none");
+    {
+        std::lock_guard lock (evidence.mutex);
+        EXPECT_EQ (reply.value ().value, evidence.instances);
+    }
+    // The relocated User Spot stays addressable by its public Id.
+    const auto spot = entry_services.get_required<fw::spot_manager_t> ()
+                        .get_or_create (fw::spot_id_t (local_spot), room_type)
+                        .timeout (wait_budget)
+                        .async ()
+                        .result ();
+    ASSERT_TRUE (spot) << "kind=" << static_cast<int> (spot.error_kind ());
+    EXPECT_EQ (spot.value ().state, fw::spot_create_state_t::existing);
+}
+
+// Relocation flow §4.6 and Session Actor binding §8.1: after the aggregate
+// relocation commits, the Session keeps its physical connection and its bound
+// Actor; the next packet on that connection reaches the target activation.
+TEST_P (ActorHostRelocation, ExistingSessionRelaysAfterRelocation)
+{
+    observations_t evidence;
+    observations = &evidence;
+    auto store = std::make_shared<fw::runtime::in_memory_location_store_t> ();
+    auto relocations = std::make_shared<fw::runtime::in_memory_relocation_store_t> ();
+    host_t entry, source, target, session;
+    configure (entry, first_rid, store, relocations, source_follow_duration, 0, true);
+    entry.start ();
+    ASSERT_TRUE (ready (entry));
+    auto entry_services = entry.app.advanced ().services ().build_provider ();
+    ASSERT_TRUE (entry_services.get_required<fw::actor_manager_t> ()
+                   .get_or_create (fw::actor_id_t (actor_id), actor_type)
+                   .async ()
+                   .result ());
+    auto &entry_options = entry_services.get_required<fw::route_mesh_runtime_options_t> ();
+    const auto entry_weight = entry_options.mesh (mesh_name).placement_weight ();
+    entry_options.mesh (mesh_name).placement_weight (0);
+    configure (source, second_rid, store, relocations, source_follow_duration, 0, true);
+    source.start ();
+    ASSERT_TRUE (ready (source));
+    auto services = source.app.advanced ().services ().build_provider ();
+    ASSERT_TRUE (services.get_required<fw::spot_manager_t> ()
+                   .get_or_create (fw::spot_id_t (local_spot), room_type)
+                   .async ()
+                   .result ());
+    configure_session (session, store, relocations);
+    session.start ();
+    ASSERT_TRUE (ready (session));
+    auto session_services = session.app.advanced ().services ().build_provider ();
+    auto &session_routes = session_services.get_required<fw::route_mesh_runtime_t> ();
+    ASSERT_TRUE (peer_ready (session_routes, first_rid));
+    ASSERT_TRUE (peer_ready (session_routes, second_rid));
+    ASSERT_TRUE (
+      peer_ready (entry_services.get_required<fw::route_mesh_runtime_t> (), session_rid));
+    view_client_t client (session_services.get_required<fw::framework_runtime_t> ()
+                            .listener_status (fw::listener_kind_t::stream, stream_name)
+                            .endpoint);
+    ASSERT_TRUE (client.connect ());
+    ASSERT_EQ (client.view (), std::optional<int>{1}) << "bound Entry Spot Actor did not reply";
+    ASSERT_TRUE (
+      move_to (entry_services.get_required<fw::actor_client_t> (), evidence, local_spot, 1));
+    int joined_instance = 0;
+    {
+        std::lock_guard lock (evidence.mutex);
+        joined_instance = evidence.instances;
+    }
+    ASSERT_EQ (client.view (), std::optional<int>{joined_instance})
+      << "joined Actor did not reply on the existing Session";
+    if (GetParam ()) {
+        entry_options.mesh (mesh_name).placement_weight (entry_weight);
+    } else {
+        configure (target, "join-third", store, relocations, source_follow_duration, 0, true);
+        target.start ();
+        ASSERT_TRUE (ready (target));
+    }
+    auto relocation = source.app.relocate (
+      {.mode = fw::relocation_mode_t::planned_maintenance, .deadline = wait_budget});
+    auto &runtime = services.get_required<fw::framework_runtime_t> ();
+    const auto readiness_deadline = std::chrono::steady_clock::now () + wait_budget;
+    while (runtime.status ().state != fw::framework_runtime_state_t::relocating
+           && std::chrono::steady_clock::now () < readiness_deadline)
+        std::this_thread::yield ();
+    ASSERT_EQ (runtime.status ().state, fw::framework_runtime_state_t::relocating);
+    auto route = source.app.advanced ().zlink ().route_client (
+      services.get_required<fw::serializer_registry_t> ());
+    ASSERT_TRUE (route.send_to_spot (fw::spot_id_t (local_spot), ready_t{}).async ().result ());
+    const auto result = relocation.result_for (wait_budget);
+    ASSERT_TRUE (result.has_value ());
+    ASSERT_TRUE (*result);
+    ASSERT_EQ (result->value ().outcome, fw::relocation_outcome_t::relocated)
+      << "reason=" << static_cast<int> (result->value ().reason);
+    int relocated_instance = 0;
+    {
+        std::lock_guard lock (evidence.mutex);
+        relocated_instance = evidence.instances;
+    }
+    ASSERT_GT (relocated_instance, joined_instance);
+    EXPECT_EQ (client.view (), std::optional<int>{relocated_instance})
+      << "relocated Actor did not reply on the existing Session";
 }
 
 INSTANTIATE_TEST_SUITE_P (FreshAndPreviousOwner, ActorHostRelocation, testing::Bool ());
@@ -1114,6 +1351,7 @@ class ActorDeferredJoinFailure : public testing::TestWithParam<std::tuple<bool, 
 TEST_P (ActorDeferredJoinFailure, FailureAndRejectionPreserveSourceActor)
 {
     observations_t evidence;
+    evidence.completion_to_hold = 1;
     evidence.fail_remote_factory =
       std::string_view (std::get<1> (GetParam ())) == factory_failed_spot;
     observations = &evidence;
@@ -1122,6 +1360,21 @@ TEST_P (ActorDeferredJoinFailure, FailureAndRejectionPreserveSourceActor)
     host_t first, second;
     release_callbacks_t release{evidence};
     configure (first, first_rid, store, relocations);
+    fw::detail::dispatch_options_access_t::set_observer_for_tests (
+      first.app.add_zlink_framework ().configure_dispatch (),
+      [&evidence] (const fw::message_flow_event_t &event) {
+          if (event.packet_name != probe_t::packet_name)
+              return;
+          const bool parked = event.detail_stage == "relay_actor_packet.try_append_backlog"
+                              && event.outcome == fw::message_flow_outcome_t::admitted;
+          if (!parked && event.detail_stage != "invoke_erased.post_serial")
+              return;
+          {
+              std::lock_guard lock (evidence.mutex);
+              evidence.probe_admission_observed = true;
+          }
+          evidence.changed.notify_all ();
+      });
     first.start ();
     ASSERT_TRUE (ready (first));
     auto services = first.app.advanced ().services ().build_provider ();
@@ -1174,10 +1427,20 @@ TEST_P (ActorDeferredJoinFailure, FailureAndRejectionPreserveSourceActor)
                                              : fw::framework_error_kind_t::internal_failure);
         }
     }
-    auto probe = client.request (fw::actor_id_t (actor_id), probe_t{17})
-                   .timeout (wait_budget)
-                   .async<probe_t> ()
-                   .result ();
+    // Keep completion's barrier active until the public probe reaches source
+    // admission. Existing Detailed flow events fix the order without a sleep.
+    auto pending_probe = client.request (fw::actor_id_t (actor_id), probe_t{17})
+                           .timeout (wait_budget)
+                           .async<probe_t> ();
+    bool reached_admission;
+    {
+        std::unique_lock lock (evidence.mutex);
+        reached_admission = evidence.changed.wait_for (
+          lock, wait_budget, [&] { return evidence.probe_admission_observed; });
+    }
+    evidence.release_completion.complete (fw::result_t<void>::success ());
+    ASSERT_TRUE (reached_admission);
+    auto probe = pending_probe.result ();
     ASSERT_TRUE (probe) << "kind=" << static_cast<int> (probe.error_kind ())
                         << " message=" << (probe.error () ? probe.error ()->what () : "");
     EXPECT_EQ (probe.value ().value, 17);

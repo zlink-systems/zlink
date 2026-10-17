@@ -13,6 +13,7 @@ import systems.zlink.framework.monitoring.*;
 import systems.zlink.framework.runtime.InMemoryRelocationStore;
 import systems.zlink.framework.runtime.actors.ZLinkSessionActorsRuntime;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
+import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
@@ -293,9 +294,15 @@ final class ZLinkRelocationObservationPublicTest {
     void existingObserverReceivesSourceQuiescenceAfterRelocated() throws Exception {
         var locations = new ZLinkInMemoryLocationStore();
         var relocations = new InMemoryRelocationStore();
-        try (var source =
-                ZLinkFrameworkRuntimeTestAccess.start(
-                        options("source", locations, relocations, null))) {
+        var sourceOptions = options("source", locations, relocations, null);
+        try (var source = ZLinkFrameworkRuntimeTestAccess.start(sourceOptions);
+                var heldPermit =
+                        sourceOptions
+                                .registration()
+                                .applicationJobQueue()
+                                .acquire(ZLinkApplicationJobQueue.Origin.REMOTE)
+                                .toCompletableFuture()
+                                .get(WAIT.toSeconds(), TimeUnit.SECONDS)) {
             source.spotManager()
                     .getOrCreate("room", "room")
                     .submit()
@@ -352,11 +359,31 @@ final class ZLinkRelocationObservationPublicTest {
                 assertTrue(
                         after.sequence() > before.sequence(),
                         "quiescence publishes a new Sequence");
-                var queried = source.status();
-                assertTrue(queried.safeToShutdown());
-                assertTrue(queried.sequence() >= after.sequence());
-                assertEquals(
-                        queried, source.status(), "unchanged queries reuse the published status");
+                assertTrue(after.capacity().applicationJobQueue().reservedSupplyPermits() > 0);
+                assertTrue(after.capacity().applicationJobQueue().permitsInUse() > 0);
+                // SafeToShutdown covers relocation obligations, not application supply permits.
+                heldPermit.close();
+                try (var released =
+                        observe(
+                                source.observe(),
+                                s ->
+                                        s.sequence() > after.sequence()
+                                                && s.capacity().applicationJobQueue().permitsInUse()
+                                                        == 0
+                                                && s.capacity()
+                                                                .applicationJobQueue()
+                                                                .reservedSupplyPermits()
+                                                        == 0)) {
+                    var drained = released.result.get(WAIT.toSeconds(), TimeUnit.SECONDS);
+                    assertEquals(ZLinkFrameworkRuntimeState.RELOCATED, drained.state());
+                    assertTrue(drained.safeToShutdown());
+                    var queried = source.status();
+                    assertTrue(queried.safeToShutdown());
+                    assertTrue(queried.sequence() >= drained.sequence());
+                    var unchanged = source.status();
+                    assertEquals(queried.sequence(), unchanged.sequence());
+                    assertSame(queried, unchanged, "unchanged queries reuse the published status");
+                }
             }
         }
     }

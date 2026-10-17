@@ -5,6 +5,7 @@ import systems.zlink.framework.runtime.internal.ZLinkCompletionBridge;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext;
 import systems.zlink.framework.runtime.internal.relocation.ZLinkRetainedSerialQueueCommit;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceCompletionDispatcher;
 import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorOrigin;
 
 import java.lang.invoke.MethodHandles;
@@ -35,6 +36,7 @@ import java.util.function.Supplier;
  */
 public final class ZLinkSerialExecutionQueue {
     private static final VarHandle OUTSTANDING;
+    private static final VarHandle YIELD_ADMITTED;
 
     static {
         try {
@@ -42,6 +44,9 @@ public final class ZLinkSerialExecutionQueue {
                     MethodHandles.lookup()
                             .findVarHandle(
                                     ZLinkSerialExecutionQueue.class, "outstanding", long.class);
+            YIELD_ADMITTED =
+                    MethodHandles.lookup()
+                            .findVarHandle(Entry.class, "yieldAdmitted", boolean.class);
         } catch (ReflectiveOperationException failure) {
             throw new ExceptionInInitializerError(failure);
         }
@@ -52,12 +57,10 @@ public final class ZLinkSerialExecutionQueue {
     private static final ThreadLocal<ZLinkSerialExecutionQueue> CURRENT = new ThreadLocal<>();
     private static final ThreadLocal<CompletableFuture<Void>> CURRENT_GATE = new ThreadLocal<>();
     private static final ThreadLocal<Boolean> CURRENT_RELEASE_DEFERRED = new ThreadLocal<>();
-    // A queue never runs a drain on its submitter's stack.  This is shared by
-    // every owner; it is deliberately not an executor per Spot, Actor, or
-    // session.
+    // Arbitrary executors may block or execute inline; worker services already
+    // provide the asynchronous boundary. Compatibility dispatch is process-wide.
     private static final ExecutorService DRAIN_EXECUTOR =
             Executors.newVirtualThreadPerTaskExecutor();
-
     private final Executor executor;
     private final ExecutorService ownedExecutor;
     private final ZLinkExecutionLanePolicy lanePolicy;
@@ -223,18 +226,7 @@ public final class ZLinkSerialExecutionQueue {
         }
 
         private void schedule() {
-            try {
-                DRAIN_EXECUTOR.execute(
-                        () -> {
-                            try {
-                                spot.executor.execute(this::drain);
-                            } catch (RuntimeException rejected) {
-                                rejectReady(rejected);
-                            }
-                        });
-            } catch (RuntimeException rejected) {
-                rejectReady(rejected);
-            }
+            spot.submitWorker(this::drain, this::rejectReady);
         }
 
         private void rejectReady(RuntimeException failure) {
@@ -374,7 +366,7 @@ public final class ZLinkSerialExecutionQueue {
             entry.result.whenComplete(
                     (ignored, failure) -> sharedSpotGate.post(() -> finish(entry, false)));
         }
-        entry.ownerMailbox = this;
+        entry.ownerMailbox = entry.origin == null ? this : entry.origin.ownerMailbox;
         CompletionStage<Void> turn = gateOwner.invokeInline(entry);
         if (this == gateOwner) {
             return turn.whenComplete(
@@ -534,30 +526,8 @@ public final class ZLinkSerialExecutionQueue {
 
         @Override
         public CompletionStage<Void> get() {
-            CompletionStage<Void> execution = operation.get();
-            if (sharedSpotGate == null) {
-                return execution.whenComplete((ignored, failure) -> rewritePending(failure));
-            }
-            CompletableFuture<Void> settled = new CompletableFuture<>();
-            execution.whenComplete(
-                    (ignored, failure) ->
-                            sharedSpotGate
-                                    .controlAsync(
-                                            () -> {
-                                                rewritePending(failure);
-                                                return null;
-                                            })
-                                    .whenComplete(
-                                            (done, controlFailure) -> {
-                                                if (controlFailure != null) {
-                                                    settled.completeExceptionally(controlFailure);
-                                                } else if (failure != null) {
-                                                    settled.completeExceptionally(failure);
-                                                } else {
-                                                    settled.complete(null);
-                                                }
-                                            }));
-            return settled;
+            return manageCurrent(operation.get())
+                    .whenComplete((ignored, failure) -> rewritePending(failure));
         }
 
         private void rewritePending(Throwable failure) {
@@ -811,8 +781,6 @@ public final class ZLinkSerialExecutionQueue {
     public boolean isCurrent() {
         SerialTurn turn = currentTurn();
         return turn != null
-                && turn.gate() != null
-                && !turn.gate().isDone()
                 && (turn.queue() == this
                         || turn.entry() != null && turn.entry().ownerMailbox == this);
     }
@@ -1210,20 +1178,17 @@ public final class ZLinkSerialExecutionQueue {
             if (suspendedLifecycle.operation instanceof LifecycleTransition) {
                 return null;
             }
-            if (applicationContinuation != null) {
+            if (applicationContinuation != null || !applicationPending.isEmpty()) {
                 lifecycleStreak = 0;
-                continuationPending.remove(applicationContinuation);
-                return applicationContinuation;
-            }
-            if (!applicationPending.isEmpty()) {
-                lifecycleStreak = 0;
-                return applicationPending.removeFirst();
+                return takeApplication(applicationContinuation);
             }
             return null;
         }
         boolean lifecycleReady = !lifecyclePending.isEmpty();
-        boolean applicationReady = !applicationPending.isEmpty();
         boolean continuationReady = !continuationPending.isEmpty();
+        boolean applicationReady =
+                !applicationPending.isEmpty()
+                        || continuationReady && !isLifecycleTurn(continuationPending.peekFirst());
         if (lifecycleReady
                 && (lifecyclePending.peekFirst().relocationBoundary != null
                         || lifecyclePending.peekFirst().operation instanceof LifecycleTransition)) {
@@ -1237,16 +1202,27 @@ public final class ZLinkSerialExecutionQueue {
             lifecycleStreak++;
             return lifecyclePending.removeFirst();
         }
-        if (continuationReady) {
+        if (continuationReady && isLifecycleTurn(continuationPending.peekFirst())) {
             lifecycleStreak = 0;
             return continuationPending.removeFirst();
         }
-        if (applicationReady) {
+        if (continuationReady || applicationReady) {
             lifecycleStreak = 0;
-            return applicationPending.removeFirst();
+            return takeApplication(continuationPending.peekFirst());
         }
         lifecycleStreak = 0;
         return lifecyclePending.removeFirst();
+    }
+
+    /** Selects the oldest eligible application record, including a resumed application turn. */
+    private Entry takeApplication(Entry continuation) {
+        Entry application = applicationPending.peekFirst();
+        if (continuation != null
+                && (application == null || continuation.sequence < application.sequence)) {
+            continuationPending.remove(continuation);
+            return continuation;
+        }
+        return applicationPending.removeFirst();
     }
 
     private boolean requestDrainLocked() {
@@ -1301,34 +1277,47 @@ public final class ZLinkSerialExecutionQueue {
             sharedSpotGate.post(this);
             return;
         }
-        try {
-            DRAIN_EXECUTOR.execute(this::drainScheduled);
-        } catch (RuntimeException rejected) {
-            throw new IllegalStateException("serial queue drain executor rejected", rejected);
+        submitWorker(
+                () -> {
+                    Entry next;
+                    synchronized (this) {
+                        drainScheduled = false;
+                        next = takeNextForDrainLocked();
+                    }
+                    if (next != null) drainBatch(next);
+                },
+                this::rejectDrain);
+    }
+
+    private void submitWorker(Runnable work, Consumer<RuntimeException> reject) {
+        Runnable submit =
+                () -> {
+                    try {
+                        executor.execute(work);
+                    } catch (RuntimeException rejected) {
+                        reject.accept(rejected);
+                    }
+                };
+        if (executor instanceof ExecutorService) {
+            submit.run();
+        } else {
+            try {
+                DRAIN_EXECUTOR.execute(submit);
+            } catch (RuntimeException rejected) {
+                reject.accept(rejected);
+            }
         }
     }
 
-    private void drainScheduled() {
-        try {
-            executor.execute(
-                    () -> {
-                        Entry entry;
-                        synchronized (this) {
-                            drainScheduled = false;
-                            entry = takeNextForDrainLocked();
-                        }
-                        if (entry != null) drainBatch(entry);
-                    });
-        } catch (RuntimeException rejected) {
-            Entry entry;
-            synchronized (this) {
-                drainScheduled = false;
-                entry = takeNextForDrainLocked();
-            }
-            if (entry != null) {
-                entry.result.completeExceptionally(rejected);
-                finish(entry, false);
-            }
+    private void rejectDrain(RuntimeException rejected) {
+        Entry entry;
+        synchronized (this) {
+            drainScheduled = false;
+            entry = takeNextForDrainLocked();
+        }
+        if (entry != null) {
+            entry.result.completeExceptionally(rejected);
+            finish(entry, false);
         }
     }
 
@@ -1621,15 +1610,13 @@ public final class ZLinkSerialExecutionQueue {
                 }
             }
         }
-        return sealNowLocked();
+        return sealNowLocked(null);
     }
 
     /**
-     * Binds the exact turn that is active on the calling thread so a later asynchronous
-     * continuation can seal this queue underneath it. A deferred Actor Join runs its complete
-     * cross-node relocation while its mailbox barrier stays the active turn; reserving another
-     * lifecycle boundary from inside that operation would queue the boundary behind the barrier
-     * itself and never reach it.
+     * Binds the current logical turn so infrastructure can seal this queue while the turn has
+     * yielded. A deferred Actor Join retains its lifecycle FIFO slot until its outcome is settled;
+     * reserving another lifecycle boundary inside that operation would wait behind itself.
      */
     public synchronized Optional<ActiveTurnSealHandle> captureActiveTurnSealHandle() {
         if (!isCurrent() || active == null) {
@@ -1654,7 +1641,7 @@ public final class ZLinkSerialExecutionQueue {
         return current != null && current.timerOwner == owner;
     }
 
-    /** Seals this queue while the captured turn is still the active turn. */
+    /** Seals this queue while the captured logical turn still owns its lifecycle operation. */
     public CompletionStage<Optional<RelocationSeal>> trySealRelocation(
             ActiveTurnSealHandle handle) {
         return underSharedSpotGateAsync(() -> trySealRelocationDirect(handle));
@@ -1665,10 +1652,14 @@ public final class ZLinkSerialExecutionQueue {
         if (relocated || relocation != null) {
             return Optional.empty();
         }
-        if (handle == null || handle.owner != this || handle.entry != active) {
+        if (handle == null || handle.owner != this || handle.entry.turnOrigin().result.isDone()) {
             return Optional.empty();
         }
-        return sealNowLocked();
+        Entry owner = handle.entry.turnOrigin();
+        if (active == null ? suspendedLifecycle != owner : active.turnOrigin() != owner) {
+            return Optional.empty();
+        }
+        return sealNowLocked(owner);
     }
 
     public static final class ActiveTurnSealHandle {
@@ -1681,12 +1672,14 @@ public final class ZLinkSerialExecutionQueue {
         }
     }
 
-    private Optional<RelocationSeal> sealNowLocked() {
+    private Optional<RelocationSeal> sealNowLocked(Entry owner) {
         // Admission and the publication tail are cut by this producer boundary.
         // The shared gate owns the detached prefix and its capture.
         materializePublished();
-        if (suspendedContinuations() != 0
-                || !continuationPending.isEmpty()
+        if (suspendedApplicationContinuations != 0
+                || (suspendedLifecycleContinuations != 0
+                        && (owner == null || owner.lane != Lane.LIFECYCLE))
+                || continuationPending.stream().anyMatch(entry -> entry.turnOrigin() != owner)
                 || applicationPending.stream().anyMatch(entry -> !entry.hasRelocationRecord())) {
             return Optional.empty();
         }
@@ -1857,15 +1850,6 @@ public final class ZLinkSerialExecutionQueue {
                         ZLinkApplicationJobContext.enterQueued(entry.applicationJobOwnership)) {
             CompletionStage<Void> execution =
                     Objects.requireNonNull(entry.operation.get(), "operation result");
-            // A relocation boundary is itself the turn a relocation seal owns; it stays active
-            // until released instead of returning the turn.
-            if (lanePolicy instanceof ZLinkExecutionLanePolicy.Spot
-                    && entry.lane == Lane.LIFECYCLE
-                    && entry.relocationBoundary == null
-                    && !execution.toCompletableFuture().isDone()
-                    && !gate.isDone()) {
-                execution = yieldCurrent(execution);
-            }
             execution.whenComplete(
                     (value, error) -> {
                         if (error != null) {
@@ -1909,7 +1893,21 @@ public final class ZLinkSerialExecutionQueue {
         return CompletableFuture.allOf(gate, invocationReturned);
     }
 
+    /**
+     * Returns the caller's stage over a Framework-owned stage: inside a serial turn it resumes on
+     * that lane; with no lane to return to it resumes in a completion dispatcher turn (spec 01
+     * §11).
+     */
     public static <T> CompletionStage<T> manageCurrent(CompletionStage<T> stage) {
+        CompletionStage<T> managed = manageCurrentInTurn(stage);
+        return managed == stage ? ZLinkServiceCompletionDispatcher.deliver(stage) : managed;
+    }
+
+    /**
+     * Captures only an existing lane. Request admission uses this before exposing its lazily
+     * observed outside-caller view, so an unobserved admission needs no delivery work item.
+     */
+    public static <T> CompletionStage<T> manageCurrentInTurn(CompletionStage<T> stage) {
         Objects.requireNonNull(stage, "stage");
         SerialTurn turn = currentTurn();
         ZLinkSerialExecutionQueue queue = turn == null ? null : turn.queue;
@@ -2069,9 +2067,16 @@ public final class ZLinkSerialExecutionQueue {
     public static <T> CompletionStage<T> yieldCurrent(CompletionStage<T> stage) {
         Objects.requireNonNull(stage, "stage");
         SerialTurn turn = currentTurn();
-        ZLinkSerialExecutionQueue queue = turn == null ? null : turn.queue;
-        CompletableFuture<Void> gate = turn == null ? null : turn.gate;
-        if (queue == null || gate == null || stage.toCompletableFuture().isDone()) {
+        if (turn == null) {
+            return stage;
+        }
+        ZLinkSerialExecutionQueue queue = turn.queue;
+        CompletableFuture<Void> gate = turn.gate;
+        // An independent ActorDelivery turn owns the Actor mailbox claim, not a shared
+        // Spot gate. Keep subsequent Actor records behind the lifecycle result (§7);
+        // infrastructure progresses independently of this application claim (§13).
+        if (queue.lanePolicy instanceof ZLinkExecutionLanePolicy.ActorDelivery
+                && isLifecycleTurn(turn.entry)) {
             return stage;
         }
         ZLinkFlowContext.State flow = ZLinkFlowContext.current();
@@ -2125,7 +2130,15 @@ public final class ZLinkSerialExecutionQueue {
                                                     managed.complete(value);
                                                 }
                                             }
-                                            return CompletableFuture.completedFuture(null);
+                                            // Execution gate §2·§7: infrastructure can resume into
+                                            // a timer or lifecycle callback. Its ordinary awaits
+                                            // retain the gate until completion or another Yield.
+                                            return turn.entry != null
+                                                    ? turn.entry
+                                                            .turnOrigin()
+                                                            .result
+                                                            .handle((ignored, failure) -> null)
+                                                    : CompletableFuture.completedFuture(null);
                                         });
                         continuation.whenComplete(
                                 (ignored, continuationFailure) -> {
@@ -2191,7 +2204,7 @@ public final class ZLinkSerialExecutionQueue {
                             true);
             continuation.origin = origin == null ? null : origin.turnOrigin();
             incrementOutstanding();
-            if (relocation != null) {
+            if (relocation != null && !lifecycleContinuation) {
                 holdRelocationEntry(continuation);
             } else {
                 if (sharedSpotGate == null) continuationPending.addLast(continuation);
@@ -2348,7 +2361,9 @@ public final class ZLinkSerialExecutionQueue {
         } else {
             turn = propagated instanceof SerialTurnCarrier carrier ? carrier.turn : null;
         }
-        return turn != null && turn.entry != null && turn.entry.turnOrigin().result.isDone()
+        return turn != null
+                        && (turn.gate.isDone()
+                                || turn.entry != null && turn.entry.turnOrigin().result.isDone())
                 ? null
                 : turn;
     }
@@ -2369,8 +2384,33 @@ public final class ZLinkSerialExecutionQueue {
     private record SerialTurn(
             ZLinkSerialExecutionQueue queue, CompletableFuture<Void> gate, Entry entry) {}
 
-    private static final class SerialTurnCarrier {
+    private static final class SerialTurnCarrier
+            implements systems.zlink.framework.runtime.internal.handlers
+                    .ZLinkSuspendInvocationContext.YieldAdmission {
         private volatile SerialTurn turn;
+
+        @Override
+        public void requireYieldAllowed(String operation) {
+            var application =
+                    systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationContext
+                            .currentApplicationExecution();
+            SerialTurn current = currentTurn();
+            if (application == null
+                    || !application.yieldAllowed()
+                    || current == null
+                    || current != turn
+                    || current.entry == null) {
+                throw new systems.zlink.framework.errors.ZLinkFrameworkException(
+                        ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                        operation
+                                + " yield requires an active SpotWide User Spot or Instance Spot application turn");
+            }
+            if (!YIELD_ADMITTED.compareAndSet(current.entry, false, true)) {
+                throw new systems.zlink.framework.errors.ZLinkFrameworkException(
+                        ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                        operation + " yield is already accepted in this execution turn");
+            }
+        }
 
         private SerialTurnCarrier(SerialTurn turn) {
             this.turn = turn;
@@ -2570,6 +2610,7 @@ public final class ZLinkSerialExecutionQueue {
 
     private static final class Entry {
         private final long sequence;
+        private volatile boolean yieldAdmitted;
         private byte[] record;
         private final Supplier<byte[]> lazyRecord;
         private Supplier<CompletionStage<Void>> operation;

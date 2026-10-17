@@ -40,7 +40,10 @@
         <Compile Include="AssemblyInfo.cs"/>
         <Compile Include="Runtime/MeshLivenessPhysicalCloseTests.cs"/>
         <Compile Include="Runtime/RequestAdmissionStageTests.cs"/>
+        <Compile Include="Runtime/SpotRequestSourceDiscoveryTests.cs"/>
         <Compile Include="Runtime/HostRelocationSealStageTests.cs"/>
+        <Compile Include="Runtime/StartupStoreStallTests.cs"/>
+        <Compile Include="Runtime/SpotWideMemberSealCaptureTests.cs"/>
         <Compile Include="TestCompletionPollerDriver.cs"/>
         <Compile Include="../../cross-language/Zlink.Framework.TestHost/TestHostMessageFlowListener.cs" Link="Support/TestHostMessageFlowListener.cs"/>
         <Compile Include="Configuration/Registration/Channels.cs"/>
@@ -175,7 +178,9 @@
         <Compile Include="Runtime/MeshCompletionTableConvergenceTests.cs"/>
         <Compile Include="Runtime/CompletionDispatcherIsolationTests.cs"/>
         <Compile Include="Runtime/MeshNodeRouteDispatcherTests.cs"/>
+        <Compile Include="Runtime/MeshNodeRouteBatchAdmissionTests.cs"/>
         <Compile Include="Runtime/MeshNodeShutdownSealTests.cs"/>
+        <Compile Include="Runtime/MeshNodeLifecycleStateTests.cs"/>
         <Compile Include="Runtime/MeshNodeHelloSubmissionTests.cs"/>
         <Compile Include="Runtime/PublicContractSnapshotTests.cs"/>
         <Compile Include="Runtime/SerialExecutionQueueBenchmarkTests.cs"/>

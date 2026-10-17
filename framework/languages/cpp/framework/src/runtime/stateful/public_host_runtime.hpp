@@ -714,7 +714,8 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
                                          const std::vector<std::uint8_t> &target_routing_id,
                                          std::uint64_t target_generation,
                                          std::uint64_t target_lease_generation,
-                                         std::chrono::milliseconds window);
+                                         std::chrono::milliseconds window,
+                                         std::optional<std::uint64_t> target_authority_generation);
     void configure_session_relocation_store (
       std::shared_ptr<stateful::relocation_store_port_t> relocations);
     void configure_message_follow_handler (
@@ -1023,8 +1024,6 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     task_t<void> submit_relocation_session_routes (relocation_attempt_key_t key);
     void start_relocation_session_route_submission (relocation_attempt_key_t key);
     void flush_pending_session_relocation_seals ();
-    bool relocation_target_authority_committed_strict (
-      const relocation_target_attempt_t &attempt) const noexcept;
     /* Target authority settlement (01 §10): the original NewOwner CAS commits,
      * is resubmitted (retry) while the Store names the source at the expected
      * StoreVersion and the target lease is live, or ends the staging

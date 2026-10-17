@@ -475,7 +475,7 @@ which one is authoritative.
 | `entrySpotId` | The Entry Spot ID for an Object Server lifecycle. `null` unless the role is `Server`. |
 | `channelWeights` | Selection weight per ClientServer ChannelName. Key is the ChannelName; value is a `0..10000` integer. |
 | `applicationVersion` | The application deployment sequence number. |
-| `objectCapabilities` | The list of registered object-kind placement capabilities. Each entry has `objectKind` (`actor \| userSpot \| instanceSpot`), `stableType`, `policy` (`unspecified \| disabled \| recreate \| snapshot`), `hasSnapshotAdapter` (boolean), and `limit` (integer, `0` means unlimited). At most 1,024 entries. |
+| `objectCapabilities` | The list of registered object-kind placement capabilities. Each entry has `objectKind` (`actor \| userSpot \| instanceSpot`), `stableType`, `policy` (`unspecified \| disabled \| recreate \| snapshot`), `hasSnapshotAdapter` (boolean), `limit` (integer, `0` means unlimited), and `entryAccepted` (boolean). `entryAccepted` is `true` only when `objectKind` is `actor` and an Entry Spot type registered on that node accepts that Actor stable type; new-Actor candidate selection ([Actor model §6.3](../03-spot-actor/04-actor-model.en.md#63-selecting-mesh-and-placement-target)) uses it. At most 1,024 entries. |
 | `objectRole` | One of `none \| client \| server`. |
 | `placementWeight` | `0..10000`, default 100 (§4). |
 | `capacity` | The "descriptor's count is a copy for operators to check status" projection from §4. `actors` and `spots` are each `{active, reserved, limit}`. `spotTypes` is an array of `{objectKind, stableType, active, reserved, limit}`. Entry Spot isn't included (§4). |
@@ -792,10 +792,14 @@ request started, the Framework re-reads the same key to confirm the result, as i
 and that confirmation also stays within the same renew timeout. A host that has not
 confirmed its lease by the renew timeout finishes startup as a host without a deadline:
 it blocks every target above, keeps claiming at each renew interval, and once it holds
-the lease computes the deadline and publishes descriptors as after a first renewal. Such a
-host can't take new application work, so its host state is
-[`Preparing`](05-host-relocation-flow.en.md#3-host-state-and-completion-results) until it holds
-the lease and publishes descriptors, and `Serving` after that. The
+the lease computes the deadline and publishes descriptors as after a first renewal. A confirmed
+descriptor publication is required for `Serving`: the host stays
+[`Preparing`](05-host-relocation-flow.en.md#3-host-state-and-completion-results) until it confirms
+the publication, and its move to `Serving` follows the readiness conditions in that section. If,
+after the lease is held, a timeout or provider error leaves the publication result unknown, the
+host confirms it again as in §10; if it still can't confirm it, the host finishes startup as
+`Preparing` and retries the publication at each renew interval. A definite rejection because
+another owner holds the row is a startup error. The
 claim results `Conflict` and `GenerationExhausted` are startup errors. If the caller
 cancels startup, startup ends as cancelled; this rule does not turn it into a success.
 A claim that already started is confirmed by re-reading the same key as in §10; a
@@ -977,7 +981,8 @@ sequenceDiagram
 ```
 
 The target must be in `Serving` state, have registered the requested stable type, and
-have a valid owner lease and remaining capacity. The Framework picks one candidate with
+have a valid owner lease and remaining capacity. [Actor model §6.3](../03-spot-actor/04-actor-model.en.md#63-selecting-mesh-and-placement-target)
+owns the Entry Spot condition for creating a new Actor. The Framework picks one candidate with
 weight greater than 0.
 
 The Location Store's `Reserve` records a `Creating` record together with the capacity to
@@ -1604,6 +1609,9 @@ If cancellation happens before starting a provider request, the Store may not be
 at all. If cancellation, timeout, or a provider error happens after starting the request,
 whether the Store changed is unknown. In this case the Framework re-reads the same key
 and expected `StoreVersion` to confirm the result, and only retries if needed.
+When a MeshNode descriptor write is sent again and the stored record differs from the sent
+descriptor only in its update time (`updatedAtEpochMs`), the earlier write already took effect, so the
+write ends as `Stored` regardless of its intent (`NewClaim` or `Renew`).
 
 A Relocation Store write must support being read or stored again using the same reference
 the Framework fixed in advance. That recheck has no separate time limit and runs within the deadline of the operation that started the write. Confirming that the same bytes are stored ends it as a success. When the re-read finds nothing, the same bytes are stored again under the same reference. When the put returns `Conflict` or the re-read finds different bytes, it is treated as the same collision and the store starts again with a new reference. This proceeds within that operation's deadline, with no retry cap and no separate time limit. A payload the Location Store already points to that is missing or fails its checksum follows the `DataLost` handling below, not this rule. Payload not pointed to by the Location Store is deleted
@@ -1680,6 +1688,9 @@ store record golden fixture. Each item maps to one test.
   startup succeeds and the four targets above are blocked.
 - A host that finished startup without a lease claims at each renew interval and
   publishes descriptors only after the lease is held.
+- A host that holds the lease but can't confirm its descriptor publication succeeds in
+  startup, stays `Preparing`, and retries the publication at each renew interval. A definite
+  rejection because another owner holds the row is a startup error.
 - The claim results `Conflict` and `GenerationExhausted` are startup errors.
 - Cancelling startup ends it as cancelled; an already committed claim is released and
   no heartbeat starts.

@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Systems.Zlink.Stream.Connector;
 using Systems.Zlink.Stream.Connector.Contracts;
 using Systems.Zlink.Stream.Connector.Runtime;
@@ -467,6 +468,319 @@ public sealed class HostRelocationSealStageTests
         }
     }
 
+    // Relocation 04 §4.2, §4.4, §4.6, §7 and §10 (#1877): a member frame that
+    // the source holds after the SpotWide seal reaches the target and runs
+    // there after the target commit. Held before the payload is captured, it
+    // is carried as backlog; held after the payload, it follows through the
+    // Message Follow route from the relocating (Draining but still admitted)
+    // source. Either way the handler pushes through the bound Session with the
+    // committed target binding.
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task Held_member_work_replayed_on_target_pushes_through_bound_session(
+        bool heldAfterPayload,
+        bool holdTargetCommitResponse
+    )
+    {
+        var trace = new RelocationBehaviorTrace();
+        trace.ReleaseSealStageWork.TrySetResult();
+        var holdGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        CommitResponseGateStore? commitStore = null;
+        if (heldAfterPayload)
+            trace.TargetActorRestoreGate = holdGate.Task;
+        else
+            trace.SourceActorCaptureGate = holdGate.Task;
+        await RunBoundMemberRelocationAsync(
+            trace,
+            async context =>
+            {
+                var relocation = context.StartRelocation();
+                // The source capture (or the target restore) waits after the
+                // SpotWide seal, so the source holds member ingress. The
+                // Session owner already holds Session→Actor messages for this
+                // binding and the relocating source admits no new local
+                // operation, so the held frame comes from another node's Actor
+                // client.
+                await trace.WaitAsync(
+                    heldAfterPayload ? "targetStateRestoring" : "sourceStateCapturing"
+                );
+                await context.SendFromSessionNodeAsync("held-work");
+                await context
+                    .Backlog.WaitForBacklogAsync(context.ActorId)
+                    .WaitAsync(TimeSpan.FromSeconds(10));
+                holdGate.TrySetResult();
+                try
+                {
+                    if (commitStore is not null)
+                        await commitStore.Committed.Task.WaitAsync(TimeSpan.FromSeconds(10));
+                    Assert.Equal(
+                        ZLinkFrameworkRelocationOutcome.Relocated,
+                        (await relocation.WaitAsync(TimeSpan.FromSeconds(15))).Outcome
+                    );
+                    if (commitStore is not null)
+                        Assert.DoesNotContain("overlapHandlerStarted", trace.Events);
+                }
+                finally
+                {
+                    commitStore?.Release.TrySetResult();
+                }
+                await trace.WaitAsync("sealStagePushed:held-work@target");
+            },
+            holdTargetCommitResponse
+                ? (inner, actorId, sourceRid) =>
+                    commitStore = new CommitResponseGateStore(inner, actorId, sourceRid)
+                : null
+        );
+    }
+
+    // Relocation 04 §4.1 (#1877): the Session owner seals a member Actor's
+    // binding before the source stops that member's application dispatch.
+    // While a member turn holds the SpotWide source, the source already
+    // captures member ingress; by then a Session→Actor message is held by the
+    // Session owner and reaches the Actor on the target. It never enters the
+    // source handoff backlog through the bound route.
+    [Fact]
+    public async Task Member_session_binding_is_sealed_before_source_dispatch_stops()
+    {
+        var trace = new RelocationBehaviorTrace();
+        await RunBoundMemberRelocationAsync(
+            trace,
+            async context =>
+            {
+                await context.SendFromSessionNodeAsync("hold-turn");
+                await trace.WaitAsync("overlapHandlerStarted");
+                var relocation = context.StartRelocation();
+                var sourceState = context.Source.Runtime.GetOrCreateActorState(context.ActorId);
+                await WaitUntilAsync(() => sourceState.Handoff.CapturesSourceIngress);
+                await context.Connector.Send(new SealStageWork("via-session")).Async();
+                trace.ReleaseSealStageWork.TrySetResult();
+                Assert.Equal(
+                    ZLinkFrameworkRelocationOutcome.Relocated,
+                    (await relocation.WaitAsync(TimeSpan.FromSeconds(15))).Outcome
+                );
+                await trace.WaitAsync("sealStagePushed:via-session@target");
+                Assert.DoesNotContain(
+                    context.Backlog.Lines,
+                    line =>
+                        line.StartsWith(
+                            $"capture_entry actor={context.ActorId} ",
+                            StringComparison.Ordinal
+                        ) && line.Contains(" bound_route=True ", StringComparison.Ordinal)
+                );
+            }
+        );
+    }
+
+    private sealed record BoundMemberRelocationContext(
+        RelocationBehaviorHost Source,
+        IServiceProvider SessionServices,
+        IZlinkStreamConnector Connector,
+        SpotWideMemberSealCaptureTests.HandoffBacklogLoggerProvider Backlog,
+        string ActorId
+    )
+    {
+        internal Task<ZLinkFrameworkRelocationResult> StartRelocation() =>
+            Source
+                .Services.GetRequiredService<IZLinkFrameworkRuntime>()
+                .RelocateAsync(
+                    new ZLinkFrameworkRelocationOptions
+                    {
+                        Mode = ZLinkFrameworkRelocationMode.PlannedMaintenance,
+                        Deadline = TimeSpan.FromSeconds(10),
+                    }
+                )
+                .AsTask();
+
+        internal async Task SendFromSessionNodeAsync(string marker) =>
+            await SessionServices
+                .GetRequiredService<IZLinkActorClient>()
+                .SendToActor(ActorId, new SealStageWork(marker))
+                .Async();
+    }
+
+    // Source, target and a Session node with one Session-bound member Actor of
+    // the SpotWide Spot "zone-2" on the source.
+    private static async Task RunBoundMemberRelocationAsync(
+        RelocationBehaviorTrace trace,
+        Func<BoundMemberRelocationContext, Task> scenario,
+        Func<IZLinkLocationStore, string, RoutingId, IZLinkLocationStore>? targetStore = null
+    )
+    {
+        using var debug = new SealStageDebugCapture();
+        using var flow = Environment.GetEnvironmentVariable(
+            RelocationBehaviorHost.FlowPathEnvironmentVariable
+        )
+            is { } path
+            ? new TestHostMessageFlowListener(path + $".bound-member-{Guid.NewGuid():N}")
+            : null;
+        trace.ReleaseJoinHandler.TrySetResult();
+        trace.ReleaseTargetLifecycle.TrySetResult();
+        trace.ReleaseSourceLeave.TrySetResult();
+        var backlog = new SpotWideMemberSealCaptureTests.HandoffBacklogLoggerProvider();
+        var store = new ZLinkInMemoryProviderLocationStore();
+        var roots = new SynchronizedRelocationStore();
+        await using var source = await RelocationBehaviorHost.StartAsync(
+            "source",
+            trace,
+            store,
+            roots,
+            true,
+            relocateSpots: true,
+            configureServices: services =>
+                services.AddLogging(logging => logging.AddProvider(backlog))
+        );
+        _ = await source
+            .Services.GetRequiredService<IZLinkSpotManager>()
+            .GetOrCreate("zone-2", RelocationBehaviorHost.SpotType)
+            .InMesh(RelocationBehaviorHost.MeshName)
+            .Async();
+        var actorId = $"bound-member-{Guid.NewGuid():N}";
+        _ = await source
+            .Services.GetRequiredService<IZLinkActorManager>()
+            .GetOrCreate(actorId, RelocationBehaviorHost.ActorType)
+            .InMesh(RelocationBehaviorHost.MeshName)
+            .Request(new BehaviorCreate(7))
+            .Async();
+        await using var target = await RelocationBehaviorHost.StartAsync(
+            "target",
+            trace,
+            targetStore?.Invoke(store, actorId, source.LocalNodeRid) ?? store,
+            roots,
+            true,
+            relocateSpots: true
+        );
+        var builder = Host.CreateApplicationBuilder();
+        var handler = new SealStageHandler();
+        builder.Services.AddSingleton(handler);
+        builder.Services.AddZLinkFramework(options =>
+        {
+            options.AddLocationStore(store);
+            options.AddRelocationStore(roots);
+            options.ConfigureLocations().PollingInterval = TimeSpan.FromMilliseconds(10);
+            options
+                .AddRouteMesh(RelocationBehaviorHost.MeshName)
+                .Listen("tcp://127.0.0.1:0")
+                .SetRoutingIdPrefix("aaa-session")
+                .Objects()
+                .Client();
+            options
+                .ConfigureDispatch()
+                .Diagnostics.SetLevel(
+                    flow is null ? ZLinkDiagnosticsLevel.Off : ZLinkDiagnosticsLevel.Detailed
+                );
+            options
+                .AddStreamNode("bound-member-stream")
+                .Bind("tcp://127.0.0.1:0")
+                .EnableActorDispatch()
+                .AddSession<SealStageSession>();
+        });
+        using var session = builder.Build();
+        await session.StartAsync();
+        try
+        {
+            using (var readyDeadline = new CancellationTokenSource(TimeSpan.FromSeconds(5)))
+                await Task.WhenAll(
+                    WaitForReadyPeersAsync(source.Services, 2, readyDeadline.Token),
+                    WaitForReadyPeersAsync(target.Services, 2, readyDeadline.Token),
+                    WaitForReadyPeersAsync(session.Services, 2, readyDeadline.Token)
+                );
+            await using var connector = ZlinkStreamConnectorFactory.Create(
+                new ZlinkStreamConnectorOptions
+                {
+                    Endpoint = new Uri(
+                        session
+                            .Services.GetRequiredService<IZLinkFrameworkRuntime>()
+                            .GetListenerStatus(ZLinkListenerKind.Stream, "bound-member-stream")
+                            .Endpoint!
+                    ),
+                    DispatchMode = ZlinkStreamDispatchMode.Immediate,
+                    Reconnect = new ZlinkStreamReconnectOptions { Enabled = false },
+                    Heartbeat = new ZlinkStreamHeartbeatOptions { Enabled = false },
+                }
+            );
+            await connector.Connect.Async();
+            await connector.Send(new SealStageBind(actorId)).Async();
+            await handler.Bound.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await connector.Request(new BeginBehaviorJoin("zone-2")).Async<BehaviorAck>();
+            await trace.WaitAsync("publicJoinCompleted");
+            await scenario(
+                new BoundMemberRelocationContext(
+                    source,
+                    session.Services,
+                    connector,
+                    backlog,
+                    actorId
+                )
+            );
+            Assert.False(handler.Disconnected.Task.IsCompleted);
+            await connector.Close.Async();
+        }
+        finally
+        {
+            trace.ReleaseSealStageWork.TrySetResult();
+            await session.StopAsync();
+        }
+    }
+
+    // Keep the committed Store state visible to the source while the target
+    // has not received the commit response or refreshed its local authority.
+    private sealed class CommitResponseGateStore(
+        IZLinkLocationStore inner,
+        string actorId,
+        RoutingId sourceRid
+    ) : IZLinkLocationStore
+    {
+        private readonly ZLinkProviderLocationRepository reader = new(inner);
+
+        internal TaskCompletionSource Committed { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource Release { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public ValueTask<ZLinkStoreReadResult> ReadAsync(
+            ZLinkStoreKey key,
+            CancellationToken cancellationToken = default
+        ) => inner.ReadAsync(key, cancellationToken);
+
+        public ValueTask<ZLinkStoreScanResult> ScanAsync(
+            ZLinkStoreScanRequest request,
+            CancellationToken cancellationToken = default
+        ) => inner.ScanAsync(request, cancellationToken);
+
+        public async ValueTask<ZLinkStoreWriteResult> WriteAsync(
+            ZLinkStoreWriteRequest request,
+            CancellationToken cancellationToken = default
+        )
+        {
+            var result = await inner.WriteAsync(request, cancellationToken);
+            if (result is ZLinkStoreWriteResult.Applied && !Release.Task.IsCompleted)
+            {
+                var authority = await reader.ReadAuthorityAsync(
+                    ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorId),
+                    cancellationToken
+                );
+                if (
+                    authority is ZLinkAuthorityReadResult.Found found
+                    && found.Snapshot.Allocation.Descriptor.Rid != sourceRid
+                )
+                {
+                    Committed.TrySetResult();
+                    await Release.Task.WaitAsync(cancellationToken);
+                }
+            }
+            return result;
+        }
+    }
+
+    private static async Task WaitUntilAsync(Func<bool> condition)
+    {
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        while (!condition())
+            await Task.Delay(TimeSpan.FromMilliseconds(5), deadline.Token);
+    }
+
     private static async Task WaitForReadyPeersAsync(
         IServiceProvider services,
         int count,
@@ -506,7 +820,7 @@ internal sealed record SealStageSessionInfo(string SessionId, string ActorId, ul
 
 internal sealed record SealStageWork(string Marker);
 
-internal sealed class SealStagePushHandler(RelocationBehaviorTrace trace)
+internal sealed class SealStagePushHandler(RelocationBehaviorTrace trace, BehaviorNode node)
     : IZLinkSpotActorSendHandler<BehaviorTargetSpot, BehaviorActor, SealStageWork>
 {
     public async ValueTask HandleAsync(
@@ -519,7 +833,16 @@ internal sealed class SealStagePushHandler(RelocationBehaviorTrace trace)
     {
         trace.Record("overlapHandlerStarted");
         await trace.ReleaseSealStageWork.Task.WaitAsync(cancellationToken);
-        await actor.Context.BoundSession.Send(new BehaviorAck(request.Marker)).Async();
+        try
+        {
+            await actor.Context.BoundSession.Send(new BehaviorAck(request.Marker)).Async();
+        }
+        catch (Exception exception)
+        {
+            trace.Record($"sealStagePushFailed:{request.Marker}@{node.Name}:{exception.Message}");
+            throw;
+        }
+        trace.Record($"sealStagePushed:{request.Marker}@{node.Name}");
         if (request.Marker == "after-relocation")
             trace.Record("afterRelocationPush");
     }
@@ -534,7 +857,7 @@ internal sealed class SealStageDebugCapture : IDisposable
     {
         if (Environment.GetEnvironmentVariable("ZLINK_RELOCATION_TEST_FLOW_PATH") is { } path)
         {
-            writer = new StreamWriter(path + ".spot") { AutoFlush = true };
+            writer = new StreamWriter(path + ".spot", append: true) { AutoFlush = true };
             Console.SetError(TextWriter.Synchronized(writer));
         }
     }

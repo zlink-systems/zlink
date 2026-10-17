@@ -1,3 +1,5 @@
+import { ZLinkDescriptorPublicationUnconfirmedError } from './descriptor-publication';
+import { isIndeterminateLocationStoreFailure } from './location-store-failure';
 import { listAllMeshNodeDescriptors } from './location-store-pages';
 import { MILLISECONDS_PER_SECOND } from '../diagnostics/runtime-metrics';
 import { ZLINK_PROVIDER_MAX_PAGE_SIZE } from '../../contracts/Locations/Stores';
@@ -148,7 +150,9 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
   private readonly liveRows: ZLinkLiveRowFilter;
   private readonly leaseTracker: ZLinkOwnerLeaseTracker;
   private readonly ownershipLostHandlers = new Set<(event: ZLinkOwnershipLostEvent) => void>();
-  private readonly ownerLeaseRenewedHandlers = new Set<(renewal: ZLinkOwnerLeaseRenewed) => void>();
+  private readonly ownerLeaseRenewedHandlers = new Set<
+    (renewal: ZLinkOwnerLeaseRenewed, wasOwnerLeaseUsable: boolean) => void
+  >();
   private readonly ownerLeaseRenewalFailedHandlers = new Set<() => void>();
   private heartbeatTimer: unknown;
   private heartbeatRenewal?: Promise<unknown>;
@@ -214,6 +218,19 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
 
   get currentOwnerToken(): ZLinkLocationOwnerToken | undefined {
     return this.ownerToken;
+  }
+
+  /** Location runtime §5: a startup Store request ends within the renew timeout. */
+  async writeDescriptor<T>(
+    action: (signal?: AbortSignal) => Promise<T>,
+    signal?: AbortSignal
+  ): Promise<T> {
+    try {
+      return await withTimeout(action, this.options.ownerLeaseRenewTimeoutMs, signal);
+    } catch (error) {
+      if (!isIndeterminateLocationStoreFailure(error, signal)) throw error;
+      throw new ZLinkDescriptorPublicationUnconfirmedError(error);
+    }
   }
 
   closeOwnerLeaseAdmission(error: unknown): void {
@@ -308,11 +325,15 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
     this.ownershipLostHandlers.delete(handler);
   }
 
-  addOwnerLeaseRenewedHandler(handler: (renewal: ZLinkOwnerLeaseRenewed) => void): void {
+  addOwnerLeaseRenewedHandler(
+    handler: (renewal: ZLinkOwnerLeaseRenewed, wasOwnerLeaseUsable: boolean) => void
+  ): void {
     this.ownerLeaseRenewedHandlers.add(handler);
   }
 
-  removeOwnerLeaseRenewedHandler(handler: (renewal: ZLinkOwnerLeaseRenewed) => void): void {
+  removeOwnerLeaseRenewedHandler(
+    handler: (renewal: ZLinkOwnerLeaseRenewed, wasOwnerLeaseUsable: boolean) => void
+  ): void {
     this.ownerLeaseRenewedHandlers.delete(handler);
   }
 
@@ -453,8 +474,8 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
         result.storeNow
       );
       this.lastError = undefined;
-      if (!wasOwnerLeaseUsable) {
-        for (const handler of this.ownerLeaseRenewedHandlers) handler(result);
+      for (const handler of this.ownerLeaseRenewedHandlers) {
+        handler(result, wasOwnerLeaseUsable);
       }
       return true;
     } catch (error) {
@@ -510,11 +531,14 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
       );
       this.lastError = undefined;
       for (const handler of this.ownerLeaseRenewedHandlers) {
-        handler({
-          kind: 'renewed',
-          leaseExpiresAt: claim.leaseExpiresAt,
-          storeNow: claim.storeNow
-        });
+        handler(
+          {
+            kind: 'renewed',
+            leaseExpiresAt: claim.leaseExpiresAt,
+            storeNow: claim.storeNow
+          },
+          false
+        );
       }
       return true;
     } catch (error) {
@@ -693,7 +717,10 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
       updatedAt: new Date()
     };
     let result = await this.guardWrite(() =>
-      this.stores.locationStore.updateMeshNode(stamped, intent, signal)
+      this.writeDescriptor(
+        (writeSignal) => this.stores.locationStore.updateMeshNode(stamped, intent, writeSignal),
+        signal
+      )
     );
     if (
       intent === ZLinkLocationWriteIntent.Renew &&
@@ -705,7 +732,15 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
       // NewClaim as a bounded fallback. If another owner has recreated the
       // row, NewClaim remains rejected and the caller keeps the conflict.
       result = await this.guardWrite(() =>
-        this.stores.locationStore.updateMeshNode(stamped, ZLinkLocationWriteIntent.NewClaim, signal)
+        this.writeDescriptor(
+          (writeSignal) =>
+            this.stores.locationStore.updateMeshNode(
+              stamped,
+              ZLinkLocationWriteIntent.NewClaim,
+              writeSignal
+            ),
+          signal
+        )
       );
     }
     this.notifyIfStale(

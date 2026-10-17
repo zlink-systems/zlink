@@ -37,8 +37,8 @@ and `samples/` of `zlink-cpp-examples` automates it.
 | Path | Where it stands |
 |---|---|
 | GitHub Release | Downloads and extracts this platform's one framework prebuilt. Core, the C++ binding, the framework libraries and `nlohmann_json` share one prefix |
-| vcpkg overlay port | Refreshed by `sync-recipes` at every release. Outside what this page verifies |
-| Conan recipe | Refreshed by `sync-recipes` at every release. Outside what this page verifies |
+| vcpkg overlay port | Written by `release-check.sh --write framework cpp` on the release branch before the tag. Outside what this page verifies |
+| Conan recipe | Written by `release-check.sh --write framework cpp` on the release branch before the tag. Outside what this page verifies |
 
 The commands of the archive path are in the project's
 [`README.md`](../../../languages/cpp/quickstart/README.md).

@@ -443,6 +443,14 @@ final class ZLinkStandaloneActorRelocationStagingOwnerTest {
         private CompletionStage<Void> discardResult = CompletableFuture.completedFuture(null);
 
         @Override
+        public CompletionStage<Void> enqueueIngress(
+                ZLinkStandaloneActorRelocationStagingOwner.Request request,
+                byte[] acceptedJournalRecord,
+                java.util.function.Supplier<CompletionStage<Void>> turn) {
+            return turn.get();
+        }
+
+        @Override
         public <T> CompletionStage<T> admitApplicationJob(
                 java.util.function.Supplier<CompletionStage<T>> turn) {
             if (rejectAdmissionsRemaining-- > 0) {

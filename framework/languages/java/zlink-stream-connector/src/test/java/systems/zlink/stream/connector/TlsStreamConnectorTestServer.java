@@ -13,7 +13,6 @@ import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
 import io.netty.handler.codec.ByteToMessageDecoder;
 import io.netty.handler.ssl.SslContext;
-import io.netty.handler.ssl.SslContextBuilder;
 
 import java.io.Closeable;
 import java.net.InetSocketAddress;
@@ -35,10 +34,7 @@ final class TlsStreamConnectorTestServer implements Closeable {
     private volatile Channel clientChannel;
 
     TlsStreamConnectorTestServer() throws Exception {
-        SslContext sslContext =
-                SslContextBuilder.forServer(
-                                TlsTestCertificates.certificate(), TlsTestCertificates.privateKey())
-                        .build();
+        SslContext sslContext = TlsTestCertificates.serverContext();
         serverChannel =
                 new ServerBootstrap()
                         .group(boss, worker)

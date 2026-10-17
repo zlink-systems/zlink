@@ -8,6 +8,7 @@ import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.framework.runtime.internal.binding.spot.ActorTransferPrepare;
 import systems.zlink.framework.runtime.internal.binding.spot.ActorTransferToken;
 import systems.zlink.framework.runtime.internal.binding.spot.PrepareActorTransferResult;
+import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry;
 
@@ -22,6 +23,11 @@ import java.util.function.Consumer;
 import java.util.function.Supplier;
 
 public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
+    /** Node-owned JVM source turn; backends without a separate owner use the selector turn. */
+    default ZLinkStateLane sourceTransportLane() {
+        return null;
+    }
+
     RoutingId routingId();
 
     void setRoutingId(RoutingId routingId);
@@ -450,6 +456,14 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
 
     @FunctionalInterface
     interface MessageFollowRelayHandler {
+        /**
+         * An authoritative absence skips local relay setup. Owners with no concurrent existence
+         * read retain the full handler path; true still requires exact admission in handle.
+         */
+        default boolean hasSource(String actorId) {
+            return true;
+        }
+
         boolean handle(
                 RoutingId sourceNodeRid,
                 long sourceNodeGeneration,

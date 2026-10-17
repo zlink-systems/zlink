@@ -433,7 +433,7 @@ record의 cmsgpack `version` member([02 §8](02-location-store-redis.ko.md#8-공
 | `entrySpotId` | Object Server lifecycle의 Entry Spot ID다. `Server` role이 아니면 `null`이다. |
 | `channelWeights` | ClientServer ChannelName마다의 선택 비중이다. Key는 ChannelName, value는 `0..10000` 정수다. |
 | `applicationVersion` | Application 배포 순번이다. |
-| `objectCapabilities` | 등록한 object 종류별 배치 능력 목록이다. 각 원소는 `objectKind`(`actor \| userSpot \| instanceSpot`), `stableType`, `policy`(`unspecified \| disabled \| recreate \| snapshot`), `hasSnapshotAdapter`(boolean)와 `limit`(정수, `0`은 무제한)을 포함한다. 최대 1,024개다. |
+| `objectCapabilities` | 등록한 object 종류별 배치 능력 목록이다. 각 원소는 `objectKind`(`actor \| userSpot \| instanceSpot`), `stableType`, `policy`(`unspecified \| disabled \| recreate \| snapshot`), `hasSnapshotAdapter`(boolean), `limit`(정수, `0`은 무제한)와 `entryAccepted`(boolean)를 포함한다. `entryAccepted`는 `objectKind`가 `actor`이고 그 node에 등록한 Entry Spot type이 그 Actor stable type을 받을 때만 `true`이며, 새 Actor 생성 후보 판정([Actor model §6.3](../03-spot-actor/04-actor-model.ko.md#63-mesh와-placement-target-선택))에 쓴다. 최대 1,024개다. |
 | `objectRole` | `none \| client \| server` 중 하나다. |
 | `placementWeight` | `0..10000`, 기본값 100이다(§4). |
 | `capacity` | §4의 "Descriptor의 count는 운영자가 상태를 확인하기 위한 복사본" 투영이다. `actors`와 `spots`는 각각 `{active, reserved, limit}`이다. `spotTypes`는 `{objectKind, stableType, active, reserved, limit}` 배열이다. Entry Spot은 포함하지 않는다(§4). |
@@ -638,7 +638,7 @@ lease read에서 얻은 만료 시각이 지난 descriptor는 새 target 선택�
 select-one의 후보 갱신도 여기에 포함한다.
 
 Object Server descriptor에는 `Server` role, node-wide placement weight, node별 Actor·Spot
-count와 limit, 지원하는 Spot stable type과 Entry Spot ID가 있다.
+count와 limit, 지원하는 Spot stable type, Entry Spot ID가 있다.
 
 여러 target 후보에 새 object를 배정할 상대 비중을
 [weight](../00-foundation/02-glossary.ko.md#weight)라고 한다. 값이 클수록 다른 조건이 같은 후보보다 자주
@@ -711,8 +711,11 @@ Startup의 최초 owner lease claim도 갱신과 같은 Store 요청이며 renew
 확인하되, 이 확인도 같은 renew timeout 안에서 한다. Renew timeout까지 lease를 확인하지
 못한 host는 deadline이 없는 host로 startup을 마친다 — 위 차단 대상을 모두 막은 채 renew
 interval마다 claim을 계속하고, 확보한 뒤에는 첫 갱신과 같이 deadline을 계산하고 descriptor를
-게시한다. 이 host는 새 application work를 받을 수 없으므로 lease를 확보해 descriptor를 게시하기 전까지 host state가
-[`Preparing`](05-host-relocation-flow.ko.md#3-host-state와-완료-결과)이고, 게시한 뒤 `Serving`이 된다.
+게시한다. Descriptor 게시 확인은 `Serving` 전이의 필수조건이다 — host는 게시를 확인하기 전까지
+[`Preparing`](05-host-relocation-flow.ko.md#3-host-state와-완료-결과)이고, `Serving` 전이는 그 절의 준비 완료
+조건을 따른다. Lease를 확보한 뒤 timeout이나 provider error로 게시 결과를 받지 못하면 §10대로 다시 확인하고,
+그래도 확인하지 못하면 host는 `Preparing`으로 startup을 마치고 renew interval마다 게시를 다시 시도한다.
+다른 owner의 점유로 인한 확정 거절은 startup error다.
 Claim 결과 `Conflict`와 `GenerationExhausted`는 startup error다. Caller가 startup을
 cancellation하면 startup은 취소로 끝나며 이 규칙으로 성공이 되지 않는다. 이미 시작한 claim은
 §10대로 같은 key를 다시 읽어 확인하고, 확인된 lease는 정상 해제하며 heartbeat를 시작하지 않는다.
@@ -873,7 +876,7 @@ sequenceDiagram
 ```
 
 Target은 `Serving` 상태이고 요청한 stable type을 등록했으며 owner lease와 남은 수용 공간이
-유효해야 한다. Framework는 weight가 0보다 큰 후보 중 하나를 고른다.
+유효해야 한다. 새 Actor 생성의 Entry Spot 조건은 [Actor model §6.3](../03-spot-actor/04-actor-model.ko.md#63-mesh와-placement-target-선택)이 정한다. Framework는 weight가 0보다 큰 후보 중 하나를 고른다.
 
 Location Store의 `Reserve`는 record가 없을 때만 `Creating` record와 사용할 수용 공간을 함께
 기록한다. 이때 `ObjectGeneration`과 `AuthorityOwnerGeneration`도 발급한다. Target 상태나
@@ -1443,6 +1446,8 @@ Provider 요청을 시작하기 전에 cancellation되면 Store를 호출하지 
 뒤 cancellation, timeout 또는 provider error가 발생하면 Store 변경 여부를 알 수 없다. 이때
 Framework는 같은 key와 예상 `StoreVersion`을 다시 읽어 결과를 확인한 뒤 필요한 경우에만
 재시도한다.
+MeshNode descriptor 쓰기를 다시 보냈을 때 저장된 record가 보낸 descriptor와 갱신 시각(`updatedAtEpochMs`)만
+다르면 앞선 쓰기가 이미 반영된 것이므로, intent(`NewClaim`·`Renew`)와 관계없이 `Stored`로 끝난다.
 
 Relocation Store 쓰기는 Framework가 미리 정한 같은 reference로 다시 읽거나 다시 저장할 수
 있어야 한다. 이 재확인은 별도 기한을 두지 않고 그 쓰기를 시작한 operation의 deadline 안에서 한다. 같은 bytes가 저장된 것을 확인하면 성공으로 끝난다. 다시 읽은 결과가 없으면 같은 reference에 같은 bytes를 다시 저장한다. 저장이 `Conflict`를 반환하거나 다시 읽은 결과가 다른 bytes이면 같은 충돌로 보고 새 reference로 저장을 다시 시작한다. 재시도 횟수 상한이나 별도 기한 없이 그 operation의 deadline 안에서 진행한다. Location Store가 이미 가리키는 payload가 없거나 checksum이 다르면 이 규칙이 아니라 아래의 `DataLost` 처리를 따른다. Location Store가 가리키지 않는 payload는 보관 기한 뒤 삭제한다. Provider가
@@ -1508,6 +1513,8 @@ provider conformance test가 store record golden fixture로 관찰하는 key·va
   네 대상이 막힌다.
 - Lease 없이 startup을 마친 host는 renew interval마다 claim하며, 확보한 뒤에야 descriptor를
   게시한다.
+- Lease를 확보한 뒤 descriptor 게시 결과를 확인하지 못한 host는 startup에 성공하고 `Preparing`으로
+  남으며 renew interval마다 게시를 다시 시도한다. 다른 owner의 점유로 인한 확정 거절은 startup error다.
 - Claim 결과 `Conflict`·`GenerationExhausted`는 startup error다.
 - Startup을 cancellation하면 결과는 취소이며, 이미 commit된 claim은 해제되고 heartbeat가
   시작되지 않는다.

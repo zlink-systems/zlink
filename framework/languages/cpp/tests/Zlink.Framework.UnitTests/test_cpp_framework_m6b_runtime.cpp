@@ -630,7 +630,12 @@ void verify_actor_calls_keep_selected_route_until_follow_notice ()
                 old_actor, new_actor,
                 spot_route_t{new_placement.node_rid, spot_id_t ("actor-send-spot"),
                              "actor-send-route-mesh"},
-                source_fence, target_fence, "actor-send-follow-transfer")
+                source_fence,
+                {target_fence.target_node_routing_id,
+                 target_fence.target_node_generation,
+                 {},
+                 target_fence.owner_lease_generation},
+                target_fence.authority_owner_generation, "actor-send-follow-transfer")
               .result ());
 
     // The source Location reader can still hold the pre-commit authority
