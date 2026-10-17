@@ -91,11 +91,12 @@ public final class ZLinkSerialExecutionQueue {
     private long nextRelocationSerial = 1L;
     private volatile Entry active;
     private Entry suspendedLifecycle;
+    private volatile ActivationPreparation<?> activationPreparation;
     private boolean drainScheduled;
     private volatile int suspendedApplicationContinuations;
     private volatile int suspendedLifecycleContinuations;
     private long turnClaimedAtNanos;
-    private RelocationState relocation;
+    private volatile RelocationState relocation;
     private boolean closingAdmissionSealed;
     private boolean relocated;
     private final List<QuiescenceWaiter> quiescenceWaiters = new ArrayList<>();
@@ -469,13 +470,12 @@ public final class ZLinkSerialExecutionQueue {
             Objects.requireNonNull(message, "message");
             LifecycleTransition transition = lifecycleTransitionLocked();
             boolean retained = transition != null && transition.retains.test(message);
-            if (transition != null
-                    && transition.committed.getAsBoolean()
-                    && (!retained || closingAdmissionSealed)) {
+            if (closingAdmissionSealed
+                    || transition != null && transition.committed.getAsBoolean() && !retained) {
                 //  A retained message after the Closing seal has no next incarnation here: it
                 //  is refused before admission, as a released owner fence.
                 CompletionStage<Void> rejected =
-                        retained
+                        retained && transition != null && transition.committed.getAsBoolean()
                                 ? CompletableFuture.failedFuture(
                                         ZLinkFrameworkErrorOrigin.ownerFenceRefusal(
                                                 "Spot incarnation released its authority"))
@@ -508,6 +508,7 @@ public final class ZLinkSerialExecutionQueue {
         private final Function<Object, CompletionStage<Void>> dispatch;
         private final BooleanSupplier committed;
         private final Predicate<Object> retains;
+        private final CompletionStage<Void> preparationTerminal;
 
         private LifecycleTransition(
                 Supplier<CompletionStage<Void>> operation,
@@ -518,11 +519,17 @@ public final class ZLinkSerialExecutionQueue {
             this.dispatch = Objects.requireNonNull(dispatch, "dispatch");
             this.committed = Objects.requireNonNull(committed, "committed");
             this.retains = Objects.requireNonNull(retains, "retains");
+            ActivationPreparation<?> preparation = activationPreparation;
+            preparationTerminal =
+                    preparation == null
+                            ? CompletableFuture.completedFuture(null)
+                            : preparation.terminal;
         }
 
         @Override
         public CompletionStage<Void> get() {
-            CompletionStage<Void> execution = operation.get();
+            CompletionStage<Void> execution =
+                    preparationTerminal.thenCompose(ignored -> operation.get());
             if (sharedSpotGate == null) {
                 return execution.whenComplete((ignored, failure) -> rewritePending(failure));
             }
@@ -552,14 +559,12 @@ public final class ZLinkSerialExecutionQueue {
             if (!committed.getAsBoolean()) return;
             synchronized (ZLinkSerialExecutionQueue.this) {
                 materializePublished();
-                for (Entry entry : applicationPending) {
-                    entry.operation =
-                            failure == null
-                                    ? () -> dispatchPending(entry)
-                                    : () -> {
-                                        entry.relocationRelease.run();
-                                        return CompletableFuture.failedFuture(failure);
-                                    };
+                if (failure != null) {
+                    failPendingApplications(failure);
+                } else {
+                    for (Entry entry : applicationPending) {
+                        entry.operation = () -> dispatchPending(entry);
+                    }
                 }
             }
         }
@@ -601,6 +606,17 @@ public final class ZLinkSerialExecutionQueue {
                                     ZLinkFrameworkErrorKind.NOT_FOUND,
                                     "Spot incarnation was closed"))
                     : CompletableFuture.completedFuture(null);
+        }
+    }
+
+    private void failPendingApplications(Throwable failure) {
+        materializePublished();
+        for (Entry entry : applicationPending) {
+            entry.operation =
+                    () -> {
+                        entry.relocationRelease.run();
+                        return CompletableFuture.failedFuture(failure);
+                    };
         }
     }
 
@@ -672,6 +688,15 @@ public final class ZLinkSerialExecutionQueue {
         this.timerOwner = timerOwner;
         this.lifecycleBurstLimit = lifecycleBurstLimit;
         this.ownerTimeBudgetNanos = ownerTimeBudget.toNanos();
+    }
+
+    public CompletionStage<Optional<RelocationSeal>> relocationPreparationSeal() {
+        return underSharedSpotGateAsync(
+                () -> {
+                    synchronized (this) {
+                        return relocation == null ? Optional.empty() : Optional.of(relocation.seal);
+                    }
+                });
     }
 
     /** Creates a timer queue whose current turn can be identified by its owning Spot queue. */
@@ -824,6 +849,147 @@ public final class ZLinkSerialExecutionQueue {
         }
         scheduleDrainIfNeeded(result);
         return result.result();
+    }
+
+    /** Holds one lifecycle item from initialization through local publication. */
+    public <T> CompletionStage<T> prepareActivation(Supplier<CompletionStage<T>> initialize) {
+        ActivationPreparation<T> preparation = new ActivationPreparation<>(initialize);
+        synchronized (this) {
+            if (activationPreparation != null)
+                throw new IllegalStateException("activation preparation already owned");
+            activationPreparation = preparation;
+        }
+        enqueueLifecycleBarrier(preparation)
+                .whenComplete(
+                        (ignored, failure) -> {
+                            if (failure != null)
+                                preparation.prepared.completeExceptionally(failure);
+                        });
+        return preparation.prepared.minimalCompletionStage();
+    }
+
+    public CompletionStage<Void> openActivationPreparationAdmission(Predicate<Object> firstRecord) {
+        return underSharedSpotGateAsync(
+                () -> {
+                    boolean schedule;
+                    synchronized (this) {
+                        materializePublished();
+                        ActivationPreparation<?> preparation = activationPreparation;
+                        if (preparation != null) {
+                            for (Entry entry : applicationPending) {
+                                if (firstRecord.test(entry.message)) {
+                                    applicationPending.remove(entry);
+                                    applicationPending.addFirst(entry);
+                                    preparation.admission.complete(entry);
+                                    break;
+                                }
+                            }
+                        }
+                        schedule = requestDrainLocked();
+                    }
+                    scheduleDrainIfNeeded(schedule, null);
+                    return null;
+                });
+    }
+
+    public CompletionStage<Void> finishActivationPreparation() {
+        return completeActivationPreparation(
+                null, null, () -> CompletableFuture.completedFuture(null));
+    }
+
+    public CompletionStage<Void> completeActivationPreparation(
+            Predicate<Object> firstRecord,
+            Throwable failure,
+            Supplier<CompletionStage<Void>> discard) {
+        return underSharedSpotGateAsync(
+                        () -> {
+                            ActivationPreparation<?> preparation = activationPreparation;
+                            Entry first =
+                                    preparation == null ? null : preparation.admission.getNow(null);
+                            return firstRecord == null
+                                            || first != null && firstRecord.test(first.message)
+                                    ? preparation
+                                    : null;
+                        })
+                .thenCompose(
+                        preparation -> {
+                            if (preparation == null) return CompletableFuture.completedFuture(null);
+                            CompletionStage<Void> cleanup =
+                                    failure == null
+                                            ? CompletableFuture.completedFuture(null)
+                                            : discard.get();
+                            return cleanup.handle(
+                                            (ignored, cleanupFailure) -> {
+                                                if (failure != null
+                                                        && cleanupFailure != null
+                                                        && failure != cleanupFailure)
+                                                    failure.addSuppressed(cleanupFailure);
+                                                return null;
+                                            })
+                                    .thenCompose(
+                                            ignored ->
+                                                    underSharedSpotGateAsync(
+                                                            () -> {
+                                                                synchronized (this) {
+                                                                    if (activationPreparation
+                                                                            == preparation) {
+                                                                        if (failure != null) {
+                                                                            closingAdmissionSealed =
+                                                                                    true;
+                                                                            failPendingApplications(
+                                                                                    failure);
+                                                                        }
+                                                                        activationPreparation =
+                                                                                null;
+                                                                        if (failure == null)
+                                                                            preparation.terminal
+                                                                                    .complete(null);
+                                                                        else
+                                                                            preparation.terminal
+                                                                                    .completeExceptionally(
+                                                                                            failure);
+                                                                    }
+                                                                }
+                                                                return null;
+                                                            }));
+                        });
+    }
+
+    public void resumePending() {
+        boolean schedule;
+        synchronized (this) {
+            schedule = requestDrainLocked();
+        }
+        scheduleDrainIfNeeded(schedule, null);
+    }
+
+    private static final class ActivationPreparation<T> implements Supplier<CompletionStage<Void>> {
+        private final Supplier<CompletionStage<T>> initialize;
+        private final CompletableFuture<T> prepared = new CompletableFuture<>();
+        private final CompletableFuture<Void> terminal = new CompletableFuture<>();
+        private final CompletableFuture<Entry> admission = new CompletableFuture<>();
+
+        private ActivationPreparation(Supplier<CompletionStage<T>> initialize) {
+            this.initialize = initialize;
+        }
+
+        @Override
+        public CompletionStage<Void> get() {
+            CompletionStage<T> initialization;
+            try {
+                initialization = Objects.requireNonNull(initialize.get(), "initialization result");
+            } catch (RuntimeException | Error failure) {
+                initialization = CompletableFuture.failedFuture(failure);
+            }
+            initialization.whenComplete(
+                    (value, failure) -> {
+                        if (failure == null) prepared.complete(value);
+                        else {
+                            prepared.completeExceptionally(failure);
+                        }
+                    });
+            return terminal;
+        }
     }
 
     public CompletionStage<Void> enqueueLifecycleAdmission(
@@ -1171,7 +1337,25 @@ public final class ZLinkSerialExecutionQueue {
                 || !lifecyclePending.isEmpty();
     }
 
-    private Entry takeNext() {
+    private boolean applicationStartAllowed(Entry candidate) {
+        ZLinkSerialExecutionQueue owner = timerOwner == null ? this : timerOwner;
+        if (timerOwner != null && owner.relocation != null) return false;
+        ActivationPreparation<?> preparation = owner.activationPreparation;
+        if (preparation != null) {
+            return candidate != null
+                    && preparation.admission.getNow(null) == candidate.turnOrigin();
+        }
+        Entry lifecycle = suspendedLifecycle == null ? active : suspendedLifecycle;
+        return lifecycle == null || !(lifecycle.operation instanceof LifecycleTransition);
+    }
+
+    private Entry selectNext(boolean remove) {
+        if (!lifecyclePending.isEmpty()
+                && lifecyclePending.peekFirst().relocationBoundary != null
+                && suspendedContinuations() != 0
+                && continuationPending.isEmpty()) return null;
+        boolean applicationBlocked = !applicationStartAllowed(applicationPending.peekFirst());
+        if (timerOwner != null && applicationBlocked) return null;
         if (suspendedLifecycle != null) {
             Entry ownerContinuation = null;
             Entry applicationContinuation = null;
@@ -1180,7 +1364,7 @@ public final class ZLinkSerialExecutionQueue {
                     if (ownerContinuation == null) {
                         ownerContinuation = candidate;
                     }
-                } else if (applicationContinuation == null) {
+                } else if (applicationContinuation == null && applicationStartAllowed(candidate)) {
                     applicationContinuation = candidate;
                 }
                 if (ownerContinuation != null && applicationContinuation != null) {
@@ -1188,24 +1372,21 @@ public final class ZLinkSerialExecutionQueue {
                 }
             }
             if (ownerContinuation != null
-                    && (suspendedLifecycle.operation instanceof LifecycleTransition
+                    && (applicationBlocked
                             || (applicationContinuation == null && applicationPending.isEmpty())
                             || lifecycleStreak < lifecycleBurstLimit)) {
-                lifecycleStreak++;
-                continuationPending.remove(ownerContinuation);
+                if (remove) lifecycleStreak++;
+                if (remove) continuationPending.remove(ownerContinuation);
                 return ownerContinuation;
             }
-            if (suspendedLifecycle.operation instanceof LifecycleTransition) {
-                return null;
-            }
             if (applicationContinuation != null) {
-                lifecycleStreak = 0;
-                continuationPending.remove(applicationContinuation);
+                if (remove) lifecycleStreak = 0;
+                if (remove) continuationPending.remove(applicationContinuation);
                 return applicationContinuation;
             }
-            if (!applicationPending.isEmpty()) {
-                lifecycleStreak = 0;
-                return applicationPending.removeFirst();
+            if (!applicationBlocked && !applicationPending.isEmpty()) {
+                if (remove) lifecycleStreak = 0;
+                return (remove ? applicationPending.removeFirst() : applicationPending.peekFirst());
             }
             return null;
         }
@@ -1214,27 +1395,31 @@ public final class ZLinkSerialExecutionQueue {
         boolean continuationReady = !continuationPending.isEmpty();
         if (lifecycleReady
                 && (lifecyclePending.peekFirst().relocationBoundary != null
-                        || lifecyclePending.peekFirst().operation instanceof LifecycleTransition)) {
+                        || (lifecyclePending.peekFirst().operation instanceof LifecycleTransition
+                                || lifecyclePending.peekFirst().operation
+                                        instanceof ActivationPreparation<?>))) {
             if (continuationReady) {
-                lifecycleStreak = 0;
-                return continuationPending.removeFirst();
+                if (remove) lifecycleStreak = 0;
+                return (remove
+                        ? continuationPending.removeFirst()
+                        : continuationPending.peekFirst());
             }
-            return lifecyclePending.removeFirst();
+            return (remove ? lifecyclePending.removeFirst() : lifecyclePending.peekFirst());
         }
         if (lifecycleReady && (!applicationReady || lifecycleStreak < lifecycleBurstLimit)) {
-            lifecycleStreak++;
-            return lifecyclePending.removeFirst();
+            if (remove) lifecycleStreak++;
+            return (remove ? lifecyclePending.removeFirst() : lifecyclePending.peekFirst());
         }
         if (continuationReady) {
-            lifecycleStreak = 0;
-            return continuationPending.removeFirst();
+            if (remove) lifecycleStreak = 0;
+            return (remove ? continuationPending.removeFirst() : continuationPending.peekFirst());
         }
         if (applicationReady) {
-            lifecycleStreak = 0;
-            return applicationPending.removeFirst();
+            if (remove) lifecycleStreak = 0;
+            return (remove ? applicationPending.removeFirst() : applicationPending.peekFirst());
         }
-        lifecycleStreak = 0;
-        return lifecyclePending.removeFirst();
+        if (remove) lifecycleStreak = 0;
+        return (remove ? lifecyclePending.removeFirst() : lifecyclePending.peekFirst());
     }
 
     private boolean requestDrainLocked() {
@@ -1242,23 +1427,7 @@ public final class ZLinkSerialExecutionQueue {
         if (drainScheduled || active != null || !hasPending()) {
             return false;
         }
-        if (suspendedLifecycle != null
-                && suspendedLifecycle.operation instanceof LifecycleTransition
-                && continuationPending.stream()
-                        .noneMatch(entry -> entry.origin == suspendedLifecycle)) {
-            return false;
-        }
-        if (suspendedLifecycle != null
-                && continuationPending.isEmpty()
-                && applicationPending.isEmpty()) {
-            return false;
-        }
-        if (!lifecyclePending.isEmpty()
-                && lifecyclePending.peekFirst().relocationBoundary != null
-                && suspendedContinuations() != 0
-                && continuationPending.isEmpty()) {
-            return false;
-        }
+        if (selectNext(false) == null) return false;
         drainScheduled = true;
         return true;
     }
@@ -1421,13 +1590,7 @@ public final class ZLinkSerialExecutionQueue {
         if (active != null || !hasPending()) {
             return null;
         }
-        if (!lifecyclePending.isEmpty()
-                && lifecyclePending.peekFirst().relocationBoundary != null
-                && suspendedContinuations() != 0
-                && continuationPending.isEmpty()) {
-            return null;
-        }
-        Entry entry = takeNext();
+        Entry entry = selectNext(true);
         if (entry == null) {
             return null;
         }

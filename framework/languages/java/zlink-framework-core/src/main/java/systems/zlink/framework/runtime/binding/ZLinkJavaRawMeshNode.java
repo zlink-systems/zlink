@@ -3871,7 +3871,8 @@ final class ZLinkJavaRawMeshNode
         Throwable cause = unwrap(failure);
         if (cause instanceof ZLinkFrameworkException) return cause;
         if (cause instanceof ZLinkUserSpotOperationException typed)
-            return userSpotFailure(typed.terminalResult(), typed.failureCode(), cause);
+            return ZLinkRequestFailureMapping.userSpotFailure(
+                    typed.terminalResult(), typed.failureCode(), cause);
         RequestResult terminal = requestResult(cause);
         return terminal == null
                 ? failure
@@ -3944,7 +3945,7 @@ final class ZLinkJavaRawMeshNode
                             failure -> {
                                 UserSpotTerminalReply reply = terminalFailure(failure);
                                 return CompletableFuture.failedFuture(
-                                        userSpotFailure(
+                                        ZLinkRequestFailureMapping.userSpotFailure(
                                                 reply.terminalResult(),
                                                 reply.failureCode(),
                                                 unwrap(failure)));
@@ -4052,6 +4053,13 @@ final class ZLinkJavaRawMeshNode
     }
 
     @Override
+    public CompletionStage<Void> instanceActivationRecoveryCompleted(
+            ZLinkServiceM6BWireCodec.InstanceRouteFence route, Throwable failure) {
+        return ((ZLinkJavaRawSpotNode) spotNode())
+                .instanceActivationRecoveryCompleted(route, failure);
+    }
+
+    @Override
     public CompletionStage<Void> recoverInstanceActivation(
             systems.zlink.framework.runtime.internal.service.ZLinkInstanceActivationRecoveryCodec
                             .RecoveryEnvelope
@@ -4105,7 +4113,8 @@ final class ZLinkJavaRawMeshNode
                 //  authoritative ownership-aware translator instead of
                 //  collapsing to a generic rejection
                 //  (spec 32-framework-error-model:81-118, 99-108).
-                throw userSpotFailure(reply.terminalResult(), reply.failureCode(), null);
+                throw ZLinkRequestFailureMapping.userSpotFailure(
+                        reply.terminalResult(), reply.failureCode(), null);
             }
             if (reply.success() == null
                     || (reply.success().result()
@@ -4224,7 +4233,8 @@ final class ZLinkJavaRawMeshNode
                 //  authoritative ownership-aware translator instead of
                 //  collapsing to a generic rejection
                 //  (spec 32-framework-error-model:81-118, 99-108).
-                throw userSpotFailure(reply.terminalResult(), reply.failureCode(), null);
+                throw ZLinkRequestFailureMapping.userSpotFailure(
+                        reply.terminalResult(), reply.failureCode(), null);
             }
             if (reply.closed() == null) {
                 throw new ZLinkFrameworkException(
@@ -4251,28 +4261,13 @@ final class ZLinkJavaRawMeshNode
         }
     }
 
-    /** Classifies a User Spot terminal the same way for a remote reply and a local owner. */
-    private static ZLinkFrameworkException userSpotFailure(
-            int terminalResult, int failureCode, Throwable cause) {
-        return ZLinkRequestFailureMapping.receivedFailure(
-                ZLinkBackendRequestResult.fromWireTerminal(terminalResult)
-                        .toFrameworkErrorKind(failureCode),
-                "User Spot operation failed: terminal="
-                        + terminalResult
-                        + " failureCode="
-                        + failureCode,
-                failureCode,
-                java.util.Map.of(),
-                cause);
-    }
-
     /**
      * A target lifecycle that differs from the Close fence is an owner fence change: SpotMoving
      * (terminal 107, failure 34), translated like every other User Spot Close terminal.
      */
     private static ZLinkFrameworkException userSpotCloseTargetMoved(
             long expectedGeneration, long currentGeneration) {
-        return userSpotFailure(
+        return ZLinkRequestFailureMapping.userSpotFailure(
                 107,
                 34,
                 new IllegalStateException(

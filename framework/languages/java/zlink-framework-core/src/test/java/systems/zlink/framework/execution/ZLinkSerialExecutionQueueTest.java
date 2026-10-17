@@ -39,6 +39,160 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 final class ZLinkSerialExecutionQueueTest {
+    @Test
+    void failedActivationPreparationRejectsPendingApplicationAndCloseWithOriginalFailure()
+            throws Exception {
+        var executor = new CountingExecutor();
+        var queue = new ZLinkSerialExecutionQueue(executor, ZLinkExecutionLanePolicy.spot());
+        var prepared = queue.prepareActivation(() -> CompletableFuture.completedFuture(null));
+        executor.runUntil(prepared.toCompletableFuture());
+        var invoked = new AtomicBoolean();
+        var pending =
+                queue.enqueue(
+                        () -> {
+                            invoked.set(true);
+                            return CompletableFuture.completedFuture(null);
+                        },
+                        null);
+        var closed = new AtomicBoolean();
+        var close =
+                queue.enqueueLifecycleTransition(
+                        () -> {
+                            closed.set(true);
+                            return CompletableFuture.completedFuture(null);
+                        },
+                        ignored -> CompletableFuture.completedFuture(null),
+                        () -> false,
+                        ignored -> false);
+        var original = new IllegalStateException("durable recovery failed");
+        try {
+            var failed =
+                    queue.completeActivationPreparation(
+                            null, original, () -> CompletableFuture.completedFuture(null));
+            executor.runUntil(
+                    CompletableFuture.allOf(
+                            failed.toCompletableFuture(),
+                            pending.handle((ignored, failure) -> null).toCompletableFuture(),
+                            close.handle((ignored, failure) -> null).toCompletableFuture()));
+            assertSame(
+                    original,
+                    assertThrows(
+                                    java.util.concurrent.CompletionException.class,
+                                    () -> pending.toCompletableFuture().join())
+                            .getCause());
+            assertSame(
+                    original,
+                    assertThrows(
+                                    java.util.concurrent.CompletionException.class,
+                                    () -> close.toCompletableFuture().join())
+                            .getCause());
+            assertFalse(invoked.get());
+            assertFalse(closed.get());
+            var admission = new CompletableFuture<Void>();
+            var later =
+                    queue.enqueueMessage(
+                            new Object(),
+                            0,
+                            () -> {
+                                invoked.set(true);
+                                return CompletableFuture.completedFuture(null);
+                            },
+                            () -> {},
+                            admission);
+            var rejected =
+                    assertInstanceOf(
+                            systems.zlink.framework.errors.ZLinkFrameworkException.class,
+                            assertThrows(
+                                            java.util.concurrent.CompletionException.class,
+                                            () -> later.toCompletableFuture().join())
+                                    .getCause());
+            assertEquals(
+                    systems.zlink.framework.errors.ZLinkFrameworkErrorKind.REJECTED,
+                    rejected.kind());
+            assertSame(
+                    rejected,
+                    assertThrows(java.util.concurrent.CompletionException.class, admission::join)
+                            .getCause());
+            assertFalse(invoked.get());
+        } finally {
+            queue.close();
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void activationFirstRecordRunsBeforePendingTimerAndCloseWaitsForRecovery(boolean shared)
+            throws Exception {
+        CountingExecutor executor = new CountingExecutor();
+        var queue = new ZLinkSerialExecutionQueue(executor, ZLinkExecutionLanePolicy.spot());
+        if (shared) new ZLinkSerialExecutionQueue.SharedSpotGate(queue);
+        var prepared = queue.prepareActivation(() -> CompletableFuture.completedFuture(null));
+        executor.runUntil(prepared.toCompletableFuture());
+        List<String> events = new CopyOnWriteArrayList<>();
+        var timer =
+                queue.enqueue(
+                        () -> {
+                            events.add("timer");
+                            return CompletableFuture.completedFuture(null);
+                        },
+                        null);
+        Object firstRecord = new Object();
+        var firstHandler = new CompletableFuture<Void>();
+        try {
+            var firstStarted = new CompletableFuture<Void>();
+            var first =
+                    queue.enqueueMessage(
+                            firstRecord,
+                            0,
+                            () -> {
+                                events.add("first");
+                                firstStarted.complete(null);
+                                return ZLinkSerialExecutionQueue.yieldCurrent(firstHandler);
+                            },
+                            () -> {},
+                            null);
+            var close =
+                    queue.enqueueLifecycleTransition(
+                            () -> {
+                                events.add("close");
+                                return CompletableFuture.completedFuture(null);
+                            },
+                            ignored -> CompletableFuture.completedFuture(null),
+                            () -> false,
+                            ignored -> false);
+            var admitted =
+                    queue.openActivationPreparationAdmission(message -> message == firstRecord);
+            executor.runUntil(admitted.toCompletableFuture());
+            executor.runUntil(firstStarted);
+            assertEquals(List.of("first"), events);
+            assertFalse(timer.toCompletableFuture().isDone());
+            assertFalse(close.toCompletableFuture().isDone());
+            firstHandler.complete(null);
+            executor.runUntil(first.toCompletableFuture());
+            assertEquals(
+                    List.of("first"),
+                    events,
+                    "handler terminal alone must not open recovery admission");
+            assertFalse(close.toCompletableFuture().isDone());
+            var completed =
+                    queue.completeActivationPreparation(
+                            message -> message == firstRecord,
+                            null,
+                            () -> CompletableFuture.completedFuture(null));
+            executor.runUntil(
+                    CompletableFuture.allOf(
+                            completed.toCompletableFuture(),
+                            close.toCompletableFuture(),
+                            timer.toCompletableFuture()));
+            assertEquals(List.of("first", "close", "timer"), events);
+        } finally {
+            firstHandler.complete(null);
+            executor.runUntil(queue.finishActivationPreparation().toCompletableFuture());
+            executor.runUntil(queue.awaitQuiescence().toCompletableFuture());
+            queue.close();
+        }
+    }
+
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
     void committedMessageSubmitsDirectlyToItsWorker(boolean shared) throws Exception {
