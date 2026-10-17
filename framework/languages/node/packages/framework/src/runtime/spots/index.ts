@@ -161,6 +161,7 @@ import { ZLinkRoutedSpotPacketDispatch } from './spot-routed-spot-packet-dispatc
 export { ZLinkEntrySpotActivation } from './spot-entry-activation';
 export {
   createFrameworkEntrySpotId,
+  registrationAcceptsNewActor,
   ZLinkSpotNodeRuntimeManager,
   type ZLinkSpotNodeRuntimeManagerOptions
 } from './spot-node-runtime-manager';

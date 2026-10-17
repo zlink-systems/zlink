@@ -144,7 +144,7 @@ import { PingHandler } from './Sessions/ping-handler';
 
         // --8<-- [start:actor-register]
         // One lobby per object server. Newly created players start there.
-        objects.addEntrySpot(LobbySpot);
+        objects.addEntrySpot(LobbySpot, TutorialNames.playerActorType);
 
         // Nodes that register the player type are candidates to host one.
         objects.addActorFactory(TutorialNames.playerActorType, PlayerFactory, (factory) =>

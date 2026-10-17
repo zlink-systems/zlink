@@ -171,7 +171,7 @@ handler 실행 완료는 기다리지 않는다.
 | 항목 | 계층 | 통과 기준 |
 |------|------|-----------|
 | duplicate Spot factory type | `unit` | startup validation 예외 |
-| duplicate `addEntrySpot(EntrySpotClass)` | `unit` | 같은 MeshNode 안에서 Entry Spot[^entry-spot] registry를 중복 등록하면 startup validation 예외 |
+| duplicate `addEntrySpot(EntrySpotClass, actorType)` | `unit` | 같은 MeshNode 안에서 Entry Spot[^entry-spot] registry를 중복 등록하면 startup validation 예외 |
 | `addRouteMesh(meshName)` + `addEntrySpot(...)` | `integration-single-process` | MeshNode 빌더에서 Entry Spot과 Spot factory 등록을 한 번에 끝낸다 |
 | location store 없이 local MeshNode 등록 | `integration-single-process` | 수동 peer 연결만 사용하는 MeshNode runtime을 시작한다 |
 | `create(spotType)` | `integration-single-process` | `spotId`, `Created` 상태가 일관되게 유지된다 |

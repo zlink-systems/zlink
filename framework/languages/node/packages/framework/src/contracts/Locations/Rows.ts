@@ -25,6 +25,8 @@ export interface ZLinkObjectCapability {
   readonly policy: ZLinkObjectMaintenancePolicyKind;
   readonly hasSnapshotAdapter: boolean;
   readonly limit: number;
+  /** True only for an Actor capability whose node registered an Entry Spot type accepting it. */
+  readonly entryAccepted: boolean;
 }
 
 export interface ZLinkPopulationCapacity {
