@@ -3,6 +3,76 @@ const test = require('node:test');
 const framework = require('../../packages/framework/dist/internal');
 const SHUTDOWN_DEADLINE_MS = 1000;
 
+for (const aggregateWrapper of [false, true]) {
+  for (const hasActualFailure of [false, true]) {
+    test(`shutdown cleanup retains abort causes: aggregate=${aggregateWrapper} actual=${hasActualFailure}`, async () => {
+      const { createAbortError } = require('../../packages/framework/dist/runtime/abort');
+      const {
+        stopRuntimeParts
+      } = require('../../packages/framework/dist/runtime/host/runtime-shutdown');
+      const error = aggregateWrapper
+        ? new AggregateError([createAbortError()], 'cleanup aborted')
+        : createAbortError();
+      if (hasActualFailure)
+        error.cause = new AggregateError([new Error('resource cleanup failed')]);
+      const reported = [];
+      const stopping = stopRuntimeParts({
+        state: {
+          listenerTasks: [],
+          dispose() {},
+          errorSink: {
+            reportRuntimeTaskException(_operation, failure) {
+              reported.push(failure);
+            }
+          }
+        },
+        locationSnapshot: {},
+        streamRuntime: {
+          async dispose() {
+            throw error;
+          }
+        }
+      });
+      if (hasActualFailure) await assert.rejects(stopping, (failure) => failure === error);
+      else await stopping;
+      assert.deepEqual(reported, hasActualFailure ? [error] : []);
+    });
+  }
+}
+
+for (const nesting of ['deadline', 'nested', 'aggregate', 'pure']) {
+  test(`host shutdown examines cleanup error causes: ${nesting}`, async () => {
+    const deadline = (cause) =>
+      framework.createInternalFrameworkException(
+        framework.ZLinkFrameworkInternalErrorKind.DeadlineExceeded,
+        'cleanup deadline',
+        cause
+      );
+    const actual = new Error('resource cleanup failed');
+    const error =
+      nesting === 'aggregate'
+        ? new AggregateError([], 'cleanup deadline', { cause: actual })
+        : deadline(
+            nesting === 'pure' ? deadline() : nesting === 'nested' ? deadline(actual) : actual
+          );
+    const host = new framework.ZLinkFrameworkRuntimeHost({
+      registration: framework.createFrameworkRegistration()
+    });
+    host.routeMeshCoordinator.shutdownHost = async () => ({ kind: 'drained' });
+    host.stop = async () => {
+      throw error;
+    };
+    const result = await host.shutdown({ deadlineMs: SHUTDOWN_DEADLINE_MS });
+    assert.equal(result.outcome, framework.ZLinkFrameworkTerminationOutcome.ForceStopped);
+    assert.equal(
+      result.reason,
+      nesting === 'pure'
+        ? framework.ZLinkFrameworkTerminationReason.DeadlineExceeded
+        : framework.ZLinkFrameworkTerminationReason.TeardownFailed
+    );
+  });
+}
+
 for (const scenario of [
   { name: 'callback failure before deadline', reason: 'teardown_failed', lateDeadline: true },
   {
