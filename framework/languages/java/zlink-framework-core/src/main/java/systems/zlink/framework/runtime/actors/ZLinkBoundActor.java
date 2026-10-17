@@ -598,7 +598,14 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
                             header,
                             List.of(payloadPart),
                             ZLinkSessionActorsRuntime.RELAY_SUBMIT_TIMEOUT)
-                    .thenAccept(reply -> reply.forEach(Message::close));
+                    .thenAccept(
+                            reply -> {
+                                try {
+                                    ZLinkActorReplyDecoder.decodeTerminal(reply);
+                                } finally {
+                                    Message.closeAll(reply);
+                                }
+                            });
         }
     }
 }

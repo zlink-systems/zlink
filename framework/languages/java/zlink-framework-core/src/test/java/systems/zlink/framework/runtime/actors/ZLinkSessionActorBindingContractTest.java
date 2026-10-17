@@ -11,6 +11,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.errors.ZlinkRequestException;
@@ -182,6 +183,85 @@ final class ZLinkSessionActorBindingContractTest {
                     java.util.HexFormat.of().parseHex(entry.path("hex").asText()),
                     stream.disconnectBody);
         }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"success", "error", "malformed"})
+    void disconnectSenderChecksTerminalWithoutDecodingSuccessBody(String terminal) {
+        FakeStream stream = new FakeStream();
+        var serializer =
+                new ZLinkMessageSerializer() {
+                    @Override
+                    public <T> ZLinkEncodedPayload serialize(T value) {
+                        return new RawSerializer().serialize(value);
+                    }
+
+                    @Override
+                    public <T> T deserialize(ZLinkEncodedPayload payload, Class<T> type) {
+                        throw new AssertionError(
+                                "Session owner must not deserialize a disconnect reply body");
+                    }
+                };
+        var runtime =
+                new ZLinkSessionActorsRuntime(
+                        authoritySpotNode(Map.of()),
+                        stream,
+                        SESSION,
+                        null,
+                        serializer,
+                        null,
+                        true,
+                        ZLinkStreamCodec.RAW);
+        stream.runtime = runtime;
+        var actor =
+                runtime.bind(new ActorRef("actor-1", 7, MESH, NODE_A)).toCompletableFuture().join();
+        if (terminal.equals("malformed")) {
+            stream.disconnectReply = new byte[] {1};
+        } else {
+            var header =
+                    new ZLinkStreamHeader(
+                            terminal.equals("error")
+                                    ? ZLinkStreamMessageKind.ERROR
+                                    : ZLinkStreamMessageKind.RESPONSE,
+                            terminal.equals("error") ? ZLinkStreamCodec.JSON : ZLinkStreamCodec.RAW,
+                            EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
+                            Optional.of(1L),
+                            "",
+                            Map.of());
+            byte[] body =
+                    terminal.equals("error")
+                            ? systems.zlink.framework.runtime.internal.streams
+                                    .ZLinkStreamErrorPayload.encode(
+                                    new ZLinkFrameworkException(
+                                            ZLinkFrameworkErrorKind.REJECTED,
+                                            "disconnect callback failure"))
+                            : new byte[] {(byte) 0xff, 0};
+            stream.disconnectReply = ZLinkStreamFrameCodec.encode(header, body);
+        }
+        if (terminal.equals("success")) {
+            actor.notifyDisconnected().toCompletableFuture().join();
+        } else {
+            var failure =
+                    assertThrows(
+                            CompletionException.class,
+                            () -> actor.notifyDisconnected().toCompletableFuture().join());
+            var cause = failure.getCause();
+            while (cause instanceof CompletionException && cause.getCause() != null)
+                cause = cause.getCause();
+            var framework = assertInstanceOf(ZLinkFrameworkException.class, cause);
+            assertEquals(
+                    terminal.equals("error")
+                            ? ZLinkFrameworkErrorKind.REJECTED
+                            : ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                    framework.kind());
+        }
+        assertEquals(List.of("actor-1"), stream.unbinds);
+        assertTrue(runtime.bound().isEmpty());
+        actor.notifyDisconnected().handle((ignored, error) -> null).toCompletableFuture().join();
+        assertEquals(
+                1,
+                stream.disconnectNotifications,
+                "terminal failure must not resubmit the notification");
     }
 
     @Test
@@ -532,7 +612,7 @@ final class ZLinkSessionActorBindingContractTest {
                 "the new exact identity is installed before retired cleanup");
         assertEquals(new ActorRef("actor-1", 7, MESH, NODE_B), installed.ref());
         assertEquals(List.of(installed), runtime.bound());
-        previousCallback.complete(List.of(Message.from(new byte[0])));
+        previousCallback.complete(List.of(Message.from(stream.disconnectReply)));
     }
 
     @Test
@@ -1405,6 +1485,16 @@ final class ZLinkSessionActorBindingContractTest {
         private long nativeBindingGeneration = BINDING_GENERATION;
         private String disconnectPacketName;
         private ZLinkStreamCodec disconnectCodec;
+        private byte[] disconnectReply =
+                ZLinkStreamFrameCodec.encode(
+                        new ZLinkStreamHeader(
+                                ZLinkStreamMessageKind.RESPONSE,
+                                ZLinkStreamCodec.RAW,
+                                EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
+                                Optional.of(1L),
+                                "",
+                                Map.of()),
+                        new byte[0]);
         private byte[] disconnectBody;
         private final List<String> binds = new ArrayList<>();
         private final List<String> bindingEvents = new ArrayList<>();
@@ -1780,7 +1870,7 @@ final class ZLinkSessionActorBindingContractTest {
                     return pending;
                 }
             }
-            return CompletableFuture.completedFuture(List.of(Message.from(new byte[0])));
+            return CompletableFuture.completedFuture(List.of(Message.from(disconnectReply)));
         }
     }
 

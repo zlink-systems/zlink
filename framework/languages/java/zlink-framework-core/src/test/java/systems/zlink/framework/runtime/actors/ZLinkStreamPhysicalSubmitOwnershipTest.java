@@ -21,6 +21,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorUnbindO
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendStreamSocket;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6AWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
+import systems.zlink.framework.runtime.streams.ZLinkStreamFrameCodec;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderFlag;
 import systems.zlink.framework.streams.ZLinkSessionActor;
@@ -595,7 +596,23 @@ final class ZLinkStreamPhysicalSubmitOwnershipTest {
                                     (ZLinkBackendActorBindOperation)
                                             timeout -> CompletableFuture.completedFuture(null);
                             case "relocateBoundActor" -> CompletableFuture.completedFuture(null);
-                            case "requestBoundActor", "requestExactActor" ->
+                            case "requestExactActor" ->
+                                    CompletableFuture.completedFuture(
+                                            List.of(
+                                                    Message.from(
+                                                            ZLinkStreamFrameCodec.encode(
+                                                                    new ZLinkStreamHeader(
+                                                                            ZLinkStreamMessageKind
+                                                                                    .RESPONSE,
+                                                                            ZLinkStreamCodec.RAW,
+                                                                            EnumSet.noneOf(
+                                                                                    ZLinkStreamHeaderFlag
+                                                                                            .class),
+                                                                            Optional.of(1L),
+                                                                            "",
+                                                                            Map.of()),
+                                                                    new byte[0]))));
+                            case "requestBoundActor" ->
                                     CompletableFuture.completedFuture(
                                             List.of(Message.from(new byte[0])));
                             case "unbindActor" ->
