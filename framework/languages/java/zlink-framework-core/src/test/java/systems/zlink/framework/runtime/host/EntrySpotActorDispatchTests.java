@@ -118,6 +118,47 @@ final class EntrySpotActorDispatchTests {
     }
 
     @ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(ints = {0, NO_BIND})
+    void malformedDisconnectRequestLogsWarningAtDefaultDiagnostics(int replyFlags)
+            throws Exception {
+        var logger =
+                java.util.logging.Logger.getLogger(
+                        systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer.class
+                                .getName());
+        LinkedBlockingQueue<java.util.logging.LogRecord> records = new LinkedBlockingQueue<>();
+        var handler =
+                new java.util.logging.Handler() {
+                    @Override
+                    public void publish(java.util.logging.LogRecord record) {
+                        if (record.getMessage().contains("reason=invalid_frame")
+                                && record.getMessage()
+                                        .contains(
+                                                systems.zlink.framework.runtime.actors
+                                                        .ZLinkActorSpotRoutePackets
+                                                        .SESSION_DISCONNECTED_PACKET_NAME)) {
+                            records.add(record);
+                        }
+                    }
+
+                    @Override
+                    public void flush() {}
+
+                    @Override
+                    public void close() {}
+                };
+        logger.addHandler(handler);
+        try {
+            disconnectRequestRepliesAfterCallbackOrDiscard("malformed", replyFlags);
+            var record = records.poll(5, TimeUnit.SECONDS);
+            assertTrue(record != null, "malformed disconnect must produce a dispatch error log");
+            assertEquals(java.util.logging.Level.WARNING, record.getLevel());
+            assertTrue(records.isEmpty(), "one discarded notification must produce one error log");
+        } finally {
+            logger.removeHandler(handler);
+        }
+    }
+
+    @ParameterizedTest
     @MethodSource("disconnectRequests")
     void disconnectRequestRepliesAfterCallbackOrDiscard(String scenario, int replyFlags)
             throws Exception {
