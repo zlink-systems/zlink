@@ -9,7 +9,6 @@ import {
   ZLinkFrameworkErrorKind,
   ZLinkFrameworkException
 } from '../../packages/framework/src/contracts/Errors/ZLinkFrameworkException';
-import { ZLinkConfigurationException } from '../../packages/framework/src/runtime/configuration';
 import { ZLinkSpotActivation } from '../../packages/framework/src/runtime/spots/spot-activation-state';
 import { ZLinkSpotSerialExecutor } from '../../packages/framework/src/runtime/spots/spot-serial-executor';
 import { ZLinkSpotSerialTurnExecutor } from '../../packages/framework/src/runtime/spots/spot-serial-turn-executor';
@@ -167,7 +166,12 @@ test('Yield rejects outside an allowed gate before worker admission', async () =
     scheduled += 1;
     return 'outside';
   });
-  assert.throws(() => outsideCall.yield(), ZLinkConfigurationException);
+  assert.throws(
+    () => outsideCall.yield(),
+    (error: unknown) =>
+      error instanceof ZLinkFrameworkException &&
+      error.kind === ZLinkFrameworkErrorKind.InvalidOperation
+  );
   assert.equal(scheduled, 0);
 
   const perActorSerial = new ZLinkSpotSerialTurnExecutor(false);
@@ -176,7 +180,12 @@ test('Yield rejects outside an allowed gate before worker admission', async () =
       scheduled += 1;
       return 'inside';
     });
-    assert.throws(() => call.yield(), ZLinkConfigurationException);
+    assert.throws(
+      () => call.yield(),
+      (error: unknown) =>
+        error instanceof ZLinkFrameworkException &&
+        error.kind === ZLinkFrameworkErrorKind.InvalidOperation
+    );
     assert.equal(scheduled, 0);
   });
 });
