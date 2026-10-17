@@ -25,36 +25,39 @@ internal static class ZLinkFrameworkJsonDocument
                     AllowTrailingCommas = false,
                 }
             );
-            var objectProperties = new Stack<HashSet<string>>();
-            while (reader.Read())
-            {
-                switch (reader.TokenType)
-                {
-                    case JsonTokenType.StartObject:
-                        objectProperties.Push(new HashSet<string>(StringComparer.Ordinal));
-                        break;
-                    case JsonTokenType.PropertyName:
-                        var name =
-                            reader.GetString()
-                            ?? throw new JsonException("JSON property name is null.");
-                        if (objectProperties.Count == 0 || !objectProperties.Peek().Add(name))
-                            throw new JsonException($"Duplicate JSON property '{name}'.");
-                        break;
-                    case JsonTokenType.EndObject:
-                        objectProperties.Pop();
-                        break;
-                    case JsonTokenType.Number:
-                        if (!reader.TryGetDouble(out var number) || double.IsInfinity(number))
-                            throw new JsonException(
-                                "framework-json-v1 only accepts finite JSON numbers."
-                            );
-                        break;
-                }
-            }
+            ValidateTokens(ref reader, null);
         }
         catch (JsonException error)
         {
             throw new JsonException("framework-json-v1 payload is malformed.", error);
+        }
+    }
+
+    private static void ValidateTokens(ref Utf8JsonReader reader, HashSet<string>? objectProperties)
+    {
+        while (reader.Read())
+        {
+            switch (reader.TokenType)
+            {
+                case JsonTokenType.StartObject:
+                    ValidateTokens(ref reader, new HashSet<string>(StringComparer.Ordinal));
+                    break;
+                case JsonTokenType.PropertyName:
+                    var name =
+                        reader.GetString()
+                        ?? throw new JsonException("JSON property name is null.");
+                    if (objectProperties is null || !objectProperties.Add(name))
+                        throw new JsonException($"Duplicate JSON property '{name}'.");
+                    break;
+                case JsonTokenType.EndObject:
+                    return;
+                case JsonTokenType.Number:
+                    if (!reader.TryGetDouble(out var number) || double.IsInfinity(number))
+                        throw new JsonException(
+                            "framework-json-v1 only accepts finite JSON numbers."
+                        );
+                    break;
+            }
         }
     }
 }
