@@ -1813,6 +1813,7 @@ class spot_node_runtime_t
                                 std::uint64_t target_spot_generation = 0,
                                 std::uint64_t target_spot_authority_owner_generation = 0);
     void dispatch_wire_actor_join_admission (const spot_id_t &target_spot_id,
+                                             std::string_view actor_id,
                                              std::function<task_t<void> ()> admission,
                                              std::function<void ()> rejected,
                                              std::function<void ()> completed = {});
@@ -2148,6 +2149,7 @@ class spot_node_runtime_t
       const std::string &join_spot_id,
       const std::vector<zlink::message_t> &parts,
       const zlink::message_t &request,
+      bool remote_transfer,
       bool targets_entry_spot,
       const std::string &local_node_rid,
       service_provider_t &services,

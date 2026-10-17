@@ -8902,6 +8902,7 @@ void spot_node_runtime_t::end_relocation_activation_admissions (
 
 void spot_node_runtime_t::dispatch_wire_actor_join_admission (
   const spot_id_t &target_spot_id,
+  std::string_view actor_id,
   std::function<task_t<void> ()> admission,
   std::function<void ()> rejected,
   std::function<void ()> completed)
@@ -8911,14 +8912,33 @@ void spot_node_runtime_t::dispatch_wire_actor_join_admission (
         rejected ();
         return;
     }
-    target->run_serial_task_async ("spot-actor-admission", std::move (admission),
-                                   [rejected = std::move (rejected),
-                                    completed = std::move (completed)] (result_t<void> outcome) {
-                                       if (!outcome)
-                                           rejected ();
-                                       if (completed)
-                                           completed ();
-                                   });
+    auto finished = [rejected = std::move (rejected),
+                     completed = std::move (completed)] (result_t<void> outcome) {
+        if (!outcome)
+            rejected ();
+        if (completed)
+            completed ();
+    };
+    // The local type projection names a retained source move; it does not
+    // replace the Store authority/type validation inside admission. Local
+    // membership controls supply no Actor ID because their source reservation
+    // belongs to the very Join this lifecycle item will complete.
+    const auto type = resolve_actor_type (actor_id);
+    auto source = type ? _state->actor_transfer_coordinator.wait_for_source_completion (
+                           *type + ":" + std::string (actor_id))
+                       : task_t<void> (result_t<void>::success ());
+    // Observe before submitting the target lifecycle item: its gate must stay
+    // available while the coordinator completes the previous source move.
+    detail::observe_task_completion (
+      source, [target, admission = std::move (admission),
+               finished = std::move (finished)] (const result_t<void> &outcome) mutable {
+          if (!outcome) {
+              finished (outcome);
+              return;
+          }
+          target->run_serial_task_async ("spot-actor-admission", std::move (admission),
+                                         std::move (finished));
+      });
 }
 
 std::shared_ptr<spot_context_state_t>
@@ -9056,8 +9076,9 @@ task_t<spot_actor_join_result_t> spot_node_runtime_t::admit_remote_actor_to_spot
     (void) _state->actor_transfer_coordinator.admit_attempt (actor_key (store_actor), transfer_id,
                                                              displaced_backlog);
     fail_handoff_backlog (_state, std::move (displaced_backlog));
-    // Source housekeeping may still own a move here. Normal callback rejection
-    // does not install an admission; accepted attempts arbitrate in try_add_admission.
+    // Admission dispatch has observed the previous source terminal before
+    // entering the target lifecycle. Normal callback rejection does not install
+    // an admission; accepted attempts arbitrate in try_add_admission.
     /* The admission callback is user code on the target Spot's lifecycle
      * lane; its item completes this task. A caller that holds that turn runs
      * it inline. The state lane is not held across it. */
@@ -15499,18 +15520,20 @@ bool spot_node_runtime_t::dispatch_mesh_record (
         std::function<void (std::function<void (result_t<void>)>)> source_leave;
     };
     auto join_result = std::make_shared<join_result_t> ();
+    const bool remote_transfer =
+      parts.size () >= 10 && owner.spot_id != join_dispatch_snapshot.local_node_rid;
     dispatch_wire_actor_join_admission (
-      spot_id_t (owner.spot_id),
+      spot_id_t (owner.spot_id), remote_transfer ? actor.actor_id ().value () : std::string_view{},
       [runtime = spot_node_runtime_t (_state), join_result, actor, control,
-       join_spot_id = owner.spot_id, parts,
+       join_spot_id = owner.spot_id, parts, remote_transfer,
        request = parts.empty () ? zlink::message_t{} : parts.front (),
        targets_entry_spot = join_dispatch_snapshot.targets_entry_spot,
        local_node_rid = join_dispatch_snapshot.local_node_rid, services = &services,
        serializers = &serializers] () mutable -> task_t<void> {
           join_result->joined.emplace (co_await runtime::await_result (
             runtime.run_actor_join_control (actor, control, join_spot_id, parts, request,
-                                            targets_entry_spot, local_node_rid, *services,
-                                            *serializers, &join_result->source_leave)));
+                                            remote_transfer, targets_entry_spot, local_node_rid,
+                                            *services, *serializers, &join_result->source_leave)));
       },
       [join_result, settle_once] {
           if (!join_result->joined)
@@ -15540,13 +15563,14 @@ task_t<actor_join_reply_t> spot_node_runtime_t::run_actor_join_control (
   const std::string &join_spot_id,
   const std::vector<zlink::message_t> &parts,
   const zlink::message_t &request,
+  bool remote_transfer,
   bool targets_entry_spot,
   const std::string &local_node_rid,
   service_provider_t &services,
   serializer_registry_t &serializers,
   std::function<void (std::function<void (result_t<void>)>)> *source_leave)
 {
-    if (parts.size () >= 10 && join_spot_id != local_node_rid) {
+    if (remote_transfer) {
         const auto target_spot = spot_id_t (join_spot_id);
         const auto transfer_id = parts[2].to_string ();
         auto admitted = co_await runtime::await_result (admit_remote_actor_to_spot (
