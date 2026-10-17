@@ -43,7 +43,7 @@ final class ZLinkActorJoinLifecycleAdmissionTest {
     @ValueSource(booleans = {false, true})
     void localAndCanonicalCallbacksShareTheWholeLifecycleTurn(boolean canonicalFirst)
             throws Exception {
-        try (var fixture = new Fixture()) {
+        try (var fixture = new Fixture<>(Room.class)) {
             var entered = new CompletableFuture<Void>();
             var release = new CompletableFuture<ZLinkSpotActorJoinResult>();
             fixture.room.callback =
@@ -78,7 +78,7 @@ final class ZLinkActorJoinLifecycleAdmissionTest {
 
     @Test
     void canonicalCallbackPropagatesRejectionAndFailure() throws Exception {
-        try (var fixture = new Fixture()) {
+        try (var fixture = new Fixture<>(Room.class)) {
             fixture.room.callback =
                     id -> CompletableFuture.completedFuture(ZLinkSpotActorJoinResult.reject());
             assertFalse(
@@ -95,7 +95,7 @@ final class ZLinkActorJoinLifecycleAdmissionTest {
 
     @Test
     void canonicalCapacityWaitDoesNotBlockInfrastructureAndPublishesInOrder() throws Exception {
-        try (var fixture = new Fixture()) {
+        try (var fixture = new Fixture<>(Room.class)) {
             var permits = fixture.exhaustCapacity();
             var release = new CompletableFuture<ZLinkSpotActorJoinResult>();
             var entered = new CompletableFuture<Void>();
@@ -146,7 +146,7 @@ final class ZLinkActorJoinLifecycleAdmissionTest {
 
     @Test
     void cancelledCapacityWaitAndHostDrainReturnEveryUnpublishedPermit() throws Exception {
-        try (var fixture = new Fixture()) {
+        try (var fixture = new Fixture<>(Room.class)) {
             var permits = fixture.exhaustCapacity();
             try {
                 var cancelled = fixture.local().toCompletableFuture();
@@ -181,21 +181,21 @@ final class ZLinkActorJoinLifecycleAdmissionTest {
         }
     }
 
-    private static final class Fixture implements AutoCloseable {
+    static final class Fixture<T extends ZLinkSpot<ZLinkActor>> implements AutoCloseable {
         final ZLinkFrameworkRuntime framework;
         final ZLinkSpotRuntime host;
         final SpotActivation activation;
-        final Room room;
+        final T room;
         final ZLinkApplicationJobQueue jobs;
 
-        Fixture() throws Exception {
+        Fixture(Class<T> roomType) throws Exception {
             var options = new DefaultZLinkFrameworkOptions();
             options.addLocationStore(new ZLinkInMemoryLocationStore());
             var node = options.addRouteMesh("join-admission");
             node.listen("inproc://join-admission-" + UUID.randomUUID()).setRoutingId(NODE);
             node.objects()
                     .server()
-                    .addSpotFactory("room", Room.class, factory -> factory.disableRelocation());
+                    .addSpotFactory("room", roomType, factory -> factory.disableRelocation());
             framework = ZLinkFrameworkRuntimeTestAccess.start(options);
             framework
                     .spotManager()
@@ -205,7 +205,7 @@ final class ZLinkActorJoinLifecycleAdmissionTest {
                     .get(5, TimeUnit.SECONDS);
             host = (ZLinkSpotRuntime) framework.spotManager();
             activation = host.spotLifecycle().spotActivationFor("room-a");
-            room = (Room) activation.spot();
+            room = roomType.cast(activation.spot());
             var jobsField = ZLinkSpotRuntime.class.getDeclaredField("applicationJobQueue");
             jobsField.setAccessible(true);
             jobs = (ZLinkApplicationJobQueue) jobsField.get(host);
@@ -267,7 +267,7 @@ final class ZLinkActorJoinLifecycleAdmissionTest {
         }
 
         CompletionStage<ZLinkSpotActorJoinResult> local() {
-            return activation.admitActorJoin(() -> room.onActorJoin("local", null));
+            return activation.admitActorJoin(() -> room.onActorJoin("local", ZLinkMessage.empty()));
         }
 
         CompletionStage<ZLinkSpotActorJoinResult> canonical(long sequence) {
