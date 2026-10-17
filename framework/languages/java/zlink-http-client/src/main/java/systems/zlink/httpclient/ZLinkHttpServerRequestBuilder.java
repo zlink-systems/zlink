@@ -66,9 +66,11 @@ public final class ZLinkHttpServerRequestBuilder {
         Objects.requireNonNull(callback, "callback");
         var scheduler = executionTurn.callbackScheduler();
         request.submit(type)
-                .whenCompleteAsync(
+                .whenComplete(
                         (response, error) ->
-                                callback.complete(error, error == null ? response : null),
-                        scheduler);
+                                scheduler.execute(
+                                        () ->
+                                                callback.complete(
+                                                        error, error == null ? response : null)));
     }
 }

@@ -17,6 +17,8 @@ import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.execution.ZLinkExecutionLanePolicy;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
+import systems.zlink.framework.monitoring.ZLinkFlowOrigin;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationContext;
 
 import java.net.InetSocketAddress;
@@ -29,6 +31,104 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 final class HttpYieldAdmissionTest {
+    @Test
+    void closedCallbackQueueReportsAdmissionFailure() throws Exception {
+        callbackFailureIsReported(true);
+    }
+
+    @Test
+    void throwingCallbackReportsOriginalFailure() throws Exception {
+        callbackFailureIsReported(false);
+    }
+
+    private static void callbackFailureIsReported(boolean closeBeforeCompletion) throws Exception {
+        var release = new CompletableFuture<Void>();
+        var executor = new ManualExecutor();
+        var queue = new ZLinkSerialExecutionQueue(executor, ZLinkExecutionLanePolicy.spot());
+        var records = new java.util.concurrent.CopyOnWriteArrayList<java.util.logging.LogRecord>();
+        var logger = java.util.logging.Logger.getLogger("systems.zlink.framework");
+        var handler =
+                new java.util.logging.Handler() {
+                    public void publish(java.util.logging.LogRecord record) {
+                        records.add(record);
+                    }
+
+                    public void flush() {}
+
+                    public void close() {}
+                };
+        var failure = new IllegalStateException("callback failed");
+        var callbacks = new AtomicInteger();
+        var dispatched = new CompletableFuture<Void>();
+        var frameworkTurn = new ZLinkFrameworkHttpExecutionTurn();
+        var observedTurn =
+                new ZLinkHttpExecutionTurn() {
+                    public <T> CompletionStage<T> async(CompletionStage<T> operation) {
+                        return frameworkTurn.async(operation);
+                    }
+
+                    public <T> CompletionStage<T> yield(
+                            java.util.function.Supplier<CompletionStage<T>> operation) {
+                        return frameworkTurn.yield(operation);
+                    }
+
+                    public java.util.concurrent.Executor callbackScheduler() {
+                        var scheduler = frameworkTurn.callbackScheduler();
+                        return command -> {
+                            try {
+                                scheduler.execute(command);
+                            } finally {
+                                dispatched.complete(null);
+                            }
+                        };
+                    }
+                };
+        logger.addHandler(handler);
+        try (var server = new HeldServer(release);
+                var client = ZLinkHttpClient.create(server.baseUrl()).buildServer(observedTurn)) {
+            var owner =
+                    queue.enqueue(
+                            () -> {
+                                try (var scope =
+                                        ZLinkSuspendInvocationContext.enterApplicationExecution(
+                                                application())) {
+                                    client.get("/callback")
+                                            .submit(
+                                                    String.class,
+                                                    (error, response) -> {
+                                                        callbacks.incrementAndGet();
+                                                        throw failure;
+                                                    });
+                                    return CompletableFuture.completedFuture(null);
+                                }
+                            },
+                            null);
+            executor.runUntil(owner.toCompletableFuture());
+            owner.toCompletableFuture().join();
+            if (closeBeforeCompletion) queue.sealClosingAdmission();
+            release.complete(null);
+            dispatched.get(5, java.util.concurrent.TimeUnit.SECONDS);
+            client.close();
+            executor.drain();
+            assertEquals(closeBeforeCompletion ? 0 : 1, callbacks.get());
+            assertEquals(1, records.size(), "callback failure must reach runtime error reporting");
+            var reported = records.getFirst().getThrown();
+            assertNotNull(reported);
+            if (closeBeforeCompletion) {
+                assertEquals(
+                        ZLinkFrameworkErrorKind.REJECTED,
+                        ((ZLinkFrameworkException) reported).kind());
+            } else {
+                assertSame(failure, reported);
+            }
+        } finally {
+            release.complete(null);
+            executor.drain();
+            queue.close();
+            logger.removeHandler(handler);
+        }
+    }
+
     @Test
     void factoryFailureResumesThroughYieldBeforeAnotherYield() throws Exception {
         var executor = new ManualExecutor();
@@ -226,6 +326,9 @@ final class HttpYieldAdmissionTest {
             var originCarrier = new AtomicReference<Object>();
             var callbackCarrier = new AtomicReference<Object>();
             var callbackApplication = new AtomicReference<Object>();
+            var callbackActor = new AtomicReference<String>();
+            var callbackFlow = new AtomicReference<ZLinkFlowContext.State>();
+            var flow = ZLinkFlowContext.create(ZLinkFlowOrigin.INBOUND);
             var owner =
                     queue.enqueue(
                             () -> {
@@ -235,19 +338,32 @@ final class HttpYieldAdmissionTest {
                                     originCarrier.set(
                                             ZLinkSuspendInvocationContext
                                                     .currentSerialExecutionTurn());
-                                    client.get("/callback")
-                                            .submit(
-                                                    String.class,
-                                                    (error, response) -> {
-                                                        callbackCarrier.set(
-                                                                ZLinkSuspendInvocationContext
-                                                                        .currentSerialExecutionTurn());
-                                                        callbackApplication.set(
-                                                                ZLinkSuspendInvocationContext
-                                                                        .currentApplicationExecution());
-                                                        if (error == null) callback.complete(null);
-                                                        else callback.completeExceptionally(error);
-                                                    });
+                                    try (var actor =
+                                                    ZLinkSuspendInvocationContext
+                                                            .enterActorDispatch("actor");
+                                            var flowScope = ZLinkFlowContext.enter(flow)) {
+                                        client.get("/callback")
+                                                .submit(
+                                                        String.class,
+                                                        (error, response) -> {
+                                                            callbackCarrier.set(
+                                                                    ZLinkSuspendInvocationContext
+                                                                            .currentSerialExecutionTurn());
+                                                            callbackApplication.set(
+                                                                    ZLinkSuspendInvocationContext
+                                                                            .currentApplicationExecution());
+                                                            callbackActor.set(
+                                                                    ZLinkSuspendInvocationContext
+                                                                            .currentActorDispatch());
+                                                            callbackFlow.set(
+                                                                    ZLinkFlowContext.current());
+                                                            if (error == null)
+                                                                callback.complete(null);
+                                                            else
+                                                                callback.completeExceptionally(
+                                                                        error);
+                                                        });
+                                    }
                                     return ownerRelease;
                                 }
                             },
@@ -271,6 +387,11 @@ final class HttpYieldAdmissionTest {
             assertNotNull(callbackApplication.get());
             assertNotNull(callbackCarrier.get());
             assertNotSame(originCarrier.get(), callbackCarrier.get());
+            assertEquals("actor", callbackActor.get());
+            assertSame(flow, callbackFlow.get());
+            assertNull(ZLinkSuspendInvocationContext.currentApplicationExecution());
+            assertNull(ZLinkSuspendInvocationContext.currentActorDispatch());
+            assertNull(ZLinkFlowContext.current());
         } finally {
             release.complete(null);
             ownerRelease.complete(null);
