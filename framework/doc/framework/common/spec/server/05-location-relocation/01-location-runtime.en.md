@@ -1503,7 +1503,7 @@ result count and the delivery-pending count is 0. Otherwise it's a recovery erro
 Connection closure or reconnection alone isn't judged as having received the completion
 result. The target keeps delivering on the current route. If the `Relocate` deadline
 passes while the source owner lease is still valid, it's `ForceStopped`. In this case
-payload and reply bytes are retained for 24 hours.
+the relocation root, payload, and reply bytes are retained for 24 hours.
 
 ### 9.4 Cancellation Before Relay-Ready Is Accepted
 
