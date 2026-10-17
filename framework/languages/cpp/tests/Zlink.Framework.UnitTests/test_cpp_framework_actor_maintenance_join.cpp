@@ -23,6 +23,7 @@
 #include <stdexcept>
 #include <thread>
 #include <tuple>
+#include <utility>
 
 namespace
 {
@@ -97,6 +98,7 @@ struct observations_t
     std::optional<std::size_t> completion_to_hold;
     fw::task_completion_source_t<void> release_completion;
     std::vector<std::string> factory_nodes;
+    std::vector<int> recorded;
 } *observations;
 struct move_t
 {
@@ -128,6 +130,12 @@ struct view_t
     int instance{};
 };
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE (view_t, instance)
+struct record_t
+{
+    static constexpr const char *packet_name = "maintenance-join-record";
+    int value{};
+};
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE (record_t, value)
 class actor_t final : public fw::actor_t
 {
   public:
@@ -200,6 +208,15 @@ class entry_t final : public fw::entry_spot_t<actor_t>
         _context.handlers ().add_actor_send<&entry_t::move> ();
         _context.handlers ().add_actor_request<&entry_t::probe> ();
         _context.handlers ().add_actor_send<&entry_t::view> ();
+        _context.handlers ().add_actor_send<&entry_t::record> ();
+    }
+    void record (actor_t &, fw::message_context_t &, const record_t &request)
+    {
+        {
+            std::lock_guard lock (observations->mutex);
+            observations->recorded.push_back (request.value);
+        }
+        observations->changed.notify_all ();
     }
     fw::task_t<void> view (actor_t &actor, fw::message_context_t &, const view_request_t &)
     {
@@ -1042,6 +1059,223 @@ TEST (ActorMaintenanceJoin, PublicEntryJoinCompletionPrecedesFirstCommand)
     const auto *accepted = std::get_if<fw::actor_join_accepted_t> (&evidence.completions.back ());
     ASSERT_NE (accepted, nullptr);
     EXPECT_TRUE (accepted->operation_id_high != 0 || accepted->operation_id_low != 0);
+}
+
+// A Store write is visible before its caller receives the result. Exercise that
+// public provider boundary without changing the relocation runtime or its lanes.
+class observed_location_store_t final : public fw::location_store_t
+{
+  public:
+    fw::task_t<fw::store_read_result_t> read (fw::store_key_t key) override
+    {
+        return _inner.read (std::move (key));
+    }
+    fw::task_t<fw::store_scan_result_t> scan (fw::store_scan_request_t request) override
+    {
+        return _inner.scan (std::move (request));
+    }
+    fw::task_t<fw::store_write_result_t> write (fw::store_write_request_t request) override
+    {
+        std::function<void ()> before_write;
+        {
+            std::lock_guard lock (_mutex);
+            if (_before_write && _before_write_ready (request))
+                before_write = std::exchange (_before_write, {});
+        }
+        if (before_write)
+            before_write ();
+        auto result = co_await _inner.write (std::move (request));
+        if (before_write) {
+            std::lock_guard lock (_mutex);
+            _intercepted_write_conflicted =
+              std::holds_alternative<fw::store_write_conflict_t> (result);
+        }
+        if (std::holds_alternative<fw::store_write_applied_t> (result)) {
+            std::lock_guard lock (_mutex);
+            if (_after_write)
+                _after_write ();
+        }
+        co_return result;
+    }
+    void observe (std::function<void ()> after_write)
+    {
+        std::lock_guard lock (_mutex);
+        _after_write = std::move (after_write);
+    }
+    void before_next_write_when (std::function<bool (const fw::store_write_request_t &)> ready,
+                                 std::function<void ()> action)
+    {
+        std::lock_guard lock (_mutex);
+        _before_write_ready = std::move (ready);
+        _before_write = std::move (action);
+    }
+    bool intercepted_write_conflicted ()
+    {
+        std::lock_guard lock (_mutex);
+        return _intercepted_write_conflicted;
+    }
+
+  private:
+    fw::runtime::in_memory_location_store_t _inner;
+    std::mutex _mutex;
+    std::function<void ()> _after_write;
+    std::function<bool (const fw::store_write_request_t &)> _before_write_ready;
+    std::function<void ()> _before_write;
+    bool _intercepted_write_conflicted = false;
+};
+
+TEST (ActorMaintenanceJoin, ReadyAuthorityAcceptsLocalSendBeforeStoreWriteReturns)
+{
+    observations_t evidence;
+    observations = &evidence;
+    auto store = std::make_shared<observed_location_store_t> ();
+    auto relocations = std::make_shared<fw::runtime::in_memory_relocation_store_t> ();
+    host_t source, target;
+    configure (source, first_rid, store, relocations, source_follow_duration);
+    source.start ();
+    ASSERT_TRUE (ready (source));
+    auto services = source.app.advanced ().services ().build_provider ();
+    ASSERT_TRUE (services.get_required<fw::actor_manager_t> ()
+                   .get_or_create (fw::actor_id_t (actor_id), actor_type)
+                   .timeout (wait_budget)
+                   .async ()
+                   .result ());
+    configure (target, second_rid, store, relocations, source_follow_duration);
+    target.start ();
+    ASSERT_TRUE (ready (target));
+    ASSERT_TRUE (peer_ready (services.get_required<fw::route_mesh_runtime_t> ()));
+    auto target_services = target.app.advanced ().services ().build_provider ();
+    auto &client = target_services.get_required<fw::actor_client_t> ();
+    auto &query = target_services.get_required<fw::location_runtime_query_t> ();
+    bool observed = false;
+    std::optional<fw::result_t<void>> sent;
+    store->observe ([&] {
+        if (observed)
+            return;
+        const auto location =
+          query.find_actor_location (fw::actor_id_t (actor_id)).result ().value ();
+        if (!location || location->state != fw::location_object_state_t::ready
+            || location->node_rid.to_string () != second_rid)
+            return;
+        observed = true;
+        std::fprintf (stderr,
+                      "Store write boundary: Ready ActorId=%s NodeRid=%s ObjectGeneration=%llu\n",
+                      location->global_id.c_str (), location->node_rid.to_string ().c_str (),
+                      static_cast<unsigned long long> (location->object_generation));
+        sent.emplace (client.send (fw::actor_id_t (actor_id), record_t{1}).async ().result ());
+        std::lock_guard lock (evidence.mutex);
+        EXPECT_TRUE (evidence.recorded.empty ());
+    });
+    const auto relocated =
+      source.app
+        .relocate ({.mode = fw::relocation_mode_t::planned_maintenance, .deadline = wait_budget})
+        .result ();
+    store->observe ({});
+    ASSERT_TRUE (observed);
+    ASSERT_TRUE (sent.has_value ());
+    ASSERT_TRUE (*sent) << (sent->error () ? sent->error ()->what () : "");
+    ASSERT_TRUE (relocated);
+    EXPECT_EQ (relocated.value ().outcome, fw::relocation_outcome_t::relocated);
+    const auto reply = client.request (fw::actor_id_t (actor_id), probe_t{instance_probe})
+                         .timeout (wait_budget)
+                         .async<probe_t> ()
+                         .result ();
+    ASSERT_TRUE (reply);
+    EXPECT_EQ (reply.value ().value, 2);
+    std::unique_lock lock (evidence.mutex);
+    EXPECT_TRUE (evidence.changed.wait_for (
+      lock, wait_budget, [&] { return evidence.recorded == std::vector<int>{1}; }));
+}
+
+TEST (ActorMaintenanceJoin, SourcePreserveDiscardsRawIdentityPreparedBeforeTargetCas)
+{
+    observations_t evidence;
+    observations = &evidence;
+    auto store = std::make_shared<observed_location_store_t> ();
+    auto relocations = std::make_shared<fw::runtime::in_memory_relocation_store_t> ();
+    host_t source, target;
+    configure (source, first_rid, store, relocations, source_follow_duration);
+    source.start ();
+    ASSERT_TRUE (ready (source));
+    auto services = source.app.advanced ().services ().build_provider ();
+    ASSERT_TRUE (services.get_required<fw::actor_manager_t> ()
+                   .get_or_create (fw::actor_id_t (actor_id), actor_type)
+                   .timeout (wait_budget)
+                   .async ()
+                   .result ());
+    auto &repository = services.get_required<fw::location_repository_t> ();
+    const auto key = fw::runtime::actor_authority_key (actor_id);
+    const auto original =
+      std::get<fw::authority_snapshot_t> (repository.read_authority (key).result ().value ());
+    configure (target, second_rid, store, relocations, source_follow_duration);
+    target.start ();
+    ASSERT_TRUE (ready (target));
+    ASSERT_TRUE (peer_ready (services.get_required<fw::route_mesh_runtime_t> ()));
+    auto target_services = target.app.advanced ().services ().build_provider ();
+    auto &query = target_services.get_required<fw::location_runtime_query_t> ();
+    const auto state =
+      fw::detail::mesh_node_runtime_t::registrations (target.app.advanced ().zlink ())
+        .front ()
+        ->spot_state;
+    const auto native = fw::detail::spot_node_runtime_t (state).native_node ();
+    const auto candidate = fw::runtime::host::public_host_runtime_t::remote_actor_ref (
+      zlink::routing_id_t::from (second_rid), actor_id, original.object_generation);
+    auto preserved = std::make_shared<std::promise<bool>> ();
+    auto preservation = preserved->get_future ();
+    store->before_next_write_when (
+      [&] (const fw::store_write_request_t &request) {
+          // Read-only observation of the raw index; the failure is injected
+          // through the Store provider, without a relocation runtime hook.
+          if (!native->resolve_actor (candidate))
+              return false;
+          const auto location =
+            query.find_actor_location (fw::actor_id_t (actor_id)).result ().value ();
+          if (!location || location->node_rid.to_string () != first_rid)
+              return false;
+          const auto current =
+            std::get<fw::authority_snapshot_t> (repository.read_authority (key).result ().value ());
+          // This in-memory Store issues globally distinct versions. Match
+          // the Actor row condition without decoding provider keys/payloads.
+          return std::ranges::any_of (request.conditions, [&] (const auto &condition) {
+              const auto *version = std::get_if<fw::store_version_condition_t> (&condition);
+              return version && version->expected.value == current.store_version;
+          });
+      },
+      [&, preserved] {
+          const auto current =
+            std::get<fw::authority_snapshot_t> (repository.read_authority (key).result ().value ());
+          // The existing source Preserve operation is an unchanged-authority
+          // CAS. Restore the uncaptured payload so this newer Store fence
+          // definitively excludes the pending target CAS (Location §10).
+          preserved->set_value (std::holds_alternative<fw::authority_stored_t> (
+            repository
+              .compare_exchange_authority (key, current.store_version,
+                                           fw::authority_put_t{original.payload})
+              .result ()
+              .value ()));
+      });
+    const auto relocated =
+      source.app
+        .relocate ({.mode = fw::relocation_mode_t::planned_maintenance, .deadline = wait_budget})
+        .result ();
+    store->before_next_write_when ({}, {});
+    ASSERT_EQ (preservation.wait_for (wait_budget), std::future_status::ready);
+    ASSERT_TRUE (preservation.get ());
+    ASSERT_TRUE (relocated);
+    EXPECT_NE (relocated.value ().outcome, fw::relocation_outcome_t::relocated);
+    {
+        std::unique_lock lock (evidence.mutex);
+        ASSERT_TRUE (evidence.changed.wait_for (lock, wait_budget, [&] {
+            return std::ranges::find (evidence.destroyed, 2) != evidence.destroyed.end ();
+        }));
+    }
+    EXPECT_TRUE (store->intercepted_write_conflicted ());
+    EXPECT_FALSE (native->resolve_actor (candidate));
+    native->seal_relocation_targets ().result ().value ();
+    EXPECT_FALSE (native->objects ().find (fw::runtime::stateful::object_kind_t::actor, actor_id));
+    const auto location = query.find_actor_location (fw::actor_id_t (actor_id)).result ().value ();
+    ASSERT_TRUE (location);
+    EXPECT_EQ (location->node_rid.to_string (), first_rid);
 }
 
 TEST (ActorMaintenanceJoin, HostShutdownClosesOccupiedUserSpot)

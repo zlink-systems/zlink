@@ -361,8 +361,6 @@ struct eligible_relocation_unit_t
         /* The unit Restore absolute deadline, owned by the source: from it the
          * source settles authority with its Preserve fence (01 §10). */
         std::chrono::steady_clock::time_point restore_deadline{};
-        /* The existing host lifecycle ends source settlement after shutdown. */
-        std::function<bool ()> source_stopped;
         // Core selected generation and admission readiness, observed by MeshNode.
         std::function<std::pair<std::uint64_t, bool> ()> target_route;
         // This is valid only after an exact target failure and before a
@@ -372,34 +370,11 @@ struct eligible_relocation_unit_t
     std::optional<canonical_wire_context_t> canonical_wire;
 };
 
-enum class target_preflight_status_t
-{
-    eligible,
-    target_unavailable,
-    store_unavailable,
-    relocation_disabled,
-    state_incompatible
-};
-
-struct target_preflight_result_t
-{
-    target_preflight_status_t status = target_preflight_status_t::target_unavailable;
-    std::vector<eligible_relocation_unit_t> units;
-};
-
-class target_preflight_port_t
-{
-  public:
-    virtual ~target_preflight_port_t () = default;
-    virtual target_preflight_result_t preflight (const std::vector<relocation_unit_t> &units) = 0;
-};
-
 struct maintenance_provider_set_t
 {
     std::shared_ptr<authority_relocation_port_t> authority;
     std::shared_ptr<aggregate_authority_port_t> aggregate_authority;
     std::shared_ptr<relocation_store_port_t> relocations;
-    std::shared_ptr<target_preflight_port_t> targets;
 };
 
 struct relocation_limits_t
@@ -668,6 +643,9 @@ class maintenance_runtime_t
     send_boundary_records (const eligible_relocation_unit_t::canonical_wire_context_t &context,
                            const std::vector<protocol::relocation_data_t> &records,
                            const relocation_ingress_batch_t &batch);
+    task_t<void>
+    submit_cutover (const eligible_relocation_unit_t::canonical_wire_context_t &context,
+                    const protocol::relocation_cutover_t &cutover);
     bool abort_target_before_cutover (
       const eligible_relocation_unit_t::canonical_wire_context_t &context) noexcept;
 
@@ -709,98 +687,43 @@ class maintenance_runtime_t
       _budget_waiters;
 };
 
-// This state gates maintenance admission only. The public seven-state host
-// lifecycle projects into it one way; callers must not treat this narrower
-// state machine as the public host authority.
-enum class maintenance_admission_state_t
-{
-    preparing,
-    serving,
-    retiring,
-    draining,
-    stopped,
-    error
-};
-
-enum class termination_intent_t
-{
-    retire,
-    shutdown
-};
-
 enum class termination_outcome_t
 {
     stopped,
-    blocked,
     force_stopped
 };
 
 enum class termination_reason_t
 {
     none,
-    target_unavailable,
-    store_unavailable,
-    relocation_disabled,
-    state_incompatible,
-    deadline_exceeded,
-    relocation_failed,
-    teardown_failed,
-    runtime_not_ready
+    teardown_failed
 };
 
 struct termination_result_t
 {
-    termination_intent_t effective_intent = termination_intent_t::shutdown;
-    termination_outcome_t outcome = termination_outcome_t::blocked;
-    termination_reason_t reason = termination_reason_t::runtime_not_ready;
-
-    friend bool operator== (const termination_result_t &, const termination_result_t &) = default;
+    termination_outcome_t outcome = termination_outcome_t::stopped;
+    termination_reason_t reason = termination_reason_t::none;
 };
 
 class host_maintenance_runtime_t
 {
   public:
-    using observer_t = std::function<void (const termination_result_t &)>;
-
     host_maintenance_runtime_t (stateful_object_runtime_t &objects,
                                 stream_session_registry_t &sessions,
-                                maintenance_runtime_t &relocation,
-                                std::shared_ptr<target_preflight_port_t> targets,
-                                observer_t observer = {},
                                 std::function<task_t<void> ()> seal_targets = {});
 
-    void mark_serving ();
-    void mark_error ();
-    maintenance_admission_state_t state () const;
-    task_t<termination_result_t> terminate (termination_intent_t intent);
-    std::optional<termination_result_t> terminal_result () const;
-    std::optional<termination_intent_t> intent_snapshot () const;
+    task_t<termination_result_t> terminate ();
 
   private:
-    static std::vector<relocation_unit_t>
-    inventory_units (std::vector<object_inventory_t> inventory);
-    task_t<termination_result_t> run_retire ();
-    task_t<termination_result_t> run_termination_attempt (termination_intent_t intent,
-                                                          std::uint64_t attempt);
-    task_t<termination_result_t> run_shutdown (termination_intent_t effective_intent);
-    void complete_attempt (std::uint64_t attempt, const termination_result_t &result);
+    task_t<termination_result_t> run_termination ();
+    task_t<termination_result_t> run_shutdown ();
+    void complete_termination (const termination_result_t &result);
 
     stateful_object_runtime_t &_objects;
     stream_session_registry_t &_sessions;
-    maintenance_runtime_t &_relocation;
-    std::shared_ptr<target_preflight_port_t> _targets;
-    observer_t _observer;
     std::function<task_t<void> ()> _seal_targets;
     offload_executor_t _lane_executor;
     mutable state_lane_t _lane;
-    maintenance_admission_state_t _state = maintenance_admission_state_t::preparing;
-    bool _active = false;
-    bool _inventory_sealed = false;
-    bool _shutdown_claimed = false;
-    std::optional<termination_intent_t> _effective_intent;
-    std::uint64_t _active_attempt = 0;
-    std::uint64_t _next_attempt = 1;
-    std::map<std::uint64_t, termination_result_t> _attempt_results;
     std::shared_ptr<task_completion_source_t<termination_result_t>> _active_completion;
     std::optional<termination_result_t> _terminal;
 };
