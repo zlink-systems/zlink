@@ -234,29 +234,29 @@ export class ZLinkActorSessionBindingRegistry<
       );
     }
 
+    const currentSessionIdentity = sessionIdentity ?? sessionIdentityFromContext(context);
     const sameBinding =
       previous !== undefined &&
-      previous.context === context &&
-      previous.bindingToken === bindingToken;
+      previous.bindingToken === bindingToken &&
+      (previous.context === context ||
+        (previous.sessionIdentity !== undefined &&
+          currentSessionIdentity !== undefined &&
+          routingIdsEqual(previous.sessionIdentity, currentSessionIdentity)));
     const actorSlot = sameBinding ? previous.actorSlot : this.issueActorSlot(context);
     commitActor?.();
     context.bindLocal(actor, bindingToken, actorSlot);
 
     try {
       if (previous !== undefined && !sameBinding) {
-        this.routes.delete(actor.actorId);
-        previous.context.unbindLocal(actor.actorId, previous.bindingToken);
-        if (previous.actorSlot !== undefined) {
-          let unbound: Promise<void> | undefined;
-          try {
-            unbound = previous.context.actorSlotControls?.enqueueUnbound(previous.actorSlot);
-          } catch (error) {
-            unbound = Promise.reject(error);
-          }
-          void unbound?.catch((error) =>
-            this.errorSink?.()?.reportRuntimeTaskException('retired session actor unbound', error)
-          );
-        }
+        const unbound = this.unbindCore(
+          actor.actorId,
+          previous.context,
+          previous.bindingToken,
+          ZLinkActorSessionBindingTermination.BindingEnd
+        );
+        void unbound?.catch((error) =>
+          this.errorSink?.()?.reportRuntimeTaskException('retired session actor unbound', error)
+        );
       }
 
       if (!sameBinding && actorSlot !== undefined) {
@@ -284,16 +284,19 @@ export class ZLinkActorSessionBindingRegistry<
       throw error;
     }
 
+    const bindingState = sameBinding ? previous : undefined;
     this.routes.set(actor.actorId, {
       context,
       actor,
       bindingToken,
       actorSlot,
-      sessionIdentity: sessionIdentity ?? sessionIdentityFromContext(context),
+      sessionIdentity: currentSessionIdentity,
+      // Accepted frames retain their completion fence across route replacement;
+      // the successor's seal must still drain them (Session binding §8.1).
       activeFrames: previous?.activeFrames ?? { count: 0, requests: new Set() },
-      sealId: previous?.sealId,
-      sessionRelocationResult: sameBinding ? previous.sessionRelocationResult : undefined,
-      authorityFence: authorityFence ?? previous?.authorityFence
+      sealId: bindingState?.sealId,
+      sessionRelocationResult: bindingState?.sessionRelocationResult,
+      authorityFence: authorityFence ?? bindingState?.authorityFence
     });
   }
 
@@ -486,7 +489,11 @@ export class ZLinkActorSessionBindingRegistry<
       termination === ZLinkActorSessionBindingTermination.BindingEnd &&
       route.actorSlot !== undefined
     ) {
-      return context.actorSlotControls?.enqueueUnbound(route.actorSlot);
+      try {
+        return context.actorSlotControls?.enqueueUnbound(route.actorSlot);
+      } catch (error) {
+        return Promise.reject(error);
+      }
     }
     return undefined;
   }
