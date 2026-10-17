@@ -3190,9 +3190,9 @@ int common_session_disconnect_uses_actor_packet_route ()
     if (errors.size () != 5)
         return 5;
     for (const auto &error : errors) {
-        if (error.message_kind != dispatch_message_kind_t::actor_request) {
+        if (error.message_kind != dispatch_message_kind_t::actor_send) {
             std::cerr << "Session disconnect malformed diagnostic kind mismatch: expected "
-                         "actor_request, actual="
+                         "actor_send, actual="
                       << static_cast<int> (error.message_kind) << std::endl;
             return 6;
         }

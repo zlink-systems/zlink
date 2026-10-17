@@ -11,6 +11,7 @@
 #include "runtime/diagnostics/dispatch_options_access.hpp"
 #include "runtime/diagnostics/message_flow_tracer.hpp"
 #include "runtime/actors/actor_gateway_runtime.hpp"
+#include "runtime/protocol/service_wire_codec.hpp"
 #include <zlink/framework/contracts/configuration/app.hpp>
 
 #include <atomic>
@@ -718,31 +719,30 @@ int main ()
                  != log_level_t::error) {
             return 27;
         }
-        auto disconnected_error = error_event ();
-        disconnected_error.message_kind = dispatch_message_kind_t::actor_request;
-        disconnected_error.reason = dispatch_error_reason_t::invalid_frame;
-        disconnected_error.action = dispatch_error_action_t::drop;
-        disconnected_error.packet_name = runtime::protocol::session_disconnected_packet_name;
-        if (detail::dispatch_error_reporter_t::default_log_level (disconnected_error)
-            != log_level_t::warn) {
-            return 71;
-        }
-        disconnected_error.packet_name = "other.actor.packet";
-        if (detail::dispatch_error_reporter_t::default_log_level (disconnected_error)
-            != log_level_t::error) {
-            return 72;
-        }
-        disconnected_error.packet_name = runtime::protocol::session_disconnected_packet_name;
-        disconnected_error.action = dispatch_error_action_t::reply_error;
-        if (detail::dispatch_error_reporter_t::default_log_level (disconnected_error)
-            != log_level_t::error) {
-            return 73;
-        }
-        disconnected_error.action = dispatch_error_action_t::drop;
-        disconnected_error.reason = dispatch_error_reason_t::handler_exception;
-        if (detail::dispatch_error_reporter_t::default_log_level (disconnected_error)
-            != log_level_t::error) {
-            return 74;
+        // Packet names do not choose severity. Malformed notifications use
+        // the existing one-way classification at their decode boundary.
+        for (const auto kind :
+             {dispatch_message_kind_t::actor_send, dispatch_message_kind_t::actor_request}) {
+            for (const auto packet :
+                 {runtime::protocol::session_disconnected_packet_name, "other.actor.packet"}) {
+                auto event = error_event ();
+                event.message_kind = kind;
+                event.reason = dispatch_error_reason_t::invalid_frame;
+                event.action = dispatch_error_action_t::drop;
+                event.packet_name = packet;
+                const auto expected = kind == dispatch_message_kind_t::actor_send
+                                        ? log_level_t::warn
+                                        : log_level_t::error;
+                if (detail::dispatch_error_reporter_t::default_log_level (event) != expected)
+                    return 71;
+                event.action = dispatch_error_action_t::reply_error;
+                if (detail::dispatch_error_reporter_t::default_log_level (event) != expected)
+                    return 73;
+                event.reason = dispatch_error_reason_t::handler_exception;
+                if (detail::dispatch_error_reporter_t::default_log_level (event)
+                    != log_level_t::error)
+                    return 74;
+            }
         }
         if (enum_name (message_flow_outcome_t::received) != "received"
             || enum_name (message_flow_outcome_t::admitted) != "admitted"

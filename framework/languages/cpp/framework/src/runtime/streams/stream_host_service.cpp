@@ -2222,6 +2222,9 @@ class stream_host_service_t::listener_t
         auto created = std::make_shared<core_session_t> (
           std::move (scope), session, actors, std::move (stream), std::move (transport_connection),
           established, _stream.liveness);
+        // Register before dispatch/configuration can fail so the caller's close
+        // path retires the canonical connection and its bindings.
+        _core_sessions.emplace (key, created);
         auto replacement = register_replacement_session (
           rid, created->stream,
           [this, rid] { request_core_peer_disconnect (rid, "actor_binding_replaced"); },
@@ -2269,7 +2272,6 @@ class stream_host_service_t::listener_t
         }
         created->connected = true;
         record_connection_opened ();
-        _core_sessions.emplace (key, created);
         register_active_stream (
           created->stream, [this] { _core_wake_timer.signal (); },
           [this, rid] (stream_close_reason_t reason, std::string diagnostic) {

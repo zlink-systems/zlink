@@ -4512,13 +4512,13 @@ void spot_handler_registry_t::register_actor_admission_erased (
               kind, runtime::protocol::session_disconnected_packet_name, {},
               std::type_index (typeid (void)), std::type_index (typeid (zlink::message_t)),
               actor_type, std::type_index (typeid (zlink::message_t)),
-              [owner, actor_type, kind] (void *, void *actor, service_provider_t &services,
-                                         serializer_registry_t &, const zlink::message_t &body,
-                                         const spot_inbound_message_t &) {
+              [owner, actor_type] (void *, void *actor, service_provider_t &services,
+                                   serializer_registry_t &, const zlink::message_t &body,
+                                   const spot_inbound_message_t &) {
                   return detail::spot_node_runtime_t (owner.lock ())
                     .notify_actor_disconnected_erased (
                       actor, actor_type, services.get_required<detail::actor_gateway_runtime_t> (),
-                      body, kind);
+                      body);
               });
     }
 }
@@ -12786,8 +12786,7 @@ task_t<zlink::message_t>
 spot_node_runtime_t::notify_actor_disconnected_erased (void *instance,
                                                        std::type_index actor_type,
                                                        actor_gateway_runtime_t gateway,
-                                                       zlink::message_t body,
-                                                       spot_handler_kind_t kind) const
+                                                       zlink::message_t body) const
 {
     const auto state_owner = _state;
     struct disconnect_plan_t
@@ -12846,9 +12845,8 @@ spot_node_runtime_t::notify_actor_disconnected_erased (void *instance,
         detail::dispatch_error_reporter_t (state_owner->dispatch).report_lazy ([&] {
             return message_dispatch_error_event_t{
               .surface = dispatch_error_surface_t::spot_actor,
-              .message_kind = kind == spot_handler_kind_t::actor_request
-                                ? dispatch_message_kind_t::actor_request
-                                : dispatch_message_kind_t::actor_send,
+              // This notification is dropped with a successful reply (binding §7).
+              .message_kind = dispatch_message_kind_t::actor_send,
               .reason = dispatch_error_reason_t::invalid_frame,
               .action = dispatch_error_action_t::drop,
               .packet_name = runtime::protocol::session_disconnected_packet_name,
