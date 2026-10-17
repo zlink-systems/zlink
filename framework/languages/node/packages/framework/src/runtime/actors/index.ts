@@ -944,7 +944,7 @@ class ZLinkActorCreateCallRuntime implements ZLinkActorCreateCall {
   yield(signal?: AbortSignal): Promise<ZLinkActorCreateResult> {
     const turn = requireZLinkYieldTurn(this.turn);
     const pending = this.executeOnce(signal);
-    return turn.yieldPromise(pending);
+    return turn.yieldFrameworkPromise(pending);
   }
 
   private executeOnce(signal?: AbortSignal): Promise<ZLinkActorCreateResult> {
