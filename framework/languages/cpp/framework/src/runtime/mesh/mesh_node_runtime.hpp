@@ -275,7 +275,7 @@ class mesh_node_runtime_t
                   const std::vector<zlink::message_t> &parts,
                   const std::map<std::string, std::string> &metadata);
     task_t<zlink::submit_result_t> request_to_node (const zlink::routing_id_t &target,
-                                                    const std::vector<zlink::message_t> &parts,
+                                                    std::vector<zlink::message_t> parts,
                                                     host::pending_operation_t &operation_id,
                                                     std::chrono::milliseconds timeout,
                                                     std::vector<std::uint8_t> metadata = {});
@@ -613,8 +613,13 @@ class mesh_node_runtime_t
                                       const std::vector<zlink::message_t> &parts,
                                       const actor_ref_t &actor,
                                       const std::shared_ptr<mesh_node_builder_state_t> &state);
+    // Classifies a Node direct target before submit. Topology decides admitted
+    // and not-required peers without a lookup; only a target unknown to the
+    // topology is looked up in the Location Store.
+    std::optional<zlink::submit_result_t>
+    classify_node_target_from_topology (const zlink::routing_id_t &target, bool &unknown) const;
     task_t<std::optional<zlink::submit_result_t>>
-    classify_node_direct_target (const zlink::routing_id_t &target) const;
+    classify_unknown_node_target (const zlink::routing_id_t &target) const;
     std::shared_ptr<mesh_node_builder_state_t> _state;
     serializer_registry_t *_serializers = nullptr;
     std::shared_ptr<location_repository_t> _user_spot_store;
@@ -668,7 +673,6 @@ class mesh_node_runtime_t
     std::map<message_follow_subscription_id_t, std::shared_ptr<message_follow_subscription_state_t>>
       _message_follow_subscriptions;
     std::map<std::string, host::spot_handle_t> _spots;
-    std::map<std::string, host::actor_handle_t> _actors;
     runtime::offload_executor_t _peer_connection_intent_lane_executor;
     runtime::state_lane_t _peer_connection_intent_lane{_peer_connection_intent_lane_executor};
     std::atomic_uint64_t _pending_application_callbacks{0};

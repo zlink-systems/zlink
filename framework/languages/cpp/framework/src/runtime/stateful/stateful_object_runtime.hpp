@@ -338,6 +338,7 @@ class stateful_object_runtime_t
                                          std::vector<std::uint8_t> payload);
     std::vector<logical_timer_t> timers (const object_ref_t &owner) const;
     std::vector<object_inventory_t> inventory () const;
+    task_t<std::vector<object_inventory_t>> actor_inventory () const;
     std::optional<std::vector<object_inventory_t>> try_begin_maintenance_inventory ();
     void end_maintenance_inventory () noexcept;
     task_t<aggregate_relocation_seal_attempt_t>
@@ -437,6 +438,7 @@ class stateful_object_runtime_t
         std::function<void (const object_ref_t &, const turn_record_t &)> deliver;
     };
 
+    bool finalized_relocation_source_on_lane (const object_record_t &object) const;
     static bool valid_text (const std::string &value);
     static bool same_exact_ref (const object_ref_t &left, const object_ref_t &right);
     /* Return-relocation remnant (spec 28 §2/§8): after this node handed an

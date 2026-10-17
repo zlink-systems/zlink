@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <limits>
 #include <string_view>
 #include <type_traits>
@@ -309,7 +310,7 @@ pack_infrastructure_reply (const std::vector<std::vector<std::uint8_t>> &parts)
 }
 
 std::vector<std::vector<std::uint8_t>>
-unpack_infrastructure_reply (const std::vector<std::uint8_t> &packed)
+unpack_infrastructure_reply (std::span<const std::uint8_t> packed)
 {
     if (packed.empty () || packed.front () == 0 || packed.front () > 2) {
         throw service_wire_error_t ("invalid packed infrastructure reply");
@@ -2721,30 +2722,62 @@ application_payload_t decode_application_payload (std::span<const std::uint8_t> 
     });
 }
 
+namespace
+{
+// One received message backs every part decoded from it. Each part holds one
+// reference; the message is released with the last part.
+struct retained_application_message_t
+{
+    explicit retained_application_message_t (zlink::message_t &&value) : bytes (std::move (value))
+    {
+    }
+
+    void release () noexcept
+    {
+        if (references.fetch_sub (1, std::memory_order_acq_rel) == 1)
+            delete this;
+    }
+
+    zlink::message_t bytes;
+    std::atomic<std::size_t> references{1};
+};
+}
+
 application_payload_t::multipart_t decode_application_parts (zlink::message_t &&bytes,
                                                              bool capture_flow)
 {
-    auto owner = std::make_shared<zlink::message_t> (std::move (bytes));
+    auto *owner = new retained_application_message_t (std::move (bytes));
     application_payload_t::multipart_t parts;
-    (void) decode_application_payload_bytes (
-      message_bytes (*owner), capture_flow, [&owner, &parts] (auto &result, auto body) {
-          if (result.packet_name != framework_multipart_packet_name
-              || result.content_type != framework_multipart_content_type)
-              throw service_wire_error_t ("framework application payload profile is unsupported");
-          parts = decode_application_parts_bytes (body, [&owner] (auto part) {
-              auto retained = std::make_unique<std::shared_ptr<zlink::message_t>> (owner);
-              auto message = zlink::advanced::external_message_t::from (
-                std::span<std::uint8_t> (const_cast<std::uint8_t *> (part.data ()), part.size ()),
-                [] (void *, void *hint) {
-                    delete static_cast<std::shared_ptr<zlink::message_t> *> (hint);
-                },
-                retained.get ());
-              if (!message.valid ())
-                  throw std::bad_alloc ();
-              retained.release ();
-              return message;
+    try {
+        (void) decode_application_payload_bytes (
+          message_bytes (owner->bytes), capture_flow, [owner, &parts] (auto &result, auto body) {
+              if (result.packet_name != framework_multipart_packet_name
+                  || result.content_type != framework_multipart_content_type)
+                  throw service_wire_error_t (
+                    "framework application payload profile is unsupported");
+              parts = decode_application_parts_bytes (body, [owner] (auto part) {
+                  owner->references.fetch_add (1, std::memory_order_relaxed);
+                  auto message = zlink::advanced::external_message_t::from (
+                    std::span<std::uint8_t> (const_cast<std::uint8_t *> (part.data ()),
+                                             part.size ()),
+                    [] (void *, void *hint) {
+                        static_cast<retained_application_message_t *> (hint)->release ();
+                    },
+                    owner);
+                  if (!message.valid ()) {
+                      owner->release ();
+                      throw std::bad_alloc ();
+                  }
+                  return message;
+              });
           });
-      });
+    }
+    catch (...) {
+        parts.clear ();
+        owner->release ();
+        throw;
+    }
+    owner->release ();
     return parts;
 }
 
@@ -3232,7 +3265,8 @@ std::vector<std::uint8_t> encode_reply_header (std::uint64_t correlation,
 reply_header_t decode_reply_header (std::span<const std::uint8_t> bytes)
 {
     const auto header = decode_header (bytes);
-    if (header.kind != command::reply || header.flags != 0 || bytes.size () < prefix_size + 16) {
+    if (header.kind != command::reply || header.flags != 0
+        || bytes.size () < reply_header_t::encoded_size) {
         throw service_wire_error_t ("invalid reply header");
     }
     //  service-wire-v1.schema.json: reply(20).tail -> `request-specific-tail`,
