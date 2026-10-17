@@ -360,7 +360,7 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                             observed,
                             new ZLinkStandaloneActorRelocationStagingOwner(targetBackend),
                             targetJoin,
-                            ignored -> CompletableFuture.completedFuture(null));
+                            (ignored, generations) -> CompletableFuture.completedFuture(null));
             link.endpoint.set(endpoint);
 
             var sourceMachine =

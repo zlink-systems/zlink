@@ -34,6 +34,7 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.BiFunction;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
@@ -61,7 +62,8 @@ final class ZLinkUserSpotRetireTargetEndpoint
     private final ZLinkSessionRelocationPeerClient sessionRoutes;
     private final Duration routeTimeout;
     private final SteadyNormalizer normalizer;
-    private final Function<ZLinkSpotRetireControl.StageRequest, CompletionStage<Void>>
+    private final BiFunction<
+                    ZLinkSpotRetireControl.StageRequest, Map<String, Long>, CompletionStage<Void>>
             boundSessionRestorer;
     private final ZLinkSpotRuntime sourceReplies;
     private final ZLinkSpotRetireControl.Client relocationClient;
@@ -101,7 +103,7 @@ final class ZLinkUserSpotRetireTargetEndpoint
                 null,
                 null,
                 null,
-                ignored -> CompletableFuture.completedFuture(null));
+                (ignored, generations) -> CompletableFuture.completedFuture(null));
     }
 
     ZLinkUserSpotRetireTargetEndpoint(
@@ -133,7 +135,7 @@ final class ZLinkUserSpotRetireTargetEndpoint
                 locations,
                 actorStaging,
                 null,
-                ignored -> CompletableFuture.completedFuture(null));
+                (ignored, generations) -> CompletableFuture.completedFuture(null));
     }
 
     ZLinkUserSpotRetireTargetEndpoint(
@@ -151,7 +153,10 @@ final class ZLinkUserSpotRetireTargetEndpoint
             ZLinkLocationRepository locations,
             ZLinkStandaloneActorRelocationStagingOwner actorStaging,
             ZLinkActorJoinCanonicalAdapter actorJoin,
-            Function<ZLinkSpotRetireControl.StageRequest, CompletionStage<Void>>
+            BiFunction<
+                            ZLinkSpotRetireControl.StageRequest,
+                            Map<String, Long>,
+                            CompletionStage<Void>>
                     boundSessionRestorer) {
         this.localNodeRid = Objects.requireNonNull(localNodeRid, "localNodeRid");
         // localNodeGeneration is a node lifecycle-generation opaque equality
@@ -293,7 +298,8 @@ final class ZLinkUserSpotRetireTargetEndpoint
                                                         .thenCompose(
                                                                 ignored ->
                                                                         boundSessionRestorer.apply(
-                                                                                request))
+                                                                                request,
+                                                                                actorOwnerGenerations))
                                                         .thenCompose(
                                                                 ignored -> {
                                                                     staging.openAdmission(

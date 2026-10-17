@@ -17,6 +17,7 @@ import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.locations.*;
 import systems.zlink.framework.runtime.actors.ZLinkActorRuntime;
 import systems.zlink.framework.runtime.actors.ZLinkSessionRelocationPeerClient;
+import systems.zlink.framework.runtime.binding.ZLinkRelocationRawSessionFixture;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
@@ -446,104 +447,111 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                         null,
                         null,
                         recoveredBackend::restoreBoundSession);
-        recoveredEndpoint.stage(request).toCompletableFuture().join();
-        List<byte[]> stagedReplies = new CopyOnWriteArrayList<>();
-        AtomicInteger stagedFailures = new AtomicInteger();
-        byte[] stagedRecord = acceptedSpotRequest(spotId, 5);
-        var stagedHeader =
-                new ZLinkServiceM6BWireCodec.SpotMessage(
-                        true,
-                        0,
-                        43L,
-                        301,
-                        303,
-                        1,
-                        "source",
-                        new ZLinkServiceM6BWireCodec.SpotRouteFence(
-                                spotId, 3, targetRid, targetNodeGeneration, 5, 23));
-        Message wrongSourcePart = Message.from("wrong-source");
-        assertFalse(
-                recoveredEndpoint.handleSpot(
-                        new ZLinkInternalMeshNode.PeerAuthorityFence(
-                                sourceRid, 11, "wrong-owner", 12),
-                        stagedHeader,
-                        new byte[0],
-                        () -> stagedRecord,
-                        stagedRecord.length,
-                        List.of(wrongSourcePart),
-                        null,
-                        null,
-                        ignored -> stagedFailures.incrementAndGet()));
-        wrongSourcePart.close();
-        assertTrue(
-                recoveredEndpoint.handleSpot(
-                        new ZLinkInternalMeshNode.PeerAuthorityFence(
-                                sourceRid, 11, "source-owner", 12),
-                        stagedHeader,
-                        new byte[0],
-                        () -> stagedRecord,
-                        stagedRecord.length,
-                        List.of(Message.from("target-staged-request")),
-                        null,
-                        reply -> {
-                            stagedReplies.add(reply.getFirst().toByteArray());
-                            reply.forEach(Message::close);
-                        },
-                        ignored -> stagedFailures.incrementAndGet()));
-        assertTrue(stagedReplies.isEmpty());
-        assertEquals(0, stagedFailures.get());
-        recoveredEndpoint
-                .stageRelayedRecord(request, acceptedSpotRequest(spotId, 4))
-                .toCompletableFuture()
-                .join();
-        var publication = recoveredEndpoint.publish(request).toCompletableFuture();
         try {
-            assertFalse(publication.isDone(), "publication must await bound Session restoration");
-            assertFalse(recoveredBackend.lifecycleOpen, "restoration must precede admission");
-            assertEquals(0, recoveredBackend.admittedTurns, "replay must await restoration");
-            assertFalse(recoveredBackend.operations.contains("command44"));
+            recoveredEndpoint.stage(request).toCompletableFuture().join();
+            List<byte[]> stagedReplies = new CopyOnWriteArrayList<>();
+            AtomicInteger stagedFailures = new AtomicInteger();
+            byte[] stagedRecord = acceptedSpotRequest(spotId, 5);
+            var stagedHeader =
+                    new ZLinkServiceM6BWireCodec.SpotMessage(
+                            true,
+                            0,
+                            43L,
+                            301,
+                            303,
+                            1,
+                            "source",
+                            new ZLinkServiceM6BWireCodec.SpotRouteFence(
+                                    spotId, 3, targetRid, targetNodeGeneration, 5, 23));
+            Message wrongSourcePart = Message.from("wrong-source");
+            assertFalse(
+                    recoveredEndpoint.handleSpot(
+                            new ZLinkInternalMeshNode.PeerAuthorityFence(
+                                    sourceRid, 11, "wrong-owner", 12),
+                            stagedHeader,
+                            new byte[0],
+                            () -> stagedRecord,
+                            stagedRecord.length,
+                            List.of(wrongSourcePart),
+                            null,
+                            null,
+                            ignored -> stagedFailures.incrementAndGet()));
+            wrongSourcePart.close();
+            assertTrue(
+                    recoveredEndpoint.handleSpot(
+                            new ZLinkInternalMeshNode.PeerAuthorityFence(
+                                    sourceRid, 11, "source-owner", 12),
+                            stagedHeader,
+                            new byte[0],
+                            () -> stagedRecord,
+                            stagedRecord.length,
+                            List.of(Message.from("target-staged-request")),
+                            null,
+                            reply -> {
+                                stagedReplies.add(reply.getFirst().toByteArray());
+                                reply.forEach(Message::close);
+                            },
+                            ignored -> stagedFailures.incrementAndGet()));
+            assertTrue(stagedReplies.isEmpty());
+            assertEquals(0, stagedFailures.get());
+            recoveredEndpoint
+                    .stageRelayedRecord(request, acceptedSpotRequest(spotId, 4))
+                    .toCompletableFuture()
+                    .join();
+            var publication = recoveredEndpoint.publish(request).toCompletableFuture();
+            try {
+                assertFalse(
+                        publication.isDone(), "publication must await bound Session restoration");
+                assertFalse(recoveredBackend.lifecycleOpen, "restoration must precede admission");
+                assertEquals(0, recoveredBackend.admittedTurns, "replay must await restoration");
+                assertFalse(recoveredBackend.operations.contains("command44"));
+            } finally {
+                recoveredBackend.restoreRelease.complete(null);
+            }
+            publication.join();
+
+            assertEquals(List.of(actorId, "spot"), recoveredBackend.live);
+            assertEquals(
+                    List.of(
+                            "prepare",
+                            "restore",
+                            "prepare-actor",
+                            "publish-actor",
+                            "publish",
+                            "complete-actor",
+                            "timers",
+                            "actor-push",
+                            "replay-send:1",
+                            "replay-send:2",
+                            "replay-send:3",
+                            "replay-request:4",
+                            "replay-request:5",
+                            "command44",
+                            "normalize"),
+                    recoveredBackend.operations,
+                    "saved, relay and temporary work must remain durable until the"
+                            + " target is published and its lifecycle admission is open");
+            assertEquals(1, stagedReplies.size());
+            assertArrayEquals(new byte[] {9}, stagedReplies.getFirst());
+            assertEquals(0, stagedFailures.get());
+            assertEquals(
+                    1,
+                    relays.get(),
+                    "the preserved request reply must relay once without an ACK journal retry");
+            assertEquals(
+                    6,
+                    recoveredBackend.admittedTurns,
+                    "each saved, relay and temporary item owns one shared permit turn");
+            assertEquals(
+                    1,
+                    recoveredBackend.maxActiveTurns,
+                    "a live limit of one must restore the durable backlog progressively");
+            recoveredBackend.rawSession.assertFirstPush();
         } finally {
             recoveredBackend.restoreRelease.complete(null);
+            recoveredBackend.actorRuntime.closeAsync().toCompletableFuture().join();
+            recoveredBackend.rawSession.close();
         }
-        publication.join();
-
-        assertEquals(List.of(actorId, "spot"), recoveredBackend.live);
-        assertEquals(
-                List.of(
-                        "prepare",
-                        "restore",
-                        "prepare-actor",
-                        "publish-actor",
-                        "publish",
-                        "complete-actor",
-                        "timers",
-                        "actor-push",
-                        "replay-send:1",
-                        "replay-send:2",
-                        "replay-send:3",
-                        "replay-request:4",
-                        "replay-request:5",
-                        "command44",
-                        "normalize"),
-                recoveredBackend.operations,
-                "saved, relay and temporary work must remain durable until the"
-                        + " target is published and its lifecycle admission is open");
-        assertEquals(1, stagedReplies.size());
-        assertArrayEquals(new byte[] {9}, stagedReplies.getFirst());
-        assertEquals(0, stagedFailures.get());
-        assertEquals(
-                1,
-                relays.get(),
-                "the preserved request reply must relay once without an ACK journal retry");
-        assertEquals(
-                6,
-                recoveredBackend.admittedTurns,
-                "each saved, relay and temporary item owns one shared permit turn");
-        assertEquals(
-                1,
-                recoveredBackend.maxActiveTurns,
-                "a live limit of one must restore the durable backlog progressively");
-        recoveredBackend.actorRuntime.closeAsync().toCompletableFuture().join();
     }
 
     @Test
@@ -988,6 +996,7 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
         private final CompletableFuture<Void> restoreRelease = new CompletableFuture<>();
         private final ZLinkActorRuntime actorRuntime;
         private final ZLinkInternalSpotNode sessionNode;
+        private ZLinkRelocationRawSessionFixture rawSession;
 
         private FakeStagingBackend() {
             this(false);
@@ -999,26 +1008,8 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                 sessionNode = null;
                 return;
             }
-            sessionNode =
-                    (ZLinkInternalSpotNode)
-                            Proxy.newProxyInstance(
-                                    ZLinkInternalSpotNode.class.getClassLoader(),
-                                    new Class<?>[] {ZLinkInternalSpotNode.class},
-                                    (proxy, method, args) ->
-                                            switch (method.getName()) {
-                                                case "routingId" -> RoutingId.from("target-node");
-                                                case "hasRemoteActorBoundSessionRoute" -> true;
-                                                case "sendRemoteActorBoundSession" -> {
-                                                    operations.add("actor-push");
-                                                    yield CompletableFuture.completedFuture(null);
-                                                }
-                                                case "destroyActor" ->
-                                                        CompletableFuture.completedFuture(null);
-                                                case "close" -> null;
-                                                default ->
-                                                        throw new UnsupportedOperationException(
-                                                                method.getName());
-                                            });
+            rawSession = new ZLinkRelocationRawSessionFixture();
+            sessionNode = rawSession.node().spotNode();
             actorRuntime =
                     new ZLinkActorRuntime(
                             sessionNode,
@@ -1026,25 +1017,17 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                             Duration.ofSeconds(1),
                             new ZLinkJsonMessageSerializer(),
                             ZLinkHandlerActivator.reflection());
+            sessionNode.setRemoteSessionBindingOwner(actorRuntime::applyRemoteSessionBinding);
         }
 
         private CompletionStage<Void> restoreBoundSession(
-                ZLinkSpotRetireControl.StageRequest request) {
+                ZLinkSpotRetireControl.StageRequest request, Map<String, Long> generations) {
             assertEquals(List.of("actor-a", "spot"), live);
             assertFalse(lifecycleOpen, "binding must be restored before admission opens");
-            var route = request.sessionRoutes().getFirst();
-            var actor = actorRuntime.localActor(route.actorId()).orElseThrow();
             return restoreRelease.thenCompose(
                     ignored ->
-                            actorRuntime
-                                    .bindNativeSession(
-                                            actor,
-                                            sessionNode,
-                                            actorRuntime.currentRef(actor),
-                                            route.sessionOwnerNodeRid(),
-                                            route.sessionRid(),
-                                            route.bindingGeneration())
-                                    .thenApply(token -> null));
+                            ZLinkUserSpotRetireRuntime.installBoundSessions(
+                                    sessionNode, request, generations));
         }
 
         @Override
@@ -1052,6 +1035,7 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                 Object spot, Object prepared, ZLinkActorAcceptedJournal.Record record) {
             assertTrue(lifecycleOpen);
             var actor = ((ZLinkActorRuntime.PreparedTransferredActor) prepared).actor();
+            operations.add("actor-push");
             return actor.context()
                     .boundSession()
                     .send(new BoundPush("first-replay"))
