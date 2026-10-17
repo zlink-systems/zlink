@@ -70,6 +70,7 @@ final class ZLinkDefaultSpotContextTest {
                         })
                 .toCompletableFuture()
                 .join();
+        host.userCloseSeen.join();
         assertEquals(1, host.userCloseRequests.get());
         assertEquals(1L, host.userCloseGeneration.get());
         assertFalse(requested.get().toCompletableFuture().isDone());
