@@ -5009,6 +5009,11 @@ class LocalTargetPort implements ServiceRelocationTargetObjectPort<LocalHidden> 
   async openAdmission(hidden: LocalHidden): Promise<void> {
     if (hidden.actor !== undefined) {
       this.requireActorManager().publishRelocationActor(hidden.actor.context.actorId);
+      this.requireSpotManager().openActorJoinRelocation(
+        this.meshName,
+        actorJoinAdmissionIdentity(this.envelope),
+        hidden.actor
+      );
     }
   }
 

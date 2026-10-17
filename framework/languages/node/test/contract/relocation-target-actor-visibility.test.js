@@ -21,6 +21,7 @@ const {
   encodeAuthorityKey
 } = require('../../packages/framework/dist/runtime/locations/authority-key-codec');
 const { Message } = require('@zlink-systems/zlink');
+const { DefaultZLinkSpotManager } = require('../../packages/framework/dist/runtime/spots');
 
 for (const departed of [false, true]) {
   test(`relocation membership shares target admission visibility (departed=${departed})`, async () => {
@@ -52,13 +53,20 @@ for (const departed of [false, true]) {
       runner
     );
     let handlers = 0;
+    let releaseFirst;
+    const firstTerminal = new Promise((resolve) => {
+      releaseFirst = resolve;
+    });
+    const order = [];
     class Probe {
-      handle(_spot, actor) {
+      async handle(_spot, actor, _context, packet) {
         const state = manager.getState(actor.context.actorId);
         // This is the committed source-fence input used by the next Deferred Join.
         assert.equal(state.ownerLeaseGeneration, 1n, 'handler must have a committed owner lease');
         assert.equal(state.locationGeneration, 12n);
         handlers++;
+        order.push(packet.order);
+        if (handlers === 1) await firstTerminal;
       }
     }
     const activation = new ZLinkSpotActivation({
@@ -70,7 +78,13 @@ for (const departed of [false, true]) {
         relocationCoordinationMode: framework.ZLinkSpotRelocationCoordinationMode.FrameworkManaged
       },
       spotType: class Room {},
-      spot: { context: { meshName: 'play' } },
+      spot: {
+        context: { meshName: 'play' },
+        async onJoinedActor() {
+          assert.equal(await manager.findActor(actorId), undefined);
+          assert.equal(handlers, 0);
+        }
+      },
       serial: new ZLinkSpotSerialTurnExecutor(),
       timers: {},
       handlers: {},
@@ -89,9 +103,28 @@ for (const departed of [false, true]) {
       locationLifecycle: () => undefined,
       createLocationSpotRouteResolver: () => undefined,
       boundSessionRelay: {},
+      spotNodeRuntime: () => undefined,
       dispatchErrorReporter: () => undefined
     }).create(undefined);
-    const coordinator = new framework.ZLinkSpotActorAdmissionCoordinator(spotOptions);
+    const spotManager = new DefaultZLinkSpotManager({
+      ...spotOptions,
+      spotFactories: [],
+      detachedTaskRunner: runner
+    });
+    spotManager.activations.register(activation);
+    const admission = spotManager.formalRemoteActorAdmissions;
+    admission.begin({
+      transferId: 'move',
+      actorId,
+      actorType: 'player',
+      spotId,
+      actorRef: { actorId, nodeRid: 'source', objectGeneration: 7n }
+    });
+    admission.complete('move', {
+      accepted: true,
+      actorRef: { actorId, nodeRid: 'target', objectGeneration: 7n }
+    });
+    admission.beginRestore('move');
     const parts = [
       Message.from(
         Buffer.from(
@@ -107,8 +140,32 @@ for (const departed of [false, true]) {
       Message.from(Buffer.from('{}'))
     ];
     const probe = async () => {
-      await coordinator.dispatchActorPacket('local', activation, actorId, parts);
+      await spotManager.activationLifecycle.dispatchActorPacket(
+        'remote',
+        activation,
+        actorId,
+        parts
+      );
       assert.equal(handlers, 0, 'ordinary handler must wait for target openAdmission');
+    };
+    const park = async () => {
+      const payload = Message.from(
+        Buffer.from(JSON.stringify({ order: admission.get('move').parked.length + 1 }))
+      );
+      try {
+        await spotManager.activationLifecycle.dispatchActorPacket(
+          'remote',
+          activation,
+          actorId,
+          [parts[0], payload],
+          false,
+          undefined,
+          { actorId, nodeRid: 'target', objectGeneration: 7n }
+        );
+      } finally {
+        payload.close();
+      }
+      assert.equal(handlers, 0);
     };
     const committed = {
       objectGeneration: 7n,
@@ -118,7 +175,7 @@ for (const departed of [false, true]) {
     const runtime = new ZLinkHostServiceRelocationRuntime({
       meshNode: () => node,
       actorManager: () => manager,
-      spotManager: () => ({ resolveRelocationActivation: () => activation }),
+      spotManager: () => spotManager,
       locationStore: () => ({
         async readAuthority() {
           await probe();
@@ -172,18 +229,37 @@ for (const departed of [false, true]) {
         await probe();
         return committed;
       };
-      runtime.finalizeActorJoinProfiles = async () => {
-        await probe();
-      };
+      runtime.submitActorJoinSourceLeave = async () => {};
       runtime.publishSessionRoutes = async () => {
         await probe();
+        await park();
       };
+      await park();
+      assert.equal(admission.get('move').parked.length, 1);
       await runtime.finalizeTargetStage('play', 'move', stage);
       assert.equal(await manager.findActor(actorId), manager.getState(actorId).actor);
       assert.equal(activation.resolveJoinedActor(actorId), manager.getState(actorId).actor);
-      await coordinator.dispatchActorPacket('local', activation, actorId, parts);
-      assert.equal(handlers, 1);
+      assert.equal(admission.get('move').parked.length, 0);
+      assert.equal(admission.get('move').migrated, true);
+      const payload = Message.from(Buffer.from('{"order":3}'));
+      const ordinary = spotManager.activationLifecycle.dispatchActorPacket(
+        'local',
+        activation,
+        actorId,
+        [parts[0], payload]
+      );
+      releaseFirst();
+      await ordinary;
+      payload.close();
+      assert.equal(handlers, 3);
+      assert.deepEqual(
+        order,
+        [1, 2, 3],
+        'retained arrivals keep their order ahead of ordinary ingress'
+      );
     } finally {
+      releaseFirst();
+      admission.delete('move');
       for (const part of parts) part.close();
       activation.commitActorDeparture(actorId);
       await manager.abortRelocationActor(actorId);

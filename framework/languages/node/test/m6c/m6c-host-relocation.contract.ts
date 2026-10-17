@@ -3307,7 +3307,8 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
         signal
       );
     },
-    finalizeActorJoinRelocation: DefaultZLinkSpotManager.prototype.finalizeActorJoinRelocation
+    finalizeActorJoinRelocation: DefaultZLinkSpotManager.prototype.finalizeActorJoinRelocation,
+    openActorJoinRelocation: DefaultZLinkSpotManager.prototype.openActorJoinRelocation
   };
   let canonicalIngress:
     | ((record: {
