@@ -122,7 +122,12 @@ class queued_execute_scheduler_t final : public zlink::http_client::coroutine_ex
 class rejecting_execute_scheduler_t final : public zlink::http_client::coroutine_execute_scheduler_t
 {
   public:
-    void execute (std::function<void ()>) override { throw std::runtime_error ("closed queue"); }
+    void execute (std::function<void ()>) override
+    {
+        ++calls;
+        throw std::runtime_error ("closed queue");
+    }
+    std::atomic_int calls{0};
 };
 
 class queued_resume_scheduler_t final : public zlink::http_client::coroutine_resume_scheduler_t
@@ -171,13 +176,33 @@ class queued_resume_scheduler_t final : public zlink::http_client::coroutine_res
     std::deque<std::function<void ()>> _work;
 };
 
-class recording_execution_turn_t final : public zlink::http_client::execution_turn_t
+class recording_execution_turn_t final : public zlink::http_client::execution_turn_t,
+                                         public zlink::framework::detail::serial_turn_t
 {
   public:
     zlink::framework::detail::task_scheduler_t prepare (bool release_turn) override
     {
         ++prepare_calls;
         last_release.store (release_turn);
+        return resume_scheduler ();
+    }
+
+    bool release () override { return !std::exchange (_released, true); }
+    bool released () const override { return _released; }
+    bool allows_yield () const noexcept override { return true; }
+    bool claim_yield () override { return !_released && !std::exchange (_yield_claimed, true); }
+    bool belongs_to (const void *owner) const noexcept override { return owner == this; }
+    bool is_after_active_phase () const noexcept override { return false; }
+    zlink::framework::result_t<void> defer (std::function<void ()> work,
+                                            std::function<void ()>) override
+    {
+        work ();
+        return zlink::framework::result_t<void>::success ();
+    }
+    void cancel_deferred () noexcept override {}
+
+    zlink::framework::detail::task_scheduler_t resume_scheduler () override
+    {
         return [this] (std::function<void ()> continuation) {
             ++resume_calls;
             continuation ();
@@ -198,6 +223,10 @@ class recording_execution_turn_t final : public zlink::http_client::execution_tu
     std::atomic_int callback_scheduler_calls{0};
     std::atomic_int callback_resume_calls{0};
     std::atomic_bool last_release{false};
+
+  private:
+    bool _released = false;
+    bool _yield_claimed = false;
 };
 
 void to_json (nlohmann::json &json, const create_game_request_t &value)
@@ -1252,8 +1281,10 @@ TEST (ZLinkHttpClient, ServerClientDelegatesTurnPolicyToInjectedExecutionTurn)
     complete_exchange ();
     ASSERT_TRUE (async_response.result ());
 
-    auto yield_response =
-      await_server_response (client.get ("/games").yield<create_game_reply_t> ());
+    auto yield_response = [&] {
+        zlink::framework::detail::serial_turn_scope_t scope (turn);
+        return await_server_response (client.get ("/games").yield<create_game_reply_t> ());
+    }();
     EXPECT_TRUE (turn->last_release.load ());
     complete_exchange ();
     ASSERT_TRUE (yield_response.result ());
@@ -1269,6 +1300,61 @@ TEST (ZLinkHttpClient, ServerClientDelegatesTurnPolicyToInjectedExecutionTurn)
     ASSERT_TRUE (callback_result.get_future ().get ());
     EXPECT_EQ (turn->callback_scheduler_calls.load (), 1);
     EXPECT_EQ (turn->callback_resume_calls.load (), 1);
+}
+
+TEST (ZLinkHttpClient, SecondYieldRejectsBeforeHttpSubmission)
+{
+    using namespace zlink::framework;
+    loopback_http_server_t server;
+    auto turn = std::make_shared<recording_execution_turn_t> ();
+    auto execute = std::make_shared<queued_execute_scheduler_t> ();
+    auto resume = std::make_shared<queued_resume_scheduler_t> ();
+    auto client = zlink::http_client::client_t::create (server.base_url ())
+                    .coroutines (execute, resume)
+                    .build_server (turn);
+    std::optional<task_t<zlink::http_client::raw_http_response_t>> second;
+    auto first = [&] {
+        detail::serial_turn_scope_t scope (turn);
+        auto pending = client.get ("/games").yield<create_game_reply_t> ();
+        second.emplace (client.get ("/games").yield_raw ());
+        EXPECT_TRUE (second->await_ready ());
+        EXPECT_EQ (execute->calls.load (), 1);
+        EXPECT_EQ (execute->pending (), 1u);
+        EXPECT_EQ (turn->prepare_calls.load (), 1);
+        return await_server_response (std::move (pending));
+    }();
+    const bool executed = execute->run_one ();
+    resume->drain ();
+    while (execute->run_one ())
+        resume->drain ();
+    EXPECT_TRUE (executed);
+    ASSERT_TRUE (first.result ());
+    EXPECT_EQ (execute->calls.load (), 1);
+    EXPECT_EQ (turn->resume_calls.load (), 1);
+    ASSERT_FALSE (second->result ());
+    EXPECT_EQ (second->result ().error_kind (), framework_error_kind_t::invalid_operation);
+}
+
+TEST (ZLinkHttpClient, YieldOutsideOwnerTurnRejectsBeforeHttpSubmission)
+{
+    using namespace zlink::framework;
+    auto turn = std::make_shared<recording_execution_turn_t> ();
+    auto execute = std::make_shared<rejecting_execute_scheduler_t> ();
+    auto resume = std::make_shared<queued_resume_scheduler_t> ();
+    auto client = zlink::http_client::client_t::create ("http://127.0.0.1:1")
+                    .coroutines (execute, resume)
+                    .build_server (turn);
+    auto builder = client.get ("/games");
+    auto typed = builder.yield<create_game_reply_t> ();
+    auto raw = builder.yield_raw ();
+    // A regression reaches a rejecting scheduler, so it cannot start network work.
+    resume->drain ();
+    EXPECT_FALSE (typed.result ());
+    EXPECT_FALSE (raw.result ());
+    EXPECT_EQ (typed.result ().error_kind (), framework_error_kind_t::invalid_operation);
+    EXPECT_EQ (raw.result ().error_kind (), framework_error_kind_t::invalid_operation);
+    EXPECT_EQ (execute->calls.load (), 0);
+    EXPECT_EQ (turn->prepare_calls.load (), 0);
 }
 
 TEST (ZLinkHttpClient, SendsDefaultHeadersAndRequestOverride)

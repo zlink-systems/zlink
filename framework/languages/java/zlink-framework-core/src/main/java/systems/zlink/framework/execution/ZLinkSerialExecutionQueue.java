@@ -36,6 +36,7 @@ import java.util.function.Supplier;
  */
 public final class ZLinkSerialExecutionQueue {
     private static final VarHandle OUTSTANDING;
+    private static final VarHandle YIELD_ADMITTED;
 
     static {
         try {
@@ -43,6 +44,9 @@ public final class ZLinkSerialExecutionQueue {
                     MethodHandles.lookup()
                             .findVarHandle(
                                     ZLinkSerialExecutionQueue.class, "outstanding", long.class);
+            YIELD_ADMITTED =
+                    MethodHandles.lookup()
+                            .findVarHandle(Entry.class, "yieldAdmitted", boolean.class);
         } catch (ReflectiveOperationException failure) {
             throw new ExceptionInInitializerError(failure);
         }
@@ -895,8 +899,6 @@ public final class ZLinkSerialExecutionQueue {
     public boolean isCurrent() {
         SerialTurn turn = currentTurn();
         return turn != null
-                && turn.gate() != null
-                && !turn.gate().isDone()
                 && (turn.queue() == this
                         || turn.entry() != null && turn.entry().ownerMailbox == this);
     }
@@ -1294,20 +1296,17 @@ public final class ZLinkSerialExecutionQueue {
             if (suspendedLifecycle.operation instanceof LifecycleTransition) {
                 return null;
             }
-            if (applicationContinuation != null) {
+            if (applicationContinuation != null || !applicationPending.isEmpty()) {
                 lifecycleStreak = 0;
-                continuationPending.remove(applicationContinuation);
-                return applicationContinuation;
-            }
-            if (!applicationPending.isEmpty()) {
-                lifecycleStreak = 0;
-                return applicationPending.removeFirst();
+                return takeApplication(applicationContinuation);
             }
             return null;
         }
         boolean lifecycleReady = !lifecyclePending.isEmpty();
-        boolean applicationReady = !applicationPending.isEmpty();
         boolean continuationReady = !continuationPending.isEmpty();
+        boolean applicationReady =
+                !applicationPending.isEmpty()
+                        || continuationReady && !isLifecycleTurn(continuationPending.peekFirst());
         if (lifecycleReady
                 && (lifecyclePending.peekFirst().relocationBoundary != null
                         || lifecyclePending.peekFirst().operation instanceof LifecycleTransition)) {
@@ -1321,16 +1320,27 @@ public final class ZLinkSerialExecutionQueue {
             lifecycleStreak++;
             return lifecyclePending.removeFirst();
         }
-        if (continuationReady) {
+        if (continuationReady && isLifecycleTurn(continuationPending.peekFirst())) {
             lifecycleStreak = 0;
             return continuationPending.removeFirst();
         }
-        if (applicationReady) {
+        if (continuationReady || applicationReady) {
             lifecycleStreak = 0;
-            return applicationPending.removeFirst();
+            return takeApplication(continuationPending.peekFirst());
         }
         lifecycleStreak = 0;
         return lifecyclePending.removeFirst();
+    }
+
+    /** Selects the oldest eligible application record, including a resumed application turn. */
+    private Entry takeApplication(Entry continuation) {
+        Entry application = applicationPending.peekFirst();
+        if (continuation != null
+                && (application == null || continuation.sequence < application.sequence)) {
+            continuationPending.remove(continuation);
+            return continuation;
+        }
+        return applicationPending.removeFirst();
     }
 
     private boolean requestDrainLocked() {
@@ -1960,6 +1970,7 @@ public final class ZLinkSerialExecutionQueue {
                     && entry.lane == Lane.LIFECYCLE
                     && entry.relocationBoundary == null
                     && !execution.toCompletableFuture().isDone()
+                    && !Boolean.TRUE.equals(CURRENT_RELEASE_DEFERRED.get())
                     && !gate.isDone()) {
                 execution = yieldCurrent(execution);
             }
@@ -2183,11 +2194,11 @@ public final class ZLinkSerialExecutionQueue {
     public static <T> CompletionStage<T> yieldCurrent(CompletionStage<T> stage) {
         Objects.requireNonNull(stage, "stage");
         SerialTurn turn = currentTurn();
-        ZLinkSerialExecutionQueue queue = turn == null ? null : turn.queue;
-        CompletableFuture<Void> gate = turn == null ? null : turn.gate;
-        if (queue == null || gate == null || stage.toCompletableFuture().isDone()) {
+        if (turn == null) {
             return stage;
         }
+        ZLinkSerialExecutionQueue queue = turn.queue;
+        CompletableFuture<Void> gate = turn.gate;
         ZLinkFlowContext.State flow = ZLinkFlowContext.current();
         var application =
                 systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationContext
@@ -2238,7 +2249,14 @@ public final class ZLinkSerialExecutionQueue {
                                                     managed.complete(value);
                                                 }
                                             }
-                                            return CompletableFuture.completedFuture(null);
+                                            // Public Yield owns the resumed turn until the handler
+                                            // terminates or another Yield releases its gate.
+                                            return turn.entry != null && turn.entry.yieldAdmitted
+                                                    ? turn.entry
+                                                            .turnOrigin()
+                                                            .result
+                                                            .handle((ignored, failure) -> null)
+                                                    : CompletableFuture.completedFuture(null);
                                         });
                         continuation.whenComplete(
                                 (ignored, continuationFailure) -> {
@@ -2473,7 +2491,9 @@ public final class ZLinkSerialExecutionQueue {
         } else {
             turn = propagated instanceof SerialTurnCarrier carrier ? carrier.turn : null;
         }
-        return turn != null && turn.entry != null && turn.entry.turnOrigin().result.isDone()
+        return turn != null
+                        && (turn.gate.isDone()
+                                || turn.entry != null && turn.entry.turnOrigin().result.isDone())
                 ? null
                 : turn;
     }
@@ -2494,8 +2514,33 @@ public final class ZLinkSerialExecutionQueue {
     private record SerialTurn(
             ZLinkSerialExecutionQueue queue, CompletableFuture<Void> gate, Entry entry) {}
 
-    private static final class SerialTurnCarrier {
+    private static final class SerialTurnCarrier
+            implements systems.zlink.framework.runtime.internal.handlers
+                    .ZLinkSuspendInvocationContext.YieldAdmission {
         private volatile SerialTurn turn;
+
+        @Override
+        public void requireYieldAllowed(String operation) {
+            var application =
+                    systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationContext
+                            .currentApplicationExecution();
+            SerialTurn current = currentTurn();
+            if (application == null
+                    || !application.yieldAllowed()
+                    || current == null
+                    || current != turn
+                    || current.entry == null) {
+                throw new systems.zlink.framework.errors.ZLinkFrameworkException(
+                        ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                        operation
+                                + " yield requires an active SpotWide User Spot or Instance Spot application turn");
+            }
+            if (!YIELD_ADMITTED.compareAndSet(current.entry, false, true)) {
+                throw new systems.zlink.framework.errors.ZLinkFrameworkException(
+                        ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                        operation + " yield is already accepted in this execution turn");
+            }
+        }
 
         private SerialTurnCarrier(SerialTurn turn) {
             this.turn = turn;
@@ -2695,6 +2740,7 @@ public final class ZLinkSerialExecutionQueue {
 
     private static final class Entry {
         private final long sequence;
+        private volatile boolean yieldAdmitted;
         private byte[] record;
         private final Supplier<byte[]> lazyRecord;
         private Supplier<CompletionStage<Void>> operation;

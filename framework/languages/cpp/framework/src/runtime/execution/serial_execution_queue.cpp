@@ -77,17 +77,6 @@ class serial_deferred_barrier_t final : public detail::deferred_barrier_t
 
   public:
     serial_deferred_barrier_t () = default;
-    // on_terminal lowers the owning queue's Actor handoff fence. Its lifetime
-    // must cover the whole window in which the transfer coordinator blocks
-    // dispatch for this Actor, so it fires when the barrier turn's work has
-    // finished (the relocation is over) or when the reservation is rolled back
-    // -- never merely when the queue reaches the barrier, which would reopen
-    // the same late-admission window while the move is still in flight.
-    explicit serial_deferred_barrier_t (std::function<void ()> on_terminal) :
-        _release (make_release (std::move (on_terminal)))
-    {
-    }
-
     // Application-lane handoffs retain their active turn instead of suspending a lifecycle item.
     void hold_application_turn () noexcept { _application_turn = true; }
 
@@ -122,13 +111,11 @@ class serial_deferred_barrier_t final : public detail::deferred_barrier_t
             return;
         }
         if (!turn) {
-            complete ([release = _release] {
-                const release_scope_t released{release};
-                throw std::logic_error ("lifecycle barrier reached outside its serial turn");
-            });
+            complete (
+              [] { throw std::logic_error ("lifecycle barrier reached outside its serial turn"); });
             return;
         }
-        finish (std::move (complete), std::move (work), std::move (async_work), _release);
+        finish (std::move (complete), std::move (work), std::move (async_work));
     }
 
     task_t<void> run (std::function<task_t<void> ()> work) override
@@ -214,7 +201,7 @@ class serial_deferred_barrier_t final : public detail::deferred_barrier_t
             complete = std::move (_complete);
             phase = std::move (_work);
         }
-        finish (std::move (complete), std::move (phase), {}, _release);
+        finish (std::move (complete), std::move (phase), {});
         return result_t<void>::success ();
     }
 
@@ -244,17 +231,16 @@ class serial_deferred_barrier_t final : public detail::deferred_barrier_t
         }
         if (_application_turn) {
             // The item kept its turn while it waited, so it finishes on it now.
-            finish (std::move (complete), {}, std::move (work), _release);
+            finish (std::move (complete), {}, std::move (work));
             return result_t<void>::success ();
         }
         if (resume) {
-            resume ([complete = std::move (complete), work = std::move (work), release = _release,
+            resume ([complete = std::move (complete), work = std::move (work),
                      turn = std::move (turn)] () mutable {
                 const auto active = detail::capture_current_serial_turn ();
                 const auto failure = detail::take_serial_resume_failure ();
                 if (failure || !active || active != turn || active->released ()) {
-                    complete ([release, failure] {
-                        const release_scope_t released{release};
+                    complete ([failure] {
                         throw framework_exception_t (
                           failure ? failure->kind : framework_error_kind_t::shutting_down,
                           failure ? failure->message
@@ -262,13 +248,11 @@ class serial_deferred_barrier_t final : public detail::deferred_barrier_t
                     });
                     return;
                 }
-                finish (std::move (complete), {}, std::move (work), std::move (release));
+                finish (std::move (complete), {}, std::move (work));
             });
         } else {
-            complete ([release = _release] {
-                const release_scope_t released{release};
-                throw std::logic_error ("lifecycle barrier has no retained serial turn");
-            });
+            complete (
+              [] { throw std::logic_error ("lifecycle barrier has no retained serial turn"); });
             return result_t<void>::failure (framework_error_kind_t::shutting_down,
                                             "lifecycle barrier has no retained serial turn");
         }
@@ -277,11 +261,6 @@ class serial_deferred_barrier_t final : public detail::deferred_barrier_t
 
     void cancel () noexcept override
     {
-        // A rolled-back reservation releases the coordinator's source hold
-        // right away, so the queue must stop fencing ordinary ingress here and
-        // not wait for the queue to reach the (now inert) barrier item.
-        if (_release)
-            _release ();
         serial_execution_queue_t::async_completion_t complete;
         phase_t phase;
         {
@@ -295,7 +274,7 @@ class serial_deferred_barrier_t final : public detail::deferred_barrier_t
         if (phase)
             phase (result_t<void>::failure (framework_error_kind_t::shutting_down,
                                             "Lifecycle barrier was cancelled"));
-        finish (std::move (complete), {}, {}, {});
+        finish (std::move (complete), {}, {});
     }
 
   private:
@@ -306,62 +285,27 @@ class serial_deferred_barrier_t final : public detail::deferred_barrier_t
         cancelled
     };
 
-    // Idempotent and copyable so the queue completion callbacks can own it
-    // even after the barrier object itself is gone.
-    static std::function<void ()> make_release (std::function<void ()> on_terminal)
-    {
-        if (!on_terminal)
-            return {};
-        auto once = std::make_shared<std::atomic_bool> (false);
-        return [once, on_terminal = std::move (on_terminal)] () noexcept {
-            if (once->exchange (true, std::memory_order_acq_rel))
-                return;
-            on_terminal ();
-        };
-    }
-
-    struct release_scope_t
-    {
-        std::function<void ()> release;
-        ~release_scope_t ()
-        {
-            if (release)
-                release ();
-        }
-    };
-
     static void finish (serial_execution_queue_t::async_completion_t complete,
                         phase_t work,
-                        async_work_t async_work,
-                        std::function<void ()> release)
+                        async_work_t async_work)
     {
-        if (!complete) {
-            if (release)
-                release ();
+        if (!complete)
             return;
-        }
         if (async_work) {
             auto completion =
               std::make_shared<serial_execution_queue_t::async_completion_t> (std::move (complete));
             try {
-                async_work ([completion, release] (result_t<void> result) mutable {
-                    (*completion) ([result = std::move (result), release] () mutable {
-                        const release_scope_t released{release};
-                        result.value ();
-                    });
+                async_work ([completion] (result_t<void> result) mutable {
+                    (*completion) ([result = std::move (result)] () mutable { result.value (); });
                 });
             }
             catch (...) {
                 const auto error = std::current_exception ();
-                (*completion) ([error, release] {
-                    const release_scope_t released{release};
-                    std::rethrow_exception (error);
-                });
+                (*completion) ([error] { std::rethrow_exception (error); });
             }
             return;
         }
-        complete ([work = std::move (work), release] () mutable {
-            const release_scope_t released{release};
+        complete ([work = std::move (work)] () mutable {
             if (work)
                 work (result_t<void>::success ());
         });
@@ -376,7 +320,6 @@ class serial_deferred_barrier_t final : public detail::deferred_barrier_t
     std::shared_ptr<detail::serial_turn_t> _turn;
     phase_t _work;
     async_work_t _async_work;
-    std::function<void ()> _release;
 };
 
 class serial_turn_handle_impl_t final
@@ -416,7 +359,16 @@ class serial_turn_handle_impl_t final
     bool released () const override
     {
         std::lock_guard lock (_mutex);
-        return _released;
+        return _phase == phase_t::released;
+    }
+
+    bool claim_yield () override
+    {
+        std::lock_guard lock (_mutex);
+        if (_phase != phase_t::open || !_queue.allows_yield ())
+            return false;
+        _phase = phase_t::yield_admitted;
+        return true;
     }
 
     std::stop_token wait_cancellation () const override
@@ -554,10 +506,10 @@ class serial_turn_handle_impl_t final
         serial_execution_queue_t::async_completion_t complete;
         {
             std::lock_guard lock (_mutex);
-            if (_released) {
+            if (_phase == phase_t::released) {
                 return false;
             }
-            _released = true;
+            _phase = phase_t::released;
             complete = std::move (_complete);
         }
         if (!complete) {
@@ -661,7 +613,13 @@ class serial_turn_handle_impl_t final
     mutable std::mutex _mutex;
     std::shared_ptr<serial_turn_chain_t> _chain;
     serial_execution_queue_t::async_completion_t _complete;
-    bool _released = false;
+    enum class phase_t : unsigned char
+    {
+        open,
+        yield_admitted,
+        released
+    };
+    phase_t _phase = phase_t::open;
 };
 
 serial_execution_queue_t::serial_execution_queue_t (offload_executor_t &executor,
@@ -750,16 +708,6 @@ bool serial_execution_queue_t::try_post_async (std::string name,
     bool accepted = false;
     {
         std::lock_guard<std::mutex> lock (_mutex);
-        if (options.refuse_when_actor_handoff_fenced
-            && _actor_handoff_fence_depth->load (std::memory_order_acquire) > 0) {
-            /* An Actor handoff barrier is already reserved on this queue: this
-             * ordinary ingress would land behind it and run on the old owner
-             * after capture. Refuse so the caller re-admits it into the
-             * transfer coordinator backlog (membership §903 capture set). */
-            if (options.actor_handoff_fence_refused)
-                *options.actor_handoff_fence_refused = true;
-            return false;
-        }
         if (_closed) {
             return false;
         }
@@ -1075,22 +1023,7 @@ serial_execution_queue_t::reserve_barrier_next (std::string name,
 result_t<std::shared_ptr<detail::deferred_barrier_t>>
 serial_execution_queue_t::reserve_handoff_barrier (std::string name)
 {
-    /* Raise the ordinary-ingress fence BEFORE the barrier enters the queue.
-     * A post that is accepted afterwards must have read the fence while
-     * holding _mutex, so "accepted" implies it was enqueued ahead of this
-     * barrier; anything that reads the raised fence is refused and re-admitted
-     * into the transfer coordinator backlog by its caller. The conservative
-     * direction (refused while the barrier is not yet enqueued) is safe: the
-     * coordinator source reservation always precedes this call. */
-    _actor_handoff_fence_depth->fetch_add (1, std::memory_order_acq_rel);
-    auto lower_fence = [depth_owner = _actor_handoff_fence_depth] {
-        auto depth = depth_owner->load (std::memory_order_acquire);
-        while (depth > 0
-               && !depth_owner->compare_exchange_weak (depth, depth - 1, std::memory_order_acq_rel,
-                                                       std::memory_order_acquire)) {
-        }
-    };
-    auto barrier = std::make_shared<serial_deferred_barrier_t> (lower_fence);
+    auto barrier = std::make_shared<serial_deferred_barrier_t> ();
     barrier->hold_application_turn ();
     const auto submission = try_post_cancellable_async (
       std::move (name),
@@ -1102,7 +1035,6 @@ serial_execution_queue_t::reserve_handoff_barrier (std::string name)
           return options;
       }());
     if (!submission) {
-        lower_fence ();
         return result_t<std::shared_ptr<detail::deferred_barrier_t>>::failure (
           submission.error_kind (), "Deferred Actor handoff barrier queue is closed");
     }

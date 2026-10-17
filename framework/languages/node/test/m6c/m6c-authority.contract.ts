@@ -2531,7 +2531,9 @@ test('exact User Spot manager call is single-use and returns the committed SpotR
   const outsideTurn = manager.getOrCreate('room-outside', 'room').inMesh('mesh');
   assert.throws(
     () => outsideTurn.yield(),
-    /yield requires a SpotWide User Spot or Instance Spot application handler/
+    (error: unknown) =>
+      error instanceof ZLinkFrameworkException &&
+      error.kind === ZLinkFrameworkErrorKind.InvalidOperation
   );
   assert.equal((await outsideTurn.submit()).state, ZLinkSpotCreateState.Created);
 
@@ -2542,7 +2544,9 @@ test('exact User Spot manager call is single-use and returns the committed SpotR
     entryTurn = call;
     assert.throws(
       () => call.yield(),
-      /yield requires a SpotWide User Spot or Instance Spot application handler/
+      (error: unknown) =>
+        error instanceof ZLinkFrameworkException &&
+        error.kind === ZLinkFrameworkErrorKind.InvalidOperation
     );
   });
   assert.equal((await entryTurn!.submit()).state, ZLinkSpotCreateState.Created);

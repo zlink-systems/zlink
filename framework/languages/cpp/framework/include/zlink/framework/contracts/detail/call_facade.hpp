@@ -19,33 +19,9 @@ template <typename T> class immediate_call_state_t
     void set_timeout (std::chrono::milliseconds) {}
 
     task_t<T> async () { return task_t<T> (_result); }
-    task_t<T> yield ()
-    {
-        return current_serial_turn_allows_yield () ? release_turn_on_suspend (task_t<T> (_result))
-                                                   : unsupported_yield_task<T> ();
-    }
 
   private:
     result_t<T> _result;
-};
-
-template <> class immediate_call_state_t<void>
-{
-  public:
-    explicit immediate_call_state_t (result_t<void> result) : _result (std::move (result)) {}
-
-    void set_timeout (std::chrono::milliseconds) {}
-
-    task_t<void> async () { return task_t<void> (_result); }
-    task_t<void> yield ()
-    {
-        return current_serial_turn_allows_yield ()
-                 ? release_turn_on_suspend (task_t<void> (_result))
-                 : unsupported_yield_task<void> ();
-    }
-
-  private:
-    result_t<void> _result;
 };
 
 template <typename T> class async_call_state_t
@@ -63,11 +39,6 @@ template <typename T> class async_call_state_t
 
     void set_timeout (std::chrono::milliseconds) {}
     task_t<T> async () { return _completion->task (); }
-    task_t<T> yield ()
-    {
-        return current_serial_turn_allows_yield () ? release_turn_on_suspend (_completion->task ())
-                                                   : unsupported_yield_task<T> ();
-    }
 
   private:
     std::shared_ptr<task_completion_source_t<T>> _completion;
@@ -84,26 +55,26 @@ template <typename TDerived, typename TResult> class call_facade_t
     }
 
     task_t<TResult> async () { return _submit (); }
-    task_t<TResult> yield () { return _yield (); }
+    task_t<TResult> yield ()
+    {
+        return yield_call<TResult> ([this] { return _submit (); });
+    }
 
   protected:
     explicit call_facade_t (result_t<TResult> result)
     {
         auto state = std::make_shared<immediate_call_state_t<TResult>> (std::move (result));
         _submit = [state] { return state->async (); };
-        _yield = [state] { return state->yield (); };
     }
 
     explicit call_facade_t (task_t<TResult> task)
     {
         auto state = std::make_shared<async_call_state_t<TResult>> (std::move (task));
         _submit = [state] { return state->async (); };
-        _yield = [state] { return state->yield (); };
     }
 
   private:
     std::function<task_t<TResult> ()> _submit;
-    std::function<task_t<TResult> ()> _yield;
 };
 
 } // namespace zlink::framework::detail

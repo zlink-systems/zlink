@@ -4034,6 +4034,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
     private <T> CompletionStage<T> withCurrentOutbound(
             DefaultSpotOutbound outbound, Supplier<CompletionStage<T>> action) {
         CompletableFuture<T> result = new CompletableFuture<>();
+        ZLinkSerialExecutionQueue.deferCurrentReleaseUntil(result);
         var flow = ZLinkFlowContext.current();
         Object entryDispatchContext =
                 systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationContext

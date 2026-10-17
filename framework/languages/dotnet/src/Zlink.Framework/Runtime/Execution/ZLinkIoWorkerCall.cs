@@ -41,12 +41,7 @@ internal sealed class ZLinkIoWorkerCall<TResult>(
     public ValueTask<TResult> Yield(CancellationToken cancellationToken = default)
     {
         EnsureSingleTerminator();
-        var turn = ZLinkApplicationExecutionContext.RequireYieldTurn("I/O worker");
-        if (!ReferenceEquals(turn, _turn))
-            throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.InvalidOperation,
-                "I/O worker Yield must execute in the callback turn that created the call."
-            );
+        var turn = ZLinkApplicationExecutionContext.RequireYieldTurn(_turn, "I/O worker");
         return turn.YieldFrameworkCallAsync(ExecuteAsync, cancellationToken);
     }
 

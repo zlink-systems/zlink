@@ -1609,6 +1609,9 @@ If cancellation happens before starting a provider request, the Store may not be
 at all. If cancellation, timeout, or a provider error happens after starting the request,
 whether the Store changed is unknown. In this case the Framework re-reads the same key
 and expected `StoreVersion` to confirm the result, and only retries if needed.
+When a MeshNode descriptor write is sent again and the stored record differs from the sent
+descriptor only in its update time (`updatedAtEpochMs`), the earlier write already took effect, so the
+write ends as `Stored` regardless of its intent (`NewClaim` or `Renew`).
 
 A Relocation Store write must support being read or stored again using the same reference
 the Framework fixed in advance. That recheck has no separate time limit and runs within the deadline of the operation that started the write. Confirming that the same bytes are stored ends it as a success. When the re-read finds nothing, the same bytes are stored again under the same reference. When the put returns `Conflict` or the re-read finds different bytes, it is treated as the same collision and the store starts again with a new reference. This proceeds within that operation's deadline, with no retry cap and no separate time limit. A payload the Location Store already points to that is missing or fails its checksum follows the `DataLost` handling below, not this rule. Payload not pointed to by the Location Store is deleted

@@ -1,5 +1,4 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { ZLinkConfigurationException } from '../configuration';
 import { isAbortError } from '../abort';
 import {
   ZLinkFrameworkInternalErrorKind,
@@ -70,6 +69,7 @@ export class ZLinkSpotSerialTurn {
   private suspendedResolve: (() => void) | undefined;
   private suspendedPromise: Promise<void> | undefined;
   private suspendSignaled = false;
+  private yieldUsed = false;
   private owner: Promise<unknown> | undefined;
   private frameworkOperationsBlocked = false;
   private endOwnedWait?: (error: unknown) => void;
@@ -146,17 +146,30 @@ export class ZLinkSpotSerialTurn {
   }
 
   resetSuspension(): void {
+    this.yieldUsed = false;
     this.suspendSignaled = false;
     this.suspendedResolve = undefined;
     this.suspendedPromise = undefined;
   }
 
-  async yieldPromise<T>(pending: Promise<T>): Promise<T> {
-    if (!this.yieldAllowed) {
-      throw new ZLinkConfigurationException(
-        'yield requires a SpotWide User Spot or Instance Spot application handler.'
+  admitYield(): void {
+    const current = spotSerialTurnStorage.getStore();
+    if (
+      current?.turn !== this ||
+      !this.yieldAllowed ||
+      !current.executor.isActiveTurn(this, current.turnId) ||
+      this.yieldUsed
+    ) {
+      throw createInternalFrameworkException(
+        ZLinkFrameworkInternalErrorKind.InvalidOperation,
+        'Yield requires the current SpotWide application turn and may be used only once per turn.'
       );
     }
+    this.yieldUsed = true;
+  }
+
+  async yieldPromise<T>(pending: Promise<T>): Promise<T> {
+    this.admitYield();
     return await this.yieldFrameworkPromise(pending);
   }
 
@@ -244,11 +257,13 @@ export function currentZLinkSpotSerialSourceId(): unknown {
 
 export function requireZLinkYieldTurn(capturedTurn?: ZLinkSpotSerialTurn): ZLinkSpotSerialTurn {
   const turn = capturedTurn ?? captureZLinkSpotSerialTurn();
-  if (turn === undefined || !turn.yieldAllowed) {
-    throw new ZLinkConfigurationException(
-      'yield requires a SpotWide User Spot or Instance Spot application handler.'
+  if (turn === undefined) {
+    throw createInternalFrameworkException(
+      ZLinkFrameworkInternalErrorKind.InvalidOperation,
+      'Yield requires a current SpotWide application turn.'
     );
   }
+  turn.admitYield();
   return turn;
 }
 

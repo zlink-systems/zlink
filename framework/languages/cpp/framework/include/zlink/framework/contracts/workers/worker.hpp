@@ -298,16 +298,16 @@ template <typename TResult> class worker_call_t
         return *this;
     }
 
-    task_t<TResult> async () { return start (false); }
+    task_t<TResult> async () { return start (); }
 
-    task_t<TResult> yield () { return detail::release_turn_on_suspend (start (true)); }
+    task_t<TResult> yield ()
+    {
+        return detail::yield_call<TResult> ([this] { return start (); });
+    }
 
   private:
-    task_t<TResult> start (bool release_turn)
+    task_t<TResult> start ()
     {
-        if (release_turn && !detail::current_serial_turn_allows_yield ()) {
-            return detail::unsupported_yield_task<TResult> ();
-        }
         if (!try_start ()) {
             return task_t<TResult> (result_t<TResult>::failure (
               framework_error_kind_t::protocol_error, "worker call already has a terminator"));
