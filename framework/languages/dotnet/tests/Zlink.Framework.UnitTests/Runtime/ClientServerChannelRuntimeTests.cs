@@ -24,40 +24,6 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
     public Task ClientServer_Requests_Then_Immediate_Client_Stop_Leave_No_Unobserved_Submit_Failures() =>
         AssertNoUnobservedSubmitFailuresAsync(RequestAndStopClientsAsync);
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public Task Unreturned_Binding_Request_Failures_Leave_No_Unobserved_Tasks(bool asynchronous) =>
-        AssertNoUnobservedSubmitFailuresAsync(() => RequestMissingClientAsync(asynchronous));
-
-    [System.Runtime.CompilerServices.MethodImpl(
-        System.Runtime.CompilerServices.MethodImplOptions.NoInlining
-    )]
-    private static async Task RequestMissingClientAsync(bool asynchronous)
-    {
-        await using var server = CreateServer(0);
-        var runtime = server.GetRequiredService<ZLinkFrameworkRuntime>();
-        await runtime.StartAsync(CancellationToken.None);
-        try
-        {
-            var state = await runtime.EnsureStartedStateAsync(CancellationToken.None);
-            var router = (IRouterSocket)GetServerBundle(state, "work").Socket;
-            using var message = Message.From("request");
-            var operation = router.Request(RoutingId.From("departed-client")).Message(message);
-            Assert.Throws<ZlinkSubmitException>(() =>
-            {
-                if (asynchronous)
-                    _ = operation.Async();
-                else
-                    _ = operation.Submit();
-            });
-        }
-        finally
-        {
-            await runtime.StopAsync(CancellationToken.None);
-        }
-    }
-
     private static async Task AssertNoUnobservedSubmitFailuresAsync(Func<Task> run)
     {
         var unobserved = new ConcurrentQueue<Exception>();

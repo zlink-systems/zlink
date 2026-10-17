@@ -29,11 +29,8 @@ internal sealed class CompletionOwner
         _socketType = socketType;
     }
 
-    internal SendSubmission SendAsync(
-        RoutingId? target,
-        IReadOnlyList<Message> parts,
-        CancellationToken cancellationToken
-    )
+    internal SendSubmission SendAsync(RoutingId? target,
+        IReadOnlyList<Message> parts, CancellationToken cancellationToken)
     {
         ValidateSend(parts);
         cancellationToken.ThrowIfCancellationRequested();
@@ -76,7 +73,8 @@ internal sealed class CompletionOwner
             {
                 if (!hasPublicOwner)
                 {
-                    var failure = new ZlinkSubmitException(SubmitResult.InvalidState);
+                    var failure = new ZlinkSubmitException(
+                        SubmitResult.InvalidState);
                     entry?.AbortBeforeNativeWait(failure);
                     throw failure;
                 }
@@ -95,7 +93,8 @@ internal sealed class CompletionOwner
                     entry!.ArmFailed(attempt.CompletionId, retained, exception);
                     throw;
                 }
-                return new SendSubmission(SubmitResult.Backpressured, entry.Task);
+                return new SendSubmission(SubmitResult.Backpressured,
+                    entry.Task);
             }
 
             entry?.AbortBeforeNativeWait(attempt.Failure);
@@ -120,23 +119,22 @@ internal sealed class CompletionOwner
             throw CreateProtocolFailure();
     }
 
-    internal RequestSubmission RequestAsync(
-        RoutingId? target,
-        IReadOnlyList<Message> parts,
-        uint timeoutMs,
-        CancellationToken cancellationToken
-    )
+    internal RequestSubmission RequestAsync(RoutingId? target,
+        IReadOnlyList<Message> parts, uint timeoutMs,
+        CancellationToken cancellationToken)
     {
         RequestReplySupport.EnsureParts(parts, nameof(parts));
         cancellationToken.ThrowIfCancellationRequested();
         EnsureOpenForSubmit();
         EnsurePublicOwner();
 
-        var entry = new RequestCompletionEntry(this, target, timeoutMs, cancellationToken);
+        var entry = new RequestCompletionEntry(this, target, timeoutMs,
+            cancellationToken);
         try
         {
             Register(entry);
-            var attempt = SubmitRequest(target, parts, timeoutMs, DontWait, entry.Context);
+            var attempt = SubmitRequest(target, parts, timeoutMs, DontWait,
+                entry.Context);
             if (attempt.Failure is null)
             {
                 if (attempt.CompletionId == 0)
@@ -147,7 +145,8 @@ internal sealed class CompletionOwner
                 }
 
                 entry.PublishRequest(attempt.CompletionId);
-                return new RequestSubmission(SubmitResult.Ok, entry.Admitted, entry.Task);
+                return new RequestSubmission(SubmitResult.Ok,
+                    entry.Admitted, entry.Task);
             }
 
             if (IsWritableWait(attempt))
@@ -166,11 +165,8 @@ internal sealed class CompletionOwner
                     entry.ArmFailed(attempt.CompletionId, retained, exception);
                     throw;
                 }
-                return new RequestSubmission(
-                    SubmitResult.Backpressured,
-                    entry.Admitted,
-                    entry.Task
-                );
+                return new RequestSubmission(SubmitResult.Backpressured,
+                    entry.Admitted, entry.Task);
             }
 
             entry.AbortBeforeNativeWait(attempt.Failure);
@@ -185,19 +181,18 @@ internal sealed class CompletionOwner
         }
     }
 
-    internal IReadOnlyList<Message> Request(
-        RoutingId? target,
-        IReadOnlyList<Message> parts,
-        uint timeoutMs
-    )
+    internal IReadOnlyList<Message> Request(RoutingId? target,
+        IReadOnlyList<Message> parts, uint timeoutMs)
     {
         RequestReplySupport.EnsureParts(parts, nameof(parts));
         EnsureOpenForSubmit();
-        var entry = new RequestCompletionEntry(this, target, timeoutMs, CancellationToken.None);
+        var entry = new RequestCompletionEntry(this, target, timeoutMs,
+            CancellationToken.None);
         try
         {
             Register(entry);
-            var attempt = SubmitRequest(target, parts, timeoutMs, 0, entry.Context);
+            var attempt = SubmitRequest(target, parts, timeoutMs, 0,
+                entry.Context);
             if (attempt.Failure is not null)
             {
                 entry.AbortBeforeNativeWait(attempt.Failure);
@@ -222,14 +217,15 @@ internal sealed class CompletionOwner
         }
     }
 
-    internal void Reply(RoutingId target, ReplyToken replyToken, IReadOnlyList<Message> parts)
+    internal void Reply(RoutingId target, ReplyToken replyToken,
+        IReadOnlyList<Message> parts)
     {
         EnsureOpenForSubmit();
         var submitter = new ReplyMessageSubmitter
         {
             Handle = _handle,
             Target = target.ToNative(),
-            ReplyToken = replyToken.Value,
+            ReplyToken = replyToken.Value
         };
         RequestReplySupport.SubmitPreservingOnFailure(parts, ref submitter);
     }
@@ -242,29 +238,27 @@ internal sealed class CompletionOwner
         internal ZlinkRoutingId Target;
         internal ulong ReplyToken;
 
-        public static int Submit(ref ReplyMessageSubmitter self, Span<ZlinkMsg> parts) =>
-            NativeMethods.zlink_reply(
-                self.Handle,
-                ref self.Target,
-                self.ReplyToken,
-                ref parts[0],
-                (nuint)parts.Length
-            );
+        public static int Submit(ref ReplyMessageSubmitter self,
+            Span<ZlinkMsg> parts) =>
+            NativeMethods.zlink_reply(self.Handle, ref self.Target,
+                self.ReplyToken, ref parts[0], (nuint)parts.Length);
     }
 
     internal bool TransferToPublic(object pollerOwner)
     {
         lock (_inlineDrainSync)
-            lock (_sync)
-            {
-                if (_closing)
-                    throw new ZlinkConfigException(ConfigResult.InvalidState);
-                if (_publicOwner is not null && !ReferenceEquals(_publicOwner, pollerOwner))
-                    throw new ZlinkConfigException(ConfigResult.InvalidState, (int)ErrorCode.EBusy);
-                if (ReferenceEquals(_publicOwner, pollerOwner))
-                    return false;
-                _publicOwner = pollerOwner;
-            }
+        lock (_sync)
+        {
+            if (_closing)
+                throw new ZlinkConfigException(ConfigResult.InvalidState);
+            if (_publicOwner is not null
+                && !ReferenceEquals(_publicOwner, pollerOwner))
+                throw new ZlinkConfigException(
+                    ConfigResult.InvalidState, (int)ErrorCode.EBusy);
+            if (ReferenceEquals(_publicOwner, pollerOwner))
+                return false;
+            _publicOwner = pollerOwner;
+        }
         return true;
     }
 
@@ -304,8 +298,10 @@ internal sealed class CompletionOwner
         while (true)
         {
             ZlinkCompletion completion = default;
-            completion.StructSize = checked((uint)Marshal.SizeOf<ZlinkCompletion>());
-            var rc = NativeMethods.zlink_completion_recv(_handle, ref completion, DontWait);
+            completion.StructSize = checked(
+                (uint)Marshal.SizeOf<ZlinkCompletion>());
+            var rc = NativeMethods.zlink_completion_recv(_handle,
+                ref completion, DontWait);
             if ((RecvResult)rc == RecvResult.NoData)
             {
                 // Core's part contract requires draining to NO_DATA before
@@ -374,22 +370,22 @@ internal sealed class CompletionOwner
         RequestReplySupport.EnsureParts(parts, nameof(parts));
         if (_socketType == SocketType.Stream && parts.Count != 1)
             throw new ArgumentException(
-                "STREAM sends contain exactly one message part.",
-                nameof(parts)
-            );
+                "STREAM sends contain exactly one message part.", nameof(parts));
     }
 
     // Core treats user_context as an opaque value. The registry roots entries;
     // monotonically increasing socket-local identities never reuse a GCHandle
     // address and require no managed/native handle-table round trip.
-    private IntPtr NextContext() => checked((IntPtr)Interlocked.Increment(ref _nextContext));
+    private IntPtr NextContext() =>
+        checked((IntPtr)Interlocked.Increment(ref _nextContext));
 
     private void Register(CompletionEntry entry, IntPtr context = default)
     {
         lock (_sync)
         {
             if (_closing)
-                throw new ZlinkSubmitException(SubmitResult.Terminated, (int)ErrorCode.EShutdown);
+                throw new ZlinkSubmitException(SubmitResult.Terminated,
+                    (int)ErrorCode.EShutdown);
             if (context == IntPtr.Zero)
                 context = NextContext();
             entry.Context = context;
@@ -410,7 +406,8 @@ internal sealed class CompletionOwner
     private void EnsureOpenForSubmit()
     {
         if (Volatile.Read(ref _closing))
-            throw new ZlinkSubmitException(SubmitResult.Terminated, (int)ErrorCode.EShutdown);
+            throw new ZlinkSubmitException(SubmitResult.Terminated,
+                (int)ErrorCode.EShutdown);
     }
 
     private bool HasPublicOwner()
@@ -429,18 +426,15 @@ internal sealed class CompletionOwner
     {
         lock (_sync)
         {
-            if (!_entries.TryGetValue(context, out var current) || !ReferenceEquals(current, entry))
+            if (!_entries.TryGetValue(context, out var current)
+                || !ReferenceEquals(current, entry))
                 return;
             _entries.Remove(context);
         }
     }
 
-    private SendAttempt SubmitSend(
-        RoutingId? target,
-        IReadOnlyList<Message> parts,
-        int flags,
-        IntPtr userContext
-    )
+    private SendAttempt SubmitSend(RoutingId? target,
+        IReadOnlyList<Message> parts, int flags, IntPtr userContext)
     {
         var submitter = new SendMessageSubmitter
         {
@@ -449,7 +443,7 @@ internal sealed class CompletionOwner
             Routed = target.HasValue,
             Flags = flags,
             Context = userContext,
-            TrackCompletion = flags == DontWait,
+            TrackCompletion = flags == DontWait
         };
         try
         {
@@ -464,48 +458,33 @@ internal sealed class CompletionOwner
 
     private unsafe struct SendMessageSubmitter : INativeMessageSubmitter<SendMessageSubmitter>
     {
-        internal IntPtr Handle,
-            Context;
+        internal IntPtr Handle, Context;
         internal ZlinkRoutingId Target;
         internal bool Routed;
         internal bool TrackCompletion;
         internal int Flags;
         internal ulong CompletionId;
 
-        public static int Submit(ref SendMessageSubmitter self, Span<ZlinkMsg> parts)
+        public static int Submit(ref SendMessageSubmitter self,
+            Span<ZlinkMsg> parts)
         {
             fixed (ulong* id = &self.CompletionId)
             {
                 var idOut = self.TrackCompletion ? id : null;
                 return self.Routed
-                    ? NativeMethods.zlink_send_rid(
-                        self.Handle,
-                        ref self.Target,
-                        ref parts[0],
-                        (nuint)parts.Length,
-                        self.Flags,
-                        self.Context,
-                        idOut
-                    )
-                    : NativeMethods.zlink_send(
-                        self.Handle,
-                        ref parts[0],
-                        (nuint)parts.Length,
-                        self.Flags,
-                        self.Context,
-                        idOut
-                    );
+                    ? NativeMethods.zlink_send_rid(self.Handle,
+                        ref self.Target, ref parts[0], (nuint)parts.Length,
+                        self.Flags, self.Context, idOut)
+                    : NativeMethods.zlink_send(self.Handle,
+                        ref parts[0], (nuint)parts.Length, self.Flags,
+                        self.Context, idOut);
             }
         }
     }
 
-    private SendAttempt SubmitRequest(
-        RoutingId? target,
-        IReadOnlyList<Message> parts,
-        uint timeoutMs,
-        int flags,
-        IntPtr userContext
-    )
+    private SendAttempt SubmitRequest(RoutingId? target,
+        IReadOnlyList<Message> parts, uint timeoutMs, int flags,
+        IntPtr userContext)
     {
         var submitter = new RequestMessageSubmitter
         {
@@ -514,7 +493,7 @@ internal sealed class CompletionOwner
             Routed = target.HasValue,
             Flags = flags,
             TimeoutMs = timeoutMs,
-            Context = userContext,
+            Context = userContext
         };
         try
         {
@@ -529,54 +508,46 @@ internal sealed class CompletionOwner
 
     private unsafe struct RequestMessageSubmitter : INativeMessageSubmitter<RequestMessageSubmitter>
     {
-        internal IntPtr Handle,
-            Context;
+        internal IntPtr Handle, Context;
         internal ZlinkRoutingId Target;
         internal bool Routed;
         internal int Flags;
         internal uint TimeoutMs;
         internal ulong CompletionId;
 
-        public static int Submit(ref RequestMessageSubmitter self, Span<ZlinkMsg> parts)
+        public static int Submit(ref RequestMessageSubmitter self,
+            Span<ZlinkMsg> parts)
         {
             fixed (ZlinkRoutingId* target = &self.Target)
             fixed (ulong* id = &self.CompletionId)
-                return NativeMethods.zlink_request(
-                    self.Handle,
-                    self.Routed ? target : null,
-                    ref parts[0],
-                    (nuint)parts.Length,
-                    self.Flags,
-                    self.TimeoutMs,
-                    self.Context,
-                    id
-                );
+                return NativeMethods.zlink_request(self.Handle,
+                    self.Routed ? target : null, ref parts[0], (nuint)parts.Length,
+                    self.Flags, self.TimeoutMs, self.Context, id);
         }
     }
 
     private static bool IsWritableWait(SendAttempt attempt)
     {
         return attempt.CompletionId != 0
-            && attempt.Failure is ZlinkSubmitException submit
-            && submit.Result == ZlinkSubmitException.ErrorCode.Backpressured;
+               && attempt.Failure is ZlinkSubmitException submit
+               && submit.Result ==
+               ZlinkSubmitException.ErrorCode.Backpressured;
     }
 
     private static ZlinkSubmitException CreateProtocolFailure() =>
         new(SubmitResult.InternalError, (int)ErrorCode.EProto);
 
-    private static ZlinkSubmitException CreateWritableFailure(ZlinkCompletion completion) =>
-        completion.SendResult switch
-        {
-            ZlinkSendCompleteResult.NotFound => new ZlinkSubmitException(
-                SubmitResult.NotFound,
-                completion.SendTerminalErrno
-            ),
-            ZlinkSendCompleteResult.NotConnected => new ZlinkSubmitException(
-                SubmitResult.NotConnected,
-                completion.SendTerminalErrno
-            ),
-            _ => CreateProtocolFailure(),
-        };
+    private static ZlinkSubmitException CreateWritableFailure(
+        ZlinkCompletion completion) => completion.SendResult switch
+    {
+        ZlinkSendCompleteResult.NotFound =>
+            new ZlinkSubmitException(SubmitResult.NotFound,
+                completion.SendTerminalErrno),
+        ZlinkSendCompleteResult.NotConnected =>
+            new ZlinkSubmitException(SubmitResult.NotConnected,
+                completion.SendTerminalErrno),
+        _ => CreateProtocolFailure()
+    };
 
     private void DrainInline(RequestCompletionEntry entry)
     {
@@ -587,8 +558,10 @@ internal sealed class CompletionOwner
             while (!entry.Task.IsCompleted)
             {
                 ZlinkCompletion completion = default;
-                completion.StructSize = checked((uint)Marshal.SizeOf<ZlinkCompletion>());
-                var rc = NativeMethods.zlink_completion_recv(_handle, ref completion, 0);
+                completion.StructSize = checked(
+                    (uint)Marshal.SizeOf<ZlinkCompletion>());
+                var rc = NativeMethods.zlink_completion_recv(_handle,
+                    ref completion, 0);
                 if ((RecvResult)rc == RecvResult.NoData)
                     continue;
                 if ((RecvResult)rc != RecvResult.Ok)
@@ -628,7 +601,8 @@ internal sealed class CompletionOwner
         }
     }
 
-    private readonly record struct SendAttempt(ulong CompletionId, Exception? Failure);
+    private readonly record struct SendAttempt(
+        ulong CompletionId, Exception? Failure);
 
     private interface CompletionEntry
     {
@@ -656,18 +630,14 @@ internal sealed class CompletionOwner
         private bool _taskSettled;
         private bool _payloadReleased;
 
-        internal SendCompletionEntry(
-            CompletionOwner owner,
-            RoutingId? target,
-            CancellationToken cancellationToken
-        )
+        internal SendCompletionEntry(CompletionOwner owner, RoutingId? target,
+            CancellationToken cancellationToken)
         {
             Owner = owner;
             _target = target;
             _cancellationToken = cancellationToken;
             _completion = new TaskCompletionSource(
-                TaskCreationOptions.RunContinuationsAsynchronously
-            );
+                TaskCreationOptions.RunContinuationsAsynchronously);
         }
 
         internal Task Task => _completion.Task;
@@ -677,9 +647,7 @@ internal sealed class CompletionOwner
             if (!_cancellationToken.CanBeCanceled)
                 return;
             _cancellationRegistration = _cancellationToken.Register(
-                static state => ((SendCompletionEntry)state!).Cancel(),
-                this
-            );
+                static state => ((SendCompletionEntry)state!).Cancel(), this);
         }
 
         internal void CompleteInitialSuccess()
@@ -703,8 +671,7 @@ internal sealed class CompletionOwner
             {
                 if (_state != SendEntryState.Registered || token == 0)
                     throw new InvalidOperationException(
-                        "A writable wait must be armed once with a nonzero token."
-                    );
+                        "A writable wait must be armed once with a nonzero token.");
                 _token = token;
                 _retained = retained;
                 _state = SendEntryState.Waiting;
@@ -717,7 +684,8 @@ internal sealed class CompletionOwner
             }
         }
 
-        internal void ArmFailed(ulong token, Message[]? retained, Exception exception)
+        internal void ArmFailed(ulong token, Message[]? retained,
+            Exception exception)
         {
             lock (this)
             {
@@ -761,17 +729,16 @@ internal sealed class CompletionOwner
                     SetExceptionLocked(terminalFailure);
                     keepExpectedWaiter = true;
                 }
-                else if (
-                    completion.Kind != CompletionKind.Writable
-                    || completion.UserContext != Context
-                )
+                else if (completion.Kind != CompletionKind.Writable
+                    || completion.UserContext != Context)
                 {
                     terminalFailure = CreateProtocolFailure();
                     _state = SendEntryState.Terminal;
                     ReleasePayloadLocked();
                     SetExceptionLocked(terminalFailure);
                 }
-                else if (completion.SendResult != ZlinkSendCompleteResult.Admitted)
+                else if (completion.SendResult !=
+                         ZlinkSendCompleteResult.Admitted)
                 {
                     terminalFailure = CreateWritableFailure(completion);
                     _state = SendEntryState.Terminal;
@@ -837,7 +804,8 @@ internal sealed class CompletionOwner
                 Owner.Remove(this, Context);
                 return;
             }
-            var attempt = Owner.SubmitSend(_target, _retained!, DontWait, Context);
+            var attempt = Owner.SubmitSend(_target, _retained!, DontWait,
+                Context);
             var terminal = false;
             lock (this)
             {
@@ -892,9 +860,8 @@ internal sealed class CompletionOwner
 
         public void FailLifecycle()
         {
-            AbortBeforeNativeWait(
-                new ZlinkSubmitException(SubmitResult.Terminated, (int)ErrorCode.EShutdown)
-            );
+            AbortBeforeNativeWait(new ZlinkSubmitException(
+                SubmitResult.Terminated, (int)ErrorCode.EShutdown));
         }
 
         public void FailDrainWait()
@@ -910,7 +877,8 @@ internal sealed class CompletionOwner
                     return;
                 _state = SendEntryState.FailedWaiting;
                 ReleasePayloadLocked();
-                SetExceptionLocked(new ZlinkSubmitException(SubmitResult.InternalError));
+                SetExceptionLocked(new ZlinkSubmitException(
+                    SubmitResult.InternalError));
             }
         }
 
@@ -966,9 +934,7 @@ internal sealed class CompletionOwner
         }
     }
 
-    private sealed class RequestCompletionEntry
-        : TaskCompletionSource<IReadOnlyList<Message>>,
-            CompletionEntry
+    private sealed class RequestCompletionEntry : TaskCompletionSource<IReadOnlyList<Message>>, CompletionEntry
     {
         private readonly CompletionOwner Owner;
         public IntPtr Context { get; set; }
@@ -976,8 +942,7 @@ internal sealed class CompletionOwner
         private readonly uint _timeoutMs;
         private readonly CancellationToken _cancellationToken;
         private readonly TaskCompletionSource _admitted = new(
-            TaskCreationOptions.RunContinuationsAsynchronously
-        );
+            TaskCreationOptions.RunContinuationsAsynchronously);
         private CancellationTokenRegistration _cancellationRegistration;
         private IReadOnlyList<Message> _reply = Array.Empty<Message>();
         private Message[]? _retained;
@@ -986,12 +951,8 @@ internal sealed class CompletionOwner
         private bool _cancelClaimed;
         private bool _payloadReleased;
 
-        internal RequestCompletionEntry(
-            CompletionOwner owner,
-            RoutingId? target,
-            uint timeoutMs,
-            CancellationToken cancellationToken
-        )
+        internal RequestCompletionEntry(CompletionOwner owner, RoutingId? target, uint timeoutMs,
+            CancellationToken cancellationToken)
             : base(TaskCreationOptions.RunContinuationsAsynchronously)
         {
             Owner = owner;
@@ -1007,9 +968,7 @@ internal sealed class CompletionOwner
             if (!_cancellationToken.CanBeCanceled)
                 return;
             _cancellationRegistration = _cancellationToken.Register(
-                static state => ((RequestCompletionEntry)state!).Cancel(),
-                this
-            );
+                static state => ((RequestCompletionEntry)state!).Cancel(), this);
         }
 
         internal void PublishRequest(ulong completionId)
@@ -1022,8 +981,7 @@ internal sealed class CompletionOwner
                     return;
                 if (_state != RequestEntryState.Registered)
                     throw new InvalidOperationException(
-                        "A request completion must be published once."
-                    );
+                        "A request completion must be published once.");
                 _completionId = completionId;
                 _state = RequestEntryState.WaitingRequest;
                 Monitor.PulseAll(this);
@@ -1040,8 +998,7 @@ internal sealed class CompletionOwner
             {
                 if (_state != RequestEntryState.Registered || token == 0)
                     throw new InvalidOperationException(
-                        "A writable wait must be armed once with a nonzero token."
-                    );
+                        "A writable wait must be armed once with a nonzero token.");
                 _completionId = token;
                 _retained = retained;
                 _state = RequestEntryState.WaitingWritable;
@@ -1054,7 +1011,8 @@ internal sealed class CompletionOwner
             }
         }
 
-        internal void ArmFailed(ulong token, Message[]? retained, Exception exception)
+        internal void ArmFailed(ulong token, Message[]? retained,
+            Exception exception)
         {
             lock (this)
             {
@@ -1100,17 +1058,16 @@ internal sealed class CompletionOwner
                 }
                 else if (_state == RequestEntryState.WaitingWritable)
                 {
-                    if (
-                        completion.Kind != CompletionKind.Writable
-                        || completion.UserContext != Context
-                    )
+                    if (completion.Kind != CompletionKind.Writable
+                        || completion.UserContext != Context)
                     {
                         failure = CreateProtocolFailure();
                         _state = RequestEntryState.Terminal;
                         ReleasePayloadLocked();
                         SetExceptionLocked(failure);
                     }
-                    else if (completion.SendResult != ZlinkSendCompleteResult.Admitted)
+                    else if (completion.SendResult !=
+                             ZlinkSendCompleteResult.Admitted)
                     {
                         failure = CreateWritableFailure(completion);
                         _state = RequestEntryState.Terminal;
@@ -1145,19 +1102,19 @@ internal sealed class CompletionOwner
                 else if (_state == RequestEntryState.WaitingRequest)
                 {
                     _state = RequestEntryState.Terminal;
-                    if (
-                        completion.Kind != CompletionKind.Request
-                        || completion.UserContext != Context
-                    )
+                    if (completion.Kind != CompletionKind.Request
+                        || completion.UserContext != Context)
                     {
-                        failure = new ZlinkRequestException(RequestResult.InternalError);
+                        failure = new ZlinkRequestException(
+                            RequestResult.InternalError);
                         SetExceptionLocked(failure);
                     }
                     else if (!_cancelClaimed)
                     {
                         if (completion.RequestResult != RequestResult.Ok)
                         {
-                            failure = new ZlinkRequestException(completion.RequestResult);
+                            failure = new ZlinkRequestException(
+                                completion.RequestResult);
                             SetExceptionLocked(failure);
                         }
                         else
@@ -1221,7 +1178,8 @@ internal sealed class CompletionOwner
                 Owner.Remove(this, Context);
                 return;
             }
-            var attempt = Owner.SubmitRequest(_target, _retained!, _timeoutMs, DontWait, Context);
+            var attempt = Owner.SubmitRequest(_target, _retained!, _timeoutMs,
+                DontWait, Context);
             var terminal = false;
             lock (this)
             {
@@ -1288,7 +1246,8 @@ internal sealed class CompletionOwner
             Exception failure;
             lock (this)
                 failure = _state is RequestEntryState.WaitingWritable or RequestEntryState.Retrying
-                    ? new ZlinkSubmitException(SubmitResult.Terminated, (int)ErrorCode.EShutdown)
+                    ? new ZlinkSubmitException(SubmitResult.Terminated,
+                        (int)ErrorCode.EShutdown)
                     : new ZlinkRequestException(RequestResult.Terminated);
             AbortBeforeNativeWait(failure);
         }
@@ -1302,12 +1261,9 @@ internal sealed class CompletionOwner
             }
             lock (this)
             {
-                if (
-                    _state
-                    is RequestEntryState.Registered
-                        or RequestEntryState.Terminal
-                        or RequestEntryState.FailedWaiting
-                )
+                if (_state is RequestEntryState.Registered
+                    or RequestEntryState.Terminal
+                    or RequestEntryState.FailedWaiting)
                     return;
                 var failure = CreateStateFailure();
                 _state = RequestEntryState.FailedWaiting;
@@ -1331,11 +1287,13 @@ internal sealed class CompletionOwner
         }
 
         private Exception CreateStateFailure() =>
-            _state is RequestEntryState.WaitingWritable or RequestEntryState.Retrying
+            _state is RequestEntryState.WaitingWritable
+                or RequestEntryState.Retrying
                 ? CreateProtocolFailure()
                 : new ZlinkRequestException(RequestResult.InternalError);
 
-        private static unsafe IReadOnlyList<Message> MoveReply(ref ZlinkCompletion completion)
+        private static unsafe IReadOnlyList<Message> MoveReply(
+            ref ZlinkCompletion completion)
         {
             var count = checked((int)completion.ReplyPartCount);
             if (count == 0)
@@ -1346,7 +1304,8 @@ internal sealed class CompletionOwner
             {
                 for (var i = 0; i < count; i++)
                 {
-                    result[i] = Message.MoveFromNative(ref completion.ReplyParts[i]);
+                    result[i] = Message.MoveFromNative(
+                        ref completion.ReplyParts[i]);
                     built++;
                 }
                 return result;
@@ -1402,7 +1361,7 @@ internal sealed class CompletionOwner
         Waiting,
         FailedWaiting,
         Retrying,
-        Terminal,
+        Terminal
     }
 
     private enum RequestEntryState
@@ -1412,8 +1371,9 @@ internal sealed class CompletionOwner
         WaitingRequest,
         FailedWaiting,
         Retrying,
-        Terminal,
+        Terminal
     }
 }
 
-internal readonly record struct CompletionDrainResult(int TotalCount, int RequestCount);
+internal readonly record struct CompletionDrainResult(
+    int TotalCount, int RequestCount);
