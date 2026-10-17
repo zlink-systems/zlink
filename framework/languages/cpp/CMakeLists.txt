@@ -1888,6 +1888,8 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     tests/Zlink.Framework.UnitTests/test_cpp_framework_host_context_hooks.cpp
     "framework-unit;framework-regression;execution")
   target_use_zlink_gtest_main(test_cpp_framework_host_context_hooks)
+  target_include_directories(test_cpp_framework_host_context_hooks PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   target_include_directories(test_cpp_framework_sync_submit PRIVATE
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   add_zlink_framework_test(

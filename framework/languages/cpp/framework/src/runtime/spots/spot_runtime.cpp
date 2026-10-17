@@ -2558,7 +2558,10 @@ void spot_context_state_t::run_local_close_steps (
   spot_close_reason_t reason)
 {
     // Steps 3 and 4: OnClosing once, local cleanup, then the fenced release.
-    const auto teardown_end = owner->lane.run ([&] { return owner->teardown_end; }).get ();
+    const auto [teardown_end, cleanup_cancellation] =
+      owner->lane
+        .run ([&] { return std::make_pair (owner->teardown_end, owner->cleanup_cancellation); })
+        .get ();
     auto finish = [self = shared_from_this (), owner, token, release = std::move (release),
                    reincarnate = std::move (reincarnate), done,
                    discard_reincarnation = std::move (discard_reincarnation), resume, teardown_end,
@@ -2831,7 +2834,8 @@ void spot_context_state_t::run_local_close_steps (
                 instance.get (),
                 spot_closing_context_t{
                   reason, teardown_end.value_or (std::chrono::system_clock::time_point::max ())},
-                {}),
+                reason == spot_close_reason_t::host_shutdown ? cleanup_cancellation
+                                                             : std::stop_token{}),
               resume,
               [self = shared_from_this (), owner, instance,
                after_closing] (result_t<void> result) mutable {
@@ -13477,7 +13481,8 @@ void spot_node_runtime_t::close_user_spot_owner (const std::string &spot_id,
     service::run_authority_close (std::move (begin), std::move (done), {});
 }
 
-bool spot_node_runtime_t::close_all_user_spots (std::chrono::steady_clock::time_point deadline_at)
+bool spot_node_runtime_t::close_all_user_spots (std::chrono::steady_clock::time_point deadline_at,
+                                                std::stop_source &cleanup_cancellation)
 {
     std::vector<spot_id_t> user_spots;
     std::vector<task_t<bool>> running_closes;
@@ -13485,6 +13490,7 @@ bool spot_node_runtime_t::close_all_user_spots (std::chrono::steady_clock::time_
       .run ([&] {
           _state->teardown_end =
             std::chrono::system_clock::now () + (deadline_at - std::chrono::steady_clock::now ());
+          _state->cleanup_cancellation = cleanup_cancellation.get_token ();
           user_spots.reserve (_state->spot_contexts_by_id.size ());
           for (const auto &[rid, context] : _state->spot_contexts_by_id) {
               if (!context._state || context._state->is_entry_spot ())
@@ -13504,12 +13510,16 @@ bool spot_node_runtime_t::close_all_user_spots (std::chrono::steady_clock::time_
           }
       })
       .get ();
-    const auto wait_for_close = [deadline_at] (const task_t<bool> &closing) {
+    const auto wait_for_close = [deadline_at, &cleanup_cancellation] (const task_t<bool> &closing) {
         const auto remaining = std::max (std::chrono::milliseconds::zero (),
                                          std::chrono::ceil<std::chrono::milliseconds> (
                                            deadline_at - std::chrono::steady_clock::now ()));
         const auto result = closing.result_for (remaining);
-        return result && result->value ();
+        if (!result) {
+            cleanup_cancellation.request_stop ();
+            return false;
+        }
+        return result->value ();
     };
     bool all_closed = true;
     std::vector<std::exception_ptr> callback_failures;
@@ -13825,9 +13835,13 @@ void spot_node_runtime_t::cancel_pending_work () noexcept
 void spot_node_runtime_t::release_native_handles () noexcept
 {
     std::vector<std::shared_ptr<detail::spot_context_state_t>> contexts;
+    std::stop_token cleanup_cancellation;
+    auto teardown_end = std::chrono::system_clock::time_point::max ();
     try {
         _state->lane
           .run ([&] {
+              cleanup_cancellation = _state->cleanup_cancellation;
+              teardown_end = _state->teardown_end.value_or (teardown_end);
               contexts.reserve (_state->spot_contexts_by_id.size ());
               for (auto &[_, context] : _state->spot_contexts_by_id) {
                   if (context._state) {
@@ -13845,7 +13859,8 @@ void spot_node_runtime_t::release_native_handles () noexcept
           .get ();
         for (auto &context : contexts) {
             try {
-                context->detach_application_instance (true, spot_close_reason_t::host_shutdown);
+                context->detach_application_instance (true, spot_close_reason_t::host_shutdown,
+                                                      teardown_end, cleanup_cancellation);
             }
             catch (...) {
             }

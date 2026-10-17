@@ -139,6 +139,7 @@ class spot_node_builder_state_t
     std::shared_ptr<std::atomic_bool> drain_flag;
     std::function<framework_runtime_state_t ()> host_phase;
     std::optional<std::chrono::system_clock::time_point> teardown_end;
+    std::stop_token cleanup_cancellation;
     /* The host admission gate (Spot address messaging §9): a draining host
      * ends new Spot creation and Actor admission with ShuttingDown before any
      * Spot seal is consulted. The host owns the flag (bind_drain_flag). */
@@ -1630,7 +1631,8 @@ class spot_node_runtime_t
     void close_user_spot_owner (const std::string &spot_id,
                                 service::spot_close_begin_t begin,
                                 service::spot_close_done_t done);
-    bool close_all_user_spots (std::chrono::steady_clock::time_point deadline_at);
+    bool close_all_user_spots (std::chrono::steady_clock::time_point deadline_at,
+                               std::stop_source &cleanup_cancellation);
     node_rid_t node_rid () const;
     std::optional<std::string> spot_name_for (spot_id_t spot_id) const;
     std::optional<spot_route_t> resolve_spot (spot_id_t spot_id) const;

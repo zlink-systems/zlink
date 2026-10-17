@@ -489,6 +489,7 @@ class app_state_t
         bool terminal = false;
         termination_result_t result{};
         std::optional<std::chrono::system_clock::time_point> deadline_at;
+        std::stop_source cleanup_cancellation;
         std::vector<std::shared_ptr<termination_waiter_t>> waiters;
         std::thread worker;
 
@@ -4134,7 +4135,9 @@ void app_t::run_shared_shutdown (detail::app_state_t &state) noexcept
         for (const auto &snapshot : detail::spot_node_runtime_t::snapshots (state.zlink)) {
             auto runtime = detail::spot_node_runtime_t::from (state.zlink, snapshot.name);
             try {
-                if (runtime && !runtime->close_all_user_spots (cleanup_end))
+                if (runtime
+                    && !runtime->close_all_user_spots (
+                      cleanup_end, state.termination_operation.cleanup_cancellation))
                     spots_closed = false;
             }
             catch (const std::exception &) {
@@ -4226,6 +4229,8 @@ void app_t::run_shared_shutdown (detail::app_state_t &state) noexcept
               lock, cleanup_end, [&] { return state.teardown_complete; });
         }
     }
+    if (!teardown_completed)
+        state.termination_operation.cleanup_cancellation.request_stop ();
     if (!teardown_completed && terminal.outcome == termination_outcome_t::stopped) {
         terminal.outcome = termination_outcome_t::force_stopped;
         terminal.reason = termination_reason_t::deadline_exceeded;
