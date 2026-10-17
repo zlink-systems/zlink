@@ -310,17 +310,7 @@ final class ZLinkActorDispatchSerials {
             long payloadBytes,
             Supplier<CompletionStage<Void>> operation,
             Runnable relocationRelease) {
-        return enqueue(turn, payloadBytes, operation, relocationRelease, null);
-    }
-
-    CompletionStage<Void> enqueue(
-            QueuedTurn turn,
-            long payloadBytes,
-            Supplier<CompletionStage<Void>> operation,
-            Runnable relocationRelease,
-            CompletableFuture<Void> requestAdmission) {
-        return enqueue(
-                turn, payloadBytes, operation, relocationRelease, requestAdmission, null, null);
+        return enqueue(turn, payloadBytes, operation, relocationRelease, null, null, null);
     }
 
     CompletionStage<Void> enqueue(
@@ -385,23 +375,7 @@ final class ZLinkActorDispatchSerials {
                 acceptedJournalRecordSizeHint,
                 operation,
                 relocationRelease,
-                null);
-    }
-
-    CompletionStage<Void> enqueueLazyRecord(
-            QueuedTurn turn,
-            Supplier<byte[]> acceptedJournalRecord,
-            long acceptedJournalRecordSizeHint,
-            Supplier<CompletionStage<Void>> operation,
-            Runnable relocationRelease,
-            CompletableFuture<Void> requestAdmission) {
-        return enqueueLazyRecord(
-                turn,
-                acceptedJournalRecord,
-                acceptedJournalRecordSizeHint,
-                operation,
-                relocationRelease,
-                requestAdmission,
+                null,
                 null,
                 null);
     }

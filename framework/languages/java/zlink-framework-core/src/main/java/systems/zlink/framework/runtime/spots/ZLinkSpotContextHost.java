@@ -65,21 +65,13 @@ abstract class ZLinkSpotContextHost {
     }
 
     abstract CompletionStage<Void> enqueueActorDispatch(
-            String actorId, long payloadBytes, Supplier<CompletionStage<Void>> operation);
-
-    abstract CompletionStage<Void> enqueueActorDispatch(
             ZLinkActorDispatchTarget target,
             String actorId,
             long payloadBytes,
             Supplier<CompletionStage<Void>> operation,
-            CompletableFuture<Void> admission);
-
-    abstract CompletionStage<Void> enqueueActorDispatch(
-            String actorId,
-            Supplier<byte[]> acceptedJournalRecord,
-            long acceptedJournalRecordSizeHint,
-            Supplier<CompletionStage<Void>> operation,
-            Runnable relocationRelease);
+            CompletableFuture<Void> admission,
+            ZLinkBackendActorReceived header,
+            Message payload);
 
     abstract CompletionStage<Void> enqueueActorDispatch(
             ZLinkActorDispatchTarget target,
@@ -88,36 +80,7 @@ abstract class ZLinkSpotContextHost {
             long acceptedJournalRecordSizeHint,
             Supplier<CompletionStage<Void>> operation,
             Runnable relocationRelease,
-            CompletableFuture<Void> admission);
-
-    CompletionStage<Void> enqueueActorDispatch(
-            ZLinkActorDispatchTarget target,
-            String actorId,
-            long payloadBytes,
-            Supplier<CompletionStage<Void>> operation,
             CompletableFuture<Void> admission,
             ZLinkBackendActorReceived header,
-            Message payload) {
-        return enqueueActorDispatch(target, actorId, payloadBytes, operation, admission);
-    }
-
-    CompletionStage<Void> enqueueActorDispatch(
-            ZLinkActorDispatchTarget target,
-            String actorId,
-            Supplier<byte[]> acceptedJournalRecord,
-            long acceptedJournalRecordSizeHint,
-            Supplier<CompletionStage<Void>> operation,
-            Runnable relocationRelease,
-            CompletableFuture<Void> admission,
-            ZLinkBackendActorReceived header,
-            Message payload) {
-        return enqueueActorDispatch(
-                target,
-                actorId,
-                acceptedJournalRecord,
-                acceptedJournalRecordSizeHint,
-                operation,
-                relocationRelease,
-                admission);
-    }
+            Message payload);
 }

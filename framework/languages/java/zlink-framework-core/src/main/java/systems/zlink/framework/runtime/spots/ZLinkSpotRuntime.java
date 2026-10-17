@@ -6325,23 +6325,6 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
 
     @Override
     CompletionStage<Void> enqueueActorDispatch(
-            String actorId, long payloadBytes, Supplier<CompletionStage<Void>> operation) {
-        return actorSessions.runtime().submitActorDispatch(actorId, payloadBytes, operation);
-    }
-
-    @Override
-    CompletionStage<Void> enqueueActorDispatch(
-            ZLinkActorDispatchTarget target,
-            String actorId,
-            long payloadBytes,
-            Supplier<CompletionStage<Void>> operation,
-            CompletableFuture<Void> admission) {
-        return enqueueActorDispatch(
-                target, actorId, payloadBytes, operation, admission, null, null);
-    }
-
-    @Override
-    CompletionStage<Void> enqueueActorDispatch(
             ZLinkActorDispatchTarget target,
             String actorId,
             long payloadBytes,
@@ -6353,44 +6336,6 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                 .runtime()
                 .submitActorDispatch(
                         target, actorId, payloadBytes, operation, admission, header, payload);
-    }
-
-    @Override
-    CompletionStage<Void> enqueueActorDispatch(
-            String actorId,
-            Supplier<byte[]> acceptedJournalRecord,
-            long acceptedJournalRecordSizeHint,
-            Supplier<CompletionStage<Void>> operation,
-            Runnable relocationRelease) {
-        return actorSessions
-                .runtime()
-                .submitActorDispatchLazyRecord(
-                        actorId,
-                        acceptedJournalRecord,
-                        acceptedJournalRecordSizeHint,
-                        operation,
-                        relocationRelease);
-    }
-
-    @Override
-    CompletionStage<Void> enqueueActorDispatch(
-            ZLinkActorDispatchTarget target,
-            String actorId,
-            Supplier<byte[]> acceptedJournalRecord,
-            long acceptedJournalRecordSizeHint,
-            Supplier<CompletionStage<Void>> operation,
-            Runnable relocationRelease,
-            CompletableFuture<Void> admission) {
-        return enqueueActorDispatch(
-                target,
-                actorId,
-                acceptedJournalRecord,
-                acceptedJournalRecordSizeHint,
-                operation,
-                relocationRelease,
-                admission,
-                null,
-                null);
     }
 
     @Override

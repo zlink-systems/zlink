@@ -28,53 +28,6 @@ interface SpotDispatchLine {
     }
 
     CompletionStage<Void> enqueueActorDispatch(
-            String actorId, Supplier<CompletionStage<Void>> operation);
-
-    default CompletionStage<Void> enqueueActorDispatch(
-            String actorId, long payloadBytes, Supplier<CompletionStage<Void>> operation) {
-        return enqueueActorDispatch(actorId, payloadBytes, operation, null);
-    }
-
-    default CompletionStage<Void> enqueueActorDispatch(
-            String actorId,
-            Supplier<byte[]> acceptedJournalRecord,
-            long acceptedJournalRecordSizeHint,
-            Supplier<CompletionStage<Void>> operation,
-            Runnable relocationRelease) {
-        return enqueueActorDispatch(
-                actorId,
-                acceptedJournalRecord,
-                acceptedJournalRecordSizeHint,
-                operation,
-                relocationRelease,
-                null);
-    }
-
-    CompletionStage<Void> enqueueActorDispatch(
-            String actorId,
-            long payloadBytes,
-            Supplier<CompletionStage<Void>> operation,
-            CompletableFuture<Void> admission);
-
-    CompletionStage<Void> enqueueActorDispatch(
-            String actorId,
-            Supplier<byte[]> acceptedJournalRecord,
-            long acceptedJournalRecordSizeHint,
-            Supplier<CompletionStage<Void>> operation,
-            Runnable relocationRelease,
-            CompletableFuture<Void> admission);
-
-    default CompletionStage<Void> enqueueActorDispatch(
-            String actorId,
-            long payloadBytes,
-            Supplier<CompletionStage<Void>> operation,
-            CompletableFuture<Void> admission,
-            ZLinkBackendActorReceived header,
-            Message payload) {
-        return enqueueActorDispatch(actorId, payloadBytes, operation, admission);
-    }
-
-    default CompletionStage<Void> enqueueActorDispatch(
             String actorId,
             Supplier<byte[]> acceptedJournalRecord,
             long acceptedJournalRecordSizeHint,
@@ -82,15 +35,15 @@ interface SpotDispatchLine {
             Runnable relocationRelease,
             CompletableFuture<Void> admission,
             ZLinkBackendActorReceived header,
-            Message payload) {
-        return enqueueActorDispatch(
-                actorId,
-                acceptedJournalRecord,
-                acceptedJournalRecordSizeHint,
-                operation,
-                relocationRelease,
-                admission);
-    }
+            Message payload);
+
+    CompletionStage<Void> enqueueActorDispatch(
+            String actorId,
+            long payloadBytes,
+            Supplier<CompletionStage<Void>> operation,
+            CompletableFuture<Void> admission,
+            ZLinkBackendActorReceived header,
+            Message payload);
 
     String spotId();
 

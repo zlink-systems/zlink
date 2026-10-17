@@ -272,7 +272,9 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                         handled.complete(null);
                         return terminal;
                     },
-                    admission);
+                    admission,
+                    null,
+                    null);
             actorBackend.drain();
             assertTrue(admission.isDone() && !admission.isCompletedExceptionally());
             assertFalse(

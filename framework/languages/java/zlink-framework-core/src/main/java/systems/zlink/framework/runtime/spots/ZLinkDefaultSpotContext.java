@@ -264,21 +264,6 @@ final class DefaultEntrySpotContext implements ZLinkEntrySpotContext, SpotDispat
 
     @Override
     public CompletionStage<Void> enqueueActorDispatch(
-            String actorId, Supplier<CompletionStage<Void>> operation) {
-        return enqueueActorDispatch(actorId, 0, operation);
-    }
-
-    @Override
-    public CompletionStage<Void> enqueueActorDispatch(
-            String actorId,
-            long payloadBytes,
-            Supplier<CompletionStage<Void>> operation,
-            CompletableFuture<Void> admission) {
-        return enqueueActorDispatch(actorId, payloadBytes, operation, admission, null, null);
-    }
-
-    @Override
-    public CompletionStage<Void> enqueueActorDispatch(
             String actorId,
             long payloadBytes,
             Supplier<CompletionStage<Void>> operation,
@@ -294,25 +279,6 @@ final class DefaultEntrySpotContext implements ZLinkEntrySpotContext, SpotDispat
                 admission,
                 header,
                 payload);
-    }
-
-    @Override
-    public CompletionStage<Void> enqueueActorDispatch(
-            String actorId,
-            Supplier<byte[]> acceptedJournalRecord,
-            long acceptedJournalRecordSizeHint,
-            Supplier<CompletionStage<Void>> operation,
-            Runnable relocationRelease,
-            CompletableFuture<Void> admission) {
-        return enqueueActorDispatch(
-                actorId,
-                acceptedJournalRecord,
-                acceptedJournalRecordSizeHint,
-                operation,
-                relocationRelease,
-                admission,
-                null,
-                null);
     }
 
     @Override
@@ -819,21 +785,6 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
 
     @Override
     public CompletionStage<Void> enqueueActorDispatch(
-            String actorId, Supplier<CompletionStage<Void>> operation) {
-        return enqueueActorDispatch(actorId, 0, operation);
-    }
-
-    @Override
-    public CompletionStage<Void> enqueueActorDispatch(
-            String actorId,
-            long payloadBytes,
-            Supplier<CompletionStage<Void>> operation,
-            CompletableFuture<Void> admission) {
-        return enqueueActorDispatch(actorId, payloadBytes, operation, admission, null, null);
-    }
-
-    @Override
-    public CompletionStage<Void> enqueueActorDispatch(
             String actorId,
             long payloadBytes,
             Supplier<CompletionStage<Void>> operation,
@@ -849,25 +800,6 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
                 admission,
                 header,
                 payload);
-    }
-
-    @Override
-    public CompletionStage<Void> enqueueActorDispatch(
-            String actorId,
-            Supplier<byte[]> acceptedJournalRecord,
-            long acceptedJournalRecordSizeHint,
-            Supplier<CompletionStage<Void>> operation,
-            Runnable relocationRelease,
-            CompletableFuture<Void> admission) {
-        return enqueueActorDispatch(
-                actorId,
-                acceptedJournalRecord,
-                acceptedJournalRecordSizeHint,
-                operation,
-                relocationRelease,
-                admission,
-                null,
-                null);
     }
 
     @Override

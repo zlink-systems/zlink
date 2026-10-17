@@ -3829,16 +3829,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             String actorId,
             long payloadBytes,
             Supplier<CompletionStage<Void>> operation) {
-        return submitActorDispatch(target, actorId, payloadBytes, operation, null);
-    }
-
-    public CompletionStage<Void> submitActorDispatch(
-            ZLinkActorDispatchTarget target,
-            String actorId,
-            long payloadBytes,
-            Supplier<CompletionStage<Void>> operation,
-            CompletableFuture<Void> admission) {
-        return submitActorDispatch(target, actorId, payloadBytes, operation, admission, null, null);
+        return submitActorDispatch(target, actorId, payloadBytes, operation, null, null, null);
     }
 
     public CompletionStage<Void> submitActorDispatch(
@@ -3865,16 +3856,6 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                                 payload));
     }
 
-    public CompletionStage<Void> submitActorDispatch(
-            ZLinkActorDispatchTarget target,
-            String actorId,
-            byte[] acceptedJournalRecord,
-            Supplier<CompletionStage<Void>> operation,
-            Runnable relocationRelease) {
-        return submitActorDispatch(
-                target, actorId, acceptedJournalRecord, null, operation, relocationRelease);
-    }
-
     public CompletionStage<Void> submitActorDispatchLazyRecord(
             ZLinkActorDispatchTarget target,
             String actorId,
@@ -3889,25 +3870,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                 acceptedJournalRecordSizeHint,
                 operation,
                 relocationRelease,
-                null);
-    }
-
-    public CompletionStage<Void> submitActorDispatchLazyRecord(
-            ZLinkActorDispatchTarget target,
-            String actorId,
-            Supplier<byte[]> acceptedJournalRecord,
-            long acceptedJournalRecordSizeHint,
-            Supplier<CompletionStage<Void>> operation,
-            Runnable relocationRelease,
-            CompletableFuture<Void> admission) {
-        return submitActorDispatchLazyRecord(
-                target,
-                actorId,
-                acceptedJournalRecord,
-                acceptedJournalRecordSizeHint,
-                operation,
-                relocationRelease,
-                admission,
+                null,
                 null,
                 null);
     }
@@ -4036,7 +3999,8 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             Runnable release,
             CompletableFuture<Void> admission) {
         Objects.requireNonNull(turn, "turn");
-        return dispatches.enqueueLazyRecord(turn, record, size, operation, release, admission);
+        return dispatches.enqueueLazyRecord(
+                turn, record, size, operation, release, admission, null, null);
     }
 
     private CompletionStage<ZLinkActorDispatchTarget.QueuedTurn> prepareManagedActorDispatch(
