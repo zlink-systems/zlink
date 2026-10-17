@@ -4092,8 +4092,7 @@ void test_relocation_ready_boundary (test_context_t &test, ready_boundary_case_t
     auto target = std::make_shared<host::public_host_runtime_t> (options);
     target->configure_maintenance ({authority,
                                     std::make_shared<memory_aggregate_authority_t> (authority),
-                                    std::make_shared<memory_relocation_repository_t> (),
-                                    std::make_shared<target_preflight_t> ()});
+                                    std::make_shared<memory_relocation_repository_t> ()});
     target->configure_session_route_owner (
       [] { return std::optional<f::location_owner_token_t>{{"target-owner", 9}}; });
     target->configure_stateful_dispatch (
