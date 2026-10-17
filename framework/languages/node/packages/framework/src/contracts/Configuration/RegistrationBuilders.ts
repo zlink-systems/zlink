@@ -1234,8 +1234,11 @@ class DefaultMeshObjectServerBuilder implements ZLinkMeshObjectServerBuilder {
     private readonly node: MutableSpotNodeOptions
   ) {}
 
-  addEntrySpot<TEntrySpot extends ZLinkEntrySpot>(entrySpotType: Type<TEntrySpot>): this {
-    registerEntrySpot(this.node, entrySpotType);
+  addEntrySpot<TEntrySpot extends ZLinkEntrySpot>(
+    entrySpotType: Type<TEntrySpot>,
+    actorType: string
+  ): this {
+    registerEntrySpot(this.node, entrySpotType, actorType);
     return this;
   }
 
@@ -1646,6 +1649,7 @@ interface MutableSpotNodeOptions {
   router?: MutableSpotRouterCapabilityOptions;
   pubSub?: MutableSpotPubSubCapabilityOptions;
   entrySpotType?: Type<ZLinkEntrySpot>;
+  entrySpotActorType?: string;
   spotFactories?: Type<ZLinkSpot>[];
   spotFactoryRegistrations?: Record<
     string,

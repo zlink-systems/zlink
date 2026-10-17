@@ -14,6 +14,8 @@
 #include <condition_variable>
 #include <cstdio>
 #include <future>
+#include <functional>
+#include <map>
 #include <optional>
 #include <stdexcept>
 #include <thread>
@@ -34,6 +36,7 @@ constexpr auto mesh_name = "maintenance-join";
 constexpr auto room_type = "room";
 constexpr auto first_rid = "join-first";
 constexpr auto second_rid = "join-second";
+constexpr auto third_rid = "join-third";
 constexpr auto previous_spot = "previous";
 constexpr auto maintenance_spot = "maintenance";
 constexpr auto source_spot = "source";
@@ -64,6 +67,7 @@ struct observations_t
     bool probe_admission_observed = false;
     std::optional<std::size_t> completion_to_hold;
     fw::task_completion_source_t<void> release_completion;
+    std::vector<std::string> factory_nodes;
 } *observations;
 struct move_t
 {
@@ -147,6 +151,10 @@ class factory_t final : public fw::actor_factory_t<actor_t>
             }
             throw std::runtime_error ("target Actor factory failed");
         }
+        {
+            std::lock_guard lock (observations->mutex);
+            observations->factory_nodes.emplace_back (context.actor_ref ().node_rid ().value ());
+        }
         co_return std::make_shared<actor_t> (std::move (context));
     }
 };
@@ -186,6 +194,40 @@ class entry_t final : public fw::entry_spot_t<actor_t>
         ++observations->entry_left;
         co_return;
     }
+
+  private:
+    fw::entry_spot_context_t _context;
+};
+// A second Actor type, so a node can register an Entry Spot that accepts only it.
+constexpr auto other_actor_type = "other-member";
+class other_actor_t final : public fw::actor_t
+{
+  public:
+    explicit other_actor_t (fw::actor_context_t context) : _context (std::move (context)) {}
+    fw::actor_context_t &context () noexcept override { return _context; }
+    const fw::actor_context_t &context () const noexcept override { return _context; }
+
+  private:
+    fw::actor_context_t _context;
+};
+class other_factory_t final : public fw::actor_factory_t<other_actor_t>
+{
+  public:
+    fw::task_t<std::shared_ptr<other_actor_t>> create (fw::actor_context_t context,
+                                                       std::stop_token) override
+    {
+        co_return std::make_shared<other_actor_t> (std::move (context));
+    }
+};
+class other_entry_t final : public fw::entry_spot_t<other_actor_t>
+{
+  public:
+    explicit other_entry_t (fw::entry_spot_context_t context) : _context (std::move (context)) {}
+    fw::entry_spot_context_t &context () noexcept override { return _context; }
+    const fw::entry_spot_context_t &context () const noexcept override { return _context; }
+    void configure () override {}
+    fw::task_t<void> on_actor_joined (other_actor_t &) override { co_return; }
+    fw::task_t<void> on_leave_actor (other_actor_t &) override { co_return; }
 
   private:
     fw::entry_spot_context_t _context;
@@ -301,13 +343,23 @@ struct host_t
         });
     }
 };
+// Which Entry Spot a node registers: one accepting `actor_t`, none, or one accepting only
+// `other_actor_t` (that node also registers the `other_actor_t` factory).
+enum class entry_kind_t
+{
+    member,
+    none,
+    other
+};
 void configure (host_t &host,
                 const std::string &rid,
                 std::shared_ptr<fw::location_store_t> store,
                 std::shared_ptr<fw::relocation_store_t> relocations,
                 std::chrono::milliseconds follow_duration = default_follow_duration,
                 int spot_limit = 0,
-                bool application_signaled = false)
+                bool application_signaled = false,
+                entry_kind_t entry = entry_kind_t::member,
+                std::optional<int> placement_weight = std::nullopt)
 {
     auto &options = host.app.add_zlink_framework ();
     if (follow_duration != default_follow_duration) {
@@ -321,10 +373,22 @@ void configure (host_t &host,
     auto mesh = options.add_route_mesh (mesh_name);
     mesh.set_object_role (fw::object_role_t::server)
       .set_routing_id (zlink::routing_id_t::from (rid))
-      .listen ("tcp://127.0.0.1:0")
-      .add_entry_spot<entry_t> ([] (fw::entry_spot_context_t context) {
-          return std::make_shared<entry_t> (std::move (context));
-      })
+      .listen ("tcp://127.0.0.1:0");
+    if (placement_weight)
+        mesh.set_placement_weight (*placement_weight);
+    if (entry == entry_kind_t::member)
+        mesh.add_entry_spot<entry_t> ([] (fw::entry_spot_context_t context) {
+            return std::make_shared<entry_t> (std::move (context));
+        });
+    if (entry == entry_kind_t::other)
+        mesh
+          .add_entry_spot<other_entry_t> ([] (fw::entry_spot_context_t context) {
+              return std::make_shared<other_entry_t> (std::move (context));
+          })
+          .add_actor_factory<other_actor_t, other_factory_t> (
+            other_actor_type, std::make_shared<other_factory_t> (),
+            [] (auto &factory) { factory.recreate_on_relocation (); });
+    mesh
       .add_spot_factory<room_t> (
         room_type,
         [] (fw::spot_context_t context) { return std::make_shared<room_t> (std::move (context)); },
@@ -466,14 +530,18 @@ bool move_to (fw::actor_client_t &sender,
     return evidence.changed.wait_for (lock, wait_budget,
                                       [&] { return evidence.completions.size () >= count; });
 }
-bool peer_ready (fw::route_mesh_runtime_t &routes, std::string_view peer_rid = {})
+bool peer_ready (fw::route_mesh_runtime_t &routes,
+                 std::string_view peer_rid = {},
+                 std::size_t count = 1)
 {
     const auto ready = [&] {
         const auto snapshot = routes.snapshot (mesh_name);
-        return std::any_of (snapshot.peers.begin (), snapshot.peers.end (), [&] (const auto &peer) {
-            return peer.state == fw::peer_state_t::ready
-                   && (peer_rid.empty () || peer.node_rid.to_string () == peer_rid);
-        });
+        return snapshot.ready_peer_count >= count
+               && std::any_of (
+                 snapshot.peers.begin (), snapshot.peers.end (), [&] (const auto &peer) {
+                     return peer.state == fw::peer_state_t::ready
+                            && (peer_rid.empty () || peer.node_rid.to_string () == peer_rid);
+                 });
     };
     const auto deadline = std::chrono::steady_clock::now () + wait_budget;
     while (!ready () && std::chrono::steady_clock::now () < deadline)
@@ -1627,6 +1695,422 @@ TEST (ActorMaintenanceJoin, CompletionCallbackPreservesStandardException)
 
 namespace
 {
+// Actor model §6.3 (#1772): a Create or GetOrCreate that makes a new Actor keeps only the nodes
+// whose Entry Spot accepts that Actor type (descriptor capability `entryAccepted`).
+constexpr auto entryless_weight = 1000;
+constexpr auto entry_weight = 1;
+constexpr std::size_t descriptor_scan_limit = 1000;
+
+std::string entryless_target_id (std::string seed)
+{
+    for (;;) {
+        const auto choice = std::hash<std::string>{}(seed) % (entryless_weight + entry_weight);
+        if (choice > 0 && choice < static_cast<std::size_t> (entryless_weight))
+            return seed;
+        seed.push_back ('_');
+    }
+}
+
+std::vector<std::string> factory_nodes (observations_t &evidence)
+{
+    std::lock_guard lock (evidence.mutex);
+    return evidence.factory_nodes;
+}
+
+// The `entryAccepted` value of each actor capability this mesh's descriptors publish, keyed by
+// routing ID and Actor stable type. A capability without the field reads as `nullopt`.
+std::map<std::pair<std::string, std::string>, std::optional<bool>>
+published_entry_accepted (fw::location_store_t &store)
+{
+    std::map<std::pair<std::string, std::string>, std::optional<bool>> result;
+    const auto scanned =
+      store.scan (fw::store_scan_request_t{{}, std::nullopt, descriptor_scan_limit}).result ();
+    const auto &page = std::get<fw::store_scan_page_t> (scanned.value ());
+    for (const auto &item : page.items) {
+        const auto bytes = std::string (reinterpret_cast<const char *> (item.value.bytes.data ()),
+                                        item.value.bytes.size ());
+        const auto record = nlohmann::json::parse (bytes, nullptr, false);
+        if (!record.is_object () || !record.contains ("descriptor")
+            || !record.at ("descriptor").contains ("objectCapabilities"))
+            continue;
+        const auto &descriptor = record.at ("descriptor");
+        if (descriptor.value ("meshName", std::string{}) != mesh_name)
+            continue;
+        for (const auto &capability : descriptor.at ("objectCapabilities")) {
+            if (capability.at ("objectKind") != "actor")
+                continue;
+            result[{descriptor.at ("routingIdHex").get<std::string> (),
+                    capability.at ("stableType").get<std::string> ()}] =
+              capability.contains ("entryAccepted")
+                ? std::make_optional (capability.at ("entryAccepted").get<bool> ())
+                : std::nullopt;
+        }
+    }
+    return result;
+}
+
+std::string rid_hex (std::string_view rid)
+{
+    return zlink::routing_id_t::from (std::string (rid)).to_hex ();
+}
+
+// Location Store view of a requester that read its descriptors before a node dropped its Entry
+// Spot: every actor capability it lists claims `entryAccepted`.
+class stale_entry_descriptor_store_t final : public fw::location_store_t
+{
+  public:
+    explicit stale_entry_descriptor_store_t (
+      std::shared_ptr<fw::location_store_t> inner,
+      std::optional<std::string> missing_owner = std::nullopt) :
+        _inner (std::move (inner)), _missing_owner (std::move (missing_owner))
+    {
+    }
+
+    fw::task_t<fw::store_read_result_t> read (fw::store_key_t key) override
+    {
+        auto result = co_await _inner->read (std::move (key));
+        if (_missing_owner) {
+            if (const auto *found = std::get_if<fw::store_found_t> (&result)) {
+                const auto record = nlohmann::json::parse (
+                  std::string (reinterpret_cast<const char *> (found->value.bytes.data ()),
+                               found->value.bytes.size ()),
+                  nullptr, false);
+                // The canonical owner lease row has these three fields; its expiry is Store metadata.
+                if (record.is_object () && record.size () == owner_lease_field_count
+                    && record.contains ("recordVersion") && record.contains ("leaseGeneration")
+                    && record.value ("ownerId", std::string{}) == *_missing_owner)
+                    co_return fw::store_missing_t{found->value.store_now};
+            }
+        }
+        co_return result;
+    }
+
+    fw::task_t<fw::store_write_result_t> write (fw::store_write_request_t request) override
+    {
+        return _inner->write (std::move (request));
+    }
+
+    fw::task_t<fw::store_scan_result_t> scan (fw::store_scan_request_t request) override
+    {
+        auto scanned = co_await _inner->scan (std::move (request));
+        if (auto *page = std::get_if<fw::store_scan_page_t> (&scanned)) {
+            for (auto &item : page->items) {
+                auto record = nlohmann::json::parse (
+                  std::string (reinterpret_cast<const char *> (item.value.bytes.data ()),
+                               item.value.bytes.size ()),
+                  nullptr, false);
+                if (!record.is_object () || !record.contains ("descriptor")
+                    || !record.at ("descriptor").contains ("objectCapabilities"))
+                    continue;
+                for (auto &capability : record["descriptor"]["objectCapabilities"])
+                    if (capability.at ("objectKind") == "actor")
+                        capability["entryAccepted"] = true;
+                const auto text = record.dump ();
+                item.value.bytes.assign (reinterpret_cast<const std::byte *> (text.data ()),
+                                         reinterpret_cast<const std::byte *> (text.data ())
+                                           + text.size ());
+            }
+        }
+        co_return scanned;
+    }
+
+  private:
+    static constexpr std::size_t owner_lease_field_count = 3;
+    std::shared_ptr<fw::location_store_t> _inner;
+    const std::optional<std::string> _missing_owner;
+};
+
+class ActorEntryPlacement : public testing::TestWithParam<entry_kind_t>
+{
+};
+
+// A node without an Entry Spot for the Actor type (none, or one for another type) is not a
+// creation candidate even when its placement weight dominates; the Actor is created on the node
+// whose Entry Spot accepts it, and the Entry-less node never runs the factory.
+TEST_P (ActorEntryPlacement, CreatesOnlyWhereEntryAcceptsActorType)
+{
+    observations_t evidence;
+    observations = &evidence;
+    release_callbacks_t release{evidence};
+    auto store = std::make_shared<fw::runtime::in_memory_location_store_t> ();
+    auto relocations = std::make_shared<fw::runtime::in_memory_relocation_store_t> ();
+    host_t accepting, entryless;
+    configure (accepting, first_rid, store, relocations, default_follow_duration, 0, false,
+               entry_kind_t::member, entry_weight);
+    accepting.start ();
+    ASSERT_TRUE (ready (accepting));
+    configure (entryless, second_rid, store, relocations, default_follow_duration, 0, false,
+               GetParam (), entryless_weight);
+    entryless.start ();
+    ASSERT_TRUE (ready (entryless));
+    auto services = entryless.app.advanced ().services ().build_provider ();
+    ASSERT_TRUE (peer_ready (services.get_required<fw::route_mesh_runtime_t> ()));
+    auto &actors = services.get_required<fw::actor_manager_t> ();
+    for (const auto *seed : {"placement-a", "placement-b", "placement-c"}) {
+        // Either descriptor order selects the Entry-less node before the fix.
+        const auto id = entryless_target_id (seed);
+        auto call = std::string_view (seed) == "placement-b"
+                      ? actors.create (fw::actor_id_t (id), actor_type)
+                      : actors.get_or_create (fw::actor_id_t (id), actor_type);
+        const auto created = call.async ().result ();
+        ASSERT_TRUE (created) << id << ": "
+                              << (created.error () ? created.error ()->what () : "no error");
+        const auto *made = std::get_if<fw::actor_create_created_t> (&created.value ());
+        ASSERT_NE (made, nullptr) << id;
+        EXPECT_EQ (made->actor.node_rid ().value (), first_rid) << id;
+    }
+    EXPECT_EQ (factory_nodes (evidence), (std::vector<std::string> (3, first_rid)));
+}
+
+INSTANTIATE_TEST_SUITE_P (NoEntryAndOtherTypeEntry,
+                          ActorEntryPlacement,
+                          testing::Values (entry_kind_t::none, entry_kind_t::other));
+
+TEST (ActorEntryPlacementUnavailable, NoAcceptingEntryReturnsUnavailableBeforeFactory)
+{
+    observations_t evidence;
+    observations = &evidence;
+    host_t entryless;
+    configure (entryless, first_rid, std::make_shared<fw::runtime::in_memory_location_store_t> (),
+               std::make_shared<fw::runtime::in_memory_relocation_store_t> (),
+               default_follow_duration, 0, false, entry_kind_t::none);
+    entryless.start ();
+    ASSERT_TRUE (ready (entryless));
+    auto services = entryless.app.advanced ().services ().build_provider ();
+    const auto created = services.get_required<fw::actor_manager_t> ()
+                           .create (fw::actor_id_t (actor_id), actor_type)
+                           .async ()
+                           .result ();
+    ASSERT_FALSE (created);
+    EXPECT_EQ (created.error_kind (), fw::framework_error_kind_t::unavailable);
+    EXPECT_TRUE (factory_nodes (evidence).empty ());
+}
+
+// Location runtime canonical descriptor: `entryAccepted` is true only for an actor capability
+// whose Actor type the node's Entry Spot accepts.
+TEST (ActorEntryPlacementDescriptor, PublishesEntryAccepted)
+{
+    observations_t evidence;
+    observations = &evidence;
+    release_callbacks_t release{evidence};
+    auto store = std::make_shared<fw::runtime::in_memory_location_store_t> ();
+    auto relocations = std::make_shared<fw::runtime::in_memory_relocation_store_t> ();
+    host_t accepting, entryless, other;
+    configure (accepting, first_rid, store, relocations);
+    accepting.start ();
+    ASSERT_TRUE (ready (accepting));
+    configure (entryless, second_rid, store, relocations, default_follow_duration, 0, false,
+               entry_kind_t::none);
+    entryless.start ();
+    ASSERT_TRUE (ready (entryless));
+    configure (other, third_rid, store, relocations, default_follow_duration, 0, false,
+               entry_kind_t::other);
+    other.start ();
+    ASSERT_TRUE (ready (other));
+    const auto published = published_entry_accepted (*store);
+    const std::map<std::pair<std::string, std::string>, std::optional<bool>> expected{
+      {{rid_hex (first_rid), actor_type}, true},
+      {{rid_hex (second_rid), actor_type}, false},
+      {{rid_hex (third_rid), actor_type}, false},
+      {{rid_hex (third_rid), other_actor_type}, true}};
+    EXPECT_EQ (published, expected);
+}
+
+enum class placement_requester_t
+{
+    accepting,
+    entryless,
+    third_node
+};
+
+class ActorEntryPlacementStaleDescriptor : public testing::TestWithParam<placement_requester_t>
+{
+};
+
+// A requester whose descriptor read still claims `entryAccepted` for an Entry-less node selects
+// it. That target ends the creation before the factory, and the requester excludes that host
+// execution generation and creates the Actor on the accepting node within the same call.
+// The requester is the Entry-less target, the accepting target, or a third node. These exercise
+// local-to-remote, remote-to-local, and remote-to-remote reselection with one operation identity.
+TEST_P (ActorEntryPlacementStaleDescriptor, TargetRejectsBeforeFactoryAndRequesterReselects)
+{
+    observations_t evidence;
+    observations = &evidence;
+    release_callbacks_t release{evidence};
+    auto store = std::make_shared<fw::runtime::in_memory_location_store_t> ();
+    std::shared_ptr<fw::location_store_t> actual_store = store;
+    std::shared_ptr<fw::location_store_t> stale =
+      std::make_shared<stale_entry_descriptor_store_t> (store);
+    auto relocations = std::make_shared<fw::runtime::in_memory_relocation_store_t> ();
+    const bool local_target = GetParam () == placement_requester_t::entryless;
+    host_t accepting, entryless, third;
+    configure (accepting, first_rid, local_target ? actual_store : stale, relocations,
+               default_follow_duration, 0, false, entry_kind_t::member, entry_weight);
+    accepting.start ();
+    ASSERT_TRUE (ready (accepting));
+    configure (entryless, second_rid, local_target ? stale : actual_store, relocations,
+               default_follow_duration, 0, false, entry_kind_t::none, entryless_weight);
+    entryless.start ();
+    ASSERT_TRUE (ready (entryless));
+    if (GetParam () == placement_requester_t::third_node) {
+        configure (third, third_rid, stale, relocations, default_follow_duration, 0, false,
+                   entry_kind_t::none, 0);
+        third.start ();
+        ASSERT_TRUE (ready (third));
+    }
+    auto &requester = GetParam () == placement_requester_t::third_node ? third
+                      : local_target                                   ? entryless
+                                                                       : accepting;
+    auto services = requester.app.advanced ().services ().build_provider ();
+    ASSERT_TRUE (peer_ready (services.get_required<fw::route_mesh_runtime_t> (), {},
+                             GetParam () == placement_requester_t::third_node ? 2 : 1));
+    const auto id = entryless_target_id (actor_id);
+    const auto created = services.get_required<fw::actor_manager_t> ()
+                           .get_or_create (fw::actor_id_t (id), actor_type)
+                           .async ()
+                           .result ();
+    ASSERT_TRUE (created) << (created.error () ? created.error ()->what () : "no error");
+    const auto *made = std::get_if<fw::actor_create_created_t> (&created.value ());
+    ASSERT_NE (made, nullptr);
+    EXPECT_EQ (made->actor.node_rid ().value (), first_rid);
+    EXPECT_EQ (factory_nodes (evidence), (std::vector<std::string>{first_rid}));
+}
+
+INSTANTIATE_TEST_SUITE_P (LocalAndRemoteTarget,
+                          ActorEntryPlacementStaleDescriptor,
+                          testing::Values (placement_requester_t::accepting,
+                                           placement_requester_t::entryless,
+                                           placement_requester_t::third_node));
+
+TEST (ActorEntryPlacementExisting, RequiresLiveOwnerWithoutNewCreationCandidates)
+{
+    observations_t evidence;
+    observations = &evidence;
+    auto store = std::make_shared<fw::runtime::in_memory_location_store_t> ();
+    auto relocations = std::make_shared<fw::runtime::in_memory_relocation_store_t> ();
+    host_t accepting, live_view, missing_owner_view;
+    configure (accepting, first_rid, store, relocations);
+    accepting.start ();
+    ASSERT_TRUE (ready (accepting));
+    auto accepting_services = accepting.app.advanced ().services ().build_provider ();
+    ASSERT_TRUE (accepting_services.get_required<fw::actor_manager_t> ()
+                   .get_or_create (fw::actor_id_t (actor_id), actor_type)
+                   .async ()
+                   .result ());
+    accepting_services.get_required<fw::route_mesh_runtime_options_t> ()
+      .mesh (mesh_name)
+      .placement_weight (0);
+    const auto current = accepting_services.get_required<fw::location_repository_t> ()
+                           .read_authority (fw::runtime::actor_authority_key (actor_id))
+                           .result ();
+    ASSERT_TRUE (current);
+    const auto *snapshot = std::get_if<fw::authority_snapshot_t> (&current.value ());
+    ASSERT_NE (snapshot, nullptr);
+    auto missing =
+      std::make_shared<stale_entry_descriptor_store_t> (store, snapshot->owner.owner_id);
+    configure (live_view, second_rid, store, relocations, default_follow_duration, 0, false,
+               entry_kind_t::none, 0);
+    live_view.start ();
+    ASSERT_TRUE (ready (live_view));
+    configure (missing_owner_view, third_rid, missing, relocations, default_follow_duration, 0,
+               false, entry_kind_t::none, 0);
+    missing_owner_view.start ();
+    ASSERT_TRUE (ready (missing_owner_view));
+    auto live_services = live_view.app.advanced ().services ().build_provider ();
+    const auto existing = live_services.get_required<fw::actor_manager_t> ()
+                            .get_or_create (fw::actor_id_t (actor_id), actor_type)
+                            .async ()
+                            .result ();
+    ASSERT_TRUE (existing);
+    EXPECT_TRUE (std::holds_alternative<fw::actor_create_existing_t> (existing.value ()));
+    auto missing_services = missing_owner_view.app.advanced ().services ().build_provider ();
+    const auto unavailable = missing_services.get_required<fw::actor_manager_t> ()
+                               .get_or_create (fw::actor_id_t (actor_id), actor_type)
+                               .async ()
+                               .result ();
+    ASSERT_FALSE (unavailable);
+    EXPECT_EQ (unavailable.error_kind (), fw::framework_error_kind_t::unavailable);
+    EXPECT_EQ (factory_nodes (evidence), (std::vector<std::string>{first_rid}));
+}
+
+// Regression: an Entry-less node still takes an existing Actor as a join target and, with its
+// User Spot, as a relocation target.
+TEST (ActorEntryPlacementRegression, EntrylessNodeTakesJoinAndRelocation)
+{
+    observations_t evidence;
+    observations = &evidence;
+    release_callbacks_t release{evidence};
+    auto store = std::make_shared<fw::runtime::in_memory_location_store_t> ();
+    auto relocations = std::make_shared<fw::runtime::in_memory_relocation_store_t> ();
+    host_t accepting, source, target;
+    configure (accepting, first_rid, store, relocations, source_follow_duration, 0, true);
+    accepting.start ();
+    ASSERT_TRUE (ready (accepting));
+    auto accepting_services = accepting.app.advanced ().services ().build_provider ();
+    ASSERT_TRUE (accepting_services.get_required<fw::actor_manager_t> ()
+                   .get_or_create (fw::actor_id_t (actor_id), actor_type)
+                   .async ()
+                   .result ());
+    accepting_services.get_required<fw::route_mesh_runtime_options_t> ()
+      .mesh (mesh_name)
+      .placement_weight (0);
+    configure (source, second_rid, store, relocations, source_follow_duration, 0, true,
+               entry_kind_t::none);
+    source.start ();
+    ASSERT_TRUE (ready (source));
+    auto services = source.app.advanced ().services ().build_provider ();
+    // Existing does not need an eligible new placement candidate.
+    const auto existing = services.get_required<fw::actor_manager_t> ()
+                            .get_or_create (fw::actor_id_t (actor_id), actor_type)
+                            .async ()
+                            .result ();
+    ASSERT_TRUE (existing);
+    ASSERT_TRUE (std::holds_alternative<fw::actor_create_existing_t> (existing.value ()));
+    ASSERT_TRUE (services.get_required<fw::spot_manager_t> ()
+                   .get_or_create (fw::spot_id_t (local_spot), room_type)
+                   .async ()
+                   .result ());
+    ASSERT_TRUE (peer_ready (accepting_services.get_required<fw::route_mesh_runtime_t> ()));
+    ASSERT_TRUE (
+      move_to (accepting_services.get_required<fw::actor_client_t> (), evidence, local_spot, 1));
+    {
+        std::lock_guard lock (evidence.mutex);
+        ASSERT_TRUE (
+          std::holds_alternative<fw::actor_join_accepted_t> (evidence.completions.back ()));
+        ASSERT_EQ (std::get<fw::actor_join_accepted_t> (evidence.completions.back ())
+                     .actor.node_rid ()
+                     .value (),
+                   second_rid);
+    }
+    configure (target, third_rid, store, relocations, source_follow_duration, 0, true,
+               entry_kind_t::none);
+    target.start ();
+    ASSERT_TRUE (ready (target));
+    auto relocation = source.app.relocate (
+      {.mode = fw::relocation_mode_t::planned_maintenance, .deadline = wait_budget});
+    auto &runtime = services.get_required<fw::framework_runtime_t> ();
+    const auto readiness_deadline = std::chrono::steady_clock::now () + wait_budget;
+    while (runtime.status ().state != fw::framework_runtime_state_t::relocating
+           && std::chrono::steady_clock::now () < readiness_deadline)
+        std::this_thread::yield ();
+    ASSERT_EQ (runtime.status ().state, fw::framework_runtime_state_t::relocating);
+    auto client = source.app.advanced ().zlink ().route_client (
+      services.get_required<fw::serializer_registry_t> ());
+    ASSERT_TRUE (client.send_to_spot (fw::spot_id_t (local_spot), ready_t{}).async ().result ());
+    const auto result = relocation.result_for (wait_budget);
+    ASSERT_TRUE (result.has_value ());
+    ASSERT_TRUE (*result);
+    EXPECT_EQ (result->value ().outcome, fw::relocation_outcome_t::relocated)
+      << "reason=" << static_cast<int> (result->value ().reason);
+    auto probe = accepting_services.get_required<fw::actor_client_t> ()
+                   .request (fw::actor_id_t (actor_id), probe_t{7})
+                   .timeout (wait_budget)
+                   .async<probe_t> ()
+                   .result ();
+    ASSERT_TRUE (probe) << (probe.error () ? probe.error ()->what () : "no error");
+    EXPECT_EQ (probe.value ().value, 7);
+}
+
 TEST (ActorMaintenanceJoin, RemoteJoinDoesNotLeaveLocalRelocationWork)
 {
     observations_t evidence;
@@ -1833,4 +2317,4 @@ TEST (ActorMaintenanceJoin, ActiveInventoryExcludesCreatingRecoveringAndFinalize
     EXPECT_EQ (target_runtime.monitoring_counts_async ().result ().value ().first, 1u);
     EXPECT_TRUE (source_runtime.local_actor_refs ().empty ());
 }
-}
+} // namespace

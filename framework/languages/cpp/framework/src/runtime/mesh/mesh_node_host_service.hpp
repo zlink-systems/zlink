@@ -124,7 +124,10 @@ class mesh_node_host_service_t final : public hosted_service_t, public hosted_se
                                                 std::optional<message_t> request,
                                                 std::chrono::milliseconds timeout,
                                                 creation_operation_identity_t operation);
-    task_t<actor_create_result_t>
+    //  Empty when the target answered routeNotConnected: it has no Entry Spot accepting the
+    //  type and ended the creation before the factory (Actor model §6.3). The caller then
+    //  excludes that target and chooses another candidate.
+    task_t<std::optional<actor_create_result_t>>
     complete_remote_actor_creation (std::shared_ptr<detail::mesh_node_runtime_t> source,
                                     mesh_node_descriptor_t target,
                                     protocol::actor_create_header_t command,

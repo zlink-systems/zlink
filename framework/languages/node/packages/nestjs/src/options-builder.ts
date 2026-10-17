@@ -1104,8 +1104,11 @@ class DefaultZLinkNestMeshObjectServerBuilder
     super(state);
   }
 
-  addEntrySpot<TEntrySpot extends ZLinkEntrySpot>(entrySpotType: Type<TEntrySpot>): this {
-    framework.registerEntrySpot(this.node, entrySpotType);
+  addEntrySpot<TEntrySpot extends ZLinkEntrySpot>(
+    entrySpotType: Type<TEntrySpot>,
+    actorType: string
+  ): this {
+    framework.registerEntrySpot(this.node, entrySpotType, actorType);
     return this;
   }
 

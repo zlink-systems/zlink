@@ -30,6 +30,7 @@ inline constexpr char descriptorLifecycleGeneration[] = "descriptorLifecycleGene
 inline constexpr char descriptorRevision[] = "descriptorRevision";
 inline constexpr char endpoint[] = "endpoint";
 inline constexpr char entries[] = "entries";
+inline constexpr char entryAccepted[] = "entryAccepted";
 inline constexpr char entryIndex[] = "entryIndex";
 inline constexpr char entrySpotId[] = "entrySpotId";
 inline constexpr char expectedStoreVersion[] = "expectedStoreVersion";

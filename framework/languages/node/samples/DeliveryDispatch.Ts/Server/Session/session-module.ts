@@ -41,7 +41,7 @@ function createSessionModule() {
             .listen(config.sessionSpotRouterEndpoint)
             .routingId(DeliveryDispatchNodeIds.customerGateway);
           const objectServer = mesh.objects().server();
-          objectServer.addEntrySpot(CustomerEntrySpot);
+          objectServer.addEntrySpot(CustomerEntrySpot, SampleNames.customerActorType);
           objectServer.addActorFactory(
             SampleNames.customerActorType,
             CustomerActorFactory,

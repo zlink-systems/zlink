@@ -10,7 +10,8 @@ public record ZLinkObjectCapability(
         String stableType,
         ZLinkObjectMaintenancePolicyKind policy,
         boolean hasSnapshotAdapter,
-        int spotLimit) {
+        int spotLimit,
+        boolean entryAccepted) {
     public ZLinkObjectCapability {
         Objects.requireNonNull(objectKind, "objectKind");
         Objects.requireNonNull(stableType, "stableType");
@@ -22,6 +23,19 @@ public record ZLinkObjectCapability(
         if (spotLimit < 0 || objectKind == ZLinkPlacementObjectKind.ACTOR && spotLimit != 0) {
             throw new IllegalArgumentException("spotLimit must be non-negative and zero for Actor");
         }
+        if (entryAccepted && objectKind != ZLinkPlacementObjectKind.ACTOR) {
+            throw new IllegalArgumentException("entryAccepted is only valid for Actor");
+        }
+    }
+
+    /** A capability whose node registers no Entry Spot type that accepts it. */
+    public ZLinkObjectCapability(
+            ZLinkPlacementObjectKind objectKind,
+            String stableType,
+            ZLinkObjectMaintenancePolicyKind policy,
+            boolean hasSnapshotAdapter,
+            int spotLimit) {
+        this(objectKind, stableType, policy, hasSnapshotAdapter, spotLimit, false);
     }
 
     private static void requireBoundedText(String value, String field) {

@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using System.Diagnostics;
 using System.Security.Cryptography;
 using Microsoft.Extensions.DependencyInjection;
+using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Runtime.Backend.DotNet.Mappings;
 using Zlink.Framework.Runtime.Backend.DotNet.Wrappers;
 using Zlink.Framework.Runtime.Locations;
@@ -286,12 +287,12 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
             );
         var selectedMesh =
             source.Registration.SpotMeshChannelName ?? source.Registration.SpotNodeName;
-        var descriptors = await ListLiveMeshNodesAsync(selectedMesh, deadline.Token)
+        var placementEligible = await ListCreationCandidatesAsync(
+                selectedMesh,
+                actorType,
+                deadline.Token
+            )
             .ConfigureAwait(false);
-        var placementEligible = descriptors
-            .Where(candidate => IsCompatibleCandidate(candidate, actorType))
-            .OrderBy(static candidate => candidate.Rid, ZLinkRoutingIdOrder.Instance)
-            .ToList();
         var eligible = FilterRouteReadyCandidates(source, placementEligible);
         var encoded = createRequest.Encode(runtime.Registration.Codecs);
         var applicationPayload = ZLinkApplicationPayloadEnvelopeCodec.Encode(
@@ -313,14 +314,28 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
             );
             if (target is null && placementEligible.Count == 0 && reservationRefreshAttempt == 0)
             {
-                var anyCompatible = descriptors.Any(candidate =>
-                    IsCompatibleCandidate(candidate, actorType)
-                );
+                //  The Entry Spot condition selects only where a new Actor is
+                //  created; GetOrCreate still returns an Actor that is
+                //  already Ready (Actor model §6.3).
+                if (
+                    !createOnly
+                    && await store.ReadAuthorityAsync(key, deadline.Token).ConfigureAwait(false)
+                        is ZLinkAuthorityReadResult.Found current
+                    && await JoinExistingAsync(
+                            store,
+                            key,
+                            actorId,
+                            actorType,
+                            current.Snapshot,
+                            deadline.Token
+                        )
+                        .ConfigureAwait(false)
+                        is { } existingActor
+                )
+                    return existingActor;
                 throw new ZLinkFrameworkException(
                     ZLinkFrameworkErrorKind.Unavailable,
-                    anyCompatible
-                        ? $"No Ready Actor target has placement capacity for '{actorType}'."
-                        : $"No compatible Actor target is available for '{actorType}'.",
+                    $"No compatible Actor target is available for '{actorType}'.",
                     ZLinkRetryAdvice.RetryAfterBackoff
                 );
             }
@@ -329,12 +344,12 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
                 var backoffMilliseconds = 1 << Math.Min(reservationRefreshAttempt++, 6);
                 await Task.Delay(TimeSpan.FromMilliseconds(backoffMilliseconds), deadline.Token)
                     .ConfigureAwait(false);
-                descriptors = await ListLiveMeshNodesAsync(selectedMesh, deadline.Token)
+                placementEligible = await ListCreationCandidatesAsync(
+                        selectedMesh,
+                        actorType,
+                        deadline.Token
+                    )
                     .ConfigureAwait(false);
-                placementEligible = descriptors
-                    .Where(candidate => IsCompatibleCandidate(candidate, actorType))
-                    .OrderBy(static candidate => candidate.Rid, ZLinkRoutingIdOrder.Instance)
-                    .ToList();
                 eligible = FilterRouteReadyCandidates(source, placementEligible);
                 continue;
             }
@@ -436,12 +451,12 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
                 var backoffMilliseconds = 1 << Math.Min(reservationRefreshAttempt++, 6);
                 await Task.Delay(TimeSpan.FromMilliseconds(backoffMilliseconds), deadline.Token)
                     .ConfigureAwait(false);
-                descriptors = await ListLiveMeshNodesAsync(selectedMesh, deadline.Token)
+                placementEligible = await ListCreationCandidatesAsync(
+                        selectedMesh,
+                        actorType,
+                        deadline.Token
+                    )
                     .ConfigureAwait(false);
-                placementEligible = descriptors
-                    .Where(candidate => IsCompatibleCandidate(candidate, actorType))
-                    .OrderBy(static candidate => candidate.Rid, ZLinkRoutingIdOrder.Instance)
-                    .ToList();
                 eligible = FilterRouteReadyCandidates(source, placementEligible);
                 continue;
             }
@@ -554,10 +569,26 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
                     await store
                         .AbortAsync(reservation, CancellationToken.None)
                         .ConfigureAwait(false);
-                throw;
+                if (!IsTargetHostRunUnavailable(error))
+                    throw;
             }
+            //  The target cannot host this creation in the host run generation
+            //  the requester selected (Location runtime §7): exclude it and
+            //  choose another candidate before the deadline.
+            eligible.Remove(target);
         }
     }
+
+    //  `routeNotConnected` (Unavailable) means the target cannot be used for
+    //  this operation, for example when no registered Entry Spot type accepts
+    //  the Actor type (Actor model §6.3, Framework error model §2.1).
+    private static bool IsTargetHostRunUnavailable(Exception error) =>
+        error
+            is ZLinkFrameworkException
+            {
+                FrameworkFailureCode: (int)
+                    ServiceWireConstants.FrameworkErrorCode.RouteNotConnected,
+            };
 
     private static ZLinkFrameworkException CreateActorCreationUnavailableException(
         string actorId,
@@ -605,7 +636,18 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
     //  A compatible/live target: serving, a server, placeable, has an Entry
     //  Spot, and advertises the Actor type. Capacity is a separate axis so an
     //  no eligible target can host a new Actor, so the caller sees Unavailable.
+    //  Joins and relocations of an existing Actor use this condition.
     internal static bool IsCompatibleCandidate(
+        ZLinkMeshNodeDescriptor candidate,
+        string actorType
+    ) => FindActorCapability(candidate, actorType) is not null;
+
+    //  The one new-Actor creation candidate filter: a compatible target whose
+    //  registered Entry Spot type accepts the Actor type (Actor model §6.3).
+    private static bool IsCreationCandidate(ZLinkMeshNodeDescriptor candidate, string actorType) =>
+        FindActorCapability(candidate, actorType) is { EntryAccepted: true };
+
+    private static ZLinkObjectCapability? FindActorCapability(
         ZLinkMeshNodeDescriptor candidate,
         string actorType
     ) =>
@@ -613,10 +655,21 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
         && candidate.ObjectRole == ZLinkMeshNodeObjectRole.Server
         && candidate.PlacementWeight > 0
         && candidate.EntrySpotId is not null
-        && candidate.ObjectCapabilities.Any(capability =>
-            capability.ObjectKind == ZLinkPlacementObjectKind.Actor
-            && string.Equals(capability.StableType, actorType, StringComparison.Ordinal)
-        );
+            ? candidate.ObjectCapabilities.FirstOrDefault(capability =>
+                capability.ObjectKind == ZLinkPlacementObjectKind.Actor
+                && string.Equals(capability.StableType, actorType, StringComparison.Ordinal)
+            )
+            : null;
+
+    private async ValueTask<List<ZLinkMeshNodeDescriptor>> ListCreationCandidatesAsync(
+        string meshName,
+        string actorType,
+        CancellationToken cancellationToken
+    ) =>
+        (await ListLiveMeshNodesAsync(meshName, cancellationToken).ConfigureAwait(false))
+            .Where(candidate => IsCreationCandidate(candidate, actorType))
+            .OrderBy(static candidate => candidate.Rid, ZLinkRoutingIdOrder.Instance)
+            .ToList();
 
     private static bool HasActorCapacity(ZLinkMeshNodeDescriptor candidate) =>
         candidate.Capacity.Actors.Limit == 0

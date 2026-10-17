@@ -129,8 +129,9 @@ interface FrameworkIntegrationModule {
   isValidListenerPort(value: number): boolean;
   isValidCapacity(value: number): boolean;
   registerEntrySpot(
-    options: { entrySpotType?: Type<ZLinkEntrySpot> },
-    entrySpotType: Type<ZLinkEntrySpot>
+    options: { entrySpotType?: Type<ZLinkEntrySpot>; entrySpotActorType?: string },
+    entrySpotType: Type<ZLinkEntrySpot>,
+    actorType: string
   ): void;
   registerSpotFactory(
     options: { spotFactories?: Type<ZLinkSpot>[] },
