@@ -227,10 +227,7 @@ async function stopChild(entry) {
   if (child.exitCode !== null || child.signalCode !== null) return;
   const exited = new Promise((resolve) => child.once('exit', resolve));
   if (child.connected) child.send({ type: 'stop' }, () => {});
-  else child.kill('SIGTERM');
-  const timer = setTimeout(() => child.kill('SIGKILL'), 5_000);
   await exited;
-  clearTimeout(timer);
 }
 
 

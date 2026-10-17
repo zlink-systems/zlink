@@ -6,7 +6,11 @@ import java.nio.ByteBuffer;
 import java.util.AbstractList;
 import java.util.List;
 
-/** A retained multipart frame whose typed parts are materialized on first use. */
+/**
+ * A retained multipart frame whose typed parts are materialized on first use.
+ *
+ * <p>One record owner accesses this view at a time; ownership handoff publishes its state.
+ */
 public final class ZLinkFrameworkMultipartView extends AbstractList<Message>
         implements AutoCloseable {
     private final List<ByteBuffer> parts;
@@ -20,7 +24,7 @@ public final class ZLinkFrameworkMultipartView extends AbstractList<Message>
     }
 
     @Override
-    public synchronized Message get(int index) {
+    public Message get(int index) {
         if (closed) {
             throw new IllegalStateException("multipart view is closed");
         }
@@ -37,7 +41,7 @@ public final class ZLinkFrameworkMultipartView extends AbstractList<Message>
         return parts.size();
     }
 
-    synchronized List<Message> detachAll() {
+    List<Message> detachAll() {
         try {
             for (int index = 0; index < materialized.length; index++) {
                 get(index);
@@ -51,7 +55,7 @@ public final class ZLinkFrameworkMultipartView extends AbstractList<Message>
     }
 
     @Override
-    public synchronized void close() {
+    public void close() {
         if (closed || detached) {
             return;
         }

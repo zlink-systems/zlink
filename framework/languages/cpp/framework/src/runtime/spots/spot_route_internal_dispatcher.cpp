@@ -2,6 +2,7 @@
 
 #include "runtime/spots/spot_route_internal_dispatcher.hpp"
 
+#include "runtime/execution/task_result.hpp"
 #include "runtime/messaging/client_call_codec.hpp"
 #include "runtime/messaging/envelope_codec.hpp"
 #include "runtime/messaging/submit_result_mapper.hpp"
@@ -333,21 +334,22 @@ bool spot_route_internal_dispatcher_t::dispatch_request_async (
             auto request = _serializers->get<spot_actor_admission_route_request_t> ().deserialize (
               detail::encoded_payload_from_raw (body.value ()));
             auto runtime = _runtime;
-            auto admitted = std::make_shared<task_t<spot_actor_join_result_t>> (
-              runtime.admit_remote_actor_to_spot (
-                request.transfer_id, actor_ref_from_spot_route (request),
-                spot_id_t (request.source_spot_id), spot_id_t (request.target_spot_id),
-                zlink::message_t::from (request.payload), request.completion_operation_id_high,
-                request.completion_operation_id_low, request.actor_authority_owner_generation,
-                request.actor_node_generation, request.expected_owner_lease_generation));
-            ::zlink::framework::detail::observe_task_completion (
-              *admitted,
-              [admitted, serializers = _serializers, completion = std::move (completion)] (
-                const result_t<spot_actor_join_result_t> &result) mutable {
+            runtime.dispatch_wire_actor_join_admission (
+              spot_id_t (request.target_spot_id), request.actor_id,
+              [runtime, request, serializers = _serializers,
+               completion] () mutable -> task_t<void> {
+                  const auto result = co_await ::zlink::framework::runtime::await_result (
+                    runtime.admit_remote_actor_to_spot (
+                      request.transfer_id, actor_ref_from_spot_route (request),
+                      spot_id_t (request.source_spot_id), spot_id_t (request.target_spot_id),
+                      zlink::message_t::from (request.payload),
+                      request.completion_operation_id_high, request.completion_operation_id_low,
+                      request.actor_authority_owner_generation, request.actor_node_generation,
+                      request.expected_owner_lease_generation));
                   if (!result) {
                       completion (detail::propagate_failure<zlink::message_t> (
                         result, "remote actor admission failed"));
-                      return;
+                      co_return;
                   }
                   const auto reply = spot_actor_admission_route_reply_t{
                     .accepted = result.value ().accepted,
@@ -359,6 +361,10 @@ bool spot_route_internal_dispatcher_t::dispatch_request_async (
                     .completion_root_checksum = 0};
                   completion (result_t<zlink::message_t>::success (detail::encoded_payload_to_raw (
                     serializers->get<spot_actor_admission_route_reply_t> ().serialize (reply))));
+              },
+              [completion] {
+                  completion (result_t<zlink::message_t>::failure (
+                    framework_error_kind_t::unavailable, "target spot is not active locally"));
               });
             return true;
         }

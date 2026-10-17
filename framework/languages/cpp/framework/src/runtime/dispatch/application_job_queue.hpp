@@ -6,9 +6,8 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
-#include <condition_variable>
 #include <cstdint>
-#include <deque>
+#include <list>
 #include <functional>
 #include <future>
 #include <limits>
@@ -145,12 +144,6 @@ class application_job_queue_t
         std::vector<std::shared_ptr<receive_flow_socket_entry_t>> sockets;
     };
 
-    struct permit_state_t
-    {
-        std::weak_ptr<state_t> owner;
-        permit_phase_t phase = permit_phase_t::reserved;
-    };
-
     struct waiter_state_t;
 
   public:
@@ -159,61 +152,109 @@ class application_job_queue_t
       public:
         permit_t () = default;
         ~permit_t () { release_without_handler (); }
-
-        permit_t (permit_t &&other) noexcept : _state (std::move (other._state)) {}
-
+        permit_t (permit_t &&other) noexcept :
+            _owner (std::move (other._owner)),
+            _phase (std::exchange (other._phase, permit_phase_t::released))
+        {
+        }
         permit_t &operator= (permit_t &&other) noexcept
         {
             if (this != &other) {
                 release_without_handler ();
-                _state = std::move (other._state);
+                _owner = std::move (other._owner);
+                _phase = std::exchange (other._phase, permit_phase_t::released);
             }
             return *this;
         }
-
         permit_t (const permit_t &) = delete;
         permit_t &operator= (const permit_t &) = delete;
-
-        explicit operator bool () const noexcept { return static_cast<bool> (_state); }
-
+        explicit operator bool () const noexcept { return _phase != permit_phase_t::released; }
         void mark_queued ()
         {
-            if (auto owner = owner_state ()) {
-                std::lock_guard lock (owner->mutex);
-                if (_state->phase != permit_phase_t::reserved)
-                    return;
-                --owner->reserved_supply_permits;
-                ++owner->queued_application_jobs;
-                _state->phase = permit_phase_t::queued;
+            if (_phase != permit_phase_t::reserved)
+                return;
+            if (auto owner = _owner.lock ()) {
+                owner->credits.fetch_add (queued_credit - 1, std::memory_order_acq_rel);
+                _phase = permit_phase_t::queued;
             }
         }
-
         void release_for_handler_entry () noexcept { release (); }
-
         void release_without_handler () noexcept { release (); }
 
       private:
         friend class application_job_queue_t;
-
-        explicit permit_t (std::shared_ptr<permit_state_t> state) : _state (std::move (state)) {}
-
-        std::shared_ptr<state_t> owner_state () const noexcept
+        explicit permit_t (std::weak_ptr<state_t> owner) :
+            _owner (std::move (owner)), _phase (permit_phase_t::reserved)
         {
-            return _state ? _state->owner.lock () : nullptr;
         }
-
         void release () noexcept
         {
-            if (!_state)
+            const auto phase = std::exchange (_phase, permit_phase_t::released);
+            if (phase == permit_phase_t::released)
                 return;
-            auto permit = std::exchange (_state, {});
-            auto owner = permit->owner.lock ();
-            if (!owner)
-                return;
-            application_job_queue_t::release_permit (std::move (owner), std::move (permit));
+            if (auto owner = _owner.lock ())
+                application_job_queue_t::release_credits (std::move (owner), phase, 1);
+            _owner.reset ();
+        }
+        std::weak_ptr<state_t> _owner;
+        permit_phase_t _phase = permit_phase_t::released;
+    };
+
+    class permit_batch_t
+    {
+      public:
+        permit_batch_t () = default;
+        ~permit_batch_t () { release_without_handler (); }
+        permit_batch_t (permit_batch_t &&other) noexcept :
+            _owner (std::move (other._owner)), _remaining (std::exchange (other._remaining, 0))
+        {
+        }
+        permit_batch_t &operator= (permit_batch_t &&other) noexcept
+        {
+            if (this != &other) {
+                release_without_handler ();
+                _owner = std::move (other._owner);
+                _remaining = std::exchange (other._remaining, 0);
+            }
+            return *this;
+        }
+        permit_batch_t (const permit_batch_t &) = delete;
+        permit_batch_t &operator= (const permit_batch_t &) = delete;
+        explicit operator bool () const noexcept { return _remaining != 0; }
+        std::uint32_t size () const noexcept { return _remaining; }
+        permit_batch_t take_batch (std::uint32_t requested) noexcept
+        {
+            const auto count = std::min (requested, _remaining);
+            _remaining -= count;
+            return permit_batch_t (_owner, count);
+        }
+        permit_t take () noexcept
+        {
+            auto part = take_batch (1);
+            if (!part)
+                return {};
+            part._remaining = 0;
+            return permit_t (std::move (part._owner));
+        }
+        void release_without_handler () noexcept
+        {
+            const auto count = std::exchange (_remaining, 0);
+            if (count != 0) {
+                if (auto owner = _owner.lock ())
+                    application_job_queue_t::release_credits (std::move (owner),
+                                                              permit_phase_t::reserved, count);
+            }
+            _owner.reset ();
         }
 
-        std::shared_ptr<permit_state_t> _state;
+      private:
+        friend class application_job_queue_t;
+        permit_batch_t (std::weak_ptr<state_t> owner, std::uint32_t count) :
+            _owner (std::move (owner)), _remaining (count)
+        {
+        }
+        std::weak_ptr<state_t> _owner;
+        std::uint32_t _remaining = 0;
     };
 
     enum class origin_t
@@ -224,6 +265,7 @@ class application_job_queue_t
     using local_backlog_sink_t = std::function<void (std::uint64_t, std::uint32_t)>;
 
     using supply_callback_t = std::function<void (std::optional<permit_t>)>;
+    using batch_supply_callback_t = std::function<void (std::optional<permit_batch_t>)>;
 
     using receive_flow_state_setter_t =
       std::function<receive_flow_state_apply_result_t (application_job_queue_pressure_state_t)>;
@@ -384,29 +426,58 @@ class application_job_queue_t
 
     std::optional<permit_t> try_reserve_supply ()
     {
+        auto batch = try_reserve_supply_batch (1);
+        if (!batch)
+            return std::nullopt;
+        return batch.take ();
+    }
+
+    permit_batch_t try_reserve_supply_batch (std::uint32_t requested)
+    {
+        if (requested == 0)
+            return {};
         std::optional<pressure_transition_t> transition;
-        std::optional<permit_t> permit;
+        permit_batch_t batch;
         {
             std::lock_guard lock (_state->mutex);
-            if (_state->stopped || !_state->waiters.empty ()
-                || _state->permits_in_use
-                     >= _state->configuration.effective_max_queued_application_jobs) {
-                return std::nullopt;
-            }
-            permit = reserve_locked (_state, transition);
+            if (_state->stopped || !_state->waiters.empty ())
+                return {};
+            const auto available = _state->configuration.effective_max_queued_application_jobs
+                                   - permits_in_use (_state->credits.load ());
+            const auto count = std::min (requested, available);
+            if (count == 0)
+                return {};
+            batch = reserve_locked (_state, count);
+            transition = evaluate_pressure_locked (*_state);
         }
         dispatch_pressure_transition (_state, std::move (transition));
-        return permit;
+        return batch;
     }
 
     waiter_t wait_for_supply (supply_callback_t callback, origin_t origin)
     {
         if (!callback)
             throw std::invalid_argument ("Application Job Queue waiter callback is required");
+        return wait_for_supply_batch (
+          [callback = std::move (callback)] (std::optional<permit_batch_t> budget) mutable {
+              std::optional<permit_t> permit;
+              if (budget)
+                  permit.emplace (budget->take ());
+              callback (std::move (permit));
+          },
+          origin, 1);
+    }
 
-        auto waiter = std::make_shared<waiter_state_t> (origin);
+    waiter_t wait_for_supply_batch (batch_supply_callback_t callback,
+                                    origin_t origin,
+                                    std::uint32_t requested)
+    {
+        if (!callback || requested == 0)
+            throw std::invalid_argument ("Application Job Queue waiter callback is required");
+
+        auto waiter = std::make_shared<waiter_state_t> (origin, requested);
         waiter->callback = std::move (callback);
-        std::optional<permit_t> immediate;
+        std::optional<permit_batch_t> immediate;
         std::optional<pressure_transition_t> transition;
         bool stopped = false;
         std::optional<std::uint64_t> warning;
@@ -416,15 +487,18 @@ class application_job_queue_t
                 waiter->terminal = true;
                 stopped = true;
             } else if (_state->waiters.empty ()
-                       && _state->permits_in_use
+                       && permits_in_use (_state->credits.load ())
                             < _state->configuration.effective_max_queued_application_jobs) {
                 waiter->terminal = true;
-                immediate = reserve_locked (_state, transition);
+                const auto available = _state->configuration.effective_max_queued_application_jobs
+                                       - permits_in_use (_state->credits.load ());
+                immediate = reserve_locked (_state, std::min (requested, available));
+                transition = evaluate_pressure_locked (*_state);
             } else {
                 waiter->started_at = std::chrono::steady_clock::now ();
                 waiter->measurement_epoch = _state->measurement_epoch;
                 _state->waiters.push_back (waiter);
-                ++_state->capacity_waiters;
+                publish_waiters_locked (*_state);
                 ++_state->capacity_wait_count;
                 warning = update_local_waiters_locked (*_state, origin, 1);
             }
@@ -437,6 +511,8 @@ class application_job_queue_t
             waiter->callback (std::move (immediate));
         else if (stopped)
             waiter->callback (std::nullopt);
+        if (!immediate && !stopped)
+            settle_released_capacity (_state);
         return waiter_t (_state, std::move (waiter));
     }
 
@@ -464,12 +540,13 @@ class application_job_queue_t
     {
         std::lock_guard lock (_state->mutex);
         const auto now = std::chrono::steady_clock::now ();
+        const auto credits = _state->credits.load ();
         return {
           {_state->configuration.configured_profile, _state->configuration.configured_manual_max,
            _state->configuration.effective_processor_count,
-           _state->configuration.effective_max_queued_application_jobs,
-           _state->reserved_supply_permits, _state->queued_application_jobs, _state->permits_in_use,
-           _state->peak_permits_in_use, _state->capacity_waiters, _state->capacity_wait_count,
+           _state->configuration.effective_max_queued_application_jobs, reserved_count (credits),
+           queued_count (credits), permits_in_use (credits), _state->peak_permits_in_use,
+           static_cast<std::uint32_t> (_state->waiters.size ()), _state->capacity_wait_count,
            std::chrono::nanoseconds (
              static_cast<std::chrono::nanoseconds::rep> (std::min<std::uint64_t> (
                _state->capacity_wait_duration_ns,
@@ -477,7 +554,7 @@ class application_job_queue_t
                  std::numeric_limits<std::chrono::nanoseconds::rep>::max ())))),
            _state->configuration.pause_threshold_percent,
            _state->configuration.resume_threshold_percent, _state->pause_threshold_permit_count,
-           _state->resume_threshold_permit_count, _state->pressure_state,
+           _state->resume_threshold_permit_count, pressure_state (_state->credits.load ()),
            saturated_duration (current_pause_duration_ns_locked (*_state, now))},
           {_state->running_transition_count, _state->paused_transition_count,
            saturated_duration (cumulative_pause_duration_ns_locked (*_state, now)),
@@ -497,7 +574,7 @@ class application_job_queue_t
                 if (_state->stopped)
                     throw std::logic_error (
                       "Cannot register a receive-flow socket after queue stop");
-                desired_state = _state->pressure_state;
+                desired_state = pressure_state (_state->credits.load ());
                 desired_sequence = _state->pressure_sequence;
             }
 
@@ -527,7 +604,7 @@ class application_job_queue_t
                 stopped = _state->stopped;
                 if (!stopped) {
                     if (_state->pressure_sequence != desired_sequence
-                        || _state->pressure_state != desired_state) {
+                        || pressure_state (_state->credits.load ()) != desired_state) {
                         continue;
                     }
                     const auto registration_id = _state->next_receive_flow_registration_id++;
@@ -544,21 +621,22 @@ class application_job_queue_t
     {
         std::lock_guard lock (_state->mutex);
         ++_state->measurement_epoch;
-        _state->peak_permits_in_use = _state->permits_in_use;
+        _state->peak_permits_in_use = permits_in_use (_state->credits.load ());
         _state->capacity_wait_count = 0;
         _state->capacity_wait_duration_ns = 0;
         _state->running_transition_count = 0;
         _state->paused_transition_count = 0;
         _state->cumulative_pause_duration_ns = 0;
         _state->flow_state_config_failure_count = 0;
-        if (_state->pressure_state == application_job_queue_pressure_state_t::paused) {
+        if (pressure_state (_state->credits.load ())
+            == application_job_queue_pressure_state_t::paused) {
             _state->pause_accounted_at = std::chrono::steady_clock::now ();
         }
     }
 
     void stop () noexcept
     {
-        std::vector<supply_callback_t> callbacks;
+        std::vector<batch_supply_callback_t> callbacks;
         {
             std::lock_guard lock (_state->mutex);
             if (_state->stopped)
@@ -572,7 +650,7 @@ class application_job_queue_t
                 callbacks.push_back (std::move (waiter->callback));
             }
             _state->waiters.clear ();
-            _state->capacity_waiters = 0;
+            publish_waiters_locked (*_state);
             for (const auto &[_, socket] : _state->receive_flow_sockets) {
                 if (socket)
                     socket->request_close ();
@@ -591,12 +669,17 @@ class application_job_queue_t
   private:
     struct waiter_state_t
     {
-        explicit waiter_state_t (origin_t value) : origin (value) {}
+        explicit waiter_state_t (origin_t value, std::uint32_t count) :
+            origin (value), requested (count)
+        {
+        }
         const origin_t origin;
-        supply_callback_t callback;
+        const std::uint32_t requested;
+        std::uint32_t granted = 0;
+        batch_supply_callback_t callback;
         std::chrono::steady_clock::time_point started_at{};
         std::uint64_t measurement_epoch = 0;
-        bool terminal = false;
+        std::atomic_bool terminal{false};
     };
 
     struct state_t
@@ -632,12 +715,9 @@ class application_job_queue_t
 
         mutable std::mutex mutex;
         application_job_queue_configuration_t configuration;
-        std::deque<std::shared_ptr<waiter_state_t>> waiters;
-        std::uint32_t reserved_supply_permits = 0;
-        std::uint32_t queued_application_jobs = 0;
-        std::uint32_t permits_in_use = 0;
+        std::list<std::shared_ptr<waiter_state_t>> waiters;
+        std::atomic<std::uint64_t> credits{0};
         std::uint32_t peak_permits_in_use = 0;
-        std::uint32_t capacity_waiters = 0;
         std::int64_t local_waiters = 0;
         bool local_backlog_logged = false;
         std::uint64_t capacity_wait_count = 0;
@@ -645,8 +725,6 @@ class application_job_queue_t
         std::uint64_t measurement_epoch = 0;
         std::uint32_t pause_threshold_permit_count = 1;
         std::uint32_t resume_threshold_permit_count = 0;
-        application_job_queue_pressure_state_t pressure_state =
-          application_job_queue_pressure_state_t::running;
         std::chrono::steady_clock::time_point pause_started_at{};
         std::chrono::steady_clock::time_point pause_accounted_at{};
         std::uint64_t pressure_sequence = 0;
@@ -690,7 +768,8 @@ class application_job_queue_t
     current_pause_duration_ns_locked (const state_t &owner,
                                       std::chrono::steady_clock::time_point now) noexcept
     {
-        return owner.pressure_state == application_job_queue_pressure_state_t::paused
+        return pressure_state (owner.credits.load ())
+                   == application_job_queue_pressure_state_t::paused
                  ? duration_ns (owner.pause_started_at, now)
                  : 0;
     }
@@ -699,36 +778,92 @@ class application_job_queue_t
     cumulative_pause_duration_ns_locked (const state_t &owner,
                                          std::chrono::steady_clock::time_point now) noexcept
     {
-        const auto active = owner.pressure_state == application_job_queue_pressure_state_t::paused
-                              ? duration_ns (owner.pause_accounted_at, now)
-                              : 0;
+        const auto active =
+          pressure_state (owner.credits.load ()) == application_job_queue_pressure_state_t::paused
+            ? duration_ns (owner.pause_accounted_at, now)
+            : 0;
         return saturated_add (owner.cumulative_pause_duration_ns, active);
+    }
+
+    static constexpr std::uint64_t queued_credit = std::uint64_t{1} << 31;
+    static constexpr std::uint64_t credit_mask = queued_credit - 1;
+    static constexpr std::uint64_t paused_credit = std::uint64_t{1} << 62;
+    static constexpr std::uint64_t waiting_credit = std::uint64_t{1} << 63;
+    static application_job_queue_pressure_state_t pressure_state (std::uint64_t credits) noexcept
+    {
+        return (credits & paused_credit) != 0 ? application_job_queue_pressure_state_t::paused
+                                              : application_job_queue_pressure_state_t::running;
+    }
+    static void publish_waiters_locked (state_t &owner) noexcept
+    {
+        if (!owner.waiters.empty ())
+            owner.credits.fetch_or (waiting_credit, std::memory_order_acq_rel);
+        else
+            owner.credits.fetch_and (~waiting_credit, std::memory_order_acq_rel);
+    }
+    static std::uint32_t reserved_count (std::uint64_t credits) noexcept
+    {
+        return static_cast<std::uint32_t> (credits & credit_mask);
+    }
+    static std::uint32_t queued_count (std::uint64_t credits) noexcept
+    {
+        return static_cast<std::uint32_t> ((credits >> 31) & credit_mask);
+    }
+    static std::uint32_t permits_in_use (std::uint64_t credits) noexcept
+    {
+        return reserved_count (credits) + queued_count (credits);
+    }
+
+    static application_job_queue_pressure_state_t desired_pressure (const state_t &owner,
+                                                                    std::uint64_t credits) noexcept
+    {
+        const auto current = pressure_state (credits);
+        const auto count = permits_in_use (credits);
+        if (current == application_job_queue_pressure_state_t::running
+            && count >= owner.pause_threshold_permit_count)
+            return application_job_queue_pressure_state_t::paused;
+        if (current == application_job_queue_pressure_state_t::paused
+            && count <= owner.resume_threshold_permit_count)
+            return application_job_queue_pressure_state_t::running;
+        return current;
+    }
+
+    static void publish_pressure_locked (state_t &owner,
+                                         application_job_queue_pressure_state_t next,
+                                         std::chrono::steady_clock::time_point now)
+    {
+        if (next == application_job_queue_pressure_state_t::paused) {
+            owner.credits.fetch_or (paused_credit, std::memory_order_acq_rel);
+            owner.pause_started_at = now;
+            owner.pause_accounted_at = now;
+            ++owner.paused_transition_count;
+        } else {
+            owner.cumulative_pause_duration_ns = saturated_add (
+              owner.cumulative_pause_duration_ns, duration_ns (owner.pause_accounted_at, now));
+            owner.credits.fetch_and (~paused_credit, std::memory_order_acq_rel);
+            owner.pause_started_at = {};
+            owner.pause_accounted_at = {};
+            ++owner.running_transition_count;
+        }
     }
 
     static std::optional<pressure_transition_t> evaluate_pressure_locked (state_t &owner)
     {
-        const auto now = std::chrono::steady_clock::now ();
-        if (owner.pressure_state == application_job_queue_pressure_state_t::running
-            && owner.permits_in_use >= owner.pause_threshold_permit_count) {
-            owner.pressure_state = application_job_queue_pressure_state_t::paused;
-            owner.pause_started_at = now;
-            owner.pause_accounted_at = now;
-            ++owner.paused_transition_count;
-        } else if (owner.pressure_state == application_job_queue_pressure_state_t::paused
-                   && owner.permits_in_use <= owner.resume_threshold_permit_count) {
-            owner.cumulative_pause_duration_ns = saturated_add (
-              owner.cumulative_pause_duration_ns, duration_ns (owner.pause_accounted_at, now));
-            owner.pressure_state = application_job_queue_pressure_state_t::running;
-            owner.pause_started_at = {};
-            owner.pause_accounted_at = {};
-            ++owner.running_transition_count;
-        } else {
+        const auto credits = owner.credits.load ();
+        auto next = desired_pressure (owner, credits);
+        if (next == pressure_state (credits))
             return std::nullopt;
+        const auto now = std::chrono::steady_clock::now ();
+        publish_pressure_locked (owner, next, now);
+        // A release preceding paused publication can change the final state.
+        const auto final = desired_pressure (owner, owner.credits.load ());
+        if (final != next) {
+            publish_pressure_locked (owner, final, now);
+            next = final;
         }
-
         ++owner.pressure_sequence;
         pressure_transition_t transition;
-        transition.state = owner.pressure_state;
+        transition.state = next;
         transition.sequence = owner.pressure_sequence;
         transition.sockets.reserve (owner.receive_flow_sockets.size ());
         for (const auto &[_, socket] : owner.receive_flow_sockets)
@@ -736,16 +871,13 @@ class application_job_queue_t
         return transition;
     }
 
-    static permit_t reserve_locked (const std::shared_ptr<state_t> &owner,
-                                    std::optional<pressure_transition_t> &transition)
+    static permit_batch_t reserve_locked (const std::shared_ptr<state_t> &owner,
+                                          std::uint32_t count)
     {
-        auto permit = std::make_shared<permit_state_t> ();
-        permit->owner = owner;
-        ++owner->reserved_supply_permits;
-        ++owner->permits_in_use;
-        owner->peak_permits_in_use = std::max (owner->peak_permits_in_use, owner->permits_in_use);
-        transition = evaluate_pressure_locked (*owner);
-        return permit_t (std::move (permit));
+        const auto before = owner->credits.fetch_add (count, std::memory_order_acq_rel);
+        owner->peak_permits_in_use =
+          std::max (owner->peak_permits_in_use, permits_in_use (before) + count);
+        return permit_batch_t (owner, count);
     }
 
     static std::optional<std::uint64_t>
@@ -780,51 +912,81 @@ class application_job_queue_t
             : owner.capacity_wait_duration_ns + amount;
     }
 
-    static std::shared_ptr<waiter_state_t> take_oldest_waiter_locked (state_t &owner) noexcept
+    static bool
+    take_oldest_waiter_locked (state_t &owner,
+                               std::list<std::shared_ptr<waiter_state_t>> &ready) noexcept
     {
-        while (!owner.waiters.empty ()) {
-            auto waiter = std::move (owner.waiters.front ());
-            owner.waiters.pop_front ();
-            if (!waiter || waiter->terminal)
-                continue;
-            waiter->terminal = true;
-            --owner.capacity_waiters;
-            account_wait_locked (owner, *waiter);
-            return waiter;
-        }
-        return {};
+        if (owner.waiters.empty ())
+            return false;
+        const auto first = owner.waiters.begin ();
+        (*first)->terminal = true;
+        account_wait_locked (owner, **first);
+        ready.splice (ready.end (), owner.waiters, first);
+        publish_waiters_locked (owner);
+        return true;
     }
 
-    static void release_permit (std::shared_ptr<state_t> owner,
-                                std::shared_ptr<permit_state_t> permit) noexcept
+    static void release_credits (std::shared_ptr<state_t> owner,
+                                 permit_phase_t phase,
+                                 std::uint32_t count) noexcept
     {
-        std::shared_ptr<waiter_state_t> waiter;
-        std::optional<permit_t> handoff;
+        const auto amount = phase == permit_phase_t::reserved ? static_cast<std::uint64_t> (count)
+                                                              : queued_credit * count;
+        std::list<std::shared_ptr<waiter_state_t>> ready;
+        permit_batch_t grants;
+        std::optional<pressure_transition_t> transition;
+        const auto before = owner->credits.fetch_sub (amount, std::memory_order_acq_rel);
+        if ((before & waiting_credit) == 0
+            && desired_pressure (*owner, before - amount) == pressure_state (before))
+            return;
+        {
+            std::lock_guard lock (owner->mutex);
+            settle_released_capacity_locked (owner, ready, grants, transition);
+        }
+        dispatch_pressure_transition (owner, std::move (transition));
+        deliver_supply (ready, grants);
+    }
+
+    static void settle_released_capacity_locked (const std::shared_ptr<state_t> &owner,
+                                                 std::list<std::shared_ptr<waiter_state_t>> &ready,
+                                                 permit_batch_t &grants,
+                                                 std::optional<pressure_transition_t> &transition)
+    {
+        const auto available = owner->configuration.effective_max_queued_application_jobs
+                               - permits_in_use (owner->credits.load ());
+        if (!owner->stopped && available != 0 && !owner->waiters.empty ()) {
+            auto remaining = available;
+            while (remaining != 0) {
+                if (!take_oldest_waiter_locked (*owner, ready))
+                    break;
+                const auto &waiter = ready.back ();
+                waiter->granted = std::min (waiter->requested, remaining);
+                remaining -= waiter->granted;
+            }
+            if (!ready.empty ())
+                grants = reserve_locked (owner, available - remaining);
+        }
+        transition = evaluate_pressure_locked (*owner);
+    }
+
+    static void settle_released_capacity (const std::shared_ptr<state_t> &owner) noexcept
+    {
+        std::list<std::shared_ptr<waiter_state_t>> ready;
+        permit_batch_t grants;
         std::optional<pressure_transition_t> transition;
         {
             std::lock_guard lock (owner->mutex);
-            if (permit->phase == permit_phase_t::released)
-                return;
-            if (permit->phase == permit_phase_t::reserved)
-                --owner->reserved_supply_permits;
-            else
-                --owner->queued_application_jobs;
-            permit->phase = permit_phase_t::released;
-
-            if (!owner->stopped)
-                waiter = take_oldest_waiter_locked (*owner);
-            if (waiter) {
-                auto next = std::make_shared<permit_state_t> ();
-                next->owner = owner;
-                ++owner->reserved_supply_permits;
-                handoff.emplace (permit_t (std::move (next)));
-            } else {
-                --owner->permits_in_use;
-                transition = evaluate_pressure_locked (*owner);
-            }
+            settle_released_capacity_locked (owner, ready, grants, transition);
         }
         dispatch_pressure_transition (owner, std::move (transition));
-        if (waiter) {
+        deliver_supply (ready, grants);
+    }
+
+    static void deliver_supply (std::list<std::shared_ptr<waiter_state_t>> &ready,
+                                permit_batch_t &grants) noexcept
+    {
+        for (auto &waiter : ready) {
+            std::optional<permit_batch_t> handoff (grants.take_batch (waiter->granted));
             try {
                 waiter->callback (std::move (handoff));
             }
@@ -891,7 +1053,9 @@ class application_job_queue_t
     static bool cancel_waiter (std::shared_ptr<state_t> owner,
                                std::shared_ptr<waiter_state_t> waiter) noexcept
     {
-        supply_callback_t callback;
+        batch_supply_callback_t callback;
+        if (waiter->terminal.load (std::memory_order_acquire))
+            return false;
         {
             std::lock_guard lock (owner->mutex);
             if (waiter->terminal)
@@ -901,7 +1065,7 @@ class application_job_queue_t
                 return false;
             owner->waiters.erase (found);
             waiter->terminal = true;
-            --owner->capacity_waiters;
+            publish_waiters_locked (*owner);
             account_wait_locked (*owner, *waiter);
             callback = std::move (waiter->callback);
         }
@@ -927,7 +1091,7 @@ class application_supply_slot_t final
         std::mutex mutex;
         std::function<void ()> wake;
         std::optional<application_job_queue_t::waiter_t> waiter;
-        std::optional<application_job_queue_t::permit_t> permit;
+        std::optional<application_job_queue_t::permit_batch_t> permit;
         bool waiting = false;
         bool closed = false;
     };
@@ -947,7 +1111,7 @@ class application_supply_slot_t final
     application_supply_slot_t (const application_supply_slot_t &) = delete;
     application_supply_slot_t &operator= (const application_supply_slot_t &) = delete;
 
-    void ensure_waiter ()
+    void ensure_waiter (std::uint32_t requested = 1)
     {
         std::optional<application_job_queue_t::waiter_t> previous;
         {
@@ -962,7 +1126,7 @@ class application_supply_slot_t final
         // The queue owns FIFO fairness for both immediate acquisition and
         // waiting. A supply already available to this ingress turn needs no
         // waiter allocation or wake notification back to that same turn.
-        if (auto permit = _queue->try_reserve_supply ()) {
+        if (auto permit = _queue->try_reserve_supply_batch (requested)) {
             std::lock_guard lock (_state->mutex);
             _state->waiting = false;
             if (!_state->closed)
@@ -971,8 +1135,8 @@ class application_supply_slot_t final
         }
 
         const auto state = _state;
-        auto waiter = _queue->wait_for_supply (
-          [state] (std::optional<application_job_queue_t::permit_t> permit) {
+        auto waiter = _queue->wait_for_supply_batch (
+          [state] (std::optional<application_job_queue_t::permit_batch_t> permit) {
               std::lock_guard lock (state->mutex);
               state->waiting = false;
               if (state->closed)
@@ -981,7 +1145,7 @@ class application_supply_slot_t final
               if (state->wake)
                   state->wake ();
           },
-          application_job_queue_t::origin_t::remote);
+          application_job_queue_t::origin_t::remote, requested);
         {
             std::lock_guard lock (_state->mutex);
             if (_state->waiting && !_state->closed)
@@ -989,10 +1153,10 @@ class application_supply_slot_t final
         }
     }
 
-    std::optional<application_job_queue_t::permit_t> take ()
+    std::optional<application_job_queue_t::permit_batch_t> take_budget ()
     {
         std::optional<application_job_queue_t::waiter_t> completed;
-        std::optional<application_job_queue_t::permit_t> permit;
+        std::optional<application_job_queue_t::permit_batch_t> permit;
         {
             std::lock_guard lock (_state->mutex);
             permit = std::exchange (_state->permit, std::nullopt);
@@ -1001,6 +1165,14 @@ class application_supply_slot_t final
         }
         completed.reset ();
         return permit;
+    }
+
+    std::optional<application_job_queue_t::permit_t> take ()
+    {
+        auto budget = take_budget ();
+        if (!budget)
+            return std::nullopt;
+        return budget->take ();
     }
 
     bool has_supply () const
@@ -1012,7 +1184,7 @@ class application_supply_slot_t final
     void close () noexcept
     {
         std::optional<application_job_queue_t::waiter_t> waiter;
-        std::optional<application_job_queue_t::permit_t> permit;
+        std::optional<application_job_queue_t::permit_batch_t> permit;
         {
             std::lock_guard lock (_state->mutex);
             if (_state->closed)

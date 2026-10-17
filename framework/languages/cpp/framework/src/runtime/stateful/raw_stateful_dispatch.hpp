@@ -14,6 +14,8 @@
 #include <chrono>
 #include <condition_variable>
 #include <functional>
+#include <limits>
+#include <atomic>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -240,6 +242,10 @@ class raw_relocation_replay_coordinator_t
     bool unregister_terminal_source (const protocol::relocation_id_t &,
                                      const protocol::wire_operation_id_t &);
     bool register_terminal_target (raw_relocation_terminal_target_registration_t registration);
+    // True when a relay retry or a tombstone reap may be due at now. The
+    // coordinator keeps an early bound of its next due instant (spec 08
+    // section 4.2), so a rotation with nothing due enters no lane.
+    bool due (clock_t::time_point now) const noexcept;
     task_t<std::size_t> retry_terminal_relays (clock_t::time_point now);
     std::size_t reap_terminal_tombstones (clock_t::time_point now);
     std::optional<clock_t::time_point> next_activity () const;
@@ -329,6 +335,13 @@ class raw_relocation_replay_coordinator_t
     std::size_t _terminal_retained_bytes = 0;
     std::chrono::milliseconds _relay_retry_interval;
     std::chrono::milliseconds _terminal_tombstone_retention;
+    // Earliest instant a retry or reap can be due, written on the lane by the
+    // scan; a lane turn that can make work due earlier resets it to due_now.
+    static constexpr clock_t::rep due_now = std::numeric_limits<clock_t::rep>::min ();
+    static constexpr clock_t::rep never_due = std::numeric_limits<clock_t::rep>::max ();
+    mutable std::atomic<clock_t::rep> _next_due{due_now};
+    void publish_next_due_on_lane () const;
+    task_t<std::size_t> retry_due_terminal_relays (clock_t::time_point now);
 };
 
 } // namespace zlink::framework::runtime::stateful

@@ -793,7 +793,7 @@ void mesh_node_runtime_t::start ()
     /* flow-correlation §4: thread the flow-capture provider so the host's
      * cold decode paths skip flow validation/materialization at level Off. */
     node->set_flow_capture_provider (
-      [spot_state] { return message_flow_tracer_t (spot_state->dispatch).capture_enabled (); });
+      [spot_state] { return message_flow_tracer_t (spot_state->dispatch).flow_tracing (); });
     if (_spot_route_fence_resolver)
         node->configure_spot_route_fence_resolver (_spot_route_fence_resolver);
     if (_user_spot_store && _user_spot_materializer) {
@@ -822,6 +822,7 @@ void mesh_node_runtime_t::start ()
           spot_node_runtime_t spot (spot_state);
           spot.dispatch_wire_actor_join_admission (
             spot_id_t (request.target_spot.spot_id),
+            request.entry ? std::string_view{} : request.actor.actor_id,
             [spot_state, routing_id, request, payload, serializers, completion] () -> task_t<void> {
                 completion (
                   admit_wire_actor_join (spot_state, routing_id, request, payload, serializers));
@@ -1450,7 +1451,6 @@ result_t<void> mesh_node_runtime_t::cleanup_application_actor_stateful (const ac
             && stateful != runtime::stateful::stateful_error_t::not_found)
             return result_t<void>::failure (framework_error_kind_t::internal_failure,
                                             "stateful Actor cleanup failed");
-        _actors.erase (std::string (actor.actor_id ().value ()));
     }
     return result_t<void>::success ();
 }
@@ -1895,7 +1895,6 @@ void mesh_node_runtime_t::stop ()
     }
     _node->transport ().mailbox ().bind_application_dispatch ({}, {});
     _peer_connection_intent_lane.run ([&] { _peer_connection_intents.clear (); }).get ();
-    _actors.clear ();
     for (auto &[_, spot] : _spots)
         (void) spot.close ();
     _spots.clear ();
@@ -2030,7 +2029,7 @@ bool mesh_node_runtime_t::wait_for_peer_ready (const zlink::routing_id_t &target
         }
         zlink::framework::runtime::wait_poll_interval (std::chrono::milliseconds (1));
     } while (std::chrono::steady_clock::now () < deadline);
-    return _node->transport ().topology ().peer (routing_id).has_value ();
+    return _node->transport ().topology ().peer (routing_id) != nullptr;
 }
 
 host::spot_handle_t mesh_node_runtime_t::get_or_create_spot (std::string spot_id)
@@ -2086,13 +2085,9 @@ mesh_node_runtime_t::create_actor (std::string actor_type,
     if (actor_id.empty ()) {
         throw configuration_error ("actor id is required");
     }
-    if (const auto found = _actors.find (actor_id); found != _actors.end ())
-        return found->second;
     (void) creation_parts;
     (void) timeout;
-    auto actor = _node->create_actor (std::move (actor_type), actor_id);
-    _actors.emplace (std::move (actor_id), actor);
-    return actor;
+    return _node->create_actor (std::move (actor_type), std::move (actor_id));
 }
 
 task_t<zlink::submit_result_t> mesh_node_runtime_t::send_to_actor (
@@ -2207,11 +2202,11 @@ bool mesh_node_runtime_t::prepare_actor_transfer (const host::actor_transfer_pre
     return _node->prepare_actor_transfer (prepare, token, result);
 }
 
-result_t<actor_ref_t> mesh_node_runtime_t::create_application_actor (
-  std::string actor_type,
-  std::string actor_id,
-  const std::optional<zlink::message_t> &creation_payload,
-  std::chrono::milliseconds timeout)
+result_t<actor_ref_t>
+mesh_node_runtime_t::create_application_actor (std::string actor_type,
+                                               std::string actor_id,
+                                               const std::optional<zlink::message_t> &,
+                                               std::chrono::milliseconds timeout)
 {
     _state->spot_state->lane
       .run ([&] {
@@ -2220,10 +2215,7 @@ result_t<actor_ref_t> mesh_node_runtime_t::create_application_actor (
       })
       .get ();
     try {
-        std::vector<zlink::message_t> parts;
-        if (creation_payload)
-            parts.push_back (*creation_payload);
-        auto native = create_actor (actor_type, actor_id, parts, timeout);
+        auto native = create_actor (actor_type, actor_id, {}, timeout);
         _state->spot_state->lane
           .run ([&] { _state->spot_state->core_actor_membership_epochs.try_emplace (actor_id, 1); })
           .get ();
@@ -2241,13 +2233,13 @@ result_t<actor_ref_t> mesh_node_runtime_t::create_application_actor (
     }
 }
 
-result_t<actor_ref_t> mesh_node_runtime_t::create_application_actor (
-  std::string actor_type,
-  std::string actor_id,
-  const std::optional<zlink::message_t> &creation_payload,
-  std::uint64_t object_generation,
-  std::uint64_t authority_owner_generation,
-  std::chrono::milliseconds timeout)
+result_t<actor_ref_t>
+mesh_node_runtime_t::create_application_actor (std::string actor_type,
+                                               std::string actor_id,
+                                               const std::optional<zlink::message_t> &,
+                                               std::uint64_t object_generation,
+                                               std::uint64_t authority_owner_generation,
+                                               std::chrono::milliseconds timeout)
 {
     _state->spot_state->lane
       .run ([&] {
@@ -2256,9 +2248,6 @@ result_t<actor_ref_t> mesh_node_runtime_t::create_application_actor (
       })
       .get ();
     try {
-        std::vector<zlink::message_t> parts;
-        if (creation_payload)
-            parts.push_back (*creation_payload);
         if (!_node)
             throw configuration_error ("MeshNode has not started");
         auto native = _node->create_reserved_actor (
@@ -2266,7 +2255,6 @@ result_t<actor_ref_t> mesh_node_runtime_t::create_application_actor (
           runtime::stateful::object_ref_t{runtime::stateful::object_kind_t::actor, actor_id,
                                           object_generation, authority_owner_generation,
                                           _state->mesh_name, _state->routing_id->to_string ()});
-        _actors.insert_or_assign (actor_id, native);
         _state->spot_state->lane
           .run ([&] { _state->spot_state->core_actor_membership_epochs.try_emplace (actor_id, 1); })
           .get ();
@@ -2313,8 +2301,8 @@ mesh_node_runtime_t::submit_application_actor_entry_spot_join (const actor_ref_t
     if (!completion)
         return result_t<void>::failure (framework_error_kind_t::internal_failure,
                                         "Actor entry Spot join completion is required");
-    const auto found = _actors.find (std::string (actor.actor_id ().value ()));
-    if (found == _actors.end ())
+    const auto current = _node ? _node->resolve_actor (actor) : std::nullopt;
+    if (!current)
         return result_t<void>::failure (framework_error_kind_t::not_found,
                                         "local Actor handle was not found");
 
@@ -2332,7 +2320,8 @@ mesh_node_runtime_t::submit_application_actor_entry_spot_join (const actor_ref_t
                                                         result.value ().parts, actor, state));
       });
     const std::vector<zlink::message_t> parts{request};
-    const auto submitted = found->second.join_entry_spot (
+    host::actor_handle_t handle (_node, actor, *current);
+    const auto submitted = handle.join_entry_spot (
       zlink::routing_id_t::from (std::string (target_node.value ())), parts, operation, timeout);
     if (submitted != zlink::submit_result_t::ok)
         return result_t<void>::failure (framework_error_kind_t::internal_failure,
@@ -2442,10 +2431,8 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::join_application_actor_to_spot (
       local_routing_id && local_routing_id->to_hex () != target.node_rid.to_hex ();
     if (remote == false) {
         /* A canonical remote Join materializes the Actor in the target public
-         * host without going through create_application_actor(), so the
-         * create-time _actors convenience map is not authoritative here.
-         * Rebind a handle to the current host object; this also keeps a later
-         * same-node User-Spot Join on the ordinary local membership lane. */
+         * host. Rebind a handle to its current object so a later same-node
+         * User-Spot Join uses the ordinary local membership lane. */
         const auto current = _node ? _node->resolve_actor (actor) : std::nullopt;
         if (!current) {
             co_return result_t<actor_join_reply_t>::failure (framework_error_kind_t::not_found,
@@ -3862,7 +3849,7 @@ mesh_node_runtime_t::bind_application_actor_session (const actor_ref_t &actor,
             {runtime::protocol::bound_session_binding_state_t::active, binding_generation}},
           timeout,
           [completion] (runtime::foundation::operation_terminal_t terminal,
-                        std::vector<std::uint8_t> payload) {
+                        zlink::message_t payload) {
               if (terminal != runtime::foundation::operation_terminal_t::completed) {
                   const auto kind = terminal == runtime::foundation::operation_terminal_t::timed_out
                                       ? framework_error_kind_t::deadline_exceeded
@@ -3873,7 +3860,8 @@ mesh_node_runtime_t::bind_application_actor_session (const actor_ref_t &actor,
               }
               try {
                   completion->complete (result_t<runtime::protocol::reply_header_t>::success (
-                    runtime::protocol::decode_reply_header (payload)));
+                    runtime::protocol::decode_reply_header (
+                      runtime::protocol::message_bytes (payload))));
               }
               catch (const runtime::protocol::service_wire_error_t &) {
                   completion->complete (result_t<runtime::protocol::reply_header_t>::failure (
@@ -3954,8 +3942,7 @@ mesh_node_runtime_t::retire_application_actor_session (runtime::stateful::stream
         session_rid.to_bytes (),
         {runtime::protocol::bound_session_binding_state_t::tombstone, binding.binding_generation}},
       timeout,
-      [completion] (runtime::foundation::operation_terminal_t terminal,
-                    std::vector<std::uint8_t> payload) {
+      [completion] (runtime::foundation::operation_terminal_t terminal, zlink::message_t payload) {
           if (terminal != runtime::foundation::operation_terminal_t::completed) {
               completion->complete (result_t<runtime::protocol::reply_header_t>::failure (
                 framework_error_kind_t::unavailable,
@@ -3964,7 +3951,8 @@ mesh_node_runtime_t::retire_application_actor_session (runtime::stateful::stream
           }
           try {
               completion->complete (result_t<runtime::protocol::reply_header_t>::success (
-                runtime::protocol::decode_reply_header (payload)));
+                runtime::protocol::decode_reply_header (
+                  runtime::protocol::message_bytes (payload))));
           }
           catch (const runtime::protocol::service_wire_error_t &) {
               completion->complete (result_t<runtime::protocol::reply_header_t>::failure (
@@ -4147,8 +4135,20 @@ mesh_node_runtime_t::await_request_reply (const host::pending_operation_t &opera
       runtime::messaging::message_parts_t (std::move (completion->value ().parts)));
 }
 
+std::optional<zlink::submit_result_t>
+mesh_node_runtime_t::classify_node_target_from_topology (const zlink::routing_id_t &target,
+                                                         bool &unknown) const
+{
+    using node_target_t = runtime::mesh::raw_mesh_node_owner_t::node_target_t;
+    const auto classified = _node->transport ().classify_node_target (target.to_bytes ());
+    unknown = classified == node_target_t::unknown;
+    if (classified == node_target_t::object_client)
+        return zlink::submit_result_t::not_found;
+    return std::nullopt;
+}
+
 task_t<std::optional<zlink::submit_result_t>>
-mesh_node_runtime_t::classify_node_direct_target (const zlink::routing_id_t &target) const
+mesh_node_runtime_t::classify_unknown_node_target (const zlink::routing_id_t &target) const
 {
     if (!_user_spot_store)
         co_return std::nullopt;
@@ -4198,8 +4198,12 @@ mesh_node_runtime_t::send_to_node (const zlink::routing_id_t &target,
     if (!_node) {
         throw configuration_error ("MeshNode has not started");
     }
-    if (const auto classified = co_await classify_node_direct_target (target))
+    bool unknown_target = false;
+    if (const auto classified = classify_node_target_from_topology (target, unknown_target))
         co_return *classified;
+    if (unknown_target)
+        if (const auto classified = co_await classify_unknown_node_target (target))
+            co_return *classified;
     (void) metadata;
     co_return co_await _node->send_to_node (target, parts);
 }
@@ -4212,8 +4216,12 @@ mesh_node_runtime_t::send_to_node (const zlink::routing_id_t &target,
     if (!_node) {
         throw configuration_error ("MeshNode has not started");
     }
-    if (const auto classified = co_await classify_node_direct_target (target))
+    bool unknown_target = false;
+    if (const auto classified = classify_node_target_from_topology (target, unknown_target))
         co_return *classified;
+    if (unknown_target)
+        if (const auto classified = co_await classify_unknown_node_target (target))
+            co_return *classified;
     (void) metadata;
     co_return co_await _node->send_to_node (target, std::move (parts));
 }
@@ -4229,7 +4237,7 @@ mesh_node_runtime_t::send_to_node (const zlink::routing_id_t &target,
 
 task_t<zlink::submit_result_t>
 mesh_node_runtime_t::request_to_node (const zlink::routing_id_t &target,
-                                      const std::vector<zlink::message_t> &parts,
+                                      std::vector<zlink::message_t> parts,
                                       host::pending_operation_t &operation_id,
                                       std::chrono::milliseconds timeout,
                                       std::vector<std::uint8_t> metadata)
@@ -4237,10 +4245,14 @@ mesh_node_runtime_t::request_to_node (const zlink::routing_id_t &target,
     if (!_node) {
         throw configuration_error ("MeshNode has not started");
     }
-    if (const auto classified = co_await classify_node_direct_target (target))
+    bool unknown_target = false;
+    if (const auto classified = classify_node_target_from_topology (target, unknown_target))
         co_return *classified;
+    if (unknown_target)
+        if (const auto classified = co_await classify_unknown_node_target (target))
+            co_return *classified;
     (void) metadata;
-    co_return co_await _node->request_to_node (target, parts, operation_id, timeout);
+    co_return co_await _node->request_to_node (target, std::move (parts), operation_id, timeout);
 }
 
 task_t<zlink::submit_result_t>

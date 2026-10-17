@@ -15,7 +15,6 @@ import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.mesh.ZLinkMeshNodesRuntime;
 
-import java.net.ServerSocket;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.concurrent.CompletableFuture;
@@ -36,17 +35,15 @@ final class ZLinkJavaMeshNodeIsolationTest {
 
     @Test
     void blockedNodeTurnDoesNotHoldAnotherNodesSubmissionOrReceivePump() throws Exception {
-        String endpointA = endpoint();
-        String endpointB = endpoint();
         var targetOptions = new DefaultZLinkFrameworkOptions();
         targetOptions
                 .addRouteMesh(MESH_A)
-                .listen(endpointA)
+                .listen(LOOPBACK + 0)
                 .setRoutingId(TARGET)
                 .addRouteSendHandler(Sink.class, Probe.class);
         targetOptions
                 .addRouteMesh(MESH_B)
-                .listen(endpointB)
+                .listen(LOOPBACK + 0)
                 .setRoutingId(TARGET)
                 .addRouteRequestHandler(Echo.class, Probe.class, String.class);
         try (var target = ZLinkFrameworkRuntimeTestAccess.start(targetOptions)) {
@@ -54,7 +51,9 @@ final class ZLinkJavaMeshNodeIsolationTest {
             for (String mesh : new String[] {MESH_A, MESH_B}) {
                 var node =
                         sourceOptions.addRouteMesh(mesh).listen(LOOPBACK + 0).setRoutingId(SOURCE);
-                node.peerConnections().connect(TARGET, mesh.equals(MESH_A) ? endpointA : endpointB);
+                node.peerConnections()
+                        .connect(
+                                TARGET, nodes(target).nodesByName().get(mesh).advertisedEndpoint());
                 if (mesh.equals(MESH_B))
                     node.addRouteRequestHandler(Echo.class, Probe.class, String.class);
             }
@@ -147,12 +146,6 @@ final class ZLinkJavaMeshNodeIsolationTest {
                 .toCompletableFuture();
     }
 
-    private static String endpoint() throws Exception {
-        try (var socket = new ServerSocket(0)) {
-            return LOOPBACK + socket.getLocalPort();
-        }
-    }
-
     private static void awaitSourceTurnWait(AtomicReference<Thread> caller) throws Exception {
         await(
                 () -> {
@@ -181,12 +174,15 @@ final class ZLinkJavaMeshNodeIsolationTest {
 
     private static ZLinkStateLane lane(ZLinkFrameworkRuntime runtime, String mesh)
             throws Exception {
-        var nodesField = ZLinkFrameworkRuntime.class.getDeclaredField("meshNodes");
-        nodesField.setAccessible(true);
-        var nodes = (ZLinkMeshNodesRuntime) nodesField.get(runtime);
         var ownerField = ZLinkJavaRawMeshNode.class.getDeclaredField("transportStateLane");
         ownerField.setAccessible(true);
-        return (ZLinkStateLane) ownerField.get(nodes.nodesByName().get(mesh));
+        return (ZLinkStateLane) ownerField.get(nodes(runtime).nodesByName().get(mesh));
+    }
+
+    private static ZLinkMeshNodesRuntime nodes(ZLinkFrameworkRuntime runtime) throws Exception {
+        var nodesField = ZLinkFrameworkRuntime.class.getDeclaredField("meshNodes");
+        nodesField.setAccessible(true);
+        return (ZLinkMeshNodesRuntime) nodesField.get(runtime);
     }
 
     public record Probe(String value) {}

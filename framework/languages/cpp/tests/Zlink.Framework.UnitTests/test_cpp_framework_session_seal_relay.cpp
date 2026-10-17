@@ -109,6 +109,9 @@ void verify_relay_seal (bool close_owner, bool request_timeout = false)
           .set_object_role (object_role_t::none)
           .set_routing_id (owner_rid)
           .listen ("tcp://127.0.0.1:0");
+        // The drop carries the relayed flow only while flow tracing is on
+        // (04-flow-correlation section 4: Normal and Detailed).
+        options.configure_dispatch ().message_flow (message_flow_log_mode_t::normal);
         dispatch_options_access_t::set_observer_for_tests (
           options.configure_dispatch (), [&] (const message_flow_event_t &event) {
               const std::lock_guard lock (events_mutex);
@@ -343,6 +346,9 @@ TEST (FrameworkSessionSealRelay, public_request_preserves_wire_correlation_and_f
     source_state->core_context = std::make_shared<zlink::context_t> ();
     source_state->listen_endpoint = "tcp://127.0.0.1:0";
     source_state->routing_id = zlink::routing_id_t::from ("seal-wire-source");
+    // The flow fields cross the wire only while flow tracing is on
+    // (04-flow-correlation section 4: Normal and Detailed).
+    source_state->spot_state->dispatch.message_flow (message_flow_log_mode_t::normal);
     mesh_node_runtime_t source (source_state);
     source.configure_actor_route_resolver (
       [&] (actor_ref_t)
@@ -401,7 +407,9 @@ TEST (FrameworkSessionSealRelay, public_request_preserves_wire_correlation_and_f
       progress);
     ASSERT_EQ (admission.wait_for (2s), std::future_status::ready);
     ASSERT_TRUE (peer_ready ());
-    actor_gateway_runtime_t gateway;
+    auto gateway_state = std::make_shared<actor_gateway_state_t> ();
+    gateway_state->dispatch.message_flow (message_flow_log_mode_t::normal);
+    actor_gateway_runtime_t gateway (gateway_state);
     gateway.on_relay ([&] (const actor_ref_t &actor, const actor_context_t &,
                            const stream_header_t &header, const zlink::message_t &payload,
                            std::optional<bound_session_relay_source_t> relay_source,
