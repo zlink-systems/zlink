@@ -2172,6 +2172,11 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
         if (streams != null) {
             shutdown.deferCloseStage("stream_close", streams::closeAsync);
         }
+        if (spotRetire != null) {
+            // An accepted target can still own sealed ingress after its authority CAS.
+            shutdown.deferCloseStage(
+                    "relocation_targets_close", spotRetire::sealAcceptedTargetRelocations);
+        }
         return shutdown.closeAsync()
                 .whenComplete(
                         (ignored, failure) -> {
