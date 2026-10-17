@@ -18,7 +18,6 @@ import {
   toFrameworkActorRef,
   type ZLinkActorHandoffCoordinator,
   type ZLinkActorHandoffPrefixAdmission,
-  type ZLinkActorHandoffPrefixQueue,
   type ZLinkActorHandoffReplayPreparation,
   type ZLinkActorRoutedJoinTransport,
   type ZLinkDeferredJoinCompletion,
@@ -247,9 +246,9 @@ export class ZLinkActorTransferRuntime {
 
   async cancelDeferredActorHandoff(
     actor: ZLinkActor,
-    state: ZLinkActorRuntimeState
+    _state: ZLinkActorRuntimeState
   ): Promise<void> {
-    const admitted = this.admitDeferredSourcePrefix(actor, state);
+    const admitted = this.admitDeferredSourcePrefix(actor);
     void this.observeHandoffReplay(admitted.terminal);
   }
 
@@ -417,7 +416,7 @@ export class ZLinkActorTransferRuntime {
       }
     } finally {
       try {
-        const admitted = this.admitCanceledSourcePrefix(actor, state, replayStart);
+        const admitted = this.admitCanceledSourcePrefix(actor, replayStart);
         void this.observeHandoffReplay(admitted.terminal);
       } finally {
         state.endMove();
@@ -427,20 +426,19 @@ export class ZLinkActorTransferRuntime {
 
   private admitCanceledSourcePrefix(
     actor: ZLinkActor,
-    state: ZLinkActorRuntimeState,
     replayStart: Promise<void> = Promise.resolve()
   ): ZLinkActorHandoffPrefixAdmission {
     // The seal-era ingress hold returns to the source queue on a precommit
     // abort. Rejection stays reserved for a source Actor whose dispatch is
     // gone, because held packets then have no queue left to return to.
-    const queue = this.sourceHandoffPrefixQueue(actor, state);
-    if (queue === undefined) {
+    const manager = this.options.spotManager();
+    if (manager === undefined) {
       this.options.actorHandoff.cancel(actor.context.actorId);
       return { terminal: Promise.resolve() };
     }
     return this.options.actorHandoff.admitCanceledPrefix(
       actor.context.actorId,
-      queue,
+      (records) => manager.admitSourceActorPacketPrefix(actor.context.actorId, records),
       this.options.prepareApplicationJob,
       replayStart
     );
@@ -448,17 +446,16 @@ export class ZLinkActorTransferRuntime {
 
   private admitDeferredSourcePrefix(
     actor: ZLinkActor,
-    state: ZLinkActorRuntimeState,
     replayStart: Promise<void> = Promise.resolve()
   ): ZLinkActorHandoffPrefixAdmission {
-    const queue = this.sourceHandoffPrefixQueue(actor, state);
-    if (queue === undefined) {
+    const manager = this.options.spotManager();
+    if (manager === undefined) {
       this.options.actorHandoff.cancel(actor.context.actorId);
       return { terminal: Promise.resolve() };
     }
     return this.options.actorHandoff.admitDeferredPrefix(
       actor.context.actorId,
-      queue,
+      (records) => manager.admitSourceActorPacketPrefix(actor.context.actorId, records),
       this.options.prepareApplicationJob,
       replayStart
     );
@@ -477,19 +474,6 @@ export class ZLinkActorTransferRuntime {
         // Diagnostics cannot interrupt the relocation terminal lifecycle.
       }
     }
-  }
-
-  private sourceHandoffPrefixQueue(
-    actor: ZLinkActor,
-    state: ZLinkActorRuntimeState
-  ): ZLinkActorHandoffPrefixQueue | undefined {
-    const sourceSpotId = state.spotId;
-    const manager = this.options.spotManager();
-    if (sourceSpotId === undefined || manager === undefined) {
-      return undefined;
-    }
-    return (drain) =>
-      manager.admitRoutedActorPacketPrefix(sourceSpotId, actor.context.actorId, drain);
   }
 
   async prepareMaintenanceSession(
@@ -612,7 +596,7 @@ export class ZLinkActorTransferRuntime {
               await this.cancelSourceActorMove(actor, state, replayGate.start);
             } else {
               try {
-                const admitted = this.admitCanceledSourcePrefix(actor, state, replayGate.start);
+                const admitted = this.admitCanceledSourcePrefix(actor, replayGate.start);
                 void this.observeHandoffReplay(admitted.terminal);
               } finally {
                 state.endMove();
@@ -637,7 +621,7 @@ export class ZLinkActorTransferRuntime {
           } catch {}
         } else {
           try {
-            const admitted = this.admitCanceledSourcePrefix(actor, state, replayGate.start);
+            const admitted = this.admitCanceledSourcePrefix(actor, replayGate.start);
             void this.observeHandoffReplay(admitted.terminal);
             sourceRestored = true;
           } catch {
