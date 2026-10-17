@@ -104,9 +104,15 @@ final class HttpClientContractTest {
                     }
 
                     @Override
-                    public <T> CompletionStage<T> yield(CompletionStage<T> operation) {
+                    public <T> CompletionStage<T> yield(
+                            java.util.function.Supplier<CompletionStage<T>> operation) {
                         yieldCalls.incrementAndGet();
-                        return operation;
+                        return operation.get();
+                    }
+
+                    @Override
+                    public java.util.concurrent.Executor callbackScheduler() {
+                        return Runnable::run;
                     }
                 };
         TestSupport.Server server =

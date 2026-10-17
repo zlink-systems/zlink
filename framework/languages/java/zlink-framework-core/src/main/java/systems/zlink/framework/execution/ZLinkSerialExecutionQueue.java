@@ -2273,6 +2273,44 @@ public final class ZLinkSerialExecutionQueue {
         return ready;
     }
 
+    /** Captures the owner queue for callbacks that run in independent application turns. */
+    public static Executor captureCurrentCallbackExecutor() {
+        SerialTurn turn = currentTurn();
+        if (turn == null) {
+            return Runnable::run;
+        }
+        ZLinkSerialExecutionQueue queue = turn.queue;
+        var application =
+                systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationContext
+                        .currentApplicationExecution();
+        String actorDispatch =
+                systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationContext
+                        .currentActorDispatch();
+        ZLinkFlowContext.State flow = ZLinkFlowContext.current();
+        return command -> {
+            Objects.requireNonNull(command, "command");
+            if (!queue.tryEnqueue(
+                    () -> {
+                        try (var execution =
+                                        systems.zlink.framework.runtime.internal.handlers
+                                                .ZLinkSuspendInvocationContext
+                                                .enterApplicationExecution(application);
+                                var actor =
+                                        systems.zlink.framework.runtime.internal.handlers
+                                                .ZLinkSuspendInvocationContext.enterActorDispatch(
+                                                actorDispatch);
+                                ZLinkFlowContext.Scope ignored =
+                                        flow == null ? () -> {} : ZLinkFlowContext.enter(flow)) {
+                            command.run();
+                        }
+                        return CompletableFuture.completedFuture(null);
+                    })) {
+                throw new java.util.concurrent.RejectedExecutionException(
+                        "Callback completion could not enter the framework execution queue");
+            }
+        };
+    }
+
     public static Executor propagateCurrent(Executor executor) {
         Objects.requireNonNull(executor, "executor");
         return command -> {
