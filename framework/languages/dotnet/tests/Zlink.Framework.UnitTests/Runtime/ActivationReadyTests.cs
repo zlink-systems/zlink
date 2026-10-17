@@ -11,6 +11,296 @@ public sealed class ActivationReadyTests
 {
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(10);
 
+    [Fact]
+    public async Task Preparation_wait_observes_request_cancellation_before_callback_finishes()
+    {
+        using var errors = new ZLinkRuntimeErrorSink();
+        await using var executor = new ZLinkSpotSerialExecutor(
+            null!,
+            () => false,
+            CancellationToken.None,
+            errors
+        );
+        using var cancellation = new CancellationTokenSource();
+        var entered = Signal();
+        var release = Signal();
+        var preparation = executor
+            .PrepareActivationAsync(
+                async _ =>
+                {
+                    entered.TrySetResult();
+                    await release.Task;
+                },
+                cancellation.Token
+            )
+            .AsTask();
+        try
+        {
+            await entered.Task.WaitAsync(Timeout);
+            cancellation.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                preparation.WaitAsync(Timeout)
+            );
+            Assert.False(release.Task.IsCompleted);
+        }
+        finally
+        {
+            release.TrySetResult();
+            await executor.FinishActivationPreparation().WaitAsync(Timeout);
+        }
+        Assert.False(executor.IsPreparing);
+    }
+
+    [Theory]
+    [InlineData(ZLinkUserSpotExecutionMode.SpotWide, false, false)]
+    [InlineData(ZLinkUserSpotExecutionMode.PerActor, false, false)]
+    [InlineData(ZLinkUserSpotExecutionMode.SpotWide, false, true)]
+    [InlineData(ZLinkUserSpotExecutionMode.PerActor, false, true)]
+    [InlineData(ZLinkUserSpotExecutionMode.SpotWide, true, true)]
+    public async Task Creation_cancellation_reaches_initialization_and_releases_preparation(
+        ZLinkUserSpotExecutionMode mode,
+        bool instance,
+        bool initialize
+    )
+    {
+        var probe = new CancellationProbe(initialize);
+        var services = new ServiceCollection().AddSingleton(probe);
+        services.AddZLinkFramework(options =>
+        {
+            options.DisableImplicitHandlerAutoRegistration();
+            options.AddLocationStore(new ZLinkInMemoryProviderLocationStore());
+            options.AddRelocationStore(new InMemoryRelocationStore());
+            var server = options
+                .AddRouteMesh("cancel-ready")
+                .Listen("tcp://127.0.0.1:0")
+                .Objects()
+                .Server();
+            server.AddSpotFactory<CancellationSpot>(
+                "cancel-user",
+                f => f.ExecutionMode(mode).RecreateOnRelocation()
+            );
+            server.AddInstanceSpotFactory<CancellationInstance>(
+                "cancel-instance",
+                f => f.DisableRelocation()
+            );
+        });
+        await using var provider = services.BuildServiceProvider();
+        var runtime = provider.GetRequiredService<ZLinkFrameworkRuntime>();
+        var locations = provider.GetRequiredService<ZLinkLocationRuntime>();
+        await locations.StartAsync(runtime.PrepareLocationNodeRoutingId(), CancellationToken.None);
+        await runtime.StartAsync(CancellationToken.None);
+        await using var scheduler = new ZLinkTimerScheduler();
+        var node = runtime.GetSpotNodeRuntime("cancel-ready");
+        var admission = new ZLinkActivationConcurrencyAdmission(1);
+        await using var catalog = new ZLinkSpotNodeCatalog(
+            provider,
+            runtime,
+            runtime.Registration,
+            node.Registration,
+            node.Node,
+            "cancel-ready",
+            null,
+            scheduler,
+            admission
+        );
+        using var cancellation = new CancellationTokenSource();
+        async Task Create()
+        {
+            if (instance)
+            {
+                var prepared = await catalog.PrepareInstanceReservedAsync(
+                    "cancel-instance",
+                    "cancel-instance",
+                    1,
+                    1,
+                    cancellation.Token
+                );
+                await catalog.DiscardReservedAsync(prepared);
+            }
+            else
+                await catalog.CreateAsync(
+                    typeof(CancellationSpot),
+                    ZLinkMessage.Empty,
+                    cancellation.Token
+                );
+        }
+        var creation = Create();
+        Task? application = null;
+        try
+        {
+            await probe.Entered.Task.WaitAsync(Timeout);
+            Assert.Equal(1, admission.Active);
+            var serial = probe.Activation!._serial;
+            await Assert.IsType<ZLinkTimer>(probe.Timer).NotifyDueAsync(1);
+            application = serial
+                .ExecuteAsync(
+                    (_, _) =>
+                    {
+                        Interlocked.Increment(ref probe.Messages);
+                        return ValueTask.CompletedTask;
+                    },
+                    CancellationToken.None
+                )
+                .AsTask();
+            await serial.RunIngressAsync(() => { });
+            Assert.Equal(0, probe.Messages);
+            Assert.Equal(0, probe.Ticks);
+            Assert.False(probe.Close!.IsCompleted);
+            cancellation.Cancel();
+            Assert.True(probe.CallbackToken.IsCancellationRequested);
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                creation.WaitAsync(Timeout)
+            );
+            Assert.False(serial.IsPreparing);
+            Assert.Equal(0, admission.Active);
+            Assert.False(await probe.Close.WaitAsync(Timeout));
+            Assert.True(probe.Timer!.IsDisposed);
+            try
+            {
+                await application.WaitAsync(Timeout);
+            }
+            catch (OperationCanceledException) { }
+            Assert.Equal(0, probe.Messages);
+            Assert.Equal(0, probe.Ticks);
+            Assert.Equal(0, probe.Closing);
+            Assert.Equal(0, probe.Initialized);
+            Assert.Null(await catalog.GetAsync(probe.Activation.SpotId, CancellationToken.None));
+        }
+        finally
+        {
+            probe.Release.TrySetResult();
+            try
+            {
+                await creation.WaitAsync(Timeout);
+            }
+            catch (OperationCanceledException) { }
+            await catalog.DisposeAsync();
+            await runtime.StopAsync(CancellationToken.None);
+            await locations.RemoveOwnedRowsBeforeRoutingIdReleaseAsync(CancellationToken.None);
+            await locations.StopAsync(CancellationToken.None);
+        }
+    }
+
+    private sealed class CancellationProbe(bool initialize)
+    {
+        internal bool HoldInitialization => initialize;
+        internal ZLinkSpotActivation? Activation;
+        internal CancellationToken CallbackToken;
+        internal IZLinkTimer? Timer;
+        internal Task<bool>? Close;
+        internal int Messages;
+        internal int Ticks;
+        internal int Closing;
+        internal int Initialized;
+        internal TaskCompletionSource Entered { get; } = Signal();
+        internal TaskCompletionSource Release { get; } = Signal();
+
+        internal async ValueTask HoldAsync(
+            IZLinkSpotCommonContext context,
+            Func<ValueTask<bool>> close,
+            CancellationToken ct
+        )
+        {
+            Activation = (ZLinkSpotActivation)context;
+            CallbackToken = ct;
+            Timer =
+                context is IZLinkInstanceSpotContext
+                    ? await context.AddTimer<CancellationInstanceTick>(
+                        "cancel-ready",
+                        TimeSpan.FromHours(1),
+                        cancellationToken: ct
+                    )
+                    : await context.AddTimer<CancellationTick>(
+                        "cancel-ready",
+                        TimeSpan.FromHours(1),
+                        cancellationToken: ct
+                    );
+            Close = close().AsTask();
+            Entered.TrySetResult();
+            await Release.Task.WaitAsync(ct);
+        }
+    }
+
+    private sealed class CancellationSpot(IZLinkSpotContext context, CancellationProbe probe)
+        : IZLinkSpot
+    {
+        public IZLinkSpotContext Context { get; } = context;
+
+        public void Configure() { }
+
+        internal CancellationProbe Probe => probe;
+
+        public async ValueTask<ZLinkSpotCreateResponse> OnCreateAsync(
+            ZLinkMessage request,
+            CancellationToken ct
+        )
+        {
+            if (!probe.HoldInitialization)
+                await probe.HoldAsync(Context, () => Context.CloseAsync(), ct);
+            return ZLinkSpotCreateResponse.Accept();
+        }
+
+        public async ValueTask OnInitializeAsync(CancellationToken ct)
+        {
+            if (probe.HoldInitialization)
+                await probe.HoldAsync(Context, () => Context.CloseAsync(), ct);
+            probe.Initialized++;
+        }
+
+        public ValueTask OnClosingAsync(ZLinkSpotClosingContext context, CancellationToken ct)
+        {
+            probe.Closing++;
+            return ValueTask.CompletedTask;
+        }
+    }
+
+    private sealed class CancellationInstance(
+        IZLinkInstanceSpotContext context,
+        CancellationProbe probe
+    ) : IZLinkInstanceSpot
+    {
+        public IZLinkInstanceSpotContext Context { get; } = context;
+        internal CancellationProbe Probe => probe;
+
+        public async ValueTask OnInitializeAsync(CancellationToken ct)
+        {
+            await probe.HoldAsync(Context, () => Context.CloseAsync(), ct);
+            probe.Initialized++;
+        }
+
+        public ValueTask OnClosingAsync(ZLinkSpotClosingContext context, CancellationToken ct)
+        {
+            probe.Closing++;
+            return ValueTask.CompletedTask;
+        }
+    }
+
+    private sealed class CancellationTick : IZLinkSpotTimerHandler<CancellationSpot>
+    {
+        public ValueTask HandleAsync(
+            CancellationSpot spot,
+            ZLinkTimerTick tick,
+            CancellationToken ct
+        )
+        {
+            Interlocked.Increment(ref spot.Probe.Ticks);
+            return ValueTask.CompletedTask;
+        }
+    }
+
+    private sealed class CancellationInstanceTick : IZLinkSpotTimerHandler<CancellationInstance>
+    {
+        public ValueTask HandleAsync(
+            CancellationInstance spot,
+            ZLinkTimerTick tick,
+            CancellationToken ct
+        )
+        {
+            Interlocked.Increment(ref spot.Probe.Ticks);
+            return ValueTask.CompletedTask;
+        }
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -25,7 +315,7 @@ public sealed class ActivationReadyTests
             CancellationToken.None,
             errors
         );
-        await executor.PrepareActivationAsync(_ => ValueTask.CompletedTask);
+        await executor.PrepareActivationAsync(_ => ValueTask.CompletedTask, CancellationToken.None);
         var terminalEntered = Signal();
         var releaseTerminal = Signal();
         Task RecordTerminal() =>
@@ -80,7 +370,7 @@ public sealed class ActivationReadyTests
             CancellationToken.None,
             errors
         );
-        await executor.PrepareActivationAsync(_ => ValueTask.CompletedTask);
+        await executor.PrepareActivationAsync(_ => ValueTask.CompletedTask, CancellationToken.None);
         await executor.FinishActivationPreparation(waitForFirstTerminal: true);
         var close = executor.PostLifecycleOperation((_, _) => ValueTask.FromResult(true))!;
         Assert.False(close.IsCompleted);
@@ -225,7 +515,7 @@ public sealed class ActivationReadyTests
             errors,
             executionMode: mode
         );
-        await executor.PrepareActivationAsync(_ => ValueTask.CompletedTask);
+        await executor.PrepareActivationAsync(_ => ValueTask.CompletedTask, CancellationToken.None);
         var time = new ReadyTime();
         await using var scheduler = new ZLinkTimerScheduler(time);
         var period = TimeSpan.FromMilliseconds(100);
