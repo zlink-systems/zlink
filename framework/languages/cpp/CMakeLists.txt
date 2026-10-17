@@ -1830,7 +1830,8 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   add_zlink_framework_test(
     test_cpp_framework_yield_admission
     tests/Zlink.Framework.UnitTests/test_cpp_framework_yield_admission.cpp
-    "framework-unit;framework-contract;framework-regression;execution;yield")
+    "framework-unit;framework-contract;framework-regression;execution;yield"
+    unit)
   add_zlink_framework_test(
     test_cpp_framework_executor_owner
     tests/Zlink.Framework.UnitTests/test_cpp_framework_executor_owner.cpp
