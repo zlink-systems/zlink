@@ -1367,11 +1367,12 @@ task_t<runtime::stateful::relocation_result_t> mesh_node_runtime_t::relocate_app
       },
       .send_application =
         [this, target] (const runtime::stateful::object_ref_t &owner,
-                        const runtime::stateful::turn_record_t &record) {
+                        const runtime::stateful::turn_record_t &record,
+                        std::optional<std::uint64_t> target_authority_generation) {
             _node->forward_relocation_application (
               owner, record, target.rid.to_bytes (), target.lifecycle_generation,
-              static_cast<std::uint64_t> (target.lease_generation),
-              _state->default_request_timeout);
+              static_cast<std::uint64_t> (target.lease_generation), _state->default_request_timeout,
+              target_authority_generation);
         },
       .send_cutover =
         [this, target] (const runtime::protocol::relocation_cutover_t &cutover) -> task_t<bool> {
@@ -1613,11 +1614,12 @@ mesh_node_runtime_t::relocate_application_unit (
       },
       .send_application =
         [this, target] (const runtime::stateful::object_ref_t &owner,
-                        const runtime::stateful::turn_record_t &record) {
+                        const runtime::stateful::turn_record_t &record,
+                        std::optional<std::uint64_t> target_authority_generation) {
             _node->forward_relocation_application (
               owner, record, target.rid.to_bytes (), target.lifecycle_generation,
-              static_cast<std::uint64_t> (target.lease_generation),
-              _state->default_request_timeout);
+              static_cast<std::uint64_t> (target.lease_generation), _state->default_request_timeout,
+              target_authority_generation);
         },
       .send_cutover =
         [this, target] (const runtime::protocol::relocation_cutover_t &cutover) -> task_t<bool> {
@@ -2415,7 +2417,7 @@ struct mesh_node_runtime_t::remote_actor_join_state_t
     std::uint64_t target_completion_operation_id_high = 0;
     std::uint64_t target_completion_operation_id_low = 0;
     std::uint64_t actor_authority_owner_generation = 0;
-    std::uint64_t committed_actor_authority_owner_generation = 0;
+    std::optional<std::uint64_t> committed_actor_authority_owner_generation;
     std::vector<std::uint8_t> admission_payload;
     std::string admission_reply_content_type;
     std::string completion_root_reference;
@@ -3253,11 +3255,12 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::prepare_remote_application_actor
       },
       .send_application =
         [this, target = s->target] (const runtime::stateful::object_ref_t &owner,
-                                    const runtime::stateful::turn_record_t &record) {
+                                    const runtime::stateful::turn_record_t &record,
+                                    std::optional<std::uint64_t> target_authority_generation) {
             _node->forward_relocation_application (
               owner, record, target.node_rid.to_bytes (), target.node_generation,
               static_cast<std::uint64_t> (target.owner.lease_generation),
-              _state->default_request_timeout);
+              _state->default_request_timeout, target_authority_generation);
         },
       .send_cutover = [this,
                        s] (const runtime::protocol::relocation_cutover_t &cutover) -> task_t<bool> {
@@ -3285,45 +3288,42 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::prepare_remote_application_actor
         const auto data_lost =
           relocated.terminal == runtime::stateful::relocation_terminal_t::data_lost
           || relocated.reason == runtime::stateful::relocation_reason_t::checksum_mismatch;
-        spot.fail_remote_actor_transfer (s->actor, false);
+        const auto authority_lost =
+          data_lost
+          || relocated.reason == runtime::stateful::relocation_reason_t::owner_lease_expired;
+        if (authority_lost) {
+            const runtime::protocol::actor_route_fence_t source_fence{
+              std::string (s->actor.actor_id ().value ()),
+              s->actor.object_generation (),
+              s->source_node_rid,
+              s->source_node_generation,
+              s->actor_authority_owner_generation,
+              s->source_owner_lease_generation};
+            co_await spot.fast_fail_reconcile_backlog (
+              s->actor,
+              std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (s->actor))
+                + ":" + std::string (s->actor.actor_id ().value ()),
+              source_fence);
+        } else
+            spot.fail_remote_actor_transfer (s->actor, false);
         (void) co_await abort_remote_actor_join_seal (s);
         co_return co_await fail_remote_actor_join (
           *s,
           result_t<actor_join_reply_t>::failure (
-            data_lost ? framework_error_kind_t::data_lost
-                      : framework_error_kind_t::internal_failure,
+            data_lost        ? framework_error_kind_t::data_lost
+            : authority_lost ? framework_error_kind_t::unavailable
+                             : framework_error_kind_t::internal_failure,
             "canonical Actor Join relocation did not complete (terminal="
               + std::to_string (static_cast<int> (relocated.terminal))
               + ", reason=" + std::to_string (static_cast<int> (relocated.reason)) + ")"),
           "canonical Actor Join relocation did not complete");
     }
-    std::optional<std::string> committed_authority_error;
-    try {
-        const auto read = co_await _user_spot_store->read_authority (
-          runtime::actor_authority_key (s->actor.actor_id ().value ()));
-        const auto *committed = std::get_if<authority_snapshot_t> (&read);
-        if (committed && committed->object_generation == s->source_actor.object_generation
-            && committed->authority_owner_generation > s->actor_authority_owner_generation)
-            s->committed_actor_authority_owner_generation = committed->authority_owner_generation;
-        if (s->committed_actor_authority_owner_generation == 0) {
-            spot.fail_remote_actor_transfer (s->actor, true);
-            co_return co_await fail_remote_actor_join (
-              *s,
-              result_t<actor_join_reply_t>::failure (
-                framework_error_kind_t::unavailable,
-                "committed target Actor authority is unavailable"),
-              "committed target Actor authority is unavailable");
-        }
-    }
-    catch (const std::exception &error) {
-        committed_authority_error = error.what ();
-    }
-    if (committed_authority_error)
-        co_return co_await fail_remote_actor_join (
-          *s,
-          result_t<actor_join_reply_t>::failure (framework_error_kind_t::unavailable,
-                                                 *committed_authority_error),
-          "committed target Actor authority read failed");
+    const auto followed = relocated.settlement.follow_generations.find (
+      std::pair{s->source_actor.kind, s->source_actor.key});
+    s->committed_actor_authority_owner_generation =
+      followed == relocated.settlement.follow_generations.end ()
+        ? std::nullopt
+        : std::optional<std::uint64_t>{followed->second};
     co_return co_await finalize_remote_application_actor_join (std::move (s));
 }
 
@@ -3345,12 +3345,8 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::finalize_remote_application_acto
                                              s->source_node_generation,
                                              s->actor_authority_owner_generation,
                                              s->source_owner_lease_generation};
-    const auto target = runtime::protocol::actor_route_fence_t{
-      std::string (s->actor.actor_id ().value ()),
-      s->actor.object_generation (),
-      s->target.node_rid.to_bytes (),
-      s->target.node_generation,
-      s->committed_actor_authority_owner_generation,
+    const auto target = runtime::protocol::relocation_target_fence_t{
+      s->target.node_rid.to_bytes (), s->target.node_generation, s->target.owner.owner_id,
       static_cast<std::uint64_t> (s->target.owner.lease_generation)};
     std::optional<result_t<actor_join_reply_t>> publication_failure;
     try {
@@ -3359,7 +3355,7 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::finalize_remote_application_acto
           {node_rid_t::from_string (s->target.node_rid.to_string ()),
            spot_id_t (s->target.spot_id),
            {}},
-          source, target, s->transfer_id);
+          source, target, s->committed_actor_authority_owner_generation, s->transfer_id);
     }
     catch (const framework_exception_t &error) {
         publication_failure.emplace (detail::result_access_t::failure<actor_join_reply_t> (error));

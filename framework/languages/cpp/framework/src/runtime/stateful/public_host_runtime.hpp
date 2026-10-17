@@ -712,7 +712,8 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
                                          const std::vector<std::uint8_t> &target_routing_id,
                                          std::uint64_t target_generation,
                                          std::uint64_t target_lease_generation,
-                                         std::chrono::milliseconds window);
+                                         std::chrono::milliseconds window,
+                                         std::optional<std::uint64_t> target_authority_generation);
     void configure_session_relocation_store (
       std::shared_ptr<stateful::relocation_store_port_t> relocations);
     void configure_message_follow_handler (
