@@ -1,14 +1,23 @@
 import { ZLinkUserSpotExecutionMode } from '../../contracts';
 import { ZLinkActorSerialExecutor } from '../actors';
+import type {
+  ZLinkActorHandoffDispatch,
+  ZLinkActorHandoffPrefixAdmission,
+  ZLinkActorHandoffPrefixRecord
+} from '../actors/actor-handoff';
 import type { ZLinkExecutionBarrier, ZLinkExecutionBarrierSeal } from '../execution';
 import type {
   ZLinkSerialSchedulerOptions,
-  ZLinkSerialWorkPreparation,
   ZLinkSerialWorkOptions
 } from '../execution/serial-execution-queue';
 import { ZLinkSpotSerialTurnExecutor } from './spot-serial-turn-executor';
 
 export type ZLinkSpotPreparationCompletion = 'publication' | 'first-terminal';
+
+export type ZLinkActorPacketTurnDispatch = (
+  serial: ZLinkSpotSerialTurnExecutor,
+  ...args: Parameters<ZLinkActorHandoffDispatch>
+) => ReturnType<ZLinkActorHandoffDispatch>;
 
 /**
  * Owns every application serial unit that belongs to one Spot activation.
@@ -101,35 +110,43 @@ export class ZLinkSpotSerialExecutor {
     return this.actorExecutor(actorId).execute(() => operation(serial), workOptions);
   }
 
-  /** @internal Restores a durable Actor FIFO prefix without starting it. */
-  admitActorDurablePrefix(
-    actorId: string,
-    records: readonly {
-      readonly operation: (
-        executeChild: <TChild>(
-          child: (serial: ZLinkSpotSerialTurnExecutor) => Promise<TChild> | TChild
-        ) => Promise<TChild>
-      ) => Promise<void>;
-      readonly preparation?: ZLinkSerialWorkPreparation;
-      readonly workOptions?: ZLinkSerialWorkOptions;
-    }[]
-  ): readonly Promise<void>[] {
-    const serial = this.actorSerial(actorId);
-    return this.actorExecutor(actorId).admitDurablePrefix(
-      records.map((record) => ({
-        operation: (executeChild) => record.operation((child) => executeChild(() => child(serial))),
-        preparation: record.preparation,
-        workOptions: record.workOptions
-      }))
-    );
-  }
-
   executeTimer<T>(
     timerName: string,
     operation: () => Promise<T> | T,
     workOptions?: ZLinkSerialWorkOptions
   ): Promise<T> {
     return this.timerSerial(timerName).execute(operation, workOptions);
+  }
+
+  /** Admits held packets through the same Actor FIFO as ordinary ingress. */
+  admitActorPacketPrefix(
+    actorId: string,
+    records: readonly ZLinkActorHandoffPrefixRecord[],
+    dispatch: ZLinkActorPacketTurnDispatch
+  ): ZLinkActorHandoffPrefixAdmission {
+    const serial = this.actorSerial(actorId);
+    const terminals = this.actorExecutor(actorId).admitDurablePrefix(
+      records.map((record) => ({
+        operation: (executeChild) =>
+          record.drain((parts, returnResponse, remoteBoundSessionTarget, fallbackActorRef) =>
+            executeChild(() =>
+              dispatch(serial, parts, returnResponse, remoteBoundSessionTarget, fallbackActorRef)
+            )
+          ),
+        preparation: record.preparation,
+        workOptions: { payloadBytes: record.payloadBytes }
+      }))
+    );
+    const terminal = Promise.allSettled(terminals).then((outcomes) => {
+      const errors = outcomes.flatMap((outcome) =>
+        outcome.status === 'rejected' ? [outcome.reason] : []
+      );
+      if (errors.length === 1) throw errors[0];
+      if (errors.length > 1) {
+        throw new AggregateError(errors, `Actor '${actorId}' durable prefix replay failed.`);
+      }
+    });
+    return { terminal };
   }
 
   isTimerExecuting(timerName: string): boolean {

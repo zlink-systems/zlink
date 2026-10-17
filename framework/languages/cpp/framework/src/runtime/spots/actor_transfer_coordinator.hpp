@@ -247,9 +247,6 @@ class actor_transfer_coordinator_t
     std::optional<std::string> transfer_id (const std::string &actor_key) const;
     bool matches_source_remote_transfer (const std::string &actor_key,
                                          const std::string &transfer_id) const;
-    bool try_submit_source_leave (const std::string &actor_key, const std::string &transfer_id);
-    bool source_leave_submitted (const std::string &actor_key,
-                                 const std::string &transfer_id) const;
 
     // In-flight handoff (spot-actor spec §10). Packets are preserved in arrival
     // order until the commit path drains them into the commit request.
@@ -394,7 +391,6 @@ class actor_transfer_coordinator_t
         std::string transfer_id;
         std::optional<std::chrono::steady_clock::time_point> transfer_started_at;
         std::shared_ptr<task_completion_source_t<void>> source_completion;
-        bool source_leave_submitted = false;
         // reconcile is entered for a genuinely ambiguous outcome (e.g. the
         // FINALIZE/cutover submission itself failed, so the source cannot
         // tell whether the target ever received it) where nothing today
