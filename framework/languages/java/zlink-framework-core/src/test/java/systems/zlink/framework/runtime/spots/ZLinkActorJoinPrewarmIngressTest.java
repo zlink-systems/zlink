@@ -252,7 +252,8 @@ final class ZLinkActorJoinPrewarmIngressTest {
                             null,
                             authorityStore,
                             actorStaging,
-                            targetJoin);
+                            targetJoin,
+                            ignored -> CompletableFuture.completedFuture(null));
 
             var participants =
                     List.of(

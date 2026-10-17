@@ -10,10 +10,11 @@ import systems.zlink.framework.errors.ZLinkFrameworkException;
 public final class ZLinkLocationStoreFailureException extends ZLinkFrameworkException
         implements ZLinkLocationStoreFailure {
     ZLinkLocationStoreFailureException(Throwable cause) {
-        this("Location Store provider is unavailable.", cause);
+        this(ZLinkFrameworkErrorKind.UNAVAILABLE, "Location Store provider is unavailable.", cause);
     }
 
-    ZLinkLocationStoreFailureException(String message, Throwable cause) {
-        super(ZLinkFrameworkErrorKind.UNAVAILABLE, message, cause);
+    ZLinkLocationStoreFailureException(
+            ZLinkFrameworkErrorKind kind, String message, Throwable cause) {
+        super(kind, message, cause);
     }
 }

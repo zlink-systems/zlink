@@ -34,7 +34,6 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
@@ -62,6 +61,8 @@ final class ZLinkUserSpotRetireTargetEndpoint
     private final ZLinkSessionRelocationPeerClient sessionRoutes;
     private final Duration routeTimeout;
     private final SteadyNormalizer normalizer;
+    private final Function<ZLinkSpotRetireControl.StageRequest, CompletionStage<Void>>
+            boundSessionRestorer;
     private final ZLinkSpotRuntime sourceReplies;
     private final ZLinkSpotRetireControl.Client relocationClient;
     private final ZLinkLocationRepository locations;
@@ -99,7 +100,8 @@ final class ZLinkUserSpotRetireTargetEndpoint
                 null,
                 null,
                 null,
-                null);
+                null,
+                ignored -> CompletableFuture.completedFuture(null));
     }
 
     ZLinkUserSpotRetireTargetEndpoint(
@@ -130,7 +132,8 @@ final class ZLinkUserSpotRetireTargetEndpoint
                 relocationClient,
                 locations,
                 actorStaging,
-                null);
+                null,
+                ignored -> CompletableFuture.completedFuture(null));
     }
 
     ZLinkUserSpotRetireTargetEndpoint(
@@ -147,7 +150,9 @@ final class ZLinkUserSpotRetireTargetEndpoint
             ZLinkSpotRetireControl.Client relocationClient,
             ZLinkLocationRepository locations,
             ZLinkStandaloneActorRelocationStagingOwner actorStaging,
-            ZLinkActorJoinCanonicalAdapter actorJoin) {
+            ZLinkActorJoinCanonicalAdapter actorJoin,
+            Function<ZLinkSpotRetireControl.StageRequest, CompletionStage<Void>>
+                    boundSessionRestorer) {
         this.localNodeRid = Objects.requireNonNull(localNodeRid, "localNodeRid");
         // localNodeGeneration is a node lifecycle-generation opaque equality
         // token (.NET ulong, spec 01-glossary "Lifecycle generation"): full
@@ -165,6 +170,8 @@ final class ZLinkUserSpotRetireTargetEndpoint
         this.sessionRoutes = sessionRoutes;
         this.routeTimeout = Objects.requireNonNull(routeTimeout, "routeTimeout");
         this.normalizer = Objects.requireNonNull(normalizer, "normalizer");
+        this.boundSessionRestorer =
+                Objects.requireNonNull(boundSessionRestorer, "boundSessionRestorer");
         this.sourceReplies = sourceReplies;
         this.relocationClient = relocationClient;
         this.locations = locations;
@@ -284,8 +291,11 @@ final class ZLinkUserSpotRetireTargetEndpoint
                                                 return staging.publishHidden(
                                                                 backlog, actorOwnerGenerations)
                                                         .thenCompose(
+                                                                ignored ->
+                                                                        boundSessionRestorer.apply(
+                                                                                request))
+                                                        .thenCompose(
                                                                 ignored -> {
-                                                                    target.published().set(true);
                                                                     staging.openAdmission(
                                                                             target.staged());
                                                                     return staging
@@ -917,7 +927,6 @@ final class ZLinkUserSpotRetireTargetEndpoint
                             actorStaging.publishHidden(
                                     backlog,
                                     requireGeneration(generations, participant.authorityKey()));
-                            target.published().set(true);
                             actorStaging.openAdmission(target.staged());
                             return actorStaging.drainDurableBacklog(backlog);
                         })
@@ -962,7 +971,6 @@ final class ZLinkUserSpotRetireTargetEndpoint
                                                     targetOwnerGeneration))
                                     .thenCompose(
                                             prepared -> {
-                                                target.published().set(true);
                                                 return ZLinkSerialExecutionQueue.yieldCurrent(
                                                         actorJoin.notifyTargetJoined(
                                                                 target.directAdmission(),
@@ -1190,8 +1198,7 @@ final class ZLinkUserSpotRetireTargetEndpoint
         return staging.stage(decoded, NOT_CANCELLED)
                 .thenCompose(
                         value -> {
-                            TargetStage target =
-                                    new TargetStage(request, value, new AtomicBoolean());
+                            TargetStage target = new TargetStage(request, value);
                             if (stages.putIfAbsent(request.fence(), target) == null) {
                                 return CompletableFuture.<Void>completedFuture(null);
                             }
@@ -1220,7 +1227,6 @@ final class ZLinkUserSpotRetireTargetEndpoint
                                             request,
                                             targetRequest,
                                             staged,
-                                            new AtomicBoolean(),
                                             directAdmission,
                                             previousMembership,
                                             new CompletableFuture<>(),
@@ -1349,18 +1355,12 @@ final class ZLinkUserSpotRetireTargetEndpoint
 
     private record TargetStage(
             ZLinkSpotRetireControl.StageRequest request,
-            ZLinkUserSpotAggregateStagingOwner.Staged staged,
-            AtomicBoolean published) {
-        private TargetStage {
-            Objects.requireNonNull(published, "published");
-        }
-    }
+            ZLinkUserSpotAggregateStagingOwner.Staged staged) {}
 
     private record ActorTargetStage(
             ZLinkSpotRetireControl.StageRequest request,
             ZLinkStandaloneActorRelocationStagingOwner.Request targetRequest,
             ZLinkStandaloneActorRelocationStagingOwner.Staged staged,
-            AtomicBoolean published,
             ZLinkActorJoinRelocationPort.Admission directAdmission,
             ZLinkActorJoinCanonicalAdapter.PreviousMembership previousMembership,
             CompletableFuture<Void> publishRequested,

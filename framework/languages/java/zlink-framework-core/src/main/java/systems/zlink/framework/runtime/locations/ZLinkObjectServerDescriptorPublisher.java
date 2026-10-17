@@ -81,6 +81,7 @@ public final class ZLinkObjectServerDescriptorPublisher {
                                     result -> {
                                         if (result.status() != ZLinkLocationWriteStatus.STORED) {
                                             throw new ZLinkLocationStoreFailureException(
+                                                    ZLinkFrameworkErrorKind.NOT_CONFIGURED,
                                                     "MeshNode descriptor publication failed"
                                                             + " [mesh="
                                                             + descriptor.meshName()

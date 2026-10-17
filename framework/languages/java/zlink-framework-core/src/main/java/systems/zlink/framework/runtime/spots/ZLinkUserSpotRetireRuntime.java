@@ -174,31 +174,25 @@ public final class ZLinkUserSpotRetireRuntime {
                             peerClient,
                             CONTROL_TIMEOUT,
                             request ->
-                                    coordinator
-                                            .normalizePublishedAggregate(
-                                                    request.participants().stream()
-                                                            .map(
-                                                                    value ->
-                                                                            new ZLinkAggregateRelocationCoordinator
-                                                                                    .ExpectedParticipant(
-                                                                                    value
-                                                                                            .authorityKey(),
-                                                                                    value
-                                                                                            .objectGeneration(),
-                                                                                    value
-                                                                                            .sourceAuthorityOwnerGeneration()))
-                                                            .toList(),
-                                                    new ZLinkAggregateFence(
-                                                            request.fence().aggregateId(),
-                                                            request.fence().aggregateGeneration()),
-                                                    new ZLinkLocationOwnerToken(
-                                                            request.targetOwnerId(),
-                                                            request.targetOwnerLeaseGeneration()),
-                                                    () -> false)
-                                            .thenCompose(
-                                                    ignored ->
-                                                            restoreBoundSessions(
-                                                                    actors, node, request)),
+                                    coordinator.normalizePublishedAggregate(
+                                            request.participants().stream()
+                                                    .map(
+                                                            value ->
+                                                                    new ZLinkAggregateRelocationCoordinator
+                                                                            .ExpectedParticipant(
+                                                                            value.authorityKey(),
+                                                                            value
+                                                                                    .objectGeneration(),
+                                                                            value
+                                                                                    .sourceAuthorityOwnerGeneration()))
+                                                    .toList(),
+                                            new ZLinkAggregateFence(
+                                                    request.fence().aggregateId(),
+                                                    request.fence().aggregateGeneration()),
+                                            new ZLinkLocationOwnerToken(
+                                                    request.targetOwnerId(),
+                                                    request.targetOwnerLeaseGeneration()),
+                                            () -> false),
                             spots,
                             relocationReplyClient,
                             locations,
@@ -208,7 +202,8 @@ public final class ZLinkUserSpotRetireRuntime {
                                     adapters,
                                     spots,
                                     registration.meshName()),
-                            actorJoin);
+                            actorJoin,
+                            request -> restoreBoundSessions(actors, node, request));
             var relocationClient =
                     new ZLinkCanonicalRelocationStateMachine(
                             node,
