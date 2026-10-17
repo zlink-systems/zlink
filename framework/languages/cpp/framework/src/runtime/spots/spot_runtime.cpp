@@ -5831,6 +5831,8 @@ class actor_dispatch_admission_token_t final
                       }
                       const auto [_, inserted] = _state->pending_handoff_requests.emplace (
                         *_pending_handoff_key, std::move (*_pending_handoff));
+                      _state->management_next_due.store (
+                        spot_node_builder_state_t::management_due_now, std::memory_order_release);
                       if (!inserted) {
                           _pending_handoff.reset ();
                           return result_t<phase_snapshot_t>::failure (
@@ -6848,6 +6850,18 @@ task_t<std::optional<std::chrono::steady_clock::time_point>>
 spot_node_runtime_t::next_management_activity_async () const
 {
     auto next = _state->actor_transfer_coordinator.next_activity ();
+    // Pending leaves and source cleanups keep the bound at due_now; only then
+    // the exact next instant is read on the lane, as each one may be blocked.
+    if (const auto own = _state->management_next_due.load (std::memory_order_acquire);
+        own != spot_node_builder_state_t::management_due_now) {
+        if (own != spot_node_builder_state_t::management_never_due) {
+            const auto deadline =
+              std::chrono::steady_clock::time_point (std::chrono::steady_clock::duration (own));
+            if (!next || deadline < *next)
+                next = deadline;
+        }
+        co_return next;
+    }
     const auto pending = co_await _state->lane.run_task ([state = _state, next] () mutable {
         std::vector<std::pair<std::string, std::chrono::steady_clock::time_point>> cleanups;
         for (const auto &entry : state->pending_handoff_requests) {
@@ -6872,6 +6886,26 @@ spot_node_runtime_t::next_management_activity_async () const
     co_return next;
 }
 
+// Runs on the spot state lane after the management sweep.
+static void publish_management_next_due_on_lane (spot_node_builder_state_t &state)
+{
+    auto next = spot_node_builder_state_t::management_never_due;
+    if (!state.pending_remote_actor_leaves.empty ()
+        || !state.pending_remote_source_cleanups.empty ())
+        next = spot_node_builder_state_t::management_due_now;
+    else
+        for (const auto &entry : state.pending_handoff_requests)
+            next = std::min (next, entry.second.deadline.time_since_epoch ().count ());
+    state.management_next_due.store (next, std::memory_order_release);
+}
+
+static bool spot_management_due (const spot_node_builder_state_t &state,
+                                 std::chrono::steady_clock::time_point now) noexcept
+{
+    return now.time_since_epoch ().count ()
+           >= state.management_next_due.load (std::memory_order_acquire);
+}
+
 std::size_t spot_node_runtime_t::cleanup_expired_actor_admissions ()
 {
     return cleanup_expired_actor_admissions_at (std::chrono::steady_clock::now ());
@@ -6881,8 +6915,17 @@ static task_t<std::optional<std::chrono::steady_clock::time_point>>
 advance_spot_management_async (std::shared_ptr<spot_node_builder_state_t> state,
                                bool include_next_activity)
 {
+    const auto now = std::chrono::steady_clock::now ();
+    // Spec 08 section 4.2: a rotation with nothing due runs no Actor
+    // management. Each owner decides from its own published bound.
+    if (!spot_management_due (*state, now) && !state->actor_transfer_coordinator.due (now)) {
+        if (!include_next_activity)
+            co_return std::nullopt;
+        co_return co_await spot_node_runtime_t (std::move (state))
+          .next_management_activity_async ();
+    }
     spot_node_runtime_t owner (std::move (state));
-    co_await owner.cleanup_expired_actor_admissions_at_async (std::chrono::steady_clock::now ());
+    co_await owner.cleanup_expired_actor_admissions_at_async (now);
     if (!include_next_activity)
         co_return std::nullopt;
     co_return co_await owner.next_management_activity_async ();
@@ -7037,6 +7080,7 @@ task_t<std::size_t> spot_node_runtime_t::cleanup_expired_actor_admissions_at_asy
             found = state->pending_remote_source_cleanups.erase (found);
             ++result.removed;
         }
+        publish_management_next_due_on_lane (*state);
         return result;
     });
     removed += sweep.removed;
@@ -9727,6 +9771,8 @@ result_t<void> spot_node_runtime_t::submit_remote_actor_leave (
                   std::find_if (_state->pending_remote_actor_leaves.begin (),
                                 _state->pending_remote_actor_leaves.end (), matches_pending_owner);
                 if (pending == _state->pending_remote_actor_leaves.end ()) {
+                    _state->management_next_due.store (
+                      spot_node_builder_state_t::management_due_now, std::memory_order_release);
                     _state->pending_remote_actor_leaves.push_back (
                       spot_node_builder_state_t::pending_remote_actor_leave_t{
                         .transfer_id = transfer_id,
@@ -10066,6 +10112,8 @@ task_t<void> spot_node_runtime_t::complete_remote_actor_transfer (
           // Commit acknowledgement fixes the new owner and Message Follow route first.
           // Releasing stale source ownership is post-commit housekeeping: losing the
           // source process now cannot roll back the accepted target generation.
+          _state->management_next_due.store (spot_node_builder_state_t::management_due_now,
+                                             std::memory_order_release);
           _state->pending_remote_source_cleanups.push_back (
             spot_node_builder_state_t::pending_remote_source_cleanup_t{
               .source_actor = source_actor,
@@ -14717,7 +14765,7 @@ bool spot_node_runtime_t::dispatch_mesh_record (
         const auto flow_mode = detail::message_flow_tracer_t (_state->dispatch).mode ();
         auto flow_scope = runtime::flow_context_t::enter (
           header.flow_id, header.flow_origin, flow_mode, flow_origin_t::inbound,
-          flow_mode != message_flow_log_mode_t::off && record.source_session_rid
+          runtime::flow_context_t::tracing (flow_mode) && record.source_session_rid
             ? std::optional<std::string> (record.source_session_rid->to_hex ())
             : std::nullopt);
 
@@ -15278,6 +15326,9 @@ bool spot_node_runtime_t::dispatch_mesh_record (
                           < detail::max_pending_handoff_requests) {
                           const auto [_, inserted] = _state->pending_handoff_requests.emplace (
                             handoff_pending, std::move (pending_request));
+                          _state->management_next_due.store (
+                            spot_node_builder_state_t::management_due_now,
+                            std::memory_order_release);
                           deferred_handoff_request = inserted;
                       }
                   })
@@ -15702,7 +15753,7 @@ spot_node_runtime_t::dispatch_subscription (const spot_context_t &context,
     const runtime::messaging::envelope_codec_t codec;
     /* flow-correlation §4: at Off the publisher's flow pair is neither
      * validated nor materialized from the fan-out envelope. */
-    const bool capture_flow = detail::message_flow_tracer_t (_state->dispatch).capture_enabled ();
+    const bool capture_flow = detail::message_flow_tracer_t (_state->dispatch).flow_tracing ();
     zlink::message_t body = parts.front ();
     std::optional<std::string> flow_id;
     std::optional<flow_origin_t> flow_origin;

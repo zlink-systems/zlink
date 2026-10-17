@@ -850,7 +850,7 @@ stream_write_call_t stream_t::write_packet_with_header (detail::stream_header_t 
     if (!header.flow_id () && header.kind () != stream_message_kind_t::control) {
         if (const auto &flow = runtime::flow_context_t::current ();
             flow && !flow->flow_id.empty ()
-            && flow->diagnostics_mode != message_flow_log_mode_t::off) {
+            && runtime::flow_context_t::tracing (flow->diagnostics_mode)) {
             header.with_flow (flow->flow_id, flow->origin);
         }
     }
@@ -1476,7 +1476,7 @@ stream_runtime_t::decode_header (const std::vector<std::uint8_t> &bytes) const
             return result_t<stream_header_t>::failure (framework_error_kind_t::protocol_error,
                                                        "STREAM header flow fields are incomplete");
         }
-        if (detail::message_flow_tracer_t (_state->dispatch).capture_enabled ()) {
+        if (detail::message_flow_tracer_t (_state->dispatch).flow_tracing ()) {
             flow_id = std::string (
               bytes.begin () + static_cast<std::ptrdiff_t> (offset),
               bytes.begin ()
@@ -1804,13 +1804,13 @@ result_t<void> stream_runtime_t::dispatch_packet (packet_stream_session_t &sessi
     const detail::message_flow_tracer_t flow_tracer (_state->dispatch);
     const auto flow_mode = flow_tracer.mode ();
     std::optional<std::string> inbound_flow_id;
-    if (flow_mode != message_flow_log_mode_t::off) {
+    if (runtime::flow_context_t::tracing (flow_mode)) {
         if (auto id = header.flow_id ())
             inbound_flow_id = std::string (*id);
     }
     auto flow_scope = runtime::flow_context_t::enter (
       std::move (inbound_flow_id), header.flow_origin (), flow_mode, flow_origin_t::inbound,
-      flow_mode == message_flow_log_mode_t::off || !stream.routing_id ()
+      !runtime::flow_context_t::tracing (flow_mode) || !stream.routing_id ()
         ? std::nullopt
         : std::optional<std::string> (stream.routing_id ()->to_hex ()));
     flow_tracer.trace (message_flow_outcome_t::received, [&] {
@@ -1875,13 +1875,13 @@ result_t<void> stream_runtime_t::dispatch_packet_async (packet_stream_session_t 
     const detail::message_flow_tracer_t flow_tracer (_state->dispatch);
     const auto flow_mode = flow_tracer.mode ();
     std::optional<std::string> inbound_flow_id;
-    if (flow_mode != message_flow_log_mode_t::off) {
+    if (runtime::flow_context_t::tracing (flow_mode)) {
         if (auto id = header.flow_id ())
             inbound_flow_id = std::string (*id);
     }
     auto flow_scope = runtime::flow_context_t::enter (
       std::move (inbound_flow_id), header.flow_origin (), flow_mode, flow_origin_t::inbound,
-      flow_mode == message_flow_log_mode_t::off || !stream.routing_id ()
+      !runtime::flow_context_t::tracing (flow_mode) || !stream.routing_id ()
         ? std::nullopt
         : std::optional<std::string> (stream.routing_id ()->to_hex ()));
     flow_tracer.trace (message_flow_outcome_t::received, [&] {

@@ -61,6 +61,8 @@ class spot_node_runtime_t;
 
 namespace zlink::framework::runtime::host
 {
+// Test-only access to the relocation terminal state (defined by unit tests).
+struct public_host_runtime_test_access_t;
 
 namespace relocation_detail
 {
@@ -802,7 +804,7 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     task_t<zlink::submit_result_t> send_to_node (const zlink::routing_id_t &target,
                                                  std::vector<zlink::message_t> &&parts);
     task_t<zlink::submit_result_t> request_to_node (const zlink::routing_id_t &target,
-                                                    const std::vector<zlink::message_t> &parts,
+                                                    std::vector<zlink::message_t> parts,
                                                     pending_operation_t &operation,
                                                     std::chrono::milliseconds timeout);
     task_t<zlink::submit_result_t> send_to_channel (const std::string &channel_name,
@@ -874,6 +876,7 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     friend class spot_handle_t;
     friend class actor_handle_t;
     friend class actor_transfer_token_t;
+    friend struct public_host_runtime_test_access_t;
     friend class ::zlink::framework::detail::spot_node_runtime_t;
 
     task_t<spot_close_commit_t> begin_user_spot_close (protocol::user_spot_close_fence_t target);
@@ -936,7 +939,7 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     void complete_operation (const pending_operation_t &operation,
                              operation_kind_t kind,
                              foundation::operation_terminal_t terminal,
-                             std::vector<std::uint8_t> payload);
+                             zlink::message_t payload);
     task_t<std::size_t> dispatch_user_spot_operations ();
     std::size_t dispatch_application_claim (
       mesh::service_mailbox_claim_t claim,
@@ -1168,6 +1171,38 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     runtime::offload_executor_t _relocation_session_terminal_lane_executor;
     mutable runtime::state_lane_t _relocation_session_terminal_lane{
       _relocation_session_terminal_lane_executor};
+    // Earliest instant relocation assembly expiry, target finalize polling or
+    // session seal flushing can be due, written on the terminal lane. A lane
+    // turn that can make that work due earlier resets it to due_now; an
+    // unsettled seal keeps it due_now because its readiness is polled.
+    static constexpr std::chrono::steady_clock::rep relocation_due_now =
+      std::numeric_limits<std::chrono::steady_clock::rep>::min ();
+    static constexpr std::chrono::steady_clock::rep relocation_never_due =
+      std::numeric_limits<std::chrono::steady_clock::rep>::max ();
+    mutable std::atomic<std::chrono::steady_clock::rep> _relocation_next_due{relocation_due_now};
+    bool relocation_management_due (std::chrono::steady_clock::time_point now) const noexcept;
+    void publish_relocation_next_due_on_lane () const;
+    // Every write on the terminal lane that adds work or sets a deadline
+    // lowers the bound through this one rule; the scan raises it again.
+    void lower_relocation_next_due_on_lane (std::chrono::steady_clock::rep due) const noexcept
+    {
+        if (due < _relocation_next_due.load (std::memory_order_relaxed))
+            _relocation_next_due.store (due, std::memory_order_release);
+    }
+    void
+    lower_relocation_next_due_on_lane (std::chrono::steady_clock::time_point due) const noexcept
+    {
+        lower_relocation_next_due_on_lane (due.time_since_epoch ().count ());
+    }
+    // The one writer of a target attempt's next finalize instant: it lowers
+    // the published bound in the same terminal lane turn.
+    void
+    set_relocation_finalize_at_on_lane (relocation_target_attempt_t &attempt,
+                                        std::chrono::steady_clock::time_point at) const noexcept
+    {
+        attempt.next_finalize_at = at;
+        lower_relocation_next_due_on_lane (at);
+    }
     runtime::offload_executor_t _user_spot_terminal_lane_executor;
     mutable runtime::state_lane_t _user_spot_terminal_lane{_user_spot_terminal_lane_executor};
     mutable std::mutex _mutex;

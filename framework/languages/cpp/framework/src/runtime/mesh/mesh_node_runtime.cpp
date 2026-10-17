@@ -793,7 +793,7 @@ void mesh_node_runtime_t::start ()
     /* flow-correlation §4: thread the flow-capture provider so the host's
      * cold decode paths skip flow validation/materialization at level Off. */
     node->set_flow_capture_provider (
-      [spot_state] { return message_flow_tracer_t (spot_state->dispatch).capture_enabled (); });
+      [spot_state] { return message_flow_tracer_t (spot_state->dispatch).flow_tracing (); });
     if (_spot_route_fence_resolver)
         node->configure_spot_route_fence_resolver (_spot_route_fence_resolver);
     if (_user_spot_store && _user_spot_materializer) {
@@ -2031,7 +2031,7 @@ bool mesh_node_runtime_t::wait_for_peer_ready (const zlink::routing_id_t &target
         }
         zlink::framework::runtime::wait_poll_interval (std::chrono::milliseconds (1));
     } while (std::chrono::steady_clock::now () < deadline);
-    return _node->transport ().topology ().peer (routing_id).has_value ();
+    return _node->transport ().topology ().peer (routing_id) != nullptr;
 }
 
 host::spot_handle_t mesh_node_runtime_t::get_or_create_spot (std::string spot_id)
@@ -3852,7 +3852,7 @@ mesh_node_runtime_t::bind_application_actor_session (const actor_ref_t &actor,
             {runtime::protocol::bound_session_binding_state_t::active, binding_generation}},
           timeout,
           [completion] (runtime::foundation::operation_terminal_t terminal,
-                        std::vector<std::uint8_t> payload) {
+                        zlink::message_t payload) {
               if (terminal != runtime::foundation::operation_terminal_t::completed) {
                   const auto kind = terminal == runtime::foundation::operation_terminal_t::timed_out
                                       ? framework_error_kind_t::deadline_exceeded
@@ -3863,7 +3863,8 @@ mesh_node_runtime_t::bind_application_actor_session (const actor_ref_t &actor,
               }
               try {
                   completion->complete (result_t<runtime::protocol::reply_header_t>::success (
-                    runtime::protocol::decode_reply_header (payload)));
+                    runtime::protocol::decode_reply_header (
+                      runtime::protocol::message_bytes (payload))));
               }
               catch (const runtime::protocol::service_wire_error_t &) {
                   completion->complete (result_t<runtime::protocol::reply_header_t>::failure (
@@ -3944,8 +3945,7 @@ mesh_node_runtime_t::retire_application_actor_session (runtime::stateful::stream
         session_rid.to_bytes (),
         {runtime::protocol::bound_session_binding_state_t::tombstone, binding.binding_generation}},
       timeout,
-      [completion] (runtime::foundation::operation_terminal_t terminal,
-                    std::vector<std::uint8_t> payload) {
+      [completion] (runtime::foundation::operation_terminal_t terminal, zlink::message_t payload) {
           if (terminal != runtime::foundation::operation_terminal_t::completed) {
               completion->complete (result_t<runtime::protocol::reply_header_t>::failure (
                 framework_error_kind_t::unavailable,
@@ -3954,7 +3954,8 @@ mesh_node_runtime_t::retire_application_actor_session (runtime::stateful::stream
           }
           try {
               completion->complete (result_t<runtime::protocol::reply_header_t>::success (
-                runtime::protocol::decode_reply_header (payload)));
+                runtime::protocol::decode_reply_header (
+                  runtime::protocol::message_bytes (payload))));
           }
           catch (const runtime::protocol::service_wire_error_t &) {
               completion->complete (result_t<runtime::protocol::reply_header_t>::failure (
@@ -4137,8 +4138,20 @@ mesh_node_runtime_t::await_request_reply (const host::pending_operation_t &opera
       runtime::messaging::message_parts_t (std::move (completion->value ().parts)));
 }
 
+std::optional<zlink::submit_result_t>
+mesh_node_runtime_t::classify_node_target_from_topology (const zlink::routing_id_t &target,
+                                                         bool &unknown) const
+{
+    using node_target_t = runtime::mesh::raw_mesh_node_owner_t::node_target_t;
+    const auto classified = _node->transport ().classify_node_target (target.to_bytes ());
+    unknown = classified == node_target_t::unknown;
+    if (classified == node_target_t::object_client)
+        return zlink::submit_result_t::not_found;
+    return std::nullopt;
+}
+
 task_t<std::optional<zlink::submit_result_t>>
-mesh_node_runtime_t::classify_node_direct_target (const zlink::routing_id_t &target) const
+mesh_node_runtime_t::classify_unknown_node_target (const zlink::routing_id_t &target) const
 {
     if (!_user_spot_store)
         co_return std::nullopt;
@@ -4188,8 +4201,12 @@ mesh_node_runtime_t::send_to_node (const zlink::routing_id_t &target,
     if (!_node) {
         throw configuration_error ("MeshNode has not started");
     }
-    if (const auto classified = co_await classify_node_direct_target (target))
+    bool unknown_target = false;
+    if (const auto classified = classify_node_target_from_topology (target, unknown_target))
         co_return *classified;
+    if (unknown_target)
+        if (const auto classified = co_await classify_unknown_node_target (target))
+            co_return *classified;
     (void) metadata;
     co_return co_await _node->send_to_node (target, parts);
 }
@@ -4202,8 +4219,12 @@ mesh_node_runtime_t::send_to_node (const zlink::routing_id_t &target,
     if (!_node) {
         throw configuration_error ("MeshNode has not started");
     }
-    if (const auto classified = co_await classify_node_direct_target (target))
+    bool unknown_target = false;
+    if (const auto classified = classify_node_target_from_topology (target, unknown_target))
         co_return *classified;
+    if (unknown_target)
+        if (const auto classified = co_await classify_unknown_node_target (target))
+            co_return *classified;
     (void) metadata;
     co_return co_await _node->send_to_node (target, std::move (parts));
 }
@@ -4219,7 +4240,7 @@ mesh_node_runtime_t::send_to_node (const zlink::routing_id_t &target,
 
 task_t<zlink::submit_result_t>
 mesh_node_runtime_t::request_to_node (const zlink::routing_id_t &target,
-                                      const std::vector<zlink::message_t> &parts,
+                                      std::vector<zlink::message_t> parts,
                                       host::pending_operation_t &operation_id,
                                       std::chrono::milliseconds timeout,
                                       std::vector<std::uint8_t> metadata)
@@ -4227,10 +4248,14 @@ mesh_node_runtime_t::request_to_node (const zlink::routing_id_t &target,
     if (!_node) {
         throw configuration_error ("MeshNode has not started");
     }
-    if (const auto classified = co_await classify_node_direct_target (target))
+    bool unknown_target = false;
+    if (const auto classified = classify_node_target_from_topology (target, unknown_target))
         co_return *classified;
+    if (unknown_target)
+        if (const auto classified = co_await classify_unknown_node_target (target))
+            co_return *classified;
     (void) metadata;
-    co_return co_await _node->request_to_node (target, parts, operation_id, timeout);
+    co_return co_await _node->request_to_node (target, std::move (parts), operation_id, timeout);
 }
 
 task_t<zlink::submit_result_t>
