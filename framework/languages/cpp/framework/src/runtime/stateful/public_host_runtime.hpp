@@ -250,6 +250,7 @@ struct user_spot_materialize_result_t
 {
     bool accepted = false;
     std::optional<protocol::application_payload_t> application_reply;
+    std::function<task_t<void> (bool)> preparation_terminal;
 };
 
 using user_spot_materializer_t = std::function<user_spot_materialize_result_t (
@@ -422,12 +423,12 @@ struct instance_spot_activation_result_t
 struct instance_spot_activation_materializer_t
 {
     std::function<bool (const protocol::instance_spot_activation_header_t &,
-                        const authority_snapshot_t &)>
+                        const authority_snapshot_t &,
+                        std::function<task_t<void> (bool)> &)>
       prepare;
     std::function<task_t<instance_spot_activation_result_t> (
       std::shared_ptr<const protocol::instance_activation_recovery_t>,
-      std::function<task_t<zlink::message_t> (std::function<void ()> &)>,
-      std::shared_ptr<::zlink::framework::detail::deferred_barrier_t> *)>
+      std::function<task_t<zlink::message_t> (std::function<void ()> &)>)>
       dispatch;
     std::function<task_t<result_t<protocol::instance_spot_activation_header_t>> (
       protocol::instance_spot_activation_header_t)>

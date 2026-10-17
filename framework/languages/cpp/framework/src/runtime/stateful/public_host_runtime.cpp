@@ -126,28 +126,35 @@ void trace_mesh_host_enabled (std::string_view stage, std::string_view detail)
 
 struct activation_terminal_t
 {
-    std::shared_ptr<detail::deferred_barrier_t> gate;
+    std::function<task_t<void> (bool)> preparation;
     std::function<void ()> accepted;
-    void finish ()
+    task_t<void> finish (bool ready = true)
     {
-        auto barrier = std::exchange (gate, {});
+        auto prepared = std::exchange (preparation, {});
         auto terminal = std::exchange (accepted, {});
         try {
             if (terminal)
                 terminal ();
         }
         catch (...) {
-            if (barrier)
-                (void) barrier->activate ([] {});
+            if (prepared)
+                prepared (false);
             throw;
         }
-        if (barrier)
-            (void) barrier->activate ([] {});
+        if (prepared)
+            return prepared (ready);
+        return task_t<void> (result_t<void>::success ());
     }
     ~activation_terminal_t () noexcept
     {
+        if (!preparation && !accepted)
+            return;
         try {
-            finish ();
+            auto cleanup = finish (false);
+            detail::observe_task_terminal (cleanup, [] (const result_t<void> &result) {
+                if (!result)
+                    trace_mesh_host ("instance-activation-terminal", result.error ()->what ());
+            });
         }
         catch (const std::exception &error) {
             trace_mesh_host ("instance-activation-terminal", error.what ());
@@ -2328,18 +2335,21 @@ std::size_t public_host_runtime_t::recover_instance_spot_activations ()
             if (recovery_pointer.replay_cursor < recovery_pointer.inbox_sequence) {
                 bool prepared = false;
                 try {
-                    prepared = materializer->prepare (recovery.activation, entry.snapshot);
+                    prepared = materializer->prepare (recovery.activation, entry.snapshot,
+                                                      activation_terminal.preparation);
                 }
                 catch (...) {
                     prepared = false;
                 }
-                if (!prepared)
+                if (!prepared) {
+                    activation_terminal.finish (false).result ().value ();
                     continue;
+                }
                 auto dispatched =
                   materializer
                     ->dispatch (
                       std::make_shared<const protocol::instance_activation_recovery_t> (recovery),
-                      {}, &activation_terminal.gate)
+                      {})
                     .result ()
                     .value ();
                 activation_terminal.accepted = std::move (dispatched.accepted_turn_terminal);
@@ -2355,15 +2365,19 @@ std::size_t public_host_runtime_t::recover_instance_spot_activations ()
                     .result ()
                     .value ();
                 const auto *stored = std::get_if<authority_stored_t> (&terminal);
-                if (!stored)
+                if (!stored) {
+                    activation_terminal.finish (false).result ().value ();
                     continue;
+                }
                 completed = stored->snapshot;
             }
             const auto completed_state = decode_instance_spot_authority_payload (completed.payload);
             if (!completed_state || !completed_state->activation_recovery
                 || completed_state->activation_recovery->replay_cursor
-                     != completed_state->activation_recovery->inbox_sequence)
+                     != completed_state->activation_recovery->inbox_sequence) {
+                activation_terminal.finish (false).result ().value ();
                 continue;
+            }
             auto released = *completed_state;
             released.activation_recovery.reset ();
             const auto cleared =
@@ -2374,10 +2388,12 @@ std::size_t public_host_runtime_t::recover_instance_spot_activations ()
                                       completed.owner})
                 .result ()
                 .value ();
-            if (!std::holds_alternative<authority_stored_t> (cleared))
+            if (!std::holds_alternative<authority_stored_t> (cleared)) {
+                activation_terminal.finish (false).result ().value ();
                 continue;
+            }
             relocations->remove (recovery_pointer.reference);
-            activation_terminal.finish ();
+            activation_terminal.finish ().result ().value ();
             ++recovered;
         }
         cursor = page->next_cursor;
@@ -4623,15 +4639,18 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation_core (
                 reject_activation ();
                 co_return true;
             }
+            auto activation_terminal = std::make_shared<activation_terminal_t> ();
             bool prepared = false;
             try {
                 prepared = ready_state->state == instance_spot_authority_state_t::closing
-                           || instance_materializer->prepare (request, *snapshot);
+                           || instance_materializer->prepare (request, *snapshot,
+                                                              activation_terminal->preparation);
             }
             catch (...) {
                 prepared = false;
             }
             if (!prepared) {
+                co_await activation_terminal->finish (false);
                 reply_terminal (
                   {105,
                    static_cast<std::uint32_t> (protocol::framework_error_code::spotCreateFailed),
@@ -4639,18 +4658,32 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation_core (
                 co_return true;
             }
             auto running = std::make_shared<task_t<instance_spot_activation_result_t>> (
-              instance_materializer->dispatch (owned_command, resume_missing, nullptr));
+              instance_materializer->dispatch (owned_command, resume_missing));
             finish_admission (instance_activation_ready_t{*snapshot, admission_command});
             detail::observe_task_terminal (
-              *running, [running, reply_terminal] (
+              *running, [running, reply_terminal, activation_terminal] (
                           const result_t<instance_spot_activation_result_t> &result) {
-                  if (result)
-                      reply_terminal (result.value ());
-                  else
-                      reply_terminal (
-                        {105,
-                         static_cast<std::uint32_t> (protocol::framework_error_code::requestFailed),
-                         std::nullopt});
+                  if (result) {
+                      auto terminal = result.value ();
+                      activation_terminal->accepted = std::move (terminal.accepted_turn_terminal);
+                      terminal.accepted_turn_terminal = [activation_terminal] {
+                          activation_terminal->finish ();
+                      };
+                      reply_terminal (std::move (terminal));
+                  } else {
+                      auto cleanup =
+                        std::make_shared<task_t<void>> (activation_terminal->finish (false));
+                      detail::observe_task_terminal (
+                        *cleanup, [cleanup, reply_terminal] (const result_t<void> &cleaned) {
+                            if (!cleaned)
+                                trace_mesh_host ("instance-activation-terminal",
+                                                 cleaned.error ()->what ());
+                            reply_terminal ({105,
+                                             static_cast<std::uint32_t> (
+                                               protocol::framework_error_code::requestFailed),
+                                             std::nullopt});
+                        });
+                  }
               });
             co_return true;
         }
@@ -4829,14 +4862,17 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation_core (
         reject_activation ();
         co_return;
     }
+    auto activation_terminal = std::make_shared<activation_terminal_t> ();
     bool prepared = false;
     try {
-        prepared = instance_materializer->prepare (request, reservation->creating);
+        prepared = instance_materializer->prepare (request, reservation->creating,
+                                                   activation_terminal->preparation);
     }
     catch (...) {
         prepared = false;
     }
     if (!prepared) {
+        co_await activation_terminal->finish (false);
         (void) co_await store->abort ({reserve.key, reservation->fence});
         instance_relocations->remove (recovery_root.reference);
         reply_terminal (
@@ -4860,12 +4896,18 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation_core (
         .encoded_size = static_cast<std::uint32_t> (recovery_public.size ()),
         .inbox_sequence = 1,
         .replay_cursor = 0}};
-    const auto committed = co_await store->commit (
+    const auto commit_result = co_await await_result (store->commit (
       {reserve.key, reservation->fence, encode_instance_spot_authority_payload (ready_state)}, {},
-      reserve.operation_deadline);
+      reserve.operation_deadline));
+    if (!commit_result) {
+        co_await activation_terminal->finish (false);
+        commit_result.value ();
+    }
+    const auto &committed = commit_result.value ();
     const auto *created = std::get_if<object_committed_t> (&committed);
     const auto *already = std::get_if<object_already_committed_t> (&committed);
     if (already) {
+        co_await activation_terminal->finish (false);
         const authority_read_result_t ready = already->ready;
         if (!(co_await join_existing (ready, decode_current_authority (ready))))
             reply_terminal (
@@ -4874,19 +4916,27 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation_core (
         co_return;
     }
     if (!created) {
+        co_await activation_terminal->finish (false);
         reply_terminal ({107,
                          static_cast<std::uint32_t> (protocol::framework_error_code::spotMoving),
                          std::nullopt});
         co_return;
     }
     const auto &ready_snapshot = created->ready;
-    auto activation_terminal = std::make_shared<activation_terminal_t> ();
-    auto dispatched =
-      instance_materializer->dispatch (owned_command, resume_missing, &activation_terminal->gate);
+    auto dispatched = instance_materializer->dispatch (owned_command, resume_missing);
     finish_admission (instance_activation_ready_t{ready_snapshot, admission_command});
-    auto result = co_await dispatched;
+    const auto dispatch_result = co_await await_result (std::move (dispatched));
+    if (!dispatch_result) {
+        co_await activation_terminal->finish (false);
+        dispatch_result.value ();
+    }
+    auto result = dispatch_result.value ();
     activation_terminal->accepted = std::move (result.accepted_turn_terminal);
     result.accepted_turn_terminal = [activation_terminal] { activation_terminal->finish (); };
+    std::optional<task_t<void>> preparation_cleanup;
+    const auto fail_preparation = [&] {
+        preparation_cleanup = activation_terminal->finish (false);
+    };
     try {
         ready_state.activation_recovery->replay_cursor =
           ready_state.activation_recovery->inbox_sequence;
@@ -4899,6 +4949,7 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation_core (
             });
         const auto *terminal_snapshot = std::get_if<authority_stored_t> (&stored_terminal);
         if (!terminal_snapshot) {
+            fail_preparation ();
             result.terminal_result = 105;
             result.failure_code =
               static_cast<std::uint32_t> (protocol::framework_error_code::requestFailed);
@@ -4914,6 +4965,7 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation_core (
             if (std::holds_alternative<authority_stored_t> (cleared)) {
                 instance_relocations->remove (recovery_root.reference);
             } else {
+                fail_preparation ();
                 result.terminal_result = 105;
                 result.failure_code =
                   static_cast<std::uint32_t> (protocol::framework_error_code::requestFailed);
@@ -4922,6 +4974,7 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation_core (
         }
     }
     catch (const framework_exception_t &error) {
+        fail_preparation ();
         const auto failure = messaging::request_failure_mapper_t{}.target_failure_reply (error);
         result.terminal_result = failure ? failure->terminal_result : 105;
         result.failure_code =
@@ -4930,10 +4983,22 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation_core (
         result.application_reply.reset ();
     }
     catch (...) {
+        fail_preparation ();
         result.terminal_result = 105;
         result.failure_code =
           static_cast<std::uint32_t> (protocol::framework_error_code::requestFailed);
         result.application_reply.reset ();
+    }
+    if (preparation_cleanup) {
+        const auto cleanup = co_await await_result (std::move (*preparation_cleanup));
+        if (!cleanup) {
+            const auto failure =
+              messaging::request_failure_mapper_t{}.target_failure_reply (*cleanup.error ());
+            result.terminal_result = failure ? failure->terminal_result : 105;
+            result.failure_code =
+              failure ? failure->failure_code
+                      : static_cast<std::uint32_t> (protocol::framework_error_code::requestFailed);
+        }
     }
     reply_terminal (std::move (result));
     co_return;
@@ -5006,6 +5071,8 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                     : record_bytes + part.size ();
             infrastructure_budget.account (record_bytes);
             ++count;
+            activation_terminal_t preparation_terminal;
+            std::optional<std::pair<std::uint32_t, std::uint32_t>> dispatch_failure;
             try {
                 const auto wire =
                   protocol::decode_header (protocol::message_bytes (mailbox_record.parts.front ()));
@@ -5859,7 +5926,10 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                                   protocol::user_spot_create_result_t::rejected, {}, 0);
                         continue;
                     }
+                    preparation_terminal.preparation =
+                      std::move (materialized.preparation_terminal);
                     if (!materialized.accepted) {
+                        co_await preparation_terminal.finish (false);
                         (void) store
                           ->abort ({{placement_object_kind_t::user_spot, global_id}, fence}, {},
                                    std::chrono::system_clock::time_point (
@@ -5887,6 +5957,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                     const auto *ready = std::get_if<object_committed_t> (&committed);
                     const auto *already = std::get_if<object_already_committed_t> (&committed);
                     if (!ready && !already) {
+                        co_await preparation_terminal.finish (false);
                         (void) _objects.abort_create (local.attempt);
                         terminal (
                           static_cast<std::uint32_t> (protocol::request_terminal_result::conflict),
@@ -5911,6 +5982,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                             local_commit = _objects.commit_create (reconciled.attempt);
                     }
                     if (local_commit != stateful::stateful_error_t::none) {
+                        co_await preparation_terminal.finish (false);
                         terminal (static_cast<std::uint32_t> (
                                     protocol::request_terminal_result::internalError),
                                   static_cast<std::uint32_t> (
@@ -5921,6 +5993,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                     _spot_actor_index_lane
                       .run ([&] { _spots.insert_or_assign (exact_ref.key, exact_ref); })
                       .get ();
+                    co_await preparation_terminal.finish ();
                     terminal (static_cast<std::uint32_t> (protocol::request_terminal_result::ok), 0,
                               protocol::user_spot_create_result_t::created, request.spot_id,
                               exact_ref.object_generation,
@@ -6054,31 +6127,38 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                 }
             }
             catch (const protocol::service_wire_error_t &) {
-                if (mailbox_record.reply_token && mailbox_record.correlation)
-                    (void) _transport->reply_failure (
-                      mailbox_record, 104,
-                      static_cast<std::uint32_t> (
-                        protocol::framework_error_code::requestProtocolError));
+                dispatch_failure = {104, static_cast<std::uint32_t> (
+                                           protocol::framework_error_code::requestProtocolError)};
             }
             catch (const std::exception &) {
                 const auto failure = detail::current_exception_result<void> ();
                 const auto *error = failure.error ();
-                const auto terminal =
+                dispatch_failure =
                   error && error->kind () == framework_error_kind_t::deadline_exceeded
-                    ? std::pair{protocol::request_terminal_result::timedOut,
-                                protocol::framework_error_code::none}
-                    : std::pair{protocol::request_terminal_result::internalError,
-                                protocol::framework_error_code::requestFailed};
-                if (mailbox_record.reply_token && mailbox_record.correlation)
-                    (void) _transport->reply_failure (mailbox_record,
-                                                      static_cast<std::uint32_t> (terminal.first),
-                                                      static_cast<std::uint32_t> (terminal.second));
+                    ? std::pair{static_cast<std::uint32_t> (
+                                  protocol::request_terminal_result::timedOut),
+                                static_cast<std::uint32_t> (protocol::framework_error_code::none)}
+                    : std::pair{
+                        static_cast<std::uint32_t> (
+                          protocol::request_terminal_result::internalError),
+                        static_cast<std::uint32_t> (protocol::framework_error_code::requestFailed)};
             }
             catch (...) {
+                dispatch_failure = {
+                  105, static_cast<std::uint32_t> (protocol::framework_error_code::requestFailed)};
+            }
+            if (dispatch_failure) {
+                const auto cleanup = co_await await_result (preparation_terminal.finish (false));
+                if (!cleanup) {
+                    const auto failure =
+                      messaging::request_failure_mapper_t{}.target_failure_reply (
+                        *cleanup.error ());
+                    if (failure)
+                        dispatch_failure = {failure->terminal_result, failure->failure_code};
+                }
                 if (mailbox_record.reply_token && mailbox_record.correlation)
-                    (void) _transport->reply_failure (
-                      mailbox_record, 105,
-                      static_cast<std::uint32_t> (protocol::framework_error_code::requestFailed));
+                    (void) _transport->reply_failure (mailbox_record, dispatch_failure->first,
+                                                      dispatch_failure->second);
             }
         }
         (void) _transport->mailbox ().release (*claim);
