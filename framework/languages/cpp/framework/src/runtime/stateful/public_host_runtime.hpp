@@ -1174,14 +1174,6 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
                              std::shared_ptr<task_completion_source_t<void>> admitted = {});
     std::function<void ()>
     local_request_wait_cleanup (const std::shared_ptr<application_job_queue_t::waiter_t> &waiter);
-    struct spot_entry_t
-    {
-        stateful::object_ref_t reference;
-        std::set<std::pair<std::string, std::string>> subscriptions;
-    };
-    spot_entry_t &upsert_spot_on_lane (stateful::object_ref_t object);
-    task_t<std::vector<stateful::object_ref_t>> multicast_local_targets (std::string channel_name,
-                                                                         std::string topic);
     task_t<void>
     enqueue_local_multicast (task_t<std::vector<stateful::object_ref_t>> target_snapshot,
                              std::string channel_name,
@@ -1190,7 +1182,6 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
                              std::shared_ptr<const std::vector<std::uint8_t>> metadata,
                              zlink::routing_id_t source_node,
                              std::function<void ()> before_application_handler = {});
-    std::map<std::string, spot_entry_t> _spots;
     std::map<std::string, std::pair<std::string, stateful::object_ref_t>> _actors;
     runtime::offload_executor_t _spot_actor_index_lane_executor;
     mutable runtime::state_lane_t _spot_actor_index_lane{_spot_actor_index_lane_executor};

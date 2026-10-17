@@ -4039,6 +4039,112 @@ void verify_failed_relay_persistence_rearms_dispatch_wait ()
     }
 }
 
+void verify_creating_spot_subscription_uses_native_object_lifetime ()
+{
+    auto local = descriptor ("creating-subscription");
+    local.channels = {{"local", 0}};
+    auto host = std::make_shared<host::public_host_runtime_t> (host::host_options_t{
+      mesh::raw_mesh_node_options_t{
+        .descriptor = std::move (local),
+        .runtime_failures =
+          std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()},
+      "entry",
+      {"framework.spot"}});
+    host->start ();
+    const stateful::object_ref_t reference{stateful::object_kind_t::user_spot,
+                                           "creating-room",
+                                           7,
+                                           1,
+                                           "m6b-mesh",
+                                           "creating-subscription"};
+    const auto creating = host->objects ().begin_reserved_object (reference, "room", {});
+    assert (creating.factory_owner);
+    assert (await_task (host->objects ().contains_async (reference)));
+    assert (!host->objects ().find (reference.kind, reference.key));
+    host::spot_handle_t spot (host, reference);
+    // Configure registers subscriptions before the same native record becomes Ready.
+    spot.set_subscription ("local", "creating-topic");
+    assert (host->get_or_create_spot (reference.key).status ().lifecycle_generation ()
+            == reference.object_generation);
+    assert (host->objects ().commit_create (creating.attempt) == stateful::stateful_error_t::none);
+    assert (host->objects ().find (reference.kind, reference.key) == reference);
+    auto publisher = host->entry_spot ();
+    std::vector<std::string> delivered;
+    const auto dispatch = [&] (const host::ready_record_t &owner,
+                               const host::receive_record_t &record,
+                               std::vector<zlink::message_t> parts) {
+        assert (record.kind == host::record_kind_t::spot_multicast);
+        assert (parts.size () == 1 && parts.front ().to_string () == "payload");
+        if (record.before_application_handler)
+            record.before_application_handler ();
+        delivered.push_back (owner.spot_id);
+    };
+    const auto publish = [&] (const std::string &topic) {
+        await_task (
+          publisher.publish ("local", topic, {zlink::message_t::from (std::string ("payload"))}));
+        while (await_task (host->dispatch_ready (dispatch)) != 0) {
+        }
+    };
+    publish ("creating-topic");
+    assert ((delivered == std::vector<std::string>{reference.key}));
+    delivered.clear ();
+    assert (spot.close ());
+    publish ("creating-topic");
+    assert (delivered.empty ());
+
+    auto failed_reference = reference;
+    ++failed_reference.object_generation;
+    const auto failed = host->objects ().begin_reserved_object (failed_reference, "room", {});
+    assert (failed.factory_owner);
+    host::spot_handle_t failed_spot (host, failed_reference);
+    failed_spot.set_subscription ("local", "aborted-topic");
+    assert (host->objects ().abort_create (failed.attempt) == stateful::stateful_error_t::none);
+    assert (!await_task (host->objects ().contains_async (failed_reference)));
+
+    auto replacement_reference = failed_reference;
+    ++replacement_reference.object_generation;
+    const auto replacement =
+      host->objects ().begin_reserved_object (replacement_reference, "room", {});
+    assert (replacement.factory_owner);
+    assert (host->objects ().commit_create (replacement.attempt)
+            == stateful::stateful_error_t::none);
+    publish ("aborted-topic");
+    assert (delivered.empty ());
+    host::spot_handle_t replacement_spot (host, replacement_reference);
+    replacement_spot.set_subscription ("local", "aborted-topic");
+    failed_spot.unset_subscription ("local", "aborted-topic");
+    bool stale_subscription_rejected = false;
+    try {
+        failed_spot.set_subscription ("local", "aborted-topic");
+    }
+    catch (const zlink::framework::framework_exception_t &error) {
+        assert (error.kind () == zlink::framework::framework_error_kind_t::invalid_operation);
+        stale_subscription_rejected = true;
+    }
+    assert (stale_subscription_rejected);
+    publish ("aborted-topic");
+    assert ((delivered == std::vector<std::string>{reference.key}));
+    assert (replacement_spot.close ());
+    auto actor_reference = replacement_reference;
+    actor_reference.kind = stateful::object_kind_t::actor;
+    actor_reference.key = "not-a-subscriber";
+    const auto actor = host->objects ().begin_reserved_object (actor_reference, "actor", {});
+    assert (actor.factory_owner);
+    host::spot_handle_t actor_as_spot (host, actor_reference);
+    bool actor_subscription_rejected = false;
+    try {
+        actor_as_spot.set_subscription ("local", "aborted-topic");
+    }
+    catch (const zlink::framework::framework_exception_t &error) {
+        assert (error.kind () == zlink::framework::framework_error_kind_t::invalid_operation);
+        actor_subscription_rejected = true;
+    }
+    assert (actor_subscription_rejected);
+    actor_as_spot.unset_subscription ("local", "aborted-topic");
+    assert (host->objects ().abort_create (actor.attempt) == stateful::stateful_error_t::none);
+    host->close ();
+}
+
 void verify_local_application_enqueue_wakes_dispatch_wait ()
 {
     auto local_descriptor = descriptor ("local-dispatch-wake");
@@ -7615,6 +7721,10 @@ int main (int argc, char **argv)
 {
     // This test drives runtime parts without a host.
     zlink::framework::runtime::install_host_context_hooks ();
+    if (argc == 2 && std::string_view (argv[1]) == "--creating-subscription") {
+        verify_creating_spot_subscription_uses_native_object_lifetime ();
+        return 0;
+    }
     if (argc == 2 && std::string_view (argv[1]) == "--unadmitted-request") {
         verify_unadmitted_request_is_dropped_without_framework_queue ();
         return 0;
@@ -7675,6 +7785,7 @@ int main (int argc, char **argv)
     verify_public_host_batches_with_finite_permits ();
     verify_public_host_fifo_drains_before_liveness_probe ();
     verify_logical_multicast_continues_after_one_target_failure ();
+    verify_creating_spot_subscription_uses_native_object_lifetime ();
     verify_local_application_enqueue_wakes_dispatch_wait ();
     verify_pending_relocation_management_bounds_dispatch_wait ();
     verify_failed_relay_persistence_rearms_dispatch_wait ();

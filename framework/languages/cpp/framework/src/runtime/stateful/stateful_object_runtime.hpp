@@ -301,7 +301,15 @@ class stateful_object_runtime_t
     create_result_t activate_instance (create_request_t request,
                                        const std::function<bool (const object_ref_t &)> &factory);
     std::optional<object_ref_t> find (object_kind_t kind, const std::string &key) const;
-    bool contains (const object_ref_t &reference) const;
+    std::optional<object_ref_t> resolve_spot (const std::string &key) const;
+    stateful_error_t set_subscription (const object_ref_t &spot,
+                                       const std::string &channel_name,
+                                       const std::string &topic);
+    void unset_subscription (const object_ref_t &spot,
+                             const std::string &channel_name,
+                             const std::string &topic);
+    task_t<std::vector<object_ref_t>> multicast_local_targets (std::string channel_name,
+                                                               std::string topic) const;
     task_t<bool> contains_async (object_ref_t reference) const;
     // Observes the existing source seal; does not resolve Store authority.
     bool finalized_relocation_source (object_kind_t kind,
@@ -420,6 +428,7 @@ class stateful_object_runtime_t
         std::optional<relocation_restore_identity_t> restore_identity;
         queue_t queue;
         std::map<std::uint64_t, logical_timer_t> timers;
+        std::set<std::pair<std::string, std::string>> subscriptions;
         std::uint64_t barrier_generation = 0;
     };
 

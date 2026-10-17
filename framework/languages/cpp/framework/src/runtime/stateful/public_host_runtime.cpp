@@ -677,7 +677,7 @@ task_t<void> spot_handle_t::publish (
     const auto local_descriptor = _host->transport ().topology ().local_descriptor ();
     std::optional<task_t<std::vector<stateful::object_ref_t>>> local_targets;
     if (mesh::find_service_channel (local_descriptor, channel_name))
-        local_targets.emplace (_host->multicast_local_targets (channel_name, topic));
+        local_targets.emplace (_host->_objects.multicast_local_targets (channel_name, topic));
     std::exception_ptr first_failure;
     if (!targets.empty ()) {
         const auto encoded = _host->encode_application (parts);
@@ -746,28 +746,17 @@ void spot_handle_t::set_subscription (const std::string &channel_name, const std
                                      "SPOT does not participate in subscription channel: "
                                        + channel_name);
     }
-    _host->_spot_actor_index_lane
-      .run ([&] {
-          const auto found = _host->_spots.find (_object.key);
-          if (found == _host->_spots.end () || found->second.reference != _object)
-              throw framework_exception_t (framework_error_kind_t::invalid_operation,
-                                           "logical multicast subscriber is no longer registered");
-          found->second.subscriptions.emplace (channel_name, topic);
-      })
-      .get ();
+    if (_host->_objects.set_subscription (_object, channel_name, topic)
+        != stateful::stateful_error_t::none)
+        throw framework_exception_t (framework_error_kind_t::invalid_operation,
+                                     "logical multicast subscriber is no longer registered");
 }
 
 void spot_handle_t::unset_subscription (const std::string &channel_name, const std::string &topic)
 {
     if (!_host)
         return;
-    _host->_spot_actor_index_lane
-      .run ([&] {
-          const auto found = _host->_spots.find (_object.key);
-          if (found != _host->_spots.end () && found->second.reference == _object)
-              found->second.subscriptions.erase ({channel_name, topic});
-      })
-      .get ();
+    _host->_objects.unset_subscription (_object, channel_name, topic);
 }
 
 bool spot_handle_t::close () noexcept
@@ -1415,17 +1404,16 @@ template <typename T> result_t<bool> close_store_failure (const result_t<T> &fai
 }
 
 /* Step 4: deletes the Closing authority with the same owner and generation
- * fence (the Closing StoreVersion). `after_delete` runs once the row is gone. */
+ * fence (the Closing StoreVersion). */
 std::function<task_t<bool> ()>
 release_closing_authority (std::shared_ptr<zlink::framework::location_repository_t> store,
                            authority_key_t authority_key,
                            std::string closing_version,
-                           std::function<result_t<bool> ()> before_delete,
-                           std::function<void ()> after_delete)
+                           std::function<result_t<bool> ()> before_delete)
 {
     return [store = std::move (store), authority_key = std::move (authority_key),
             closing_version = std::move (closing_version),
-            before_delete = std::move (before_delete), after_delete = std::move (after_delete)] () {
+            before_delete = std::move (before_delete)] () {
         auto completion = std::make_shared<task_completion_source_t<bool>> ();
         auto output = completion->task ();
         if (before_delete) {
@@ -1437,7 +1425,7 @@ release_closing_authority (std::shared_ptr<zlink::framework::location_repository
         }
         after_close_step (
           store->compare_exchange_authority (authority_key, closing_version, authority_delete_t{}),
-          {}, [completion, after_delete] (result_t<authority_compare_exchange_result_t> deleted) {
+          {}, [completion] (result_t<authority_compare_exchange_result_t> deleted) {
               if (!deleted) {
                   completion->complete (close_store_failure (deleted));
                   return;
@@ -1447,8 +1435,6 @@ release_closing_authority (std::shared_ptr<zlink::framework::location_repository
                     framework_error_kind_t::internal_failure, "Spot authority release failed"));
                   return;
               }
-              if (after_delete)
-                  after_delete ();
               completion->complete (result_t<bool>::success (true));
           });
         return output;
@@ -1534,11 +1520,11 @@ public_host_runtime_t::begin_instance_spot_close (const std::string &stable_type
               complete_close_step (
                 completion,
                 {result_t<bool>::success (true),
-                 release_closing_authority (store, authority_key, snapshot->store_version, {}, {}),
+                 release_closing_authority (store, authority_key, snapshot->store_version, {}),
                  reincarnate_closing_authority (store, authority_key, snapshot->store_version,
                                                 ready_payload),
                  [store, authority_key] (const authority_snapshot_t &next) {
-                     return release_closing_authority (store, authority_key, next.store_version, {},
+                     return release_closing_authority (store, authority_key, next.store_version,
                                                        {}) ();
                  }});
               return;
@@ -1578,12 +1564,12 @@ public_host_runtime_t::begin_instance_spot_close (const std::string &stable_type
                   completion,
                   {result_t<bool>::success (true),
                    release_closing_authority (store, authority_key, closing->snapshot.store_version,
-                                              {}, {}),
+                                              {}),
                    reincarnate_closing_authority (store, authority_key,
                                                   closing->snapshot.store_version, ready_payload),
                    [store, authority_key] (const authority_snapshot_t &next) {
                        return release_closing_authority (store, authority_key, next.store_version,
-                                                         {}, {}) ();
+                                                         {}) ();
                    }});
             });
       });
@@ -1709,11 +1695,10 @@ public_host_runtime_t::begin_user_spot_close (protocol::user_spot_close_fence_t 
             exact_ref, snapshot->allocation.stable_type, snapshot->allocation.target);
 
           // Step 4 releases the local object record, then the authority row.
-          const auto release_from = [self, store, authority_key, key = exact_ref.key] (
-                                      std::string closing_version, stateful::object_ref_t ref) {
+          const auto release_from = [self, store, authority_key] (std::string closing_version,
+                                                                  stateful::object_ref_t ref) {
               return release_closing_authority (
-                store, authority_key, std::move (closing_version),
-                [self, ref] {
+                store, authority_key, std::move (closing_version), [self, ref] {
                     // The record that the Closing commit sealed is found by its
                     // exact ref, so a resumed Close retries a failed release.
                     const auto [error, closed] = self->_objects.close_spot (ref);
@@ -1722,9 +1707,6 @@ public_host_runtime_t::begin_user_spot_close (protocol::user_spot_close_fence_t 
                         return result_t<bool>::failure (framework_error_kind_t::internal_failure,
                                                         "User Spot record release failed");
                     return result_t<bool>::success (true);
-                },
-                [self, key] {
-                    self->_spot_actor_index_lane.run ([&] { self->_spots.erase (key); }).get ();
                 });
           };
 
@@ -2541,16 +2523,7 @@ spot_handle_t public_host_runtime_t::entry_spot ()
 spot_handle_t public_host_runtime_t::get_or_create_spot (std::string spot_id)
 {
     const auto &key = spot_id;
-    const auto existing = _spot_actor_index_lane
-                            .run ([&] () -> std::optional<stateful::object_ref_t> {
-                                const auto found = _spots.find (key);
-                                if (found != _spots.end ()) {
-                                    return found->second.reference;
-                                }
-                                return std::nullopt;
-                            })
-                            .get ();
-    if (existing && _objects.contains (*existing))
+    if (const auto existing = _objects.resolve_spot (key))
         return spot_handle_t (shared_from_this (), *existing);
     auto created =
       _objects.begin_create (stateful::create_request_t{stateful::object_kind_t::user_spot,
@@ -2571,16 +2544,12 @@ spot_handle_t public_host_runtime_t::get_or_create_spot (std::string spot_id)
     if (!object) {
         throw std::runtime_error ("framework Spot authority is unavailable");
     }
-    _spot_actor_index_lane.run ([&] { upsert_spot_on_lane (*object); }).get ();
     return spot_handle_t (shared_from_this (), *object);
 }
 
 spot_handle_t public_host_runtime_t::bind_relocation_spot (stateful::object_ref_t object)
 {
-    const auto bound = _spot_actor_index_lane
-                         .run ([&] { return upsert_spot_on_lane (std::move (object)).reference; })
-                         .get ();
-    return spot_handle_t (shared_from_this (), bound);
+    return spot_handle_t (shared_from_this (), std::move (object));
 }
 
 stateful::stateful_error_t
@@ -5916,7 +5885,6 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                                   protocol::user_spot_create_result_t::rejected, {}, 0);
                         continue;
                     }
-                    _spot_actor_index_lane.run ([&] { upsert_spot_on_lane (exact_ref); }).get ();
                     terminal (static_cast<std::uint32_t> (protocol::request_terminal_result::ok), 0,
                               protocol::user_spot_create_result_t::created, request.spot_id,
                               exact_ref.object_generation,
@@ -6410,8 +6378,8 @@ std::size_t public_host_runtime_t::dispatch_application_claim (
                 if (generated::decode_head_logicalMulticast_23 (reader, multicast)
                     != generated::error_code::ok)
                     throw protocol::service_wire_error_t ("invalid logical multicast frame");
-                auto targets =
-                  multicast_local_targets (multicast.channelName.value, multicast.topic.value);
+                auto targets = _objects.multicast_local_targets (multicast.channelName.value,
+                                                                 multicast.topic.value);
                 auto metadata =
                   (multicast.flags & static_cast<std::uint8_t> (protocol::flag::metadata)) == 0
                     ? std::shared_ptr<const std::vector<std::uint8_t>>{}
@@ -6711,13 +6679,7 @@ public_host_runtime_t::resolve_actor (std::string_view actor_id) const
 std::optional<stateful::object_ref_t>
 public_host_runtime_t::resolve_spot (const std::string &spot_id) const
 {
-    return _spot_actor_index_lane
-      .run ([&] {
-          const auto found = _spots.find (spot_id);
-          return found == _spots.end () ? std::optional<stateful::object_ref_t>{}
-                                        : std::make_optional (found->second.reference);
-      })
-      .get ();
+    return _objects.resolve_spot (spot_id);
 }
 
 protocol::application_payload_t
@@ -6992,30 +6954,6 @@ std::function<void ()> public_host_runtime_t::local_request_wait_cleanup (
         if (auto host = weak.lock ())
             host->_local_dispatch_completion_lane.try_post ([waiter] { (void) waiter->cancel (); });
     };
-}
-
-public_host_runtime_t::spot_entry_t &
-public_host_runtime_t::upsert_spot_on_lane (stateful::object_ref_t object)
-{
-    const auto key = object.key;
-    const auto [found, inserted] = _spots.try_emplace (key, spot_entry_t{object, {}});
-    if (!inserted && found->second.reference != object)
-        found->second = spot_entry_t{std::move (object), {}};
-    return found->second;
-}
-
-task_t<std::vector<stateful::object_ref_t>>
-public_host_runtime_t::multicast_local_targets (std::string channel_name, std::string topic)
-{
-    return _spot_actor_index_lane.run_task (
-      [this, subscription = std::make_pair (std::move (channel_name), std::move (topic))] {
-          std::vector<stateful::object_ref_t> targets;
-          for (const auto &[key, entry] : _spots) {
-              if (entry.subscriptions.contains (subscription))
-                  targets.push_back (entry.reference);
-          }
-          return targets;
-      });
 }
 
 task_t<void> public_host_runtime_t::enqueue_local_multicast (
