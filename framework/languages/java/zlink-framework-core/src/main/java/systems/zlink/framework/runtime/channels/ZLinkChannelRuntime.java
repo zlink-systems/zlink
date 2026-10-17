@@ -1498,7 +1498,7 @@ public final class ZLinkChannelRuntime
         } catch (InterruptedException failure) {
             Thread.currentThread().interrupt();
             throw new CompletionException(failure);
-        } catch (TimeoutException | ExecutionException failure) {
+        } catch (TimeoutException failure) {
             throw new CompletionException(failure);
         }
     }
@@ -1522,8 +1522,7 @@ public final class ZLinkChannelRuntime
         return completion;
     }
 
-    private void closeCore(Instant deadline)
-            throws InterruptedException, TimeoutException, ExecutionException {
+    private void closeCore(Instant deadline) throws InterruptedException, TimeoutException {
         beginClose();
         // Location stop removes native connections, so settle their liveness callers first.
         timeoutExecutor.shutdownNow();
@@ -1552,8 +1551,8 @@ public final class ZLinkChannelRuntime
                     else cleanupFailure.addSuppressed(failure);
                 }
             }
-            if (cleanupFailure != null) throw new ExecutionException(cleanupFailure);
-        } catch (InterruptedException | ExecutionException | RuntimeException | Error failure) {
+            if (cleanupFailure != null) throw new CompletionException(cleanupFailure);
+        } catch (InterruptedException | RuntimeException | Error failure) {
             cleanupFailure = failure;
             throw failure;
         } finally {

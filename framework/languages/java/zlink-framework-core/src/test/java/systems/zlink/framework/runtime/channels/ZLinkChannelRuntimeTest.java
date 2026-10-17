@@ -189,6 +189,16 @@ final class ZLinkChannelRuntimeTest {
 
     @Test
     void channelCloseDeadlineStillClosesOwnedContext() throws Exception {
+        assertChannelCloseDeadline(() -> Instant.now().plusMillis(150));
+    }
+
+    @Test
+    void expiredChannelCloseDeadlinePreservesTimeoutAndClosesOwnedContext() throws Exception {
+        assertChannelCloseDeadline(() -> Instant.EPOCH);
+    }
+
+    private void assertChannelCloseDeadline(java.util.function.Supplier<Instant> deadline)
+            throws Exception {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         FakeChannelBackendAdapter backend = new FakeChannelBackendAdapter();
         ZLinkChannelRuntime runtime =
@@ -215,7 +225,7 @@ final class ZLinkChannelRuntimeTest {
                     assertThrows(
                             ExecutionException.class,
                             () ->
-                                    runtime.closeAsync(Instant.now().plusMillis(150))
+                                    runtime.closeAsync(deadline.get())
                                             .toCompletableFuture()
                                             .get(2, TimeUnit.SECONDS));
             assertInstanceOf(java.util.concurrent.TimeoutException.class, failure.getCause());

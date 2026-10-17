@@ -10,6 +10,7 @@ import systems.zlink.framework.runtime.internal.monitoring.ZLinkMeshNodeMonitori
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceNodeDescriptor;
 import systems.zlink.framework.runtime.locations.ZLinkLocationRuntime;
 import systems.zlink.framework.runtime.mesh.MeshNodeRegistration;
+import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorOrigin;
 
 import java.time.Instant;
 import java.util.ArrayList;
@@ -235,8 +236,15 @@ public final class ZLinkObjectServerDescriptorPublisher {
                                         || failure
                                                         instanceof
                                                         ZLinkFrameworkException frameworkFailure
-                                                && frameworkFailure.kind()
-                                                        == ZLinkFrameworkErrorKind.UNAVAILABLE) {
+                                                && (frameworkFailure.kind()
+                                                                == ZLinkFrameworkErrorKind
+                                                                        .UNAVAILABLE
+                                                        || frameworkFailure.kind()
+                                                                        == ZLinkFrameworkErrorKind
+                                                                                .DEADLINE_EXCEEDED
+                                                                && ZLinkFrameworkErrorOrigin
+                                                                        .isFramework(
+                                                                                frameworkFailure))) {
                                     unavailable = failure;
                                 } else {
                                     return CompletableFuture.failedFuture(failure);

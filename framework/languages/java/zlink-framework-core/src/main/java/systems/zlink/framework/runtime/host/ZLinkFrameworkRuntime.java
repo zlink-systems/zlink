@@ -2435,13 +2435,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                                         streams == null
                                                 ? CompletableFuture.completedFuture(null)
                                                 : ZLinkFrameworkShutdown.atStage(
-                                                        "stream_drain",
-                                                        () ->
-                                                                streams.awaitDrainBarrier()
-                                                                        .thenCompose(
-                                                                                streamIgnored ->
-                                                                                        streams
-                                                                                                .notifyServerDrain()));
+                                                        "stream_drain", streams::notifyServerDrain);
                                 traceDrainStage("server_stream", serverStreamBarrier);
                                 CompletionStage<Void> spotClosing =
                                         serverStreamBarrier.thenCompose(
