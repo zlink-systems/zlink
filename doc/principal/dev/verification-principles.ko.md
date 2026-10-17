@@ -62,6 +62,7 @@
 | Configure 거부 뒤 source가 복원됐나 | `RelocationFailed` reason만 일치 | Source lease가 만료돼 `Error`가 되어도 같은 reason이다. `Blocked/RelocationFailed`와 source `Serving`을 함께 단언한다 | #1877 |
 | 끝난 member의 capacity가 반납됐나 | provider `list_mesh_nodes`의 descriptor capacity가 0 | 게시한 descriptor의 초기값이 0인지에만 답한다. 실제 capacity record의 수정 전 사용량과 수정 후 반환·예약 수를 함께 확인한다 | #1872 |
 | 완료 callback 안의 단언 실패가 시험에 전달되나 | callback 실행 뒤 시험 통과 | dispatcher가 `AssertionError`를 잡으면 내부 단언이 실패해도 통과한다. callback은 관찰값을 기록하고 시험 thread에서 단언하거나, 실패를 시험이 기다리는 future로 전달한다 | #1770 |
+| Framework E2E에서 handler 오류가 없었나 | Kotlin match update의 종료 코드 0과 `Scenarios: 1/1 passed` | 같은 회차의 JoinSpot message-flow에는 `INTERNAL_FAILURE`와 `ConcurrentModificationException`이 기록됐다. Program 결과와 서버의 예기치 않은 handler 오류를 함께 확인한다 | #1882 |
 
 ## 4. 무엇이 실제로 답을 줬나
 
