@@ -539,7 +539,9 @@ void maintenance_runtime_t::retain_message_follow (
     state->records.reset ();
     state->cutover_record.reset ();
     auto tracking = _shutdown_tracking;
-    const auto deadline = state->cutover_terminal_at + _limits.message_follow_duration;
+    const auto cutover_terminal_at = state->cutover_terminal_at;
+    auto token = std::move (state->pending_unit_token);
+    const auto deadline = cutover_terminal_at + _limits.message_follow_duration;
     const auto now = std::chrono::steady_clock::now ();
     auto retention = std::make_shared<task_t<void>> (
       deadline > now
@@ -547,20 +549,21 @@ void maintenance_runtime_t::retain_message_follow (
             _delay_owner, std::chrono::duration_cast<std::chrono::milliseconds> (deadline - now))
         : task_t<void> (result_t<void>::success ()));
     detail::observe_task_terminal (
-      *retention, [retention, tracking, state] (const result_t<void> &result) {
+      *retention, [retention, tracking, cutover_terminal_at,
+                   token = std::move (token)] (const result_t<void> &result) mutable {
           {
               std::lock_guard lock (tracking->metric_mutex);
               if (result && tracking->route_convergence_metric) {
                   const auto elapsed = std::chrono::duration<double> (
-                    std::chrono::steady_clock::now () - state->cutover_terminal_at);
+                    std::chrono::steady_clock::now () - cutover_terminal_at);
                   tracking->route_convergence_metric (elapsed.count ());
               }
           }
-          state->pending_unit_token.reset ();
+          token.reset ();
       });
 }
 
-task_t<relocation_authority_t>
+task_t<source_relocation_settlement_t>
 maintenance_runtime_t::settle_relocation (std::shared_ptr<relocation_terminal_state_t> state,
                                           std::vector<object_ref_t> participants)
 {
@@ -581,11 +584,11 @@ maintenance_runtime_t::settle_relocation (std::shared_ptr<relocation_terminal_st
       state->context.relocation};
     for (;;) {
         if (state->context.source_stopped && state->context.source_stopped ())
-            co_return relocation_authority_t::source_lease_expired;
+            co_return source_relocation_settlement_t{relocation_authority_t::source_lease_expired,
+                                                     {}};
         const auto preserve = std::chrono::steady_clock::now () >= state->context.restore_deadline;
-        const auto settled = preserve ? _authority->preserve_relocation (fence)
-                                      : _authority->observe_relocation (fence);
-        if (settled != relocation_authority_t::unsettled)
+        const auto settled = _authority->settle_source_relocation (fence, participants, preserve);
+        if (settled.outcome != relocation_authority_t::unsettled)
             co_return settled;
         // Relocation flow §4.4: only a different selected route can
         // require another complete boundary batch. Wait for its admission.
@@ -605,12 +608,24 @@ std::pair<relocation_terminal_t, relocation_reason_t>
 maintenance_runtime_t::apply_relocation_settlement (
   const std::shared_ptr<relocation_terminal_state_t> &state,
   const std::vector<object_ref_t> &participants,
-  relocation_authority_t settled)
+  const source_relocation_settlement_t &settled)
 {
     const auto token = state->seal_attempt.seal.token;
-    switch (settled) {
+    const auto deliver = [forward = state->context.send_application,
+                          follows = std::make_shared<const decltype (settled.follow_generations)> (
+                            settled.follow_generations)] (const object_ref_t &owner,
+                                                          const turn_record_t &record) {
+        if (!forward)
+            return;
+        // Heterogeneous lookup avoids allocating a key on each message.
+        const auto found = follows->find (std::pair{owner.kind, std::string_view{owner.key}});
+        forward (owner, record,
+                 found == follows->end () ? std::nullopt
+                                          : std::optional<std::uint64_t>{found->second});
+    };
+    switch (settled.outcome) {
         case relocation_authority_t::target_committed:
-            (void) _objects.finalize_relocation_cutover (token);
+            (void) _objects.finalize_relocation_cutover (token, deliver);
             if (_committed_terminal)
                 for (const auto &participant : participants)
                     _committed_terminal (participant);
@@ -624,7 +639,7 @@ maintenance_runtime_t::apply_relocation_settlement (
         default:
             /* Expired-owner terminal: dispatch and Store changes stop for
              * good; each pending request gets Unavailable once. */
-            (void) _objects.finalize_relocation_cutover (token);
+            (void) _objects.finalize_relocation_cutover (token, deliver);
             if (_unavailable_terminal) {
                 for (const auto &participant : participants) {
                     try {
@@ -634,8 +649,11 @@ maintenance_runtime_t::apply_relocation_settlement (
                     }
                 }
             }
-            return {relocation_terminal_t::recovery_required,
-                    relocation_reason_t::owner_lease_expired};
+            return settled.outcome == relocation_authority_t::data_lost
+                     ? std::pair{relocation_terminal_t::data_lost,
+                                 relocation_reason_t::authority_conflict}
+                     : std::pair{relocation_terminal_t::recovery_required,
+                                 relocation_reason_t::owner_lease_expired};
     }
 }
 
@@ -842,8 +860,12 @@ maintenance_runtime_t::relocate_prepare_target (std::shared_ptr<relocation_termi
 task_t<bool> maintenance_runtime_t::relocate_boundary_and_send (
   std::shared_ptr<relocation_terminal_state_t> state)
 {
-    const auto boundary = _objects.begin_relocation_boundary (state->seal_attempt.seal.token,
-                                                              state->context.send_application);
+    const auto boundary = _objects.begin_relocation_boundary (
+      state->seal_attempt.seal.token, [forward = state->context.send_application] (
+                                        const object_ref_t &owner, const turn_record_t &record) {
+          if (forward)
+              forward (owner, record, owner.authority_owner_generation);
+      });
     const auto boundary_error = boundary.first;
     state->batch = boundary.second;
     if (boundary_error != stateful_error_t::none) {
@@ -901,7 +923,7 @@ maintenance_runtime_t::relocate_cutover (std::shared_ptr<relocation_terminal_sta
     const auto terminal = applied.first;
     const auto reason = applied.second;
     state->result.emplace (
-      finish ({terminal, reason, std::nullopt, *state->records, state->handoff, stall}));
+      finish ({terminal, reason, std::nullopt, *state->records, state->handoff, stall, settled}));
     if (terminal == relocation_terminal_t::completed)
         retain_message_follow (state);
     co_return terminal == relocation_terminal_t::completed;
@@ -1087,8 +1109,12 @@ task_t<aggregate_relocation_result_t> maintenance_runtime_t::relocate_aggregate 
     }
     const target_only_cas_t handoff{sources, target_node_id, target_owner, inventory_digest,
                                     state->manifest};
-    const auto [boundary_error, batch] =
-      _objects.begin_relocation_boundary (seal.token, canonical_wire->send_application);
+    const auto [boundary_error, batch] = _objects.begin_relocation_boundary (
+      seal.token, [forward = canonical_wire->send_application] (const object_ref_t &owner,
+                                                                const turn_record_t &record) {
+          if (forward)
+              forward (owner, record, owner.authority_owner_generation);
+      });
     auto failure = relocation_reason_t::restore_failed;
     const auto records =
       boundary_error == stateful_error_t::none
@@ -1154,7 +1180,7 @@ task_t<aggregate_relocation_result_t> maintenance_runtime_t::relocate_aggregate 
     const auto reason = applied.second;
     if (terminal == relocation_terminal_t::completed)
         retain_message_follow (state);
-    co_return aggregate_relocation_result_t{terminal, reason, {}, *records, handoff};
+    co_return aggregate_relocation_result_t{terminal, reason, {}, *records, handoff, settled};
 }
 
 relocation_gate_snapshot_t maintenance_runtime_t::gate_snapshot () const
