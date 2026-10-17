@@ -1,0 +1,121 @@
+{
+  "version": 1,
+  "id": "morpg-lobby-instances",
+  "name": "my-game",
+  "language": "java",
+  "run": {
+    "commands": {
+      "sh": [
+        "./run-e2e.sh --build-only",
+        "./run-e2e.sh",
+        "./run-e2e.sh --scenario party,reconnect,update"
+      ],
+      "powershell": [
+        "pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly",
+        "pwsh -NoProfile -File ./run-e2e.ps1",
+        "pwsh -NoProfile -File ./run-e2e.ps1 -Scenario party,reconnect,update"
+      ]
+    },
+    "scenarios": [
+      "party",
+      "reconnect",
+      "update"
+    ]
+  },
+  "nodes": [
+    {
+      "id": "players",
+      "role": "external",
+      "title": "Players",
+      "config": null
+    },
+    {
+      "id": "session",
+      "role": "session",
+      "title": "session",
+      "config": "server/config/session.json"
+    },
+    {
+      "id": "lobby",
+      "role": "lobby",
+      "title": "Lobby",
+      "config": "server/config/lobby.json"
+    },
+    {
+      "id": "instanceA",
+      "role": "instance",
+      "title": "instanceA",
+      "config": "server/config/instanceA.json"
+    },
+    {
+      "id": "instanceB",
+      "role": "instance",
+      "title": "instanceB",
+      "config": "server/config/instanceB.json"
+    },
+    {
+      "id": "location",
+      "role": "location-store",
+      "title": "Redis",
+      "config": "docker-compose.yml"
+    }
+  ],
+  "channels": [],
+  "spots": [
+    {
+      "id": "entry",
+      "kind": "entry",
+      "type": null,
+      "owner": "lobby"
+    },
+    {
+      "id": "instanceA-entry",
+      "kind": "entry",
+      "type": null,
+      "owner": "instanceA"
+    },
+    {
+      "id": "instanceB-entry",
+      "kind": "entry",
+      "type": null,
+      "owner": "instanceB"
+    },
+    {
+      "id": "party",
+      "kind": "user",
+      "type": "Party",
+      "owner": "lobby",
+      "dynamic": true
+    },
+    {
+      "id": "dungeon",
+      "kind": "user",
+      "type": "Dungeon",
+      "owner": "instanceA",
+      "dynamic": true
+    }
+  ],
+  "edges": [
+    {
+      "from": "players",
+      "to": "session",
+      "label": "STREAM"
+    },
+    {
+      "from": "session",
+      "to": "lobby",
+      "label": "relay"
+    },
+    {
+      "from": "lobby",
+      "to": "instanceA",
+      "label": "GetOrCreate"
+    },
+    {
+      "from": "lobby",
+      "to": "location",
+      "label": "Location / lease",
+      "semantic": "location-authority"
+    }
+  ]
+}

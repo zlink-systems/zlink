@@ -1,0 +1,20 @@
+{
+  "Id": "accounts",
+  "RedisEndpoint": "localhost:6379",
+  "KeyPrefix": "my-game-world-a:",
+  "MeshEndpoint": "tcp://127.0.0.1:0",
+  "WorldId": "A",
+  "HttpEndpoint": "http://127.0.0.1:0",
+  "Worlds": [
+    {
+      "WorldId": "A",
+      "Name": "World A",
+      "SessionEndpoint": "ws://127.0.0.1:0"
+    },
+    {
+      "WorldId": "B",
+      "Name": "World B",
+      "SessionEndpoint": "ws://127.0.0.1:0"
+    }
+  ]
+}

@@ -1,0 +1,23 @@
+{
+  "id": "accounts",
+  "redisEndpoint": "localhost:6379",
+  "keyPrefix": "my-game-world-a:",
+  "meshEndpoint": "tcp://127.0.0.1:0",
+  "worldId": "A",
+  "httpEndpoint": "http://127.0.0.1:0",
+  "worlds": [
+    {
+      "worldId": "A",
+      "name": "World A",
+      "sessionEndpoint": "ws://127.0.0.1:0"
+    },
+    {
+      "worldId": "B",
+      "name": "World B",
+      "sessionEndpoint": "ws://127.0.0.1:0"
+    }
+  ],
+  "streamEndpoint": null,
+  "zoneIds": [],
+  "zoneCapacity": 2
+}
