@@ -2,6 +2,7 @@ package systems.zlink.framework.runtime.binding;
 
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpot;
+import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode.InstanceSpotActivationHandler;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityReadResult;
 import systems.zlink.framework.runtime.internal.service.ZLinkInstanceActivationRecoveryCodec;
@@ -15,7 +16,6 @@ import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
 import java.util.function.BiFunction;
-import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
 
@@ -28,7 +28,7 @@ final class ZLinkJavaInstanceSpotRegistry {
     private final Executor applicationExecutor;
     private final Map<String, BiFunction<String, Long, ZLinkBackendSpot>> factories =
             new ConcurrentHashMap<>();
-    private final Map<String, ActivationHook> hooks = new ConcurrentHashMap<>();
+    private final Map<String, InstanceSpotActivationHandler> hooks = new ConcurrentHashMap<>();
     private final Map<String, String> stableTypes = new ConcurrentHashMap<>();
     private final Map<String, ActivationOperation> activations = new ConcurrentHashMap<>();
 
@@ -42,13 +42,13 @@ final class ZLinkJavaInstanceSpotRegistry {
         register(
                 stableType,
                 factory,
-                (type, spotId, generation, spot) -> CompletableFuture.completedFuture(null));
+                (type, route, spot) -> CompletableFuture.completedFuture(null));
     }
 
     void register(
             String stableType,
             BiFunction<String, Long, ZLinkBackendSpot> factory,
-            ActivationHook hook) {
+            InstanceSpotActivationHandler hook) {
         requireType(stableType);
         if (factories.putIfAbsent(stableType, Objects.requireNonNull(factory, "factory")) != null) {
             throw new IllegalStateException(
@@ -58,37 +58,30 @@ final class ZLinkJavaInstanceSpotRegistry {
     }
 
     CompletionStage<Activation> activate(
-            String spotId, String requestedType, long objectGeneration) {
-        return activate(spotId, requestedType, objectGeneration, Long.MAX_VALUE);
-    }
-
-    CompletionStage<Activation> activate(
-            String spotId, String requestedType, long objectGeneration, long deadlineUnixMs) {
+            String spotId,
+            String requestedType,
+            ZLinkServiceM6BWireCodec.InstanceRouteFence route) {
         return activate(
                 spotId,
                 requestedType,
-                objectGeneration,
-                deadlineUnixMs,
+                route,
+                Long.MAX_VALUE,
                 ignored -> CompletableFuture.completedFuture(null));
     }
 
     CompletionStage<Activation> activate(
             String spotId,
             String requestedType,
-            long objectGeneration,
+            ZLinkServiceM6BWireCodec.InstanceRouteFence route,
             long deadlineUnixMs,
             Function<ZLinkBackendSpot, CompletionStage<Void>> restoreFirst) {
         Objects.requireNonNull(spotId, "spotId");
-        if (objectGeneration <= 0) {
-            return CompletableFuture.failedFuture(
-                    new IllegalArgumentException(
-                            "Instance Spot object generation must be positive"));
-        }
+        Objects.requireNonNull(route, "route");
         return activate(
                 spotId,
                 requestedType,
                 deadlineUnixMs,
-                () -> CompletableFuture.completedFuture(objectGeneration),
+                () -> CompletableFuture.completedFuture(route),
                 restoreFirst);
     }
 
@@ -96,7 +89,7 @@ final class ZLinkJavaInstanceSpotRegistry {
             String spotId,
             String requestedType,
             long deadlineUnixMs,
-            Supplier<CompletionStage<Long>> generation,
+            Supplier<CompletionStage<ZLinkServiceM6BWireCodec.InstanceRouteFence>> authority,
             Function<ZLinkBackendSpot, CompletionStage<Void>> restoreFirst) {
         Objects.requireNonNull(spotId, "spotId");
         String selected = selectType(spotId, requestedType);
@@ -116,7 +109,7 @@ final class ZLinkJavaInstanceSpotRegistry {
                                             spotId,
                                             selected,
                                             deadlineUnixMs,
-                                            generation,
+                                            authority,
                                             restoreFirst,
                                             candidate,
                                             current);
@@ -141,7 +134,7 @@ final class ZLinkJavaInstanceSpotRegistry {
             String spotId,
             String selected,
             long deadlineUnixMs,
-            Supplier<CompletionStage<Long>> generation,
+            Supplier<CompletionStage<ZLinkServiceM6BWireCodec.InstanceRouteFence>> authority,
             Function<ZLinkBackendSpot, CompletionStage<Void>> restoreFirst,
             ActivationOperation candidate,
             ActivationOperation current) {
@@ -183,20 +176,22 @@ final class ZLinkJavaInstanceSpotRegistry {
         try {
             Supplier<CompletionStage<Activation>> start =
                     () ->
-                            generation
+                            authority
                                     .get()
                                     .thenComposeAsync(
-                                            objectGeneration -> {
+                                            route -> {
                                                 ZLinkBackendSpot spot =
                                                         factories
                                                                 .get(selected)
-                                                                .apply(spotId, objectGeneration);
+                                                                .apply(
+                                                                        spotId,
+                                                                        route.objectGeneration());
                                                 if (spot == null) {
                                                     throw new IllegalStateException(
                                                             "Instance Spot factory returned null");
                                                 }
                                                 if (spot.lifecycleGeneration()
-                                                        != objectGeneration) {
+                                                        != route.objectGeneration()) {
                                                     throw new IllegalStateException(
                                                             "Instance Spot factory returned a stale"
                                                                     + " generation");
@@ -204,8 +199,7 @@ final class ZLinkJavaInstanceSpotRegistry {
                                                 return hooks.get(selected)
                                                         .activate(
                                                                 selected,
-                                                                spotId,
-                                                                objectGeneration,
+                                                                route,
                                                                 spot,
                                                                 deadlineUnixMs,
                                                                 activated ->
@@ -255,14 +249,14 @@ final class ZLinkJavaInstanceSpotRegistry {
             String stableType,
             ZLinkServiceM6BWireCodec.InstanceSpotMessage message,
             ZLinkBackendReceived received) {
-        ActivationHook hook = hooks.get(stableType);
+        InstanceSpotActivationHandler hook = hooks.get(stableType);
         return hook == null ? null : hook.admitExisting(message, received);
     }
 
     CompletionStage<ZLinkServiceM6BWireCodec.InstanceRouteFence> reserve(
             ZLinkInstanceActivationRecoveryCodec.RecoveryEnvelope envelope,
             ZLinkAuthorityReadResult authority) {
-        ActivationHook hook = hooks.get(envelope.stableType());
+        InstanceSpotActivationHandler hook = hooks.get(envelope.stableType());
         if (hook == null)
             return CompletableFuture.failedFuture(
                     new IllegalStateException("Instance type is not registered"));
@@ -354,52 +348,4 @@ final class ZLinkJavaInstanceSpotRegistry {
     }
 
     record Activation(String stableType, ZLinkBackendSpot spot) {}
-
-    @FunctionalInterface
-    interface ActivationHook {
-        default <T> CompletionStage<T> admit(Supplier<CompletionStage<T>> work) {
-            return work.get();
-        }
-
-        CompletionStage<Void> activate(
-                String stableType, String spotId, long generation, ZLinkBackendSpot spot);
-
-        default CompletionStage<Void> activate(
-                String stableType,
-                String spotId,
-                long generation,
-                ZLinkBackendSpot spot,
-                long deadlineUnixMs,
-                Consumer<ZLinkBackendSpot> restoreFirst) {
-            return activate(stableType, spotId, generation, spot, deadlineUnixMs)
-                    .thenRun(() -> restoreFirst.accept(spot));
-        }
-
-        default CompletionStage<Void> completed(
-                ZLinkServiceM6BWireCodec.InstanceSpotMessage message) {
-            return CompletableFuture.completedFuture(null);
-        }
-
-        default CompletionStage<Void> activate(
-                String stableType,
-                String spotId,
-                long generation,
-                ZLinkBackendSpot spot,
-                long deadlineUnixMs) {
-            return activate(stableType, spotId, generation, spot);
-        }
-
-        default CompletionStage<ZLinkServiceM6BWireCodec.InstanceRouteFence> reserve(
-                ZLinkInstanceActivationRecoveryCodec.RecoveryEnvelope envelope,
-                ZLinkAuthorityReadResult authority) {
-            return CompletableFuture.failedFuture(
-                    new UnsupportedOperationException("Cold activation is unavailable"));
-        }
-
-        default CompletionStage<Void> admitExisting(
-                ZLinkServiceM6BWireCodec.InstanceSpotMessage message,
-                ZLinkBackendReceived received) {
-            return null;
-        }
-    }
 }
