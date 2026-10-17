@@ -9,6 +9,8 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.errors.ZlinkRequestException;
@@ -118,8 +120,10 @@ final class ZLinkSessionActorBindingContractTest {
         assertEquals(1, stream.disconnectNotifications);
     }
 
-    @Test
-    void disconnectSenderUsesBindingOwnerSnapshotAndCanonicalPacket() throws Exception {
+    @ParameterizedTest
+    @EnumSource(ZLinkStreamCodec.class)
+    void disconnectSenderUsesBindingOwnerSnapshotAndCanonicalPacket(ZLinkStreamCodec defaultCodec)
+            throws Exception {
         var golden =
                 new com.fasterxml.jackson.databind.ObjectMapper()
                         .readTree(getClass().getResourceAsStream("/session-disconnected-v1.json"));
@@ -159,7 +163,7 @@ final class ZLinkSessionActorBindingContractTest {
                             new RawSerializer(),
                             null,
                             true,
-                            ZLinkStreamCodec.RAW,
+                            defaultCodec,
                             null,
                             Duration.ofSeconds(1),
                             () -> binding);
@@ -173,6 +177,7 @@ final class ZLinkSessionActorBindingContractTest {
             lifecycle.set(5L);
             actor.notifyDisconnected().toCompletableFuture().join();
             assertEquals("zlink.framework.actor.session_disconnected", stream.disconnectPacketName);
+            assertEquals(ZLinkStreamCodec.RAW, stream.disconnectCodec);
             org.junit.jupiter.api.Assertions.assertArrayEquals(
                     java.util.HexFormat.of().parseHex(entry.path("hex").asText()),
                     stream.disconnectBody);
@@ -1399,6 +1404,7 @@ final class ZLinkSessionActorBindingContractTest {
     private static final class FakeStream implements ZLinkBackendStreamSocket {
         private long nativeBindingGeneration = BINDING_GENERATION;
         private String disconnectPacketName;
+        private ZLinkStreamCodec disconnectCodec;
         private byte[] disconnectBody;
         private final List<String> binds = new ArrayList<>();
         private final List<String> bindingEvents = new ArrayList<>();
@@ -1760,6 +1766,7 @@ final class ZLinkSessionActorBindingContractTest {
             if (ZLinkActorSpotRoutePackets.SESSION_DISCONNECTED_PACKET_NAME.equals(
                     header.packetName())) {
                 disconnectPacketName = header.packetName();
+                disconnectCodec = header.codec();
                 disconnectBody = parts.getFirst().toByteArray();
                 disconnectNotifications++;
                 if (disconnectSubmissionFailure != null) {

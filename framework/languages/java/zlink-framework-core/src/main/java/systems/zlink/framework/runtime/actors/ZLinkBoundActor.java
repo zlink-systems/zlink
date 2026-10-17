@@ -587,7 +587,7 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
         ZLinkStreamHeader header =
                 new ZLinkStreamHeader(
                         ZLinkStreamMessageKind.SEND,
-                        defaultCodec,
+                        ZLinkStreamCodec.RAW,
                         EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
                         Optional.empty(),
                         ZLinkActorSpotRoutePackets.SESSION_DISCONNECTED_PACKET_NAME,
