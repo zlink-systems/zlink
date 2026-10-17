@@ -7984,6 +7984,240 @@ int verify_deferred_join_waits_for_handler_terminal_across_yield ()
     return 0;
 }
 
+bool verify_relocation_readiness_root_rejection ()
+{
+    namespace fw = zlink::framework;
+    namespace detail = zlink::framework::detail;
+    namespace rt = zlink::framework::runtime;
+    auto mesh =
+      fw::test::runtime_failure_fixture<detail::mesh_node_builder_state_t> ("readiness-rejection");
+    auto node = mesh->spot_state;
+    node->worker_executor = std::make_shared<rt::offload_executor_t> (2, "readiness-rejection");
+    auto spot = std::make_shared<detail::spot_context_state_t> ();
+    spot->node = node;
+    spot->spot_id = fw::spot_id_t ("rejected-source");
+    spot->spot_instance = std::make_shared<int> (1);
+    spot->serial_executor = node->worker_executor;
+    spot->relocation_coordination_mode =
+      fw::spot_relocation_coordination_mode_t::application_signaled;
+    spot->relocation_boundary_active = true;
+    const auto coordinator = spot->ensure_spot_serial_executor ();
+    spot->serial_queue = coordinator->spot_queue ();
+    node->actor_spot_ids.emplace ("probe:member", spot->spot_id);
+    const auto actor = coordinator->actor_executor ("probe:member")->queue ();
+    std::promise<void> finished;
+    bool rejected = false;
+    spot->serial_queue->post ("reject-readiness-root", [&] {
+        spot->serial_queue->close ();
+        try {
+            spot->defer_relocation_ready ();
+        }
+        catch (const fw::framework_exception_t &error) {
+            rejected = error.kind () == fw::framework_error_kind_t::shutting_down;
+        }
+        finished.set_value ();
+    });
+    finished.get_future ().wait ();
+    spot->serial_queue->drain ();
+    actor->drain ();
+    coordinator->close ();
+    node->worker_executor->drain ();
+    std::cout << "readiness-root-rejection rejected=" << rejected
+              << " deferred=" << spot->relocation_ready_deferred
+              << " holder=" << bool (spot->relocation_ready_barrier)
+              << " pending=" << actor->pending_count () << '\n';
+    return rejected && !spot->relocation_ready_deferred && !spot->relocation_ready_barrier
+           && actor->pending_count () == 0;
+}
+
+bool verify_relocation_participant_resources (bool fail_reserve, bool abort)
+{
+    namespace fw = zlink::framework;
+    namespace detail = zlink::framework::detail;
+    namespace rt = zlink::framework::runtime;
+    auto mesh =
+      fw::test::runtime_failure_fixture<detail::mesh_node_builder_state_t> ("readiness-resources");
+    auto node = mesh->spot_state;
+    node->worker_executor = std::make_shared<rt::offload_executor_t> (2, "readiness-resources");
+    auto spot = std::make_shared<detail::spot_context_state_t> ();
+    spot->node = node;
+    spot->spot_id = fw::spot_id_t ("resource-source");
+    spot->spot_instance = std::make_shared<int> (1);
+    spot->serial_executor = node->worker_executor;
+    spot->relocation_coordination_mode =
+      fw::spot_relocation_coordination_mode_t::application_signaled;
+    spot->relocation_boundary_active = true;
+    node->spot_contexts_by_id.emplace (spot->spot_id, detail::spot_context_access_t::create (spot));
+    const auto coordinator = spot->ensure_spot_serial_executor ();
+    spot->serial_queue = coordinator->spot_queue ();
+    std::vector<std::shared_ptr<rt::serial_execution_queue_t>> actors;
+    for (const auto &key : {"probe:first", "probe:second"}) {
+        node->actor_spot_ids.emplace (key, spot->spot_id);
+        actors.push_back (coordinator->actor_executor (key)->queue ());
+    }
+    std::atomic_int completions{0};
+    spot->lifecycle.on_relocation_ready_completed =
+      [&] (void *, const fw::spot_relocation_ready_completion_t &completion) {
+          if (completion.outcome == fw::spot_relocation_ready_outcome_t::continued)
+              ++completions;
+      };
+    std::promise<void> handler_entered;
+    detail::task_scheduler_t resume;
+    rt::serial_execution_queue_t::async_completion_t terminal;
+    if (fail_reserve) {
+        actors[1]->close ();
+    } else {
+        actors[1]->post_async ("participant-resource-handler", [&] (auto complete) {
+            terminal = std::move (complete);
+            const auto turn = detail::capture_current_serial_turn ();
+            resume = turn->resume_scheduler ();
+            turn->release ();
+            handler_entered.set_value ();
+        });
+        handler_entered.get_future ().wait ();
+    }
+    std::promise<void> registered;
+    spot->serial_queue->post ("resource-readiness", [&] {
+        spot->defer_relocation_ready ();
+        registered.set_value ();
+    });
+    registered.get_future ().wait ();
+    std::atomic_bool captured{false};
+    auto capture = spot->relocation_ready_barrier->run ([&] () -> fw::task_t<void> {
+        captured.store (true);
+        co_return;
+    });
+    if (!fail_reserve) {
+        std::promise<void> acquisition_checkpoint;
+        spot->serial_queue->post ("participant-acquisition-checkpoint",
+                                  [&] { acquisition_checkpoint.set_value (); });
+        acquisition_checkpoint.get_future ().wait ();
+        if (abort)
+            spot->complete_relocation_ready (fw::spot_relocation_ready_outcome_t::continued);
+        else
+            actors[1]->cancel_pending ();
+    }
+    const auto result = capture.result ();
+    std::size_t pending_before_continued = 0;
+    int continued_before = completions.load ();
+    bool next_before_continued = false;
+    std::atomic_bool next_started{false};
+    std::promise<void> next_terminal;
+    auto next_completed = next_terminal.get_future ();
+    if (!abort) {
+        std::promise<void> released_head_checkpoint;
+        // The participant head was connected before acquisition failed. This
+        // later root FIFO item observes its terminal if cancellation released it.
+        spot->serial_queue->post ("failed-participant-release-checkpoint",
+                                  [&] { released_head_checkpoint.set_value (); });
+        released_head_checkpoint.get_future ().wait ();
+        pending_before_continued = actors[0]->pending_count ();
+        actors[0]->post ("after-failed-participant-acquisition", [&] {
+            next_started.store (true);
+            next_terminal.set_value ();
+        });
+        // A retained boundary is already a deterministic failure. Release it
+        // through Continued instead of waiting on work behind that boundary.
+        if (pending_before_continued == 0)
+            next_completed.wait ();
+        next_before_continued = next_started.load ();
+        spot->complete_relocation_ready (fw::spot_relocation_ready_outcome_t::continued);
+    }
+    if (!fail_reserve)
+        resume ([&] { terminal ([] {}); });
+    for (const auto &actor : actors)
+        actor->drain ();
+    spot->serial_queue->drain ();
+    coordinator->close ();
+    node->worker_executor->drain ();
+    std::cout << "readiness-resources reserve_failure=" << fail_reserve << " abort=" << abort
+              << " capture_started=" << captured.load () << " result=" << bool (result)
+              << " error=" << (result ? 0 : static_cast<int> (result.error_kind ()))
+              << " pending_before_continued=" << pending_before_continued
+              << " next_before_continued=" << next_before_continued
+              << " continued_before=" << continued_before << " continued=" << completions.load ()
+              << " pending_first=" << actors[0]->pending_count ()
+              << " pending_second=" << actors[1]->pending_count () << '\n';
+    return !result && !captured.load ()
+           && (abort
+               || (pending_before_continued == 0 && next_before_continued && continued_before == 0))
+           && completions.load () == 1 && actors[0]->pending_count () == 0
+           && actors[1]->pending_count () == 0;
+}
+
+bool verify_relocation_membership_pending_releases_root_turn ()
+{
+    namespace fw = zlink::framework;
+    namespace detail = zlink::framework::detail;
+    namespace rt = zlink::framework::runtime;
+    auto mesh = fw::test::runtime_failure_fixture<detail::mesh_node_builder_state_t> (
+      "readiness-node-pending");
+    auto node = mesh->spot_state;
+    node->worker_executor = std::make_shared<rt::offload_executor_t> (2, "readiness-node-pending");
+    auto spot = std::make_shared<detail::spot_context_state_t> ();
+    spot->node = node;
+    spot->spot_id = fw::spot_id_t ("node-pending-source");
+    spot->spot_instance = std::make_shared<int> (1);
+    spot->serial_executor = node->worker_executor;
+    spot->relocation_coordination_mode =
+      fw::spot_relocation_coordination_mode_t::application_signaled;
+    spot->relocation_boundary_active = true;
+    node->spot_contexts_by_id.emplace (spot->spot_id, detail::spot_context_access_t::create (spot));
+    const auto coordinator = spot->ensure_spot_serial_executor ();
+    spot->serial_queue = coordinator->spot_queue ();
+    std::promise<void> node_entered;
+    auto node_entered_future = node_entered.get_future ();
+    std::promise<void> node_release;
+    auto node_release_future = node_release.get_future ();
+    std::promise<void> node_terminal;
+    auto node_terminal_future = node_terminal.get_future ();
+    std::promise<void> registered;
+    std::atomic_bool captured{false};
+    std::atomic_int continued{0};
+    spot->lifecycle.on_relocation_ready_completed =
+      [&] (void *, const fw::spot_relocation_ready_completion_t &completion) {
+          if (completion.outcome == fw::spot_relocation_ready_outcome_t::continued)
+              ++continued;
+      };
+    spot->serial_queue->post ("register-before-node-hold", [&] {
+        spot->defer_relocation_ready ();
+        // Registration has completed every synchronous state capture. Hold the
+        // node lane before this root turn ends and its lifecycle provider starts.
+        node->lane.try_post ([&] {
+            node_entered.set_value ();
+            node_release_future.wait ();
+            node_terminal.set_value ();
+        });
+        node_entered_future.wait ();
+        registered.set_value ();
+    });
+    registered.get_future ().wait ();
+    auto capture = spot->relocation_ready_barrier->run ([&] () -> fw::task_t<void> {
+        captured.store (true);
+        co_return;
+    });
+    std::promise<void> root_checkpoint;
+    bool captured_while_node_pending = false;
+    spot->serial_queue->post ("root-progress-with-node-pending", [&] {
+        captured_while_node_pending = captured.load ();
+        root_checkpoint.set_value ();
+    });
+    root_checkpoint.get_future ().wait ();
+    node_release.set_value ();
+    node_terminal_future.wait ();
+    const auto result = capture.result ();
+    spot->complete_relocation_ready (fw::spot_relocation_ready_outcome_t::continued);
+    spot->serial_queue->drain ();
+    node->lane.run ([] {}).get ();
+    coordinator->close ();
+    node->worker_executor->drain ();
+    std::cout << "readiness-node-pending root_checkpoint=1 captured_while_pending="
+              << captured_while_node_pending << " captured=" << captured.load ()
+              << " result=" << bool (result) << " continued=" << continued.load ()
+              << " pending=" << spot->serial_queue->pending_count () << '\n';
+    return !captured_while_node_pending && captured.load () && result && continued.load () == 1
+           && spot->serial_queue->pending_count () == 0;
+}
 bool verify_teardown_observes_actor_handoff_terminal ()
 {
     using namespace zlink::framework;
@@ -8059,6 +8293,29 @@ bool verify_teardown_observes_actor_handoff_terminal ()
 
 int main (int argc, char **argv)
 {
+    if (argc == 2 && std::string_view (argv[1]) == "--aggregate-membership-pending")
+        return verify_relocation_membership_pending_releases_root_turn () ? EXIT_SUCCESS
+                                                                          : EXIT_FAILURE;
+    if (argc == 1
+        && (!verify_relocation_participant_resources (true, false)
+            || !verify_relocation_participant_resources (false, false)
+            || !verify_relocation_participant_resources (false, true)
+            || !verify_relocation_readiness_root_rejection ()
+            || !verify_relocation_membership_pending_releases_root_turn ()))
+        return EXIT_FAILURE;
+    if (argc == 2 && std::string_view (argv[1]) == "--aggregate-failure-release") {
+        const bool reserve_failure = verify_relocation_participant_resources (true, false);
+        const bool run_failure = verify_relocation_participant_resources (false, false);
+        return reserve_failure && run_failure ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+    if (argc == 2 && std::string_view (argv[1]) == "--aggregate-holder-resources")
+        return verify_relocation_participant_resources (true, false)
+                   && verify_relocation_participant_resources (false, false)
+                   && verify_relocation_participant_resources (false, true)
+                   && verify_relocation_readiness_root_rejection ()
+                 ? EXIT_SUCCESS
+                 : EXIT_FAILURE;
+
     if (argc == 2 && std::string_view (argv[1]) == "--source-mesh-stopped-management")
         return verify_remote_actor_cutover_completion_is_target_owned (true, true, true)
                  ? EXIT_SUCCESS
