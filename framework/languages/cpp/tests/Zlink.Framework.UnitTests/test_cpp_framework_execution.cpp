@@ -2635,12 +2635,26 @@ bool verify_spot_wide_yield_blocks_idle_eviction_until_handler_terminal ()
                                           && node->spot_contexts_by_id.contains (context->spot_id);
     }
 
+    const auto coordinator = context->ensure_spot_serial_executor ();
+    const auto actor_executor = coordinator->find_actor_executor (actor_key);
+    auto terminal_fence = std::make_shared<serial_test_signal_t> ();
     probe->reply->complete (result_t<int>::success (7));
+    const auto handler_resumed = probe->handler_resumed.wait_for ();
+    const auto terminal_fence_posted =
+      actor_executor && handler_resumed
+      && coordinator->execute_actor (actor_key, "yield-idle-eviction-terminal-fence",
+                                     [terminal_fence] (auto complete) {
+                                         complete ([terminal_fence] { terminal_fence->set (); });
+                                     });
+    const auto terminal_observed = terminal_fence_posted && terminal_fence->wait_for ();
+    // Yield releases the Spot gate, while this Actor FIFO retains the handler claim.
+    if (actor_executor)
+        actor_executor->queue ()->drain ();
     context->serial_queue->drain ();
     executor->drain ();
 
     const auto handler_completed =
-      probe->handler_resumed.is_set () && !context->has_active_callback ();
+      terminal_observed && probe->handler_resumed.is_set () && !context->has_active_callback ();
     if (!handler_entered || !follower_ran || !single_lifecycle_claim
         || !eviction_rejected_while_yielded || !handler_completed) {
         return false;
@@ -8430,10 +8444,10 @@ int main (int argc, char **argv)
         return 10;
     }
     scheduler->run_worker_job ();
+    const auto submit_result = submit_task.result ();
     if (!submit_task.await_ready ()) {
         return 11;
     }
-    const auto submit_result = submit_task.result ();
     if (worker_thread == std::thread::id{} || !submit_result || submit_result.value () != 42) {
         return 12;
     }

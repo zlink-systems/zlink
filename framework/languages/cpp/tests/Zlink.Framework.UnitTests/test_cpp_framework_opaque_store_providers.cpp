@@ -292,7 +292,13 @@ TEST (ZLinkFrameworkOpaqueStoreProviders, RenewReturnsBeforeDelayedProviderWrite
     EXPECT_FALSE (renewal.await_ready ());
     store.finish_write ();
     std::atomic_int completions = 0;
-    detail::observe_task_completion (renewal, [&] (const auto &) { ++completions; });
+    std::promise<void> completed;
+    auto completion = completed.get_future ();
+    detail::observe_task_completion (renewal, [&] (const auto &) {
+        ++completions;
+        completed.set_value ();
+    });
+    completion.get ();
     EXPECT_TRUE (std::holds_alternative<owner_lease_renewed_t> (renewal.result ().value ()));
     EXPECT_EQ (1, completions.load ());
 }
