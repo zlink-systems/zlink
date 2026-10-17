@@ -13683,9 +13683,10 @@ public sealed partial class EntrySpotActorDispatchTests
         public ZLinkServiceWireCodec.RequestSourceFence? ResolveRequestSourceFence(
             RoutingId sourceNodeRid,
             ulong sourceNodeGeneration
-        ) => _requestSources.TryGetValue((sourceNodeRid, sourceNodeGeneration), out var source)
-            ? source
-            : null;
+        ) =>
+            _requestSources.TryGetValue((sourceNodeRid, sourceNodeGeneration), out var source)
+                ? source
+                : null;
 
         public void ObserveActorAuthority(
             ZLinkBackendActorRef actor,
