@@ -2072,6 +2072,9 @@ public final class ZLinkSerialExecutionQueue {
         }
         ZLinkSerialExecutionQueue queue = turn.queue;
         CompletableFuture<Void> gate = turn.gate;
+        // An independent ActorDelivery turn owns the Actor mailbox claim, not a shared
+        // Spot gate. Keep subsequent Actor records behind the lifecycle result (§7);
+        // infrastructure progresses independently of this application claim (§13).
         if (queue.lanePolicy instanceof ZLinkExecutionLanePolicy.ActorDelivery
                 && isLifecycleTurn(turn.entry)) {
             return stage;
@@ -2127,8 +2130,9 @@ public final class ZLinkSerialExecutionQueue {
                                                     managed.complete(value);
                                                 }
                                             }
-                                            // Every resumed turn retains the gate through ordinary
-                                            // awaits until its logical operation ends or yields.
+                                            // Execution gate §2·§7: infrastructure can resume into
+                                            // a timer or lifecycle callback. Its ordinary awaits
+                                            // retain the gate until completion or another Yield.
                                             return turn.entry != null
                                                     ? turn.entry
                                                             .turnOrigin()

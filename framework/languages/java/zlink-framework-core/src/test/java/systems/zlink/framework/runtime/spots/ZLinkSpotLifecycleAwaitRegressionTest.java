@@ -20,6 +20,7 @@ import systems.zlink.framework.spots.ZLinkSpotContext;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
@@ -30,19 +31,15 @@ final class ZLinkSpotLifecycleAwaitRegressionTest {
     @Test
     void independentActorInfrastructureWaitRetainsItsMailboxClaim() throws Exception {
         var release = new CompletableFuture<Void>();
-        var prefixReturned = new CompletableFuture<Void>();
         var observer = new AtomicReference<Runnable>();
         var retained = new AtomicBoolean();
-        java.util.concurrent.Executor executor =
-                command -> {
-                    command.run();
-                    prefixReturned.complete(null);
-                };
+        var payloadEntered = new AtomicBoolean();
+        var executor = Executors.newSingleThreadExecutor();
         var serials =
                 new ZLinkSpotSerialExecutor(
                         new ZLinkSerialExecutionQueue(
                                 Runnable::run, ZLinkExecutionLanePolicy.spot()),
-                        Runnable::run,
+                        executor,
                         executor,
                         ZLinkUserSpotExecutionMode.PER_ACTOR,
                         false);
@@ -63,7 +60,19 @@ final class ZLinkSpotLifecycleAwaitRegressionTest {
                                 return ZLinkSerialExecutionQueue.yieldCurrent(release);
                             },
                             null);
-            prefixReturned.get(BOUND_SECONDS, TimeUnit.SECONDS);
+            executor.submit(() -> {}).get(BOUND_SECONDS, TimeUnit.SECONDS);
+            var payload =
+                    actor.executeActor(
+                            () -> {
+                                payloadEntered.set(true);
+                                return CompletableFuture.completedFuture(null);
+                            },
+                            null);
+            executor.submit(() -> {}).get(BOUND_SECONDS, TimeUnit.SECONDS);
+            boolean payloadOverlapped = payloadEntered.get();
+            serials.executeInfrastructure(() -> CompletableFuture.completedFuture(null))
+                    .toCompletableFuture()
+                    .get(BOUND_SECONDS, TimeUnit.SECONDS);
             serials.executeTimer("probe", ignored -> CompletableFuture.completedFuture(null))
                     .toCompletableFuture()
                     .get(BOUND_SECONDS, TimeUnit.SECONDS);
@@ -71,65 +80,81 @@ final class ZLinkSpotLifecycleAwaitRegressionTest {
             boolean owned = retained.get();
             release.complete(null);
             lifecycle.toCompletableFuture().get(BOUND_SECONDS, TimeUnit.SECONDS);
+            payload.toCompletableFuture().get(BOUND_SECONDS, TimeUnit.SECONDS);
+            assertFalse(
+                    payloadOverlapped,
+                    "the next Actor payload must remain behind its pending lifecycle result");
+            assertTrue(payloadEntered.get(), "Actor payload must progress after lifecycle release");
             assertTrue(
                     owned,
                     "infrastructure progress must not release an independent Actor mailbox claim");
         } finally {
             release.complete(null);
             serials.closeAsync().toCompletableFuture().get(BOUND_SECONDS, TimeUnit.SECONDS);
+            executor.shutdownNow();
         }
     }
 
-    @Test
-    void infrastructureYieldThenOrdinaryAwaitRetainsTheResumedGate() throws Exception {
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void infrastructureYieldThenOrdinaryAwaitRetainsTheResumedGate(boolean lifecycle)
+            throws Exception {
         var infrastructure = new CompletableFuture<Void>();
         var release = new CompletableFuture<Void>();
         var entered = new CompletableFuture<Void>();
-        var prefixReturned = new CompletableFuture<Void>();
         var observeTurn = new AtomicReference<Runnable>();
         var held = new AtomicBoolean();
-        var queue =
-                new ZLinkSerialExecutionQueue(
-                        command -> {
-                            command.run();
-                            if (observeTurn.get() != null) prefixReturned.complete(null);
-                        },
-                        ZLinkExecutionLanePolicy.spot());
+        var siblingEntered = new AtomicBoolean();
+        var executor = Executors.newSingleThreadExecutor();
+        var queue = new ZLinkSerialExecutionQueue(executor, ZLinkExecutionLanePolicy.spot());
         var serials =
                 new ZLinkSpotSerialExecutor(
-                        queue,
-                        Runnable::run,
-                        Runnable::run,
-                        ZLinkUserSpotExecutionMode.SPOT_WIDE,
-                        false);
+                        queue, executor, executor, ZLinkUserSpotExecutionMode.SPOT_WIDE, false);
         try {
-            var lifecycle =
-                    serials.enqueueSpotLifecycleAdmission(
-                            () -> {
-                                var stage =
-                                        ZLinkSerialExecutionQueue.yieldCurrent(infrastructure)
-                                                .thenCompose(
-                                                        ignored -> {
-                                                            ZLinkSerialExecutionQueue
-                                                                    .propagateCurrent(
-                                                                            observeTurn::set)
-                                                                    .execute(
-                                                                            () ->
-                                                                                    held.set(
-                                                                                            queue
-                                                                                                    .isCurrent()));
-                                                            return release;
-                                                        });
-                                entered.complete(null);
-                                return stage;
-                            });
+            java.util.function.Supplier<CompletionStage<Void>> operation =
+                    () -> {
+                        var stage =
+                                ZLinkSerialExecutionQueue.yieldCurrent(infrastructure)
+                                        .thenCompose(
+                                                ignored -> {
+                                                    ZLinkSerialExecutionQueue.propagateCurrent(
+                                                                    observeTurn::set)
+                                                            .execute(
+                                                                    () ->
+                                                                            held.set(
+                                                                                    queue
+                                                                                            .isCurrent()));
+                                                    return release;
+                                                });
+                        entered.complete(null);
+                        return stage;
+                    };
+            var turn =
+                    lifecycle
+                            ? serials.enqueueSpotLifecycleAdmission(operation)
+                            : serials.executeTimer("resumed-timer", ignored -> operation.get());
             entered.get(BOUND_SECONDS, TimeUnit.SECONDS);
+            executor.submit(() -> {}).get(BOUND_SECONDS, TimeUnit.SECONDS);
             infrastructure.complete(null);
-            prefixReturned.get(BOUND_SECONDS, TimeUnit.SECONDS);
+            executor.submit(() -> {}).get(BOUND_SECONDS, TimeUnit.SECONDS);
             observeTurn.get().run();
             boolean retained = held.get();
+            var sibling =
+                    serials.executeTimer(
+                            "sibling",
+                            ignored -> {
+                                siblingEntered.set(true);
+                                return CompletableFuture.completedFuture(null);
+                            });
+            executor.submit(() -> {}).get(BOUND_SECONDS, TimeUnit.SECONDS);
+            boolean siblingOverlapped = siblingEntered.get();
             release.complete(null);
-            lifecycle.toCompletableFuture().get(BOUND_SECONDS, TimeUnit.SECONDS);
+            turn.toCompletableFuture().get(BOUND_SECONDS, TimeUnit.SECONDS);
+            sibling.toCompletableFuture().get(BOUND_SECONDS, TimeUnit.SECONDS);
+            assertFalse(
+                    siblingOverlapped,
+                    "a resumed callback retains the gate through ordinary await");
+            assertTrue(siblingEntered.get(), "sibling must run after the callback completes");
             assertTrue(
                     retained,
                     "ordinary callback await after infrastructure Yield must retain the resumed gate");
@@ -137,6 +162,7 @@ final class ZLinkSpotLifecycleAwaitRegressionTest {
             infrastructure.complete(null);
             release.complete(null);
             serials.closeAsync().toCompletableFuture().get(BOUND_SECONDS, TimeUnit.SECONDS);
+            executor.shutdownNow();
         }
     }
 
