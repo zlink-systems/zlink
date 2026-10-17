@@ -3879,7 +3879,7 @@ TEST (ZLinkFrameworkStoreLocationResolvers, AutoConnectSameEndpointReplacementPr
 }
 
 TEST (ZLinkFrameworkStoreLocationResolvers,
-      AutoConnectRetainsExistingDrainingMeshPipeUntilDescriptorRetires)
+      AutoConnectRetainsExistingMaintenanceMeshPipeUntilDescriptorRetires)
 {
     auto store = std::make_shared<in_memory_location_repository_t> ();
     location_options_t options;
@@ -3932,17 +3932,24 @@ TEST (ZLinkFrameworkStoreLocationResolvers,
 
     auto descriptors = store->list_mesh_nodes ("route.drain").result ().value ().items;
     ASSERT_EQ (1u, descriptors.size ());
-    auto draining = descriptors.front ();
-    ++draining.descriptor_revision;
-    draining.state = zlink::framework::framework_runtime_state_t::draining;
-    ASSERT_EQ (
-      location_write_status_t::stored,
-      store->update_mesh_node (draining, location_write_intent_t::renew).result ().value ().status);
+    auto maintenance = descriptors.front ();
+    for (const auto state : {zlink::framework::framework_runtime_state_t::relocating,
+                             zlink::framework::framework_runtime_state_t::relocated,
+                             zlink::framework::framework_runtime_state_t::draining}) {
+        SCOPED_TRACE (static_cast<int> (state));
+        ++maintenance.descriptor_revision;
+        maintenance.state = state;
+        ASSERT_EQ (location_write_status_t::stored,
+                   store->update_mesh_node (maintenance, location_write_intent_t::renew)
+                     .result ()
+                     .value ()
+                     .status);
 
-    std::this_thread::sleep_for (std::chrono::milliseconds (100));
-    const auto during_drain = route.list_connections ();
-    EXPECT_NE (during_drain.end (), std::find (during_drain.begin (), during_drain.end (),
-                                               "inproc://route-drain-remote"));
+        std::this_thread::sleep_for (std::chrono::milliseconds (100));
+        const auto connections = route.list_connections ();
+        EXPECT_NE (connections.end (), std::find (connections.begin (), connections.end (),
+                                                  "inproc://route-drain-remote"));
+    }
 
     ASSERT_EQ (1, store->remove_all_by_owner (live_owner_token (*store, "owner-route-drain-remote"))
                     .result ()
