@@ -1246,21 +1246,6 @@ export class ZLinkActorSessionBindingRegistry<
     return true;
   }
 
-  async updateAuthorityFence(
-    actorId: string,
-    authorityFence: ZLinkActorSessionAuthorityFence
-  ): Promise<void> {
-    await this.lane.run(() => this.updateAuthorityFenceCore(actorId, authorityFence));
-  }
-
-  private updateAuthorityFenceCore(
-    actorId: string,
-    authorityFence: ZLinkActorSessionAuthorityFence
-  ): void {
-    const route = this.requireRouteCore(actorId);
-    route.authorityFence = authorityFence;
-  }
-
   async validateSeal(actorId: string, sealId: string): Promise<boolean> {
     return await this.lane.run(() => this.validateSealCore(actorId, sealId));
   }

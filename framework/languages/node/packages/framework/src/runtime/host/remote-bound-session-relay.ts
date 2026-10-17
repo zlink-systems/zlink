@@ -421,7 +421,6 @@ export class ZLinkRemoteBoundSessionRelay {
       } as ActorRef;
       await owner.applyRelocation(value.actor.actorId, key, fingerprint, async () => {
         await runtime.commitActorRoute(targetActorRef, undefined, {
-          confirmRemoteSessionBinding: 'send',
           releaseSeal: { sealId: key }
         });
         const currentGeneration = this.actorOwnershipGenerations.get(value.actor.actorId);
