@@ -390,7 +390,7 @@ public final class ZLinkChannelEnvelope {
 
     /** Two or more parts whose first frame starts with a JSON object byte. */
     public static boolean looksLikeEnvelope(List<Message> parts) {
-        if (parts == null || parts.size() < 2 || parts.get(0).size() == 0) {
+        if (parts == null || parts.size() < 2) {
             return false;
         }
         Message first = parts.get(0);

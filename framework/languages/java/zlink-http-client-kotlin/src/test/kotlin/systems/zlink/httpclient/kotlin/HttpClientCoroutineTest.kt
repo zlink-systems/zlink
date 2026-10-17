@@ -15,9 +15,13 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.future.future
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.yield
 import org.junit.jupiter.api.Assertions
@@ -27,6 +31,10 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind
 import systems.zlink.framework.errors.ZLinkFrameworkException
+import systems.zlink.framework.execution.ZLinkExecutionLanePolicy
+import systems.zlink.framework.execution.ZLinkSerialExecutionQueue
+import systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationContext
+import systems.zlink.httpclient.ZLinkFrameworkHttpExecutionTurn
 import systems.zlink.httpclient.ZLinkHttpClient
 import systems.zlink.httpclient.ZLinkHttpExecutionTurn
 
@@ -176,10 +184,15 @@ class HttpClientCoroutineTest {
                     return operation
                 }
 
-                override fun <T : Any?> yield(operation: CompletionStage<T>): CompletionStage<T> {
+                override fun <T : Any?> yield(
+                    operation: java.util.function.Supplier<CompletionStage<T>>
+                ): CompletionStage<T> {
                     yieldCalls.incrementAndGet()
-                    return operation
+                    return operation.get()
                 }
+
+                override fun callbackScheduler(): java.util.concurrent.Executor =
+                    java.util.concurrent.Executor { it.run() }
             }
         TestServer { exchange -> respond(exchange, 200, """{"id":7,"name":"Aria"}""") }
             .use { server ->
@@ -190,6 +203,88 @@ class HttpClientCoroutineTest {
                     assertEquals(1, yieldCalls.get())
                 }
             }
+    }
+
+    @Test
+    fun `server coroutine rejects second HTTP Yield before submission`() {
+        val release = CompletableFuture<Void>()
+        val callsFinished = CompletableFuture<Void>()
+        val requests = AtomicInteger()
+        val httpExecutor = Executors.newVirtualThreadPerTaskExecutor()
+        val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
+        server.executor = httpExecutor
+        server.createContext("/") { exchange ->
+            requests.incrementAndGet()
+            release.join()
+            respond(exchange, 200, """{"id":7,"name":"Aria"}""")
+        }
+        server.start()
+        val queue = ZLinkSerialExecutionQueue(ZLinkExecutionLanePolicy.spot())
+        val coroutineScope = CoroutineScope(Dispatchers.Unconfined)
+        try {
+            ZLinkHttpClient.create("http://127.0.0.1:${server.address.port}")
+                .buildServer(ZLinkFrameworkHttpExecutionTurn())
+                .use { client ->
+                    val owner =
+                        queue.enqueue(
+                            {
+                                ZLinkSuspendInvocationContext.enterApplicationExecution(
+                                        ZLinkSuspendInvocationContext.ApplicationExecution(
+                                            "room",
+                                            null,
+                                            true,
+                                            true,
+                                            null,
+                                        )
+                                    )
+                                    .use {
+                                        val first =
+                                            coroutineScope.future(
+                                                start = CoroutineStart.UNDISPATCHED
+                                            ) {
+                                                client.get("/first").yield<Player>()
+                                            }
+                                        val second =
+                                            coroutineScope.future(
+                                                start = CoroutineStart.UNDISPATCHED
+                                            ) {
+                                                runCatching {
+                                                        client.get("/second").yield<Player>()
+                                                    }
+                                                    .exceptionOrNull()
+                                            }
+                                        callsFinished.complete(null)
+                                        first
+                                            .thenCombine(second) { response, error ->
+                                                assertEquals(7, response.body().id)
+                                                assertTrue(error is ZLinkFrameworkException)
+                                                assertEquals(
+                                                    ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                                                    (error as ZLinkFrameworkException).kind(),
+                                                )
+                                            }
+                                            .thenAccept {}
+                                    }
+                            },
+                            null,
+                        )
+                    owner.whenComplete { _, error ->
+                        if (error != null) callsFinished.completeExceptionally(error)
+                    }
+                    try {
+                        callsFinished.join()
+                    } finally {
+                        release.complete(null)
+                    }
+                    owner.toCompletableFuture().join()
+                }
+            assertEquals(1, requests.get(), "actual HTTP submissions through the suspend facade")
+        } finally {
+            release.complete(null)
+            queue.close()
+            server.stop(0)
+            httpExecutor.close()
+        }
     }
 
     @Test

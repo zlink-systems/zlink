@@ -95,8 +95,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     private readonly long _deadlineOriginTicks;
     private long _deadlineTick;
     private PendingOperation? _deadlineCursor;
-    private readonly Func<TimeSpan> _readOperationWaitBound;
-    private readonly Func<PendingOperation?> _takeExpiredOperation;
+    private readonly Func<(PendingOperation? Expired, TimeSpan WaitUntil)> _takeExpiredOperation;
 
     // Start of the receive owner's current deadline management turn.
     private TimeSpan _deadlineVisitStartedAt;
@@ -273,7 +272,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         _deadlineTimeProvider = deadlineTimeProvider ?? TimeProvider.System;
         _deadlineClock = new ZLinkDeadlineClock(_deadlineTimeProvider);
         _deadlineOriginTicks = _deadlineClock.Elapsed.Ticks;
-        _readOperationWaitBound = ReadOperationWaitBound;
         _takeExpiredOperation = TakeExpiredOperation;
         _applicationJobQueue = applicationJobQueue;
         NativeTerminalReplySubmitOverride = nativeTerminalReplySubmitOverride is null
@@ -5467,14 +5465,16 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     private void ReceiveLoop(CancellationToken cancellationToken)
     {
         var events = new PollEvent[ReceivePollSourceCount];
-        var admissions = new ZLinkApplicationJobQueueLease?[ReceiveBatchSize];
+        // §4.2: each rotation's deadline turn also yields the next wait bound.
+        // The first wait has no earlier turn and does not block.
+        var waitBound = TimeSpan.Zero;
         try
         {
             while (!cancellationToken.IsCancellationRequested)
             {
                 try
                 {
-                    var count = _poller!.Wait(events, OperationWaitBound());
+                    var count = _poller!.Wait(events, waitBound);
                     var receiveReady = false;
                     var now = Stopwatch.GetTimestamp();
                     DrainSocketMonitorEvents();
@@ -5506,9 +5506,9 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     if (cancellationToken.IsCancellationRequested)
                         return;
                     if (receiveReady)
-                        DrainRawSocket(cancellationToken, admissions);
+                        DrainRawSocket(cancellationToken);
                     ProcessInfrastructure(now);
-                    ExpireOperations();
+                    waitBound = ExpireOperations();
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
@@ -5570,39 +5570,37 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         }
     }
 
-    private void DrainRawSocket(
-        CancellationToken cancellationToken,
-        ZLinkApplicationJobQueueLease?[] admissions
-    )
+    private void DrainRawSocket(CancellationToken cancellationToken)
     {
         var queue = _applicationJobQueue;
         if (queue is null)
         {
-            ReceiveRawBatch(admissions, ReceiveBatchSize);
+            var unbounded = new ZLinkApplicationJobQueueReservation(
+                null,
+                ZLinkApplicationJobOrigin.Remote,
+                null,
+                ReceiveBatchSize
+            );
+            ReceiveRawBatch(ref unbounded);
             return;
         }
+        var reservation = new ZLinkApplicationJobQueueReservation(
+            queue,
+            ZLinkApplicationJobOrigin.Remote,
+            Interlocked.Exchange(ref _reservedRawApplicationAdmission, null)
+        );
         var count = 0;
         try
         {
-            var reserved = Interlocked.Exchange(ref _reservedRawApplicationAdmission, null);
-            admissions[0] = reserved;
-            if (reserved is not null)
-            {
-                count = 1;
+            if (reservation.Count != 0)
                 _poller!.Modify(_socket!, PollEventFlags.PollIn | InfrastructurePollEvents);
-            }
-            count += queue.TryAcquireBatch(
-                admissions,
-                count,
-                ReceiveBatchSize - count,
-                ZLinkApplicationJobOrigin.Remote
-            );
-            ReceiveRawBatch(admissions, count);
+            reservation.ReserveAvailable(ReceiveBatchSize);
+            count = reservation.Count;
+            ReceiveRawBatch(ref reservation);
         }
         finally
         {
-            queue.ReleaseBatch(admissions);
-            Array.Clear(admissions);
+            reservation.Dispose();
         }
 
         if (count == 0 || _pendingRawMulticast is not null)
@@ -5618,28 +5616,28 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         }
     }
 
-    // Each permit of the batch admits one record, or the next child of a
-    // fanout this source received before.
-    private void ReceiveRawBatch(ZLinkApplicationJobQueueLease?[] admissions, int count)
+    // Each reserved permit admits one claimed record, or the next child of a
+    // fanout this source received before; its lease is created at that claim.
+    private void ReceiveRawBatch(ref ZLinkApplicationJobQueueReservation reservation)
     {
         var startedAt = Stopwatch.GetTimestamp();
         long bytes = 0;
-        for (var index = 0; index < count; index++)
+        for (var index = 0; reservation.Count != 0; index++)
         {
             if (ZLinkReceiveBatchBudget.IsExhausted(index, bytes, startedAt))
                 return;
-            var admission = admissions[index];
-            admissions[index] = null;
             if (_pendingRawMulticast is { } fanout)
             {
-                ContinueRawMulticast(fanout, admission);
+                ContinueRawMulticast(fanout, reservation.Claim());
                 continue;
             }
             Received? received = Received.Create();
+            ZLinkApplicationJobQueueLease? admission = null;
             try
             {
                 if (!_socket!.Recv(received, RecvFlags.DontWait))
                     return;
+                admission = reservation.Claim();
                 bytes = checked(bytes + ZLinkReceiveBatchBudget.MeasureParts(received.Parts));
                 using var ownership = new RawIngressOwnership(received, admission);
                 received = null;
@@ -5821,20 +5819,26 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         }
     }
 
-    private bool HasCurrentSource(RoutingId sourceRid, ulong routeGeneration)
-    {
-        return RunState(() =>
-        {
-            var admitted =
-                _peersByRid.TryGetValue(sourceRid, out var peer)
-                && peer.Admission is not null
-                && peer.State != MeshPeerState.NotRequired
-                && peer.RouteGeneration == routeGeneration;
-            if (admitted)
-                peer!.Liveness?.RecordReceived(Stopwatch.GetTimestamp());
-            return admitted;
-        });
-    }
+    // One node-lane turn decides the record's source authority and records
+    // its liveness (mesh-node/transport-liveness). The state travels as a
+    // value, so the per-record check creates no closure or delegate.
+    private bool HasCurrentSource(RoutingId sourceRid, ulong routeGeneration) =>
+        AwaitStateLane(
+            _lane.RunAsync(
+                static state =>
+                {
+                    var admitted =
+                        state.Node._peersByRid.TryGetValue(state.SourceRid, out var peer)
+                        && peer.Admission is not null
+                        && peer.State != MeshPeerState.NotRequired
+                        && peer.RouteGeneration == state.RouteGeneration;
+                    if (admitted)
+                        peer!.Liveness?.RecordReceived(Stopwatch.GetTimestamp());
+                    return admitted;
+                },
+                (Node: this, SourceRid: sourceRid, RouteGeneration: routeGeneration)
+            )
+        );
 
     internal static bool IsAllowedInfrastructureControl(
         IReadOnlyList<Message> parts,
@@ -6583,33 +6587,9 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             ServiceWireConstants.Command.ChannelRequest => MeshRecordKind.ChannelRequest,
             _ => throw new InvalidOperationException(),
         };
-        Func<IReadOnlyList<Message>, SubmitResult>? replyHandler = null;
-        if (request)
-        {
-            var nativeReply = received.Reply();
-            var replied = 0;
-            replyHandler = replyParts =>
-            {
-                if (Interlocked.CompareExchange(ref replied, 1, 0) != 0)
-                    return SubmitResult.InvalidState;
-                var (preparedReply, wire) = PrepareNativeTerminalReply(
-                    sourceRid,
-                    nativeReply,
-                    application.Correlation,
-                    RequestResult.Ok,
-                    0,
-                    replyParts
-                );
-                try
-                {
-                    return SubmitNativeTerminalReply(preparedReply);
-                }
-                finally
-                {
-                    ZLinkMessageParts.DisposeAll(wire);
-                }
-            };
-        }
+        var replyHandler = request
+            ? CreateNativeReplyHandler(sourceRid, received.Reply(), application.Correlation)
+            : null;
         return EnqueueOwned(
             MailboxKey.ForNode(MeshReadyDomains.Application, application.ChannelName),
             new MeshReceiveRecord(
@@ -6640,6 +6620,38 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             true,
             ownership.TakeApplicationOwner()
         );
+    }
+
+    // The request's one-shot native reply capability. Its capture lives in
+    // this method, so the send path of ProcessReceived allocates none of it.
+    private Func<IReadOnlyList<Message>, SubmitResult> CreateNativeReplyHandler(
+        RoutingId sourceRid,
+        ReplyOperation nativeReply,
+        ulong correlation
+    )
+    {
+        var replied = 0;
+        return replyParts =>
+        {
+            if (Interlocked.CompareExchange(ref replied, 1, 0) != 0)
+                return SubmitResult.InvalidState;
+            var (preparedReply, wire) = PrepareNativeTerminalReply(
+                sourceRid,
+                nativeReply,
+                correlation,
+                RequestResult.Ok,
+                0,
+                replyParts
+            );
+            try
+            {
+                return SubmitNativeTerminalReply(preparedReply);
+            }
+            finally
+            {
+                ZLinkMessageParts.DisposeAll(wire);
+            }
+        };
     }
 
     private bool ProcessCanonicalActorJoin(
@@ -11548,25 +11560,28 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         operation.DeadlineNext = null;
     }
 
-    private TimeSpan OperationWaitBound() => RunOperation(_readOperationWaitBound);
-
-    private TimeSpan ReadOperationWaitBound()
+    private TimeSpan ReadOperationWaitDeadline()
     {
+        var pollDeadline = _deadlineClock.Elapsed + PollInterval;
         var tick = NextOccupiedDeadlineTick();
         if (tick < 0)
-            return PollInterval;
-        var remaining =
-            TimeSpan.FromTicks(_deadlineOriginTicks + tick * DeadlineTickTicks)
-            - _deadlineClock.Elapsed;
-        return remaining <= TimeSpan.Zero ? TimeSpan.Zero
-            : remaining < PollInterval ? remaining
-            : PollInterval;
+            return pollDeadline;
+        var deadline = TimeSpan.FromTicks(_deadlineOriginTicks + tick * DeadlineTickTicks);
+        return deadline < pollDeadline ? deadline : pollDeadline;
     }
 
     // One operation-lane turn: rounds-only visits continue inside the turn
     // while the management budget, counted from _deadlineVisitStartedAt,
-    // remains; the turn returns at the first expired operation.
-    private PendingOperation? TakeExpiredOperation()
+    // remains; the turn returns at the first expired operation. The same turn
+    // reads the receive owner's next wait deadline from the deadline index, so a
+    // rotation enters the operation lane once when nothing expires.
+    private (PendingOperation? Expired, TimeSpan WaitUntil) TakeExpiredOperation()
+    {
+        var expired = TakeNextExpiredOperation();
+        return (expired, ReadOperationWaitDeadline());
+    }
+
+    private PendingOperation? TakeNextExpiredOperation()
     {
         do
         {
@@ -11609,14 +11624,19 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         (_deadlineClock.Elapsed - _deadlineVisitStartedAt).TotalMilliseconds
         >= ZLinkReceiveBatchBudget.MaximumMilliseconds;
 
-    private void ExpireOperations()
+    // Completion delivery consumes time from the same absolute wait deadline.
+    private TimeSpan ExpireOperations()
     {
         // §4.2: the budget counts from entry and covers every slot visit, a
         // rounds-only visit included, and each expiry's completion delivery;
         // the cursor keeps the rest of the slot for the next receive-owner turn.
         _deadlineVisitStartedAt = _deadlineClock.Elapsed;
-        while (RunOperation(_takeExpiredOperation) is { } pending)
+        TimeSpan waitUntil;
+        do
         {
+            (var expired, waitUntil) = RunOperation(_takeExpiredOperation);
+            if (expired is not { } pending)
+                break;
             pending.Complete();
             var result = RequestResult.TimedOut;
             if (pending.AwaitedCompletion is { } awaitedCompletion)
@@ -11631,9 +11651,9 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     0,
                     Array.Empty<Message>()
                 );
-            if (DeadlineBudgetSpent())
-                return;
-        }
+        } while (!DeadlineBudgetSpent());
+        var remaining = waitUntil - _deadlineClock.Elapsed;
+        return remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero;
     }
 
     private void EnqueueCompletion(
