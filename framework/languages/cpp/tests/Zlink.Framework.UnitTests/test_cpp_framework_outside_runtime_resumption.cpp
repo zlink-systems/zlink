@@ -190,14 +190,13 @@ int expect_independent_registry_completions ()
     auto second_done = second_finished.get_future ();
     const auto deadline = foundation::operation_registry_t::clock_t::time_point::max ();
     registry.register_operation (foundation::call_id_t{1770, 1}, deadline,
-                                 [&] (foundation::operation_terminal_t, std::vector<std::uint8_t>) {
+                                 [&] (foundation::operation_terminal_t, zlink::message_t) {
                                      entered.set_value ();
                                      release_first.wait ();
                                  });
-    registry.register_operation (foundation::call_id_t{1770, 2}, deadline,
-                                 [&] (foundation::operation_terminal_t, std::vector<std::uint8_t>) {
-                                     second_finished.set_value ();
-                                 });
+    registry.register_operation (
+      foundation::call_id_t{1770, 2}, deadline,
+      [&] (foundation::operation_terminal_t, zlink::message_t) { second_finished.set_value (); });
     registry.complete (foundation::call_id_t{1770, 1}, {});
     first_entered.wait ();
     registry.complete (foundation::call_id_t{1770, 2}, {});
@@ -217,7 +216,7 @@ int expect_registry_callback_final_owner ()
     auto done = finished->get_future ();
     registry->register_operation (
       foundation::call_id_t{1770, 3}, foundation::operation_registry_t::clock_t::time_point::max (),
-      [&, finished] (foundation::operation_terminal_t, std::vector<std::uint8_t>) {
+      [&, finished] (foundation::operation_terminal_t, zlink::message_t) {
           registry.reset ();
           finished->set_value ();
       });
