@@ -5,6 +5,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import com.sun.net.httpserver.HttpServer;
@@ -18,6 +20,8 @@ import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationContext;
 
 import java.net.InetSocketAddress;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Executors;
@@ -25,6 +29,96 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 final class HttpYieldAdmissionTest {
+    @Test
+    void factoryFailureResumesThroughYieldBeforeAnotherYield() throws Exception {
+        var executor = new ManualExecutor();
+        var queue = new ZLinkSerialExecutionQueue(executor, ZLinkExecutionLanePolicy.spot());
+        var release = new CompletableFuture<Void>();
+        var blockerStarted = new CompletableFuture<Void>();
+        var failure = new IllegalStateException("request factory failed");
+        var synchronousFailure = new AtomicReference<Throwable>();
+        var calls = new AtomicInteger();
+        var events = new ArrayList<String>();
+        var turn = new ZLinkFrameworkHttpExecutionTurn();
+        var owner =
+                queue.enqueue(
+                        () -> {
+                            try (var scope =
+                                    ZLinkSuspendInvocationContext.enterApplicationExecution(
+                                            application())) {
+                                CompletionStage<Integer> pending;
+                                try {
+                                    pending =
+                                            turn.yield(
+                                                    () -> {
+                                                        calls.incrementAndGet();
+                                                        throw failure;
+                                                    });
+                                } catch (Throwable error) {
+                                    synchronousFailure.set(error);
+                                    pending = CompletableFuture.failedFuture(error);
+                                }
+                                var rejection =
+                                        assertThrows(
+                                                ZLinkFrameworkException.class,
+                                                () ->
+                                                        turn.yield(
+                                                                () -> {
+                                                                    calls.incrementAndGet();
+                                                                    return CompletableFuture
+                                                                            .completedFuture(0);
+                                                                }));
+                                assertEquals(
+                                        ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                                        rejection.kind());
+                                return pending.handle(
+                                                (value, error) -> {
+                                                    assertSame(failure, error);
+                                                    events.add("catch");
+                                                    return turn.yield(
+                                                            () ->
+                                                                    CompletableFuture
+                                                                            .completedFuture(7));
+                                                })
+                                        .thenCompose(resumed -> resumed)
+                                        .thenAccept(
+                                                value -> {
+                                                    assertEquals(7, value);
+                                                    events.add("end");
+                                                });
+                            }
+                        },
+                        null);
+        var blocker =
+                queue.enqueue(
+                        () -> {
+                            events.add("blocker");
+                            blockerStarted.complete(null);
+                            return release.thenRun(() -> events.add("blocker:end"));
+                        },
+                        null);
+        try {
+            executor.runUntil(blockerStarted);
+            assertNull(synchronousFailure.get(), "factory failure must use the returned stage");
+            assertEquals(1, calls.get(), "rejected factory must not run");
+            assertEquals(List.of("blocker"), events, "failure continuation must wait for the gate");
+            assertFalse(owner.toCompletableFuture().isDone());
+            release.complete(null);
+            executor.runUntil(owner.toCompletableFuture());
+            executor.runUntil(blocker.toCompletableFuture());
+            owner.toCompletableFuture().join();
+            blocker.toCompletableFuture().join();
+            assertEquals(List.of("blocker", "blocker:end", "catch", "end"), events);
+        } finally {
+            release.complete(null);
+            executor.runUntil(owner.toCompletableFuture());
+            executor.runUntil(blocker.toCompletableFuture());
+            owner.handle((value, error) -> null).toCompletableFuture().join();
+            blocker.handle((value, error) -> null).toCompletableFuture().join();
+            queue.close();
+        }
+    }
+
     @Test
     void secondYieldRejectsBeforeActualHttpSubmission() throws Exception {
         var release = new CompletableFuture<Void>();
