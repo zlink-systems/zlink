@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #include "../support/runtime_failure_fixture.hpp"
+#include "../support/relocation_unit_fixture.hpp"
 #include <zlink.h>
 #include "runtime/client_server/raw_client_server_owner.hpp"
 #include "runtime/execution/state_lane.hpp"
@@ -305,6 +306,18 @@ int main (int argc, char **argv)
             options.add_location_store (location_store);
             options.add_relocation_store (relocation_store);
             options.configure_locations ().polling_interval = std::chrono::hours (24);
+            auto mesh = options.add_route_mesh ("delay-preflight-mesh");
+            mesh.channel_name ("delay-preflight-channel").server ();
+            mesh.set_object_role (zlink::framework::object_role_t::server)
+              .set_routing_id (zlink::routing_id_t::from ("delay-preflight-source"))
+              .listen ("tcp://127.0.0.1:0")
+              .add_spot_factory<zlink::framework::test::relocation_unit_spot_t> (
+                "delay-preflight-unit",
+                [] (zlink::framework::spot_context_t context) {
+                    return std::make_shared<zlink::framework::test::relocation_unit_spot_t> (
+                      std::move (context));
+                },
+                [] (auto &factory) { factory.recreate_on_relocation (); });
         });
         char source_program[] = "delay-preflight-source";
         char *source_arguments[] = {source_program, nullptr};
@@ -317,6 +330,23 @@ int main (int argc, char **argv)
         while (!source.is_ready () && !source_finished.load (std::memory_order_acquire))
             std::this_thread::yield ();
         if (!source.is_ready ()) {
+            source_thread.join ();
+            keeper.request_stop ();
+            keeper_thread.join ();
+            return 1;
+        }
+
+        auto services = source.advanced ().services ().build_provider ();
+        const auto created = services.get_required<zlink::framework::spot_manager_t> ()
+                               .get_or_create (zlink::framework::spot_id_t ("delay-preflight-unit"),
+                                               "delay-preflight-unit")
+                               .in_mesh ("delay-preflight-mesh")
+                               .timeout (std::chrono::seconds (1))
+                               .async ()
+                               .result ();
+        services.close ();
+        if (!created) {
+            source.request_stop ();
             source_thread.join ();
             keeper.request_stop ();
             keeper_thread.join ();
