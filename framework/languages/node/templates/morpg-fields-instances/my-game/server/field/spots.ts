@@ -40,6 +40,9 @@ export class Field implements ZLinkSpot<Player> {
     @Inject(ZLINK_ACTOR_CLIENT) private readonly actors: ZLinkActorClient,
     @Inject(ZLINK_SPOT_MANAGER) private readonly spots: ZLinkSpotManager
   ) {}
+  isVisible(actor: Player): boolean {
+    return Object.hasOwn(this.state.visible, actor.context.actorId);
+  }
   configure(): void {
     for (const adjacent of adjacentFields(String(this.context.spotId)))
       this.context.handlers.addSubscribe(

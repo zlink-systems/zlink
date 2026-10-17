@@ -13,6 +13,14 @@ class Player final : public fx::actor_t
     explicit Player (fx::actor_context_t context) : context_ (std::move (context)) {}
     fx::actor_context_t &context () noexcept override { return context_; }
     const fx::actor_context_t &context () const noexcept override { return context_; }
+    // Decide synchronously because source IDs may be temporary name values.
+    template <class Message>
+    fx::task_t<void> deliver (const std::string &sourceSpotId, const Message &message)
+    {
+        if (context_.spot_id () != sourceSpotId)
+            return fx::task_t<void> (fx::result_t<void>::success ());
+        return context_.bound_session ().send (message).async ();
+    }
     fx::task_t<void> on_join_completed (const fx::actor_join_completion_t &completion) override
     {
         if (std::holds_alternative<fx::actor_join_rejected_t> (completion))
@@ -56,13 +64,22 @@ class TownEntry final : public fx::entry_spot_t<Player>
     explicit TownEntry (fx::entry_spot_context_t context) : context_ (std::move (context)) {}
     fx::entry_spot_context_t &context () noexcept override { return context_; }
     const fx::entry_spot_context_t &context () const noexcept override { return context_; }
-    void configure () override { context_.handlers ().add_actor_send<&TownEntry::enter> (); }
+    void configure () override
+    {
+        context_.handlers ()
+          .add_actor_send<&TownEntry::enter> ()
+          .add_actor_send<&TownEntry::pending> ();
+    }
     fx::task_t<void> enter (Player &actor, fx::message_context_t &, const JoinTownRequest &request)
     {
         if (request.playerId != actor.context ().actor_id ().value ())
             throw std::invalid_argument ("Player identity mismatch");
         actor.context ().join_spot (Names::town_id (request.channel), request).defer ();
         co_return;
+    }
+    fx::task_t<void> pending (Player &actor, fx::message_context_t &, const TownView &message)
+    {
+        return actor.deliver (message.townId, message);
     }
     fx::task_t<void> on_actor_joined (Player &) override { co_return; }
     fx::task_t<void> on_leave_actor (Player &) override { co_return; }

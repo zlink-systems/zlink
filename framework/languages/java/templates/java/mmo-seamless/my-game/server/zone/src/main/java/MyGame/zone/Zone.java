@@ -76,6 +76,14 @@ public final class Zone implements ZLinkSpot<Player> {
         state.visiblePlayers.put(actor.context().actorId(), actor.position());
     }
 
+    public CompletionStage<Void> deliver(Player actor, BorderVisible message) {
+        // Membership or visibility may change before a queued notification is handled.
+        if (!message.observerZoneId().equals(actor.context().spotId().orElse(null))
+                || !state.visiblePlayers.containsKey(actor.context().actorId()))
+            return CompletableFuture.completedFuture(null);
+        return actor.context().boundSession().send(message).submit();
+    }
+
     public CompletionStage<Void> publishBorder() {
         CompletionStage<Void> sends = CompletableFuture.completedFuture(null);
         for (var entry : state.visiblePlayers.entrySet()) {

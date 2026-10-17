@@ -108,8 +108,8 @@ export class BorderHandler {
   packetName: PacketNames.borderVisible
 })
 export class BorderDelivery {
-  async handle(
-    _spot: Zone,
+  handle(
+    spot: Zone,
     actor: Player,
     context: ZLinkMessageContext,
     presence: BorderVisible
@@ -117,7 +117,7 @@ export class BorderDelivery {
     const type = deliveryPackets.get(context.packetName);
     if (!type) throw new Error(`Unregistered zone push: ${context.packetName}`);
     // Restore the declared public DTO class before forwarding (#1731).
-    await actor.context.boundSession.send(Object.assign(new type(), presence)).submit();
+    return spot.deliver(actor, Object.assign(new type(), presence));
   }
 }
 const deliveryPackets: ReadonlyMap<string, typeof BorderVisible> = new Map([

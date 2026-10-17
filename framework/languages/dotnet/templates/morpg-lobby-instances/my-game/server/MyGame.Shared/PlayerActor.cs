@@ -6,6 +6,11 @@ public sealed class PlayerActor(IZLinkActorContext context) : IZLinkActor
 {
     public IZLinkActorContext Context { get; } = context;
 
+    public ValueTask DeliverAsync<T>(string sourceSpotId, T message) =>
+        Context.SpotId == sourceSpotId
+            ? Context.BoundSession.Send(message).Async()
+            : ValueTask.CompletedTask;
+
     public async ValueTask OnJoinCompletedAsync(
         ZLinkActorJoinCompletion completion,
         CancellationToken cancellationToken

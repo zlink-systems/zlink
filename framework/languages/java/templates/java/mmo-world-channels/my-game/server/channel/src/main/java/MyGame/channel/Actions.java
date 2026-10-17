@@ -42,6 +42,8 @@ public final class Actions {
     @ZLinkSpotActorSend
     public CompletionStage<Void> forward(
             Zone spot, Player actor, ZLinkMessageContext context, PlayerView message) {
+        if (!Names.zone(message.channel()).equals(actor.context().spotId().orElse(null)))
+            return CompletableFuture.completedFuture(null);
         return actor.context().boundSession().send(message).submit();
     }
 }

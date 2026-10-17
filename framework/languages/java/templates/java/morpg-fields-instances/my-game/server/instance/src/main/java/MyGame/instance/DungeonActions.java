@@ -31,6 +31,18 @@ public final class DungeonActions {
     @ZLinkSpotActorSend
     public CompletionStage<Void> deliver(
             Dungeon spot, Player actor, ZLinkMessageContext dispatch, DungeonView message) {
-        return actor.context().boundSession().send(message).submit();
+        return actor.deliver(message.dungeonId(), message, true);
+    }
+
+    @ZLinkSpotActorSend
+    public CompletionStage<Void> departedBorderVisible(
+            Dungeon spot, Player actor, ZLinkMessageContext context, BorderVisible message) {
+        return actor.deliver(message.observerFieldId(), message, true);
+    }
+
+    @ZLinkSpotActorSend
+    public CompletionStage<Void> departedFieldView(
+            Dungeon spot, Player actor, ZLinkMessageContext context, FieldView message) {
+        return actor.deliver(message.fieldId(), message, true);
     }
 }

@@ -10,6 +10,7 @@ import { Entry, EnterWorld } from '../shared/entry';
 import { PlayerFactory, PlayerRelocation } from '../shared/player';
 import { Field, FieldRelocation } from './spots';
 import {
+  DepartedDungeonView,
   Reconnect,
   Move,
   CreateParty,
@@ -32,6 +33,7 @@ runHost((_builder, config, mesh) => {
   mesh.channel(Names.border).server();
   return {
     providers: [
+      DepartedDungeonView,
       Entry,
       EnterWorld,
       Field,

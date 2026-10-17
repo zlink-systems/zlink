@@ -1,3 +1,4 @@
+import { PacketNames } from './constants';
 export class JoinLobbyRequest {
   constructor(readonly playerId: string) {}
 }
@@ -59,4 +60,21 @@ export class SessionInfo {
     readonly actorId: string,
     readonly objectGeneration: bigint
   ) {}
+}
+
+export type GameNotification = PartyView | DungeonView;
+const notificationPackets: ReadonlyMap<string, new () => GameNotification> = new Map<
+  string,
+  new () => GameNotification
+>([
+  [PacketNames.partyView, PartyView],
+  [PacketNames.dungeonView, DungeonView]
+]);
+export function restoreNotification(
+  packetName: string,
+  message: GameNotification
+): GameNotification {
+  const type = notificationPackets.get(packetName);
+  if (!type) throw new Error(`Unregistered notification: ${packetName}`);
+  return Object.assign(new type(), message);
 }

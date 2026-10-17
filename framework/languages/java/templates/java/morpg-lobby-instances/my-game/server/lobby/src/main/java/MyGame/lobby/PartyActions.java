@@ -44,6 +44,12 @@ public final class PartyActions {
     @ZLinkSpotActorSend
     public CompletionStage<Void> deliver(
             Party spot, Player actor, ZLinkMessageContext context, PartyView request) {
-        return actor.context().boundSession().send(request).submit();
+        return actor.deliver(Names.PARTY_PREFIX + request.partyId(), request);
+    }
+
+    @ZLinkSpotActorSend
+    public CompletionStage<Void> pendingDungeon(
+            Party spot, Player actor, ZLinkMessageContext context, DungeonView message) {
+        return actor.deliver(message.dungeonId(), message);
     }
 }

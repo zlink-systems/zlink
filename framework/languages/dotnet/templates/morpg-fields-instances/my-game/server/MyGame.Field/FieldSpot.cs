@@ -22,6 +22,7 @@ public sealed class FieldSpot(
 
     public void Configure()
     {
+        Context.Handlers.AddActorPacket<DepartedDungeonView, PlayerActor>(nameof(DungeonView));
         Context.Handlers.AddActorPacket<ReconnectHandler, PlayerActor>(nameof(JoinWorldRequest));
         Context.Handlers.AddActorPacket<MoveHandler, PlayerActor>(nameof(MoveRequest));
         Context.Handlers.AddActorPacket<BorderDelivery, PlayerActor>(nameof(BorderVisible));
@@ -85,6 +86,8 @@ public sealed class FieldSpot(
         _visiblePlayers.Remove(actor.Context.ActorId);
         return ValueTask.CompletedTask;
     }
+
+    public bool IsVisible(PlayerActor actor) => _visiblePlayers.ContainsKey(actor.Context.ActorId);
 
     public void Remember(PlayerActor actor) =>
         _visiblePlayers[actor.Context.ActorId] = new EnterField(actor.X, actor.Sequence);

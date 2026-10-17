@@ -31,6 +31,12 @@ public final class DungeonActions {
     @ZLinkSpotActorSend
     public CompletionStage<Void> deliver(
             Dungeon spot, Player actor, ZLinkMessageContext context, DungeonView request) {
-        return actor.context().boundSession().send(request).submit();
+        return actor.deliver(request.dungeonId(), request);
+    }
+
+    @ZLinkSpotActorSend
+    public CompletionStage<Void> departed(
+            Dungeon spot, Player actor, ZLinkMessageContext context, TownView message) {
+        return actor.deliver(message.townId(), message);
     }
 }

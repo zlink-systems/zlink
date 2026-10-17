@@ -112,6 +112,10 @@ class Zone final : public fx::spot_t<Player>
     }
     fx::task_t<void> deliver (Player &actor, fx::message_context_t &, const BorderVisible &event)
     {
+        // Membership or visibility may change before a queued notification is handled.
+        if (actor.context ().spot_id () != event.observerZoneId
+            || !state.visiblePlayers.contains (std::string (actor.context ().actor_id ().value ())))
+            co_return;
         co_await actor.context ().bound_session ().send (event).async ();
     }
     fx::task_t<void>

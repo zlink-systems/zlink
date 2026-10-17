@@ -6,7 +6,7 @@ import {
   PrepareDungeon,
   DungeonPrepared,
   DungeonView,
-  restorePush,
+  TownView,
   JoinTownRequest
 } from '../shared/messages';
 import { Player } from '../shared/player';
@@ -64,12 +64,29 @@ export class Advance {
   packetName: PacketNames.dungeonView
 })
 export class DungeonDelivery {
-  async handle(
+  handle(
     _spot: Dungeon,
     actor: Player,
     context: ZLinkMessageContext,
     view: DungeonView
   ): Promise<void> {
-    await actor.context.boundSession.send(restorePush(context.packetName, view)).submit();
+    return actor.deliver(view.dungeonId, context.packetName, view);
+  }
+}
+
+@Injectable()
+@zlinkSpotActorSendHandler({
+  spot: () => Dungeon,
+  actor: () => Player,
+  packetName: PacketNames.townView
+})
+export class DepartedDelivery {
+  handle(
+    _spot: Dungeon,
+    actor: Player,
+    context: ZLinkMessageContext,
+    view: TownView
+  ): Promise<void> {
+    return actor.deliver(view.townId, context.packetName, view);
   }
 }

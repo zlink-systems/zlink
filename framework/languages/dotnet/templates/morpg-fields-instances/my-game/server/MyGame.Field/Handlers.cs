@@ -80,7 +80,7 @@ public sealed class BorderDelivery
         IZLinkMessageContext context,
         BorderVisible presence,
         CancellationToken cancellationToken
-    ) => actor.Context.BoundSession.Send(presence).Async();
+    ) => actor.DeliverAsync(presence.ObserverFieldId, presence, spot.IsVisible(actor));
 }
 
 [ZLinkSpotActorSendHandler(nameof(CreatePartyRequest))]
@@ -157,6 +157,18 @@ public sealed class FieldDelivery : IZLinkSpotActorSendHandler<FieldSpot, Player
         CancellationToken ct
     )
     {
-        return actor.Context.BoundSession.Send(request).Async();
+        return actor.DeliverAsync(request.FieldId, request, spot.IsVisible(actor));
     }
+}
+
+public sealed class DepartedDungeonView
+    : IZLinkSpotActorSendHandler<FieldSpot, PlayerActor, DungeonView>
+{
+    public ValueTask HandleAsync(
+        FieldSpot spot,
+        PlayerActor actor,
+        IZLinkMessageContext context,
+        DungeonView message,
+        CancellationToken ct
+    ) => actor.DeliverAsync(message.DungeonId, message, spot.IsVisible(actor));
 }

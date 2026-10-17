@@ -59,6 +59,14 @@ class PartyActions {
         context: ZLinkMessageContext,
         request: PartyView,
     ) {
-        actor.context.boundSession().kotlin().send(request).await()
+        actor.deliver(Names.PARTY_PREFIX + request.partyId, request)
     }
+
+    @ZLinkSpotActorSend
+    suspend fun pendingDungeon(
+        spot: Party,
+        actor: Player,
+        context: ZLinkMessageContext,
+        message: DungeonView,
+    ) = actor.deliver(message.dungeonId, message)
 }

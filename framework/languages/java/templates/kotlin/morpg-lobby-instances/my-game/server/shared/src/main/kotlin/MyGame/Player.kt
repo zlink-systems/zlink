@@ -10,6 +10,11 @@ class Player(override val context: ZLinkActorContext) : ZLinkSuspendingActor() {
         require(context.actorId() == playerId) { "Player identity mismatch" }
     }
 
+    suspend fun deliver(sourceSpotId: String, message: Any) {
+        if (context.spotId().orElse(null) != sourceSpotId) return
+        context.boundSession().kotlin().send(message).await()
+    }
+
     override suspend fun onJoinCompletedSuspending(completion: ZLinkActorJoinCompletion) {
         when (completion) {
             is ZLinkActorJoinCompletion.Accepted -> Unit

@@ -58,6 +58,7 @@ class Actions {
         context: ZLinkMessageContext,
         message: PlayerView,
     ) {
+        if (actor.context.spotId().orElse(null) != Names.zone(message.channel)) return
         actor.context.boundSession().kotlin().send(message).await()
     }
 }

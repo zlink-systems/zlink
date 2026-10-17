@@ -15,6 +15,12 @@ public final class Player implements ZLinkActor {
         return context;
     }
 
+    public CompletionStage<Void> deliver(String sourceSpotId, Object message) {
+        if (!sourceSpotId.equals(context.spotId().orElse(null)))
+            return CompletableFuture.completedFuture(null);
+        return context.boundSession().send(message).submit();
+    }
+
     public void checkIdentity(String playerId) {
         if (!context.actorId().equals(playerId))
             throw new IllegalArgumentException("Player identity mismatch");

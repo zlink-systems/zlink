@@ -12,6 +12,14 @@ class Player final : public fx::actor_t
     explicit Player (fx::actor_context_t context) : context_ (std::move (context)) {}
     fx::actor_context_t &context () noexcept override { return context_; }
     const fx::actor_context_t &context () const noexcept override { return context_; }
+    // Decide synchronously because source IDs may be temporary name values.
+    template <class Message>
+    fx::task_t<void> deliver (const std::string &sourceSpotId, const Message &message)
+    {
+        if (context_.spot_id () != sourceSpotId)
+            return fx::task_t<void> (fx::result_t<void>::success ());
+        return context_.bound_session ().send (message).async ();
+    }
     fx::task_t<void> on_join_completed (const fx::actor_join_completion_t &completion) override
     {
         if (std::holds_alternative<fx::actor_join_rejected_t> (completion))

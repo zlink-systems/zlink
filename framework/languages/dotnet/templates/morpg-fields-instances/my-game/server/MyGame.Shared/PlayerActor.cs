@@ -6,6 +6,12 @@ namespace MyGame.Shared;
 public sealed class PlayerActor(IZLinkActorContext context, NodeSettings settings) : IZLinkActor
 {
     public IZLinkActorContext Context { get; } = context;
+
+    public ValueTask DeliverAsync<T>(string sourceSpotId, T message, bool visible) =>
+        Context.SpotId == sourceSpotId && visible
+            ? Context.BoundSession.Send(message).Async()
+            : ValueTask.CompletedTask;
+
     public int X { get; private set; }
     public int Sequence { get; private set; }
     public string FieldId => GameNames.FieldId(X);

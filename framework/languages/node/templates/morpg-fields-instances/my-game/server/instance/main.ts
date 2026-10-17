@@ -1,3 +1,4 @@
+import { DepartedBorderVisible, DepartedFieldView } from './handlers';
 import { ZLinkUserSpotExecutionMode } from '@zlink-systems/framework';
 import { runHost, failHost } from '../shared/hosting';
 import { Names } from '../shared/constants';
@@ -16,6 +17,8 @@ runHost((_builder, config, mesh) => {
   });
   return {
     providers: [
+      DepartedBorderVisible,
+      DepartedFieldView,
       Entry,
       EnterWorld,
       Dungeon,

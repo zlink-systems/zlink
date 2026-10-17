@@ -18,6 +18,7 @@ public sealed class TownSpot(
 
     public void Configure()
     {
+        Context.Handlers.AddActorPacket<DepartedDelivery, PlayerActor>(nameof(DungeonView));
         Context.Handlers.AddActorPacket<TownReconnect, PlayerActor>(nameof(JoinTownRequest));
         Context.Handlers.AddActorPacket<ChangeChannel, PlayerActor>(nameof(ChangeChannelRequest));
         Context.Handlers.AddActorPacket<CreateParty, PlayerActor>(nameof(CreatePartyRequest));

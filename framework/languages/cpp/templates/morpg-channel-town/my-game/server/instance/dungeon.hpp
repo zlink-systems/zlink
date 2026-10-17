@@ -29,7 +29,8 @@ class Dungeon final : public fx::spot_t<Player>
           .add_actor_send<&Dungeon::reconnect> ()
           .add_actor_send<&Dungeon::query> ()
           .add_actor_send<&Dungeon::advance> ()
-          .add_actor_send<&Dungeon::deliver> ();
+          .add_actor_send<&Dungeon::deliver> ()
+          .add_actor_send<&Dungeon::departed> ();
     }
     fx::task_t<DungeonPrepared> prepare (const PrepareDungeon &request)
     {
@@ -67,9 +68,13 @@ class Dungeon final : public fx::spot_t<Player>
         for (const auto &id : snapshot.members)
             co_await actors_.send (fx::actor_id_t (id), snapshot).async ();
     }
+    fx::task_t<void> departed (Player &actor, fx::message_context_t &, const TownView &message)
+    {
+        return actor.deliver (message.townId, message);
+    }
     fx::task_t<void> deliver (Player &actor, fx::message_context_t &, const DungeonView &message)
     {
-        co_await actor.context ().bound_session ().send (message).async ();
+        return actor.deliver (message.dungeonId, message);
     }
 };
 class DungeonRelocation final : public fx::spot_relocation_adapter_t<Dungeon>

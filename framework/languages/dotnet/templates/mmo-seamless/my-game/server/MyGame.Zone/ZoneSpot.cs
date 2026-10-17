@@ -109,6 +109,17 @@ public sealed class ZoneSpot(IZLinkSpotContext context, IZLinkActorClient actors
         }
     }
 
+    public ValueTask DeliverAsync(PlayerActor actor, BorderVisible presence)
+    {
+        // Membership or visibility may change before a queued notification is handled.
+        if (
+            presence.ObserverZoneId != actor.Context.SpotId
+            || !_visiblePlayers.ContainsKey(actor.Context.ActorId)
+        )
+            return ValueTask.CompletedTask;
+        return actor.Context.BoundSession.Send(presence).Async();
+    }
+
     public ZoneSnapshot Capture() => new(new(_visiblePlayers), new(_arrivals));
 
     public void Restore(ZoneSnapshot state)

@@ -81,7 +81,10 @@ public sealed class DeliverView : IZLinkSpotActorSendHandler<ZoneSpot, PlayerAct
         IZLinkMessageContext context,
         PlayerView request,
         CancellationToken ct
-    ) => actor.Context.BoundSession.Send(request).Async();
+    ) =>
+        actor.Context.SpotId == GameNames.ZoneId(request.Channel)
+            ? actor.Context.BoundSession.Send(request).Async()
+            : ValueTask.CompletedTask;
 }
 
 public sealed class ZoneEntry(IZLinkEntrySpotContext context) : IZLinkEntrySpot<PlayerActor>

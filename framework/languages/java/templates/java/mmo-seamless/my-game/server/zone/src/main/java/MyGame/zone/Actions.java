@@ -42,7 +42,7 @@ public final class Actions {
     @ZLinkSpotActorSend
     public CompletionStage<Void> deliver(
             Zone spot, Player actor, ZLinkMessageContext dispatch, BorderVisible message) {
-        return actor.context().boundSession().send(message).submit();
+        return spot.deliver(actor, message);
     }
 
     @ZLinkSpotActorSend

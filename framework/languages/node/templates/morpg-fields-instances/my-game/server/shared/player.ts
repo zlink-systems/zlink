@@ -1,3 +1,4 @@
+import { restoreNotification, type GameNotification } from './messages';
 import { Inject, Injectable } from '@nestjs/common';
 import type {
   ZLinkActor,
@@ -27,6 +28,15 @@ export class Player implements ZLinkActor {
     await this.context.boundSession
       .send(new WorldState(fieldId(this.x), this.config.id, this.x, this.sequence))
       .submit();
+  }
+  async deliver(
+    sourceSpotId: string,
+    packetName: string,
+    message: GameNotification,
+    visible: boolean
+  ): Promise<void> {
+    if (this.context.spotId !== sourceSpotId || !visible) return;
+    await this.context.boundSession.send(restoreNotification(packetName, message)).submit();
   }
   async onJoinCompleted(completion: ZLinkActorJoinCompletion): Promise<void> {
     if (completion.status !== 'accepted') throw new Error(`Spot join failed: ${completion.status}`);
