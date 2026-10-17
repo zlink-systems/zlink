@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 
 #include <zlink/framework.hpp>
+#include "../support/manual_deadlines.hpp"
 #include "runtime/locations/in_memory_location_store.hpp"
 #include "runtime/fanout/fanout_location_runtime.hpp"
 #include "runtime/locations/location_runtime.hpp"
@@ -620,4 +621,80 @@ TEST (ZLinkFrameworkStartupLease, DescriptorCancellationFailsStartup)
     EXPECT_NE (0, app.run (1, argv));
     EXPECT_EQ (framework_runtime_state_t::error, app.runtime_state ());
     EXPECT_FALSE (app.is_ready ());
+}
+
+
+TEST (ZLinkFrameworkStartupLease, UnansweredPublicationStartsPreparingAndRecoversAfterRenewal)
+{
+    for (const auto kind : {"MeshNode", "ClientServer", "Fanout"}) {
+        SCOPED_TRACE (kind);
+        startup_metrics_t metrics;
+        auto started = metrics.meter->started.get_future ();
+        auto store =
+          std::make_shared<held_lease_repository_t> (held_lease_repository_t::mode_t::held);
+        store->release_claim.complete (result_t<void>::success ());
+        store->hold_renewals = true;
+        auto app = app_t::create ();
+        configure (app, store);
+        std::future<void> requested;
+        task_completion_source_t<void> *release = nullptr;
+        std::atomic_int *attempts = nullptr;
+        if (std::string_view (kind) == "MeshNode") {
+            requested = store->descriptor_requested.get_future ();
+            release = &store->release_descriptor;
+            attempts = &store->mesh_attempts;
+        } else {
+            store->release_descriptor.complete (result_t<void>::success ());
+            if (std::string_view (kind) == "ClientServer") {
+                app.add_zlink_framework ()
+                  .add_client_server_channel ("unanswered-client")
+                  .server ()
+                  .listen (0)
+                  .add_send_handler<startup_handler_t, startup_message_t> ();
+                requested = store->client_requested.get_future ();
+                release = &store->release_client;
+                attempts = &store->client_attempts;
+            } else {
+                app.add_zlink_framework ()
+                  .add_fanout_channel ("unanswered-fanout")
+                  .enable_publisher (0)
+                  .set_routing_id (zlink::routing_id_t::from ("unanswered-fanout"));
+                requested = store->fanout_requested.get_future ();
+                release = &store->release_fanout;
+                attempts = &store->fanout_claims;
+            }
+        }
+        auto probe = std::make_unique<runtime_probe_t> ();
+        auto location = probe->location.get_future ();
+        auto framework = probe->framework_runtime.get_future ();
+        app.add_hosted_service (std::move (probe));
+        running_host_t host (app, store, *metrics.meter);
+        requested.wait ();
+        EXPECT_EQ (framework_runtime_state_t::preparing, app.runtime_state ());
+        EXPECT_FALSE (app.is_ready ());
+        // Common publication registers its deadline before invoking the provider.
+        detail::deadline_scheduler_test_access_t::advance_to (
+          std::chrono::steady_clock::now () + location_options_t{}.owner_lease_renew_timeout);
+        started.wait ();
+        ASSERT_EQ (-1, host.exit_code.load ());
+        auto *runtime = location.get ();
+        EXPECT_EQ (framework_runtime_state_t::preparing, app.runtime_state ());
+        EXPECT_FALSE (app.is_ready ());
+        EXPECT_TRUE (runtime->owner_lease_usable ());
+        EXPECT_EQ (1, attempts->load ());
+        std::promise<void> serving;
+        auto ready = serving.get_future ();
+        std::once_flag observed;
+        auto observation = framework.get ()->observe (16, [&] (const auto &status) {
+            if (status.status.state == framework_runtime_state_t::serving)
+                std::call_once (observed, [&] { serving.set_value (); });
+        });
+        release->complete (result_t<void>::success ());
+        EXPECT_EQ (framework_runtime_state_t::preparing, app.runtime_state ());
+        store->release_renew.complete (result_t<void>::success ());
+        runtime->renew_owner_lease_once ();
+        ready.wait ();
+        EXPECT_TRUE (app.is_ready ());
+        EXPECT_GE (attempts->load (), 2);
+    }
 }

@@ -2483,9 +2483,10 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
             }
             if (owner) {
                 const auto written = infrastructure_result ([&] {
-                                         return _location_runtime->descriptor_write_confirmed (
-                                           _location_store->update_mesh_node (
-                                             descriptor, location_write_intent_t::new_claim));
+                                         return _location_runtime->descriptor_write_confirmed ([&] {
+                                             return _location_store->update_mesh_node (
+                                               descriptor, location_write_intent_t::new_claim);
+                                         });
                                      }).value ();
                 if (written)
                     _published_mesh_nodes.push_back ({descriptor.mesh_name, descriptor.rid});
@@ -2971,10 +2972,11 @@ bool mesh_node_host_service_t::republish_after_store_recovery (location_write_in
             ++descriptor.descriptor_revision;
         const auto written =
           infrastructure_result ([&] {
-              return _location_runtime->descriptor_write_confirmed (
-                _location_store->update_mesh_node (
-                  descriptor, first_publication ? location_write_intent_t::new_claim
-                                                : location_write_intent_t::renew));
+              return _location_runtime->descriptor_write_confirmed ([&] {
+                  return _location_store->update_mesh_node (
+                    descriptor, first_publication ? location_write_intent_t::new_claim
+                                                  : location_write_intent_t::renew);
+              });
           }).value ();
         if (!written)
             return false;

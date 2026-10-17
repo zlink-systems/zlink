@@ -2,6 +2,7 @@
 #pragma once
 
 #include "runtime/execution/task_result.hpp"
+#include <zlink/framework/detail/deadline_scheduler.hpp>
 
 #include "runtime/diagnostics/runtime_metrics.hpp"
 #include "runtime/execution/state_lane.hpp"
@@ -23,6 +24,7 @@
 #include <random>
 #include <stop_token>
 #include <thread>
+#include <vector>
 
 namespace zlink::framework::runtime
 {
@@ -102,6 +104,49 @@ class location_runtime_t
         std::stop_token cancellation;
         std::function<void ()> expire;
         std::optional<task_t<lease_renew_outcome_t>> task;
+    };
+
+    struct descriptor_publication_t
+    {
+        explicit descriptor_publication_t (
+          std::chrono::milliseconds timeout,
+          std::function<std::chrono::steady_clock::time_point ()> clock) :
+            now (std::move (clock)), deadline_at (now () + timeout)
+        {
+        }
+
+        std::function<std::chrono::steady_clock::time_point ()> now;
+        const std::chrono::steady_clock::time_point deadline_at;
+        task_completion_source_t<location_write_result_t> observation;
+        task_completion_source_t<void> drained;
+        std::shared_ptr<detail::deadline_state_t> deadline =
+          std::make_shared<detail::deadline_state_t> ();
+        std::optional<task_t<location_write_result_t>> pending;
+
+        // The deadline wins even when provider completion reaches us before
+        // the scheduler delivers an already-due timer. No second expiry state.
+        bool
+        observe (std::optional<result_t<location_write_result_t>> result = std::nullopt,
+                 std::optional<std::chrono::steady_clock::time_point> observed_at = std::nullopt)
+        {
+            const bool native_failure = result && !*result && result->error () == nullptr;
+            if (!native_failure && (observed_at ? *observed_at : now ()) >= deadline_at)
+                result = result_t<location_write_result_t>::failure (
+                  framework_error_kind_t::deadline_exceeded,
+                  "Location descriptor publication timed out");
+            if (result) {
+                deadline->cancelled.store (true, std::memory_order_release);
+                detail::deadline_scheduler_t::instance ().wake ();
+                observation.complete (*result);
+            }
+            return !observation.task ().await_ready ();
+        }
+
+        void finish (std::optional<result_t<location_write_result_t>> result = std::nullopt)
+        {
+            observe (std::move (result));
+            drained.complete (result_t<void>::success ());
+        }
     };
 
   public:
@@ -232,10 +277,12 @@ class location_runtime_t
 
     void stop () noexcept
     {
-        if (!_started.exchange (false))
-            return;
-        stop_heartbeat ();
-        static_cast<void> (cleanup_owner ());
+        const bool started = _started.exchange (false);
+        if (started)
+            stop_heartbeat ();
+        infrastructure_result ([this] { return drain_descriptor_publications (); }).value ();
+        if (started)
+            static_cast<void> (cleanup_owner ());
     }
 
     /* Drain owner cleanup (graceful-drain-handoff §4-5): stops the lease
@@ -307,9 +354,46 @@ class location_runtime_t
 
     // Location runtime §5: provider failures leave publication unknown. Only a
     // confirmed conflicting claim is a startup error. The repository owns §10 reads.
-    task_t<bool> descriptor_write_confirmed (task_t<location_write_result_t> pending) const
+    template <typename Start>
+    task_t<bool>
+    descriptor_write_confirmed (Start start,
+                                std::function<std::chrono::steady_clock::time_point ()> now =
+                                  std::chrono::steady_clock::now) const
     {
-        const auto result = co_await await_result (std::move (pending));
+        auto operation = std::make_shared<descriptor_publication_t> (
+          _options.owner_lease_renew_timeout, std::move (now));
+        try {
+            co_await _lane.run_task ([this, operation] {
+                std::erase_if (_descriptor_publications, [] (const auto &pending) {
+                    return pending->drained.task ().await_ready ();
+                });
+                _descriptor_publications.push_back (operation);
+            });
+        }
+        catch (...) {
+            operation->finish (detail::current_exception_result<location_write_result_t> ());
+        }
+        detail::deadline_scheduler_t::instance ().schedule (
+          operation->deadline_at, operation->deadline, [weak = std::weak_ptr{operation}] {
+              if (auto active = weak.lock ())
+                  active->observe (std::nullopt, active->deadline_at);
+          });
+        if (operation->observe ()) {
+            try {
+                operation->pending.emplace (start ());
+            }
+            catch (...) {
+                operation->pending.emplace (
+                  detail::current_exception_result<location_write_result_t> ());
+            }
+            detail::observe_task_terminal (
+              *operation->pending, [operation] (const result_t<location_write_result_t> &result) {
+                  operation->finish (result);
+              });
+        } else {
+            operation->finish ();
+        }
+        const auto result = co_await await_result (operation->observation.task ());
         if (!result) {
             if (result.error () == nullptr)
                 std::rethrow_exception (result.exception ());
@@ -896,6 +980,19 @@ class location_runtime_t
         }
     }
 
+    task_t<void> drain_descriptor_publications () const
+    {
+        auto operations =
+          co_await _lane.run_task ([this] { return std::exchange (_descriptor_publications, {}); });
+        for (const auto &operation : operations)
+            operation->observe (detail::result_access_t::failure<location_write_result_t> (
+              detail::make_cancellation_exception ("Location descriptor publication stopped")));
+        // The caller's deadline cannot end opaque I/O. Preserve every repository
+        // coroutine and its input until its actual terminal, before provider teardown.
+        for (const auto &operation : operations)
+            co_await operation->drained.task ();
+    }
+
     void record_failure (std::string message) const
     {
         _lane.run_checked ([&] { record_failure_on_lane (std::move (message)); }).get ();
@@ -919,6 +1016,7 @@ class location_runtime_t
     mutable std::shared_ptr<const owner_lease_snapshot_t> _owner_lease{
       std::make_shared<const owner_lease_snapshot_t> ()};
     mutable std::optional<std::string> _last_error;
+    mutable std::vector<std::shared_ptr<descriptor_publication_t>> _descriptor_publications;
     offload_executor_t _lane_executor;
     mutable state_lane_t _lane{_lane_executor};
 };

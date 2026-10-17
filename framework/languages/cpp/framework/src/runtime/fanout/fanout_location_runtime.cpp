@@ -223,11 +223,12 @@ void fanout_location_runtime_t::start_publisher (const channel_snapshot_t &chann
       .owner_id = owner ? owner->owner_id : std::string{},
       .lease_generation = owner ? owner->lease_generation : 0};
     if (owner) {
-        const auto stored =
-          infrastructure_result ([&] {
-              return _locations->descriptor_write_confirmed (
-                _store->update_fanout_publisher (descriptor, location_write_intent_t::new_claim));
-          }).value ();
+        const auto stored = infrastructure_result ([&] {
+                                return _locations->descriptor_write_confirmed ([&] {
+                                    return _store->update_fanout_publisher (
+                                      descriptor, location_write_intent_t::new_claim);
+                                });
+                            }).value ();
         if (!stored) {
             descriptor.owner_id.clear ();
             descriptor.lease_generation = 0;
@@ -347,10 +348,11 @@ bool fanout_location_runtime_t::publish_descriptors (location_write_intent_t int
         }
     }
     for (auto &item : pending) {
-        const auto written = infrastructure_result ([&] {
-                                 return _locations->descriptor_write_confirmed (
-                                   _store->update_fanout_publisher (item.descriptor, item.intent));
-                             }).value ();
+        const auto written =
+          infrastructure_result ([&] {
+              return _locations->descriptor_write_confirmed (
+                [&] { return _store->update_fanout_publisher (item.descriptor, item.intent); });
+          }).value ();
         if (!written) {
             published = false;
             continue;

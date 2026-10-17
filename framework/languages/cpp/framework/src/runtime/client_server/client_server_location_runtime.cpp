@@ -730,11 +730,12 @@ void client_server_location_runtime_t::start_server (
     entry->owner = std::move (raw);
     if (publication_owner) {
         auto descriptor = to_descriptor (entry->owner->descriptor (), *publication_owner);
-        const auto stored =
-          infrastructure_result ([&] {
-              return _locations->descriptor_write_confirmed (
-                _store->update_client_server (descriptor, location_write_intent_t::new_claim));
-          }).value ();
+        const auto stored = infrastructure_result ([&] {
+                                return _locations->descriptor_write_confirmed ([&] {
+                                    return _store->update_client_server (
+                                      descriptor, location_write_intent_t::new_claim);
+                                });
+                            }).value ();
         if (stored)
             entry->published_descriptor = std::move (descriptor);
     }
@@ -1042,9 +1043,11 @@ task_t<bool> client_server_location_runtime_t::publish_servers_task (location_wr
         admission.weight = static_cast<std::uint32_t> (weight);
         admission.state = client_server_service_state (state);
         auto descriptor = to_descriptor (admission, *owner);
-        const auto written = co_await _locations->descriptor_write_confirmed (
-          _store->update_client_server (descriptor, new_owner ? location_write_intent_t::new_claim
-                                                              : location_write_intent_t::renew));
+        const auto written = co_await _locations->descriptor_write_confirmed ([&] {
+            return _store->update_client_server (descriptor, new_owner
+                                                               ? location_write_intent_t::new_claim
+                                                               : location_write_intent_t::renew);
+        });
         if (written)
             server->published_descriptor = std::move (descriptor);
         else
