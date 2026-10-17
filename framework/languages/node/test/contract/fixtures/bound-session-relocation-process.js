@@ -35,6 +35,7 @@ async function start() {
   else if (role === 'target') await startTarget();
   else throw new Error(`Unsupported role '${role}'.`);
   process.on('message', onMessage);
+  process.once('disconnect', () => void stop());
   process.once('SIGTERM', () => void stop());
   // The session owner reports the port it bound; the target connects to it.
   send({ type: 'ready', role, pid: process.pid, port: server?.address().port });

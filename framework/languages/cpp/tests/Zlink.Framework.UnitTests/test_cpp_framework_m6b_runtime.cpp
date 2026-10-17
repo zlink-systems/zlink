@@ -67,6 +67,51 @@
 #include <type_traits>
 #include <vector>
 
+namespace zlink::framework::runtime::host
+{
+// Drives the relocation terminal lane directly so a test can build the state
+// between two management passes without waiting for time to pass.
+struct public_host_runtime_test_access_t
+{
+    using key_t = public_host_runtime_t::relocation_attempt_key_t;
+
+    static void insert_unscheduled_target_attempt (public_host_runtime_t &host, const key_t &key)
+    {
+        host._relocation_session_terminal_lane
+          .run ([&] {
+              host.lower_relocation_next_due_on_lane (public_host_runtime_t::relocation_due_now);
+              (void) host._relocation_target_attempts.try_emplace (key);
+          })
+          .get ();
+    }
+
+    static void publish_relocation_bound (public_host_runtime_t &host)
+    {
+        host._relocation_session_terminal_lane
+          .run ([&] { host.publish_relocation_next_due_on_lane (); })
+          .get ();
+    }
+
+    static void schedule_finalize (public_host_runtime_t &host,
+                                   const key_t &key,
+                                   std::chrono::steady_clock::time_point at)
+    {
+        host._relocation_session_terminal_lane
+          .run ([&] {
+              host.set_relocation_finalize_at_on_lane (host._relocation_target_attempts.at (key),
+                                                       at);
+          })
+          .get ();
+    }
+
+    static bool relocation_due (const public_host_runtime_t &host,
+                                std::chrono::steady_clock::time_point now)
+    {
+        return host.relocation_management_due (now);
+    }
+};
+} // namespace zlink::framework::runtime::host
+
 namespace foundation = zlink::framework::runtime::foundation;
 namespace mesh = zlink::framework::runtime::mesh;
 namespace protocol = zlink::framework::runtime::protocol;
@@ -2410,7 +2455,7 @@ void verify_actor_create_replays_after_reciprocal_handover ()
                                    std::chrono::duration_cast<std::chrono::milliseconds> (
                                      deadline - std::chrono::steady_clock::now ()),
                                    [&promise] (auto terminal, auto payload) {
-                                       promise.set_value ({terminal, std::move (payload)});
+                                       promise.set_value ({terminal, payload.to_bytes ()});
                                    })));
     const auto receive = [&] {
         std::optional<mesh::service_mailbox_claim_t> claim;
@@ -2819,12 +2864,12 @@ void verify_session_binding_and_terminal_once ()
     foundation::call_id_t id{};
     id.low = 1;
     std::atomic_size_t terminal_count{0};
-    assert (operations.register_operation (
-      id, foundation::operation_registry_t::clock_t::now () + 1s,
-      [&] (foundation::operation_terminal_t, std::vector<std::uint8_t>) {
-          terminal_count.fetch_add (1, std::memory_order_release);
-      }));
-    assert (operations.complete (id, {1}));
+    assert (
+      operations.register_operation (id, foundation::operation_registry_t::clock_t::now () + 1s,
+                                     [&] (foundation::operation_terminal_t, zlink::message_t) {
+                                         terminal_count.fetch_add (1, std::memory_order_release);
+                                     }));
+    assert (operations.complete (id, zlink::message_t::from (std::vector<std::uint8_t>{1})));
     assert (!operations.cancel (id));
     const auto terminal_deadline = std::chrono::steady_clock::now () + 5s;
     while (terminal_count.load (std::memory_order_acquire) != 1
@@ -3907,6 +3952,28 @@ void verify_logical_multicast_continues_after_one_target_failure ()
     target->close ();
 }
 
+void verify_relocation_finalize_write_lowers_published_bound ()
+{
+    // An attempt inserted unscheduled is excluded from a management pass that
+    // runs before its first finalize instant is written. That write must make
+    // the attempt due again; without it the bound stays never-due.
+    auto host = std::make_shared<host::public_host_runtime_t> (
+      host::host_options_t{mesh::raw_mesh_node_options_t{
+        .descriptor = descriptor ("finalize-bound"),
+        .runtime_failures =
+          std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()}});
+    using access = host::public_host_runtime_test_access_t;
+    const access::key_t key{1, 2, 3};
+    const auto now = std::chrono::steady_clock::now ();
+    access::insert_unscheduled_target_attempt (*host, key);
+    assert (access::relocation_due (*host, now));
+    access::publish_relocation_bound (*host);
+    assert (!access::relocation_due (*host, now + 24h));
+    access::schedule_finalize (*host, key, now + 1h);
+    assert (!access::relocation_due (*host, now));
+    assert (access::relocation_due (*host, now + 1h));
+}
+
 void verify_pending_relocation_management_bounds_dispatch_wait ()
 {
     auto host = std::make_shared<host::public_host_runtime_t> (
@@ -4601,17 +4668,18 @@ void verify_raw_spot_and_actor_routing ()
     using request_result_t = std::pair<foundation::operation_terminal_t, std::vector<std::uint8_t>>;
     std::promise<request_result_t> promise;
     auto future = promise.get_future ();
-    assert (source
-              .request_to_actor (
-                target_descriptor.node_routing_id, std::nullopt, actor_fence,
-                {"ActorPacket", "application/json", bytes ("request")}, 2s,
-                [&promise] (foundation::operation_terminal_t terminal,
-                            std::vector<std::uint8_t> payload) {
-                    promise.set_value ({terminal, std::move (payload)});
-                },
-                protocol::wire_operation_id_t{77, 88})
-              .result ()
-              .value ());
+    assert (
+      source
+        .request_to_actor (
+          target_descriptor.node_routing_id, std::nullopt, actor_fence,
+          {"ActorPacket", "application/json", bytes ("request")}, 2s,
+          [&promise] (foundation::operation_terminal_t terminal, zlink::message_t native_payload) {
+              auto payload = native_payload.to_bytes ();
+              promise.set_value ({terminal, std::move (payload)});
+          },
+          protocol::wire_operation_id_t{77, 88})
+        .result ()
+        .value ());
     mesh::raw_mesh_pump_result_t actor_pump = mesh::raw_mesh_pump_result_t::no_data;
     while (actor_pump != mesh::raw_mesh_pump_result_t::application
            && mesh::service_liveness_registry_t::clock_t::now () < deadline) {
@@ -4669,7 +4737,8 @@ void verify_raw_spot_and_actor_routing ()
                 target_descriptor.node_routing_id, std::nullopt, actor_fence,
                 {"ActorPacket", "application/json", bytes ("bound")}, 2s,
                 [&bound_promise] (foundation::operation_terminal_t terminal,
-                                  std::vector<std::uint8_t> payload) {
+                                  zlink::message_t native_payload) {
+                    auto payload = native_payload.to_bytes ();
                     bound_promise.set_value ({terminal, std::move (payload)});
                 },
                 bound_operation, bound_session_tail, 91)
@@ -4821,7 +4890,8 @@ void verify_raw_spot_and_actor_routing ()
                 target_descriptor.node_routing_id, std::nullopt, stale_fence,
                 {"ActorPacket", "application/json", bytes ("stale")}, 2s,
                 [&stale_promise, &stale_terminal_count] (foundation::operation_terminal_t terminal,
-                                                         std::vector<std::uint8_t> payload) {
+                                                         zlink::message_t native_payload) {
+                    auto payload = native_payload.to_bytes ();
                     ++stale_terminal_count;
                     stale_promise.set_value ({terminal, std::move (payload)});
                 })
@@ -5075,13 +5145,12 @@ void verify_node_request_requires_remote_admission ()
     const auto deadline = mesh::service_liveness_registry_t::clock_t::now () + 5s;
     // Transport readiness is not service admission. A Node direct request is
     // rejected until the remote descriptor has completed service admission.
-    assert (
-      !source
-         .request_to_node (target_descriptor.node_routing_id,
-                           {"DeferredRequest", "application/json", bytes ("request")}, 2s,
-                           [] (foundation::operation_terminal_t, std::vector<std::uint8_t>) {})
-         .result ()
-         .value ());
+    assert (!source
+               .request_to_node (target_descriptor.node_routing_id,
+                                 {"DeferredRequest", "application/json", bytes ("request")}, 2s,
+                                 [] (foundation::operation_terminal_t, zlink::message_t) {})
+               .result ()
+               .value ());
 
     while ((!ready_peer (source.topology (), target_descriptor.node_routing_id)
             || !ready_peer (target.topology (), source_descriptor.node_routing_id))
@@ -5101,17 +5170,18 @@ void verify_node_request_requires_remote_admission ()
     using request_result_t = std::pair<foundation::operation_terminal_t, std::vector<std::uint8_t>>;
     std::promise<request_result_t> promise;
     auto future = promise.get_future ();
-    assert (source
-              .request_to_node (
-                target_descriptor.node_routing_id,
-                {"DeferredRequest", "application/json", bytes ("request")}, 2s,
-                [&promise] (foundation::operation_terminal_t terminal,
-                            std::vector<std::uint8_t> payload) {
-                    promise.set_value ({terminal, std::move (payload)});
-                },
-                4242)
-              .result ()
-              .value ());
+    assert (
+      source
+        .request_to_node (
+          target_descriptor.node_routing_id,
+          {"DeferredRequest", "application/json", bytes ("request")}, 2s,
+          [&promise] (foundation::operation_terminal_t terminal, zlink::message_t native_payload) {
+              auto payload = native_payload.to_bytes ();
+              promise.set_value ({terminal, std::move (payload)});
+          },
+          4242)
+        .result ()
+        .value ());
 
     std::optional<mesh::service_mailbox_claim_t> claim;
     while (!claim && mesh::service_liveness_registry_t::clock_t::now () < deadline) {
@@ -5249,8 +5319,8 @@ void verify_queued_owner_accepts_request_without_blocking_other_owner ()
     assert (source
               .request_to_node (published_target.node_routing_id, payload, 5s,
                                 [&accepted_promise] (foundation::operation_terminal_t terminal,
-                                                     std::vector<std::uint8_t> failure) {
-                                    accepted_promise.set_value ({terminal, std::move (failure)});
+                                                     zlink::message_t failure) {
+                                    accepted_promise.set_value ({terminal, failure.to_bytes ()});
                                 })
               .result ()
               .value ());
@@ -5297,15 +5367,14 @@ void verify_queued_owner_accepts_request_without_blocking_other_owner ()
 
     std::promise<foundation::operation_terminal_t> independent_promise;
     auto independent = independent_promise.get_future ();
-    assert (
-      source
-        .request_to_channel ("independent-channel", payload, 5s,
-                             [&independent_promise] (foundation::operation_terminal_t terminal,
-                                                     std::vector<std::uint8_t>) {
-                                 independent_promise.set_value (terminal);
-                             })
-        .result ()
-        .value ());
+    assert (source
+              .request_to_channel ("independent-channel", payload, 5s,
+                                   [&independent_promise] (
+                                     foundation::operation_terminal_t terminal, zlink::message_t) {
+                                       independent_promise.set_value (terminal);
+                                   })
+              .result ()
+              .value ());
     mesh::raw_mesh_pump_result_t independent_pump = mesh::raw_mesh_pump_result_t::no_data;
     while (independent_pump != mesh::raw_mesh_pump_result_t::application
            && mesh::service_liveness_registry_t::clock_t::now () < deadline) {
@@ -7586,6 +7655,7 @@ int main (int argc, char **argv)
     verify_public_host_fifo_drains_before_liveness_probe ();
     verify_logical_multicast_continues_after_one_target_failure ();
     verify_local_application_enqueue_wakes_dispatch_wait ();
+    verify_relocation_finalize_write_lowers_published_bound ();
     verify_pending_relocation_management_bounds_dispatch_wait ();
     verify_failed_relay_persistence_rearms_dispatch_wait ();
     verify_root_location_session_seal_timeout_is_startup_snapshot ();

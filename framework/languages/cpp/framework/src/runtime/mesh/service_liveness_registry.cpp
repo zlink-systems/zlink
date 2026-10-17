@@ -42,6 +42,8 @@ service_liveness_registry_t::admit (std::vector<std::uint8_t> node_routing_id,
               return found->second;
           auto peer = std::make_shared<peer_t> (std::move (connection_id), now, _peer_timeout);
           _peers.insert_or_assign (std::move (node_routing_id), peer);
+          // A new peer is due for its first probe at once.
+          _next_due.store (unknown_due, std::memory_order_release);
           return peer;
       })
       .get ();
@@ -119,8 +121,45 @@ service_liveness_registry_t::acknowledge_probe (const std::vector<std::uint8_t> 
       .get ();
 }
 
+void service_liveness_registry_t::set_admission_pending (bool pending)
+{
+    _lane
+      .run ([this, pending] {
+          if (pending) {
+              if (!_admission_activity)
+                  _admission_activity = clock_t::now ();
+          } else {
+              _admission_activity.reset ();
+          }
+          publish_next_due_on_lane ();
+      })
+      .get ();
+}
+
+bool service_liveness_registry_t::due (clock_t::time_point now) const noexcept
+{
+    const auto next = _next_due.load (std::memory_order_acquire);
+    return next == unknown_due || now.time_since_epoch ().count () >= next;
+}
+
+void service_liveness_registry_t::publish_next_due_on_lane () const
+{
+    const auto admission_due =
+      _admission_activity ? (*_admission_activity + _probe_interval).time_since_epoch ().count ()
+                          : never_due;
+    auto next = admission_due;
+    for (const auto &[_, peer] : _peers) {
+        const auto candidate =
+          std::min (peer->deadline.load (std::memory_order_relaxed), peer->next_probe);
+        next = std::min (next, candidate.time_since_epoch ().count ());
+    }
+    _next_due.store (next, std::memory_order_release);
+}
+
 service_liveness_tick_t service_liveness_registry_t::tick (clock_t::time_point now)
 {
+    if (!due (now))
+        return {};
     return _lane
       .run ([&, this] {
           service_liveness_tick_t result;
@@ -145,6 +184,9 @@ service_liveness_tick_t service_liveness_registry_t::tick (clock_t::time_point n
               }
               ++entry;
           }
+          if (_admission_activity)
+              _admission_activity = now;
+          publish_next_due_on_lane ();
           return result;
       })
       .get ();
@@ -153,18 +195,14 @@ service_liveness_tick_t service_liveness_registry_t::tick (clock_t::time_point n
 std::optional<service_liveness_registry_t::clock_t::time_point>
 service_liveness_registry_t::next_activity () const
 {
-    return _lane
-      .run ([this] {
-          std::optional<clock_t::time_point> result;
-          for (const auto &[_, peer] : _peers) {
-              const auto candidate =
-                std::min (peer->deadline.load (std::memory_order_relaxed), peer->next_probe);
-              if (!result || candidate < *result)
-                  result = candidate;
-          }
-          return result;
-      })
-      .get ();
+    auto next = _next_due.load (std::memory_order_acquire);
+    if (next == unknown_due) {
+        _lane.run ([this] { publish_next_due_on_lane (); }).get ();
+        next = _next_due.load (std::memory_order_acquire);
+    }
+    if (next == never_due)
+        return std::nullopt;
+    return clock_t::time_point (clock_t::duration (next));
 }
 
 std::size_t service_liveness_registry_t::size () const
