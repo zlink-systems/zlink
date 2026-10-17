@@ -5480,6 +5480,25 @@ class actor_cutover_authority_t final
     : public zlink::framework::runtime::stateful::authority_relocation_port_t
 {
   public:
+    zlink::framework::runtime::stateful::source_relocation_settlement_t settle_source_relocation (
+      const zlink::framework::runtime::stateful::relocation_authority_fence_t &fence,
+      const std::vector<zlink::framework::runtime::stateful::object_ref_t> &participants,
+      bool preserve) override
+    {
+        namespace sf = zlink::framework::runtime::stateful;
+        (void) preserve;
+        sf::source_relocation_settlement_t settled{observe_relocation (fence), {}};
+        if (settled.outcome == sf::relocation_authority_t::target_committed) {
+            for (const auto &participant : participants) {
+                if (const auto current = read (participant.kind, participant.key))
+                    settled.follow_generations.emplace (
+                      std::pair{participant.kind, participant.key},
+                      current->target.authority_owner_generation);
+            }
+        }
+        return settled;
+    }
+
     using authority_publish_result_t =
       zlink::framework::runtime::stateful::authority_publish_result_t;
     using authority_relocation_reference_t =
@@ -7588,7 +7607,12 @@ bool verify_remote_actor_completion_keeps_session_ref_until_route_ack ()
                      source, target,
                      spot_route_t{node_rid_t::from_string ("target-node"),
                                   spot_id_t ("target-spot"), "game"},
-                     source_fence, target_fence, "remote-source-transfer"))
+                     source_fence,
+                     {target_fence.target_node_routing_id,
+                      target_fence.target_node_generation,
+                      {},
+                      target_fence.owner_lease_generation},
+                     target_fence.authority_owner_generation, "remote-source-transfer"))
           .result ()
           .value ();
     }

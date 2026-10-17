@@ -15,10 +15,12 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
@@ -293,6 +295,7 @@ final class ZLinkInMemoryAuthorityStore {
                         current.allocation.descriptorLifecycleGeneration(),
                         current.owner);
         boolean ownerLive = ownerLeaseIsLive.test(current.owner);
+        List<String> members = List.of();
         if (active) {
             if (ownerLive) return false;
             if (participantIsPrepared(key)
@@ -311,36 +314,13 @@ final class ZLinkInMemoryAuthorityStore {
                 var spot = new ZLinkServiceAuthorityPayloadCodec().decode(current.payload);
                 if (spot.isEmpty()
                         || spot.get().state() != ZLinkServiceAuthorityPayloadCodec.State.READY
-                        || spot.get().activationRecoveryState().isPresent()
-                        || (spot.get().user().isPresent()
-                                && rows.values().stream()
-                                        .anyMatch(
-                                                row ->
-                                                        new ZLinkActorAuthorityPayloadCodec()
-                                                                .decode(row.payload)
-                                                                .filter(
-                                                                        actor ->
-                                                                                actor
-                                                                                                        .currentSpotKind()
-                                                                                                == systems
-                                                                                                        .zlink
-                                                                                                        .framework
-                                                                                                        .spots
-                                                                                                        .ZLinkSpotKind
-                                                                                                        .USER
-                                                                                                        .value()
-                                                                                        && actor.currentSpotId()
-                                                                                                .equals(
-                                                                                                        spot.get()
-                                                                                                                .spotId())
-                                                                                        && actor
-                                                                                                        .currentSpotGeneration()
-                                                                                                == current.objectGeneration)
-                                                                .isPresent()))) {
+                        || spot.get().activationRecoveryState().isPresent()) {
                     throw new ZLinkFrameworkException(
                             ZLinkFrameworkErrorKind.UNAVAILABLE,
                             "Ended Spot authority is not reclaimable");
                 }
+                if (spot.get().user().isPresent())
+                    members = endedSpotMembers(key, current, spot.get().spotId());
             }
         } else if (ownerLive
                 && descriptor != null
@@ -351,7 +331,59 @@ final class ZLinkInMemoryAuthorityStore {
         var reservation = reservations.remove(key);
         if (reservation != null && !active) reservation.state = State.ABORTED;
         rows.remove(key);
+        for (String memberKey : members) {
+            Row member = rows.remove(memberKey);
+            adjustActive(member.allocation, member.allocation.capacityBundle(), -1);
+            reservations.remove(memberKey);
+        }
         return true;
+    }
+
+    /**
+     * Every Actor membership of the old User Spot incarnation must belong to an ended-owner member
+     * (location runtime §6.1): steady Ready, activated, outside any aggregate, and with an invalid
+     * owner lease. The release must fit one provider batch; the key set mirrors the provider
+     * repository batch (authority, owner lease, descriptor and capacity records).
+     */
+    private List<String> endedSpotMembers(String spotKey, Row spot, String spotId) {
+        List<String> members = new ArrayList<>();
+        Set<String> batchKeys = new HashSet<>();
+        batchKeys.add("authority:" + spotKey);
+        batchKeys.add("owner:" + spot.owner.ownerId());
+        batchKeys.add("descriptor:" + spot.allocation.descriptor());
+        batchKeys.add("capacity:" + spot.allocation.descriptor());
+        for (var entry : rows.entrySet()) {
+            Row row = entry.getValue();
+            var actor = new ZLinkActorAuthorityPayloadCodec().decode(row.payload);
+            if (actor.isEmpty()
+                    || actor.get().currentSpotKind()
+                            != systems.zlink.framework.spots.ZLinkSpotKind.USER.value()
+                    || !actor.get().currentSpotId().equals(spotId)
+                    || actor.get().currentSpotGeneration() != spot.objectGeneration) continue;
+            if (row.allocation.state() != ZLinkPlacementAllocationState.ACTIVE
+                    || participantIsPrepared(entry.getKey())
+                    || !Arrays.equals(
+                            row.payload,
+                            ZLinkCanonicalRelocationAuthorityStateCodec
+                                    .applicationPayloadOrOriginal(row.payload))
+                    || actor.get().state() != ZLinkActorAuthorityPayloadCodec.State.READY)
+                throw new ZLinkFrameworkException(
+                        ZLinkFrameworkErrorKind.UNAVAILABLE,
+                        "User Spot still has a relocating or unactivated member");
+            if (ownerLeaseIsLive.test(row.owner))
+                throw new ZLinkFrameworkException(
+                        ZLinkFrameworkErrorKind.UNAVAILABLE,
+                        "User Spot still has a member with a live owner lease");
+            members.add(entry.getKey());
+            batchKeys.add("authority:" + entry.getKey());
+            batchKeys.add("owner:" + row.owner.ownerId());
+            batchKeys.add("capacity:" + row.allocation.descriptor());
+        }
+        if (batchKeys.size() > ZLinkLocationStoreLimits.MAXIMUM_BATCH_KEYS)
+            throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.UNAVAILABLE,
+                    "User Spot member release exceeds one Location Store batch");
+        return members;
     }
 
     public CompletionStage<ZLinkObjectReserveResult> reserve(
