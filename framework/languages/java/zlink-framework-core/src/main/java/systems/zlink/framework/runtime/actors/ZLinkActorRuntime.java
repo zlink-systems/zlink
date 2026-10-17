@@ -3092,6 +3092,10 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         messageFollowNoticeSender = sender;
     }
 
+    public boolean hasMessageFollowSource(String actorId) {
+        return handoff.hasMessageFollowSource(actorId);
+    }
+
     /**
      * Relays one stale raw Actor record through the committed typed Actor route. The caller
      * transfers the received parts and admission lease only when this method returns true.

@@ -2784,6 +2784,59 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
             long sourceSessionSequence,
             CompletableFuture<Void> requestAdmission) {
         if (actor == null) return null;
+        ZLinkInternalSpotNode.MessageFollowRelayHandler relay = messageFollowRelayHandler;
+        if (relay != null && relay.hasSource(actor.actorId())) {
+            return dispatchLocalActorFollowing(
+                    actor,
+                    parts,
+                    requestId,
+                    flags,
+                    sourceNodeRid,
+                    sourceSessionRid,
+                    sourceBindingGeneration,
+                    sourceSessionSequence,
+                    requestAdmission,
+                    relay);
+        }
+        ZLinkBackendActorRef currentActor = actors.get(actor.actorId());
+        String targetSpotId = actorSpots.get(actor.actorId());
+        ZLinkJavaRawSpot target = targetSpotId == null ? null : spots.get(targetSpotId);
+        if (currentActor == null || target == null) return null;
+        List<Message> copied = ZLinkJavaRawSpot.copy(parts);
+        String contentType = ZLinkChannelContentTypeFrame.decode(parts);
+        var header =
+                owner.localActorMessage(
+                        currentActor,
+                        sourceNodeRid,
+                        sourceSessionRid,
+                        sourceBindingGeneration,
+                        sourceSessionSequence,
+                        requestId);
+        byte[] acceptedRecord = owner.encodeLocalActorAccepted(header, parts);
+        return enqueueLocalActorMessages(
+                currentActor,
+                target,
+                copied,
+                acceptedRecord,
+                contentType,
+                requestId,
+                flags,
+                sourceNodeRid,
+                sourceSessionRid,
+                requestAdmission);
+    }
+
+    private CompletionStage<Void> dispatchLocalActorFollowing(
+            ZLinkBackendActorRef actor,
+            List<Message> parts,
+            long requestId,
+            int flags,
+            RoutingId sourceNodeRid,
+            RoutingId sourceSessionRid,
+            long sourceBindingGeneration,
+            long sourceSessionSequence,
+            CompletableFuture<Void> requestAdmission,
+            ZLinkInternalSpotNode.MessageFollowRelayHandler relay) {
         List<Message> copied = ZLinkJavaRawSpot.copy(parts);
         String contentType = ZLinkChannelContentTypeFrame.decode(parts);
         var header =
@@ -2795,8 +2848,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                         sourceSessionSequence,
                         requestId);
         byte[] acceptedRecord = owner.encodeLocalActorAccepted(header, parts);
-        ZLinkInternalSpotNode.MessageFollowRelayHandler relay = messageFollowRelayHandler;
-        if (relay != null && header != null) {
+        if (header != null) {
             var terminal = new AtomicReference<CompletableFuture<Void>>();
             if (tryRelayActor(
                     relay,
@@ -2842,6 +2894,30 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
             copied.forEach(Message::close);
             return null;
         }
+        return enqueueLocalActorMessages(
+                currentActor,
+                target,
+                copied,
+                acceptedRecord,
+                contentType,
+                requestId,
+                flags,
+                sourceNodeRid,
+                sourceSessionRid,
+                requestAdmission);
+    }
+
+    private static CompletionStage<Void> enqueueLocalActorMessages(
+            ZLinkBackendActorRef currentActor,
+            ZLinkJavaRawSpot target,
+            List<Message> copied,
+            byte[] acceptedRecord,
+            String contentType,
+            long requestId,
+            int flags,
+            RoutingId sourceNodeRid,
+            RoutingId sourceSessionRid,
+            CompletableFuture<Void> requestAdmission) {
         List<ZLinkBackendActorReceived> messages = new ArrayList<>(copied.size());
         for (int index = 0; index < copied.size(); index++) {
             messages.add(

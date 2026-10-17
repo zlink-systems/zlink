@@ -10,6 +10,7 @@ import systems.zlink.contracts.core.Zlink;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.runtime.internal.backend.*;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceFrozenRecordCodec;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
@@ -25,6 +26,7 @@ import java.util.logging.Logger;
 final class ZLinkLocalActorFollowAdmissionTest {
     enum Relay {
         NONE,
+        ABSENT,
         SUCCESS_AFTER_ADMISSION,
         FAILURE_BEFORE_ADMISSION,
         FAILURE_AFTER_ADMISSION
@@ -69,29 +71,38 @@ final class ZLinkLocalActorFollowAdmissionTest {
             var release = new AtomicReference<Runnable>();
             var expected = new IllegalStateException("owned relay failure");
             spots.setMessageFollowRelayHandler(
-                    (rid,
-                            generation,
-                            header,
-                            journal,
-                            parts,
-                            contentType,
-                            reply,
-                            failure,
-                            terminalRelease) -> {
-                        calls.incrementAndGet();
-                        var accepted = ZLinkServiceFrozenRecordCodec.decodeActor(journal);
-                        assertEquals(header.operationHigh(), accepted.operationHigh());
-                        assertEquals(header.operationLow(), accepted.operationLow());
-                        assertEquals(actor, header.target().actor());
-                        if (relay == Relay.NONE) return false;
-                        retained.set(parts);
-                        fail.set(failure);
-                        release.set(terminalRelease);
-                        if (relay == Relay.FAILURE_BEFORE_ADMISSION) {
-                            failure.accept(expected);
-                            terminalRelease.run();
+                    new ZLinkInternalSpotNode.MessageFollowRelayHandler() {
+                        @Override
+                        public boolean hasSource(String actorId) {
+                            return relay != Relay.ABSENT;
                         }
-                        return true;
+
+                        @Override
+                        public boolean handle(
+                                RoutingId rid,
+                                long generation,
+                                ZLinkServiceM6BWireCodec.ActorMessage header,
+                                byte[] journal,
+                                List<Message> parts,
+                                String contentType,
+                                Consumer<List<Message>> reply,
+                                Consumer<Throwable> failure,
+                                Runnable terminalRelease) {
+                            calls.incrementAndGet();
+                            var accepted = ZLinkServiceFrozenRecordCodec.decodeActor(journal);
+                            assertEquals(header.operationHigh(), accepted.operationHigh());
+                            assertEquals(header.operationLow(), accepted.operationLow());
+                            assertEquals(actor, header.target().actor());
+                            if (relay == Relay.NONE || relay == Relay.ABSENT) return false;
+                            retained.set(parts);
+                            fail.set(failure);
+                            release.set(terminalRelease);
+                            if (relay == Relay.FAILURE_BEFORE_ADMISSION) {
+                                failure.accept(expected);
+                                terminalRelease.run();
+                            }
+                            return true;
+                        }
                     });
             var reports = new AtomicInteger();
             var logger = Logger.getLogger(ZLinkJavaRawSpotNode.class.getName());
@@ -113,7 +124,7 @@ final class ZLinkLocalActorFollowAdmissionTest {
                     var body = Message.from("body")) {
                 var admitted =
                         spots.sendToActorAsync(actor, List.of(header, body)).toCompletableFuture();
-                assertEquals(1, calls.get());
+                assertEquals(relay == Relay.ABSENT ? 0 : 1, calls.get());
                 if (relay == Relay.FAILURE_BEFORE_ADMISSION) {
                     assertSame(
                             expected,
@@ -123,7 +134,7 @@ final class ZLinkLocalActorFollowAdmissionTest {
                             admitted.isDone(),
                             "local relay acceptance must not wait for relay terminal");
                     admitted.join();
-                    if (relay != Relay.NONE) {
+                    if (relay != Relay.NONE && relay != Relay.ABSENT) {
                         assertEquals(
                                 "body",
                                 new String(
@@ -134,7 +145,8 @@ final class ZLinkLocalActorFollowAdmissionTest {
                         admitted.join();
                     }
                 }
-                assertEquals(relay == Relay.NONE ? 1 : 0, dispatches.get());
+                assertEquals(
+                        relay == Relay.NONE || relay == Relay.ABSENT ? 1 : 0, dispatches.get());
                 assertEquals(relay == Relay.FAILURE_AFTER_ADMISSION ? 1 : 0, reports.get());
             } finally {
                 if (release.get() != null) release.get().run();

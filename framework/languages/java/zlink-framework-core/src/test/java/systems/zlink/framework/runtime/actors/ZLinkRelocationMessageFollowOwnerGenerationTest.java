@@ -147,7 +147,10 @@ final class ZLinkRelocationMessageFollowOwnerGenerationTest {
             assertEquals(7, ordinary.get(1).size());
             ordinary.forEach(Message::close);
 
+            assertFalse(runtime.hasMessageFollowSource(source.actor().actorId()));
             runtime.stageRelocationMessageFollow(source, target);
+            assertTrue(runtime.hasMessageFollowSource(source.actor().actorId()));
+            assertFalse(runtime.hasMessageFollowSource("no-tenure-actor"));
             assertTrue(
                     runtime.relayMessageFollow(
                             RoutingId.from("client"),
@@ -162,6 +165,8 @@ final class ZLinkRelocationMessageFollowOwnerGenerationTest {
             assertEquals(List.of(target), forwarded);
             assertEquals(1, released.get());
             assertTrue(failures.isEmpty(), failures.toString());
+            runtime.abortRelocationMessageFollow(source);
+            assertFalse(runtime.hasMessageFollowSource(source.actor().actorId()));
         } finally {
             runtime.close();
         }
