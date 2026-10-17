@@ -70,6 +70,13 @@ internal partial class ZLinkInMemoryLocationStore : IZLinkLocationRepository
                     new ZLinkLocationOwnerToken(current!.OwnerId, current.LeaseGeneration),
                     now
                 );
+            _meshNodes.Generations.TryGetValue(key, out var last);
+            if (
+                exists
+                && intent is ZLinkLocationWriteIntent.NewClaim or ZLinkLocationWriteIntent.Renew
+                && ZLinkLocationDescriptorComparison.SameExceptWriteTime(current!, descriptor)
+            )
+                return ZLinkLocationWriteResult.Stored(last, current!.UpdatedAt);
             if (intent == ZLinkLocationWriteIntent.NewClaim && currentOwnerLive)
                 return ZLinkLocationWriteResult.RejectedConflict;
             if (intent == ZLinkLocationWriteIntent.Takeover && currentOwnerLive)
@@ -89,7 +96,6 @@ internal partial class ZLinkInMemoryLocationStore : IZLinkLocationRepository
             if (!CanPublishEntrySpotIdNoLock(descriptor, key, now))
                 return ZLinkLocationWriteResult.RejectedConflict;
 
-            _meshNodes.Generations.TryGetValue(key, out var last);
             var generation = intent == ZLinkLocationWriteIntent.Renew ? last : checked(last + 1);
             _meshNodes.Generations[key] = generation;
             _meshNodes.Rows[key] = WithCurrentPlacementCapacity(
