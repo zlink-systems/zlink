@@ -1451,7 +1451,6 @@ result_t<void> mesh_node_runtime_t::cleanup_application_actor_stateful (const ac
             && stateful != runtime::stateful::stateful_error_t::not_found)
             return result_t<void>::failure (framework_error_kind_t::internal_failure,
                                             "stateful Actor cleanup failed");
-        _actors.erase (std::string (actor.actor_id ().value ()));
     }
     return result_t<void>::success ();
 }
@@ -1897,7 +1896,6 @@ void mesh_node_runtime_t::stop ()
     }
     _node->transport ().mailbox ().bind_application_dispatch ({}, {});
     _peer_connection_intent_lane.run ([&] { _peer_connection_intents.clear (); }).get ();
-    _actors.clear ();
     for (auto &[_, spot] : _spots)
         (void) spot.close ();
     _spots.clear ();
@@ -2088,13 +2086,9 @@ mesh_node_runtime_t::create_actor (std::string actor_type,
     if (actor_id.empty ()) {
         throw configuration_error ("actor id is required");
     }
-    if (const auto found = _actors.find (actor_id); found != _actors.end ())
-        return found->second;
     (void) creation_parts;
     (void) timeout;
-    auto actor = _node->create_actor (std::move (actor_type), actor_id);
-    _actors.emplace (std::move (actor_id), actor);
-    return actor;
+    return _node->create_actor (std::move (actor_type), std::move (actor_id));
 }
 
 task_t<zlink::submit_result_t> mesh_node_runtime_t::send_to_actor (
@@ -2209,11 +2203,11 @@ bool mesh_node_runtime_t::prepare_actor_transfer (const host::actor_transfer_pre
     return _node->prepare_actor_transfer (prepare, token, result);
 }
 
-result_t<actor_ref_t> mesh_node_runtime_t::create_application_actor (
-  std::string actor_type,
-  std::string actor_id,
-  const std::optional<zlink::message_t> &creation_payload,
-  std::chrono::milliseconds timeout)
+result_t<actor_ref_t>
+mesh_node_runtime_t::create_application_actor (std::string actor_type,
+                                               std::string actor_id,
+                                               const std::optional<zlink::message_t> &,
+                                               std::chrono::milliseconds timeout)
 {
     _state->spot_state->lane
       .run ([&] {
@@ -2222,10 +2216,7 @@ result_t<actor_ref_t> mesh_node_runtime_t::create_application_actor (
       })
       .get ();
     try {
-        std::vector<zlink::message_t> parts;
-        if (creation_payload)
-            parts.push_back (*creation_payload);
-        auto native = create_actor (actor_type, actor_id, parts, timeout);
+        auto native = create_actor (actor_type, actor_id, {}, timeout);
         _state->spot_state->lane
           .run ([&] { _state->spot_state->core_actor_membership_epochs.try_emplace (actor_id, 1); })
           .get ();
@@ -2243,13 +2234,13 @@ result_t<actor_ref_t> mesh_node_runtime_t::create_application_actor (
     }
 }
 
-result_t<actor_ref_t> mesh_node_runtime_t::create_application_actor (
-  std::string actor_type,
-  std::string actor_id,
-  const std::optional<zlink::message_t> &creation_payload,
-  std::uint64_t object_generation,
-  std::uint64_t authority_owner_generation,
-  std::chrono::milliseconds timeout)
+result_t<actor_ref_t>
+mesh_node_runtime_t::create_application_actor (std::string actor_type,
+                                               std::string actor_id,
+                                               const std::optional<zlink::message_t> &,
+                                               std::uint64_t object_generation,
+                                               std::uint64_t authority_owner_generation,
+                                               std::chrono::milliseconds timeout)
 {
     _state->spot_state->lane
       .run ([&] {
@@ -2258,9 +2249,6 @@ result_t<actor_ref_t> mesh_node_runtime_t::create_application_actor (
       })
       .get ();
     try {
-        std::vector<zlink::message_t> parts;
-        if (creation_payload)
-            parts.push_back (*creation_payload);
         if (!_node)
             throw configuration_error ("MeshNode has not started");
         auto native = _node->create_reserved_actor (
@@ -2268,7 +2256,6 @@ result_t<actor_ref_t> mesh_node_runtime_t::create_application_actor (
           runtime::stateful::object_ref_t{runtime::stateful::object_kind_t::actor, actor_id,
                                           object_generation, authority_owner_generation,
                                           _state->mesh_name, _state->routing_id->to_string ()});
-        _actors.insert_or_assign (actor_id, native);
         _state->spot_state->lane
           .run ([&] { _state->spot_state->core_actor_membership_epochs.try_emplace (actor_id, 1); })
           .get ();
@@ -2315,8 +2302,8 @@ mesh_node_runtime_t::submit_application_actor_entry_spot_join (const actor_ref_t
     if (!completion)
         return result_t<void>::failure (framework_error_kind_t::internal_failure,
                                         "Actor entry Spot join completion is required");
-    const auto found = _actors.find (std::string (actor.actor_id ().value ()));
-    if (found == _actors.end ())
+    const auto current = _node ? _node->resolve_actor (actor) : std::nullopt;
+    if (!current)
         return result_t<void>::failure (framework_error_kind_t::not_found,
                                         "local Actor handle was not found");
 
@@ -2334,7 +2321,8 @@ mesh_node_runtime_t::submit_application_actor_entry_spot_join (const actor_ref_t
                                                         result.value ().parts, actor, state));
       });
     const std::vector<zlink::message_t> parts{request};
-    const auto submitted = found->second.join_entry_spot (
+    host::actor_handle_t handle (_node, actor, *current);
+    const auto submitted = handle.join_entry_spot (
       zlink::routing_id_t::from (std::string (target_node.value ())), parts, operation, timeout);
     if (submitted != zlink::submit_result_t::ok)
         return result_t<void>::failure (framework_error_kind_t::internal_failure,
@@ -2444,10 +2432,8 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::join_application_actor_to_spot (
       local_routing_id && local_routing_id->to_hex () != target.node_rid.to_hex ();
     if (remote == false) {
         /* A canonical remote Join materializes the Actor in the target public
-         * host without going through create_application_actor(), so the
-         * create-time _actors convenience map is not authoritative here.
-         * Rebind a handle to the current host object; this also keeps a later
-         * same-node User-Spot Join on the ordinary local membership lane. */
+         * host. Rebind a handle to its current object so a later same-node
+         * User-Spot Join uses the ordinary local membership lane. */
         const auto current = _node ? _node->resolve_actor (actor) : std::nullopt;
         if (!current) {
             co_return result_t<actor_join_reply_t>::failure (framework_error_kind_t::not_found,

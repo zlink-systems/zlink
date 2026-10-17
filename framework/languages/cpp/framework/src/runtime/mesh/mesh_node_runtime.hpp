@@ -666,7 +666,6 @@ class mesh_node_runtime_t
     std::map<message_follow_subscription_id_t, std::shared_ptr<message_follow_subscription_state_t>>
       _message_follow_subscriptions;
     std::map<std::string, host::spot_handle_t> _spots;
-    std::map<std::string, host::actor_handle_t> _actors;
     runtime::offload_executor_t _peer_connection_intent_lane_executor;
     runtime::state_lane_t _peer_connection_intent_lane{_peer_connection_intent_lane_executor};
     std::atomic_uint64_t _pending_application_callbacks{0};
