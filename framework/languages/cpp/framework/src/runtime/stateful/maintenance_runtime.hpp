@@ -361,8 +361,6 @@ struct eligible_relocation_unit_t
         /* The unit Restore absolute deadline, owned by the source: from it the
          * source settles authority with its Preserve fence (01 §10). */
         std::chrono::steady_clock::time_point restore_deadline{};
-        /* The existing host lifecycle ends source settlement after shutdown. */
-        std::function<bool ()> source_stopped;
         // Core selected generation and admission readiness, observed by MeshNode.
         std::function<std::pair<std::uint64_t, bool> ()> target_route;
         // This is valid only after an exact target failure and before a
@@ -668,6 +666,9 @@ class maintenance_runtime_t
     send_boundary_records (const eligible_relocation_unit_t::canonical_wire_context_t &context,
                            const std::vector<protocol::relocation_data_t> &records,
                            const relocation_ingress_batch_t &batch);
+    task_t<void>
+    submit_cutover (const eligible_relocation_unit_t::canonical_wire_context_t &context,
+                    const protocol::relocation_cutover_t &cutover);
     bool abort_target_before_cutover (
       const eligible_relocation_unit_t::canonical_wire_context_t &context) noexcept;
 

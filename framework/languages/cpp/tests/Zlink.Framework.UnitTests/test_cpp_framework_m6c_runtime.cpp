@@ -4,6 +4,7 @@
 
 #include "runtime/stateful/maintenance_runtime.hpp"
 #include "runtime/dispatch/coroutine_executor.hpp"
+#include "runtime/dispatch/dispatch_limits.hpp"
 #include "runtime/diagnostics/dispatch_options_access.hpp"
 #include "runtime/diagnostics/flow_context.hpp"
 #include <runtime/locations/location_repository.hpp>
@@ -3147,7 +3148,6 @@ void test_retire_delay_shutdown_completes_termination (test_context_t &test)
               co_return true;
           },
           .restore_deadline = std::chrono::steady_clock::now () + 10s,
-          .source_stopped = [] { return false; },
           .target_route = [] { return std::pair{std::uint64_t{1}, true}; },
           .abort_target_before_cutover = [] { return true; }};
     };
@@ -4753,7 +4753,11 @@ void test_cutover_replays_over_selected_network_route (test_context_t &test)
     target.close ();
 }
 
-void test_source_relocation_settles_by_authority (test_context_t &test)
+void test_source_relocation_settles_by_authority (test_context_t &test,
+                                                  bool cancel_management_delay = false,
+                                                  bool cancel_cutover_submit = false,
+                                                  bool cancel_pending_wait = false,
+                                                  bool expired_teardown = false)
 {
     using namespace std::chrono_literals;
     namespace framework = zlink::framework;
@@ -4762,6 +4766,7 @@ void test_source_relocation_settles_by_authority (test_context_t &test)
     struct outcome_t
     {
         relocation_result_t result;
+        std::optional<zlink::framework::framework_error_kind_t> operation_error;
         int data_sends = 0;
         int cutover_sends = 0;
         bool late_accepted = false;
@@ -4770,13 +4775,16 @@ void test_source_relocation_settles_by_authority (test_context_t &test)
         std::vector<object_ref_t> unavailable;
         std::optional<relocation_authority_fence_t> observed;
         int preserve_calls = 0;
+        bool registered_wait = false;
     };
     /* One unit whose cutover submit first misses the connection; `settle`
      * scripts the Store after that submit terminal. */
-    const auto run = [] (std::chrono::milliseconds restore_after,
-                         const std::function<void (settlement_authority_t &)> &settle,
-                         bool stop_source = false, bool inject_late = false,
-                         bool submitted_ok = false, bool change_route = false) {
+    const auto run = [cancel_management_delay, cancel_cutover_submit, cancel_pending_wait,
+                      expired_teardown] (
+                       std::chrono::milliseconds restore_after,
+                       const std::function<void (settlement_authority_t &)> &settle,
+                       bool expire_source_lease = false, bool inject_late = false,
+                       bool submitted_ok = false, bool change_route = false) {
         stateful_object_runtime_t objects;
         objects.configure_relocation_state (
           [] (const object_ref_t &, const std::string &, std::stop_token) {
@@ -4789,8 +4797,15 @@ void test_source_relocation_settles_by_authority (test_context_t &test)
         auto roots = std::make_shared<memory_relocation_repository_t> ();
         auto authority = std::make_shared<settlement_authority_t> ();
         settle (*authority);
-        if (stop_source)
+        if (expire_source_lease) {
+            authority->observed_authority = relocation_authority_t::source_lease_expired;
             authority->settle_after_observes = 3;
+        }
+        const auto requested_authority = authority->observed_authority;
+        if (cancel_pending_wait) {
+            authority->observed_authority = relocation_authority_t::unsettled;
+            authority->settle_after_observes = 0;
+        }
         std::mutex delay_mutex;
         zlink::framework::detail::delay_owner_t delays (delay_mutex);
         maintenance_runtime_t relocation (objects, authority, roots);
@@ -4798,7 +4813,7 @@ void test_source_relocation_settles_by_authority (test_context_t &test)
         outcome_t outcome;
         relocation.attach_unavailable_terminal (
           [&outcome] (const object_ref_t &owner) { outcome.unavailable.push_back (owner); });
-        std::atomic<bool> source_stopped{false};
+        const auto teardown_deadline = std::chrono::steady_clock::now () + restore_after;
         eligible_relocation_unit_t::canonical_wire_context_t wire{
           .relocation = {0x61, 0x62},
           .target_attempt_generation = 7,
@@ -4849,14 +4864,18 @@ void test_source_relocation_settles_by_authority (test_context_t &test)
                                                                {1, {}, 1, std::move (late)})
                                               == stateful_error_t::none;
                   }
-                  if (stop_source)
-                      source_stopped.store (true, std::memory_order_release);
+                  if (cancel_management_delay && !cancel_pending_wait)
+                      delays.request_stop (expired_teardown ? std::chrono::steady_clock::now ()
+                                                            : teardown_deadline);
+                  if (cancel_cutover_submit)
+                      throw framework::framework_exception_t (
+                        framework::framework_error_kind_t::shutting_down,
+                        "source cutover submission cancelled during host shutdown");
                   co_return submitted_ok;
               }
               co_return true;
           },
           .restore_deadline = std::chrono::steady_clock::now () + restore_after,
-          .source_stopped = [&] { return source_stopped.load (std::memory_order_acquire); },
           .target_route =
             [&] {
                 const auto changed =
@@ -4865,8 +4884,26 @@ void test_source_relocation_settles_by_authority (test_context_t &test)
                 return std::pair{std::uint64_t{changed ? 2u : 1u}, true};
             },
           .abort_target_before_cutover = [] { return true; }};
-        outcome.result = await_task (relocation.relocate (actor, "target-node", {"target-owner", 9},
-                                                          1024 * 1024, digest_with (0x41), wire));
+        auto moving = relocation.relocate (actor, "target-node", {"target-owner", 9}, 1024 * 1024,
+                                           digest_with (0x41), wire);
+        if (cancel_pending_wait) {
+            {
+                std::lock_guard lock (authority->mutex);
+                outcome.registered_wait = authority->observed.has_value ()
+                                          && delays.worker_count () >= 1 && !moving.await_ready ();
+            }
+            delays.request_stop (teardown_deadline);
+            std::lock_guard lock (authority->mutex);
+            authority->observed_authority = requested_authority;
+        }
+        const auto result = moving.result ();
+        if (!result && (cancel_management_delay || cancel_cutover_submit)) {
+            outcome.operation_error = result.error_kind ();
+            std::cerr << "cancelled source relocation operation_error="
+                      << static_cast<int> (result.error_kind ())
+                      << " message=" << (result.error () ? result.error ()->what () : "") << '\n';
+        } else
+            outcome.result = result.value ();
         {
             std::lock_guard lock (authority->mutex);
             outcome.observed = authority->observed;
@@ -4877,6 +4914,52 @@ void test_source_relocation_settles_by_authority (test_context_t &test)
         outcome.dispatch_reopened = claim_error == stateful_error_t::none && claimed.has_value ();
         return outcome;
     };
+
+    if (expired_teardown) {
+        const auto unknown = run (10s, [] (settlement_authority_t &) {}, false, false, true);
+        test.require (!unknown.operation_error
+                        && unknown.result.settlement.outcome == relocation_authority_t::unsettled
+                        && unknown.result.terminal == relocation_terminal_t::recovery_required
+                        && !unknown.dispatch_reopened && unknown.unavailable.size () == 1,
+                      "UNKNOWN at the existing host teardown deadline must remain unavailable "
+                      "and apply the source terminal exactly once");
+        return;
+    }
+    if (cancel_management_delay || cancel_cutover_submit) {
+        // Cancelling the host delay owner in the cutover callback makes its
+        // first management wait fail synchronously. The scripted second read
+        // must still decide the source terminal, without a timer or sleep.
+        for (const auto terminal :
+             {relocation_authority_t::target_committed, relocation_authority_t::source_preserved,
+              relocation_authority_t::source_lease_expired}) {
+            const auto cancelled = run (
+              10s,
+              [terminal] (settlement_authority_t &authority) {
+                  authority.observed_authority = terminal;
+                  authority.settle_after_observes = 2;
+              },
+              false, false, true);
+            if (cancel_pending_wait)
+                test.require (cancelled.registered_wait,
+                              "pending cancellation must own an actual suspended management wait");
+            test.require (!cancelled.operation_error,
+                          "management cancellation must reach the authority-owned source terminal");
+            test.require (cancelled.result.settlement.outcome == terminal,
+                          "management cancellation must preserve the authority settlement outcome");
+            test.require (
+              cancelled.result.terminal
+                == (terminal == relocation_authority_t::target_committed
+                      ? relocation_terminal_t::completed
+                    : terminal == relocation_authority_t::source_preserved
+                      ? relocation_terminal_t::blocked
+                      : relocation_terminal_t::recovery_required),
+              "management cancellation must use the normal relocation terminal classification");
+            test.require (
+              cancelled.dispatch_reopened == (terminal == relocation_authority_t::source_preserved),
+              "only confirmed source Preserve may reopen dispatch after management cancellation");
+        }
+        return;
+    }
 
     // Target commit confirmed by the Store is the only evidence of Relocated.
     const auto committed = run (
@@ -4939,9 +5022,30 @@ void test_source_relocation_settles_by_authority (test_context_t &test)
                   "with Unavailable");
 
     const auto stopped = run (10s, [] (settlement_authority_t &) {}, true);
-    test.require (stopped.result.terminal == relocation_terminal_t::recovery_required
-                    && stopped.unavailable.size () == 1 && !stopped.dispatch_reopened,
-                  "host shutdown ends source settlement and fails retained requests");
+    test.require (
+      stopped.result.terminal == relocation_terminal_t::recovery_required
+        && stopped.unavailable.size () == 1 && !stopped.dispatch_reopened,
+      "a Store-confirmed expired source lease ends settlement and fails retained requests");
+}
+
+
+void test_delay_owner_final_join_closes_accepted_registration (test_context_t &test)
+{
+    namespace framework = zlink::framework;
+    std::mutex owner_mutex;
+    framework::detail::delay_owner_t delays (owner_mutex);
+    const auto duration = framework::runtime::dispatch_limits::management_retry_interval;
+    delays.request_stop (std::chrono::steady_clock::time_point::max ());
+    auto pending = delays.start (duration, true);
+    delays.stop_and_join ();
+    const auto completed = pending.result ();
+    const auto rejected = delays.start (duration, true).result ();
+    test.require (
+      (completed || completed.error_kind () == framework::framework_error_kind_t::shutting_down)
+        && !rejected && rejected.error_kind () == framework::framework_error_kind_t::shutting_down
+        && delays.worker_count () == 0,
+      "final teardown must complete existing accepted waits and reject accepted "
+      "registration after its final fence");
 }
 
 
@@ -7534,6 +7638,23 @@ int main (int argc, char **argv)
         std::cerr << "Boundary reply cases=3 failures=" << test.failures << '\n';
         return test.failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
     }
+    if (argc == 2 && std::string_view (argv[1]) == "--source-cutover-cancel") {
+        test_source_relocation_settles_by_authority (test, false, true);
+        std::cerr << "Source cutover cancellation cases=3 failures=" << test.failures << '\n';
+        return test.failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+    if (argc == 2 && std::string_view (argv[1]) == "--source-terminal-lifecycle") {
+        test_source_relocation_settles_by_authority (test, true, false, true);
+        test_source_relocation_settles_by_authority (test, true, false, false, true);
+        test_delay_owner_final_join_closes_accepted_registration (test);
+        std::cerr << "Source terminal lifecycle cases=5 failures=" << test.failures << '\n';
+        return test.failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+    if (argc == 2 && std::string_view (argv[1]) == "--source-management-cancel") {
+        test_source_relocation_settles_by_authority (test, true);
+        std::cerr << "Source management cancellation cases=3 failures=" << test.failures << '\n';
+        return test.failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
     if (argc == 2 && std::string_view (argv[1]) == "--source-settlement-chain") {
         test_source_settlement_after_subsequent_moves (test);
         test_source_settlement_preserve_and_members (test);
@@ -7576,6 +7697,10 @@ int main (int argc, char **argv)
             return EXIT_FAILURE;
         for (int i = 0; i < repetitions; ++i) {
             test_source_relocation_settles_by_authority (test);
+            test_source_relocation_settles_by_authority (test, true);
+            test_source_relocation_settles_by_authority (test, true, false, true);
+            test_source_relocation_settles_by_authority (test, true, false, false, true);
+            test_delay_owner_final_join_closes_accepted_registration (test);
             if (test.failures != 0)
                 return EXIT_FAILURE;
             std::cerr << "settlement " << i + 1 << '/' << repetitions << " passed\n";
@@ -7624,6 +7749,11 @@ int main (int argc, char **argv)
     test_boundary_preserve_restores_acceptance_order (test);
     test_cutover_replays_over_selected_network_route (test);
     test_source_relocation_settles_by_authority (test);
+    test_source_relocation_settles_by_authority (test, true);
+    test_source_relocation_settles_by_authority (test, true, false, true);
+    test_source_relocation_settles_by_authority (test, true, false, false, true);
+    test_delay_owner_final_join_closes_accepted_registration (test);
+    test_source_relocation_settles_by_authority (test, false, true);
     test_source_settlement_after_subsequent_moves (test);
     test_source_settlement_preserve_and_members (test);
     test_relocation_target_cutover_and_authority_settlement (test);

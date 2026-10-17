@@ -86,7 +86,6 @@ struct expired_actor_admission_t
 struct actor_transfer_cleanup_snapshot_t
 {
     std::vector<expired_actor_admission_t> expired_admissions;
-    std::vector<std::pair<std::string, std::string>> source_remote_transfers;
     std::vector<std::string> blocked_dispatch_keys;
 };
 

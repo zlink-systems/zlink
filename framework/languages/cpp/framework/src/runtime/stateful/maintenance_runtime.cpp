@@ -487,6 +487,22 @@ task_t<bool> maintenance_runtime_t::send_boundary_records (
     }
 }
 
+task_t<void> maintenance_runtime_t::submit_cutover (
+  const eligible_relocation_unit_t::canonical_wire_context_t &context,
+  const protocol::relocation_cutover_t &cutover)
+{
+    try {
+        (void) co_await context.send_cutover (cutover);
+        co_return;
+    }
+    catch (const framework_exception_t &error) {
+        if (error.kind () != framework_error_kind_t::shutting_down)
+            throw;
+        // Relocation flow §4.4: a cancelled submit does not decide authority.
+        co_return;
+    }
+}
+
 bool maintenance_runtime_t::abort_target_before_cutover (
   const eligible_relocation_unit_t::canonical_wire_context_t &context) noexcept
 {
@@ -583,13 +599,13 @@ maintenance_runtime_t::settle_relocation (std::shared_ptr<relocation_terminal_st
       state->target_owner,
       state->context.relocation};
     for (;;) {
-        if (state->context.source_stopped && state->context.source_stopped ())
-            co_return source_relocation_settlement_t{relocation_authority_t::source_lease_expired,
-                                                     {}};
         const auto preserve = std::chrono::steady_clock::now () >= state->context.restore_deadline;
         const auto settled = _authority->settle_source_relocation (fence, participants, preserve);
         if (settled.outcome != relocation_authority_t::unsettled)
             co_return settled;
+        const auto stop_at = _delay_owner ? _delay_owner->stop_deadline () : std::nullopt;
+        if (stop_at && std::chrono::steady_clock::now () >= *stop_at)
+            co_return source_relocation_settlement_t{};
         // Relocation flow §4.4: only a different selected route can
         // require another complete boundary batch. Wait for its admission.
         const auto route = state->context.target_route ? state->context.target_route ()
@@ -597,10 +613,18 @@ maintenance_runtime_t::settle_relocation (std::shared_ptr<relocation_terminal_st
         if (!preserve && route.second && route.first != state->submitted_route_generation) {
             state->submitted_route_generation = route.first;
             if (co_await send_boundary_records (state->context, *state->records, state->batch))
-                (void) co_await state->context.send_cutover (*state->cutover_record);
+                co_await submit_cutover (state->context, *state->cutover_record);
         }
-        co_await ::zlink::framework::detail::delay (_delay_owner,
-                                                    dispatch_limits::management_retry_interval);
+        try {
+            co_await ::zlink::framework::detail::delay (
+              _delay_owner, dispatch_limits::management_retry_interval, stop_at.has_value ());
+        }
+        catch (const framework_exception_t &error) {
+            if (error.kind () != framework_error_kind_t::shutting_down)
+                throw;
+            // A cancelled management delay does not decide authority. Read it
+            // again before the existing host teardown deadline can end the unit.
+        }
     }
 }
 
@@ -908,7 +932,7 @@ maintenance_runtime_t::relocate_cutover (std::shared_ptr<relocation_terminal_sta
       state->context.coordinator, protocol::relocation_role_t::source, object};
     cutover.boundary_record_count = state->records->size ();
     cutover.boundary_checksum_crc32c = boundary_batch_checksum (*state->records);
-    (void) co_await state->context.send_cutover (cutover);
+    co_await submit_cutover (state->context, cutover);
     const auto terminal_now = std::chrono::steady_clock::now ();
     state->cutover_terminal_at = terminal_now;
     const auto stall = state->sealed_at != std::chrono::steady_clock::time_point{}
@@ -1168,7 +1192,7 @@ task_t<aggregate_relocation_result_t> maintenance_runtime_t::relocate_aggregate 
        root.owner.object_generation, root.owner.authority_owner_generation}};
     cutover.boundary_record_count = records->size ();
     cutover.boundary_checksum_crc32c = boundary_batch_checksum (*records);
-    (void) co_await canonical_wire->send_cutover (cutover);
+    co_await submit_cutover (*canonical_wire, cutover);
     state->cutover_terminal_at = std::chrono::steady_clock::now ();
     state->target_owner = target_owner;
     state->batch = batch;

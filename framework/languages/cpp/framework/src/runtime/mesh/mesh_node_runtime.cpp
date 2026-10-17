@@ -1379,7 +1379,6 @@ task_t<runtime::stateful::relocation_result_t> mesh_node_runtime_t::relocate_app
           co_return co_await _node->cutover_relocation_remote (target.rid, cutover);
       },
       .restore_deadline = restore_deadline,
-      .source_stopped = [this] { return relocation_source_stopped (); },
       .target_route =
         [this, target] {
             return _node->transport ().peer_route (target.rid.to_bytes (),
@@ -1626,7 +1625,6 @@ mesh_node_runtime_t::relocate_application_unit (
           co_return co_await _node->cutover_relocation_remote (target.rid, cutover);
       },
       .restore_deadline = restore_deadline,
-      .source_stopped = [this] { return relocation_source_stopped (); },
       .target_route =
         [this, target] {
             return _node->transport ().peer_route (target.rid.to_bytes (),
@@ -3267,7 +3265,6 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::prepare_remote_application_actor
           co_return co_await _node->cutover_relocation_remote (s->target.node_rid, cutover);
       },
       .restore_deadline = s->deadline,
-      .source_stopped = [this] { return relocation_source_stopped (); },
       .target_route =
         [this, s] {
             return _node->transport ().peer_route (s->target.node_rid.to_bytes (),
@@ -4338,15 +4335,6 @@ mesh_node_runtime_t::monitoring_configuration_async () const
 task_t<std::pair<std::size_t, std::size_t>> mesh_node_runtime_t::monitoring_counts_async () const
 {
     return spot_node_runtime_t (_state->spot_state).monitoring_counts_async ();
-}
-
-bool mesh_node_runtime_t::relocation_source_stopped () const
-{
-    if (_stopping.load (std::memory_order_acquire))
-        return true;
-    const auto state = _node->status ().state;
-    return state == host::node_status_t::state_t::stopped
-           || state == host::node_status_t::state_t::error;
 }
 
 std::string mesh_node_runtime_t::mesh_name () const

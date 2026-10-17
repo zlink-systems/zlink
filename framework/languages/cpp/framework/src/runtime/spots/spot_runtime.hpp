@@ -2093,6 +2093,9 @@ class spot_node_runtime_t
                         bool relocation_restore = false,
                         bool publish = true);
 
+    std::size_t settle_abandoned_actor_leave_reservations (
+      std::function<void ()> after_coordinator_snapshot = {});
+
     static std::string actor_key (const actor_ref_t &actor_ref)
     {
         return std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (actor_ref))
