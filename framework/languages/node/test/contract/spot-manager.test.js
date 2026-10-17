@@ -214,60 +214,66 @@ function decodeActorReplyFrame(message) {
   return { header, payload };
 }
 
-test('spot runtime owner resolver converts backend actor generation to objectGeneration', () => {
-  const nativeActorRef = {
-    actorId: 'actor-1',
-    nodeRid: 'node-a',
-    generation: 7n
-  };
-  const actorState = {
-    actor: {},
-    spot: {},
-    spotId: 'spot-a',
-    isMoving: false,
-    nativeActorRef,
-    meshName: 'test.mesh',
-    remoteActorPacketTarget: undefined
-  };
-  const factory = new ZLinkSpotRuntimeOptionsFactory({
-    registration: framework.createFrameworkRegistration(),
-    channelTransport: {},
-    routeTransport: {},
-    addressTransport: {},
-    spotPublisherTransport: {},
-    meshRouters: { spotRouterChannelIdByMesh: () => new Map() },
-    runtimeEventPublisher: {},
-    spotNodeRuntime: () => ({
-      primaryMeshNode: {
-        status: () => ({ routingId: 'node-a' })
-      }
-    }),
-    actorManager: () => ({
-      getState: (actorId) => ( actorId === nativeActorRef.actorId ? actorState : undefined
-    ) }),
-    locationLifecycle: () => undefined,
-    releaseInstanceAuthority: async () => {},
-    beginInstanceIdleClosingAuthority: async () => undefined,
-    beginInstanceClosingAuthority: async () => undefined,
-    createLocationSpotRouteResolver: () => undefined,
-    boundSessionRelay: { boundSessions: {} },
-    actorHandoff: {},
-    dispatchErrorReporter: () => ({}),
-    runtimeOrPreStartErrorSink: {},
-    detachedTaskRunner,
-    metrics: {},
-    admission: {}
+for (const spotId of ['spot-a', undefined]) {
+  test(`spot runtime resolves a ${spotId === undefined ? 'Entry' : 'User'} Actor FIFO in its own mesh`, () => {
+    const nativeActorRef = {
+      actorId: 'actor-1',
+      nodeRid: 'node-a',
+      generation: 7n
+    };
+    const actorState = {
+      actor: {},
+      spot: spotId === undefined ? undefined : {},
+      spotId,
+      isMoving: false,
+      nativeActorRef,
+      meshName: 'test.mesh',
+      remoteActorPacketTarget: undefined
+    };
+    const factory = new ZLinkSpotRuntimeOptionsFactory({
+      registration: framework.createFrameworkRegistration(),
+      channelTransport: {},
+      routeTransport: {},
+      addressTransport: {},
+      spotPublisherTransport: {},
+      meshRouters: { spotRouterChannelIdByMesh: () => new Map() },
+      runtimeEventPublisher: {},
+      spotNodeRuntime: () => ({
+        primaryMeshNode: {
+          status: () => ({ routingId: 'other-node' })
+        },
+        meshNode: (meshName) => {
+          assert.equal(meshName, actorState.meshName);
+          return { status: () => ({ routingId: nativeActorRef.nodeRid }) };
+        }
+      }),
+      actorManager: () => ({
+        getState: (actorId) => (actorId === nativeActorRef.actorId ? actorState : undefined)
+      }),
+      locationLifecycle: () => undefined,
+      releaseInstanceAuthority: async () => {},
+      beginInstanceIdleClosingAuthority: async () => undefined,
+      beginInstanceClosingAuthority: async () => undefined,
+      createLocationSpotRouteResolver: () => undefined,
+      boundSessionRelay: { boundSessions: {} },
+      actorHandoff: {},
+      dispatchErrorReporter: () => ({}),
+      runtimeOrPreStartErrorSink: {},
+      detachedTaskRunner,
+      metrics: {},
+      admission: {}
+    });
+
+    const runtimeOptions = factory.create({});
+    const owner = runtimeOptions.actorDispatchOwnerResolver(nativeActorRef.actorId);
+
+    assert.equal(owner.spotId, spotId);
+    assert.equal(owner.actorRef.actorId, nativeActorRef.actorId);
+    assert.equal(owner.actorRef.nodeRid, nativeActorRef.nodeRid);
+    assert.equal(owner.actorRef.objectGeneration, nativeActorRef.generation);
+    assert.equal(owner.actorRef.generation, nativeActorRef.generation);
   });
-
-  const runtimeOptions = factory.create({});
-  const owner = runtimeOptions.actorDispatchOwnerResolver(nativeActorRef.actorId);
-
-  assert.equal(owner.spotId, 'spot-a');
-  assert.equal(owner.actorRef.actorId, nativeActorRef.actorId);
-  assert.equal(owner.actorRef.nodeRid, nativeActorRef.nodeRid);
-  assert.equal(owner.actorRef.objectGeneration, nativeActorRef.generation);
-  assert.equal(owner.actorRef.generation, nativeActorRef.generation);
-});
+}
 
 test('Mesh actor ingress uses the current runtime owner for handoff capture', async () => {
   let fallbackActorRef;
