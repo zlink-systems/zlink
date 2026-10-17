@@ -74,21 +74,21 @@ final class ZLinkFrameworkShutdown {
 
     static boolean hasTeardownFailure(Throwable error) {
         if (error == null) return false;
-        Throwable value = error;
         boolean failed =
-                (value instanceof Failure
-                                        || value instanceof CompletionException
-                                        || value instanceof ExecutionException)
-                                && value.getCause() != null
-                        ? hasTeardownFailure(value.getCause())
-                        : !(value instanceof ZLinkTeardownDeadlineExceededException)
-                                && !(ZLinkFrameworkErrorOrigin.isFramework(value)
-                                        && value instanceof ZLinkFrameworkException failure
-                                        && (failure.kind()
-                                                        == ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED
-                                                || failure.kind()
-                                                        == ZLinkFrameworkErrorKind.SHUTTING_DOWN));
-        for (Throwable suppressed : value.getSuppressed()) {
+                !((error instanceof Failure
+                                        || error instanceof CompletionException
+                                        || error instanceof ExecutionException)
+                                && error.getCause() != null)
+                        && !(error instanceof ZLinkTeardownDeadlineExceededException)
+                        && !(ZLinkFrameworkErrorOrigin.isFramework(error)
+                                && error instanceof ZLinkFrameworkException failure
+                                && (failure.kind() == ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED
+                                        || failure.kind()
+                                                == ZLinkFrameworkErrorKind.SHUTTING_DOWN));
+        if (error.getCause() != null) {
+            failed |= hasTeardownFailure(error.getCause());
+        }
+        for (Throwable suppressed : error.getSuppressed()) {
             failed |= hasTeardownFailure(suppressed);
         }
         return failed;

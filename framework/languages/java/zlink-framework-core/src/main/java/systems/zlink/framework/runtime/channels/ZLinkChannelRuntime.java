@@ -1583,11 +1583,8 @@ public final class ZLinkChannelRuntime
         }
         try {
             stage.toCompletableFuture().get(remaining, TimeUnit.NANOSECONDS);
-        } catch (TimeoutException failure) {
-            var expired =
-                    new ZLinkTeardownDeadlineExceededException("host shutdown deadline expired");
-            expired.initCause(failure);
-            throw expired;
+        } catch (TimeoutException expired) {
+            throw new ZLinkTeardownDeadlineExceededException("host shutdown deadline expired");
         }
     }
 

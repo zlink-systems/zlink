@@ -4,7 +4,10 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import org.junit.jupiter.api.Test;
 
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
+import systems.zlink.framework.runtime.internal.execution.ZLinkTeardownDeadlineExceededException;
+import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorOrigin;
 
 import java.io.IOException;
 import java.time.Instant;
@@ -14,6 +17,39 @@ import java.util.concurrent.TimeoutException;
 
 final class ZLinkShutdownReasonTest {
     private static final long WAIT_SECONDS = 10;
+
+    @Test
+    void deadlineWrappingActualCleanupFailureReportsTeardownFailed() throws Exception {
+        var deadline = new ZLinkTeardownDeadlineExceededException();
+        deadline.initCause(new IOException("resource cleanup failed"));
+        assertForcedReason(deadline, ZLinkFrameworkTerminationReason.TEARDOWN_FAILED);
+    }
+
+    @Test
+    void frameworkDeadlineWrappingActualCleanupFailureReportsTeardownFailed() throws Exception {
+        var deadline =
+                ZLinkFrameworkErrorOrigin.framework(
+                        ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
+                        "cleanup deadline",
+                        new IOException("resource cleanup failed"));
+        assertForcedReason(deadline, ZLinkFrameworkTerminationReason.TEARDOWN_FAILED);
+    }
+
+    @Test
+    void nestedDeadlineIncludesSuppressedCleanupFailure() throws Exception {
+        var nested = new ZLinkTeardownDeadlineExceededException();
+        nested.addSuppressed(new IOException("resource cleanup failed"));
+        var deadline = new ZLinkTeardownDeadlineExceededException();
+        deadline.initCause(nested);
+        assertForcedReason(deadline, ZLinkFrameworkTerminationReason.TEARDOWN_FAILED);
+    }
+
+    @Test
+    void nestedDeadlineWithoutActualFailureRemainsDeadlineExceeded() throws Exception {
+        var deadline = new ZLinkTeardownDeadlineExceededException();
+        deadline.initCause(new ZLinkTeardownDeadlineExceededException());
+        assertForcedReason(deadline, ZLinkFrameworkTerminationReason.DEADLINE_EXCEEDED);
+    }
 
     @Test
     void callbackFailureBeforeDeadlineRemainsTeardownFailed() throws Exception {
@@ -38,8 +74,7 @@ final class ZLinkShutdownReasonTest {
     @Test
     void deadlineWithoutActualFailureReportsDeadlineExceeded() throws Exception {
         assertForcedReason(
-                new systems.zlink.framework.runtime.internal.execution
-                        .ZLinkTeardownDeadlineExceededException(),
+                new ZLinkTeardownDeadlineExceededException(),
                 ZLinkFrameworkTerminationReason.DEADLINE_EXCEEDED);
     }
 
