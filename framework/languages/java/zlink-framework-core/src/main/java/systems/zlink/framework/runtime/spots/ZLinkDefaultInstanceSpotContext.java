@@ -105,7 +105,7 @@ final class DefaultInstanceSpotContext implements ZLinkInstanceSpotContext, Spot
                                         timers.add(name, period, handlerType, options)));
     }
 
-    CompletionStage<Void> prepareActivation(Supplier<CompletionStage<Void>> operation) {
+    <T> CompletionStage<T> prepareActivation(Supplier<CompletionStage<T>> operation) {
         return dispatchQueue.prepareActivation(
                 () -> runLifecycleExecution(() -> host.runWithOutbound(outbound, operation)));
     }

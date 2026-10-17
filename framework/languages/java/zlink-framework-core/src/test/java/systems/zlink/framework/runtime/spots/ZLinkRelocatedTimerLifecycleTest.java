@@ -22,6 +22,254 @@ import java.util.concurrent.CompletionStage;
 
 final class ZLinkRelocatedTimerLifecycleTest {
     @Test
+    void constructorTimerDoesNotRunBeforeFactoryReturnsAndReadyPublication() throws Exception {
+        constructorTimerStaysBehindPreparation(false);
+    }
+
+    @Test
+    void targetConstructorTimerDoesNotRunBeforeFactoryReturns() throws Exception {
+        constructorTimerStaysBehindPreparation(true);
+    }
+
+    private void constructorTimerStaysBehindPreparation(boolean target) throws Exception {
+        ConstructorTimerSpot.entered = new CompletableFuture<>();
+        ConstructorTimerSpot.release = new CompletableFuture<>();
+        ConstructorTimerSpot.deliveries.set(0);
+        ConstructorTimerInstance.ticked = null;
+        var options = new DefaultZLinkFrameworkOptions();
+        options.addLocationStore(new ZLinkInMemoryLocationStore());
+        options.addRouteMesh("mesh")
+                .listen("inproc://constructor-timer-" + UUID.randomUUID())
+                .objects()
+                .server()
+                .addSpotFactory(
+                        "constructor-timer",
+                        ConstructorTimerSpot.class,
+                        factory -> factory.disableRelocation());
+        try (var controlled = new ControlledTimerRuntime(options);
+                var creator = java.util.concurrent.Executors.newSingleThreadExecutor()) {
+            var lifecycle = controlled.lifecycle;
+            var preparing =
+                    CompletableFuture.supplyAsync(
+                            () ->
+                                    (target
+                                                    ? lifecycle.prepareRelocationReserved(
+                                                            "mesh",
+                                                            ConstructorTimerSpot.class,
+                                                            "constructor-timer",
+                                                            1,
+                                                            ZLinkSpotTimerRelocationEnvelope.encode(
+                                                                    new ZLinkSpotTimerRegistry
+                                                                            .FrozenTimers(
+                                                                            java.util.List.of())))
+                                                    : lifecycle.prepareReserved(
+                                                            "mesh",
+                                                            ConstructorTimerSpot.class,
+                                                            "constructor-timer",
+                                                            1,
+                                                            null))
+                                            .toCompletableFuture()
+                                            .join(),
+                            creator);
+            try {
+                var context =
+                        ConstructorTimerSpot.entered.get(3, java.util.concurrent.TimeUnit.SECONDS);
+                controlled.controlTimerLane(context);
+                var due = controlled.scheduler.due.poll(3, java.util.concurrent.TimeUnit.SECONDS);
+                assertNotNull(due);
+                due.run();
+                assertFalse(
+                        preparing.isDone(), "the factory must still be held inside construction");
+                assertEquals(
+                        0,
+                        ConstructorTimerSpot.deliveries.get(),
+                        "actual timer callback started before the factory returned");
+                ConstructorTimerSpot.release.complete(null);
+                var prepared = preparing.get(3, java.util.concurrent.TimeUnit.SECONDS);
+                assertEquals(0, ConstructorTimerSpot.deliveries.get());
+                var hold =
+                        target
+                                ? lifecycle
+                                        .beginReservedIngressHold(prepared)
+                                        .toCompletableFuture()
+                                        .get(3, java.util.concurrent.TimeUnit.SECONDS)
+                                : null;
+                if (target)
+                    lifecycle
+                            .completeRelocationReady(prepared)
+                            .toCompletableFuture()
+                            .get(3, java.util.concurrent.TimeUnit.SECONDS);
+                lifecycle
+                        .publishReserved(prepared)
+                        .toCompletableFuture()
+                        .get(3, java.util.concurrent.TimeUnit.SECONDS);
+                if (target) {
+                    // Restoring the target envelope replaces constructor registrations.
+                    lifecycle.publishReservedTimers(prepared);
+                    lifecycle
+                            .resumeReservedIngress(prepared, hold)
+                            .toCompletableFuture()
+                            .get(3, java.util.concurrent.TimeUnit.SECONDS);
+                    assertEquals(0, ConstructorTimerSpot.deliveries.get());
+                } else assertEquals(1, ConstructorTimerSpot.deliveries.get());
+            } finally {
+                ConstructorTimerSpot.release.complete(null);
+                var prepared =
+                        preparing
+                                .handle((value, failure) -> value)
+                                .get(3, java.util.concurrent.TimeUnit.SECONDS);
+                if (prepared != null) {
+                    if (lifecycle.spotActivationFor(prepared.spotId())
+                            == prepared.created().activation())
+                        lifecycle.retireClosed(prepared.created().activation());
+                    lifecycle
+                            .discardReserved(prepared)
+                            .toCompletableFuture()
+                            .get(3, java.util.concurrent.TimeUnit.SECONDS);
+                }
+            }
+        }
+    }
+
+    @Test
+    void instanceConstructorTimerDoesNotRunBeforeFactoryReturnsAndRecoveryCompletes()
+            throws Exception {
+        ConstructorTimerSpot.entered = new CompletableFuture<>();
+        ConstructorTimerSpot.release = new CompletableFuture<>();
+        ConstructorTimerSpot.deliveries.set(0);
+        ConstructorTimerInstance.ticked = new CompletableFuture<>();
+        var options = new DefaultZLinkFrameworkOptions();
+        options.addLocationStore(new ZLinkInMemoryLocationStore());
+        options.addRelocationStore(new systems.zlink.framework.runtime.InMemoryRelocationStore());
+        options.addRouteMesh("mesh")
+                .listen("inproc://instance-constructor-" + UUID.randomUUID())
+                .objects()
+                .server()
+                .addInstanceSpotFactory(
+                        "constructor-instance",
+                        ConstructorTimerInstance.class,
+                        factory -> factory.disableRelocation());
+        try (var controlled = new ControlledTimerRuntime(options)) {
+            var first =
+                    controlled
+                            .framework
+                            .route()
+                            .requestToSpot(
+                                    "constructor-instance-" + UUID.randomUUID(),
+                                    new InstanceProbe())
+                            .instanceSpot("constructor-instance")
+                            .inMesh("mesh")
+                            .timeout(Duration.ofSeconds(5))
+                            .submit(InstanceReply.class)
+                            .toCompletableFuture();
+            try {
+                var context =
+                        ConstructorTimerSpot.entered.get(3, java.util.concurrent.TimeUnit.SECONDS);
+                controlled.controlTimerLane(context);
+                var due = controlled.scheduler.due.poll(3, java.util.concurrent.TimeUnit.SECONDS);
+                assertNotNull(due);
+                due.run();
+                assertFalse(first.isDone(), "the constructor must still be held");
+                assertEquals(
+                        0,
+                        ConstructorTimerSpot.deliveries.get(),
+                        "actual Instance timer callback started before the factory returned");
+                ConstructorTimerSpot.release.complete(null);
+                assertEquals(
+                        new InstanceReply("constructor"),
+                        first.get(3, java.util.concurrent.TimeUnit.SECONDS));
+                ConstructorTimerInstance.ticked.get(3, java.util.concurrent.TimeUnit.SECONDS);
+                assertEquals(1, ConstructorTimerSpot.deliveries.get());
+            } finally {
+                ConstructorTimerSpot.release.complete(null);
+                first.handle((value, failure) -> null)
+                        .get(3, java.util.concurrent.TimeUnit.SECONDS);
+            }
+        }
+    }
+
+    public static final class ConstructorTimerInstance
+            implements systems.zlink.framework.spots.ZLinkInstanceSpot {
+        static CompletableFuture<Void> ticked;
+        final systems.zlink.framework.spots.ZLinkInstanceSpotContext context;
+
+        public ConstructorTimerInstance(
+                systems.zlink.framework.spots.ZLinkInstanceSpotContext context) {
+            this.context = context;
+            context.addTimer(
+                            "constructor-ready",
+                            Duration.ofNanos(1),
+                            ConstructorTimerHandler.class,
+                            null)
+                    .toCompletableFuture()
+                    .join();
+            ConstructorTimerSpot.entered.complete(context);
+            ConstructorTimerSpot.release.join();
+        }
+
+        @Override
+        public systems.zlink.framework.spots.ZLinkInstanceSpotContext context() {
+            return context;
+        }
+
+        @Override
+        public void configure() {
+            context.handlers().addPacket(ConstructorInstanceHandler.class);
+        }
+    }
+
+    public static final class ConstructorInstanceHandler
+            implements systems.zlink.framework.spots.ZLinkSpotRequestHandler<
+                    ConstructorTimerInstance, InstanceProbe, InstanceReply> {
+        public CompletionStage<InstanceReply> handle(
+                ConstructorTimerInstance spot, InstanceProbe request) {
+            return CompletableFuture.completedFuture(new InstanceReply("constructor"));
+        }
+    }
+
+    public static final class ConstructorTimerSpot extends ReadyTimerSpot {
+        static CompletableFuture<Object> entered;
+        static CompletableFuture<Void> release;
+        static final java.util.concurrent.atomic.AtomicInteger deliveries =
+                new java.util.concurrent.atomic.AtomicInteger();
+
+        public ConstructorTimerSpot(ZLinkSpotContext context) {
+            super(context);
+            context.addTimer(
+                            "constructor-ready",
+                            Duration.ofNanos(1),
+                            ConstructorTimerHandler.class,
+                            null)
+                    .toCompletableFuture()
+                    .join();
+            entered.complete(context);
+            release.join();
+        }
+
+        @Override
+        public CompletionStage<systems.zlink.framework.spots.ZLinkSpotCreateResponse> onCreate(
+                systems.zlink.framework.messaging.ZLinkMessage request) {
+            return CompletableFuture.completedFuture(
+                    systems.zlink.framework.spots.ZLinkSpotCreateResponse.accept());
+        }
+
+        @Override
+        public CompletionStage<Void> onInitialize() {
+            return CompletableFuture.completedFuture(null);
+        }
+    }
+
+    public static final class ConstructorTimerHandler {
+        public CompletionStage<Void> handle(
+                Object spot, systems.zlink.framework.spots.ZLinkTimerTick tick) {
+            ConstructorTimerSpot.deliveries.incrementAndGet();
+            if (ConstructorTimerInstance.ticked != null)
+                ConstructorTimerInstance.ticked.complete(null);
+            return CompletableFuture.completedFuture(null);
+        }
+    }
+
+    @Test
     void relocationTargetKeepsPendingTickAndCloseBehindItsExistingStagingSeal() throws Exception {
         var options = new DefaultZLinkFrameworkOptions();
         options.addLocationStore(new ZLinkInMemoryLocationStore());
