@@ -14,6 +14,7 @@
 #include <latch>
 #include <chrono>
 #include <fstream>
+#include <future>
 #include <stdexcept>
 #include <thread>
 
@@ -129,9 +130,116 @@ void verify_completion_turn_batches ()
         assert (calls.load (std::memory_order_acquire) == 1);
 }
 
+void verify_receive_completion_turn_independence ()
+{
+    foundation::operation_registry_t registry;
+    foundation::operation_completion_chain_t collected;
+    const auto caller = std::this_thread::get_id ();
+    std::promise<void> first_started, second_started;
+    auto first_running = first_started.get_future ();
+    auto second_running = second_started.get_future ();
+    std::atomic_size_t callbacks{0};
+    assert (registry.register_operation (
+      {31, 1}, foundation::operation_registry_t::clock_t::time_point::max (),
+      [&] (foundation::operation_terminal_t terminal, zlink::message_t) {
+          assert (terminal == foundation::operation_terminal_t::completed);
+          assert (foundation::is_on_completion_dispatcher ());
+          assert (std::this_thread::get_id () == caller);
+          first_started.set_value ();
+          assert (second_running.wait_for (std::chrono::seconds (5)) == std::future_status::ready);
+          ++callbacks;
+          throw std::runtime_error ("a consumer failure releases its slot");
+      }));
+    assert (registry.register_operation (
+      {31, 2}, foundation::operation_registry_t::clock_t::time_point::max (),
+      [&] (foundation::operation_terminal_t terminal, zlink::message_t) {
+          assert (terminal == foundation::operation_terminal_t::completed);
+          assert (foundation::is_on_completion_dispatcher ());
+          assert (std::this_thread::get_id () != caller);
+          assert (first_running.wait_for (std::chrono::seconds (5)) == std::future_status::ready);
+          ++callbacks;
+          second_started.set_value ();
+      }));
+    {
+        foundation::operation_completion_collector_t rotation (collected);
+        assert (registry.complete ({31, 1}, {}));
+        assert (registry.complete ({31, 2}, {}));
+        assert (registry.size () == 0 && callbacks == 0 && collected.size () == 2);
+    }
+    assert (callbacks == 0 && !foundation::is_on_completion_dispatcher ());
+    auto first = collected.take_first ();
+    collected.publish ();
+    first.run_one ();
+    assert (!foundation::is_on_completion_dispatcher ());
+    assert (registry.shutdown () == 0 && callbacks == 2);
+}
+
+void verify_collected_slots_survive_shutdown_and_fallback ()
+{
+    foundation::operation_registry_t registry;
+    foundation::operation_completion_chain_t collected;
+    const auto caller = std::this_thread::get_id ();
+    std::promise<void> shutdown_terminal;
+    auto shutdown_delivered = shutdown_terminal.get_future ();
+    std::atomic_size_t callbacks{0};
+    for (std::uint64_t index = 1; index <= 3; ++index) {
+        assert (registry.register_operation (
+          {32, index}, foundation::operation_registry_t::clock_t::time_point::max (),
+          [&, index] (foundation::operation_terminal_t terminal, zlink::message_t) {
+              assert (foundation::is_on_completion_dispatcher ());
+              assert (std::this_thread::get_id () != caller);
+              assert (terminal
+                      == (index == 3 ? foundation::operation_terminal_t::shutdown
+                                     : foundation::operation_terminal_t::completed));
+              ++callbacks;
+              if (index == 3)
+                  shutdown_terminal.set_value ();
+          }));
+    }
+    {
+        foundation::operation_completion_collector_t rotation (collected);
+        assert (registry.complete ({32, 1}, {}));
+        assert (registry.complete ({32, 2}, {}));
+        assert (callbacks == 0);
+    }
+    auto stopping = std::async (std::launch::async, [&] { return registry.shutdown (); });
+    assert (shutdown_delivered.wait_for (std::chrono::seconds (5)) == std::future_status::ready);
+    assert (callbacks == 1
+            && stopping.wait_for (std::chrono::seconds (0)) != std::future_status::ready);
+    collected.publish ();
+    assert (stopping.wait_for (std::chrono::seconds (5)) == std::future_status::ready);
+    assert (stopping.get () == 1 && callbacks == 3 && collected.empty ());
+}
+
+void verify_completion_collection_scope_restores_on_return ()
+{
+    foundation::operation_registry_t registry;
+    foundation::operation_completion_chain_t collected;
+    std::atomic_size_t callbacks{0};
+    for (std::uint64_t index = 1; index <= 2; ++index)
+        assert (registry.register_operation (
+          {33, index}, foundation::operation_registry_t::clock_t::time_point::max (),
+          [&] (auto, auto) { ++callbacks; }));
+    try {
+        foundation::operation_completion_collector_t rotation (collected);
+        assert (registry.complete ({33, 1}, {}));
+        throw std::runtime_error ("leave collection scope");
+    }
+    catch (const std::runtime_error &) {
+    }
+    assert (registry.complete ({33, 2}, {}));
+    assert (wait_until ([&] { return callbacks == 1; }));
+    assert (collected.size () == 1);
+    collected.publish ();
+    assert (registry.shutdown () == 0 && callbacks == 2);
+}
+
 int main ()
 {
     verify_completion_turn_batches ();
+    verify_receive_completion_turn_independence ();
+    verify_collected_slots_survive_shutdown_and_fallback ();
+    verify_completion_collection_scope_restores_on_return ();
     const auto &fixture = completion_terminal_fixture ();
     assert (fixture.at ("fixture") == "zlink.framework.completion-terminal");
     assert (fixture.at ("version") == 1);
