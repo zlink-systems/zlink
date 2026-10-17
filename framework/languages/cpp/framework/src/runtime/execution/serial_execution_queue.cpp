@@ -416,7 +416,16 @@ class serial_turn_handle_impl_t final
     bool released () const override
     {
         std::lock_guard lock (_mutex);
-        return _released;
+        return _phase == phase_t::released;
+    }
+
+    bool claim_yield () override
+    {
+        std::lock_guard lock (_mutex);
+        if (_phase != phase_t::open || !_queue.allows_yield ())
+            return false;
+        _phase = phase_t::yield_admitted;
+        return true;
     }
 
     std::stop_token wait_cancellation () const override
@@ -554,10 +563,10 @@ class serial_turn_handle_impl_t final
         serial_execution_queue_t::async_completion_t complete;
         {
             std::lock_guard lock (_mutex);
-            if (_released) {
+            if (_phase == phase_t::released) {
                 return false;
             }
-            _released = true;
+            _phase = phase_t::released;
             complete = std::move (_complete);
         }
         if (!complete) {
@@ -661,7 +670,13 @@ class serial_turn_handle_impl_t final
     mutable std::mutex _mutex;
     std::shared_ptr<serial_turn_chain_t> _chain;
     serial_execution_queue_t::async_completion_t _complete;
-    bool _released = false;
+    enum class phase_t : unsigned char
+    {
+        open,
+        yield_admitted,
+        released
+    };
+    phase_t _phase = phase_t::open;
 };
 
 serial_execution_queue_t::serial_execution_queue_t (offload_executor_t &executor,
