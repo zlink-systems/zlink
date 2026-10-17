@@ -5336,6 +5336,14 @@ void test_application_relocation_remote_production_path (test_context_t &test,
         std::this_thread::yield ();
     }
 
+    // Command 44 is one-way (Session Actor binding §8.2). Observing the new
+    // binding is not an acknowledgement that its receive turn has returned.
+    // Join the fixture's dispatchers before inspecting the final Session state.
+    stop_dispatch.store (true, std::memory_order_release);
+    source_dispatch.join ();
+    target_dispatch.join ();
+    session_owner_dispatch.join ();
+
     const auto committed_binding =
       session_owner.native_node ().sessions ().current_binding ("production-remote-actor");
     const auto [continued_inbound_error, continued_inbound] =
@@ -5346,11 +5354,6 @@ void test_application_relocation_remote_production_path (test_context_t &test,
       continued_inbound
       && session_owner.native_node ().sessions ().complete_inbound (*continued_inbound)
            == stateful_error_t::none;
-    stop_dispatch.store (true, std::memory_order_release);
-    source_dispatch.join ();
-    target_dispatch.join ();
-    session_owner_dispatch.join ();
-
     object_ref_t expected_target{
       object_kind_t::actor,         std::string (actor.actor_id ().value ()),
       actor.object_generation (),   2,
@@ -5375,18 +5378,24 @@ void test_application_relocation_remote_production_path (test_context_t &test,
       result.terminal == relocation_terminal_t::completed && !result.authority
         && result.target_handoff
         && result.target_handoff->sources == std::vector<object_ref_t>{*bound_source_object}
-        && result.target_handoff->target_node_id == target.status ().routing_id ().to_string ()
-        && restored_target == std::optional<object_ref_t>{expected_target}
-        && roots->roots.size () == 1
-        && route_owner_observed_target_ready.load (std::memory_order_acquire) && committed_binding
-        && committed_binding->actor == expected_target
+        && result.target_handoff->target_node_id == target.status ().routing_id ().to_string (),
+      "production relocation must complete the source handoff without committing source authority");
+    test.require (restored_target == std::optional<object_ref_t>{expected_target}
+                    && roots->roots.size () == 1,
+                  "production relocation must restore the target and retain one handoff root");
+    // Relocation flow §4.6 requires target dispatch to open before command 44;
+    // source completion alone does not order independent completion turns (§11).
+    test.require (route_owner_observed_target_ready.load (std::memory_order_acquire),
+                  "production relocation must restore the target before the one-way Session route");
+    test.require (
+      committed_binding && committed_binding->actor == expected_target
         && committed_binding->binding_generation == session_binding.binding_generation
         && committed_binding->target_node_generation == target.status ().lifecycle_generation ()
-        && committed_binding->owner_lease_generation == target_descriptor.lease_generation
-        && continued_inbound_error == stateful_error_t::none && continued_inbound_completed
-        && continued_inbound->inbound_sequence == 2,
-      "production relocation must commit authority only at the target, restore before the one-way "
-      "Session route, and continue ingress");
+        && committed_binding->owner_lease_generation == target_descriptor.lease_generation,
+      "production relocation must commit the exact target Session route");
+    test.require (continued_inbound_error == stateful_error_t::none && continued_inbound_completed
+                    && continued_inbound->inbound_sequence == 2,
+                  "production relocation must continue Session ingress after the route commit");
     test.require (
       source_relocation_gate == relocation_gate_snapshot_t{},
       "cutover submit terminal must release relocation execution permits while post-cutover "

@@ -3586,10 +3586,8 @@ bool public_host_runtime_t::try_finalize_relocation_target (const relocation_att
         .get ();
     if (!attempt_current)
         return false;
-    if (relocation_target_terminal (attempt)) {
-        start_relocation_session_route_submission (key);
+    if (relocation_target_terminal (attempt))
         return true;
-    }
 
     const auto discard_attempt = [&] {
         std::vector<relocation_target_attempt_t> discarded;
@@ -3697,11 +3695,6 @@ bool public_host_runtime_t::try_finalize_relocation_target (const relocation_att
             return false;
         }
 
-        /* Identity and S2 authority are visible before lifecycle opens. The
-         * existing execution gate holds ingress until restore becomes Ready.
-         * Submit command 44 first so a joined callback's Session push remains
-         * ordered behind the Session owner's route commit. */
-        start_relocation_session_route_submission (key);
         const auto committed = attempt.targets.size () == 1
                                  ? _objects.commit_relocation_restore (attempt.targets.front (),
                                                                        attempt.restore_identity)
@@ -3741,6 +3734,10 @@ bool public_host_runtime_t::try_finalize_relocation_target (const relocation_att
                                                             - attempt.authority_committed_at);
         _relocation_target_metrics.target_resume_seconds (elapsed.count ());
     }
+    /* Relocation flow §4.6: command 44 follows target dispatch opening.
+     * A completion on another execution resource may run before this stack
+     * returns (Submit and completion §11), so send completion cannot order
+     * the Session owner's route commit after the target becomes Ready. */
     start_relocation_session_route_submission (key);
     finalized->complete (result_t<void>::success ());
     return true;
