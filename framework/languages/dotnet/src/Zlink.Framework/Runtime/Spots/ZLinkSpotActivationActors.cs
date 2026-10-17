@@ -345,25 +345,51 @@ internal abstract partial class ZLinkSpotActivation
         }
     }
 
+    internal ValueTask InvokeOwnedActorPacketAsync(
+        IZLinkActor actor,
+        ZLinkActorRuntimeState state,
+        ZlinkStreamHeader header,
+        Message body,
+        RoutingId sourceSessionRid,
+        CancellationToken cancellationToken
+    ) =>
+        _dispatcher.ActorPackets.DispatchAsync(
+            actor,
+            state,
+            header,
+            body,
+            cancellationToken,
+            sourceSessionRid
+        );
+
+    internal ValueTask<ZLinkActorReply?> InvokeOwnedActorPacketForReplyAsync(
+        IZLinkActor actor,
+        ZLinkActorRuntimeState state,
+        ZlinkStreamHeader header,
+        Message body,
+        RoutingId sourceSessionRid,
+        CancellationToken cancellationToken
+    ) =>
+        _dispatcher.ActorPackets.DispatchForReplyAsync(
+            actor,
+            state,
+            header,
+            body,
+            cancellationToken,
+            sourceSessionRid
+        );
+
     internal Task DispatchOwnedActorFrameAsync(
         ZLinkBackendActorRef actorRef,
         ZLinkActorHandoffFrame frame,
         Func<ZLinkSpotActorFrame, ZLinkActorReply?, CancellationToken, ValueTask>? complete,
         CancellationToken cancellationToken
     ) =>
-        complete is null
-            ? _dispatcher
-                .DispatchActorReplayFramesAsync(
-                    ZLinkActorHandoffFrames.Restore(actorRef, [frame]),
-                    static _ => { },
-                    cancellationToken
-                )
-                .AsTask()
-            : _dispatcher.DispatchOwnedCanonicalActorFramesAsync(
-                ZLinkActorHandoffFrames.Restore(actorRef, [frame]),
-                complete,
-                cancellationToken
-            );
+        _dispatcher.DispatchOwnedActorFrameAsync(
+            ZLinkActorHandoffFrames.Restore(actorRef, [frame]),
+            complete,
+            cancellationToken
+        );
 
     internal ValueTask ReplayAbortedActorHandoffAsync(
         ZLinkActorRuntimeState actorState,

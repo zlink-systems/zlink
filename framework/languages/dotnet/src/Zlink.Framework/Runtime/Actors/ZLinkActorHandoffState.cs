@@ -49,6 +49,12 @@ internal sealed class ZLinkActorHandoffState(
         Func<ZLinkActorHandoffFrame, Task>? Admit = null
     );
 
+    // Only the handoff lane writes capture. Begin capture runs in the current
+    // Actor turn (or target completion), before any subsequent application
+    // claim. EndDeferredJoinCapture publishes false in that lane before its
+    // caller notifies the mailbox. The record then claims its frame through
+    // the same lane before invoking its handler. This acquire read is a
+    // projection of that lane-owned fact, not a second execution permission.
     internal bool DurablePrefixCanRun => !_deferredJoinCapture;
 
     internal Task AdmitDurablePrefix(string handoffId, Func<ZLinkActorHandoffFrame, Task> admit)

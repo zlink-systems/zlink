@@ -6,7 +6,6 @@ internal sealed class ZLinkSerialWorkPreparation
     private readonly Func<CancellationToken, ValueTask> _prepare;
     private readonly Action _cancel;
     private readonly Action _notify;
-    private readonly Action<Exception>? _reject;
     private CancellationTokenSource? _cancellation = new();
     private readonly CancellationToken _token;
     private Task? _ready;
@@ -14,14 +13,12 @@ internal sealed class ZLinkSerialWorkPreparation
     internal ZLinkSerialWorkPreparation(
         Func<CancellationToken, ValueTask> prepare,
         Action cancel,
-        Action notify,
-        Action<Exception>? reject = null
+        Action notify
     )
     {
         _prepare = prepare;
         _cancel = cancel;
         _notify = notify;
-        _reject = reject;
         _token = _cancellation.Token;
     }
 
@@ -58,7 +55,6 @@ internal sealed class ZLinkSerialWorkPreparation
         {
             completion.TrySetException(error);
             _ = completion.Task.Exception;
-            _reject?.Invoke(error);
         }
         finally
         {

@@ -3036,13 +3036,11 @@ internal sealed partial class ZLinkFrameworkRuntime
         dispatch ??= frame =>
             actorState.LiveActivation is { } activation
                 ? activation.DispatchOwnedActorFrameAsync(actorRef, frame, null, ShutdownToken)
-                : pipeline
-                    .DispatchReplayAsync(
-                        ZLinkActorHandoffFrames.Restore(actorRef, [frame]),
-                        static _ => { },
-                        ShutdownToken
-                    )
-                    .AsTask();
+                : pipeline.DispatchOwnedFrameAsync(
+                    ZLinkActorHandoffFrames.Restore(actorRef, [frame]),
+                    null,
+                    ShutdownToken
+                );
         var terminal = actorState.Handoff.AdmitDurablePrefix(
             handoffId,
             frame =>
@@ -3052,6 +3050,7 @@ internal sealed partial class ZLinkFrameworkRuntime
                     async ct =>
                     {
                         actorState.Handoff.ClaimDurableFrame(frame);
+                        using var dispatchScope = actorState.EnterDispatch();
                         using var invocation = ZLinkApplicationJobQueueInvocation.Enter(prepared!);
                         await dispatch(frame).ConfigureAwait(false);
                     },

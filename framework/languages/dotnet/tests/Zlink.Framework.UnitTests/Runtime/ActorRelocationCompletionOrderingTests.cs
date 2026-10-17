@@ -9,6 +9,28 @@ public sealed class ActorRelocationCompletionOrderingTests
     private static TaskCompletionSource Signal() =>
         new(TaskCreationOptions.RunContinuationsAsynchronously);
 
+    [Fact]
+    public async Task Active_durable_turn_cannot_bypass_the_actor_queue()
+    {
+        var mailbox = new ZLinkActorSerialExecutor();
+        Task<ZLinkActorSerialExecutor.Turn>? next = null;
+        var bypassed = true;
+        var prefix = mailbox.AdmitDurablePrefix(
+            new[]
+            {
+                new ZLinkActorDurableRecord(_ =>
+                {
+                    next = mailbox.EnterAsync(default).AsTask();
+                    bypassed = next.IsCompleted;
+                    return ValueTask.CompletedTask;
+                }),
+            }
+        );
+        await Task.WhenAll(prefix);
+        using (await next!) { }
+        Assert.False(bypassed);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

@@ -355,19 +355,12 @@ internal sealed class ZLinkActorDispatchRouter(
             return ZLinkActorReply.FromError(replyPathError);
         }
 
-        var error = new ZLinkFrameworkException(
-            ZLinkFrameworkErrorKind.NotFound,
-            $"No Spot actor request handler is registered for '{header.Name}'."
-        );
-        ReportMissingHandler(
+        return ZLinkSpotActorPacketDispatcher.MissingHandlerReply(
+            _dispatchErrors,
             actor,
             header,
-            ZLinkDispatchMessageKind.ActorRequest,
-            ZLinkDispatchErrorAction.ReplyError,
-            error,
             sourceSessionRid
         );
-        return ZLinkActorReply.FromError(error);
     }
 
     private async ValueTask NotifyDisconnectedByCurrentLocationAsync(

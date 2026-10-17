@@ -15,7 +15,8 @@ internal interface IZLinkActorInboundEndpoint
         Message body,
         RoutingId sourceSessionRid,
         bool relocationReplay,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        bool callerOwnsDispatchTurn = false
     );
 
     ValueTask<ZLinkActorReply?> DispatchForReplyAsync(
@@ -25,7 +26,8 @@ internal interface IZLinkActorInboundEndpoint
         Message body,
         RoutingId sourceSessionRid,
         bool relocationReplay,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        bool callerOwnsDispatchTurn = false
     );
 }
 
@@ -235,6 +237,33 @@ internal sealed class ZLinkActorInboundPipeline(
         }
     }
 
+    // Called only by the FIFO record operation, which already owns its turn.
+    internal async Task DispatchOwnedFrameAsync(
+        ZLinkSpotActorFrameBatch frames,
+        Func<ZLinkSpotActorFrame, ZLinkActorReply?, CancellationToken, ValueTask>? completeFrame,
+        CancellationToken cancellationToken
+    )
+    {
+        using (frames)
+        {
+            if (frames.Count != 1)
+                throw new ArgumentException(
+                    "An owned Actor record contains one frame.",
+                    nameof(frames)
+                );
+            using var frame = frames[0];
+            await DispatchFrameAsync(
+                    frame,
+                    cancellationToken,
+                    allowCapture: false,
+                    acknowledgeHandledFrame: completeFrame is null ? static () => { } : null,
+                    completeCanonicalReplay: completeFrame,
+                    callerOwnsDispatchTurn: true
+                )
+                .ConfigureAwait(false);
+        }
+    }
+
     internal Task QueueCanonicalReplayAsync(
         ZLinkSpotActorFrameBatch frames,
         Func<ZLinkSpotActorFrame, ZLinkActorReply?, CancellationToken, ValueTask> completeFrame,
@@ -324,7 +353,8 @@ internal sealed class ZLinkActorInboundPipeline(
             CancellationToken,
             ValueTask
         >? completeCanonicalReplay = null,
-        bool? relocationReplay = null
+        bool? relocationReplay = null,
+        bool callerOwnsDispatchTurn = false
     )
     {
         using var flow = ZLinkFlowContext.Enter(
@@ -484,7 +514,8 @@ internal sealed class ZLinkActorInboundPipeline(
                     acknowledgeHandledFrame,
                     completeCanonicalReplay,
                     relocationReplay,
-                    cancellationToken
+                    cancellationToken,
+                    callerOwnsDispatchTurn
                 )
                 .ConfigureAwait(false);
         }
@@ -757,7 +788,8 @@ internal sealed class ZLinkActorInboundPipeline(
             ValueTask
         >? completeCanonicalReplay,
         bool? relocationReplay,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        bool callerOwnsDispatchTurn
     )
     {
         var disconnected = ZLinkActorBoundSessionRelay.IsSessionDisconnectedPacket(frame.Header);
@@ -827,7 +859,8 @@ internal sealed class ZLinkActorInboundPipeline(
                                     acknowledgeHandledFrame is not null
                                     || completeCanonicalReplay is not null
                                 ),
-                            cancellationToken
+                            cancellationToken,
+                            callerOwnsDispatchTurn
                         )
                         .ConfigureAwait(false);
                 ZLinkFrameworkDebugLog.SpotDiscovery(
@@ -932,7 +965,8 @@ internal sealed class ZLinkActorInboundPipeline(
                             acknowledgeHandledFrame is not null
                             || completeCanonicalReplay is not null
                         ),
-                    cancellationToken
+                    cancellationToken,
+                    callerOwnsDispatchTurn
                 )
                 .ConfigureAwait(false);
             if (completeCanonicalReplay is not null)
@@ -1011,9 +1045,19 @@ internal sealed class ZLinkEntrySpotActorInboundEndpoint(ZLinkFrameworkRuntime r
         Message body,
         RoutingId sourceSessionRid,
         bool relocationReplay,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        bool callerOwnsDispatchTurn = false
     )
     {
+        if (callerOwnsDispatchTurn)
+            return InvokeOwnedAsync(
+                actor,
+                state,
+                header,
+                body,
+                sourceSessionRid,
+                cancellationToken
+            );
         return runtime.SubmitActorAsync(
             actor,
             state,
@@ -1025,6 +1069,39 @@ internal sealed class ZLinkEntrySpotActorInboundEndpoint(ZLinkFrameworkRuntime r
         );
     }
 
+    private async ValueTask InvokeOwnedAsync(
+        IZLinkActor actor,
+        ZLinkActorRuntimeState state,
+        ZlinkStreamHeader header,
+        Message body,
+        RoutingId sourceSessionRid,
+        CancellationToken cancellationToken
+    )
+    {
+        if (state.LiveActivation is { } activation)
+            await activation
+                .InvokeOwnedActorPacketAsync(
+                    actor,
+                    state,
+                    header,
+                    body,
+                    sourceSessionRid,
+                    cancellationToken
+                )
+                .ConfigureAwait(false);
+        else
+            _ = await runtime
+                .TrySubmitEntrySpotActorAsync(
+                    actor,
+                    state,
+                    header,
+                    body,
+                    cancellationToken,
+                    sourceSessionRid
+                )
+                .ConfigureAwait(false);
+    }
+
     public async ValueTask<ZLinkActorReply?> DispatchForReplyAsync(
         IZLinkActor actor,
         ZLinkActorRuntimeState state,
@@ -1032,12 +1109,24 @@ internal sealed class ZLinkEntrySpotActorInboundEndpoint(ZLinkFrameworkRuntime r
         Message body,
         RoutingId sourceSessionRid,
         bool relocationReplay,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        bool callerOwnsDispatchTurn = false
     )
     {
         ZLinkFrameworkDebugLog.SpotDiscovery(
             $"actor_dispatch_entry_path actor={actor.Context.ActorId} correlation_id={header.CorrelationId} live_activation={state.LiveActivation is not null}"
         );
+        if (callerOwnsDispatchTurn && state.LiveActivation is { } ownedActivation)
+            return await ownedActivation
+                .InvokeOwnedActorPacketForReplyAsync(
+                    actor,
+                    state,
+                    header,
+                    body,
+                    sourceSessionRid,
+                    cancellationToken
+                )
+                .ConfigureAwait(false);
         if (state.LiveActivation is not null)
             return await runtime
                 .SubmitActorForReplyAsync(
@@ -1057,7 +1146,7 @@ internal sealed class ZLinkEntrySpotActorInboundEndpoint(ZLinkFrameworkRuntime r
                 state,
                 header,
                 body,
-                callerOwnsDispatchTurn: false,
+                callerOwnsDispatchTurn: callerOwnsDispatchTurn,
                 relocationReplay,
                 cancellationToken,
                 sourceSessionRid
@@ -1066,6 +1155,16 @@ internal sealed class ZLinkEntrySpotActorInboundEndpoint(ZLinkFrameworkRuntime r
         ZLinkFrameworkDebugLog.SpotDiscovery(
             $"actor_dispatch_entry_result actor={actor.Context.ActorId} correlation_id={header.CorrelationId} handled={result.Handled} reply={result.Reply is not null}"
         );
+        if (callerOwnsDispatchTurn && !result.Handled)
+            return ZLinkSpotActorPacketDispatcher.MissingHandlerReply(
+                new ZLinkDispatchErrorReporter(
+                    runtime.Registration.DispatchOptions,
+                    runtime: runtime
+                ),
+                actor,
+                header,
+                sourceSessionRid
+            );
         return result.Handled
             ? result.Reply
             : await runtime
@@ -1111,7 +1210,8 @@ internal sealed class ZLinkUserSpotActorInboundEndpoint(
         Message body,
         RoutingId sourceSessionRid,
         bool relocationReplay,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        bool callerOwnsDispatchTurn = false
     )
     {
         return dispatcher.DispatchAsync(
@@ -1131,7 +1231,8 @@ internal sealed class ZLinkUserSpotActorInboundEndpoint(
         Message body,
         RoutingId sourceSessionRid,
         bool relocationReplay,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        bool callerOwnsDispatchTurn = false
     )
     {
         return dispatcher.DispatchForReplyAsync(

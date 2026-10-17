@@ -138,11 +138,11 @@ internal sealed class ZLinkSpotActivationDispatcher
             .ConfigureAwait(false);
     }
 
-    internal Task DispatchOwnedCanonicalActorFramesAsync(
+    internal Task DispatchOwnedActorFrameAsync(
         ZLinkSpotActorFrameBatch frames,
-        Func<ZLinkSpotActorFrame, ZLinkActorReply?, CancellationToken, ValueTask> complete,
+        Func<ZLinkSpotActorFrame, ZLinkActorReply?, CancellationToken, ValueTask>? complete,
         CancellationToken cancellationToken
-    ) => _actorPipeline.QueueCanonicalReplayAsync(frames, complete, cancellationToken);
+    ) => _actorPipeline.DispatchOwnedFrameAsync(frames, complete, cancellationToken);
 
     public ValueTask DispatchActorReplayFramesAsync(
         ZLinkSpotActorFrameBatch frames,

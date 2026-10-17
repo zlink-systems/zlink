@@ -56,7 +56,6 @@ internal sealed class ZLinkActorSerialExecutor
                             record.CancelPreparation ?? (static () => { }),
                             out item,
                             ready: record.Ready,
-                            acceptedState: this,
                             errorReporter: record.ReportFailure
                         );
                     if (admission != ZLinkSerialPostAdmission.Accepted)
@@ -85,14 +84,6 @@ internal sealed class ZLinkActorSerialExecutor
     )
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (
-            lane == ZLinkSerialWorkLane.Application
-            && ZLinkSerialTurn.Current is { } turn
-            && !turn.Item.Completion.IsCompleted
-            && !turn.Suspended.IsCompleted
-            && ReferenceEquals(turn.Item.AcceptedState, this)
-        )
-            return ValueTask.FromResult(default(Turn));
         var waiter = AwaitStateLane(
             _lane.RunAsync(() =>
             {
@@ -209,12 +200,6 @@ internal sealed class ZLinkActorSerialExecutor
         bool countAsPendingRequest
     )
     {
-        var durable =
-            lane == ZLinkSerialWorkLane.Application && _queue.HasPendingDurableApplication
-                ? ZLinkApplicationJobQueueInvocation.CurrentScope
-                : null;
-        if (durable?.Lease is not { IsReleased: false })
-            durable = null;
         var waiter = new Waiter(this, cancellationToken, countAsPendingRequest);
         if (countAsPendingRequest)
             _pendingRequests++;
@@ -227,22 +212,26 @@ internal sealed class ZLinkActorSerialExecutor
             admission =
                 lane == ZLinkSerialWorkLane.Lifecycle
                     ? _queue.TryPostNextWithAdmission(waiter.RunAsync, out item)
-                : durable is not null
-                    ? _queue.TryPostDurableApplication(
-                        waiter.RunAsync,
-                        durable.ReacquireAsync,
-                        durable.ReleaseDurablePermit,
-                        out item,
-                        waiter.FailPreparation
-                    )
-                : _queue.TryPostApplicationWithAdmission(waiter.RunAsync, out item);
+                    : _queue.TryPostApplicationWithAdmission(waiter.RunAsync, out item);
         if (admission == ZLinkSerialPostAdmission.Accepted)
         {
             waiter.MarkAccepted();
             _acceptedWaiters++;
             item.AddTerminalRelease(() => OnWaiterFinished(waiter));
             waiter.BindItem(item);
-            durable?.ReleaseDurablePermit();
+            if (item.Preparation is not null)
+            {
+                _ = item.Completion.ContinueWith(
+                    static (task, state) =>
+                        ((Waiter)state!).FailPreparation(task.Exception!.InnerException!),
+                    waiter,
+                    CancellationToken.None,
+                    TaskContinuationOptions.OnlyOnFaulted
+                        | TaskContinuationOptions.ExecuteSynchronously,
+                    TaskScheduler.Default
+                );
+                ZLinkApplicationJobQueueInvocation.CurrentScope?.ReleaseDurablePermit();
+            }
             return waiter;
         }
 

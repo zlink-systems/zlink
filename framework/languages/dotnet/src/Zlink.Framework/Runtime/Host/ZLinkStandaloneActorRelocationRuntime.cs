@@ -4087,14 +4087,14 @@ internal sealed partial class ZLinkFrameworkRuntime
                 ZLinkFrameworkErrorKind.DataLost,
                 $"Actor '{actorState.ActorId}' target completion phase is not recoverable."
             );
-        // A routed Join's target completion owns publication normalization,
-        // OnJoinCompleted and the common FIFO activation boundary.
-        if (!normalizeSteady)
-            return;
         await ZLinkActorTargetActivation
             .CompleteAsync(
                 async () =>
                 {
+                    // Routed recovery retains publication for its protocol owner;
+                    // it still owns the restored FIFO and Session route completion.
+                    if (!normalizeSteady)
+                        return;
                     progress = progress with
                     {
                         Authority = await coordinator
@@ -4203,13 +4203,11 @@ internal sealed partial class ZLinkFrameworkRuntime
                             null,
                             ShutdownToken
                         )
-                        : pipeline
-                            .DispatchReplayAsync(
-                                ZLinkActorHandoffFrames.Restore(actorRef, [frame]),
-                                static _ => { },
-                                ShutdownToken
-                            )
-                            .AsTask();
+                        : pipeline.DispatchOwnedFrameAsync(
+                            ZLinkActorHandoffFrames.Restore(actorRef, [frame]),
+                            null,
+                            ShutdownToken
+                        );
                 async ValueTask Complete(
                     ZLinkSpotActorFrame replayFrame,
                     ZLinkActorReply? reply,
@@ -4255,7 +4253,7 @@ internal sealed partial class ZLinkFrameworkRuntime
                 }
                 return actorState.LiveActivation is { } target
                     ? target.DispatchOwnedActorFrameAsync(actorRef, frame, Complete, ShutdownToken)
-                    : pipeline.QueueCanonicalReplayAsync(
+                    : pipeline.DispatchOwnedFrameAsync(
                         ZLinkActorHandoffFrames.Restore(actorRef, [frame]),
                         Complete,
                         ShutdownToken

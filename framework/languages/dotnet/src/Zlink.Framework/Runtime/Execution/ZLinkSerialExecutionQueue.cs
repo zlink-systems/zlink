@@ -165,9 +165,7 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
         Func<CancellationToken, ValueTask> prepare,
         Action cancel,
         out ZLinkSerialWorkItem item,
-        Action<Exception>? reject = null,
         Func<bool>? ready = null,
-        object? acceptedState = null,
         Action<Exception>? errorReporter = null
     )
     {
@@ -181,13 +179,7 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
             }
             item = new ZLinkSerialWorkItem(callback, ready: ready)
             {
-                Preparation = new ZLinkSerialWorkPreparation(
-                    prepare,
-                    cancel,
-                    NotifyReadiness,
-                    reject
-                ),
-                AcceptedState = acceptedState,
+                Preparation = new ZLinkSerialWorkPreparation(prepare, cancel, NotifyReadiness),
                 ErrorReporter = errorReporter,
             };
             CommitWorkItemUnderLock(_applicationQueue, item, ZLinkSerialWorkLane.Application);
@@ -451,6 +443,18 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
                 item = null!;
                 return ZLinkSerialPostAdmission.Closed;
             }
+            // Publication and durable inheritance use the same admission boundary.
+            // Ordinary Actor admission adds no lock, preparation or delegate.
+            if (
+                _applicationQueue.PendingTail?.Preparation is not null
+                && ZLinkApplicationJobQueueInvocation.CurrentScope
+                    is { Lease.IsReleased: false } scope
+            )
+                candidate.Preparation = new ZLinkSerialWorkPreparation(
+                    scope.ReacquireAsync,
+                    scope.ReleaseDurablePermit,
+                    NotifyReadiness
+                );
             CommitWorkItemUnderLock(_applicationQueue, candidate, ZLinkSerialWorkLane.Application);
             item = candidate;
             drain = ReserveDrainUnderLock();
