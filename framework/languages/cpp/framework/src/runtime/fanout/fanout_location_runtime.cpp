@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 
 #include "runtime/fanout/fanout_location_runtime.hpp"
+
+#include "runtime/execution/task_result.hpp"
 #include "runtime/diagnostics/topology_projection.hpp"
 #include "runtime/transport/listener_identity.hpp"
 #include "runtime/diagnostics/dispatch_error_reporter.hpp"
@@ -221,13 +223,15 @@ void fanout_location_runtime_t::start_publisher (const channel_snapshot_t &chann
       .owner_id = owner ? owner->owner_id : std::string{},
       .lease_generation = owner ? owner->lease_generation : 0};
     if (owner) {
-        const auto stored =
-          _store->update_fanout_publisher (descriptor, location_write_intent_t::new_claim)
-            .result ()
-            .value ();
-        if (stored.status != location_write_status_t::stored) {
-            raw->close ();
-            throw std::runtime_error ("fanout publisher descriptor publication was fenced");
+        const auto stored = infrastructure_result ([&] {
+                                return _locations->descriptor_write_confirmed ([&] {
+                                    return _store->update_fanout_publisher (
+                                      descriptor, location_write_intent_t::new_claim);
+                                });
+                            }).value ();
+        if (!stored) {
+            descriptor.owner_id.clear ();
+            descriptor.lease_generation = 0;
         }
     }
     auto entry = std::make_unique<publisher_entry_t> ();
@@ -263,7 +267,7 @@ void fanout_location_runtime_t::run ()
         const auto now = std::chrono::steady_clock::now ();
         if (now >= next_reconcile) {
             try {
-                publish_descriptors ();
+                publish_descriptors (location_write_intent_t::renew);
                 reconcile_subscribers ();
                 publish_snapshot_changes ();
             }
@@ -301,12 +305,12 @@ void fanout_location_runtime_t::wait_for_activity (std::chrono::milliseconds tim
     }
 }
 
-void fanout_location_runtime_t::publish_descriptors ()
+bool fanout_location_runtime_t::publish_descriptors (location_write_intent_t intent)
 {
     std::lock_guard publish_lock (_descriptor_publish_mutex);
     const auto owner = _locations->current_owner_token ();
     if (!owner)
-        return;
+        return false;
     struct pending_descriptor_t
     {
         std::string channel_name;
@@ -314,6 +318,7 @@ void fanout_location_runtime_t::publish_descriptors ()
         location_write_intent_t intent;
     };
     std::vector<pending_descriptor_t> pending;
+    bool published = true;
     {
         std::lock_guard lock (_gate);
         const auto state = current_state (*_locations);
@@ -324,6 +329,10 @@ void fanout_location_runtime_t::publish_descriptors ()
               || publisher->descriptor.lease_generation != owner->lease_generation;
             if (!new_owner && publisher->descriptor.state == state)
                 continue;
+            if (new_owner && intent == location_write_intent_t::renew) {
+                published = false;
+                continue;
+            }
             if (publisher->descriptor.descriptor_revision
                 == static_cast<std::uint64_t> (std::numeric_limits<std::int64_t>::max ()))
                 throw std::overflow_error ("fanout publisher descriptor revision is exhausted");
@@ -340,23 +349,26 @@ void fanout_location_runtime_t::publish_descriptors ()
     }
     for (auto &item : pending) {
         const auto written =
-          _store->update_fanout_publisher (item.descriptor, item.intent).result ().value ();
-        if (written.status != location_write_status_t::stored)
+          infrastructure_result ([&] {
+              return _locations->descriptor_write_confirmed (
+                [&] { return _store->update_fanout_publisher (item.descriptor, item.intent); });
+          }).value ();
+        if (!written) {
+            published = false;
             continue;
+        }
         std::lock_guard lock (_gate);
         const auto found = _publishers.find (item.channel_name);
         if (found == _publishers.end ())
             continue;
-        const auto &current = found->second->descriptor;
-        if (current.descriptor_revision < item.descriptor.descriptor_revision)
-            found->second->descriptor = std::move (item.descriptor);
+        found->second->descriptor = std::move (item.descriptor);
     }
+    return published;
 }
 
-bool fanout_location_runtime_t::republish_after_store_recovery ()
+bool fanout_location_runtime_t::republish_after_store_recovery (location_write_intent_t intent)
 {
-    publish_descriptors ();
-    return _locations->current_owner_token ().has_value ();
+    return publish_descriptors (intent);
 }
 
 void fanout_location_runtime_t::reconcile_subscribers ()
