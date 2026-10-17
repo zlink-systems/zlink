@@ -5164,8 +5164,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             ActorPacketFrames.Header packetHeader,
             ZLinkBackendActorReceived headerPart,
             String actorId,
-            Throwable error,
-            String failureMessage) {
+            Throwable error) {
         byte[] frameBytes;
         try (Message frame = ActorPacketFrames.encodeError(packetHeader, error)) {
             frameBytes = frame.toByteArray();
@@ -5173,31 +5172,20 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             headerPart.close();
             return;
         }
-        ZLinkBackendActorRef actorRef =
-                new ZLinkBackendActorRef(
-                        headerPart.actor().nodeRid(), actorId, headerPart.actor().generation());
-        if (isNoBindActorRequest(packetHeader, headerPart)) {
-            dispatchLine.enqueueDispatch(
-                    () -> {
-                        try (Message frame = Message.from(frameBytes)) {
-                            primaryNode.replyActorNoBind(
-                                    actorRef,
-                                    headerPart.sourceNodeRid(),
-                                    headerPart.sourceSessionRid(),
-                                    headerPart.requestId(),
-                                    headerPart.flags(),
-                                    List.of(frame));
-                            return CompletableFuture.completedFuture(null);
-                        } finally {
-                            headerPart.close();
-                        }
-                    });
-            return;
-        }
         dispatchLine.enqueueDispatch(
                 () ->
-                        sendActorBoundSessionWithRetry(
-                                        primaryNode, actorRef, actorId, frameBytes, failureMessage)
+                        ZLinkHandlerStages.fromStageSupplier(
+                                        () ->
+                                                sendActorReplyFrame(
+                                                        actorId,
+                                                        headerPart.actor(),
+                                                        headerPart.sourceNodeRid(),
+                                                        headerPart.sourceSessionRid(),
+                                                        headerPart.requestId(),
+                                                        headerPart.flags(),
+                                                        isNoBindActorRequest(
+                                                                packetHeader, headerPart),
+                                                        frameBytes))
                                 .whenComplete((ignored, sendError) -> headerPart.close()));
     }
 
@@ -6521,8 +6509,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                         new ZLinkConfigurationException(
                                 "No SPOT actor request handler is registered for '"
                                         + packetHeader.packetName()
-                                        + "'."),
-                        "actor dispatch error reply failed");
+                                        + "'."));
             } else {
                 closePendingActorHeader(headerPart, pendingHeader);
             }
