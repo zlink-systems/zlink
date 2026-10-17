@@ -1,9 +1,10 @@
-import { BorderVisible, FieldView } from '../shared/messages';
 import { Injectable } from '@nestjs/common';
 import { zlinkSpotActorSendHandler, zlinkSpotPacketHandler } from '@zlink-systems/nestjs';
 import type { ZLinkMessageContext } from '@zlink-systems/framework';
 import { PacketNames } from '../shared/constants';
 import {
+  BorderVisible,
+  FieldView,
   JoinWorldRequest,
   ViewRequest,
   AdvanceRequest,

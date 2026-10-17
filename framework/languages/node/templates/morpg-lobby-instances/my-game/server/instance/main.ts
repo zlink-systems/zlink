@@ -1,4 +1,3 @@
-import { DepartedPartyView } from './handlers';
 import { ZLinkUserSpotExecutionMode } from '@zlink-systems/framework';
 import { runHost, failHost } from '../shared/hosting';
 import { Names } from '../shared/constants';
@@ -6,7 +5,7 @@ import { PlayerFactory, PlayerRelocation } from '../shared/player';
 import { Entry } from '../shared/entry';
 import { EntryPartyViewDelivery, Login, CreateParty, JoinParty } from '../shared/entry-handlers';
 import { Dungeon, DungeonRelocation } from './dungeon';
-import { Prepare, Reconnect, View, Advance, Delivery } from './handlers';
+import { DepartedPartyView, Prepare, Reconnect, View, Advance, Delivery } from './handlers';
 runHost((_builder, config, mesh) => {
   const objects = mesh.objects().server();
   objects.addEntrySpot(Entry);

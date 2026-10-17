@@ -45,11 +45,6 @@ class Party final : public fx::spot_t<Player>
     }
     fx::task_t<void> on_actor_joined (Player &) override { co_await broadcast (); }
     fx::task_t<void>
-    departedDungeonView (Player &actor, fx::message_context_t &, const DungeonView &message)
-    {
-        return actor.deliver (message.dungeonId, message);
-    }
-    fx::task_t<void>
     pending_dungeon (Player &actor, fx::message_context_t &, const DungeonView &message)
     {
         return actor.deliver (message.dungeonId, message);

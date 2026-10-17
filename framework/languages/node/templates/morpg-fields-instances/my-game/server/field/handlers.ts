@@ -151,20 +151,32 @@ export class BorderHandler {
   actor: () => Player,
   packetName: PacketNames.fieldView
 })
+export class FieldDelivery {
+  handle(
+    spot: Field,
+    actor: Player,
+    context: ZLinkMessageContext,
+    message: FieldView
+  ): Promise<void> {
+    return actor.deliver(message.fieldId, context.packetName, message, spot.isVisible(actor));
+  }
+}
+
+@Injectable()
 @zlinkSpotActorSendHandler({
   spot: () => Field,
   actor: () => Player,
   packetName: PacketNames.borderVisible
 })
-export class Delivery {
+export class BorderDelivery {
   handle(
     spot: Field,
     actor: Player,
     context: ZLinkMessageContext,
-    message: FieldView | BorderVisible
+    message: BorderVisible
   ): Promise<void> {
     return actor.deliver(
-      'observerFieldId' in message ? message.observerFieldId : message.fieldId,
+      message.observerFieldId,
       context.packetName,
       message,
       spot.isVisible(actor)

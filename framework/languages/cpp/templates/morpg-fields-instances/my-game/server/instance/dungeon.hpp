@@ -19,8 +19,8 @@ class Dungeon final : public fx::spot_t<Player>
     const fx::spot_context_t &context () const noexcept override { return context_; }
     void configure () override
     {
-        context_.handlers ().add_actor_send<&Dungeon::departedFieldView> ();
-        context_.handlers ().add_actor_send<&Dungeon::departedBorderVisible> ();
+        context_.handlers ().add_actor_send<&Dungeon::departed_field_view> ();
+        context_.handlers ().add_actor_send<&Dungeon::departed_border_visible> ();
         context_.handlers ()
           .add_handler<&Dungeon::prepare> ()
           .add_actor_send<&Dungeon::reconnect> ()
@@ -49,12 +49,12 @@ class Dungeon final : public fx::spot_t<Player>
         co_await actors_.send (actor.context ().actor_id (), view ()).async ();
     }
     fx::task_t<void>
-    departedBorderVisible (Player &actor, fx::message_context_t &, const BorderVisible &message)
+    departed_border_visible (Player &actor, fx::message_context_t &, const BorderVisible &message)
     {
         return actor.deliver (message.observerFieldId, message, true);
     }
     fx::task_t<void>
-    departedFieldView (Player &actor, fx::message_context_t &, const FieldView &message)
+    departed_field_view (Player &actor, fx::message_context_t &, const FieldView &message)
     {
         return actor.deliver (message.fieldId, message, true);
     }

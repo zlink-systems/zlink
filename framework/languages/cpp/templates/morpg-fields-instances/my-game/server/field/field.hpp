@@ -95,13 +95,6 @@ class Field final : public fx::spot_t<Player>
         co_return;
     }
     fx::task_t<void>
-    departedDungeonView (Player &actor, fx::message_context_t &, const DungeonView &message)
-    {
-        return actor.deliver (
-          message.dungeonId, message,
-          state.visiblePlayers.contains (std::string (actor.context ().actor_id ().value ())));
-    }
-    fx::task_t<void>
     pending_dungeon (Player &actor, fx::message_context_t &, const DungeonView &message)
     {
         return actor.deliver (

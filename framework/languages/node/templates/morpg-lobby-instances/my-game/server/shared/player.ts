@@ -1,4 +1,3 @@
-import { restoreNotification, type GameNotification } from './messages';
 import { Injectable } from '@nestjs/common';
 import type {
   ZLinkActor,
@@ -8,7 +7,7 @@ import type {
   ZLinkActorRelocationAdapter
 } from '@zlink-systems/framework';
 import { Rejection } from './constants';
-import { ActionRejected } from './messages';
+import { ActionRejected, restoreNotification, type GameNotification } from './messages';
 export class Player implements ZLinkActor {
   constructor(readonly context: ZLinkActorContext) {}
   async deliver(

@@ -19,7 +19,8 @@ import {
   DungeonTravel,
   BorderTick,
   BorderHandler,
-  Delivery
+  FieldDelivery,
+  BorderDelivery
 } from './handlers';
 runHost((_builder, config, mesh) => {
   const objects = mesh.objects().server();
@@ -48,7 +49,8 @@ runHost((_builder, config, mesh) => {
       DungeonTravel,
       BorderTick,
       BorderHandler,
-      Delivery
+      FieldDelivery,
+      BorderDelivery
     ],
     listener: { kind: 'routeMesh', name: Names.mesh },
     ready: (status) => status.placement.isAvailable,

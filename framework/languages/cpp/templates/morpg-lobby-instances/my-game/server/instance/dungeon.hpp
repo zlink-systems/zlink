@@ -24,7 +24,7 @@ class Dungeon final : public fx::spot_t<Player>
     const fx::spot_context_t &context () const noexcept override { return context_; }
     void configure () override
     {
-        context_.handlers ().add_actor_send<&Dungeon::departedPartyView> ();
+        context_.handlers ().add_actor_send<&Dungeon::departed_party_view> ();
         context_.handlers ()
           .add_handler<&Dungeon::prepare> ()
           .add_actor_send<&Dungeon::reconnect> ()
@@ -50,7 +50,7 @@ class Dungeon final : public fx::spot_t<Player>
         co_await actors_.send (actor.context ().actor_id (), view ()).async ();
     }
     fx::task_t<void>
-    departedPartyView (Player &actor, fx::message_context_t &, const PartyView &message)
+    departed_party_view (Player &actor, fx::message_context_t &, const PartyView &message)
     {
         return actor.deliver (std::string (Names::party_prefix) + message.partyId, message);
     }

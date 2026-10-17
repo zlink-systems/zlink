@@ -1,10 +1,9 @@
-import { Names } from '../shared/constants';
-import { PartyView } from '../shared/messages';
 import { Injectable } from '@nestjs/common';
 import { zlinkSpotActorSendHandler, zlinkSpotPacketHandler } from '@zlink-systems/nestjs';
 import type { ZLinkMessageContext, ZLinkSpotRequestHandler } from '@zlink-systems/framework';
-import { PacketNames } from '../shared/constants';
+import { Names, PacketNames } from '../shared/constants';
 import {
+  PartyView,
   DungeonView,
   type JoinLobbyRequest,
   type ViewRequest,
