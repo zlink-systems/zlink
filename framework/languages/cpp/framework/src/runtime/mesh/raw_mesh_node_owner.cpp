@@ -8,6 +8,7 @@
 #include "runtime/messaging/submit_result_mapper.hpp"
 
 #include "runtime/mesh/raw_mesh_node_owner.hpp"
+#include "runtime/mesh/service_channel_membership.hpp"
 #include "runtime/backend/raw_binding_adapter.hpp"
 
 #include <array>
@@ -3344,11 +3345,7 @@ raw_mesh_node_owner_t::pump_one (service_liveness_registry_t::clock_t::time_poin
                 correlation = channel_request.correlation;
                 channel_name = std::move (channel_request.channel_name);
             }
-            const auto channel =
-              std::lower_bound (local.channels.begin (), local.channels.end (), channel_name,
-                                [] (const service_channel_descriptor_t &entry,
-                                    const std::string &name) { return entry.name < name; });
-            if (channel == local.channels.end () || channel->name != channel_name) {
+            if (!find_service_channel (local, channel_name)) {
                 co_return raw_mesh_pump_result_t::protocol_error;
             }
             mailbox_owner =

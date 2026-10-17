@@ -4479,19 +4479,18 @@ spot_handler_registry_t &spot_handler_registry_t::add_handler_erased (spot_handl
                                      "duplicate spot handler registration");
     }
 
-    _state->handlers.push_back (
-      spot_handler_descriptor_t{kind, std::move (packet_name), std::move (topic), handler_type,
-                                payload_type, actor_type, reply_type, std::move (channel_name)});
-    _state->handler_invokers.push_back (std::move (invoker));
-    const auto &descriptor = _state->handlers.back ();
-    if (descriptor.kind == spot_handler_kind_t::subscription) {
+    if (kind == spot_handler_kind_t::subscription) {
         const auto native =
           _state->node ? _state->node->lane.run ([&] { return _state->native_spot.lock (); }).get ()
                        : std::shared_ptr<service::spot_t>{};
         if (native) {
-            native->set_subscription (descriptor.channel_name, descriptor.topic);
+            native->set_subscription (channel_name, topic);
         }
     }
+    _state->handlers.push_back (
+      spot_handler_descriptor_t{kind, std::move (packet_name), std::move (topic), handler_type,
+                                payload_type, actor_type, reply_type, std::move (channel_name)});
+    _state->handler_invokers.push_back (std::move (invoker));
     return *this;
 }
 

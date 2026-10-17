@@ -4,6 +4,7 @@
 #include "runtime/diagnostics/dispatch_options_access.hpp"
 #include "runtime/messaging/envelope_codec.hpp"
 #include "runtime/spots/spot_runtime.hpp"
+#include "runtime/locations/in_memory_store_providers.hpp"
 #include <gtest/gtest.h>
 #include <zlink/framework.hpp>
 
@@ -223,5 +224,116 @@ TEST_F (SpotSubscribe, DuplicateRegistrationIsRejected)
         EXPECT_EQ (fw::framework_error_kind_t::invalid_operation, error.kind ());
     }
     EXPECT_EQ (1u, context.handlers ().descriptors ().size ());
+}
+class membership_entry_t final : public fw::entry_spot_t<fw::actor_t>
+{
+  public:
+    membership_entry_t (fw::entry_spot_context_t context, std::string subscription_channel) :
+        _context (std::move (context)), _channel (std::move (subscription_channel))
+    {
+    }
+    fw::entry_spot_context_t &context () noexcept override { return _context; }
+    const fw::entry_spot_context_t &context () const noexcept override { return _context; }
+    void configure () override
+    {
+        _context.handlers ().add_subscribe<&membership_entry_t::receive> (_channel,
+                                                                          "runtime-topic");
+    }
+    void receive (const event_t &) {}
+    fw::task_t<void> on_actor_joined (fw::actor_t &) override { co_return; }
+    fw::task_t<void> on_leave_actor (fw::actor_t &) override { co_return; }
+
+  private:
+    fw::entry_spot_context_t _context;
+    std::string _channel;
+};
+
+class membership_stop_service_t final : public fw::hosted_service_t
+{
+  public:
+    membership_stop_service_t (fw::app_t &app, bool &started) : _app (app), _started (started) {}
+    fw::task_t<void> start (fw::service_provider_t &) override
+    {
+        _started = true;
+        _app.stop ();
+        co_return;
+    }
+    void stop () noexcept override {}
+
+  private:
+    fw::app_t &_app;
+    bool &_started;
+};
+
+TEST (SpotSubscriptionMembership, EntryActivationRejectsUnjoinedChannelBeforeHostStarts)
+{
+    for (const auto &subscription_channel : {std::string (channel), std::string (other_channel)}) {
+        SCOPED_TRACE (subscription_channel);
+        auto app = fw::app_t::create ();
+        app.logging ().use_file ("spot-membership.flow").set_min_level (fw::log_level_t::debug);
+        app.add_zlink_framework ([&] (fw::zlink_framework_options_t &options) {
+            options.configure_dispatch ().message_flow (fw::message_flow_log_mode_t::detailed);
+            options.add_location_store (
+              std::make_shared<fw::runtime::in_memory_location_store_t> ());
+            auto mesh = options.add_route_mesh ("membership");
+            mesh.set_object_role (fw::object_role_t::server)
+              .set_routing_id (zlink::routing_id_t::from ("membership-node"))
+              .listen ("tcp://127.0.0.1:0")
+              .add_entry_spot<membership_entry_t> ([&] (fw::entry_spot_context_t context) {
+                  return std::make_shared<membership_entry_t> (std::move (context),
+                                                               subscription_channel);
+              });
+            mesh.channel_name (channel).server ().set_weight (0);
+        });
+        bool started = false;
+        app.add_hosted_service (std::make_unique<membership_stop_service_t> (app, started));
+        const auto exit_code = app.run (0, nullptr);
+        if (subscription_channel == channel) {
+            EXPECT_EQ (0, exit_code);
+            EXPECT_TRUE (started);
+        } else {
+            EXPECT_EQ (1, exit_code);
+            EXPECT_FALSE (started);
+        }
+    }
+}
+TEST (SpotSubscriptionMembership, NativeRegistrationRejectsUnjoinedChannel)
+{
+    namespace host = fw::runtime::host;
+    auto native = std::make_shared<host::public_host_runtime_t> (host::host_options_t{
+      .mesh = {.descriptor = {.mesh_name = "membership-native",
+                              .node_routing_id =
+                                zlink::routing_id_t::from ("membership-native").to_bytes (),
+                              .lifecycle_generation = 1,
+                              .descriptor_revision = 1,
+                              .advertised_endpoint = "tcp://127.0.0.1:0",
+                              .channels = {{channel, 0}}},
+               .runtime_failures = std::make_shared<fw::runtime::runtime_failure_collector_t> ()},
+      .object_stable_types = {"framework.spot"}});
+    native->start ();
+    auto spot = native->get_or_create_spot ("subscriber");
+    EXPECT_NO_THROW (spot.set_subscription (channel, "runtime-topic"));
+    std::optional<fw::framework_error_kind_t> rejected;
+    try {
+        spot.set_subscription (other_channel, "runtime-topic");
+    }
+    catch (const fw::framework_exception_t &error) {
+        rejected = error.kind ();
+    }
+    auto node =
+      fw::test::runtime_failure_fixture<detail::spot_node_builder_state_t> ("membership-native");
+    auto state = std::make_shared<detail::spot_context_state_t> ();
+    state->node = node;
+    auto attached = std::make_shared<host::spot_handle_t> (std::move (spot));
+    state->native_spot = attached;
+    auto context = detail::spot_context_access_t::create (state);
+    context.handlers ().add_subscribe<&subscriber_t::receive> (channel, "runtime-topic");
+    const auto descriptors_before = context.handlers ().descriptors ().size ();
+    EXPECT_THROW (
+      context.handlers ().add_subscribe<&subscriber_t::receive> (other_channel, "runtime-topic"),
+      fw::framework_exception_t);
+    EXPECT_EQ (descriptors_before, context.handlers ().descriptors ().size ());
+    native->close ();
+    EXPECT_EQ (fw::framework_error_kind_t::invalid_operation, rejected);
 }
 } // namespace

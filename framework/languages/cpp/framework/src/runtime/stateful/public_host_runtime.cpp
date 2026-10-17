@@ -5,6 +5,7 @@
 #include "runtime/diagnostics/dispatch_error_reporter.hpp"
 
 #include "runtime/stateful/public_host_runtime.hpp"
+#include "runtime/mesh/service_channel_membership.hpp"
 #include "runtime/backend/raw_binding_adapter.hpp"
 #include <zlink/framework/contracts/detail/handler_invocation.hpp>
 #include "runtime/locations/live_location_reader.hpp"
@@ -758,8 +759,18 @@ task_t<void> spot_handle_t::publish_tail_impl (
     co_return;
 }
 
-void spot_handle_t::set_subscription (const std::string &, const std::string &)
+void spot_handle_t::set_subscription (const std::string &channel_name, const std::string &)
 {
+    if (!_host) {
+        throw framework_exception_t (framework_error_kind_t::invalid_operation,
+                                     "logical multicast subscriber is not connected");
+    }
+    const auto descriptor = _host->transport ().topology ().local_descriptor ();
+    if (!mesh::find_service_channel (descriptor, channel_name)) {
+        throw framework_exception_t (framework_error_kind_t::invalid_operation,
+                                     "SPOT does not participate in subscription channel: "
+                                       + channel_name);
+    }
 }
 
 void spot_handle_t::unset_subscription (const std::string &, const std::string &)
@@ -1195,10 +1206,8 @@ void public_host_runtime_t::set_channel_weight (const std::string &channel_name,
         throw std::invalid_argument ("channel weight exceeds 10000");
     }
     auto descriptor = _transport->topology ().local_descriptor ();
-    const auto found =
-      std::find_if (descriptor.channels.begin (), descriptor.channels.end (),
-                    [&] (const auto &channel) { return channel.name == channel_name; });
-    if (found == descriptor.channels.end ()) {
+    const auto found = mesh::find_service_channel (descriptor, channel_name);
+    if (!found) {
         throw std::invalid_argument ("channel is not registered");
     }
     found->weight = weight;
