@@ -571,7 +571,6 @@ class mesh_node_runtime_t
 
   private:
     static std::vector<std::string> channel_names_on_lane (const mesh_node_builder_state_t &state);
-    bool relocation_source_stopped () const;
 
     //  Coroutine: parameters are taken by value so the frame owns them for
     //  the whole suspended seal exchange (callers pass temporaries).
