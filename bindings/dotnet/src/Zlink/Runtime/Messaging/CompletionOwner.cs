@@ -48,55 +48,64 @@ internal sealed class CompletionOwner
             entry = new SendCompletionEntry(this, target, cancellationToken);
             Register(entry, context);
         }
-        var attempt = SubmitSend(target, parts, DontWait, context);
-        if (attempt.Failure is null)
+        try
         {
-            if (attempt.CompletionId != 0)
+            var attempt = SubmitSend(target, parts, DontWait, context);
+            if (attempt.Failure is null)
             {
-                var failure = CreateProtocolFailure();
-                entry?.AbortBeforeNativeWait(failure);
-                throw failure;
+                if (attempt.CompletionId != 0)
+                {
+                    var failure = CreateProtocolFailure();
+                    entry?.AbortBeforeNativeWait(failure);
+                    throw failure;
+                }
+
+                Task admitted = Task.CompletedTask;
+                if (entry is not null)
+                {
+                    entry.CompleteInitialSuccess();
+                    admitted = entry.Task;
+                }
+                return new SendSubmission(SubmitResult.Ok, admitted);
             }
 
-            Task admitted = Task.CompletedTask;
-            if (entry is not null)
+            if (IsWritableWait(attempt))
             {
-                entry.CompleteInitialSuccess();
-                admitted = entry.Task;
+                if (!hasPublicOwner)
+                {
+                    var failure = new ZlinkSubmitException(
+                        SubmitResult.InvalidState);
+                    entry?.AbortBeforeNativeWait(failure);
+                    throw failure;
+                }
+                Message[]? retained = null;
+                try
+                {
+                    // Core retains only the token. Take a shared zlink_msg
+                    // snapshot only after rejection, then consume the caller's
+                    // messages once ownership has moved to this operation.
+                    retained = RequestReplySupport.CloneParts(parts);
+                    RequestReplySupport.ConsumeParts(parts);
+                    entry!.Arm(attempt.CompletionId, retained);
+                }
+                catch (Exception exception)
+                {
+                    entry!.ArmFailed(attempt.CompletionId, retained, exception);
+                    throw;
+                }
+                return new SendSubmission(SubmitResult.Backpressured,
+                    entry.Task);
             }
-            return new SendSubmission(SubmitResult.Ok, admitted);
+
+            entry?.AbortBeforeNativeWait(attempt.Failure);
+            throw attempt.Failure;
         }
-
-        if (IsWritableWait(attempt))
+        catch
         {
-            if (!hasPublicOwner)
-            {
-                var failure = new ZlinkSubmitException(
-                    SubmitResult.InvalidState);
-                entry?.AbortBeforeNativeWait(failure);
-                throw failure;
-            }
-            Message[]? retained = null;
-            try
-            {
-                // Core retains only the token. Take a shared zlink_msg
-                // snapshot only after rejection, then consume the caller's
-                // messages once ownership has moved to this operation.
-                retained = RequestReplySupport.CloneParts(parts);
-                RequestReplySupport.ConsumeParts(parts);
-                entry!.Arm(attempt.CompletionId, retained);
-            }
-            catch (Exception exception)
-            {
-                entry!.ArmFailed(attempt.CompletionId, retained, exception);
-                throw;
-            }
-            return new SendSubmission(SubmitResult.Backpressured,
-                entry.Task);
+            // No submission was returned; its private completion faults have no caller.
+            _ = entry?.Task.Exception;
+            throw;
         }
-
-        entry?.AbortBeforeNativeWait(attempt.Failure);
-        throw attempt.Failure;
     }
 
     internal void Send(RoutingId? target, IReadOnlyList<Message> parts)
@@ -121,45 +130,55 @@ internal sealed class CompletionOwner
 
         var entry = new RequestCompletionEntry(this, target, timeoutMs,
             cancellationToken);
-        Register(entry);
-        var attempt = SubmitRequest(target, parts, timeoutMs, DontWait,
-            entry.Context);
-        if (attempt.Failure is null)
+        try
         {
-            if (attempt.CompletionId == 0)
+            Register(entry);
+            var attempt = SubmitRequest(target, parts, timeoutMs, DontWait,
+                entry.Context);
+            if (attempt.Failure is null)
             {
-                var failure = CreateProtocolFailure();
-                entry.AbortBeforeNativeWait(failure);
-                throw failure;
+                if (attempt.CompletionId == 0)
+                {
+                    var failure = CreateProtocolFailure();
+                    entry.AbortBeforeNativeWait(failure);
+                    throw failure;
+                }
+
+                entry.PublishRequest(attempt.CompletionId);
+                return new RequestSubmission(SubmitResult.Ok,
+                    entry.Admitted, entry.Task);
             }
 
-            entry.PublishRequest(attempt.CompletionId);
-            return new RequestSubmission(SubmitResult.Ok,
-                entry.Admitted, entry.Task);
-        }
+            if (IsWritableWait(attempt))
+            {
+                Message[]? retained = null;
+                try
+                {
+                    // Core retains only the token. Snapshot the request only
+                    // after refusal so the admitted path remains unchanged.
+                    retained = RequestReplySupport.CloneParts(parts);
+                    RequestReplySupport.ConsumeParts(parts);
+                    entry.ArmWritable(attempt.CompletionId, retained);
+                }
+                catch (Exception exception)
+                {
+                    entry.ArmFailed(attempt.CompletionId, retained, exception);
+                    throw;
+                }
+                return new RequestSubmission(SubmitResult.Backpressured,
+                    entry.Admitted, entry.Task);
+            }
 
-        if (IsWritableWait(attempt))
+            entry.AbortBeforeNativeWait(attempt.Failure);
+            throw attempt.Failure;
+        }
+        catch
         {
-            Message[]? retained = null;
-            try
-            {
-                // Core retains only the token. Snapshot the request only
-                // after refusal so the admitted path remains unchanged.
-                retained = RequestReplySupport.CloneParts(parts);
-                RequestReplySupport.ConsumeParts(parts);
-                entry.ArmWritable(attempt.CompletionId, retained);
-            }
-            catch (Exception exception)
-            {
-                entry.ArmFailed(attempt.CompletionId, retained, exception);
-                throw;
-            }
-            return new RequestSubmission(SubmitResult.Backpressured,
-                entry.Admitted, entry.Task);
+            // No submission was returned; its private completion faults have no caller.
+            _ = entry.Admitted.Exception;
+            _ = entry.Task.Exception;
+            throw;
         }
-
-        entry.AbortBeforeNativeWait(attempt.Failure);
-        throw attempt.Failure;
     }
 
     internal IReadOnlyList<Message> Request(RoutingId? target,
@@ -169,23 +188,33 @@ internal sealed class CompletionOwner
         EnsureOpenForSubmit();
         var entry = new RequestCompletionEntry(this, target, timeoutMs,
             CancellationToken.None);
-        Register(entry);
-        var attempt = SubmitRequest(target, parts, timeoutMs, 0,
-            entry.Context);
-        if (attempt.Failure is not null)
+        try
         {
-            entry.AbortBeforeNativeWait(attempt.Failure);
-            throw attempt.Failure;
+            Register(entry);
+            var attempt = SubmitRequest(target, parts, timeoutMs, 0,
+                entry.Context);
+            if (attempt.Failure is not null)
+            {
+                entry.AbortBeforeNativeWait(attempt.Failure);
+                throw attempt.Failure;
+            }
+            if (attempt.CompletionId == 0)
+            {
+                var failure = CreateProtocolFailure();
+                entry.AbortBeforeNativeWait(failure);
+                throw failure;
+            }
+            entry.PublishRequest(attempt.CompletionId);
+            DrainInline(entry);
+            return entry.Task.GetAwaiter().GetResult();
         }
-        if (attempt.CompletionId == 0)
+        catch
         {
-            var failure = CreateProtocolFailure();
-            entry.AbortBeforeNativeWait(failure);
-            throw failure;
+            // No submission was returned; its private completion faults have no caller.
+            _ = entry.Admitted.Exception;
+            _ = entry.Task.Exception;
+            throw;
         }
-        entry.PublishRequest(attempt.CompletionId);
-        DrainInline(entry);
-        return entry.Task.GetAwaiter().GetResult();
     }
 
     internal void Reply(RoutingId target, ReplyToken replyToken,
@@ -631,21 +660,6 @@ internal sealed class CompletionOwner
                 Monitor.PulseAll(this);
                 ReleasePayloadLocked();
                 SetResultLocked();
-            }
-            _cancellationRegistration.Unregister();
-            Owner.Remove(this, Context);
-        }
-
-        internal void CompleteInitialFailure(Exception exception)
-        {
-            lock (this)
-            {
-                if (_state == SendEntryState.Terminal)
-                    return;
-                _state = SendEntryState.Terminal;
-                Monitor.PulseAll(this);
-                ReleasePayloadLocked();
-                SetExceptionLocked(exception);
             }
             _cancellationRegistration.Unregister();
             Owner.Remove(this, Context);
