@@ -7,7 +7,7 @@ import { Dungeon, DungeonRelocation } from './spots';
 import { Reconnect, View, Advance, Prepare, Delivery } from './handlers';
 runHost((_builder, config, mesh) => {
   const objects = mesh.objects().server();
-  objects.addEntrySpot(Entry);
+  objects.addEntrySpot(Entry, Names.actor);
   objects.addActorFactory(Names.actor, PlayerFactory, (f) => f.preserveStateWith(PlayerRelocation));
   objects.addSpotFactory(Names.dungeon, Dungeon, (f) => {
     f.stableTypeLimit(config.dungeonCapacity);

@@ -8,7 +8,7 @@ import { Login, CreateParty, JoinParty } from '../shared/entry-handlers';
 import { Reconnect, View, Ready, EnterDungeon, Travel, Delivery } from './handlers';
 runHost((_builder, _config, mesh) => {
   const objects = mesh.objects().server();
-  objects.addEntrySpot(Entry);
+  objects.addEntrySpot(Entry, Names.actor);
   objects.addActorFactory(Names.actor, PlayerFactory, (f) => f.preserveStateWith(PlayerRelocation));
   objects.addSpotFactory(Names.party, Party, (f) => {
     f.executionMode(ZLinkUserSpotExecutionMode.SpotWide);
