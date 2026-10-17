@@ -695,7 +695,7 @@ int main ()
     const auto source_fence =
       source_finalizer.find ("const auto source =\n      runtime::protocol::actor_route_fence_t{");
     const auto target_fence =
-      source_finalizer.find ("const auto target = runtime::protocol::actor_route_fence_t{");
+      source_finalizer.find ("const auto target = runtime::protocol::relocation_target_fence_t{");
     const auto source_follow_publish =
       source_finalizer.find ("co_await spot.complete_remote_actor_transfer (");
     const auto source_join_completion = source_finalizer.find (

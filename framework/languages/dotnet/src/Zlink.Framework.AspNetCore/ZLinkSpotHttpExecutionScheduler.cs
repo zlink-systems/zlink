@@ -19,7 +19,9 @@ internal sealed class ZLinkSpotHttpExecutionScheduler : IZLinkHttpExecutionSched
         )
         {
             ArgumentNullException.ThrowIfNull(operation);
-            return turn.YieldFrameworkCallAsync(operation, cancellationToken);
+            return ZLinkApplicationExecutionContext
+                .RequireYieldTurn(turn, "HTTP request")
+                .YieldFrameworkCallAsync(operation, cancellationToken);
         }
 
         public void Post(Action callback)

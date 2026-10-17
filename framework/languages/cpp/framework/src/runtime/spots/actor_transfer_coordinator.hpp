@@ -197,12 +197,10 @@ struct actor_transfer_dispatch_state_snapshot_t
 struct actor_transfer_packet_admission_t
 {
     bool matches_message_follow_source = false;
-    bool transfer_in_progress = false;
+    std::optional<bool> queue_submission;
+    std::optional<runtime::protocol::actor_route_fence_t> message_follow_source;
     handoff_append_result_t append_result = handoff_append_result_t::not_moving;
-    // The packet is moved back out when it was not retained, so an ordinary
-    // dispatch that later loses the Actor FIFO admission race against a
-    // relocation barrier can re-admit the very same packet without paying a
-    // second payload/metadata copy on the hot path.
+    // Returned only when neither backlog nor a prepared queue took the packet.
     std::optional<handoff_packet_t> released_packet;
 };
 
@@ -247,9 +245,6 @@ class actor_transfer_coordinator_t
     std::optional<std::string> transfer_id (const std::string &actor_key) const;
     bool matches_source_remote_transfer (const std::string &actor_key,
                                          const std::string &transfer_id) const;
-    bool try_submit_source_leave (const std::string &actor_key, const std::string &transfer_id);
-    bool source_leave_submitted (const std::string &actor_key,
-                                 const std::string &transfer_id) const;
 
     // In-flight handoff (spot-actor spec §10). Packets are preserved in arrival
     // order until the commit path drains them into the commit request.
@@ -258,11 +253,14 @@ class actor_transfer_coordinator_t
     // Projects the fresh Message Follow/transfer state and makes the backlog
     // admission decision in the same coordinator turn. A packet already on a
     // committed source edge bypasses the local moving backlog.
-    actor_transfer_packet_admission_t
-    admit_dispatch_packet (const std::string &actor_key,
-                           const runtime::protocol::actor_route_fence_t *source_fence,
-                           bool targets_current_authority,
-                           handoff_packet_t packet);
+    actor_transfer_packet_admission_t admit_dispatch_packet (
+      const std::string &actor_key,
+      const runtime::protocol::actor_route_fence_t *source_fence,
+      bool targets_current_authority,
+      handoff_packet_t packet,
+      std::function<bool ()> submit = {},
+      const runtime::protocol::actor_route_fence_t *prepared_authority = nullptr,
+      std::uint64_t prepared_generation = 0);
     // Stages one source-retained batch without allowing live target traffic to
     // interleave between its packets. The exact committing transfer owns the
     // append or the whole batch is rejected.
@@ -394,7 +392,6 @@ class actor_transfer_coordinator_t
         std::string transfer_id;
         std::optional<std::chrono::steady_clock::time_point> transfer_started_at;
         std::shared_ptr<task_completion_source_t<void>> source_completion;
-        bool source_leave_submitted = false;
         // reconcile is entered for a genuinely ambiguous outcome (e.g. the
         // FINALIZE/cutover submission itself failed, so the source cannot
         // tell whether the target ever received it) where nothing today
@@ -427,6 +424,10 @@ class actor_transfer_coordinator_t
         message_follow_suppression_key_t suppression_key;
     };
 
+    std::optional<runtime::protocol::actor_route_fence_t>
+    message_follow_source_for_generation_unlocked (const std::string &actor_key,
+                                                   std::uint64_t generation,
+                                                   std::chrono::steady_clock::time_point now) const;
     bool matches_message_follow_source_unlocked (
       const std::string &actor_key,
       const runtime::protocol::actor_route_fence_t &source_fence,

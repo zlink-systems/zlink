@@ -24,6 +24,8 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ForkJoinPool;
+import java.util.concurrent.ForkJoinTask;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
@@ -200,7 +202,8 @@ final class ZLinkServiceOperationRegistryTest {
             var callback =
                     send.thenRun(
                             () -> {
-                                assertSame(dispatcherWorker(), Thread.currentThread());
+                                assertSame(ForkJoinPool.commonPool(), ForkJoinTask.getPool());
+                                assertTrue(ZLinkServiceCompletionDispatcher.isCurrentCompletion());
                                 assertFalse(Thread.holdsLock(gate));
                                 var request = registry.register(Duration.ofSeconds(1));
                                 assertTrue(registry.discard(request.id()));
@@ -261,16 +264,6 @@ final class ZLinkServiceOperationRegistryTest {
                     assertEquals(0, registry.pendingCount());
                 }
             }
-        }
-    }
-
-    private static Thread dispatcherWorker() {
-        try {
-            var worker = ZLinkServiceCompletionDispatcher.class.getDeclaredField("worker");
-            worker.setAccessible(true);
-            return (Thread) worker.get(ZLinkServiceCompletionDispatcher.INSTANCE);
-        } catch (ReflectiveOperationException failure) {
-            throw new AssertionError(failure);
         }
     }
 
@@ -823,19 +816,26 @@ final class ZLinkServiceOperationRegistryTest {
         try (ZLinkServiceOperationRegistry registry =
                 new ZLinkServiceOperationRegistry(scheduler)) {
             var operation = registry.register(Duration.ofSeconds(1));
-            var callbackThread = new java.util.concurrent.CompletableFuture<String>();
-            String callerThread = Thread.currentThread().getName();
+            var callbackThread = new CompletableFuture<Thread>();
+            var completionPool = new AtomicReference<ForkJoinPool>();
+            var completionContext = new AtomicReference<Boolean>();
+            Thread callerThread = Thread.currentThread();
             operation
                     .completion()
                     .whenComplete(
-                            (ignored, failure) ->
-                                    callbackThread.complete(Thread.currentThread().getName()));
+                            (ignored, failure) -> {
+                                completionPool.set(ForkJoinTask.getPool());
+                                completionContext.set(
+                                        ZLinkServiceCompletionDispatcher.isCurrentCompletion());
+                                callbackThread.complete(Thread.currentThread());
+                            });
 
             assertTrue(registry.complete(operation.id(), "reply"));
-            String actualThread = callbackThread.orTimeout(1, TimeUnit.SECONDS).join();
+            Thread actualThread = callbackThread.orTimeout(1, TimeUnit.SECONDS).join();
             assertEquals("reply", operation.completion().join());
             assertNotEquals(callerThread, actualThread);
-            assertEquals("zlink-jvm-service-completion", actualThread);
+            assertSame(ForkJoinPool.commonPool(), completionPool.get());
+            assertTrue(completionContext.get());
         } finally {
             scheduler.shutdownNow();
         }
@@ -904,29 +904,61 @@ final class ZLinkServiceOperationRegistryTest {
     }
 
     @Test
-    void closeDispatchesEveryAcceptedTerminalInRegistrationOrder() throws Exception {
+    void closeDispatchesEveryAcceptedTerminalWithoutWaitingForAnotherCallback() {
         ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
-        ZLinkServiceOperationRegistry registry = new ZLinkServiceOperationRegistry(scheduler);
+        var closeFailure = new IllegalStateException("closed");
+        ZLinkServiceOperationRegistry registry =
+                new ZLinkServiceOperationRegistry(scheduler, closeFailure);
+        var firstEntered = new CompletableFuture<Void>();
+        var releaseFirst = new CompletableFuture<Void>();
         try {
-            List<Integer> observed = new java.util.concurrent.CopyOnWriteArrayList<>();
-            CountDownLatch callbacks = new CountDownLatch(3);
+            List<ZLinkServiceOperationRegistry.Operation<String>> operations = new ArrayList<>();
+            List<CompletableFuture<Void>> callbacks = new ArrayList<>();
+            var delivered = new AtomicInteger();
             for (int index = 0; index < 3; index++) {
-                int expected = index;
-                registry.register(Duration.ofHours(1))
-                        .completion()
-                        .whenComplete(
-                                (ignored, failure) -> {
-                                    observed.add(expected);
-                                    callbacks.countDown();
-                                });
+                boolean first = index == 0;
+                var operation = registry.<String>register(Duration.ofHours(1));
+                operations.add(operation);
+                callbacks.add(
+                        operation.handle(
+                                (value, failure) -> {
+                                    if (first) {
+                                        firstEntered.complete(null);
+                                        releaseFirst.join();
+                                    } else {
+                                        firstEntered.join();
+                                    }
+                                    assertNull(value);
+                                    assertSame(closeFailure, failure);
+                                    delivered.incrementAndGet();
+                                    return null;
+                                }));
             }
 
             registry.close();
 
-            assertTrue(callbacks.await(1, TimeUnit.SECONDS));
-            assertEquals(List.of(0, 1, 2), observed);
+            try {
+                firstEntered.orTimeout(1, TimeUnit.SECONDS).join();
+                CompletableFuture.allOf(
+                                callbacks
+                                        .subList(1, callbacks.size())
+                                        .toArray(CompletableFuture[]::new))
+                        .orTimeout(1, TimeUnit.SECONDS)
+                        .join();
+                assertFalse(callbacks.getFirst().isDone());
+                assertEquals(operations.size() - 1, delivered.get());
+            } finally {
+                releaseFirst.complete(null);
+            }
+            CompletableFuture.allOf(callbacks.toArray(CompletableFuture[]::new)).join();
+            assertEquals(operations.size(), delivered.get());
+            for (var operation : operations) {
+                assertFalse(registry.complete(operation.id(), "late reply"));
+                assertFalse(registry.completeExceptionally(operation.id(), closeFailure));
+            }
             assertEquals(0, registry.pendingCount());
         } finally {
+            releaseFirst.complete(null);
             registry.close();
             scheduler.shutdownNow();
         }
@@ -948,50 +980,54 @@ final class ZLinkServiceOperationRegistryTest {
     }
 
     @Test
-    void concurrentTerminalProducersKeepTheirPublicationOrder() throws Exception {
+    void concurrentTerminalProducersDeliverEachAcceptedResultExactlyOnce() throws Exception {
+        int producerCount = 4;
+        int operationsPerProducer = 64;
         ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
-        var producers = Executors.newFixedThreadPool(4);
+        var producers = Executors.newFixedThreadPool(producerCount);
         try (ZLinkServiceOperationRegistry registry =
                 new ZLinkServiceOperationRegistry(scheduler)) {
             List<List<ZLinkServiceOperationRegistry.Operation<Integer>>> operations =
                     new ArrayList<>();
-            List<List<Integer>> observed = new ArrayList<>();
-            CountDownLatch start = new CountDownLatch(1);
-            CountDownLatch callbacks = new CountDownLatch(256);
-            for (int producer = 0; producer < 4; producer++) {
+            List<CompletableFuture<Void>> callbacks = new ArrayList<>();
+            var start = new CompletableFuture<Void>();
+            var delivered = new AtomicInteger();
+            for (int producer = 0; producer < producerCount; producer++) {
                 List<ZLinkServiceOperationRegistry.Operation<Integer>> pending = new ArrayList<>();
-                List<Integer> values = new java.util.concurrent.CopyOnWriteArrayList<>();
-                observed.add(values);
-                for (int index = 0; index < 64; index++) {
+                for (int index = 0; index < operationsPerProducer; index++) {
+                    int expected = producer * operationsPerProducer + index;
                     var operation = registry.<Integer>register(Duration.ofHours(1));
-                    operation
-                            .completion()
-                            .thenAccept(
+                    callbacks.add(
+                            operation.thenAccept(
                                     value -> {
-                                        values.add(value);
-                                        callbacks.countDown();
-                                    });
+                                        assertEquals(expected, value);
+                                        delivered.incrementAndGet();
+                                    }));
                     pending.add(operation);
                 }
                 operations.add(pending);
             }
             List<java.util.concurrent.Future<?>> submitted = new ArrayList<>();
-            for (var pending : operations) {
+            for (int producer = 0; producer < operations.size(); producer++) {
+                var pending = operations.get(producer);
+                int firstValue = producer * pending.size();
                 submitted.add(
                         producers.submit(
                                 () -> {
-                                    await(start);
+                                    start.join();
                                     for (int index = 0; index < pending.size(); index++) {
-                                        assertTrue(
-                                                registry.complete(pending.get(index).id(), index));
+                                        UUID id = pending.get(index).id();
+                                        assertTrue(registry.complete(id, firstValue + index));
+                                        assertFalse(registry.complete(id, -1));
                                     }
                                 }));
             }
-            start.countDown();
+            start.complete(null);
             for (var submission : submitted) submission.get(5, TimeUnit.SECONDS);
-            assertTrue(callbacks.await(5, TimeUnit.SECONDS));
-            List<Integer> expected = java.util.stream.IntStream.range(0, 64).boxed().toList();
-            for (var values : observed) assertEquals(expected, values);
+            CompletableFuture.allOf(callbacks.toArray(CompletableFuture[]::new))
+                    .orTimeout(5, TimeUnit.SECONDS)
+                    .join();
+            assertEquals(callbacks.size(), delivered.get());
             assertEquals(0, registry.pendingCount());
         } finally {
             producers.shutdownNow();

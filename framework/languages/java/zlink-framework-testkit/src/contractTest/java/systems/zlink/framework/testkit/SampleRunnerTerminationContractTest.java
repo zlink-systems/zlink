@@ -174,8 +174,9 @@ final class SampleRunnerTerminationContractTest {
                                 preservedRoot.toString())
                         .redirectErrorStream(true)
                         .start();
+        process.getOutputStream().close();
         if (!process.waitFor(10, TimeUnit.SECONDS)) {
-            process.destroyForcibly();
+            process.waitFor();
             throw new AssertionError("sample cleanup contract timed out for " + variableName);
         }
         String output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);

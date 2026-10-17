@@ -17,7 +17,7 @@
 #include <zlink/framework/contracts/configuration/module.hpp>
 
 #include <algorithm>
-#include <atomic>
+#include <semaphore>
 #include <chrono>
 #include <cstdlib>
 #include <exception>
@@ -234,7 +234,6 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
               });
         }
 
-        _stop.store (false, std::memory_order_release);
         if (!_loops.empty ())
             detail::channel_runtime_t::from (_bus).mark_auto_connect_active ();
         for (auto &loop : _loops) {
@@ -246,7 +245,12 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
 
     void stop () noexcept override
     {
-        _stop.store (true, std::memory_order_release);
+        // The host cannot restart this service: app_t::run (runtime/host/app.cpp:2962)
+        // returns for Stopped before start_hosted_services. stop_hosted_services joins
+        // here on the host run thread; repeated stop/destruction sees no joinable loops.
+        // Each running loop consumes one stop signal before its thread joins.
+        _stop.release (std::count_if (_loops.begin (), _loops.end (),
+                                      [] (const auto &loop) { return loop.thread.joinable (); }));
         if (_client_server && _runtime_failures->capture ([&] { _client_server->stop (); })) {
             _client_server_started = false;
             _client_server.reset ();
@@ -339,7 +343,9 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
 
     void run_loop (loop_t &loop)
     {
-        while (!_stop.load (std::memory_order_acquire)) {
+        for (auto polling_delay = std::chrono::milliseconds::zero ();
+             !_stop.try_acquire_for (polling_delay);
+             polling_delay = _runtime->options ().polling_interval) {
             try {
                 tick (loop);
             }
@@ -349,7 +355,6 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
             catch (...) {
                 handle_loop_failure (loop, "tick", "unknown exception");
             }
-            std::this_thread::sleep_for (_runtime->options ().polling_interval);
         }
     }
 
@@ -601,7 +606,7 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
     location_repository_t *_store = nullptr;
     live_location_reader_t *_live_store = nullptr;
     store_location_resolvers_t *_route_cache = nullptr;
-    std::atomic_bool _stop{false};
+    std::counting_semaphore<> _stop{0};
     std::vector<loop_t> _loops;
     std::shared_ptr<client_server::client_server_location_runtime_t> _client_server;
     bool _client_server_started = false;

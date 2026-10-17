@@ -1,33 +1,40 @@
 package systems.zlink.framework.runtime.internal.service;
 
-import systems.zlink.framework.runtime.internal.calls.ZLinkBlockingCalls;
+import systems.zlink.framework.runtime.internal.ZLinkCompletionBridge;
 
-import java.util.concurrent.atomic.AtomicReference;
-import java.util.concurrent.locks.LockSupport;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ForkJoinPool;
+import java.util.function.BiConsumer;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
-/**
- * Owns the process-wide execution lane for service operation terminals. A registered work item is
- * also its intrusive queue node, so a terminal winner never needs a second queue allocation.
- */
-final class ZLinkServiceCompletionDispatcher {
+/** Owns independent process-pool turns for Framework completion delivery. */
+public final class ZLinkServiceCompletionDispatcher {
     private static final Logger LOGGER =
             Logger.getLogger(ZLinkServiceCompletionDispatcher.class.getName());
     static final ZLinkServiceCompletionDispatcher INSTANCE = new ZLinkServiceCompletionDispatcher();
+    private static final ThreadLocal<Boolean> CURRENT_COMPLETION = new ThreadLocal<>();
 
-    private final Thread worker;
-    // Producers publish pre-registered nodes; the worker detaches a complete rotation.
-    // Reversing that rotation restores publication order without allocating queue nodes.
-    private final AtomicReference<WorkItem> pending = new AtomicReference<>();
+    private ZLinkServiceCompletionDispatcher() {}
 
-    private ZLinkServiceCompletionDispatcher() {
-        worker =
-                Thread.ofPlatform()
-                        .daemon(true)
-                        .name("zlink-jvm-service-completion")
-                        .unstarted(this::run);
-        worker.start();
+    public static boolean isCurrentCompletion() {
+        return Boolean.TRUE.equals(CURRENT_COMPLETION.get());
+    }
+
+    /** Reuses an existing completion turn; other sources start an independent pool turn. */
+    public static <T> CompletionStage<T> deliver(CompletionStage<T> source) {
+        if (source.toCompletableFuture().isDone()) return source;
+        var caller = new CompletableFuture<T>();
+        deliver(source, caller);
+        return caller;
+    }
+
+    /** Connects a caller view only after its owner has published that shared view. */
+    public static <T> void deliver(CompletionStage<T> source, CompletableFuture<T> caller) {
+        Delivery<T> delivery = new Delivery<>(source, caller);
+        INSTANCE.register(delivery);
+        source.whenComplete(delivery);
     }
 
     void register(WorkItem item) {
@@ -43,13 +50,11 @@ final class ZLinkServiceCompletionDispatcher {
 
     void post(WorkItem item) {
         requireRegistered(item);
-        publish(item, item);
+        ForkJoinPool.commonPool().execute(item);
     }
 
     void postChain(WorkItem first, WorkItem last) {
-        if (first == null) {
-            return;
-        }
+        if (first == null) return;
         WorkItem current = first;
         while (true) {
             requireRegistered(current);
@@ -59,56 +64,19 @@ final class ZLinkServiceCompletionDispatcher {
                 throw new IllegalStateException("completion work chain does not reach its tail");
             }
         }
-        last.dispatchNext = null;
-        publish(reverse(first), first);
-    }
-
-    private void publish(WorkItem first, WorkItem last) {
-        WorkItem observed;
-        do {
-            observed = pending.get();
-            last.dispatchNext = observed;
-        } while (!pending.compareAndSet(observed, first));
-        // One wake per empty-to-nonempty transition. A producer racing with park
-        // leaves its permit with the worker, so detaching a rotation needs no flag.
-        if (observed == null) LockSupport.unpark(worker);
-    }
-
-    private void run() {
-        ZLinkBlockingCalls.markInfrastructureThread();
+        current = first;
         while (true) {
-            WorkItem item = reverse(pending.getAndSet(null));
-            if (item == null) {
-                LockSupport.park(this);
-                continue;
-            }
-            while (item != null) {
-                WorkItem next = item.dispatchNext;
-                item.dispatchNext = null;
-                try {
-                    item.dispatch();
-                } catch (RuntimeException | Error failure) {
-                    LOGGER.log(Level.SEVERE, "service completion dispatch failed", failure);
-                } finally {
-                    releaseRegistration(item);
-                }
-                item = next;
-            }
+            // Posting can run, release and reuse this entry before post returns.
+            WorkItem next = current.dispatchNext;
+            current.dispatchNext = null;
+            boolean end = current == last;
+            post(current);
+            if (end) break;
+            current = next;
         }
     }
 
-    private static WorkItem reverse(WorkItem first) {
-        WorkItem reversed = null;
-        while (first != null) {
-            WorkItem next = first.dispatchNext;
-            first.dispatchNext = reversed;
-            reversed = first;
-            first = next;
-        }
-        return reversed;
-    }
-
-    private void releaseRegistration(WorkItem item) {
+    private static void releaseRegistration(WorkItem item) {
         requireRegistered(item);
         item.registered = false;
         item.released();
@@ -120,7 +88,7 @@ final class ZLinkServiceCompletionDispatcher {
         }
     }
 
-    abstract static class WorkItem {
+    abstract static class WorkItem implements Runnable {
         private WorkItem dispatchNext;
         private volatile boolean registered;
 
@@ -128,8 +96,51 @@ final class ZLinkServiceCompletionDispatcher {
             dispatchNext = value;
         }
 
+        @Override
+        public final void run() {
+            Boolean previous = CURRENT_COMPLETION.get();
+            CURRENT_COMPLETION.set(true);
+            try {
+                try {
+                    dispatch();
+                } catch (RuntimeException | Error failure) {
+                    LOGGER.log(Level.SEVERE, "service completion dispatch failed", failure);
+                } finally {
+                    releaseRegistration(this);
+                }
+            } finally {
+                if (previous == null) CURRENT_COMPLETION.remove();
+                else CURRENT_COMPLETION.set(previous);
+            }
+        }
+
         abstract void dispatch();
 
         void released() {}
+    }
+
+    private static final class Delivery<T> extends WorkItem implements BiConsumer<T, Throwable> {
+        private final CompletableFuture<T> caller;
+        private T value;
+        private Throwable failure;
+
+        private Delivery(CompletionStage<T> source, CompletableFuture<T> caller) {
+            this.caller = caller;
+            ZLinkCompletionBridge.forwardCancellation(caller, source);
+        }
+
+        @Override
+        public void accept(T value, Throwable failure) {
+            this.value = value;
+            this.failure = failure;
+            if (isCurrentCompletion()) run();
+            else INSTANCE.post(this);
+        }
+
+        @Override
+        void dispatch() {
+            if (failure == null) caller.complete(value);
+            else caller.completeExceptionally(failure);
+        }
     }
 }

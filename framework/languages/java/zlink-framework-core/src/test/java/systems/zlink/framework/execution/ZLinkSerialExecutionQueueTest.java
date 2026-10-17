@@ -1028,21 +1028,42 @@ final class ZLinkSerialExecutionQueueTest {
         CompletableFuture<Void> secondRemote = new CompletableFuture<>();
         CompletableFuture<Void> started = new CompletableFuture<>();
         AtomicBoolean currentAfterRelease = new AtomicBoolean(true);
-        AtomicBoolean secondYieldWasManaged = new AtomicBoolean();
+        AtomicInteger secondSubmissions = new AtomicInteger();
+        AtomicReference<Throwable> secondFailure = new AtomicReference<>();
         AtomicBoolean continuationIsCurrent = new AtomicBoolean();
 
         CompletableFuture<Void> dispatch =
                 queue.enqueue(
                                 () -> {
-                                    CompletionStage<Void> firstYield =
-                                            ZLinkSerialExecutionQueue.yieldCurrent(firstRemote);
-                                    currentAfterRelease.set(queue.isCurrent());
-                                    CompletionStage<Void> secondYield =
+                                    try (var scope =
+                                            ZLinkSuspendInvocationContext.enterApplicationExecution(
+                                                    new ZLinkSuspendInvocationContext
+                                                            .ApplicationExecution(
+                                                            "room-1",
+                                                            null,
+                                                            true,
+                                                            true,
+                                                            ignored -> false))) {
+                                        ZLinkSuspendInvocationContext.requireYieldAllowed(
+                                                "first request");
+                                        CompletionStage<Void> firstYield =
+                                                ZLinkSerialExecutionQueue.yieldCurrent(firstRemote);
+                                        currentAfterRelease.set(queue.isCurrent());
+                                        try {
+                                            ZLinkSuspendInvocationContext.requireYieldAllowed(
+                                                    "second request");
+                                            secondSubmissions.incrementAndGet();
                                             ZLinkSerialExecutionQueue.yieldCurrent(secondRemote);
-                                    secondYieldWasManaged.set(secondYield != secondRemote);
-                                    started.complete(null);
-                                    return firstYield.thenRun(
-                                            () -> continuationIsCurrent.set(queue.isCurrent()));
+                                        } catch (
+                                                systems.zlink.framework.errors
+                                                                .ZLinkFrameworkException
+                                                        failure) {
+                                            secondFailure.set(failure);
+                                        }
+                                        started.complete(null);
+                                        return firstYield.thenRun(
+                                                () -> continuationIsCurrent.set(queue.isCurrent()));
+                                    }
                                 },
                                 null)
                         .toCompletableFuture();
@@ -1054,7 +1075,14 @@ final class ZLinkSerialExecutionQueueTest {
         queue.awaitQuiescence().toCompletableFuture().get(3, TimeUnit.SECONDS);
 
         assertFalse(currentAfterRelease.get());
-        assertTrue(secondYieldWasManaged.get());
+        assertEquals(0, secondSubmissions.get());
+        var rejected =
+                assertInstanceOf(
+                        systems.zlink.framework.errors.ZLinkFrameworkException.class,
+                        secondFailure.get());
+        assertEquals(
+                systems.zlink.framework.errors.ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                rejected.kind());
         assertTrue(continuationIsCurrent.get());
     }
 
@@ -1557,7 +1585,8 @@ final class ZLinkSerialExecutionQueueTest {
                                 () -> {
                                     order.add("first-start");
                                     started.complete(null);
-                                    return remote.thenRun(() -> order.add("first-end"));
+                                    return ZLinkSerialExecutionQueue.yieldCurrent(remote)
+                                            .thenRun(() -> order.add("first-end"));
                                 })
                         .toCompletableFuture();
         started.get(3, TimeUnit.SECONDS);
@@ -1655,7 +1684,7 @@ final class ZLinkSerialExecutionQueueTest {
                 queue.enqueueLifecycleBarrier(
                                 () -> {
                                     order.add("lifecycle");
-                                    return remote;
+                                    return ZLinkSerialExecutionQueue.yieldCurrent(remote);
                                 })
                         .toCompletableFuture();
         close.whenComplete((ignored, failure) -> order.add("continuation"));
@@ -1701,7 +1730,7 @@ final class ZLinkSerialExecutionQueueTest {
                 queue.enqueueLifecycleBarrier(
                                 () -> {
                                     order.add("lifecycle-start");
-                                    return lifecycleRemote;
+                                    return ZLinkSerialExecutionQueue.yieldCurrent(lifecycleRemote);
                                 })
                         .toCompletableFuture();
         lifecycle.whenComplete((ignored, failure) -> order.add("lifecycle-resume"));
@@ -1752,9 +1781,10 @@ final class ZLinkSerialExecutionQueueTest {
         CompletableFuture<Void> close =
                 queue.enqueueLifecycleBarrier(
                                 () ->
-                                        queue.awaitQuiescence(
-                                                        ZLinkSerialExecutionQueue.Quiescence
-                                                                .APPLICATION)
+                                        ZLinkSerialExecutionQueue.yieldCurrent(
+                                                        queue.awaitQuiescence(
+                                                                ZLinkSerialExecutionQueue.Quiescence
+                                                                        .APPLICATION))
                                                 .thenRun(() -> order.add("close")))
                         .toCompletableFuture();
         CompletableFuture<Void> laterLifecycle =
