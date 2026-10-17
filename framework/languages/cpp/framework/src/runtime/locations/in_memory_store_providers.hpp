@@ -3,6 +3,7 @@
 
 #include "runtime/execution/state_lane.hpp"
 #include "runtime/locations/location_repository.hpp"
+#include "runtime/locations/location_store_limits.hpp"
 #include "../../../../../../runtime/protocol/generated/cpp/service_wire_constants.hpp"
 
 #include <zlink/framework/contracts/locations/stores.hpp>
@@ -24,13 +25,6 @@
 namespace zlink::framework::runtime
 {
 
-namespace location_store_limits
-{
-inline constexpr std::size_t key_bytes = 1024;
-inline constexpr std::size_t write_keys = 2048;
-inline constexpr std::size_t value_bytes = 1024u * 1024u;
-inline constexpr std::size_t write_bytes = 4u * 1024u * 1024u;
-}
 
 class in_memory_location_store_t final : public location_store_t
 {

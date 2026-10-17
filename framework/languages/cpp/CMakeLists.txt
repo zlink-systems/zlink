@@ -1828,6 +1828,11 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     tests/Zlink.Framework.UnitTests/test_cpp_framework_async_task.cpp
     "framework-unit;framework-regression;async")
   add_zlink_framework_test(
+    test_cpp_framework_yield_admission
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_yield_admission.cpp
+    "framework-unit;framework-contract;framework-regression;execution;yield"
+    unit)
+  add_zlink_framework_test(
     test_cpp_framework_executor_owner
     tests/Zlink.Framework.UnitTests/test_cpp_framework_executor_owner.cpp
     "framework-unit;framework-regression;framework-host;async")

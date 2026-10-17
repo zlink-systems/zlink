@@ -382,22 +382,25 @@ class server_request_builder_t : public request_builder_t
     template <typename T>
     zlink::framework::task_t<http_response_t<T>> schedule (bool release_turn) const
     {
-        return turn_await (request_builder_t::async<T> (), release_turn);
+        return turn_await<http_response_t<T>> ([this] { return request_builder_t::async<T> (); },
+                                               release_turn);
     }
 
     zlink::framework::task_t<raw_http_response_t> schedule_raw (bool release_turn) const
     {
-        return turn_await (request_builder_t::async_raw (), release_turn);
+        return turn_await<raw_http_response_t> ([this] { return request_builder_t::async_raw (); },
+                                                release_turn);
     }
 
-    template <typename T>
-    zlink::framework::task_t<T> turn_await (zlink::framework::task_t<T> task,
-                                            bool release_turn) const
+    template <typename T, typename TStart>
+    zlink::framework::task_t<T> turn_await (TStart &&start, bool release_turn) const
     {
-        task = zlink::framework::detail::with_task_resume_scheduler (
-          std::move (task), _execution_turn->prepare (release_turn));
-        return release_turn ? zlink::framework::detail::release_turn_on_suspend (std::move (task))
-                            : std::move (task);
+        const auto submit = [&] {
+            auto task = start ();
+            return zlink::framework::detail::with_task_resume_scheduler (
+              std::move (task), _execution_turn->prepare (release_turn));
+        };
+        return release_turn ? zlink::framework::detail::yield_call<T> (submit) : submit ();
     }
 
     std::shared_ptr<execution_turn_t> _execution_turn;
