@@ -130,13 +130,14 @@ class serial_deferred_barrier_t final
       std::function<task_t<std::vector<std::shared_ptr<serial_execution_queue_t>>> ()> collect,
       std::function<void (const result_t<void> &)> completion)
     {
-        auto acquisition =
-          std::make_shared<task_t<void>> (acquire_participants (std::move (collect)));
+        const auto turn = detail::capture_current_serial_turn ();
+        auto acquisition = std::make_shared<task_t<void>> (detail::with_task_resume_scheduler (
+          acquire_participants (std::move (collect)), turn->resume_scheduler ()));
         {
             std::lock_guard lock (_mutex);
             _acquisition = acquisition;
         }
-        detail::observe_task_terminal (
+        detail::observe_task_completion (
           *acquisition, [self = shared_from_this (), acquisition,
                          completion = std::move (completion)] (const result_t<void> &result) {
               if (!result)
