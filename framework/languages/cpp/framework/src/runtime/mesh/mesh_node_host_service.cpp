@@ -2322,7 +2322,7 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                                     original_command->application_payload.packet_name,
                                     "application/octet-stream", reply.value ().to_bytes ()};
                                   if (detail::message_flow_tracer_t (_dispatch_options)
-                                        .capture_enabled ()) {
+                                        .flow_tracing ()) {
                                       response->flow_id =
                                         original_command->application_payload.flow_id;
                                       response->flow_origin =
@@ -2704,29 +2704,20 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                         observe_management ();
                 };
                 while (!_stop.load (std::memory_order_acquire)) {
-                    constexpr std::size_t max_application_permits_per_turn = 64;
-                    std::array<application_job_queue_t::permit_t,
-                               max_application_permits_per_turn - 1>
-                      application_permit_budget;
-                    std::size_t application_permit_budget_size = 0;
-                    supply.ensure_waiter ();
-                    application_permit = supply.take ();
-                    while (application_permit
-                           && application_permit_budget_size < application_permit_budget.size ()) {
-                        auto extra = _application_jobs->try_reserve_supply ();
-                        if (!extra)
-                            break;
-                        application_permit_budget[application_permit_budget_size++] =
-                          std::move (*extra);
-                    }
+                    supply.ensure_waiter (dispatch_limits::receive_batch_messages);
+                    auto budget = supply.take_budget ();
+                    application_permit =
+                      budget ? std::optional<application_job_queue_t::permit_t> (budget->take ())
+                             : std::nullopt;
+                    auto application_permit_budget =
+                      budget ? std::move (*budget) : application_job_queue_t::permit_batch_t{};
                     const auto next_application_receive = [&] {
                         application_permit.reset ();
                         if (_stop.load (std::memory_order_acquire))
                             return false;
-                        if (application_permit_budget_size == 0)
+                        if (!application_permit_budget)
                             return false;
-                        application_permit.emplace (
-                          std::move (application_permit_budget[--application_permit_budget_size]));
+                        application_permit.emplace (application_permit_budget.take ());
                         return static_cast<bool> (application_permit);
                     };
                     const bool accept_application_receive = static_cast<bool> (application_permit);
@@ -2798,7 +2789,7 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                                           const auto header = decode_mesh_record_header (
                                             record, parts,
                                             detail::message_flow_tracer_t (_dispatch_options)
-                                              .capture_enabled (),
+                                              .flow_tracing (),
                                             _dispatch_options);
                                           if (!header) {
                                               return;
@@ -2849,7 +2840,7 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                                   auto decoded_header = decode_mesh_record_header (
                                     record, parts,
                                     detail::message_flow_tracer_t (_dispatch_options)
-                                      .capture_enabled (),
+                                      .flow_tracing (),
                                     _dispatch_options);
                                   if (!decoded_header)
                                       return;
@@ -2872,10 +2863,7 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                     mailbox.end_application_receive_turn ();
                     receive_turn.dismiss ();
                     application_permit.reset ();
-                    while (application_permit_budget_size != 0) {
-                        application_permit_budget[--application_permit_budget_size]
-                          .release_without_handler ();
-                    }
+                    application_permit_budget.release_without_handler ();
                     if (count != 0 && pending_management) {
                         if (pending_management->armed)
                             pending_management->armed->store (false, std::memory_order_release);
@@ -3181,7 +3169,7 @@ void mesh_node_host_service_t::dispatch_application (
         detail::spot_node_runtime_t application_spot_runtime (registration->spot_state);
         bool terminal_deferred = false;
         auto decoded_header = decode_mesh_record_header (
-          record, parts, detail::message_flow_tracer_t (dispatch_options).capture_enabled (),
+          record, parts, detail::message_flow_tracer_t (dispatch_options).flow_tracing (),
           dispatch_options);
         if (!decoded_header) {
             deferred_terminal->settle ();

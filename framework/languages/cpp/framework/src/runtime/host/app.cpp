@@ -2148,7 +2148,8 @@ void app_t::_apply_zlink_framework ()
                   std::chrono::milliseconds timeout)
             -> request_task_t<result_t<runtime::messaging::message_parts_t>> {
               detail::host::pending_operation_t operation;
-              auto submission = mesh->request_to_node (target, parts.items (), operation, timeout);
+              auto submission =
+                mesh->request_to_node (target, std::move (parts).take_items (), operation, timeout);
               auto admitted = co_await detail::request_admission_source_t{};
               mesh->observe_request_failure (operation, admitted, "MeshNode request");
               const auto submitted = co_await submission;
@@ -2413,7 +2414,7 @@ void app_t::_apply_zlink_framework ()
                       ? native.transport ().register_local_operation (
                           deadline,
                           [completion] (runtime::foundation::operation_terminal_t terminal,
-                                        const std::vector<std::uint8_t> &) {
+                                        const zlink::message_t &) {
                               completion->complete (result_t<reply_t>::failure (
                                 terminal == runtime::foundation::operation_terminal_t::timed_out
                                   ? framework_error_kind_t::deadline_exceeded

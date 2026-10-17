@@ -64,8 +64,7 @@ TEST (LaneRoundtrip, RequestToTargetUsesOneLaneTurnAndNoExecutorHop)
 
 TEST (LaneRoundtrip, RequestToChannelUsesOneLaneTurnAndNoExecutorHop)
 {
-    // request_to_channel delegates to request_to_target before the shared
-    // request_with_header owner turn.
+    // request_to_channel enters the shared request_with_header owner turn.
     expect_one_caller_owned_turn ();
 }
 
