@@ -79,29 +79,26 @@ final class DefaultZLinkStreamSequenceCall implements ZLinkStreamSequenceCall {
                     "waitForSequence requires at least one expectation");
         }
         if (connector instanceof DefaultZLinkStreamConnector concrete) {
-            CompletableFuture<List<ZLinkStreamMessage<ZLinkStreamEncodedPayload>>> result =
-                    new CompletableFuture<>();
             List<ZLinkStreamMessage<ZLinkStreamEncodedPayload>> messages = new ArrayList<>();
             Object sequenceLock = new Object();
             AtomicReference<CompletableFuture<ZLinkStreamMessage<ZLinkStreamEncodedPayload>>>
                     currentWaiter = new AtomicReference<>();
-            result.whenComplete(
-                    (ignored, error) -> {
-                        if (!result.isCancelled()) {
-                            return;
-                        }
-                        CompletableFuture<ZLinkStreamMessage<ZLinkStreamEncodedPayload>> waiter;
-                        List<ZLinkStreamMessage<ZLinkStreamEncodedPayload>> abandoned;
-                        synchronized (sequenceLock) {
-                            waiter = currentWaiter.getAndSet(null);
-                            abandoned = List.copyOf(messages);
-                            messages.clear();
-                        }
-                        closeMessages(abandoned);
-                        if (waiter != null) {
-                            waiter.cancel(false);
-                        }
-                    });
+            CompletableFuture<List<ZLinkStreamMessage<ZLinkStreamEncodedPayload>>> result =
+                    ZLinkStreamWaitFailure.withCancellation(
+                            () -> {
+                                CompletableFuture<ZLinkStreamMessage<ZLinkStreamEncodedPayload>>
+                                        waiter;
+                                List<ZLinkStreamMessage<ZLinkStreamEncodedPayload>> abandoned;
+                                synchronized (sequenceLock) {
+                                    waiter = currentWaiter.getAndSet(null);
+                                    abandoned = List.copyOf(messages);
+                                    messages.clear();
+                                }
+                                closeMessages(abandoned);
+                                if (waiter != null) {
+                                    waiter.cancel(false);
+                                }
+                            });
             long deadline = System.nanoTime() + timeout.toNanos();
             awaitNext(concrete, result, messages, deadline, 0, sequenceLock, currentWaiter);
             return result;
@@ -320,7 +317,9 @@ final class DefaultZLinkStreamSequenceCall implements ZLinkStreamSequenceCall {
                     "typed stream payload API requires ZLinkStreamConnectorOptions.typedCodec");
         }
         CompletionStage<List<ZLinkStreamMessage<ZLinkStreamEncodedPayload>>> source = submit();
-        CompletableFuture<List<ZLinkStreamMessage<TPayload>>> result = new CompletableFuture<>();
+        CompletableFuture<List<ZLinkStreamMessage<TPayload>>> result =
+                ZLinkStreamWaitFailure.withCancellation(
+                        () -> source.toCompletableFuture().cancel(false));
         source.whenComplete(
                 (messages, error) -> {
                     if (error != null) {
@@ -337,12 +336,6 @@ final class DefaultZLinkStreamSequenceCall implements ZLinkStreamSequenceCall {
                         result.completeExceptionally(failure);
                     } finally {
                         messages.forEach(message -> message.payload().payload().close());
-                    }
-                });
-        result.whenComplete(
-                (ignored, error) -> {
-                    if (result.isCancelled()) {
-                        source.toCompletableFuture().cancel(false);
                     }
                 });
         return result;

@@ -155,7 +155,25 @@ enum class relocation_authority_t
     unsettled,
     target_committed,
     source_preserved,
-    source_lease_expired
+    source_lease_expired,
+    data_lost
+};
+
+struct relocation_object_key_less_t
+{
+    using is_transparent = void;
+    template <class Left, class Right> bool operator() (const Left &left, const Right &right) const
+    {
+        return std::tie (left.first, left.second) < std::tie (right.first, right.second);
+    }
+};
+
+struct source_relocation_settlement_t
+{
+    relocation_authority_t outcome = relocation_authority_t::unsettled;
+    // Only current first-target tenures can receive Message Follow.
+    std::map<std::pair<object_kind_t, std::string>, std::uint64_t, relocation_object_key_less_t>
+      follow_generations;
 };
 
 /* The primary participant whose authority row carries the unit's fence: the
@@ -176,9 +194,8 @@ class authority_relocation_port_t
 {
   public:
     virtual ~authority_relocation_port_t () = default;
-    /* Reads the unit's primary row: target owner -> target_committed; a
-     * StoreVersion other than the expected one -> source_preserved (the
-     * target CAS can no longer commit); otherwise unsettled. */
+    /* Target-side current-CAS observation. Source settlement below also
+     * recognizes later owner moves, which cannot authorize target dispatch. */
     virtual relocation_authority_t observe_relocation (const relocation_authority_fence_t &fence)
     {
         const auto current = read (fence.kind, fence.key);
@@ -187,12 +204,12 @@ class authority_relocation_port_t
                  ? relocation_authority_t::target_committed
                  : relocation_authority_t::unsettled;
     }
-    /* The source Preserve fence (01 §6.1): an expected-StoreVersion CAS that
-     * keeps the source owner and requires its live owner lease. */
-    virtual relocation_authority_t preserve_relocation (const relocation_authority_fence_t &fence)
-    {
-        return observe_relocation (fence);
-    }
+    /* Source-side historical commit and current first-target Follow decision
+     * (Location runtime §10), shared by observation and Preserve conflicts. */
+    virtual source_relocation_settlement_t
+    settle_source_relocation (const relocation_authority_fence_t &fence,
+                              const std::vector<object_ref_t> &participants,
+                              bool preserve) = 0;
     /* True/false when the Store confirmed the lease state; nullopt when the
      * read is indeterminate. */
     virtual std::optional<bool> owner_lease_live (const location_owner_token_t &)
@@ -337,7 +354,9 @@ struct eligible_relocation_unit_t
         std::function<task_t<bool> (const std::vector<protocol::relocation_data_t> &,
                                     const relocation_ingress_batch_t &)>
           send_relocation_data;
-        std::function<void (const object_ref_t &, const turn_record_t &)> send_application;
+        std::function<void (
+          const object_ref_t &, const turn_record_t &, std::optional<std::uint64_t>)>
+          send_application;
         std::function<task_t<bool> (const protocol::relocation_cutover_t &)> send_cutover;
         /* The unit Restore absolute deadline, owned by the source: from it the
          * source settles authority with its Preserve fence (01 §10). */
@@ -466,6 +485,7 @@ struct relocation_result_t
     /* S0 (source admission seal) to S1 (cutover submit terminal), on the
      * source clock. Zero when the unit never reached the seal. */
     std::chrono::steady_clock::duration source_stall{};
+    source_relocation_settlement_t settlement;
 };
 
 struct aggregate_relocation_result_t
@@ -475,6 +495,7 @@ struct aggregate_relocation_result_t
     std::vector<authority_relocation_reference_t> authority;
     std::vector<protocol::relocation_data_t> replay_records;
     std::optional<target_only_cas_t> target_handoff;
+    source_relocation_settlement_t settlement;
 };
 
 class raw_relocation_replay_coordinator_t;
@@ -613,13 +634,13 @@ class maintenance_runtime_t
     std::uint64_t effective_in_flight_budget () const noexcept;
     task_t<void> acquire_transfer_budget (std::uint64_t bytes);
     void release_transfer_budget (std::uint64_t bytes) noexcept;
-    task_t<relocation_authority_t>
+    task_t<source_relocation_settlement_t>
     settle_relocation (std::shared_ptr<relocation_terminal_state_t> state,
                        std::vector<object_ref_t> participants);
     std::pair<relocation_terminal_t, relocation_reason_t>
     apply_relocation_settlement (const std::shared_ptr<relocation_terminal_state_t> &state,
                                  const std::vector<object_ref_t> &participants,
-                                 relocation_authority_t settled);
+                                 const source_relocation_settlement_t &settled);
     void retain_message_follow (std::shared_ptr<relocation_terminal_state_t> state);
     /* SafeToShutdown must observe a relocation unit as pending from the
      * moment it is sealed (registered), not only once it reaches S1

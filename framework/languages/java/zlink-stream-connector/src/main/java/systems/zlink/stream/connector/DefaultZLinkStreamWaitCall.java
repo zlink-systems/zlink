@@ -105,7 +105,9 @@ final class DefaultZLinkStreamWaitCall implements ZLinkStreamWaitCall {
                     "typed stream payload API requires ZLinkStreamConnectorOptions.typedCodec");
         }
         CompletionStage<ZLinkStreamMessage<ZLinkStreamEncodedPayload>> source = submit();
-        CompletableFuture<ZLinkStreamMessage<TPayload>> result = new CompletableFuture<>();
+        CompletableFuture<ZLinkStreamMessage<TPayload>> result =
+                ZLinkStreamWaitFailure.withCancellation(
+                        () -> source.toCompletableFuture().cancel(false));
         source.whenComplete(
                 (message, error) -> {
                     if (error != null) {
@@ -118,12 +120,6 @@ final class DefaultZLinkStreamWaitCall implements ZLinkStreamWaitCall {
                         result.completeExceptionally(failure);
                     } finally {
                         ZLinkStreamCleanup.closeMessage(message);
-                    }
-                });
-        result.whenComplete(
-                (ignored, error) -> {
-                    if (result.isCancelled()) {
-                        source.toCompletableFuture().cancel(false);
                     }
                 });
         return result;

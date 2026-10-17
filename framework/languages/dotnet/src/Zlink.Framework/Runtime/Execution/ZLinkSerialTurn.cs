@@ -24,6 +24,7 @@ internal sealed class ZLinkSerialTurn
     );
 
     private int _suspendSignaled;
+    private int _yieldUsed;
 
     public ZLinkSerialTurn(
         Func<
@@ -59,6 +60,7 @@ internal sealed class ZLinkSerialTurn
 
     public void ResetSuspension()
     {
+        Volatile.Write(ref _yieldUsed, 0);
         Volatile.Write(
             ref _suspended,
             new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)
@@ -88,6 +90,23 @@ internal sealed class ZLinkSerialTurn
         var previous = CurrentTurn.Value;
         CurrentTurn.Value = null;
         return new Scope(previous);
+    }
+
+    internal ZLinkSerialTurn AdmitYield(ZLinkSerialTurn? capturedTurn, string operation)
+    {
+        if (
+            ZLinkApplicationExecutionContext.Current is not { YieldAllowed: true }
+            || !ReferenceEquals(Current, this)
+            || !ReferenceEquals(capturedTurn, this)
+            || Volatile.Read(ref _suspendSignaled) != 0
+            || Item.Completion.IsCompleted
+            || Interlocked.CompareExchange(ref _yieldUsed, 1, 0) != 0
+        )
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.InvalidOperation,
+                $"{operation} Yield requires the current SpotWide application turn and may be used only once per turn."
+            );
+        return this;
     }
 
     public async ValueTask<T> YieldFrameworkCallAsync<T>(

@@ -757,7 +757,7 @@ class DefaultZLinkActorRequestCall implements ZLinkActorRequestCall {
     this.rejectSelfActorRequest();
     const turn = requireZLinkYieldTurn(this.turn);
     const pending = this.execute<TReply>('yield', signal);
-    return turn.yieldPromise(pending);
+    return turn.yieldFrameworkPromise(pending);
   }
 
   private execute<TReply>(

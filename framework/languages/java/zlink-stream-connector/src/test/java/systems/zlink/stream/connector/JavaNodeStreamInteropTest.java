@@ -74,10 +74,10 @@ final class JavaNodeStreamInteropTest {
                                 HexFormat.of().formatHex(requestFrame))
                         .redirectErrorStream(true)
                         .start();
+        process.getOutputStream().close();
         boolean exited = process.waitFor(Duration.ofSeconds(10).toMillis(), TimeUnit.MILLISECONDS);
         if (!exited) {
-            process.destroyForcibly();
-            process.waitFor(1, TimeUnit.SECONDS);
+            process.waitFor();
             throw new AssertionError("node interop process did not exit within 10s");
         }
         String output =
