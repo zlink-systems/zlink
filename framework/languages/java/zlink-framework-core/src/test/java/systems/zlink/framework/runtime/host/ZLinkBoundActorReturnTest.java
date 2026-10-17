@@ -472,7 +472,10 @@ final class ZLinkBoundActorReturnTest {
                             node.actorNodeGeneration(actorRef),
                             oldAuthority + 1,
                             ownerLease);
-            runtime.stageRelocationMessageFollowAsync(source, target).toCompletableFuture().join();
+            runtime.stageRelocationMessageFollowAsync(
+                            source, targetRef, CompletableFuture.completedFuture(target))
+                    .toCompletableFuture()
+                    .join();
             var handoffField = runtime.getClass().getDeclaredField("handoff");
             handoffField.setAccessible(true);
             var handoff = handoffField.get(runtime);

@@ -1532,7 +1532,8 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                                                 relocation.setAccessible(true);
                                                 assertNull(
                                                         relocation.get(sourceQueue),
-                                                        "source queue must leave its relocation cut before abort");
+                                                        "source queue must leave its relocation cut"
+                                                                + " before abort");
                                                 EVENTS.add("source.queue.restored");
                                                 EVENTS.add("command44.abort");
                                                 yield CompletableFuture.completedFuture(null);
@@ -1612,6 +1613,19 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
             this.actorRuntime = actorRuntime;
             this.adapters = adapters;
             this.spots = spots;
+        }
+
+        @Override
+        public CompletionStage<Void> enqueueIngress(
+                ZLinkStandaloneActorRelocationStagingOwner.Request request,
+                byte[] acceptedJournalRecord,
+                java.util.function.Supplier<CompletionStage<Void>> turn) {
+            return spots.enqueueActorDispatch(
+                    request.actorId(),
+                    () -> acceptedJournalRecord,
+                    acceptedJournalRecord.length,
+                    turn,
+                    () -> {});
         }
 
         @Override

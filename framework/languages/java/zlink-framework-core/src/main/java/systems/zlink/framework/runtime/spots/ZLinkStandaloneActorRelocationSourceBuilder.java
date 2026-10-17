@@ -1061,23 +1061,19 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
             return owned.snapshot().authorityOwnerGeneration();
         }
 
-        void acceptTargetAuthorityOwnerGeneration(long targetAuthorityOwnerGeneration) {
-            inStateLane(
-                    () -> {
-                        if (!committed
-                                || targetAuthorityOwnerGeneration
-                                        <= sourceAuthorityOwnerGeneration()) {
-                            throw new IllegalStateException(
-                                    "Actor relocation target owner generation is invalid");
-                        }
-                        actors.refreshRelocationMessageFollow(
-                                sourceRoute(), targetRoute(targetAuthorityOwnerGeneration));
-                        return null;
-                    });
+        private boolean isTargetOwner(ZLinkAuthoritySnapshot snapshot) {
+            return snapshot.authorityOwnerGeneration() > sourceAuthorityOwnerGeneration()
+                    && snapshot.allocation()
+                            .descriptor()
+                            .equals(new ZLinkMeshNodeDescriptorKey(target.meshName(), target.rid()))
+                    && snapshot.allocation().descriptorLifecycleGeneration()
+                            == target.lifecycleGeneration();
         }
 
         CompletionStage<Void> relayCapturedIngress(
-                ZLinkRelocationTransitionClient client, Duration timeout) {
+                ZLinkRelocationTransitionClient client,
+                Duration timeout,
+                CompletionStage<ZLinkRelocationTransitionClient.AuthoritySettlement> settlement) {
             Objects.requireNonNull(client, "client");
             Objects.requireNonNull(timeout, "timeout");
             try {
@@ -1107,7 +1103,10 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                                                 .thenCompose(
                                                         retained ->
                                                                 relayRetained(
-                                                                        retained, client, timeout))
+                                                                        retained,
+                                                                        client,
+                                                                        timeout,
+                                                                        settlement))
                                                 .whenComplete(
                                                         (ignored, failure) -> {
                                                             if (failure == null) {
@@ -1149,7 +1148,8 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                                 .Commit
                         retained,
                 ZLinkRelocationTransitionClient client,
-                Duration timeout) {
+                Duration timeout,
+                CompletionStage<ZLinkRelocationTransitionClient.AuthoritySettlement> settlement) {
             return stateLane
                     .runNowOrQueue(
                             () -> {
@@ -1161,7 +1161,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                     .thenCompose(ignored -> finishCapture(retained))
                     .thenCompose(
                             relayed ->
-                                    installExpectedRelocationForward()
+                                    installRelocationForward(settlement)
                                             .thenApply(ignored -> relayed))
                     .thenCompose(
                             relayed ->
@@ -1249,10 +1249,38 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
             return result;
         }
 
-        private CompletionStage<Void> installExpectedRelocationForward() {
-            long targetOwnerGeneration = owned.snapshot().authorityOwnerGeneration();
+        private CompletionStage<Void> installRelocationForward(
+                CompletionStage<ZLinkRelocationTransitionClient.AuthoritySettlement> settlement) {
+            var targetFence =
+                    settlement.thenApply(
+                            result -> {
+                                if (result.outcome()
+                                        != ZLinkRelocationTransitionClient.Settlement
+                                                .TARGET_COMMITTED) {
+                                    throw new IllegalStateException(
+                                            "Actor relocation target did not commit");
+                                }
+                                var snapshot =
+                                        Objects.requireNonNull(
+                                                result.target(), "committed target authority");
+                                if (snapshot.objectGeneration()
+                                                != owned.snapshot().objectGeneration()
+                                        || !isTargetOwner(snapshot)
+                                        || snapshot.ownerLeaseGeneration()
+                                                != stageRequest.targetOwnerLeaseGeneration()) {
+                                    throw new IllegalStateException(
+                                            "committed Actor relocation target fence differs");
+                                }
+                                return targetRoute(snapshot.authorityOwnerGeneration());
+                            });
             return actors.stageRelocationMessageFollowAsync(
-                            sourceRoute(), targetRoute(targetOwnerGeneration))
+                            sourceRoute(),
+                            new systems.zlink.framework.runtime.internal.backend
+                                    .ZLinkBackendActorRef(
+                                    stageRequest.targetNodeRid(),
+                                    owned.actorId(),
+                                    owned.snapshot().objectGeneration()),
+                            targetFence)
                     .thenCompose(ignored -> bindCommittedReplies());
         }
 

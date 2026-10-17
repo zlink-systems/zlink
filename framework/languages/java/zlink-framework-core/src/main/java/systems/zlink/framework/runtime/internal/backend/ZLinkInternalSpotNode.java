@@ -497,6 +497,14 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
 
     @FunctionalInterface
     interface MessageFollowRelayHandler {
+        /**
+         * An authoritative absence skips local relay setup. Owners with no concurrent existence
+         * read retain the full handler path; true still requires exact admission in handle.
+         */
+        default boolean hasSource(String actorId) {
+            return true;
+        }
+
         boolean handle(
                 RoutingId sourceNodeRid,
                 long sourceNodeGeneration,

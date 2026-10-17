@@ -117,7 +117,8 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
         return ZLinkRelocationHandOff.run(
                         lane.client(),
                         prepared.stageRequest(),
-                        () -> prepared.relayCapturedIngress(lane.client(), timeout),
+                        settlement ->
+                                prepared.relayCapturedIngress(lane.client(), timeout, settlement),
                         timeout,
                         restoreDeadline)
                 .handle(
@@ -221,7 +222,7 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
                 () -> {
                     sources.remove(attempt.goal().sourceActor().actorId(), attempt);
                     attempt.committed()
-                            .thenCompose(leave -> notifySourceLeft(attempt, leave, () -> {}))
+                            .thenCompose(leave -> notifySourceLeft(attempt, leave))
                             .exceptionally(
                                     failure -> {
                                         LOGGER.log(
@@ -642,33 +643,20 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
                         <= attempt.prepared().sourceAuthorityOwnerGeneration()) {
             return CompletableFuture.completedFuture(null);
         }
-        return attempt.committed()
-                .thenCompose(
-                        leave ->
-                                notifySourceLeft(
-                                        attempt,
-                                        leave,
-                                        () ->
-                                                attempt.prepared()
-                                                        .acceptTargetAuthorityOwnerGeneration(
-                                                                left
-                                                                        .currentAuthorityOwnerGeneration())));
+        return attempt.committed().thenCompose(leave -> notifySourceLeft(attempt, leave));
     }
 
     /** Delivers the one-way source OnLeaveActor; membership already ended at the commit. */
-    private CompletionStage<Void> notifySourceLeft(
-            SourceAttempt attempt, SourceLeave leave, Runnable onClaim) {
+    private CompletionStage<Void> notifySourceLeft(SourceAttempt attempt, SourceLeave leave) {
         if (!attempt.leaveClaimed().compareAndSet(false, true)) {
             return CompletableFuture.completedFuture(null);
         }
         return ZLinkHandlerStages.fromStageSupplier(
-                        () -> {
-                            onClaim.run();
-                            return leave.actor() == null
-                                    ? CompletableFuture.completedFuture(null)
-                                    : spots.notifySourceActorLeft(
-                                            leave.spotSurface(), leave.actor());
-                        })
+                        () ->
+                                leave.actor() == null
+                                        ? CompletableFuture.completedFuture(null)
+                                        : spots.notifySourceActorLeft(
+                                                leave.spotSurface(), leave.actor()))
                 .whenComplete(
                         (ignored, failure) ->
                                 sources.remove(attempt.goal().sourceActor().actorId(), attempt));
