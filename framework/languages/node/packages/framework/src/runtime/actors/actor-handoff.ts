@@ -11,6 +11,9 @@ import {
   type MessageFollowSuppressionFence
 } from '../foundation/message-follow-suppression-registry';
 import type { ZLinkMessageFollowOrigin } from '../foundation/service-runtime-contracts';
+import type { ServiceActorRouteFence } from '../foundation/service-stateful-wire-codec';
+import { OPERATION_IDENTITY_BYTES } from '../foundation/operation-identity';
+import { UINT64_BYTES } from '@zlink-systems/stream-wire';
 import {
   createInternalFrameworkException,
   internalFrameworkErrorKind,
@@ -838,10 +841,31 @@ export class ZLinkActorHandoffCoordinator {
     provisionalReplay?: ZLinkActorHandoffDispatch,
     onAdmitted?: () => void
   ): Promise<unknown> | undefined {
-    const incomingContext = actorMessageFollowContext(fallbackActorRef);
+    let incomingContext = actorMessageFollowContext(fallbackActorRef);
     const originalDeadlineUnixMs =
       deadlineUnixMs ?? incomingContext?.deadlineUnixMs ?? packetDeadlineUnixMs(parts);
-    const handoff = this.active.get(actorId);
+    const followRoute = this.findMessageFollowRoute(
+      actorId,
+      incomingContext,
+      messageFollowOrigin?.target
+    );
+    // An exact departed tenure belongs to its committed route, even while the
+    // same Actor incarnation is performing a later Join on this node.
+    const handoff = followRoute === undefined ? this.active.get(actorId) : undefined;
+    if (
+      incomingContext === undefined &&
+      followRoute !== undefined &&
+      messageFollowOrigin?.target !== undefined
+    ) {
+      incomingContext = this.createInitialIngressContext(
+        followRoute.sourceOwner,
+        messageFollowOrigin.target.actor.generation,
+        parts,
+        returnResponse,
+        originalDeadlineUnixMs,
+        messageFollowOrigin
+      );
+    }
     if (handoff !== undefined) {
       if (
         handoff.phase === 'releasing' &&
@@ -871,7 +895,8 @@ export class ZLinkActorHandoffCoordinator {
           handoff.oldGeneration,
           parts,
           returnResponse,
-          originalDeadlineUnixMs
+          originalDeadlineUnixMs,
+          messageFollowOrigin
         );
       try {
         this.validateContext(actorId, context, parts, returnResponse, fallbackActorRef);
@@ -954,7 +979,6 @@ export class ZLinkActorHandoffCoordinator {
       return result;
     }
 
-    const followRoute = this.findMessageFollowRoute(actorId, incomingContext);
     const staleGeneration = fallbackActorRef?.objectGeneration;
     if (
       fallbackActorRef !== undefined &&
@@ -1391,22 +1415,46 @@ export class ZLinkActorHandoffCoordinator {
 
   private findMessageFollowRoute(
     actorId: string,
-    context: ZLinkActorMessageFollowContext | undefined
+    context: ZLinkActorMessageFollowContext | undefined,
+    nativeTarget?: ServiceActorRouteFence
   ): MessageFollowRoute | undefined {
-    if (context === undefined) return undefined;
+    if (context === undefined) {
+      if (nativeTarget === undefined || nativeTarget.actor.actorId !== actorId) return undefined;
+      // Native wire carries the complete route fence, without the location owner's text id.
+      // Resolve that fence against the same committed routes used by contextual ingress.
+      for (const route of this.messageFollowRoutes.values()) {
+        if (
+          route.targetActorRef.actorId === actorId &&
+          route.oldGeneration === nativeTarget.actor.generation &&
+          routingIdsEqual(
+            messageFollowOwnerNodeRid(route.sourceOwner),
+            nativeTarget.actor.nodeRid
+          ) &&
+          BigInt(route.sourceOwner.nodeGeneration) === nativeTarget.targetNodeGeneration &&
+          BigInt(route.sourceOwner.authorityOwnerGeneration) ===
+            nativeTarget.authorityOwnerGeneration &&
+          BigInt(route.sourceOwner.ownerLeaseGeneration) === nativeTarget.ownerLeaseGeneration
+        )
+          return route;
+      }
+      return undefined;
+    }
     return this.messageFollowRoutes.get(
       messageFollowRouteKey(actorId, BigInt(context.objectGeneration), context.targetOwner)
     );
   }
 
   private hasMessageFollowRouteForStaleRef(actorId: string, actorRef: ActorRef): boolean {
-    return [...this.messageFollowRoutes.values()].some(
-      (route) =>
+    for (const route of this.messageFollowRoutes.values()) {
+      if (
         route.targetActorRef.actorId === actorId &&
         actorRef.objectGeneration === route.oldGeneration &&
         (route.oldNodeRid === undefined ||
           routingIdsEqual(actorRef.nodeRid, messageFollowOwnerNodeRid(route.sourceOwner)))
-    );
+      )
+        return true;
+    }
+    return false;
   }
 
   private createInitialIngressContext(
@@ -1414,9 +1462,21 @@ export class ZLinkActorHandoffCoordinator {
     generation: bigint,
     parts: readonly Message[],
     request: boolean,
-    deadlineUnixMs?: number
+    deadlineUnixMs?: number,
+    origin?: ZLinkMessageFollowOrigin
   ): ZLinkActorMessageFollowContext {
-    const operationId = createMessageFollowId();
+    let operationId: string;
+    if (origin === undefined) {
+      operationId = createMessageFollowId();
+    } else {
+      const bytes = Buffer.allocUnsafe(OPERATION_IDENTITY_BYTES);
+      bytes.writeBigUInt64BE(BigInt.asUintN(UINT64_BYTES * 8, origin.originalOperation.high));
+      bytes.writeBigUInt64BE(
+        BigInt.asUintN(UINT64_BYTES * 8, origin.originalOperation.low),
+        UINT64_BYTES
+      );
+      operationId = bytes.toString('hex');
+    }
     return Object.freeze({
       operationId,
       objectGeneration: generation.toString(),
@@ -1424,7 +1484,11 @@ export class ZLinkActorHandoffCoordinator {
       targetOwner: sourceOwner,
       deadlineUnixMs,
       correlationId: request ? createMessageFollowId() : undefined,
-      replyRouteId: request ? createMessageFollowId() : undefined,
+      replyRouteId: request
+        ? origin === undefined
+          ? createMessageFollowId()
+          : operationId
+        : undefined,
       request,
       hopCount: 0,
       visitedOwners: Object.freeze([messageFollowOwnerFenceKey(sourceOwner)]),

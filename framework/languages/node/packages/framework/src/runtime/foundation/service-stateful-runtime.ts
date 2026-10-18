@@ -1360,13 +1360,12 @@ export class ServiceStatefulRuntime {
 
   async sendToActor(
     target: ServiceActorRef,
-    _targetNodeGeneration: bigint,
-    _authorityOwnerGeneration: bigint,
     payload: ServiceApplicationPayload,
     sourceActor?: ServiceActorRef,
-    boundSession?: { readonly sessionRid: string; readonly bindingGeneration: bigint }
+    boundSession?: { readonly sessionRid: string; readonly bindingGeneration: bigint },
+    routeFence?: ServiceActorRouteFence
   ): Promise<number> {
-    const route = this.tryActorFence(target);
+    const route = routeFence ?? this.tryActorFence(target);
     if (route === undefined) return SubmitResult.NotFound;
     const header = encodeActorHeader(
       'actorSend',
@@ -1386,16 +1385,15 @@ export class ServiceStatefulRuntime {
 
   requestToActor(
     target: ServiceActorRef,
-    _targetNodeGeneration: bigint,
-    _authorityOwnerGeneration: bigint,
     payload: ServiceApplicationPayload,
     timeoutMs: number,
     sourceActor?: ServiceActorRef,
     boundSession?: { readonly sessionRid: string; readonly bindingGeneration: bigint },
-    onAdmitted?: () => void
+    onAdmitted?: () => void,
+    routeFence?: ServiceActorRouteFence
   ): ServiceStatefulPendingOperation {
     const pending = this.operations.register(timeoutMs);
-    const route = this.tryActorFence(target);
+    const route = routeFence ?? this.tryActorFence(target);
     if (route === undefined) {
       this.operations.reply(
         pending.id,
@@ -1973,17 +1971,10 @@ export class ServiceStatefulRuntime {
     if (delivery === undefined || !routingIdsEqual(delivery.binding.sessionRid, sessionRid)) {
       return SubmitResult.NotFound;
     }
-    return this.sendToActor(
-      actor,
-      this.peerGeneration(actor.nodeRid),
-      actor.generation,
-      payload,
-      undefined,
-      {
-        sessionRid,
-        bindingGeneration: delivery.binding.bindingGeneration
-      }
-    );
+    return this.sendToActor(actor, payload, undefined, {
+      sessionRid,
+      bindingGeneration: delivery.binding.bindingGeneration
+    });
   }
 
   async sendBoundSession(
@@ -2296,11 +2287,9 @@ export class ServiceStatefulRuntime {
               : { sourceBindingGeneration: record.boundSession.bindingGeneration }),
             targetActor: actor.ref,
             messageFollowOrigin: {
+              target: record.target,
               sourceNodeRid: ingress.sourceRoutingId,
-              originalOperation: {
-                high: this.peerGeneration(ingress.sourceRoutingId),
-                low: record.correlation ?? this.nextMessageFollowOperation++
-              },
+              originalOperation: record.operation,
               originalReplyRouteId: ingress.requestSequence ?? 0n
             },
             ...(record.kind === 'actorRequest'
@@ -4567,6 +4556,12 @@ export class ServiceStatefulRuntime {
           operationKind: OperationKind.ActorRequest,
           correlation: decoded.correlation,
           targetActor: current.ref,
+          messageFollowOrigin: {
+            target: decoded.target,
+            sourceNodeRid: ingress.sourceRoutingId,
+            originalOperation: decoded.operation,
+            originalReplyRouteId: ingress.requestSequence ?? 0n
+          },
           ...(decoded.sourceActor === undefined
             ? {}
             : { sourceActor: { ...decoded.sourceActor, nodeRid: ingress.sourceRoutingId } }),

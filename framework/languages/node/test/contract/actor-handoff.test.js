@@ -291,6 +291,65 @@ function harness(messageFollowDurationMs = 30, requestReply) {
   };
 }
 
+test('native Actor ingress retains its exact source fence across a completed Join', async () => {
+  const h = harness(30_000);
+  h.setCurrentGeneration(1n);
+  h.coordinator.begin('actor-1', 1n);
+  h.coordinator.snapshot('actor-1');
+  h.coordinator.complete('actor-1', target(), targetActorRef(), [], ownerFence('target', 2n));
+  const parts = frame('native-after-join');
+  const ref = { ...actorRef(), nodeRid: 'source-node' };
+  const origin = {
+    sourceNodeRid: 'caller', originalOperation: { high: 7n, low: 11n }, originalReplyRouteId: 0n,
+    target: { actor: { actorId: ref.actorId, nodeRid: ref.nodeRid, generation: ref.objectGeneration },
+      targetNodeGeneration: 1n, authorityOwnerGeneration: 1n, ownerLeaseGeneration: 1n }
+  };
+  try {
+    for (const field of ['targetNodeGeneration', 'authorityOwnerGeneration', 'ownerLeaseGeneration']) {
+      await assert.rejects(h.coordinator.capture('remote', ref.actorId, parts, false, undefined, ref,
+        undefined, { ...origin, target: { ...origin.target, [field]: 99n } }),
+      { kind: framework.ZLinkFrameworkErrorKind.Unavailable });
+    }
+    await h.coordinator.capture('remote', ref.actorId, parts, false, undefined, ref, undefined, origin);
+    await h.coordinator.capture('remote', ref.actorId, parts, false, undefined, ref, undefined, origin);
+    assert.deepEqual(h.followed, ['native-after-join']);
+    const context = actorRelayWire.decodeRemoteActorPacketRelayPayload(h.messageFollowPayloads[0]).messageFollowContext;
+    assert.equal(context.operationId, '0000000000000007000000000000000b');
+    assert.equal(context.objectGeneration, '1');
+    assert.equal(context.sourceOwner.authorityOwnerGeneration, '1');
+    assert.equal(context.targetOwner.authorityOwnerGeneration, '2');
+  } finally {
+    parts.forEach(part => part.close());
+  }
+});
+
+test('native ingress for a departed tenure follows that route while a successor Join is active', async () => {
+  const h = harness(30_000);
+  h.setCurrentGeneration(1n);
+  h.coordinator.begin('actor-1', 1n);
+  h.coordinator.snapshot('actor-1');
+  h.coordinator.complete('actor-1', target(), targetActorRef(), [], ownerFence('target', 2n));
+  h.setRequestSource({ meshName: 'mesh', objectGeneration: 1n, ownerId: 'source-owner',
+    ownerLeaseGeneration: 1n, nodeRid: 'source-node', nodeGeneration: 1n, authorityOwnerGeneration: 3n });
+  h.setCurrentNodeRid('source-node');
+  h.setCurrentOwner(sourceOwnerFence(3n));
+  h.coordinator.begin('actor-1', 1n);
+  const parts = frame('departed-tenure');
+  const ref = { ...actorRef(), nodeRid: 'source-node' };
+  try {
+    await h.coordinator.capture('remote', ref.actorId, parts, false, undefined, ref, undefined, {
+      sourceNodeRid: 'caller', originalOperation: { high: 7n, low: 12n }, originalReplyRouteId: 0n,
+      target: { actor: { actorId: ref.actorId, nodeRid: ref.nodeRid, generation: ref.objectGeneration },
+        targetNodeGeneration: 1n, authorityOwnerGeneration: 1n, ownerLeaseGeneration: 1n }
+    });
+    assert.deepEqual(h.followed, ['departed-tenure']);
+    assert.deepEqual(h.coordinator.snapshot(ref.actorId), []);
+  } finally {
+    h.coordinator.cancel(ref.actorId);
+    parts.forEach(part => part.close());
+  }
+});
+
 test('handoff admission requires committed source and target owner fences', () => {
   let sourceLookupCount = 0;
   const invalidGeneration = new framework.ZLinkActorHandoffCoordinator({
