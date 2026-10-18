@@ -6868,40 +6868,96 @@ int session_relay_waiter_accepts_beyond_former_capacity ()
     using namespace zlink::framework;
     using namespace zlink::framework::detail;
 
+    constexpr std::size_t relay_count = 1026;
+    using reply_source_t = task_completion_source_t<std::optional<zlink::message_t>>;
+    struct relay_fixture_t
+    {
+        std::vector<std::shared_ptr<reply_source_t>> sources;
+        std::vector<std::promise<void>> arrived;
+        std::vector<std::future<void>> arrivals;
+        std::vector<std::string> packet_names;
+        std::size_t dispatch_count = 0;
+        std::promise<std::size_t> &released;
+
+        relay_fixture_t (std::size_t count, std::promise<std::size_t> &released) :
+            sources (count), arrived (count), packet_names (count), released (released)
+        {
+            arrivals.reserve (count);
+            for (std::size_t index = 0; index != count; ++index) {
+                sources[index] = std::make_shared<reply_source_t> ();
+                arrivals.push_back (arrived[index].get_future ());
+            }
+        }
+
+        ~relay_fixture_t () { released.set_value (dispatch_count); }
+    };
+
     actor_gateway_runtime_t gateway;
     auto manager = gateway.manager ();
     session_actor_manager_access_t::attach (manager, stream_t{});
     const actor_ref_t actor = test_actor_ref ("actor-node-a", "player", "actor-capacity", 1);
     auto binding = manager.bind (actor).async ().result ().value ();
-
-    std::vector<std::shared_ptr<task_completion_source_t<std::optional<zlink::message_t>>>>
-      dispatched;
-    gateway.on_relay ([&dispatched] (const actor_ref_t &, const actor_context_t &,
-                                     const stream_header_t &, const zlink::message_t &,
+    std::promise<std::size_t> released;
+    auto release = released.get_future ();
+    {
+        auto fixture = std::make_shared<relay_fixture_t> (relay_count, released);
+        std::vector<task_t<void>> accepted;
+        accepted.reserve (relay_count);
+        struct relay_scope_t
+        {
+            actor_gateway_runtime_t &gateway;
+            std::shared_ptr<relay_fixture_t> &fixture;
+            std::vector<task_t<void>> &accepted;
+            std::future<std::size_t> &release;
+            ~relay_scope_t ()
+            {
+                for (const auto &source : fixture->sources)
+                    source->complete (
+                      result_t<std::optional<zlink::message_t>>::success (std::nullopt));
+                for (auto &task : accepted)
+                    (void) task.result ();
+                gateway.on_relay ({});
+                fixture.reset ();
+                // The final drain observer owns its dispatch closure until it returns.
+                release.wait ();
+            }
+        } relay_scope{gateway, fixture, accepted, release};
+        gateway.on_relay ([fixture] (const actor_ref_t &, const actor_context_t &,
+                                     const stream_header_t &header, const zlink::message_t &,
                                      std::optional<bound_session_relay_source_t>,
                                      std::chrono::milliseconds) {
-        auto source =
-          std::make_shared<task_completion_source_t<std::optional<zlink::message_t>>> ();
-        dispatched.push_back (source);
-        return test::accepted_request_task (source->task ());
-    });
+            const auto index = fixture->dispatch_count++;
+            fixture->packet_names.at (index) = std::string (header.packet_name ());
+            const auto source = fixture->sources.at (index);
+            fixture->arrived.at (index).set_value ();
+            return test::accepted_request_task (source->task ());
+        });
 
-    /* One relay occupies the drain turn; the rest cross the former boundary. */
-    std::vector<task_t<void>> accepted;
-    accepted.reserve (1026);
-    for (std::size_t index = 0; index != 1026; ++index)
-        accepted.push_back (binding.relay ("packet", zlink::message_t{}));
+        /* One relay occupies the drain turn; the rest cross the former boundary. */
+        for (std::size_t index = 0; index != relay_count; ++index)
+            accepted.push_back (binding.relay (std::to_string (index), zlink::message_t{}));
+        auto completed = std::make_shared<std::promise<void>> ();
+        auto completion = completed->get_future ();
+        observe_task_completion (accepted.back (),
+                                 [completed] (const auto &) { completed->set_value (); });
 
-    /* Releasing each dispatch drains the FIFO; every relay completes once. */
-    for (std::size_t index = 0; index != dispatched.size (); ++index)
-        dispatched[index]->complete (
-          result_t<std::optional<zlink::message_t>>::success (std::nullopt));
-    if (dispatched.size () != 1026)
-        return 3;
-    for (auto &admitted : accepted) {
-        if (!admitted.await_ready () || !admitted.result ())
-            return 4;
+        /* Each arrival is observed before its source is released; order remains FIFO. */
+        for (std::size_t index = 0; index != relay_count; ++index) {
+            fixture->arrivals[index].get ();
+            if (fixture->packet_names[index] != std::to_string (index))
+                return 5;
+            fixture->sources[index]->complete (
+              result_t<std::optional<zlink::message_t>>::success (std::nullopt));
+        }
+        // Result delivery precedes the final drain frame's destruction.
+        completion.get ();
+        for (auto &admitted : accepted) {
+            if (!admitted.await_ready () || !admitted.result ())
+                return 4;
+        }
     }
+    if (release.get () != relay_count)
+        return 3;
     return 0;
 }
 

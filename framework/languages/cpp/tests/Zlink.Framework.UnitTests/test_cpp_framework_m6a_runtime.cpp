@@ -430,8 +430,12 @@ void verify_bound_session_bind_replay_preserves_first_admission ()
     auto request = bound_session_request (source, remote, 200ms);
     auto admitted = request.admitted ();
     std::atomic<int> admission_completions = 0;
-    zlink::framework::detail::observe_task_completion (
-      admitted, [&] (const auto &) { ++admission_completions; });
+    std::promise<void> admission_observed;
+    auto observed = admission_observed.get_future ();
+    zlink::framework::detail::observe_task_completion (admitted, [&] (const auto &) {
+        ++admission_completions;
+        admission_observed.set_value ();
+    });
     const auto pump = [&] {
         const auto now = mesh::service_liveness_registry_t::clock_t::now ();
         (void) source.observe_routes ();
@@ -454,6 +458,7 @@ void verify_bound_session_bind_replay_preserves_first_admission ()
       protocol::message_bytes (first.records.front ().parts.front ()));
     assert (admitted.await_ready () && admitted.result ());
     const auto *first_admission = &admitted.result ();
+    observed.get ();
     assert (admission_completions == 1 && !request.await_ready ());
     assert (target.mailbox ().release (first));
     assert (target.connect_peer (source.endpoint (), local));

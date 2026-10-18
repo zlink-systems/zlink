@@ -5,6 +5,7 @@
 #include "runtime/dispatch/offload_executor.hpp"
 
 #include <chrono>
+#include <future>
 #include <coroutine>
 #include <filesystem>
 #include <iostream>
@@ -737,14 +738,18 @@ int main ()
     auto first_complete_wins = completion.task ();
     int callback_count = 0;
     int callback_value = 0;
+    std::promise<void> callback_delivered;
+    auto delivered = callback_delivered.get_future ();
     zlink::framework::detail::observe_task_completion (
-      first_complete_wins,
-      [&callback_count, &callback_value] (const zlink::framework::result_t<int> &result) {
+      first_complete_wins, [&callback_count, &callback_value,
+                            &callback_delivered] (const zlink::framework::result_t<int> &result) {
           ++callback_count;
           callback_value = result.value ();
+          callback_delivered.set_value ();
       });
     completion.complete (zlink::framework::result_t<int>::success (100));
     completion.complete (zlink::framework::result_t<int>::success (200));
+    delivered.get ();
     if (first_complete_wins.result ().value () != 100 || callback_count != 1
         || callback_value != 100) {
         return 33;
