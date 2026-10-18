@@ -6251,21 +6251,6 @@ task_t<void> spot_node_runtime_t::replay_actor_handoff_batch (actor_ref_t actor_
             co_await emit_actor_transfer_marker_async ("handoff_replay_enqueued", actor_ref,
                                                        transfer_id, *location);
         }
-        if (packet.application_record && !packet.application_record->invocation) {
-            runtime::stateful::with_accepted_application (
-              *packet.application_record->payload, [&] (auto, const auto &application) {
-                  const runtime::messaging::message_parts_t parts (
-                    runtime::protocol::decode_application_parts (application));
-                  const auto body = runtime::messaging::envelope_codec_t{}.decode_body (parts);
-                  if (!body)
-                      std::rethrow_exception (body.exception ());
-                  spot_inbound_message_t metadata;
-                  metadata.content_type = std::move (packet.content_type);
-                  metadata.values = std::move (packet.metadata);
-                  packet.application_record->invocation.emplace (body.value (),
-                                                                 std::move (metadata));
-              });
-        }
         spot_inbound_message_t metadata;
         if (packet.application_record && packet.application_record->invocation)
             metadata = std::move (packet.application_record->invocation->second);
@@ -6289,6 +6274,19 @@ task_t<void> spot_node_runtime_t::replay_actor_handoff_batch (actor_ref_t actor_
           framework_error_kind_t::internal_failure, "Actor handoff replay did not complete");
         std::exception_ptr replay_exception;
         try {
+            if (packet.application_record && !packet.application_record->invocation) {
+                runtime::stateful::with_accepted_application (
+                  *packet.application_record->payload, [&] (auto, const auto &application) {
+                      const runtime::messaging::message_parts_t parts (
+                        runtime::protocol::decode_application_parts (application));
+                      const auto body = runtime::messaging::envelope_codec_t{}.decode_body (parts);
+                      if (!body)
+                          std::rethrow_exception (body.exception ());
+                      packet.application_record->invocation.emplace (body.value (),
+                                                                     std::move (metadata));
+                  });
+                metadata = std::move (packet.application_record->invocation->second);
+            }
             result = result_t<zlink::message_t>::success (
               co_await spot_handler_registry_t (context_state)
                 .invoke_erased (kind, packet.packet_name, {}, actor_type,
