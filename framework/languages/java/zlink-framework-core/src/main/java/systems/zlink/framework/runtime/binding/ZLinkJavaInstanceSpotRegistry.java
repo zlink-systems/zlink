@@ -16,7 +16,6 @@ import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
 import java.util.function.BiFunction;
-import java.util.function.Function;
 import java.util.function.Supplier;
 
 /**
@@ -66,7 +65,10 @@ final class ZLinkJavaInstanceSpotRegistry {
                 requestedType,
                 route,
                 Long.MAX_VALUE,
-                ignored -> CompletableFuture.completedFuture(null));
+                (ignored, admission) -> {
+                    admission.complete(null);
+                    return CompletableFuture.completedFuture(null);
+                });
     }
 
     CompletionStage<Activation> activate(
@@ -74,7 +76,8 @@ final class ZLinkJavaInstanceSpotRegistry {
             String requestedType,
             ZLinkServiceM6BWireCodec.InstanceRouteFence route,
             long deadlineUnixMs,
-            Function<ZLinkBackendSpot, CompletionStage<Void>> restoreFirst) {
+            BiFunction<ZLinkBackendSpot, CompletableFuture<Void>, CompletionStage<Void>>
+                    restoreFirst) {
         Objects.requireNonNull(spotId, "spotId");
         Objects.requireNonNull(route, "route");
         return activate(
@@ -90,7 +93,8 @@ final class ZLinkJavaInstanceSpotRegistry {
             String requestedType,
             long deadlineUnixMs,
             Supplier<CompletionStage<ZLinkServiceM6BWireCodec.InstanceRouteFence>> authority,
-            Function<ZLinkBackendSpot, CompletionStage<Void>> restoreFirst) {
+            BiFunction<ZLinkBackendSpot, CompletableFuture<Void>, CompletionStage<Void>>
+                    restoreFirst) {
         Objects.requireNonNull(spotId, "spotId");
         String selected = selectType(spotId, requestedType);
         String recorded = stableTypes.putIfAbsent(spotId, selected);
@@ -135,7 +139,8 @@ final class ZLinkJavaInstanceSpotRegistry {
             String selected,
             long deadlineUnixMs,
             Supplier<CompletionStage<ZLinkServiceM6BWireCodec.InstanceRouteFence>> authority,
-            Function<ZLinkBackendSpot, CompletionStage<Void>> restoreFirst,
+            BiFunction<ZLinkBackendSpot, CompletableFuture<Void>, CompletionStage<Void>>
+                    restoreFirst,
             ActivationOperation candidate,
             ActivationOperation current) {
         if (current != null) {
@@ -157,7 +162,8 @@ final class ZLinkJavaInstanceSpotRegistry {
                         try {
                             admission =
                                     Objects.requireNonNull(
-                                            restoreFirst.apply(value.spot()),
+                                            restoreFirst.apply(
+                                                    value.spot(), new CompletableFuture<>()),
                                             "Instance Spot admission returned null");
                         } catch (RuntimeException | Error refusal) {
                             admission = CompletableFuture.failedFuture(refusal);
@@ -202,9 +208,11 @@ final class ZLinkJavaInstanceSpotRegistry {
                                                                 route,
                                                                 spot,
                                                                 deadlineUnixMs,
-                                                                activated ->
+                                                                (activated, admission) ->
                                                                         restoreFirst
-                                                                                .apply(activated)
+                                                                                .apply(
+                                                                                        activated,
+                                                                                        admission)
                                                                                 .whenComplete(
                                                                                         (ignored,
                                                                                                 failure) -> {
@@ -261,6 +269,13 @@ final class ZLinkJavaInstanceSpotRegistry {
             return CompletableFuture.failedFuture(
                     new IllegalStateException("Instance type is not registered"));
         return hook.reserve(envelope, authority);
+    }
+
+    CompletionStage<Void> recovered(
+            String stableType,
+            ZLinkServiceM6BWireCodec.InstanceRouteFence route,
+            Throwable failure) {
+        return hooks.get(stableType).recovered(route, failure);
     }
 
     CompletionStage<Void> completed(

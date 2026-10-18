@@ -67,7 +67,9 @@ class timer_state_t
     std::shared_ptr<task_completion_source_t<void>> cancel_completion;
     std::optional<result_t<void>> cleanup_result;
     bool cancel_completed = false;
-    bool pending_fire = false;
+    // Presence denotes a pending fire. A queued fire exposes its claim here
+    // for cancellation; a coalesced fire has no queued claim yet.
+    std::optional<std::weak_ptr<void>> pending_fire;
     std::uint64_t pending_fire_count = 0;
     std::deque<timer_tick_t> delivered_ticks;
     std::deque<timer_failure_event_t> failure_events;
@@ -101,12 +103,12 @@ class timer_runtime_t
 
     // Admits and runs one fire directly.
     task_t<timer_tick_t> dispatch_fire_count_async (timer_t &timer, std::uint64_t fire_count) const;
-    // Runs a fire that post_fire_count admitted against `spot_instance`.
+    // For a queued fire the caller retains the claim through terminal. Its
+    // pointer identifies the pending fire; the payload is selected in this turn.
     task_t<timer_tick_t>
     dispatch_fire_count_async (timer_t &timer,
                                std::uint64_t fire_count,
-                               std::shared_ptr<void> spot_instance,
-                               std::shared_ptr<channel_runtime_state_t> channel_runtime) const;
+                               std::optional<const void *> pending_admission) const;
 
     void cancel_all () const noexcept;
     static void cancel_all (spot_context_state_t &context) noexcept;

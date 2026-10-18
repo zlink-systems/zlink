@@ -2323,6 +2323,8 @@ internal sealed class SpotCloseProbeState
     internal bool ThrowOnInitialize { get; set; }
     internal ConcurrentQueue<ulong> InitializedGenerations { get; } = new();
     internal Func<ulong, Task>? OnReinitialize { get; set; }
+    internal Action<IZLinkInstanceSpotContext>? OnInstanceInitializing { get; set; }
+    internal Func<CancellationToken, Task>? OnInstanceHandler { get; set; }
     internal ConcurrentQueue<string>? BranchOrder { get; set; }
     internal string? StoredMarker { get; set; }
     internal ConcurrentQueue<ulong> PendingHandlerGenerations { get; } = new();
@@ -2364,6 +2366,7 @@ internal sealed class SpotCloseInstance(
 
     public async ValueTask OnInitializeAsync(CancellationToken cancellationToken)
     {
+        State.OnInstanceInitializing?.Invoke(Context);
         State.InitializedGenerations.Enqueue(Context.ObjectGeneration);
         if (State.OnReinitialize is { } observe)
             await observe(Context.ObjectGeneration);
@@ -2399,6 +2402,8 @@ internal sealed class SpotCloseInstanceHandler
     )
     {
         spot.State.RecordHandlerCall();
+        if (spot.State.OnInstanceHandler is { } onHandler)
+            await onHandler(cancellationToken);
         spot.State.InstanceHandlerMarkers.Enqueue(request.Marker);
         if (request.Marker == "initial")
             spot.State.StoredMarker = request.Marker;

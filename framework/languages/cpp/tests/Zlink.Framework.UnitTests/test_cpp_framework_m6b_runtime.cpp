@@ -5950,7 +5950,7 @@ void verify_public_host_dispatches_durable_reply_relay ()
     target->close ();
 }
 
-void verify_remote_user_spot_create_close_terminal_once ()
+bool verify_remote_user_spot_create_close_terminal_once (bool cleanup_only = false)
 {
     using namespace zlink::framework;
     auto store = std::make_shared<counting_location_repository_t> ();
@@ -6082,6 +6082,73 @@ void verify_remote_user_spot_create_close_terminal_once ()
           assert (creation == std::vector<std::byte> ({std::byte{0x41}, std::byte{0x42}}));
           return host::user_spot_materialize_result_t{true, std::nullopt};
       });
+    if (cleanup_only) {
+        task_completion_source_t<void> cleanup_release;
+        bool cleanup_started = false;
+        target->configure_user_spot_operations (store, [&] (const stateful::object_ref_t &,
+                                                            const std::string &,
+                                                            const std::vector<std::byte> &) {
+            // Revoke this reservation after materialization so publication fails.
+            (void) store->abort ({reserve.key, reservation->fence}).result ().value ();
+            return host::user_spot_materialize_result_t{true, std::nullopt,
+                                                        [&] (bool ready) -> task_t<void> {
+                                                            assert (!ready);
+                                                            cleanup_started = true;
+                                                            return cleanup_release.task ();
+                                                        }};
+        });
+        target->start ();
+        std::promise<
+          std::pair<foundation::operation_terminal_t, protocol::user_spot_create_reply_t>>
+          reply_completion;
+        auto local_reply = reply_completion.get_future ();
+        const auto deadline_ms =
+          static_cast<std::uint64_t> (std::chrono::duration_cast<std::chrono::milliseconds> (
+                                        std::chrono::system_clock::now ().time_since_epoch () + 5s)
+                                        .count ());
+        const protocol::user_spot_create_header_t request{
+          1,
+          {99, 1},
+          target->status ().routing_id ().to_bytes (),
+          target->status ().lifecycle_generation (),
+          spot_id,
+          "room",
+          {reservation->fence.reservation_id, reservation->fence.expected_store_version,
+           reservation->fence.object_generation, reservation->fence.authority_owner_generation,
+           target->status ().routing_id ().to_bytes (), target->status ().lifecycle_generation (),
+           reservation->fence.target.owner.owner_id,
+           static_cast<std::uint64_t> (reservation->fence.target.owner.lease_generation),
+           reservation->fence.capacity_bundle.spot_slots},
+          deadline_ms};
+        const auto submitted = target
+                                 ->create_user_spot_remote (
+                                   target->status ().routing_id (), request, 5s,
+                                   [&] (foundation::operation_terminal_t terminal,
+                                        protocol::user_spot_create_reply_t reply,
+                                        std::optional<protocol::application_payload_t>) {
+                                       reply_completion.set_value ({terminal, std::move (reply)});
+                                   })
+                                 .result ();
+        assert (submitted && submitted.value ());
+        auto dispatched =
+          target->dispatch_ready ([] (const host::ready_record_t &, const host::receive_record_t &,
+                                      std::vector<zlink::message_t>) {});
+        const auto pending_before_cleanup = target->pending_operation_count ();
+        cleanup_release.complete (result_t<void>::success ());
+        const auto result = dispatched.result ();
+        const auto [reply_terminal, reply] = local_reply.get ();
+        const auto pending_after_cleanup = target->pending_operation_count ();
+        target->close ();
+        std::cout << "cleanup_started=" << cleanup_started
+                  << " pending_before_cleanup=" << pending_before_cleanup
+                  << " pending_after_cleanup=" << pending_after_cleanup
+                  << " rejected=" << (reply.result == protocol::user_spot_create_result_t::rejected)
+                  << std::endl;
+        return result && result.value () == 1 && cleanup_started && pending_before_cleanup == 1
+               && pending_after_cleanup == 0
+               && reply_terminal == foundation::operation_terminal_t::completed
+               && reply.result == protocol::user_spot_create_result_t::rejected;
+    }
     std::size_t instance_activation_count = 0;
     std::size_t instance_prepare_count = 0;
     bool fail_recovery_dispatch_once = false;
@@ -6090,42 +6157,27 @@ void verify_remote_user_spot_create_close_terminal_once ()
     bool close_during_instance_turn = false;
     std::size_t recovery_barrier_finishes = 0;
     std::size_t recovery_accepted_finishes = 0;
-    struct recovery_barrier_t final : detail::deferred_barrier_t
-    {
-        task_t<void> run (std::function<task_t<void> ()> work) override { return work (); }
-        explicit recovery_barrier_t (std::size_t &finishes) : _finishes (finishes) {}
-        result_t<void> activate (std::function<void ()> work) override
-        {
-            ++_finishes;
-            work ();
-            return result_t<void>::success ();
-        }
-        result_t<void> activate_async (async_work_t work) override
-        {
-            ++_finishes;
-            work ([] (result_t<void> result) { assert (result); });
-            return result_t<void>::success ();
-        }
-        void cancel () noexcept override { assert (false); }
-        std::size_t &_finishes;
-    };
     auto instance_relocations = std::make_shared<memory_relocation_repository_t> ();
     const std::weak_ptr<host::public_host_runtime_t> weak_target = target;
     target->configure_instance_spot_operations (
       store, instance_relocations, [owner] { return owner->token; },
       host::instance_spot_activation_materializer_t{
-        [&instance_prepare_count] (const protocol::instance_spot_activation_header_t &activation,
-                                   const authority_snapshot_t &) {
+        [&instance_prepare_count, &store, &recovery_barrier_finishes] (
+          const protocol::instance_spot_activation_header_t &activation,
+          const authority_snapshot_t &, std::function<task_t<void> (bool)> &preparation_terminal) {
+            if (store->activation_recovery_write_observer)
+                preparation_terminal = [&recovery_barrier_finishes] (bool) {
+                    ++recovery_barrier_finishes;
+                    return task_t<void> (result_t<void>::success ());
+                };
             ++instance_prepare_count;
             assert (!activation.target.spot_id.empty ());
             return true;
         },
         [&instance_activation_count, &store, &fail_recovery_dispatch_once,
-         &close_during_instance_turn, &recovery_barrier_finishes, &recovery_accepted_finishes,
-         &injected_activation_failure,
+         &close_during_instance_turn, &recovery_accepted_finishes, &injected_activation_failure,
          weak_target] (std::shared_ptr<const protocol::instance_activation_recovery_t> command,
-                       std::function<task_t<zlink::message_t> (std::function<void ()> &)>,
-                       std::shared_ptr<detail::deferred_barrier_t> *activation_terminal) {
+                       std::function<task_t<zlink::message_t> (std::function<void ()> &)>) {
             const auto &activation = command->activation;
             const auto &metadata = command->metadata;
             const auto &application = command->application_payload;
@@ -6159,9 +6211,6 @@ void verify_remote_user_spot_create_close_terminal_once ()
             }
             std::function<void ()> accepted_turn_terminal;
             if (store->activation_recovery_write_observer) {
-                assert (activation_terminal);
-                *activation_terminal =
-                  std::make_shared<recovery_barrier_t> (recovery_barrier_finishes);
                 accepted_turn_terminal = [&recovery_accepted_finishes] {
                     ++recovery_accepted_finishes;
                 };
@@ -7280,6 +7329,7 @@ void verify_remote_user_spot_create_close_terminal_once ()
     assert (create_reply->header.failure_code == 0);
 
     source->close ();
+    return true;
 }
 
 // Spec 28 §3/§12: the exact identity is RelocationId + targetAttemptGeneration
@@ -7564,6 +7614,11 @@ int main (int argc, char **argv)
         verify_session_relocation_gateway_commit_is_atomic ();
         return 0;
     }
+    if (argc == 2 && std::string_view (argv[1]) == "--preparation-cleanup-terminal") {
+        return verify_remote_user_spot_create_close_terminal_once (true) ? 0 : 1;
+    }
+    if (!verify_remote_user_spot_create_close_terminal_once (true))
+        return 1;
     verify_actor_create_replays_after_reciprocal_handover ();
     verify_message_follow_invalidation_subscriptions_are_lifetime_safe ();
     verify_actor_calls_keep_selected_route_until_follow_notice ();

@@ -7,6 +7,8 @@
 #include "runtime/locations/authority_key_codec.hpp"
 #include "runtime/locations/in_memory_store_providers.hpp"
 #include "runtime/spots/spot_runtime.hpp"
+#include "runtime/timers/timer_runtime.hpp"
+#include "../support/runtime_failure_fixture.hpp"
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
 #include <zlink/framework.hpp>
@@ -33,6 +35,408 @@
 
 namespace
 {
+
+// Spot timer §1: a native expiry must remain queued while creation is preparing.
+// A FIFO worker marker follows the expiry's runnable queue consumer. All fixtures
+// using this marker configure one worker, so observation does not stop the worker.
+void observe_scheduled_expiry (
+  const std::shared_ptr<zlink::framework::runtime::offload_executor_t> &executor)
+{
+    auto marker = std::make_shared<std::promise<void>> ();
+    auto observed = marker->get_future ();
+    if (!executor->try_submit_internal ([marker] { marker->set_value (); }))
+        throw std::runtime_error ("expiry observation worker rejected the marker");
+    observed.get ();
+}
+
+void verify_timer_waits_for_creation (zlink::framework::user_spot_execution_mode_t mode,
+                                      bool reject = false,
+                                      bool expire_from_factory = false)
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+    auto node = zlink::framework::test::runtime_failure_fixture<spot_node_builder_state_t> (
+      "timer-preparation-node");
+    node->worker_executor = std::make_shared<runtime::offload_executor_t> (1);
+    serializer_registry_t serializers;
+    node->channel_runtime =
+      zlink::framework::test::runtime_failure_fixture<channel_runtime_state_t> ();
+    node->channel_runtime->serializers = &serializers;
+    node->snapshot.spot_execution_modes.emplace ("preparing", mode);
+    node->spot_factories.emplace ("preparing", std::type_index (typeid (int)));
+    std::shared_ptr<spot_context_state_t> context;
+    std::promise<void> prepared;
+    auto preparation_started = prepared.get_future ();
+    task_completion_source_t<spot_create_response_t> release_preparation;
+    const auto callbacks = std::make_shared<std::atomic_int> (0);
+    auto timer = std::make_shared<timer_state_t> ();
+    timer->name = "creation-expiry";
+    timer->period = std::chrono::hours (1);
+    timer->handler_invoker = [callbacks] (void *, void *, serializer_registry_t &,
+                                          const timer_tick_t &) {
+        ++*callbacks;
+        return task_t<zlink::message_t> (result_t<zlink::message_t>::success (zlink::message_t{}));
+    };
+    const auto expire = [&] {
+        if (mode == user_spot_execution_mode_t::per_actor)
+            timer->serial_queue = context->spot_serial_executor->timer_queue (timer->name);
+        node->lane.run ([&] { context->timers.push_back (timer); }).get ();
+        timer_runtime_t::post_fire_count (context, timer, timer->serial_queue, 1);
+    };
+    spot_lifecycle_callbacks_t lifecycle;
+    lifecycle.create_spot_context_instance = [&] (spot_context_t value,
+                                                  service_provider_t &) -> std::shared_ptr<void> {
+        context = spot_context_access_t::state (value);
+        auto instance = std::make_shared<int> (1);
+        timer->handler_instance = instance;
+        // The public factory adapter also calls Configure before it returns the
+        // instance to create_spot_context, so spot_instance is still unset here.
+        if (expire_from_factory)
+            expire ();
+        return instance;
+    };
+    lifecycle.on_create = [&] (void *, const zlink::message_t &, serializer_registry_t &) {
+        prepared.set_value ();
+        return release_preparation.task ();
+    };
+    node->spot_lifecycles.emplace ("preparing", std::move (lifecycle));
+    spot_node_runtime_t owner (node);
+    auto creating = std::async (std::launch::async, [&] {
+        return owner.get_or_create_spot ("preparing", spot_id_t ("preparing-spot"), {});
+    });
+    const std::shared_ptr<void> release_on_exit (nullptr, [&] (void *) {
+        release_preparation.complete (
+          result_t<spot_create_response_t>::success (spot_create_response_t::accept ()));
+    });
+    preparation_started.get ();
+    if (!expire_from_factory)
+        expire ();
+    observe_scheduled_expiry (node->worker_executor);
+    const auto callbacks_before_ready = callbacks->load ();
+    std::optional<task_t<bool>> early_close;
+    if (reject)
+        early_close.emplace (spot_context_access_t::create (context).close ());
+    // Release and join before assertions, including the expected red outcome.
+    release_preparation.complete (result_t<spot_create_response_t>::success (
+      reject ? spot_create_response_t::reject () : spot_create_response_t::accept ()));
+    auto created = creating.get ();
+    context->serial_queue->drain ();
+    if (timer->serial_queue)
+        timer->serial_queue->drain ();
+    const auto callbacks_after_creation = callbacks->load ();
+    context->spot_serial_executor->close ();
+    context->serial_queue->close ();
+    node->worker_executor->drain ();
+    node->lane.run ([&] { node->spot_contexts_by_id.clear (); }).get ();
+    EXPECT_EQ (created.state,
+               reject ? spot_create_state_t::rejected : spot_create_state_t::created);
+    EXPECT_EQ (callbacks_before_ready, 0);
+    EXPECT_EQ (callbacks_after_creation, reject ? 0 : 1);
+    if (early_close) {
+        const auto closed = early_close->result ();
+        ASSERT_TRUE (closed);
+        EXPECT_FALSE (closed.value ());
+    }
+}
+
+TEST (ZLinkFrameworkSpotCloseConformance, SpotWideTimerWaitsForCreationPreparation)
+{
+    verify_timer_waits_for_creation (zlink::framework::user_spot_execution_mode_t::spot_wide);
+}
+
+TEST (ZLinkFrameworkSpotCloseConformance, PerActorTimerWaitsForCreationPreparation)
+{
+    verify_timer_waits_for_creation (zlink::framework::user_spot_execution_mode_t::per_actor);
+}
+
+TEST (ZLinkFrameworkSpotCloseConformance, PreparationOwnsInvokedCoroutineCallbackUntilTerminal)
+{
+    using namespace zlink::framework;
+    struct observation_t
+    {
+        std::atomic<const void *> invoked{nullptr};
+        std::atomic_bool alive{false};
+        std::promise<void> entered;
+        task_completion_source_t<void> release;
+    };
+    struct work_t
+    {
+        std::shared_ptr<observation_t> observation;
+        ~work_t ()
+        {
+            if (observation->invoked.load () == this)
+                observation->alive.store (false);
+        }
+        task_t<void> operator() () const
+        {
+            const auto state = observation;
+            state->invoked.store (this);
+            state->alive.store (true);
+            state->entered.set_value ();
+            co_await state->release.task ();
+        }
+    };
+    auto worker = std::make_shared<runtime::offload_executor_t> (1);
+    auto queue = std::make_shared<runtime::serial_execution_queue_t> (*worker);
+    auto reserved = queue->reserve_barrier_next ("preparation-callback-lifetime");
+    ASSERT_TRUE (reserved);
+    const auto barrier = reserved.value ();
+    auto state = std::make_shared<observation_t> ();
+    auto entered = state->entered.get_future ();
+    const auto cleanup = std::shared_ptr<void> (nullptr, [&] (void *) {
+        state->release.complete (result_t<void>::success ());
+        (void) barrier->activate ([] {});
+        queue->drain ();
+        queue->close ();
+        worker->drain ();
+    });
+    auto pending = barrier->run (work_t{state});
+    entered.get ();
+    observe_scheduled_expiry (worker);
+    EXPECT_TRUE (state->alive.load ());
+    EXPECT_FALSE (pending.await_ready ());
+    state->release.complete (result_t<void>::success ());
+    EXPECT_TRUE (pending.result ());
+    observe_scheduled_expiry (worker);
+    EXPECT_FALSE (state->alive.load ());
+}
+
+TEST (ZLinkFrameworkSpotCloseConformance, BorrowedPreparationReleasesPerActorChildQueues)
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+    auto node = zlink::framework::test::runtime_failure_fixture<spot_node_builder_state_t> (
+      "borrowed-preparation-node");
+    auto worker = std::make_shared<runtime::offload_executor_t> (1);
+    auto previous = std::make_shared<spot_serial_executor_t> (
+      worker, node->lane, runtime::serial_lane_policy_t::per_actor_spot ());
+    auto replacement = std::make_shared<spot_serial_executor_t> (
+      worker, node->lane, runtime::serial_lane_policy_t::per_actor_spot (),
+      previous->spot_queue ());
+    auto operation = previous->begin_preparation ();
+    std::shared_ptr<runtime::serial_execution_queue_t> timer_queue;
+    std::atomic_int callbacks{0};
+    const auto cleanup = std::shared_ptr<void> (nullptr, [&] (void *) {
+        (void) previous->finish_preparation ().result ();
+        if (timer_queue)
+            timer_queue->drain ();
+        replacement->close ();
+        previous->close ();
+        worker->drain ();
+    });
+    const auto attached = operation->lifecycle
+                            ->run ([&] {
+                                replacement->attach_preparation (operation);
+                                timer_queue = replacement->timer_queue ("replacement-timer");
+                                timer_queue->post ("replacement-expiry", [&] { ++callbacks; });
+                                return task_t<void> (result_t<void>::success ());
+                            })
+                            .result ();
+    ASSERT_TRUE (attached);
+    observe_scheduled_expiry (worker);
+    EXPECT_EQ (callbacks.load (), 0);
+    const auto terminal = previous->finish_preparation ().result ();
+    ASSERT_TRUE (terminal);
+    node->lane.run ([] {}).get ();
+    timer_queue->drain ();
+    EXPECT_EQ (callbacks.load (), 1);
+    EXPECT_FALSE (previous->preparation_operation ());
+    EXPECT_FALSE (replacement->preparation_operation ());
+}
+
+TEST (ZLinkFrameworkSpotCloseConformance, RejectedCreationNeverTicksAndCloseIsFalse)
+{
+    verify_timer_waits_for_creation (zlink::framework::user_spot_execution_mode_t::spot_wide, true);
+}
+
+TEST (ZLinkFrameworkSpotCloseConformance, FactoryExpiryRemainsPendingUntilInstancePublication)
+{
+    verify_timer_waits_for_creation (zlink::framework::user_spot_execution_mode_t::spot_wide, false,
+                                     true);
+}
+
+void verify_target_staging_commit (bool initialize_throws)
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+    auto node = zlink::framework::test::runtime_failure_fixture<spot_node_builder_state_t> (
+      "timer-staging-node");
+    node->worker_executor = std::make_shared<runtime::offload_executor_t> (1);
+    serializer_registry_t serializers;
+    node->channel_runtime =
+      zlink::framework::test::runtime_failure_fixture<channel_runtime_state_t> ();
+    node->channel_runtime->serializers = &serializers;
+    node->spot_factories.emplace ("staged", std::type_index (typeid (int)));
+    node->spot_factory_relocations.emplace (
+      "staged", factory_relocation_configuration_t{factory_relocation_kind_t::recreate});
+    std::shared_ptr<spot_context_state_t> context;
+    const auto initializes = std::make_shared<std::atomic_int> (0);
+    spot_lifecycle_callbacks_t lifecycle;
+    lifecycle.create_spot_context_instance = [&] (spot_context_t value,
+                                                  service_provider_t &) -> std::shared_ptr<void> {
+        context = spot_context_access_t::state (value);
+        return std::make_shared<int> (1);
+    };
+    lifecycle.on_initialize = [initializes, initialize_throws] (void *) -> task_t<void> {
+        ++*initializes;
+        if (initialize_throws)
+            throw framework_exception_t (framework_error_kind_t::internal_failure,
+                                         "fixture target initialize failure");
+        co_return;
+    };
+    node->spot_lifecycles.emplace ("staged", std::move (lifecycle));
+    spot_node_runtime_t owner (node);
+    runtime::stateful::frozen_object_state_t frozen;
+    frozen.stable_type = "staged";
+    runtime::stateful::object_ref_t target{.kind = runtime::stateful::object_kind_t::user_spot,
+                                           .key = "staged-timer-spot",
+                                           .object_generation = 1,
+                                           .authority_owner_generation = 1};
+    frozen.owner = target;
+    ASSERT_TRUE (owner.restore_spot_relocation_state (frozen, target));
+    const auto initializes_before_commit = initializes->load ();
+    const auto callbacks = std::make_shared<std::atomic_int> (0);
+    auto timer = std::make_shared<timer_state_t> ();
+    timer->name = "staged-expiry";
+    timer->period = std::chrono::hours (1);
+    timer->handler_instance = context->spot_instance;
+    timer->handler_invoker = [callbacks] (void *, void *, serializer_registry_t &,
+                                          const timer_tick_t &) {
+        ++*callbacks;
+        return task_t<zlink::message_t> (result_t<zlink::message_t>::success (zlink::message_t{}));
+    };
+    node->lane.run ([&] { context->timers.push_back (timer); }).get ();
+    timer_runtime_t::post_fire_count (context, timer, {}, 1);
+    observe_scheduled_expiry (node->worker_executor);
+    const auto callbacks_before_commit = callbacks->load ();
+    const bool committed = owner.commit_relocation_materialization ({target});
+    context->serial_queue->drain ();
+    context->spot_serial_executor->close ();
+    context->serial_queue->close ();
+    node->worker_executor->drain ();
+    node->lane.run ([&] { node->spot_contexts_by_id.clear (); }).get ();
+    EXPECT_TRUE (committed);
+    EXPECT_EQ (initializes_before_commit, 0);
+    EXPECT_EQ (initializes->load (), 1);
+    EXPECT_EQ (callbacks_before_commit, 0);
+    if (!initialize_throws)
+        EXPECT_EQ (callbacks->load (), 1);
+}
+
+TEST (ZLinkFrameworkSpotCloseConformance, FailedPreparationDrainsYieldedTimerAndAcceptedClaims)
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+    auto node = zlink::framework::test::runtime_failure_fixture<spot_node_builder_state_t> (
+      "failed-preparation-drain");
+    node->worker_executor = std::make_shared<runtime::offload_executor_t> (1);
+    serializer_registry_t serializers;
+    node->channel_runtime =
+      zlink::framework::test::runtime_failure_fixture<channel_runtime_state_t> ();
+    node->channel_runtime->serializers = &serializers;
+    node->spot_factories.emplace ("preparing", std::type_index (typeid (int)));
+    spot_lifecycle_callbacks_t lifecycle;
+    lifecycle.create_spot_context_instance = [] (spot_context_t,
+                                                 service_provider_t &) -> std::shared_ptr<void> {
+        return std::make_shared<int> (1);
+    };
+    node->spot_lifecycles.emplace ("preparing", std::move (lifecycle));
+    std::function<task_t<void> (bool)> terminal;
+    auto created = spot_node_runtime_t (node).get_or_create_spot (
+      "preparing", spot_id_t ("failed-preparation-drain"), {}, 1, {}, 1, &terminal);
+    auto state = spot_context_access_t::state (created.context);
+    const auto queue = state->serial_queue;
+    EXPECT_TRUE (state->admit (true));
+    std::shared_ptr<void> first_record_claim (nullptr,
+                                              [state] (void *) { state->leave_callback (); });
+    task_completion_source_t<void> resume;
+    const std::shared_ptr<void> release_on_exit (
+      nullptr, [&] (void *) { resume.complete (result_t<void>::success ()); });
+    std::promise<void> cancelling;
+    auto cancellation_started = cancelling.get_future ();
+    struct observed_timer_resource_t final : timer_resource_t
+    {
+        explicit observed_timer_resource_t (std::promise<void> &value) : observed (value) {}
+        result_t<void> cancel () noexcept override
+        {
+            observed.set_value ();
+            return result_t<void>::success ();
+        }
+        std::promise<void> &observed;
+    };
+    bool resumed_with_instance = false;
+    int callbacks = 0;
+    int pending_callbacks = 0;
+    auto running = std::make_shared<timer_state_t> ();
+    running->name = "yielded-preparation-timer";
+    running->period = std::chrono::hours (1);
+    running->handler_instance = state->spot_instance;
+    running->native_timer = std::make_unique<observed_timer_resource_t> (cancelling);
+    running->handler_invoker = [&] (void *, void *, serializer_registry_t &,
+                                    const timer_tick_t &) -> task_t<zlink::message_t> {
+        terminal (false);
+        co_await detail::yield_call<void> ([&] { return resume.task (); });
+        resumed_with_instance = bool (state->spot_instance);
+        ++callbacks;
+        co_return zlink::message_t{};
+    };
+    auto pending = std::make_shared<timer_state_t> ();
+    pending->name = "pending-preparation-timer";
+    pending->period = std::chrono::hours (1);
+    pending->handler_instance = state->spot_instance;
+    pending->handler_invoker = [&] (void *, void *, serializer_registry_t &, const timer_tick_t &) {
+        ++pending_callbacks;
+        return task_t<zlink::message_t> (result_t<zlink::message_t>::success (zlink::message_t{}));
+    };
+    node->lane.run ([&] { state->timers = {running, pending}; }).get ();
+    auto marker = std::make_shared<std::promise<void>> ();
+    auto application_drained = marker->get_future ();
+    std::shared_ptr<void> cleanup_on_exit (nullptr, [&] (void *) {
+        resume.complete (result_t<void>::success ());
+        terminal (false);
+        first_record_claim.reset ();
+        queue->drain ();
+        state->spot_serial_executor->close ();
+        node->worker_executor->drain ();
+        node->lane.run ([&] { node->spot_contexts_by_id.clear (); }).get ();
+    });
+    timer_runtime_t::post_fire_count (state, running, {}, 1);
+    timer_runtime_t::post_fire_count (state, pending, {}, 1);
+    state->spot_serial_executor->open_preparation_admission ();
+    cancellation_started.get ();
+    auto drained = node->lane.run ([&] { return state->preparation_callback_terminal; }).get ();
+    ASSERT_TRUE (drained);
+    auto early_close = created.context.close ();
+    resume.complete (result_t<void>::success ());
+    ASSERT_TRUE (queue->try_post ("accepted-callback-marker", [marker] { marker->set_value (); }));
+    application_drained.get ();
+    EXPECT_TRUE (resumed_with_instance);
+    EXPECT_EQ (callbacks, 1);
+    EXPECT_EQ (pending_callbacks, 0);
+    EXPECT_FALSE (drained->task ().await_ready ());
+    EXPECT_FALSE (early_close.await_ready ());
+    auto repeated_terminal = state->complete_preparation (false);
+    EXPECT_FALSE (repeated_terminal.await_ready ());
+    EXPECT_TRUE (node->lane.run ([&] { return bool (state->spot_instance); }).get ());
+    first_record_claim.reset ();
+    queue->drain ();
+    EXPECT_TRUE (drained->task ().await_ready ());
+    EXPECT_TRUE (repeated_terminal.result ());
+    EXPECT_TRUE (early_close.result ());
+    EXPECT_FALSE (early_close.result ().value ());
+    EXPECT_FALSE (node->lane.run ([&] { return bool (state->spot_instance); }).get ());
+    cleanup_on_exit.reset ();
+}
+
+TEST (ZLinkFrameworkSpotCloseConformance, RelocationTargetTimerWaitsForStagingCommit)
+{
+    verify_target_staging_commit (false);
+}
+
+TEST (ZLinkFrameworkSpotCloseConformance, TargetInitializeFailurePreservesConfirmedRelocation)
+{
+    verify_target_staging_commit (true);
+}
 
 using namespace std::chrono_literals;
 namespace zf = zlink::framework;
@@ -70,6 +474,13 @@ struct observation_t
     std::string handler_mode;
     std::string watched_spot;
     std::shared_ptr<zf::detail::spot_context_state_t> room_state;
+    std::shared_ptr<zf::detail::spot_context_state_t> session_state;
+    std::shared_ptr<zf::detail::timer_state_t> preparation_timer;
+    bool prepare_timer = false;
+    bool initialized = false;
+    std::size_t prepared_authority_puts = 0;
+    bool preparation_timer_closes = false;
+    std::optional<zf::task_t<bool>> preparation_timer_close;
 
     void record (std::string event)
     {
@@ -83,6 +494,39 @@ observation_t *observed = nullptr;
 observation_t &current ()
 {
     return *observed;
+}
+
+void install_preparation_timer (const std::shared_ptr<zf::detail::spot_context_state_t> &state)
+{
+    if (!current ().prepare_timer)
+        return;
+    auto timer = std::make_shared<zf::detail::timer_state_t> ();
+    timer->name = "prepared-expiry";
+    timer->period = std::chrono::hours (1);
+    timer->handler_instance = state->spot_instance;
+    timer->handler_invoker = [weak_state = std::weak_ptr (state)] (void *, void *,
+                                                                   zf::serializer_registry_t &,
+                                                                   const zf::timer_tick_t &) {
+        bool closes = false;
+        {
+            std::lock_guard lock (current ().mutex);
+            ++current ().timer_calls;
+            closes = current ().preparation_timer_closes;
+        }
+        if (closes) {
+            auto closing = zf::detail::spot_context_access_t::create (weak_state.lock ()).close ();
+            std::lock_guard lock (current ().mutex);
+            current ().preparation_timer_close.emplace (std::move (closing));
+        }
+        return zf::task_t<zlink::message_t> (
+          zf::result_t<zlink::message_t>::success (zlink::message_t{}));
+    };
+    if (state->execution_mode == zf::user_spot_execution_mode_t::per_actor)
+        timer->serial_queue = state->spot_serial_executor->timer_queue (timer->name);
+    state->node->lane.run ([&] { state->timers.push_back (timer); }).get ();
+    std::lock_guard lock (current ().mutex);
+    current ().preparation_timer = std::move (timer);
+    current ().initialized = true;
 }
 
 // ---------------------------------------------------------------------------
@@ -222,6 +666,11 @@ class close_room_spot_t final : public zf::spot_t<member_actor_t>
     }
     zf::spot_context_t &context () noexcept override { return _context; }
     const zf::spot_context_t &context () const noexcept override { return _context; }
+    zf::task_t<void> on_initialize () override
+    {
+        install_preparation_timer (zf::detail::spot_context_access_t::state (_context));
+        co_return;
+    }
     void configure () override
     {
         _context.handlers ().add_handler<&close_room_spot_t::probe> (
@@ -313,9 +762,15 @@ class close_session_spot_t final : public zf::instance_spot_t
     explicit close_session_spot_t (zf::instance_spot_context_t context) :
         _context (std::move (context))
     {
+        current ().session_state = zf::detail::spot_context_access_t::state (_context);
     }
     zf::instance_spot_context_t &context () noexcept override { return _context; }
     const zf::instance_spot_context_t &context () const noexcept override { return _context; }
+    zf::task_t<void> on_initialize () override
+    {
+        install_preparation_timer (zf::detail::spot_context_access_t::state (_context));
+        co_return;
+    }
     void configure () override
     {
         _context.handlers ().add_handler<&close_session_spot_t::probe> ();
@@ -371,6 +826,8 @@ class close_fault_store_t final : public zf::location_store_t
     // The next Closing commit stays pending until release_held_commit.
     std::atomic_bool hold_closing_commit_once{false};
     std::atomic_bool hold_authority_release_once{false};
+    // Zero disables this fixture; Ready/cursor/pointer are prepared puts 1/2/3.
+    std::size_t hold_prepared_authority_put = 0;
     std::atomic_bool owner_lease_released{false};
     std::promise<void> commit_held;
 
@@ -414,7 +871,15 @@ class close_fault_store_t final : public zf::location_store_t
                   owner_delete || erase->key.value.starts_with (std::string ("owner-lease\0", 12));
             }
         }
-        if ((watched_put && hold_closing_commit_once.exchange (false))
+        bool hold_prepared = false;
+        if (watched_put) {
+            std::lock_guard lock (current ().mutex);
+            if (current ().initialized) {
+                ++current ().prepared_authority_puts;
+                hold_prepared = current ().prepared_authority_puts == hold_prepared_authority_put;
+            }
+        }
+        if (hold_prepared || (watched_put && hold_closing_commit_once.exchange (false))
             || (watched_delete && hold_authority_release_once.exchange (false))) {
             zf::task_completion_source_t<zf::store_write_result_t> completion;
             auto held = completion.task ();
@@ -686,8 +1151,69 @@ class scenario_client_t final : public zf::hosted_service_t
             current ().on_closing_blocks = given.value ("onClosing", "") == "blocks";
             current ().handler_mode = given.value ("handler", "");
             current ().room_timer = given.value ("roomTimer", false);
+            current ().prepare_timer = act == "timerDuringPreparedAuthorityWrite";
+            current ().preparation_timer_closes = given.value ("timerCloses", false);
         }
         auto &store = *_store;
+
+        if (act == "timerDuringPreparedAuthorityWrite") {
+            const bool instance = given.value ("instance", false);
+            const auto stage = given.at ("heldStage").get<std::string> ();
+            store.hold_prepared_authority_put = stage == "ready" ? 1 : stage == "cursor" ? 2 : 3;
+            auto held = store.commit_held.get_future ();
+            auto creating = std::async (std::launch::async, [&] {
+                if (!instance) {
+                    auto &manager = services.get_required<zf::spot_manager_t> ();
+                    const auto result = manager.get_or_create (zf::spot_id_t (spot_id), "room")
+                                          .timeout (3s)
+                                          .async ()
+                                          .result ();
+                    return bool (result);
+                }
+                auto route = _app->advanced ().zlink ().route_client (
+                  services.get_required<zf::serializer_registry_t> ());
+                return bool (
+                  route.request_to_spot (zf::spot_id_t (spot_id), close_probe_request_t{0})
+                    .instance_spot ("session")
+                    .timeout (3s)
+                    .async<close_probe_reply_t> ()
+                    .result ());
+            });
+            const std::shared_ptr<void> release_on_exit (
+              nullptr, [&] (void *) { store.release_held_commit (false); });
+            held.get ();
+            const auto state = instance ? current ().session_state : current ().room_state;
+            const auto timer = current ().preparation_timer;
+            const auto queue = state->serial_queue;
+            zf::detail::timer_runtime_t::post_fire_count (state, timer, timer->serial_queue, 1);
+            observe_scheduled_expiry (state->serial_executor);
+            {
+                std::lock_guard lock (current ().mutex);
+                actual["timerCallsWhileHeld"] = current ().timer_calls;
+                actual["handlerCallsWhileHeld"] = current ().handler_calls;
+                if (given.value ("timerCloses", false) && stage != "ready") {
+                    actual["timerCloseRequestedWhileHeld"] =
+                      bool (current ().preparation_timer_close);
+                    actual["timerCloseCompletedWhileHeld"] =
+                      current ().preparation_timer_close
+                      && current ().preparation_timer_close->await_ready ();
+                }
+            }
+            store.release_held_commit (given.value ("terminalConflict", false));
+            actual["created"] = creating.get ();
+            queue->drain ();
+            if (timer->serial_queue)
+                timer->serial_queue->drain ();
+            std::optional<zf::task_t<bool>> timer_close;
+            {
+                std::lock_guard lock (current ().mutex);
+                actual["timerCallsAfterPublication"] = current ().timer_calls;
+                timer_close = std::move (current ().preparation_timer_close);
+            }
+            if (timer_close)
+                actual["timerCloseResult"] = close_result (timer_close->result ());
+            return;
+        }
 
         if (given.contains ("handler")) {
             // Instance Spot: the handler turn calls context Close itself.
@@ -1078,6 +1604,8 @@ nlohmann::json run_scenario (const nlohmann::json &scenario, std::string &failur
     auto app = zf::app_t::create ();
     app.logging ().use_file ("spot-close.flow").set_min_level (zf::log_level_t::debug);
     app.add_zlink_framework ([&] (zf::zlink_framework_options_t &options) {
+        if (scenario.at ("act") == "timerDuringPreparedAuthorityWrite")
+            options.worker ().min_threads (1).max_threads (1);
         options.configure_dispatch ().message_flow (zf::message_flow_log_mode_t::detailed);
         zf::detail::dispatch_options_access_t::set_observer_for_tests (
           options.configure_dispatch (), observe_diagnostics);
@@ -1293,6 +1821,80 @@ TEST (ZLinkFrameworkSpotCloseConformance, OppositeJoinsBetweenTwoSpotsComplete)
        "given": {"runtime": "Ready", "authority": "Ready"},
        "act": "crossJoins",
        "expect": {"crossJoins": "completed"}})json"));
+}
+
+TEST (ZLinkFrameworkSpotCloseConformance, TimerWaitsForReadyStorePublication)
+{
+    for (const bool instance : {false, true}) {
+        run_and_check (nlohmann::json{
+          {"name", instance ? "instance-timer-ready-publication" : "user-timer-ready-publication"},
+          {"given", {{"authority", "Missing"}, {"instance", instance}, {"heldStage", "ready"}}},
+          {"act", "timerDuringPreparedAuthorityWrite"},
+          {"expect",
+           {{"timerCallsWhileHeld", 0},
+            {"handlerCallsWhileHeld", 0},
+            {"timerCallsAfterPublication", 1},
+            {"created", true}}}});
+    }
+}
+
+TEST (ZLinkFrameworkSpotCloseConformance, InstanceReadyTimerRunsWhileDurableTerminalDefersClose)
+{
+    for (const auto *stage : {"cursor", "pointer"}) {
+        run_and_check (
+          nlohmann::json{{"name", std::string ("instance-timer-first-terminal-") + stage},
+                         {"given",
+                          {{"authority", "Missing"},
+                           {"instance", true},
+                           {"heldStage", stage},
+                           {"timerCloses", true}}},
+                         {"act", "timerDuringPreparedAuthorityWrite"},
+                         {"expect",
+                          {{"timerCallsWhileHeld", 1},
+                           {"handlerCallsWhileHeld", 1},
+                           {"timerCloseRequestedWhileHeld", true},
+                           {"timerCloseCompletedWhileHeld", false},
+                           {"timerCloseResult", true},
+                           {"timerCallsAfterPublication", 1},
+                           {"created", true}}}});
+    }
+}
+
+TEST (ZLinkFrameworkSpotCloseConformance,
+      InstanceDurableTerminalFailureDiscardsPreparationAndCloseIsFalse)
+{
+    for (const auto *stage : {"cursor", "pointer"}) {
+        run_and_check (
+          nlohmann::json{{"name", std::string ("instance-timer-terminal-failure-") + stage},
+                         {"given",
+                          {{"authority", "Missing"},
+                           {"instance", true},
+                           {"heldStage", stage},
+                           {"timerCloses", true},
+                           {"terminalConflict", true}}},
+                         {"act", "timerDuringPreparedAuthorityWrite"},
+                         {"expect",
+                          {{"timerCallsWhileHeld", 1},
+                           {"handlerCallsWhileHeld", 1},
+                           {"timerCloseRequestedWhileHeld", true},
+                           {"timerCloseCompletedWhileHeld", false},
+                           {"timerCloseResult", false},
+                           {"created", false},
+                           {"onClosingCalls", 0}}}});
+    }
+}
+
+TEST (ZLinkFrameworkSpotCloseConformance, TimerCloseSucceedsAfterReadyPublication)
+{
+    run_and_check (nlohmann::json{
+      {"name", "timer-close-after-ready-publication"},
+      {"given", {{"authority", "Missing"}, {"heldStage", "ready"}, {"timerCloses", true}}},
+      {"act", "timerDuringPreparedAuthorityWrite"},
+      {"expect",
+       {{"timerCallsWhileHeld", 0},
+        {"timerCallsAfterPublication", 1},
+        {"timerCloseResult", true},
+        {"created", true}}}});
 }
 
 } // namespace

@@ -2069,8 +2069,10 @@ export class ZLinkFrameworkRuntimeHost
           target.stableType,
           target.targetSpotId as never,
           objectGeneration,
-          this.executionState?.abortController.signal
+          this.executionState?.abortController.signal,
+          'first-terminal'
         ),
+      publish: (target) => spotManager.publishInstance(target, meshName),
       discard: (target) => spotManager.discardInstance(meshName, target.targetSpotId as never),
       beginTerminal: (target) =>
         spotManager.beginInstanceTerminal(

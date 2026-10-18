@@ -56,6 +56,11 @@ internal abstract partial class ZLinkSpotActivation
                     return (_finalization, (TaskCompletionSource?)null);
 
                 Volatile.Write(ref _disposed, 1);
+                if (_serial.IsPreparing)
+                {
+                    Volatile.Read(ref _close)?.TrySetResult(false);
+                    _ = _serial.FinishActivationPreparation();
+                }
                 var completion = new TaskCompletionSource(
                     TaskCreationOptions.RunContinuationsAsynchronously
                 );
@@ -424,6 +429,8 @@ internal abstract partial class ZLinkSpotActivation
     protected ValueTask<bool> CloseFromContextAsync(CancellationToken cancellationToken)
     {
         EnsureContextOperationAllowed();
+        if (_serial.IsPreparing)
+            return _runtime.CloseCurrentSpotAsync(this, cancellationToken);
         if (
             ZLinkApplicationExecutionContext.Current is null
             || ZLinkSerialTurn.Current is not { } turn
@@ -613,7 +620,7 @@ internal abstract partial class ZLinkSpotActivation
     {
         AttachNativeDispatch();
         var create = new SpotCreateCallState(request);
-        await ExecuteSerializedAsync(
+        await _serial.ExecuteApplicationCallbackAsync(
             static async (activation, state, ct) =>
             {
                 state.Response = await activation.UserSpot.OnCreateAsync(state.Request, ct);
@@ -630,7 +637,7 @@ internal abstract partial class ZLinkSpotActivation
 
     protected ValueTask InitializeInstanceCoreAsync(CancellationToken cancellationToken)
     {
-        return ExecuteSerializedAsync(
+        return _serial.ExecuteApplicationCallbackAsync(
             static async (activation, state, ct) =>
             {
                 activation._timers.BeginRelocatedInitialization();
@@ -778,44 +785,15 @@ internal abstract partial class ZLinkSpotActivation
         Func<ReadOnlyMemory<byte>> acceptedJournalFactory = () =>
             ZLinkSpotAcceptedJournal.Encode(received, request ? originalOperation.ReplyRouteId : 0);
 
-        // Spot messaging §4 step 12 with §7 step 1: the first terminal record is
-        // the lifecycle item posted before the first message runs, so a Close
-        // that message's handler requests is the next lifecycle item and starts
-        // only after the record (C++ "instance-activation-terminal" barrier).
+        // The preparation item was admitted before initialization could request
+        // Close. Its terminal now includes the first durable message record.
         var recorded = recordTerminal is null
             ? null
-            : PostLifecycleOperation(
-                async (_, ct) =>
-                {
-                    var turn =
-                        ZLinkSerialTurn.Current
-                        ?? throw new InvalidOperationException(
-                            "The first terminal record requires a lifecycle turn."
-                        );
-                    await turn.YieldFrameworkCallAsync(
-                            async token =>
-                            {
-                                await completion.Task.WaitAsync(ct).ConfigureAwait(false);
-                                await recordTerminal(token).ConfigureAwait(false);
-                            },
-                            // The accepted terminal record owns its Store completion. Spot
-                            // cancellation must not release this lifecycle item while that
-                            // completion can still mutate the authority being cleaned up.
-                            CancellationToken.None
-                        )
-                        .ConfigureAwait(false);
-                    return true;
-                }
-            );
-        if (recordTerminal is not null && recorded is null)
-        {
-            received.Dispose();
-            throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.ShuttingDown,
-                "The Instance Spot activation queue stopped before admission."
-            );
-        }
-
+            : _serial.RecordActivationTerminalAsync(async token =>
+            {
+                await completion.Task.ConfigureAwait(false);
+                await recordTerminal(token).ConfigureAwait(false);
+            });
         // The record must be accepted in this call's synchronous prefix when no
         // other turn holds either lane, as the blocking turn did; contention now
         // suspends this call instead of blocking its thread. The ingress turn
@@ -1389,7 +1367,9 @@ internal abstract partial class ZLinkSpotActivation
         CancellationToken cancellationToken
     )
     {
-        return _serial.ExecuteAsync(operation, cancellationToken);
+        return _serial.IsTargetPreparing
+            ? _serial.ExecuteTargetPreparationAsync(operation, cancellationToken)
+            : _serial.ExecuteAsync(operation, cancellationToken);
     }
 
     private ValueTask ExecuteSerializedAsync<TState>(
@@ -1398,7 +1378,12 @@ internal abstract partial class ZLinkSpotActivation
         CancellationToken cancellationToken
     )
     {
-        return _serial.ExecuteAsync(operation, state, cancellationToken);
+        return _serial.IsTargetPreparing
+            ? _serial.ExecuteTargetPreparationAsync(
+                (activation, ct) => operation(activation, state, ct),
+                cancellationToken
+            )
+            : _serial.ExecuteAsync(operation, state, cancellationToken);
     }
 
     private async ValueTask ExecuteApplicationSerializedAsync<TState>(
@@ -1890,8 +1875,6 @@ internal abstract partial class ZLinkSpotActivation
         CancellationToken cancellationToken
     )
     {
-        if (_timers.IsFrozen)
-            return false;
         await HandlerInvoker
             .InvokeTimerAsync(descriptor, tick, cancellationToken)
             .ConfigureAwait(false);
@@ -2782,8 +2765,6 @@ internal abstract partial class ZLinkSpotActivation
         CancellationToken cancellationToken
     )
     {
-        if (_timers.IsFrozen)
-            return false;
         var state = new TimerDispatchState(descriptor, tick);
         var operationAdmission = (
             await _runtime
