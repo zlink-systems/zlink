@@ -125,18 +125,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
     private volatile boolean draining;
 
     private <T> T inStateLane(Supplier<T> work) {
-        try {
-            return stateLane.runAsync(work).toCompletableFuture().join();
-        } catch (java.util.concurrent.CompletionException failure) {
-            Throwable cause = failure.getCause();
-            if (cause instanceof RuntimeException runtimeFailure) {
-                throw runtimeFailure;
-            }
-            if (cause instanceof Error error) {
-                throw error;
-            }
-            throw failure;
-        }
+        return stateLane.awaitTurn(work);
     }
 
     public ZLinkStreamRuntime(
