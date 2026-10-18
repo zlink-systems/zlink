@@ -436,7 +436,7 @@ std::vector<handoff_packet_t>
 actor_transfer_coordinator_t::take_backlog (const std::string &actor_key)
 {
     return _lane
-      .run ([&, this] () -> std::vector<handoff_packet_t> {
+      .run_checked ([&, this] () -> std::vector<handoff_packet_t> {
           const auto found = _backlogs.find (actor_key);
           if (found == _backlogs.end ()) {
               return {};
