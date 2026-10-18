@@ -102,8 +102,6 @@ internal sealed class ZLinkSpotActivationFactory(
                     )
                     .ConfigureAwait(false);
                 await activation.BindDescriptorsAsync(ct).ConfigureAwait(false);
-                if (!invokeCreate)
-                    activation.AttachNativeDispatch();
                 response = invokeCreate
                     ? await activation.InitializeAsync(request, ct).ConfigureAwait(false)
                     : ZLinkSpotCreateResponse.Accept();
