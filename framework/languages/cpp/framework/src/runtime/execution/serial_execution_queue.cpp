@@ -130,13 +130,14 @@ class serial_deferred_barrier_t final
       std::function<task_t<std::vector<std::shared_ptr<serial_execution_queue_t>>> ()> collect,
       std::function<void (const result_t<void> &)> completion)
     {
-        auto acquisition =
-          std::make_shared<task_t<void>> (acquire_participants (std::move (collect)));
+        const auto turn = detail::capture_current_serial_turn ();
+        auto acquisition = std::make_shared<task_t<void>> (detail::with_task_resume_scheduler (
+          acquire_participants (std::move (collect)), turn->resume_scheduler ()));
         {
             std::lock_guard lock (_mutex);
             _acquisition = acquisition;
         }
-        detail::observe_task_terminal (
+        detail::observe_task_completion (
           *acquisition, [self = shared_from_this (), acquisition,
                          completion = std::move (completion)] (const result_t<void> &result) {
               if (!result)
@@ -193,8 +194,9 @@ class serial_deferred_barrier_t final
             return task_t<void> (result_t<void>::failure (framework_error_kind_t::not_configured,
                                                           "Lifecycle barrier phase is empty"));
         auto source = std::make_shared<task_completion_source_t<void>> ();
+        auto owned_work = std::make_shared<std::function<task_t<void> ()>> (std::move (work));
         const auto invoke = [self = shared_from_this (), source,
-                             work = std::move (work)] (result_t<void> admission) {
+                             owned_work] (result_t<void> admission) {
             if (!admission) {
                 source->complete (std::move (admission));
                 return;
@@ -216,9 +218,9 @@ class serial_deferred_barrier_t final
                 return;
             }
             try {
-                auto pending = std::make_shared<task_t<void>> (work ());
+                auto pending = std::make_shared<task_t<void>> ((*owned_work) ());
                 detail::observe_task_terminal (
-                  *pending, [source, pending, work] (const result_t<void> &result) {
+                  *pending, [source, pending, owned_work] (const result_t<void> &result) {
                       source->complete (result);
                   });
             }
@@ -803,6 +805,17 @@ serial_execution_queue_t::~serial_execution_queue_t ()
 bool serial_execution_queue_t::owns_shared_gate () const noexcept
 {
     return _lane_policy.allows_turn_yield () || static_cast<bool> (_spot_gate);
+}
+
+void serial_execution_queue_t::set_application_start_policy (application_start_policy_t policy)
+{
+    notify_control ("application-start-policy", [this, policy = std::move (policy)] () mutable {
+        std::unique_lock lock (_mutex, std::defer_lock);
+        if (!owns_shared_gate ())
+            lock.lock ();
+        _application_start_policy = std::move (policy);
+        (void) schedule_drain_locked ();
+    });
 }
 
 void serial_execution_queue_t::attach_spot_gate (std::shared_ptr<serial_execution_queue_t> gate)
@@ -1746,9 +1759,20 @@ bool serial_execution_queue_t::has_ready_locked () noexcept
            || (!_suspended_lifecycle && next_lifecycle_locked () != _lifecycle.queue.end ());
 }
 
-bool serial_execution_queue_t::application_ready_locked () const noexcept
+std::deque<serial_execution_queue_t::work_item_t>::iterator
+serial_execution_queue_t::next_application_locked () noexcept
 {
-    return !_application.queue.empty ()
+    if (!_application_start_policy)
+        return _application.queue.begin ();
+    return std::find_if (_application.queue.begin (), _application.queue.end (),
+                         [this] (const work_item_t &item) {
+                             return _application_start_policy (item.retained_message);
+                         });
+}
+
+bool serial_execution_queue_t::application_ready_locked () noexcept
+{
+    return next_application_locked () != _application.queue.end ()
            && (!_suspended_lifecycle
                || !_suspended_lifecycle->turn->holds_application_while_waiting ());
 }
@@ -1845,8 +1869,9 @@ serial_execution_queue_t::take_next_locked (std::optional<serial_work_lane_t> fo
         _suspended_lifecycle.reset ();
     } else {
         auto &queue = lane_locked (selected_lane).queue;
-        const auto next =
-          selected_lane == serial_work_lane_t::lifecycle ? lifecycle_next : queue.begin ();
+        const auto next = selected_lane == serial_work_lane_t::lifecycle
+                            ? lifecycle_next
+                            : next_application_locked ();
         item = std::move (*next);
         queue.erase (next);
     }

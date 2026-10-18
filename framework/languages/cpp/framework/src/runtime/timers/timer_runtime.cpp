@@ -36,6 +36,23 @@ bool timer_t::is_disposed () const noexcept
 namespace
 {
 
+// A queued fire owns its callback claim until dispatch completes or timer
+// cancellation releases the claim without starting application work.
+struct timer_callback_admission_t
+{
+    explicit timer_callback_admission_t (std::shared_ptr<detail::spot_context_state_t> value = {}) :
+        context (std::move (value))
+    {
+    }
+    timer_callback_admission_t (const timer_callback_admission_t &) = delete;
+    ~timer_callback_admission_t ()
+    {
+        if (context)
+            context->leave_callback ();
+    }
+    std::shared_ptr<detail::spot_context_state_t> context;
+};
+
 void complete_cancel_if_ready (const std::shared_ptr<detail::timer_state_t> &state)
 {
     std::shared_ptr<task_completion_source_t<void>> completion;
@@ -62,13 +79,20 @@ task_t<void> timer_t::cancel ()
 
     const auto state = _state;
     std::shared_ptr<task_completion_source_t<void>> completion;
+    timer_callback_admission_t pending_admission;
     std::unique_ptr<detail::timer_resource_t> resource;
     bool owns_cleanup = false;
     {
         std::lock_guard lock (state->mutex);
         if (!state->cancel_completion) {
             state->disposed.store (true, std::memory_order_release);
-            state->pending_fire = false;
+            if (state->pending_fire) {
+                auto pending = std::static_pointer_cast<timer_callback_admission_t> (
+                  state->pending_fire->lock ());
+                if (pending)
+                    pending_admission.context = std::move (pending->context);
+                state->pending_fire.reset ();
+            }
             state->pending_fire_count = 0;
             state->cancel_completion = std::make_shared<task_completion_source_t<void>> ();
             resource = std::move (state->native_timer);
@@ -224,43 +248,46 @@ void timer_runtime_t::post_fire_count (
   const std::shared_ptr<runtime::serial_execution_queue_t> &queue,
   std::uint64_t fire_count)
 {
-    if (!context || !state) {
+    if (!context || !state)
         return;
-    }
+    std::shared_ptr<timer_callback_admission_t> admission;
     {
         std::lock_guard lock (state->mutex);
-        if (state->disposed) {
+        if (state->disposed)
             return;
-        }
         const auto available =
           std::numeric_limits<std::uint64_t>::max () - state->pending_fire_count;
         state->pending_fire_count += std::min (fire_count, available);
         if (state->pending_fire || state->running) {
-            state->pending_fire = true;
+            if (!state->pending_fire)
+                state->pending_fire.emplace ();
             return;
         }
-        state->pending_fire = true;
+        admission = std::make_shared<timer_callback_admission_t> ();
+        state->pending_fire.emplace (admission);
     }
-    // The fire is admitted here and holds its admission until its callbacks
-    // complete, or until its queue drops it unrun (Spot address messaging §7).
-    auto fire = context->admit_timer_fire ();
-    std::shared_ptr<void> admission;
-    if (fire.admitted)
-        admission.reset (static_cast<void *> (nullptr),
-                         [context] (void *) noexcept { context->leave_callback (); });
-    auto work = [context, state, admission, spot_instance = std::move (fire.spot_instance),
-                 channel_runtime = std::move (fire.channel_runtime)] (auto complete) mutable {
-        std::uint64_t pending_fire_count = 0;
-        {
-            std::lock_guard lock (state->mutex);
-            pending_fire_count = state->pending_fire_count;
-            state->pending_fire = false;
-            state->pending_fire_count = 0;
-        }
+    const auto rollback = [&] (void *) noexcept {
+        std::lock_guard lock (state->mutex);
+        if (state->pending_fire && state->pending_fire->lock ().get () == admission.get ())
+            state->pending_fire.reset ();
+    };
+    std::unique_ptr<void, decltype (rollback)> rollback_pending (state.get (), rollback);
+    // Queued work owns the claim. The timer can cancel that claim without
+    // running the application lane; active callbacks keep their claim.
+    const bool admitted = context->admit_timer_fire ();
+    timer_callback_admission_t claimed (admitted ? context : nullptr);
+    {
+        std::lock_guard lock (state->mutex);
+        const auto pending = state->pending_fire ? state->pending_fire->lock () : nullptr;
+        if (state->disposed || pending.get () != admission.get ())
+            return;
+        admission->context = std::move (claimed.context);
+    }
+    auto work = [context, state, admission] (auto complete) mutable {
         framework::timer_t timer (state);
         auto runtime = timer_runtime_t (context);
         auto task = runtime.dispatch_fire_count_async (
-          timer, pending_fire_count, std::move (spot_instance), std::move (channel_runtime));
+          timer, {}, std::optional<const void *>{admission.get ()});
         detail::observe_task_completion (task, [complete, admission = std::move (admission)] (
                                                  const result_t<timer_tick_t> &) mutable {
             admission.reset ();
@@ -268,15 +295,11 @@ void timer_runtime_t::post_fire_count (
         });
     };
     const auto queue_name = "spot-timer:" + state->name;
-    const bool posted = fire.admitted
+    const bool posted = admitted
                         && (queue ? queue->try_post_async (queue_name, std::move (work))
                                   : context->try_post_serial_async (queue_name, std::move (work)));
-    if (!posted) {
-        std::lock_guard lock (state->mutex);
-        if (!state->disposed) {
-            state->pending_fire = false;
-        }
-    }
+    if (posted)
+        (void) rollback_pending.release ();
 }
 
 namespace
@@ -423,38 +446,41 @@ task_t<timer_tick_t> timer_runtime_t::dispatch_fire_count_async (timer_t &timer,
         return task_t<timer_tick_t> (result_t<timer_tick_t>::failure (
           framework_error_kind_t::protocol_error, "SPOT timer context is not configured"));
     }
-    auto fire = context->admit_timer_fire ();
-    if (!fire.admitted) {
+    if (!context->admit_timer_fire ()) {
         return task_t<timer_tick_t> (detail::result_access_t::failure<timer_tick_t> (
           spot_context_state_t::sealed_admission_error ()));
     }
-    auto task = dispatch_fire_count_async (timer, fire_count, std::move (fire.spot_instance),
-                                           std::move (fire.channel_runtime));
+    auto task = dispatch_fire_count_async (timer, fire_count, std::nullopt);
     detail::observe_task_completion (
       task, [context] (const result_t<timer_tick_t> &) { context->leave_callback (); });
     return task;
 }
 
 task_t<timer_tick_t> timer_runtime_t::dispatch_fire_count_async (
-  timer_t &timer,
-  std::uint64_t fire_count,
-  std::shared_ptr<void> spot_instance,
-  std::shared_ptr<channel_runtime_state_t> channel_runtime) const
+  timer_t &timer, std::uint64_t fire_count, std::optional<const void *> pending_admission) const
 {
     auto state = timer._state;
     auto context = _context;
-    if (!state || state->disposed) {
+    if (!state) {
         co_return detail::boundary_failure<timer_tick_t> (detail::boundary_error_t::closed,
                                                           "SPOT timer is disposed");
     }
     {
         std::lock_guard lock (state->mutex);
-        if (state->disposed.load (std::memory_order_acquire)) {
+        if (state->disposed.load (std::memory_order_acquire)
+            || (pending_admission
+                && (!*pending_admission || !state->pending_fire
+                    || state->pending_fire->lock ().get () != *pending_admission))) {
             co_return detail::boundary_failure<timer_tick_t> (detail::boundary_error_t::closed,
                                                               "SPOT timer is disposed");
         }
+        if (pending_admission) {
+            fire_count = std::exchange (state->pending_fire_count, 0);
+            state->pending_fire.reset ();
+        }
         if (state->running) {
-            state->pending_fire = true;
+            if (!state->pending_fire)
+                state->pending_fire.emplace ();
             const auto available =
               std::numeric_limits<std::uint64_t>::max () - state->pending_fire_count;
             state->pending_fire_count += std::min (fire_count, available);
@@ -489,7 +515,7 @@ task_t<timer_tick_t> timer_runtime_t::dispatch_fire_count_async (
             state->running = false;
             post_pending = state->pending_fire && !state->disposed;
             pending_fire_count = state->pending_fire_count;
-            state->pending_fire = false;
+            state->pending_fire.reset ();
             state->pending_fire_count = 0;
         }
         complete_cancel_if_ready (state);
@@ -499,6 +525,8 @@ task_t<timer_tick_t> timer_runtime_t::dispatch_fire_count_async (
         }
     };
 
+    const auto spot_instance = context->spot_instance;
+    const auto channel_runtime = context->channel_runtime;
     try {
         auto ticks = make_ticks (*state, fire_count);
         /* Timer callbacks have no inbound message: they start a new flow with

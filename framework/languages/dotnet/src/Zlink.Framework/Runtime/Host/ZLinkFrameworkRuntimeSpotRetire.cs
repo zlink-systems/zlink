@@ -81,7 +81,8 @@ internal sealed partial class ZLinkFrameworkRuntime
                         targetOwnerGeneration,
                         cancellationToken,
                         restoreLogicalTimers: true,
-                        logicalTimers: spotParticipant.LogicalTimers
+                        logicalTimers: spotParticipant.LogicalTimers,
+                        relocationTarget: true
                     )
                     .ConfigureAwait(false);
             }

@@ -77,6 +77,23 @@ final class ZLinkRelocatedTimerOutcomeTest {
                     assertEquals(ZLinkFrameworkRelocationOutcome.RELOCATED, result.outcome());
                     assertEquals(ZLinkFrameworkRelocationReason.NONE, result.reason());
                     assertTrue(scenario.sourceTimer.isDisposed(), "source must not resume");
+                    var dispatched = new java.util.concurrent.atomic.AtomicBoolean();
+                    scenario.target
+                            .context
+                            .enqueueDispatch(
+                                    () -> {
+                                        dispatched.set(true);
+                                        return CompletableFuture.completedFuture(null);
+                                    })
+                            .toCompletableFuture()
+                            .get(WAIT.toSeconds(), TimeUnit.SECONDS);
+                    assertTrue(
+                            dispatched.get(),
+                            "target local admission must open after its callback completes");
+                    assertTrue(
+                            ((ZLinkSpotRuntime) target.spotManager())
+                                    .activeUserSpotIds()
+                                    .contains("room"));
                     var restored = scenario.target.context.freezeTimerRelocationEnvelope();
                     assertEquals(
                             ZLinkRelocatedTimerRebindTest.TickHandler.class.getName(),

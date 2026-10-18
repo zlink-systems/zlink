@@ -569,9 +569,9 @@ final class ZLinkRelocatedTimerRebindTest {
         }
     }
 
-    private static final class ManualScheduler extends ScheduledThreadPoolExecutor {
+    static final class ManualScheduler extends ScheduledThreadPoolExecutor {
         private final List<ScheduledFuture<?>> tasks = new ArrayList<>();
-        private final LinkedBlockingQueue<Runnable> due = new LinkedBlockingQueue<>();
+        final LinkedBlockingQueue<Runnable> due = new LinkedBlockingQueue<>();
 
         ManualScheduler() {
             super(1);

@@ -800,7 +800,8 @@ internal sealed class ZLinkInstanceSpotActivationTarget(
                     prepared,
                     readySnapshot.ObjectGeneration,
                     readySnapshot.AuthorityOwnerGeneration,
-                    cancellationToken
+                    cancellationToken,
+                    readyPayload.ActivationRecovery
                 )
                 .ConfigureAwait(false);
             published = true;
@@ -1089,7 +1090,8 @@ internal sealed class ZLinkInstanceSpotActivationTarget(
                         prepared,
                         snapshot.ObjectGeneration,
                         snapshot.AuthorityOwnerGeneration,
-                        cancellationToken
+                        cancellationToken,
+                        authority.ActivationRecovery
                     )
                     .ConfigureAwait(false);
             }
