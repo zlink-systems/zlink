@@ -167,6 +167,7 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
         List<String> operations = new CopyOnWriteArrayList<>();
         var actorBackend = new RestartActorBackend(operations);
         var actorStaging = new ZLinkStandaloneActorRelocationStagingOwner(actorBackend);
+        CompletableFuture<Void> bindingRestore = new CompletableFuture<>();
         CompletableFuture<Void> normalization = new CompletableFuture<>();
         CompletableFuture<Void> normalizationEntered = new CompletableFuture<>();
         var endpoint =
@@ -190,7 +191,13 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                         null,
                         null,
                         authorityStore,
-                        actorStaging);
+                        actorStaging,
+                        null,
+                        (req, generations) -> {
+                            assertEquals(java.util.Set.of(actorId), generations.keySet());
+                            operations.add("install-target-binding");
+                            return bindingRestore;
+                        });
         var request =
                 new ZLinkSpotRetireControl.StageRequest(
                         new ZLinkSpotRetireControl.Fence(relocationId, 1),
@@ -227,9 +234,21 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
         authority.reads.set(0);
         CompletionStage<Void> publishing = endpoint.publish(request);
         actorBackend.drain();
+        assertFalse(publishing.toCompletableFuture().isDone());
+        assertFalse(
+                operations.contains("command44"), "route switch must await binding installation");
+        assertFalse(normalizationEntered.isDone());
+        bindingRestore.complete(null);
+        actorBackend.drain();
 
         var terminal = new CompletableFuture<Void>();
         try {
+            assertTrue(
+                    operations.indexOf("install-target-binding") >= 0,
+                    "missing target binding: " + operations);
+            assertTrue(
+                    operations.indexOf("install-target-binding") < operations.indexOf("command44"),
+                    "binding must precede route switch: " + operations);
             assertTrue(normalizationEntered.isDone());
             assertEquals(
                     1,
@@ -282,7 +301,12 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                     handled.isDone(),
                     "ordinary Actor handler must wait for route and normalization finalization");
             assertEquals(
-                    List.of("prepare-actor", "publish-actor", "command44", "normalize"),
+                    List.of(
+                            "prepare-actor",
+                            "publish-actor",
+                            "install-target-binding",
+                            "command44",
+                            "normalize"),
                     operations);
             normalization.complete(null);
             actorBackend.drain();
@@ -1760,19 +1784,6 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
 
         private RestartActorBackend(List<String> operations) {
             this.operations = operations;
-        }
-
-        @Override
-        public CompletionStage<Void> enqueueIngress(
-                ZLinkStandaloneActorRelocationStagingOwner.Request request,
-                byte[] acceptedJournalRecord,
-                java.util.function.Supplier<CompletionStage<Void>> turn) {
-            return actorRuntime.submitActorDispatchLazyRecord(
-                    request.actorId(),
-                    () -> acceptedJournalRecord,
-                    acceptedJournalRecord.length,
-                    turn,
-                    () -> {});
         }
 
         @Override

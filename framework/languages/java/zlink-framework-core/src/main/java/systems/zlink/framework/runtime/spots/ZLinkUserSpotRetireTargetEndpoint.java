@@ -975,6 +975,8 @@ final class ZLinkUserSpotRetireTargetEndpoint
                         OPEN)
                 .thenCompose(
                         generations -> {
+                            long targetOwnerGeneration =
+                                    requireGeneration(generations, participant.authorityKey());
                             var backlog =
                                     actorStaging.closeDurableBacklog(
                                             target.staged(),
@@ -985,11 +987,15 @@ final class ZLinkUserSpotRetireTargetEndpoint
                                     .thenRun(
                                             () -> {
                                                 actorStaging.publishHidden(
-                                                        backlog,
-                                                        requireGeneration(
-                                                                generations,
-                                                                participant.authorityKey()));
+                                                        backlog, targetOwnerGeneration);
                                             })
+                                    .thenCompose(
+                                            ignored ->
+                                                    boundSessionRestorer.apply(
+                                                            request,
+                                                            Map.of(
+                                                                    participant.objectId(),
+                                                                    targetOwnerGeneration)))
                                     .thenCompose(
                                             ignored ->
                                                     switchSessionRoutes(

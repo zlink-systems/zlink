@@ -1739,21 +1739,6 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
         }
 
         @Override
-        public CompletionStage<Void> enqueueIngress(
-                ZLinkStandaloneActorRelocationStagingOwner.Request request,
-                byte[] acceptedJournalRecord,
-                java.util.function.Supplier<CompletionStage<Void>> turn) {
-            return spots.actorSessions()
-                    .runtime()
-                    .submitActorDispatchLazyRecord(
-                            request.actorId(),
-                            () -> acceptedJournalRecord,
-                            acceptedJournalRecord.length,
-                            turn,
-                            () -> {});
-        }
-
-        @Override
         public CompletionStage<Object> prepare(
                 ZLinkStandaloneActorRelocationStagingOwner.Request request,
                 byte[] state,

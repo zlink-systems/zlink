@@ -272,7 +272,9 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
                         backlog.relayed,
                         backlog.temporary,
                         backlog.replayer,
-                        backlog.debugProbe)
+                        backlog.debugProbe,
+                        0,
+                        0)
                 .thenApply(
                         terminal -> {
                             inStateLane(
@@ -301,28 +303,26 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
             List<PendingIngress> relayed,
             List<PendingIngress> temporary,
             ZLinkUserSpotAggregateStagingOwner.JournalReplayer replayer,
-            AsyncDrainProbe probe) {
+            AsyncDrainProbe probe,
+            int temporaryOffset,
+            int pendingOffset) {
         List<ZLinkSerialExecutionQueue.QueuedRecord> records =
                 new ArrayList<>(saved.size() + relayed.size() + temporary.size());
-        List<Supplier<CompletionStage<Void>>> turns = new ArrayList<>(records.size());
         String lane = "actor:" + staged.request().actorId();
         for (var queued : saved) {
             records.add(
                     new ZLinkSerialExecutionQueue.QueuedRecord(
                             records.size() + 1L, queued.payload()));
-            turns.add(null);
         }
         for (PendingIngress ingress : relayed) {
             records.add(
                     new ZLinkSerialExecutionQueue.QueuedRecord(
                             records.size() + 1L, ingress.record()));
-            turns.add(null);
         }
         for (PendingIngress ingress : temporary) {
             records.add(
                     new ZLinkSerialExecutionQueue.QueuedRecord(
                             records.size() + 1L, ingress.record()));
-            turns.add(() -> replayIngress(staged, ingress));
         }
         List<CompletionStage<Void>> replayObserved = new ArrayList<>(records.size());
         return backend.admitBacklogPrefix(
@@ -342,9 +342,10 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
                                         terminal,
                                         replayObserved::add);
                             replayObserved.add(terminal);
-                            return turns.get(index);
+                            var ingress = temporary.get(index - saved.size() - relayed.size());
+                            return () -> replayIngress(staged, ingress);
                         })
-                .thenApply(
+                .thenCompose(
                         accepted -> {
                             List<CompletableFuture<Void>> observed =
                                     new ArrayList<>(accepted.size());
@@ -362,71 +363,86 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
                                                                     .accept(unwrap(failure));
                                                     });
                                 }
-                                String key =
-                                        index < saved.size()
-                                                ? "journal:"
-                                                        + lane
-                                                        + ":"
-                                                        + saved.get(index).sequence()
-                                                : index < saved.size() + relayed.size()
-                                                        ? "relayed:"
-                                                                + lane
-                                                                + ":"
-                                                                + (index - saved.size())
-                                                        : "temporary:"
-                                                                + lane
-                                                                + ":"
-                                                                + (index
-                                                                        - saved.size()
-                                                                        - relayed.size());
-                                assert (execution = probe.completeOn(execution, key)) != null;
+                                assert (execution =
+                                                probe.completeOn(
+                                                        execution,
+                                                        index < saved.size()
+                                                                ? "journal:"
+                                                                        + lane
+                                                                        + ":"
+                                                                        + saved.get(index)
+                                                                                .sequence()
+                                                                : index
+                                                                                < saved.size()
+                                                                                        + relayed
+                                                                                                .size()
+                                                                        ? "relayed:"
+                                                                                + lane
+                                                                                + ":"
+                                                                                + (index
+                                                                                        - saved
+                                                                                                .size())
+                                                                        : "temporary:"
+                                                                                + lane
+                                                                                + ":"
+                                                                                + (temporaryOffset
+                                                                                        + index
+                                                                                        - saved
+                                                                                                .size()
+                                                                                        - relayed
+                                                                                                .size())))
+                                        != null;
                                 observed.add(execution.toCompletableFuture());
                             }
-                            inStateLane(
-                                    staged,
-                                    () -> {
-                                        int offset = temporary.size();
-                                        for (PendingIngress ingress : staged.pendingIngress) {
-                                            CompletionStage<Void> execution =
-                                                    backend.enqueueIngress(
-                                                            staged.request(),
-                                                            ingress.record(),
-                                                            () -> replayIngress(staged, ingress));
-                                            execution =
-                                                    execution.whenComplete(
-                                                            (ignored, failure) -> {
-                                                                if (failure != null
-                                                                        && ingress.failure()
-                                                                                != null)
-                                                                    ingress.failure()
-                                                                            .accept(
-                                                                                    unwrap(
-                                                                                            failure));
-                                                            });
-                                            assert (execution =
-                                                            probe.completeOn(
-                                                                    execution,
-                                                                    "temporary:"
-                                                                            + lane
-                                                                            + ":"
-                                                                            + offset))
-                                                    != null;
-                                            offset++;
-                                            observed.add(execution.toCompletableFuture());
-                                        }
-                                        staged.pendingIngress.clear();
-                                        completeReplay(staged);
-                                        return null;
+                            // Retain pending payloads until all batches have reached the prepared
+                            // FIFO.
+                            // Arrivals during an asynchronous admission stay in this same owner
+                            // list.
+                            List<PendingIngress> late =
+                                    inStateLane(
+                                            staged,
+                                            () -> {
+                                                if (staged.pendingIngress.size() == pendingOffset) {
+                                                    staged.pendingIngress.clear();
+                                                    completeReplay(staged);
+                                                    return List.of();
+                                                }
+                                                return List.copyOf(
+                                                        staged.pendingIngress.subList(
+                                                                pendingOffset,
+                                                                staged.pendingIngress.size()));
+                                            });
+                            CompletionStage<CompletionStage<Void>> suffix =
+                                    late.isEmpty()
+                                            ? CompletableFuture.completedFuture(
+                                                    CompletableFuture.completedFuture(null))
+                                            : replayBacklog(
+                                                    staged,
+                                                    List.of(),
+                                                    List.of(),
+                                                    late,
+                                                    replayer,
+                                                    probe,
+                                                    temporaryOffset + temporary.size(),
+                                                    pendingOffset + late.size());
+                            return suffix.thenApply(
+                                    lateTerminal -> {
+                                        observed.add(lateTerminal.toCompletableFuture());
+                                        var terminal =
+                                                CompletableFuture.allOf(
+                                                        observed.toArray(CompletableFuture[]::new));
+                                        terminal.whenComplete(
+                                                (ignored, failure) -> {
+                                                    if (terminal.isCancelled()) {
+                                                        accepted.forEach(
+                                                                entry -> entry.cancel(false));
+                                                        lateTerminal
+                                                                .toCompletableFuture()
+                                                                .cancel(false);
+                                                    }
+                                                });
+                                        return terminal;
                                     });
-                            var terminal =
-                                    CompletableFuture.allOf(
-                                            observed.toArray(CompletableFuture[]::new));
-                            terminal.whenComplete(
-                                    (ignored, failure) -> {
-                                        if (terminal.isCancelled())
-                                            accepted.forEach(entry -> entry.cancel(false));
-                                    });
-                            return terminal;
                         });
     }
 
@@ -564,7 +580,9 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
                         replay.relayed(),
                         replay.temporary(),
                         replayer,
-                        replay.debugProbe)
+                        replay.debugProbe,
+                        0,
+                        0)
                 .thenApply(
                         terminal -> {
                             inStateLane(
@@ -951,11 +969,6 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
                                 Supplier<CompletionStage<Void>>>
                         replay);
 
-        CompletionStage<Void> enqueueIngress(
-                Request request,
-                byte[] acceptedJournalRecord,
-                Supplier<CompletionStage<Void>> turn);
-
         default CompletionStage<Void> stageTimers(Request request, byte[] timerEnvelope) {
             if (ZLinkSpotTimerRelocationEnvelope.canonicalize(timerEnvelope).isEmpty()) {
                 return CompletableFuture.completedFuture(null);
@@ -1049,20 +1062,6 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
                     request.targetSpotId(),
                     records,
                     replay);
-        }
-
-        @Override
-        public CompletionStage<Void> enqueueIngress(
-                Request request,
-                byte[] acceptedJournalRecord,
-                Supplier<CompletionStage<Void>> turn) {
-            return actors.runtime()
-                    .submitActorDispatchLazyRecord(
-                            request.actorId(),
-                            () -> acceptedJournalRecord,
-                            acceptedJournalRecord.length,
-                            turn,
-                            () -> {});
         }
 
         @Override
