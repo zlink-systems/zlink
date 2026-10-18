@@ -302,7 +302,8 @@ public final class ZLinkStatefulAuthorityRouteRuntime implements AutoCloseable {
                                             if (!(read instanceof ZLinkRelocationFound found))
                                                 return CompletableFuture.failedFuture(
                                                         new IllegalStateException(
-                                                                "Instance activation recovery root is missing"));
+                                                                "Instance activation recovery root"
+                                                                        + " is missing"));
                                             byte[] payload = found.payload();
                                             if (payload.length != recovery.encodedSize()
                                                     || !Arrays.equals(
@@ -310,7 +311,8 @@ public final class ZLinkStatefulAuthorityRouteRuntime implements AutoCloseable {
                                                 return CompletableFuture.failedFuture(
                                                         new IllegalStateException(
                                                                 "Instance activation recovery root"
-                                                                        + " failed integrity validation"));
+                                                                        + " failed integrity"
+                                                                        + " validation"));
                                             }
                                             var envelope =
                                                     new systems.zlink.framework.runtime.internal
@@ -334,8 +336,8 @@ public final class ZLinkStatefulAuthorityRouteRuntime implements AutoCloseable {
                                                                     .targetNodeGeneration()) {
                                                 return CompletableFuture.failedFuture(
                                                         new IllegalStateException(
-                                                                "Instance activation recovery root does"
-                                                                        + " not match authority"));
+                                                                "Instance activation recovery root"
+                                                                        + " does not match authority"));
                                             }
                                             return node.recoverInstanceActivation(
                                                     envelope, applied.instance());
@@ -348,8 +350,56 @@ public final class ZLinkStatefulAuthorityRouteRuntime implements AutoCloseable {
                                 return CompletableFuture.failedFuture(
                                         new IllegalStateException(
                                                 "Recovered Instance authority is missing"));
+                            Applied decoded = decode(current).orElse(null);
+                            if (!(decoded instanceof InstanceApplied observed)
+                                    || !observed.ready()
+                                    || !observed.stableType().equals(applied.stableType())
+                                    || !observed.meshName().equals(applied.meshName())
+                                    || !observed.instance()
+                                            .equals(
+                                                    withoutRecovery(applied, current.storeVersion())
+                                                            .instance())) {
+                                return CompletableFuture.failedFuture(
+                                        new IllegalStateException(
+                                                "Instance activation recovery owner changed"));
+                            }
+                            if (observed.activationRecovery().isEmpty()) {
+                                return CompletableFuture.completedFuture(
+                                        withoutRecovery(applied, current.storeVersion()));
+                            }
                             return completeActivationRecovery(store, relocationStore, key, current)
-                                    .thenApply(released -> withoutRecovery(applied, released));
+                                    .handle(
+                                            (released, failure) -> {
+                                                Throwable recoveryFailure = unwrap(failure);
+                                                return node.instanceActivationRecoveryCompleted(
+                                                                applied.instance(), recoveryFailure)
+                                                        .handle(
+                                                                (ignored, notificationFailure) -> {
+                                                                    if (recoveryFailure != null) {
+                                                                        if (notificationFailure
+                                                                                        != null
+                                                                                && notificationFailure
+                                                                                        != recoveryFailure)
+                                                                            recoveryFailure
+                                                                                    .addSuppressed(
+                                                                                            notificationFailure);
+                                                                        throw new java.util
+                                                                                .concurrent
+                                                                                .CompletionException(
+                                                                                recoveryFailure);
+                                                                    }
+                                                                    if (notificationFailure != null)
+                                                                        throw new java.util
+                                                                                .concurrent
+                                                                                .CompletionException(
+                                                                                notificationFailure);
+                                                                    return withoutRecovery(
+                                                                            applied,
+                                                                            released
+                                                                                    .storeVersion());
+                                                                });
+                                            })
+                                    .thenCompose(java.util.function.Function.identity());
                         });
     }
 
@@ -397,7 +447,8 @@ public final class ZLinkStatefulAuthorityRouteRuntime implements AutoCloseable {
                                         result ->
                                                 requireStored(
                                                                 result,
-                                                                "Instance activation handler completion record")
+                                                                "Instance activation handler"
+                                                                        + " completion record")
                                                         .storeVersion())
                         : CompletableFuture.completedFuture(snapshot.storeVersion());
         return cursor.thenCompose(
@@ -426,8 +477,7 @@ public final class ZLinkStatefulAuthorityRouteRuntime implements AutoCloseable {
                 operation + " failed: " + result.getClass().getSimpleName());
     }
 
-    private static InstanceApplied withoutRecovery(
-            InstanceApplied applied, ZLinkAuthorityStored stored) {
+    private static InstanceApplied withoutRecovery(InstanceApplied applied, String storeVersion) {
         var route = applied.route();
         var instance = applied.instance();
         return new InstanceApplied(
@@ -443,12 +493,12 @@ public final class ZLinkStatefulAuthorityRouteRuntime implements AutoCloseable {
                         route.ownerLeaseGeneration(),
                         route.ownerId(),
                         route.meshName(),
-                        stored.storeVersion()),
+                        storeVersion),
                 new ZLinkServiceM6BWireCodec.InstanceRouteFence(
                         instance.targetNodeRid(), instance.targetNodeGeneration(),
                         instance.targetSpotId(), instance.objectGeneration(),
                         instance.ownerId(), instance.authorityOwnerGeneration(),
-                        instance.leaseGeneration(), stored.storeVersion()),
+                        instance.leaseGeneration(), storeVersion),
                 Optional.empty());
     }
 

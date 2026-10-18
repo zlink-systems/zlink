@@ -252,6 +252,7 @@ final class ZLinkJavaRawMeshNode
     private volatile ZLinkInternalMeshNode.PeerAuthorityResolver peerAuthorityResolver;
     private volatile ZLinkInternalMeshNode.PeerAuthorityFence localAuthorityFence;
     private volatile ZLinkInternalMeshNode.RelocationControlHandler relocationControlHandler;
+    private volatile Consumer<RoutingId> peerReconcileRequester = peer -> {};
     private volatile ZLinkInternalMeshNode.CanonicalRelocationControlHandler
             canonicalRelocationControlHandler;
     private volatile ZLinkInternalMeshNode.ActorLeftHandler actorLeftHandler;
@@ -3875,7 +3876,8 @@ final class ZLinkJavaRawMeshNode
         Throwable cause = unwrap(failure);
         if (cause instanceof ZLinkFrameworkException) return cause;
         if (cause instanceof ZLinkUserSpotOperationException typed)
-            return userSpotFailure(typed.terminalResult(), typed.failureCode(), cause);
+            return ZLinkRequestFailureMapping.userSpotFailure(
+                    typed.terminalResult(), typed.failureCode(), cause);
         RequestResult terminal = requestResult(cause);
         return terminal == null
                 ? failure
@@ -3948,7 +3950,7 @@ final class ZLinkJavaRawMeshNode
                             failure -> {
                                 UserSpotTerminalReply reply = terminalFailure(failure);
                                 return CompletableFuture.failedFuture(
-                                        userSpotFailure(
+                                        ZLinkRequestFailureMapping.userSpotFailure(
                                                 reply.terminalResult(),
                                                 reply.failureCode(),
                                                 unwrap(failure)));
@@ -4056,6 +4058,13 @@ final class ZLinkJavaRawMeshNode
     }
 
     @Override
+    public CompletionStage<Void> instanceActivationRecoveryCompleted(
+            ZLinkServiceM6BWireCodec.InstanceRouteFence route, Throwable failure) {
+        return ((ZLinkJavaRawSpotNode) spotNode())
+                .instanceActivationRecoveryCompleted(route, failure);
+    }
+
+    @Override
     public CompletionStage<Void> recoverInstanceActivation(
             systems.zlink.framework.runtime.internal.service.ZLinkInstanceActivationRecoveryCodec
                             .RecoveryEnvelope
@@ -4109,7 +4118,8 @@ final class ZLinkJavaRawMeshNode
                 //  authoritative ownership-aware translator instead of
                 //  collapsing to a generic rejection
                 //  (spec 32-framework-error-model:81-118, 99-108).
-                throw userSpotFailure(reply.terminalResult(), reply.failureCode(), null);
+                throw ZLinkRequestFailureMapping.userSpotFailure(
+                        reply.terminalResult(), reply.failureCode(), null);
             }
             if (reply.success() == null
                     || (reply.success().result()
@@ -4228,7 +4238,8 @@ final class ZLinkJavaRawMeshNode
                 //  authoritative ownership-aware translator instead of
                 //  collapsing to a generic rejection
                 //  (spec 32-framework-error-model:81-118, 99-108).
-                throw userSpotFailure(reply.terminalResult(), reply.failureCode(), null);
+                throw ZLinkRequestFailureMapping.userSpotFailure(
+                        reply.terminalResult(), reply.failureCode(), null);
             }
             if (reply.closed() == null) {
                 throw new ZLinkFrameworkException(
@@ -4255,28 +4266,13 @@ final class ZLinkJavaRawMeshNode
         }
     }
 
-    /** Classifies a User Spot terminal the same way for a remote reply and a local owner. */
-    private static ZLinkFrameworkException userSpotFailure(
-            int terminalResult, int failureCode, Throwable cause) {
-        return ZLinkRequestFailureMapping.receivedFailure(
-                ZLinkBackendRequestResult.fromWireTerminal(terminalResult)
-                        .toFrameworkErrorKind(failureCode),
-                "User Spot operation failed: terminal="
-                        + terminalResult
-                        + " failureCode="
-                        + failureCode,
-                failureCode,
-                java.util.Map.of(),
-                cause);
-    }
-
     /**
      * A target lifecycle that differs from the Close fence is an owner fence change: SpotMoving
      * (terminal 107, failure 34), translated like every other User Spot Close terminal.
      */
     private static ZLinkFrameworkException userSpotCloseTargetMoved(
             long expectedGeneration, long currentGeneration) {
-        return userSpotFailure(
+        return ZLinkRequestFailureMapping.userSpotFailure(
                 107,
                 34,
                 new IllegalStateException(
@@ -4289,9 +4285,8 @@ final class ZLinkJavaRawMeshNode
 
     CompletionStage<Void> sendBoundSession(
             ZLinkJavaRawSpotNode.ActorSessionBinding binding, List<Message> parts) {
-        BoundSessionRouteStateSnapshot route = boundSessionRouteStateSnapshot(binding);
-        boolean ready = route.readyFor(binding);
-        if (!ready) {
+        if (!sessionOwnerRouteReady(
+                binding.sessionOwnerNodeRid(), binding.sessionOwnerNodeGeneration())) {
             return CompletableFuture.failedFuture(
                     new ZlinkSubmitException(SubmitResult.NOT_CONNECTED));
         }
@@ -4310,17 +4305,62 @@ final class ZLinkJavaRawMeshNode
         return submission;
     }
 
-    private BoundSessionRouteStateSnapshot boundSessionRouteStateSnapshot(
-            ZLinkJavaRawSpotNode.ActorSessionBinding binding) {
-        RoutingId target = binding.sessionOwnerNodeRid();
+    /**
+     * The one ready condition for a route to a Session owner: the push submits on it, and a
+     * relocation target waits for it before relay-ready (relocation §4.3).
+     */
+    private boolean sessionOwnerRouteReady(RoutingId sessionOwner, long sessionOwnerGeneration) {
         ZLinkServiceTopologyRegistry currentTopology = topology;
         ZLinkServiceTopologyRegistry.Peer peer =
-                currentTopology == null ? null : currentTopology.peerFromOwner(target).orElse(null);
-        if (peer == null) {
-            return new BoundSessionRouteStateSnapshot(null, null, false);
+                currentTopology == null
+                        ? null
+                        : currentTopology.peerFromOwner(sessionOwner).orElse(null);
+        return peer != null
+                && peer.descriptor().lifecycleGeneration() == sessionOwnerGeneration
+                && isReadyPeer(peer);
+    }
+
+    @Override
+    public CompletionStage<Void> secureSessionOwnerRoute(
+            RoutingId sessionOwnerNodeRid, long sessionOwnerNodeGeneration) {
+        Objects.requireNonNull(sessionOwnerNodeRid, "sessionOwnerNodeRid");
+        if (sessionOwnerRouteReady(sessionOwnerNodeRid, sessionOwnerNodeGeneration)) {
+            return CompletableFuture.completedFuture(null);
         }
-        String admissionConnectionId = admissionControlReadyConnections.get(target);
-        return new BoundSessionRouteStateSnapshot(peer, admissionConnectionId, isReadyPeer(peer));
+        var ready = new CompletableFuture<Void>();
+        AutoCloseable registration =
+                onPeerStateChanged(
+                        sessionOwnerNodeRid,
+                        () -> {
+                            if (sessionOwnerRouteReady(
+                                    sessionOwnerNodeRid, sessionOwnerNodeGeneration))
+                                ready.complete(null);
+                        });
+        ready.whenComplete(
+                (unused, failure) -> {
+                    try {
+                        registration.close();
+                    } catch (Exception cleanupFailure) {
+                        LOGGER.log(
+                                Level.WARNING,
+                                "Session owner route observer cleanup failed",
+                                cleanupFailure);
+                    }
+                });
+        requestPeerReconcile(sessionOwnerNodeRid, sessionOwnerNodeGeneration);
+        return ready;
+    }
+
+    @Override
+    public void requestPeerReconcile(RoutingId peerRid, long peerGeneration) {
+        if (!routingId.equals(peerRid) && !sessionOwnerRouteReady(peerRid, peerGeneration)) {
+            peerReconcileRequester.accept(peerRid);
+        }
+    }
+
+    @Override
+    public void setPeerReconcileRequester(Consumer<RoutingId> requester) {
+        peerReconcileRequester = Objects.requireNonNull(requester, "requester");
     }
 
     private void completeActorRequest(
@@ -7552,32 +7592,6 @@ final class ZLinkJavaRawMeshNode
         CompletionStage<List<byte[]>> submission =
                 port.request(requireStarted(), target, frames, timeout, requestAdmission);
         return submission;
-    }
-
-    private record BoundSessionRouteStateSnapshot(
-            ZLinkServiceTopologyRegistry.Peer peer,
-            String admissionConnectionId,
-            boolean livenessReady) {
-
-        boolean peerPresent() {
-            return peer != null;
-        }
-
-        long peerGeneration() {
-            return peer == null ? 0L : peer.descriptor().lifecycleGeneration();
-        }
-
-        boolean admissionConnectionMatches() {
-            return peer != null && peer.connectionId().equals(admissionConnectionId);
-        }
-
-        boolean readyFor(ZLinkJavaRawSpotNode.ActorSessionBinding binding) {
-            return peer != null
-                    && peer.descriptor().lifecycleGeneration()
-                            == binding.sessionOwnerNodeGeneration()
-                    && admissionConnectionMatches()
-                    && livenessReady;
-        }
     }
 
     private record PeerCloseRequest(long connectionIntentId, String endpoint) {}

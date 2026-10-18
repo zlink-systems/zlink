@@ -79,66 +79,70 @@ final class ZLinkSameNodeJoinBarrierTest {
         try (ZLinkFrameworkRuntime runtime =
                 ZLinkFrameworkRuntimeTestAccess.start(
                         options, observeMeshJoins(meshJoinSubmissions))) {
-            var targetCreated =
-                    runtime.spotManager()
-                            .getOrCreate(TARGET_SPOT_ID, "target")
-                            .submit()
-                            .toCompletableFuture()
-                            .get(3, TimeUnit.SECONDS);
-            ZLinkActorCreateResult.Created created =
-                    assertInstanceOf(
-                            ZLinkActorCreateResult.Created.class,
-                            runtime.actorManager()
-                                    .create(ACTOR_ID, "player")
-                                    .submit()
-                                    .toCompletableFuture()
-                                    .get(3, TimeUnit.SECONDS));
-
-            String scheduled =
-                    runtime.actorClient()
-                            .requestToActor(
-                                    created.actor().actorId(), new JoinRequest(TARGET_SPOT_ID))
-                            .timeout(Duration.ofSeconds(3))
-                            .submit(String.class)
-                            .toCompletableFuture()
-                            .get(3, TimeUnit.SECONDS);
-            assertEquals("scheduled", scheduled);
-
-            // OnJoinedActor가 아직 완료되지 않은 동안 Actor 수신을 제출한다.
-            assertTrue(TARGET_JOINED.await(3, TimeUnit.SECONDS));
-            assertTrue(LIFECYCLE_HELD.await(3, TimeUnit.SECONDS));
-            CompletableFuture<Boolean> close =
-                    runtime.spotManager().close(targetCreated.spot()).toCompletableFuture();
-
-            CompletableFuture<String> probe =
-                    runtime.actorClient()
-                            .requestToActor(created.actor().actorId(), new ProbeRequest())
-                            .timeout(Duration.ofSeconds(10))
-                            .submit(String.class)
-                            .toCompletableFuture();
-            //  Unfixed: the arrival runs at once on the target Spot and
-            //  replies before the completion callback. Fixed: it cannot run
-            //  while the Join is open, so no reply arrives until the hold is
-            //  released below.
-            String early;
             try {
-                early = probe.get(2, TimeUnit.SECONDS);
-            } catch (TimeoutException heldBehindJoin) {
-                early = null;
+                var targetCreated =
+                        runtime.spotManager()
+                                .getOrCreate(TARGET_SPOT_ID, "target")
+                                .submit()
+                                .toCompletableFuture()
+                                .get(3, TimeUnit.SECONDS);
+                ZLinkActorCreateResult.Created created =
+                        assertInstanceOf(
+                                ZLinkActorCreateResult.Created.class,
+                                runtime.actorManager()
+                                        .create(ACTOR_ID, "player")
+                                        .submit()
+                                        .toCompletableFuture()
+                                        .get(3, TimeUnit.SECONDS));
+
+                String scheduled =
+                        runtime.actorClient()
+                                .requestToActor(
+                                        created.actor().actorId(), new JoinRequest(TARGET_SPOT_ID))
+                                .timeout(Duration.ofSeconds(3))
+                                .submit(String.class)
+                                .toCompletableFuture()
+                                .get(3, TimeUnit.SECONDS);
+                assertEquals("scheduled", scheduled);
+
+                // OnJoinedActor가 아직 완료되지 않은 동안 Actor 수신을 제출한다.
+                assertTrue(TARGET_JOINED.await(3, TimeUnit.SECONDS));
+                assertTrue(LIFECYCLE_HELD.await(3, TimeUnit.SECONDS));
+                CompletableFuture<Boolean> close =
+                        runtime.spotManager().close(targetCreated.spot()).toCompletableFuture();
+
+                CompletableFuture<String> probe =
+                        runtime.actorClient()
+                                .requestToActor(created.actor().actorId(), new ProbeRequest())
+                                .timeout(Duration.ofSeconds(10))
+                                .submit(String.class)
+                                .toCompletableFuture();
+                //  Unfixed: the arrival runs at once on the target Spot and
+                //  replies before the completion callback. Fixed: it cannot run
+                //  while the Join is open, so no reply arrives until the hold is
+                //  released below.
+                String early;
+                try {
+                    early = probe.get(2, TimeUnit.SECONDS);
+                } catch (TimeoutException heldBehindJoin) {
+                    early = null;
+                }
+                LIFECYCLE_RELEASE.complete(null);
+                assertFalse(close.get(5, TimeUnit.SECONDS));
+                String reply = early != null ? early : probe.get(5, TimeUnit.SECONDS);
+                assertEquals(
+                        TARGET_SPOT_ID + ":completed",
+                        reply,
+                        "an arrival during a same-node Join must dispatch only after "
+                                + "the Join completion callback ended");
+                assertEquals(
+                        0,
+                        meshJoinSubmissions.get(),
+                        "same-node public Actor Join must use one Framework local path without Mesh"
+                                + " Join records");
+            } finally {
+                LIFECYCLE_RELEASE.complete(null);
             }
-            LIFECYCLE_RELEASE.complete(null);
-            assertFalse(close.get(5, TimeUnit.SECONDS));
-            String reply = early != null ? early : probe.get(5, TimeUnit.SECONDS);
-            assertEquals(
-                    TARGET_SPOT_ID + ":completed",
-                    reply,
-                    "an arrival during a same-node Join must dispatch only after "
-                            + "the Join completion callback ended");
-            assertEquals(
-                    0,
-                    meshJoinSubmissions.get(),
-                    "same-node public Actor Join must use one Framework local path without Mesh"
-                            + " Join records");
         }
     }
 

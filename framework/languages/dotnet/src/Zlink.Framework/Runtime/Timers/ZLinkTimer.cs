@@ -222,7 +222,7 @@ internal sealed class ZLinkTimer : IZLinkTimer
 
     public async ValueTask CancelAsync()
     {
-        var finalization = await GetOrStartFinalizationAsync().ConfigureAwait(false);
+        var finalization = await BeginCancellationAsync().ConfigureAwait(false);
         await finalization.ConfigureAwait(false);
     }
 
@@ -250,7 +250,7 @@ internal sealed class ZLinkTimer : IZLinkTimer
         );
     }
 
-    private async ValueTask<Task> GetOrStartFinalizationAsync()
+    internal async ValueTask<Task> BeginCancellationAsync()
     {
         TaskCompletionSource? completion = null;
         var finalization = await _lane

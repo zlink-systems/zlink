@@ -230,14 +230,16 @@ final class ZLinkCanonicalRelocationStateMachine
     public CompletionStage<Void> stage(
             RoutingId targetNodeRid,
             ZLinkSpotRetireControl.StageRequest request,
-            Duration timeout) {
+            Duration timeout,
+            Instant deadline) {
         Objects.requireNonNull(targetNodeRid, "targetNodeRid");
         Objects.requireNonNull(request, "request");
+        Objects.requireNonNull(deadline, "deadline");
         requireTimeout(timeout);
         if (!targetNodeRid.equals(request.targetNodeRid())) {
             return failed(new IllegalArgumentException("canonical relocation target RID differs"));
         }
-        return sourcePrepare(request)
+        return sourcePrepare(request, deadline)
                 .thenCompose(
                         prepare -> {
                             Fence fence =
@@ -735,6 +737,9 @@ final class ZLinkCanonicalRelocationStateMachine
                                     .thenRun(() -> attempt.request().complete(restore.request()))
                                     .thenCompose(
                                             ignored ->
+                                                    secureSessionRoutes(restore.request(), attempt))
+                                    .thenCompose(
+                                            ignored ->
                                                     coordinator.prepare(restore.authority(), OPEN))
                                     .thenAccept(attempt.prepared()::complete);
                         })
@@ -774,6 +779,60 @@ final class ZLinkCanonicalRelocationStateMachine
                             return null;
                         });
         return CompletableFuture.completedFuture(null);
+    }
+
+    /**
+     * Relocation §4.3: relay-ready waits until each carried binding's remote Session owner has a
+     * ready route. The wait ends when the routes are ready, when this attempt ends (supersede,
+     * admission seal at shutdown), or at the source operation deadline that command 40 carries. The
+     * last two fail the attempt, so the existing explicit failure reply and staging cleanup follow.
+     * The deadline is the source's value; the target adds no timeout of its own.
+     */
+    private CompletionStage<Void> secureSessionRoutes(
+            ZLinkSpotRetireControl.StageRequest request, TargetAttempt attempt) {
+        CompletableFuture<?>[] routes =
+                request.sessionRoutes().stream()
+                        .filter(route -> !route.sessionOwnerNodeRid().equals(localNodeRid))
+                        .map(
+                                route ->
+                                        node.secureSessionOwnerRoute(
+                                                        route.sessionOwnerNodeRid(),
+                                                        route.sessionOwnerNodeGeneration())
+                                                .toCompletableFuture())
+                        .toArray(CompletableFuture[]::new);
+        CompletableFuture<Void> secured = CompletableFuture.allOf(routes);
+        if (secured.isDone()) {
+            return secured;
+        }
+        secured.whenComplete(
+                (ignored, failure) -> {
+                    for (CompletableFuture<?> route : routes) {
+                        route.cancel(false);
+                    }
+                });
+        attempt.ready()
+                .whenComplete(
+                        (ignored, failure) -> {
+                            if (failure != null) {
+                                secured.completeExceptionally(failure);
+                            }
+                        });
+        long deadlineUnixMs = attempt.prepare().deadlineUnixMs();
+        Instant deadline =
+                Instant.ofEpochSecond(
+                        Long.divideUnsigned(deadlineUnixMs, 1000L),
+                        Long.remainderUnsigned(deadlineUnixMs, 1000L) * 1_000_000L);
+        Duration remaining = Duration.between(Instant.now(), deadline);
+        Runnable expire =
+                () ->
+                        secured.completeExceptionally(
+                                new ZLinkFrameworkException(
+                                        ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
+                                        "Session owner route was not ready before the relocation"
+                                                + " deadline"));
+        if (remaining.isNegative() || remaining.isZero()) expire.run();
+        else delayScheduler.schedule(remaining, expire);
+        return secured;
     }
 
     private CompletionStage<Void> publishReady(
@@ -1372,7 +1431,7 @@ final class ZLinkCanonicalRelocationStateMachine
     }
 
     private CompletionStage<ZLinkCanonicalRelocationProtocol.Prepare> sourcePrepare(
-            ZLinkSpotRetireControl.StageRequest request) {
+            ZLinkSpotRetireControl.StageRequest request, Instant deadline) {
         ZLinkSpotRetireControl.ParticipantFence primary = primary(request.participants());
         CompletionStage<ZLinkAuthorityReadResult> authority =
                 locations.read(primary.authorityKey(), OPEN);
@@ -1417,7 +1476,8 @@ final class ZLinkCanonicalRelocationStateMachine
                                     payload,
                                     budget.effectiveChunkBytes(
                                             request.advertisedReceiveChunkLimitBytes())),
-                            envelope.applicationVersion());
+                            envelope.applicationVersion(),
+                            deadline.toEpochMilli());
                 });
     }
 

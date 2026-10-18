@@ -40,6 +40,20 @@ pack_infrastructure_reply (const std::vector<std::vector<std::uint8_t>> &parts);
 std::vector<std::vector<std::uint8_t>>
 unpack_infrastructure_reply (std::span<const std::uint8_t> packed);
 
+inline constexpr char session_disconnected_packet_name[] =
+  "zlink.framework.actor.session_disconnected";
+
+struct session_disconnected_identity_t
+{
+    std::vector<std::uint8_t> session_owner_node_rid;
+    std::uint64_t session_owner_node_generation = 0;
+    std::uint64_t binding_generation = 0;
+};
+
+std::vector<std::uint8_t>
+encode_session_disconnected (const session_disconnected_identity_t &identity);
+session_disconnected_identity_t decode_session_disconnected (std::span<const std::uint8_t> bytes);
+
 struct liveness_record_t
 {
     command kind;
@@ -321,6 +335,7 @@ struct relocation_prepare_t
     std::uint32_t payload_chunk_count = 0;
     std::uint32_t payload_checksum_crc32c = 0;
     std::uint64_t application_version = 0;
+    std::uint64_t deadline_unix_ms = 0;
     friend bool operator== (const relocation_prepare_t &, const relocation_prepare_t &) = default;
 };
 
@@ -571,6 +586,8 @@ struct session_relocation_seal_t
     std::uint64_t session_owner_lease_generation = 0;
     std::vector<std::uint8_t> session_routing_id;
     std::uint64_t binding_generation = 0;
+    std::vector<std::uint8_t> target_node_routing_id;
+    std::uint64_t target_node_generation = 0;
 
     friend bool operator== (const session_relocation_seal_t &,
                             const session_relocation_seal_t &) = default;

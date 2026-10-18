@@ -288,8 +288,9 @@ export class ZLinkSpotRuntimeOptionsFactory {
         this.options.spotNodeRuntime()?.meshNode(meshName) as never,
       spotRouteResolver: this.options.createLocationSpotRouteResolver(),
       actorResolver: (actorId) => {
-        const state = this.options.actorManager()?.getState(actorId);
-        return state?.isMoving === true ? undefined : state?.actor;
+        const manager = this.options.actorManager();
+        const state = manager?.getState(actorId);
+        return state?.isMoving === true ? undefined : manager?.resolveLocalActor(actorId);
       },
       canonicalActorJoinResolver: (fence) =>
         this.options.boundSessionRelay.actorJoins.prepareCanonicalActorJoin({

@@ -130,6 +130,19 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
                                                 == authorityOwnerGeneration));
     }
 
+    boolean authorityFenceMatches(
+            systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
+                            .InstanceRouteFence
+                    route) {
+        return context.nodeRid().equals(route.targetNodeRid())
+                && context.spotId().equals(route.targetSpotId())
+                && context.objectGeneration() == route.objectGeneration()
+                && authorityFenceMatches(
+                        route.ownerId(), route.leaseGeneration(), route.authorityOwnerGeneration())
+                && hasExpectedNodeGeneration()
+                && expectedNodeGeneration() == route.targetNodeGeneration();
+    }
+
     void markSealedStoreVersion(String storeVersion) {
         inStateLane(
                 () -> {
@@ -453,6 +466,7 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
     }
 
     private CompletionStage<Boolean> closeOnLifecycle(ZLinkSpotCloseReason reason) {
+        if (!hasExpectedNodeGeneration()) return CompletableFuture.completedFuture(false);
         ZLinkSpotCloseCoordinator existing = existingCloseCoordinator();
         if (existing != null) {
             return existing.close();
@@ -563,7 +577,7 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
                                                                                     return null;
                                                                                 }))),
                                         failure ->
-                                                host.reportSpotClosingFailure(
+                                                host.reportSpotLifecycleFailure(
                                                         context.spotId(), failure)));
         coordinatorOwner.set(coordinator);
         host.retainClosingCoordinator(

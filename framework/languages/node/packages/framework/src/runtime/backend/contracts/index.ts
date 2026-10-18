@@ -190,6 +190,12 @@ export interface ZLinkBackendMeshNode {
   ): import('../../foundation/durable-service-request').PeerRouteObservation;
   hasPeerRouteOrConnectionIntent?(targetRid: unknown, endpoint: string): boolean;
   isPeerRouteReady?(targetRid: unknown, lifecycleGeneration?: bigint): boolean;
+  waitForPeerRoute?(
+    targetRid: unknown,
+    lifecycleGeneration: bigint,
+    deadlineUnixMs: bigint,
+    signal?: AbortSignal
+  ): Promise<void>;
   sendToNode(
     targetRid: unknown,
     parts: MessageLike | readonly MessageLike[],
@@ -366,7 +372,10 @@ export interface ZLinkBackendMeshNode {
   sendToActor(
     actor: ZLinkBackendActorRef,
     parts: MessageLike | readonly MessageLike[],
-    options?: { flags?: number }
+    options?: {
+      flags?: number;
+      routeFence?: import('../../foundation/service-stateful-wire-codec').ServiceActorRouteFence;
+    }
   ): Promise<SubmitResult>;
   requestToActor(
     actor: ZLinkBackendActorRef,
@@ -376,6 +385,7 @@ export interface ZLinkBackendMeshNode {
       timeoutMs?: number;
       applicationMetadata?: Buffer;
       onAdmitted?: () => void;
+      routeFence?: import('../../foundation/service-stateful-wire-codec').ServiceActorRouteFence;
     }
   ): MeshOperationId;
   actorSendToActor(

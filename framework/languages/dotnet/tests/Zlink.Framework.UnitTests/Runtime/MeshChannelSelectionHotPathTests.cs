@@ -534,7 +534,8 @@ public sealed class MeshChannelSelectionHotPathTests
             (ulong)payload.TotalLength,
             (uint)payload.ChunkCount,
             payload.ChecksumCrc32c,
-            1
+            1,
+            checked((ulong)DateTimeOffset.UtcNow.AddMinutes(1).ToUnixTimeMilliseconds())
         );
 
         var failure = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>

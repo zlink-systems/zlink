@@ -1050,12 +1050,15 @@ internal sealed class ZLinkSessionActorBindingTable
 
     internal async ValueTask<ZLinkServiceWireCodec.SessionRelocationSealedRecord?> SealCanonicalRouteAsync(
         ZLinkServiceWireCodec.SessionRelocationSealRecord request,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        Action? onSealInstalled = null
     )
     {
         var prepared = await _lane
             .RunAsync(() => PrepareCanonicalRouteSeal(request))
             .ConfigureAwait(false);
+        if (prepared.Reply is { SealResult: ServiceWirePilotCodec.SessionSealResult.Sealed })
+            onSealInstalled?.Invoke();
         if (prepared.Complete)
             return prepared.Reply;
         if (prepared.Drain is { } drain)

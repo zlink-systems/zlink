@@ -38,6 +38,8 @@ function contextTimers() {
 
 function sealRequest() {
   return {
+    targetNodeRid: 'target',
+    targetNodeGeneration: 4n,
     relocation: { high: 1n, low: 2n },
     coordinator: {
       nodeRid: 'source',

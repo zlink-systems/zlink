@@ -1020,6 +1020,10 @@ public final class ZLinkApplicationJobQueue implements AutoCloseable {
             this.owner = owner;
         }
 
+        ZLinkApplicationJobQueue owner() {
+            return owner;
+        }
+
         /** Transfers this receive reservation to one queued application job. */
         public void queued() {
             owner.queued(this);

@@ -37,6 +37,38 @@ internal sealed class ZLinkActorSerialExecutor
 
     internal int PendingLifecycleCount => _queue.LifecyclePendingCount;
 
+    internal void NotifyReadiness() => _queue.NotifyReadiness();
+
+    internal IReadOnlyList<Task> AdmitDurablePrefix(IReadOnlyList<ZLinkActorDurableRecord> records)
+    {
+        return AwaitStateLane(
+            _lane.RunAsync(() =>
+            {
+                var terminals = new List<Task>(records.Count);
+                foreach (var record in records)
+                {
+                    ZLinkSerialPostAdmission admission;
+                    ZLinkSerialWorkItem item;
+                    using (ExecutionContext.SuppressFlow())
+                        admission = _queue.TryPostDurableApplication(
+                            record.Operation,
+                            record.PrepareAsync ?? (static _ => ValueTask.CompletedTask),
+                            record.CancelPreparation ?? (static () => { }),
+                            out item,
+                            ready: record.Ready,
+                            errorReporter: record.ReportFailure
+                        );
+                    if (admission != ZLinkSerialPostAdmission.Accepted)
+                        throw new InvalidOperationException("Actor FIFO is closed.");
+                    record.OnAdmitted?.Invoke();
+                    record.OnWithdrawable?.Invoke(() => _queue.WithdrawAsync(item));
+                    terminals.Add(item.Completion);
+                }
+                return (IReadOnlyList<Task>)terminals;
+            })
+        );
+    }
+
     public ValueTask<Turn> EnterAsync(
         CancellationToken cancellationToken,
         bool countAsPendingRequest = false
@@ -140,7 +172,7 @@ internal sealed class ZLinkActorSerialExecutor
             {
                 if (!_admissionClosed)
                     return true;
-                if (_acceptedWaiters != 0)
+                if (_acceptedWaiters != 0 || _queue.HasPendingDurableApplication)
                     return false;
                 _admissionClosed = false;
                 return true;
@@ -153,7 +185,7 @@ internal sealed class ZLinkActorSerialExecutor
         AwaitStateLane(
             _lane.RunAsync(() =>
             {
-                if (_acceptedWaiters != 0)
+                if (_acceptedWaiters != 0 || _queue.HasPendingDurableApplication)
                     throw new InvalidOperationException(
                         "Actor dispatch admission cannot reopen while a previous lifecycle turn remains."
                     );
@@ -175,15 +207,31 @@ internal sealed class ZLinkActorSerialExecutor
         // SuppressFlow is sufficient: TryPost only admits and schedules a cold task; it does
         // not synchronously invoke waiter.RunAsync.
         ZLinkSerialPostAdmission admission;
+        ZLinkSerialWorkItem item;
         using (ExecutionContext.SuppressFlow())
             admission =
                 lane == ZLinkSerialWorkLane.Lifecycle
-                    ? _queue.TryPostNextWithAdmission(waiter.RunAsync, out _)
-                    : _queue.TryPostApplicationWithAdmission(waiter.RunAsync, out _);
+                    ? _queue.TryPostNextWithAdmission(waiter.RunAsync, out item)
+                    : _queue.TryPostApplicationWithAdmission(waiter.RunAsync, out item);
         if (admission == ZLinkSerialPostAdmission.Accepted)
         {
             waiter.MarkAccepted();
             _acceptedWaiters++;
+            item.AddTerminalRelease(() => OnWaiterFinished(waiter));
+            waiter.BindItem(item);
+            if (item.Preparation is not null)
+            {
+                _ = item.Completion.ContinueWith(
+                    static (task, state) =>
+                        ((Waiter)state!).FailPreparation(task.Exception!.InnerException!),
+                    waiter,
+                    CancellationToken.None,
+                    TaskContinuationOptions.OnlyOnFaulted
+                        | TaskContinuationOptions.ExecuteSynchronously,
+                    TaskScheduler.Default
+                );
+                ZLinkApplicationJobQueueInvocation.CurrentScope?.ReleaseDurablePermit();
+            }
             return waiter;
         }
 
@@ -199,7 +247,7 @@ internal sealed class ZLinkActorSerialExecutor
     private ValueTask OnWaiterStartedAsync(Waiter waiter) =>
         _lane.RunAsync(() =>
         {
-            if (waiter.CountsAsPendingRequest)
+            if (waiter.TryStartAccepted() && waiter.CountsAsPendingRequest)
                 _pendingRequests--;
         });
 
@@ -208,8 +256,11 @@ internal sealed class ZLinkActorSerialExecutor
         AwaitStateLane(
             _lane.RunAsync(() =>
             {
-                if (!waiter.TryFinishAccepted())
+                var previous = waiter.FinishAccepted();
+                if (previous == Waiter.NotAccepted)
                     return;
+                if (previous == Waiter.AcceptedWaiting && waiter.CountsAsPendingRequest)
+                    _pendingRequests--;
                 _acceptedWaiters--;
             })
         );
@@ -285,8 +336,10 @@ internal sealed class ZLinkActorSerialExecutor
         );
         private readonly CancellationTokenRegistration _registration;
         private int _accepted;
-        private int _finished;
-        private int _releasedOnce;
+        internal const int NotAccepted = 0;
+        internal const int AcceptedWaiting = 1;
+        private const int AcceptedStarted = 2;
+        private ZLinkSerialWorkItem? _item;
 
         internal Waiter(
             ZLinkActorSerialExecutor owner,
@@ -307,23 +360,36 @@ internal sealed class ZLinkActorSerialExecutor
         internal Task<Turn> Task => _ready.Task;
         internal bool CountsAsPendingRequest { get; }
 
-        internal void MarkAccepted() => Volatile.Write(ref _accepted, 1);
+        internal void MarkAccepted() => Volatile.Write(ref _accepted, AcceptedWaiting);
 
-        internal bool TryFinishAccepted() =>
-            Volatile.Read(ref _accepted) != 0 && Interlocked.Exchange(ref _finished, 1) == 0;
+        internal void BindItem(ZLinkSerialWorkItem item)
+        {
+            _item = item;
+            if (_cancellationToken.IsCancellationRequested)
+                Cancel();
+        }
+
+        internal void FailPreparation(Exception error)
+        {
+            _ready.TrySetException(error);
+        }
+
+        internal bool TryStartAccepted() =>
+            Interlocked.CompareExchange(ref _accepted, AcceptedStarted, AcceptedWaiting)
+            == AcceptedWaiting;
+
+        internal int FinishAccepted() => Interlocked.Exchange(ref _accepted, NotAccepted);
 
         internal async ValueTask RunAsync(CancellationToken _)
         {
             await _owner.OnWaiterStartedAsync(this).ConfigureAwait(false);
             if (_cancellationToken.IsCancellationRequested || !_ready.TrySetResult(new Turn(this)))
             {
-                _owner.OnWaiterFinished(this);
                 return;
             }
             if (_owner._queue.HasSharedConsumer)
             {
                 var turn = ZLinkSerialTurn.Current!;
-                turn.Item.AddTerminalRelease(() => _owner.OnWaiterFinished(this));
                 turn.SignalSuspended();
             }
             await _released.Task.ConfigureAwait(false);
@@ -331,12 +397,9 @@ internal sealed class ZLinkActorSerialExecutor
 
         internal void Release()
         {
-            if (Interlocked.Exchange(ref _releasedOnce, 1) == 0)
-            {
-                if (!_owner._queue.HasSharedConsumer)
-                    _owner.OnWaiterFinished(this);
-                _released.TrySetResult();
-            }
+            if (!_owner._queue.HasSharedConsumer)
+                _owner.OnWaiterFinished(this);
+            _released.TrySetResult();
         }
 
         internal void DisposeCancellationRegistration() => _registration.Dispose();
@@ -347,7 +410,12 @@ internal sealed class ZLinkActorSerialExecutor
             Release();
         }
 
-        private void Cancel() => _ready.TrySetException(new OperationCanceledException());
+        private void Cancel()
+        {
+            _ready.TrySetException(new OperationCanceledException(_cancellationToken));
+            if (Volatile.Read(ref _item) is { } item)
+                _ = _owner._queue.WithdrawAsync(item);
+        }
     }
 
     private sealed class MailboxFailureReporter : IZLinkRuntimeFailureReporter
@@ -370,3 +438,13 @@ internal sealed class ZLinkActorSerialExecutor
         }
     }
 }
+
+internal sealed record ZLinkActorDurableRecord(
+    Func<CancellationToken, ValueTask> Operation,
+    Func<CancellationToken, ValueTask>? PrepareAsync = null,
+    Action? CancelPreparation = null,
+    Action? OnAdmitted = null,
+    Action<Func<ValueTask<bool>>>? OnWithdrawable = null,
+    Func<bool>? Ready = null,
+    Action<Exception>? ReportFailure = null
+);

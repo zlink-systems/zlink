@@ -68,7 +68,7 @@ function fixture() {
             1000,
             onAdmitted
           )
-        : runtime.requestToActor(actor, 1n, 1n, payload, 1000, undefined, undefined, onAdmitted);
+        : runtime.requestToActor(actor, payload, 1000, undefined, undefined, onAdmitted);
     }
   };
 }

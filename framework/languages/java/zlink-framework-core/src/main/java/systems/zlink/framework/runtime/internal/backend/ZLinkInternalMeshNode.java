@@ -202,6 +202,25 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
         return new PeerRouteObservation(0, false);
     }
 
+    /**
+     * Completes once the route to a remote Session owner is ready for its bound-session push
+     * (relocation §4.3). When it is not ready, this asks the auto-connect owner to reconcile that
+     * peer immediately (MeshNode §7.1) and then only observes the result. It never times out;
+     * cancelling the returned stage ends the wait.
+     */
+    default CompletionStage<Void> secureSessionOwnerRoute(
+            RoutingId sessionOwnerNodeRid, long sessionOwnerNodeGeneration) {
+        return CompletableFuture.failedFuture(
+                new UnsupportedOperationException(
+                        "Session owner route observation is not available"));
+    }
+
+    /** Requests ordinary auto-connect reconciliation without waiting for its result. */
+    default void requestPeerReconcile(RoutingId peerRid, long peerGeneration) {}
+
+    /** Installs the auto-connect owner's immediate reconcile entry for one peer (MeshNode §7.1). */
+    default void setPeerReconcileRequester(java.util.function.Consumer<RoutingId> requester) {}
+
     default boolean targetLifecycleEnded(RoutingId peerRid) {
         return false;
     }
@@ -556,6 +575,11 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
                 new UnsupportedOperationException("Instance activation recovery is unavailable"));
     }
 
+    default CompletionStage<Void> instanceActivationRecoveryCompleted(
+            ZLinkServiceM6BWireCodec.InstanceRouteFence route, Throwable failure) {
+        return CompletableFuture.completedFuture(null);
+    }
+
     @FunctionalInterface
     interface InstanceSpotActivationHandler {
         default <T> CompletionStage<T> admit(java.util.function.Supplier<CompletionStage<T>> work) {
@@ -592,9 +616,16 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
                 ZLinkServiceM6BWireCodec.InstanceRouteFence route,
                 ZLinkBackendSpot backendSpot,
                 long deadlineUnixMs,
-                java.util.function.Consumer<ZLinkBackendSpot> restoreFirst) {
+                java.util.function.BiFunction<
+                                ZLinkBackendSpot, CompletableFuture<Void>, CompletionStage<Void>>
+                        restoreFirst) {
             return activate(stableType, route, backendSpot, deadlineUnixMs)
-                    .thenRun(() -> restoreFirst.accept(backendSpot));
+                    .thenRun(() -> restoreFirst.apply(backendSpot, new CompletableFuture<>()));
+        }
+
+        default CompletionStage<Void> recovered(
+                ZLinkServiceM6BWireCodec.InstanceRouteFence route, Throwable failure) {
+            return CompletableFuture.completedFuture(null);
         }
 
         default CompletionStage<Void> admitExisting(

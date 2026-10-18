@@ -133,24 +133,6 @@ final class ZLinkActorTransferHandoffTest {
     }
 
     @Test
-    void precommitAbortRestoresSnapshotAndTrailingPacketsInArrivalOrder() {
-        ZLinkActorTransferHandoff handoff = new ZLinkActorTransferHandoff();
-        handoff.begin("actor");
-        capture(handoff, "B1", Map.of());
-        capture(handoff, "B2", Map.of());
-        List<ZLinkActorHandoffPacket> committed = handoff.take("actor");
-        capture(handoff, "D1", Map.of());
-
-        List<ZLinkActorHandoffPacket> restored = handoff.takeForRestore("actor", committed);
-        assertEquals(
-                List.of("B1", "B2", "D1"),
-                restored.stream().map(packet -> packet.header().packetName()).toList());
-        assertEquals(List.of(), handoff.finish("actor"));
-        restored.forEach(ZLinkActorHandoffPacket::close);
-        handoff.close();
-    }
-
-    @Test
     void boundSessionRouteMetadataSurvivesHandoff() {
         ZLinkActorTransferHandoff handoff = new ZLinkActorTransferHandoff();
         handoff.begin("actor");

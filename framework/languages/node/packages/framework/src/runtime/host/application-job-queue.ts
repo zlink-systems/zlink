@@ -149,6 +149,10 @@ export class ApplicationJobQueuePermit implements ApplicationJobPermitPort {
     return true;
   }
 
+  reacquire(signal: AbortSignal): Promise<ApplicationJobPermitPort> {
+    return this.owner.acquire(signal, this.origin);
+  }
+
   releaseStorage(): void {
     if (this.storage === undefined || this.state === 'idle') return;
     if (this.state !== 'released')

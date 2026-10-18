@@ -91,6 +91,11 @@ export class DefaultZLinkActorContext implements ZLinkActorContext {
     return this.state.actorId;
   }
 
+  /** Actor-turn view of the single current Session binding (§7). */
+  get currentSessionBinding() {
+    return this.state.boundSession;
+  }
+
   get objectGeneration(): bigint {
     return this.state.nativeActorRef?.generation ?? 1n;
   }
