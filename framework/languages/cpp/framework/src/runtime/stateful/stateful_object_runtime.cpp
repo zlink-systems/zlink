@@ -424,12 +424,16 @@ stateful_object_runtime_t::relocation_source_seal_on_lane (const object_record_t
     return std::nullopt;
 }
 
-task_t<bool> stateful_object_runtime_t::retained_relocation_source (object_ref_t owner) const
+task_t<stateful_error_t> stateful_object_runtime_t::retained_relocation_source (
+  object_ref_t owner, std::uint64_t packet_object_generation) const
 {
-    co_return co_await _lane.run_task ([this, owner = std::move (owner)] {
+    co_return co_await _lane.run_task ([this, owner = std::move (owner), packet_object_generation] {
         const auto object = _objects.find (object_key_t{owner.kind, owner.key});
-        return object != _objects.end () && same_exact_ref (object->second.reference, owner)
-               && relocation_source_seal_on_lane (object->second).has_value ();
+        if (object == _objects.end () || !same_exact_ref (object->second.reference, owner)
+            || !relocation_source_seal_on_lane (object->second))
+            return stateful_error_t::not_found;
+        return packet_object_generation == object->second.reference.object_generation
+                 ? stateful_error_t::none : stateful_error_t::generation_stale;
     });
 }
 

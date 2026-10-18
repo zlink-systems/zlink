@@ -44,6 +44,7 @@ struct accepted_record_authority_query_t
     std::uint64_t source_session_sequence = 0;
     // Packet address fence; target remains the exact native mailbox owner.
     std::uint64_t requested_authority_owner_generation = 0;
+    std::uint64_t requested_object_generation = 0;
 };
 
 struct accepted_record_authority_t

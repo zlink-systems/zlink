@@ -324,7 +324,8 @@ class stateful_object_runtime_t
     bool finalized_relocation_source (object_kind_t kind,
                                       const std::string &key,
                                       std::uint64_t object_generation) const;
-    task_t<bool> retained_relocation_source (object_ref_t owner) const;
+    task_t<stateful_error_t> retained_relocation_source (
+      object_ref_t owner, std::uint64_t packet_object_generation) const;
 
     std::pair<stateful_error_t, membership_token_t>
     begin_membership_move (const object_ref_t &actor, const object_ref_t &target_spot);

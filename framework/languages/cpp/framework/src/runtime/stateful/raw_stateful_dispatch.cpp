@@ -654,7 +654,7 @@ raw_stateful_dispatch_t::ingest_claimed (object_ref_t owner,
                 : static_cast<std::uint32_t> (protocol::request_terminal_result::protocolError);
             const auto failure_code =
               validation == stateful_error_t::generation_stale
-                ? static_cast<std::uint32_t> (protocol::framework_error_code::actorLocationStale)
+                ? static_cast<std::uint32_t> (protocol::framework_error_code::spotGenerationStale)
               : validation == stateful_error_t::moving
                 ? static_cast<std::uint32_t> (protocol::framework_error_code::spotMoving)
               : validation == stateful_error_t::conflict
@@ -805,6 +805,7 @@ raw_stateful_dispatch_t::accepted_actor_authority (object_ref_t owner,
     accepted_record_authority_query_t query;
     query.target = std::move (owner);
     query.requested_authority_owner_generation = actor.target.authority_owner_generation;
+    query.requested_object_generation = actor.target.object_generation;
     query.source_node_routing_id = std::move (source_node_routing_id);
     query.source_node_generation = source_node_generation;
     query.target_node_routing_id = std::move (actor.target.target_node_routing_id);
@@ -834,6 +835,7 @@ raw_stateful_dispatch_t::accepted_spot_authority (object_ref_t owner,
     accepted_record_authority_query_t query;
     query.target = std::move (owner);
     query.requested_authority_owner_generation = spot.target.authority_owner_generation;
+    query.requested_object_generation = spot.target.object_generation;
     query.source_node_routing_id = std::move (source_node_routing_id);
     query.source_node_generation = source_node_generation;
     query.target_node_routing_id = std::move (spot.target.target_node_routing_id);
@@ -856,8 +858,11 @@ raw_stateful_dispatch_t::resolve_accepted_authority (
     if (!authority && _retained_authority_resolver) {
         auto source = query.target;
         source.authority_owner_generation = query.requested_authority_owner_generation;
-        const auto retained = co_await _objects->retained_relocation_source (std::move (source));
-        if (retained) {
+        const auto retained = co_await _objects->retained_relocation_source (
+          std::move (source), query.requested_object_generation);
+        if (retained == stateful_error_t::generation_stale)
+            co_return std::pair{retained, std::nullopt};
+        if (retained == stateful_error_t::none) {
             // Native ingress owns the exact source fence, hold and Follow; Store qualifies peers.
             authority = co_await _retained_authority_resolver (query);
         }

@@ -1016,6 +1016,45 @@ TEST (FrameworkRelocationSealContract, source_fenced_relay_survives_target_autho
     }
 }
 
+TEST (FrameworkRelocationSealContract, retained_follow_rejects_previous_object_generation)
+{
+    auto host = std::make_shared<host::public_host_runtime_t> (
+      host::host_options_t{mesh::raw_mesh_node_options_t{
+        .descriptor = test_descriptor ("follow-generation"),
+        .runtime_failures = std::make_shared<runtime::runtime_failure_collector_t> ()}});
+    auto &objects = host->objects ();
+    const stateful::object_ref_t object{
+      stateful::object_kind_t::actor, "moving", 7, 1, "mesh", "source"};
+    const auto created = objects.begin_reserved_object (object, "actor", {});
+    ASSERT_EQ (created.error, stateful::stateful_error_t::none);
+    ASSERT_EQ (objects.commit_create (created.attempt), stateful::stateful_error_t::none);
+    const auto sealed = objects.try_seal_relocation_aggregate ({object}).result ().value ();
+    ASSERT_EQ (sealed.error, stateful::stateful_error_t::none);
+    ASSERT_EQ (objects.begin_relocation_boundary (
+                 sealed.seal.token, [] (const auto &, const auto &) {}).first,
+               stateful::stateful_error_t::none);
+    const protocol::request_source_fence_t fence{"source-owner", 3, {1}, 1};
+    stateful::raw_stateful_dispatch_t dispatch (
+      objects, host->transport (),
+      [] (const auto &) -> task_t<std::optional<stateful::accepted_record_authority_t>> {
+          co_return std::nullopt;
+      },
+      [&] (const auto &) -> task_t<std::optional<stateful::accepted_record_authority_t>> {
+          co_return stateful::accepted_record_authority_t{fence, 3};
+      });
+    protocol::actor_message_header_t header;
+    header.target.actor_id = object.key;
+    header.target.object_generation = object.object_generation;
+    header.target.authority_owner_generation = object.authority_owner_generation;
+    header.target.owner_lease_generation = 3;
+    EXPECT_EQ (dispatch.accepted_actor_authority (object, header, {1}, 1).result ().value ().first,
+               stateful::stateful_error_t::none);
+    --header.target.object_generation;
+    EXPECT_NE (dispatch.accepted_actor_authority (object, header, {1}, 1).result ().value ().first,
+               stateful::stateful_error_t::none);
+    host->close ();
+}
+
 TEST (FrameworkRelocationSealContract, local_follow_checks_store_before_retained_source)
 {
     auto owner = std::make_shared<host::public_host_runtime_t> (
