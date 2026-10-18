@@ -82,6 +82,15 @@ internal sealed class ZLinkSerialWorkQueue : IEnumerable<ZLinkSerialWorkItem>
     public int Count { get; private set; }
     internal ZLinkSerialWorkItem? Head => _head;
 
+    internal ZLinkSerialWorkItem? PendingTail =>
+        _publicationTail is { } published
+        && (
+            !ReferenceEquals(published, Volatile.Read(ref _publicationCursor))
+            || Volatile.Read(ref published.Next) is not null
+        )
+            ? published
+            : Volatile.Read(ref _tail);
+
     public void Enqueue(ZLinkSerialWorkItem item)
     {
         ArgumentNullException.ThrowIfNull(item);

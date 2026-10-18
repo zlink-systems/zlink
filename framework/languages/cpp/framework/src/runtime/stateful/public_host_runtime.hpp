@@ -602,6 +602,7 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     bool capture_flow () const { return !_flow_capture || _flow_capture (); }
     void set_delay_owner (detail::delay_owner_t &owner) noexcept { _delay_owner = &owner; }
 
+    void configure_peer_reconcile (std::function<void (const std::vector<std::uint8_t> &)> request);
     bool connect_peer (const std::string &endpoint,
                        std::optional<zlink::routing_id_t> expected = std::nullopt,
                        std::uint64_t expected_lifecycle_generation = 0,
@@ -1014,10 +1015,12 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
              std::pair<protocol::session_relocation_seal_t, session_relocation_seal_result_t>>
       _session_journal_terminals;
     std::pair<bool, std::optional<protocol::session_relocation_sealed_t>>
-    admit_session_relocation_seal (const protocol::session_relocation_seal_t &seal,
-                                   const location_owner_token_t &session_owner,
-                                   std::vector<std::uint8_t> response_routing_id,
-                                   session_seal_local_completion_t local_completion = {});
+    admit_session_relocation_seal (
+      const protocol::session_relocation_seal_t &seal,
+      const location_owner_token_t &session_owner,
+      std::vector<std::uint8_t> response_routing_id,
+      session_seal_local_completion_t local_completion,
+      const std::function<void (const std::vector<std::uint8_t> &)> &reconcile);
     using relocation_attempt_key_t = std::tuple<std::uint64_t, std::uint64_t, std::uint64_t>;
     struct relocation_target_attempt_t;
     bool try_finalize_relocation_target (const relocation_attempt_key_t &key);
@@ -1051,6 +1054,7 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     observe_relocation_target (const stateful::relocation_authority_fence_t &fence) const noexcept;
     bool
     adopt_committed_session_route_authorities (relocation_target_attempt_t &attempt) const noexcept;
+    struct pending_relocation_assembly_t;
     struct relocation_target_attempt_t
     {
         struct session_route_state_t
@@ -1071,6 +1075,7 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
             bool send_failed = false;
         };
         protocol::relocation_prepare_t prepare;
+        std::shared_ptr<const pending_relocation_assembly_t> pending;
         stateful::relocation_restore_identity_t restore_identity;
         std::vector<stateful::object_ref_t> sources;
         std::vector<stateful::object_ref_t> targets;
@@ -1106,8 +1111,10 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
         protocol::relocation_prepare_t prepare;
         mesh::service_mailbox_record_t request;
         stateful::relocation_state_assembly_t assembly;
-        bool principal_registered = false;
         std::chrono::steady_clock::time_point expires_at{};
+        std::shared_ptr<task_completion_source_t<void>> ready =
+          std::make_shared<task_completion_source_t<void>> ();
+        std::shared_ptr<std::stop_source> cancellation = std::make_shared<std::stop_source> ();
     };
     struct relocation_assembly_staging_t
     {
@@ -1120,10 +1127,12 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     };
     std::map<relocation_attempt_key_t, pending_relocation_assembly_t> _relocation_assemblies;
     static constexpr auto relocation_assembly_retention = std::chrono::seconds (10);
-    void fail_relocation_assembly_locked (const relocation_attempt_key_t &key,
-                                          pending_relocation_assembly_t &pending) noexcept;
     void complete_relocation_assembly (const relocation_attempt_key_t &key,
-                                       pending_relocation_assembly_t pending);
+                                       std::shared_ptr<pending_relocation_assembly_t> pending);
+    task_t<void>
+    reply_relocation_assembly_failure (relocation_attempt_key_t key,
+                                       std::shared_ptr<const pending_relocation_assembly_t> pending,
+                                       protocol::framework_error_code code);
     void reply_relocation_assembly_failure (
       const pending_relocation_assembly_t &pending,
       protocol::framework_error_code code = protocol::framework_error_code::relocationDataLost);
@@ -1139,9 +1148,27 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     task_t<bool>
     restore_relocation_assembly (std::shared_ptr<const pending_relocation_assembly_t> pending,
                                  std::shared_ptr<const relocation_assembly_staging_t> staging);
-    void activate_relocation_assembly (const relocation_attempt_key_t &key,
-                                       const pending_relocation_assembly_t &pending,
-                                       relocation_assembly_staging_t staging);
+    void request_peer_reconcile (
+      const std::vector<std::uint8_t> &target,
+      std::uint64_t generation,
+      const std::function<void (const std::vector<std::uint8_t> &)> &reconcile);
+    task_t<void> await_relocation_session_routes (
+      std::shared_ptr<const pending_relocation_assembly_t> pending,
+      const std::vector<protocol::session_relocation_route_t> &routes);
+    task_t<void> finish_relocation_assembly (
+      relocation_attempt_key_t key,
+      std::shared_ptr<const pending_relocation_assembly_t> pending,
+      std::shared_ptr<relocation_assembly_staging_t> staging,
+      std::vector<std::pair<std::string, stateful::object_ref_t>> consumed);
+    task_t<bool> submit_relocation_ready_reply (protocol::relocation_prepare_t prepare,
+                                                const mesh::service_mailbox_record_t &request);
+    void observe_relocation_ready (std::shared_ptr<task_completion_source_t<void>> ready,
+                                   mesh::service_mailbox_record_t request,
+                                   protocol::relocation_prepare_t prepare);
+    task_t<bool>
+    activate_relocation_assembly (const relocation_attempt_key_t &key,
+                                  std::shared_ptr<const pending_relocation_assembly_t> pending,
+                                  std::shared_ptr<relocation_assembly_staging_t> staging);
     bool register_relocation_target_queue (const protocol::relocation_prepare_t &prepare,
                                            const stateful::object_ref_t &target,
                                            const protocol::relocation_object_t &wire_object,
@@ -1150,13 +1177,15 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
                                   const protocol::relocation_data_t &data,
                                   std::uint64_t participant_id);
     void poll_relocation_target_attempts ();
+    static bool relocation_target_wire_ready (const relocation_target_attempt_t &attempt) noexcept;
     static bool relocation_target_terminal (const relocation_target_attempt_t &attempt);
     static std::optional<relocation_target_attempt_t>
     take_relocation_target_discard (relocation_target_attempt_t &attempt);
     void discard_unverified_relocation_targets (
       const std::vector<relocation_attempt_key_t> &observed = {});
-    void
-    discard_relocation_target_attempts (std::vector<relocation_target_attempt_t> attempts) noexcept;
+    void discard_relocation_target_attempts (
+      std::vector<relocation_target_attempt_t> attempts,
+      std::optional<framework_exception_t> failure = std::nullopt) noexcept;
     std::map<relocation_attempt_key_t, relocation_target_attempt_t> _relocation_target_attempts;
     std::shared_ptr<stateful::authority_relocation_port_t> _relocation_authority;
     std::shared_ptr<stateful::aggregate_authority_port_t> _aggregate_relocation_authority;
@@ -1235,6 +1264,7 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     runtime::offload_executor_t _spot_actor_index_lane_executor;
     mutable runtime::state_lane_t _spot_actor_index_lane{_spot_actor_index_lane_executor};
     std::map<std::string, std::string> _peer_endpoints;
+    std::function<void (const std::vector<std::uint8_t> &)> _peer_reconcile;
     runtime::offload_executor_t _peer_endpoint_lane_executor;
     runtime::state_lane_t _peer_endpoint_lane{_peer_endpoint_lane_executor};
     std::atomic<std::uint64_t> _next_operation{1};

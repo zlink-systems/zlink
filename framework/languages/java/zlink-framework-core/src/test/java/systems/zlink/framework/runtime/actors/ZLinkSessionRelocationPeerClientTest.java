@@ -108,12 +108,10 @@ final class ZLinkSessionRelocationPeerClientTest {
     void bindingAbsentCommand43CompletesTheSealWithoutRetransmission() throws Exception {
         var codec = new ZLinkServiceM6BWireCodec();
         var seal = seal();
-        var generated =
-                ServiceWirePilotCodec.decodeSessionRelocationSeal42(
-                        codec.encodeSessionRelocationSeal(seal));
+        var generated = codec.decodeSessionRelocationSeal(codec.encodeSessionRelocationSeal(seal));
         byte[] absent =
-                ServiceWirePilotCodec.encodeSessionRelocationSealed43(
-                        new ServiceWirePilotCodec.SessionRelocationSealed43(
+                codec.encodeSessionRelocationSealed(
+                        new ZLinkServiceM6BWireCodec.SessionRelocationSealed(
                                 generated.relocation(),
                                 generated.coordinator(),
                                 generated.actor(),
@@ -161,7 +159,9 @@ final class ZLinkSessionRelocationPeerClientTest {
                         10,
                         11),
                 new ZLinkServiceM6BWireCodec.SessionOwnerFence(
-                        SESSION_OWNER, 7, "session-owner", 8, SESSION, 9));
+                        SESSION_OWNER, 7, "session-owner", 8, SESSION, 9),
+                RoutingId.from("relocation-target"),
+                7);
     }
 
     private static ZLinkServiceM6BWireCodec.SessionRelocationRoute command() {

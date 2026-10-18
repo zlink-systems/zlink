@@ -10,6 +10,7 @@ import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.actors.ZLinkActorJoinOperationId;
+import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.locations.*;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.runtime.InMemoryRelocationStore;
@@ -108,6 +109,12 @@ final class ZLinkActorJoinPrewarmIngressTest {
             //  between Accepted and PREPARE (migrated atomically when the
             //  real stage installed) ahead of the one that landed
             //  straight in the real stage after install.
+            harness.recordingBackend
+                    .actors
+                    .actorRelocationLaneAsync(harness.actorId)
+                    .thenCompose(ZLinkSerialExecutionQueue::awaitQuiescence)
+                    .toCompletableFuture()
+                    .get(5, TimeUnit.SECONDS);
             assertEquals(List.of("EARLY", "AFTER_INSTALL"), harness.recordingBackend.replayed);
         }
     }
@@ -515,6 +522,24 @@ final class ZLinkActorJoinPrewarmIngressTest {
      */
     private static final class RecordingActorBackend
             implements ZLinkStandaloneActorRelocationStagingOwner.Backend {
+        @Override
+        public CompletionStage<List<CompletableFuture<Void>>> admitBacklogPrefix(
+                Object actor,
+                ZLinkStandaloneActorRelocationStagingOwner.Request request,
+                List<ZLinkSerialExecutionQueue.QueuedRecord> records,
+                java.util.function.BiFunction<
+                                ZLinkSerialExecutionQueue.QueuedRecord,
+                                CompletableFuture<Void>,
+                                java.util.function.Supplier<CompletionStage<Void>>>
+                        replay) {
+            return spots.admitActorRelocationPrefix(
+                    actors,
+                    (ZLinkActorRuntime.PreparedTransferredActor) actor,
+                    request.targetSpotId(),
+                    records,
+                    replay);
+        }
+
         private final systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode
                 targetNode;
         private final ZLinkActorSessionCoordinator actors;

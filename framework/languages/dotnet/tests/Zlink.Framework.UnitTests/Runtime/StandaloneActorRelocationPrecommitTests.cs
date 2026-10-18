@@ -178,7 +178,8 @@ public sealed class StandaloneActorRelocationPrecommitTests
             target,
             envelope,
             ZLinkRelocationTransferPayload.Create(envelope, 1024),
-            applicationVersion: 1
+            applicationVersion: 1,
+            DateTimeOffset.UtcNow.AddMinutes(1)
         );
 
         var targetAuthority = Authority(actorId, target, targetOwner);
@@ -312,7 +313,8 @@ public sealed class StandaloneActorRelocationPrecommitTests
             target,
             envelope,
             ZLinkRelocationTransferPayload.Create(envelope, 1024),
-            applicationVersion: 1
+            applicationVersion: 1,
+            DateTimeOffset.UtcNow.AddMinutes(1)
         );
 
         Assert.Equal(
@@ -397,7 +399,8 @@ public sealed class StandaloneActorRelocationPrecommitTests
             target,
             envelope,
             ZLinkRelocationTransferPayload.Create(envelope, 1024),
-            applicationVersion: 1
+            applicationVersion: 1,
+            DateTimeOffset.UtcNow.AddMinutes(1)
         );
 
         var committed = await new ZLinkStandaloneActorRelocationPrecommitCoordinator(
@@ -894,7 +897,8 @@ public sealed class StandaloneActorRelocationPrecommitTests
                 third,
                 root,
                 ZLinkRelocationTransferPayload.Create(root, 1024),
-                1
+                1,
+                DateTimeOffset.UtcNow.AddMinutes(1)
             );
             var actorId = source.TargetAuthority.ActorId;
             var thirdAuthority = Authority(actorId, third, thirdOwner);
@@ -1279,7 +1283,8 @@ public sealed class StandaloneActorRelocationPrecommitTests
             target,
             envelope,
             ZLinkRelocationTransferPayload.Create(envelope, 1024),
-            applicationVersion: 1
+            applicationVersion: 1,
+            DateTimeOffset.UtcNow.AddMinutes(1)
         );
         return new CapturedSource(
             key,
@@ -1377,7 +1382,8 @@ public sealed class StandaloneActorRelocationPrecommitTests
             target,
             envelope,
             ZLinkRelocationTransferPayload.Create(envelope, 1024),
-            applicationVersion: 1
+            applicationVersion: 1,
+            DateTimeOffset.UtcNow.AddMinutes(1)
         );
         return new ForeignCutover(
             actorId,

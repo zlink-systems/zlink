@@ -250,13 +250,11 @@ internal sealed class ZLinkActorDispatchRouter(
                 )
                 .ConfigureAwait(false);
             if (!handled)
-                ReportMissingHandler(
+                ZLinkSpotActorPacketDispatcher.ReportMissingSendHandler(
+                    _dispatchErrors,
                     actor,
                     header,
-                    ZLinkDispatchMessageKind.ActorSend,
-                    ZLinkDispatchErrorAction.Drop,
-                    exception: null,
-                    sourceSessionRid: sourceSessionRid
+                    sourceSessionRid
                 );
             return placement.Prune;
         }
@@ -355,19 +353,12 @@ internal sealed class ZLinkActorDispatchRouter(
             return ZLinkActorReply.FromError(replyPathError);
         }
 
-        var error = new ZLinkFrameworkException(
-            ZLinkFrameworkErrorKind.NotFound,
-            $"No Spot actor request handler is registered for '{header.Name}'."
-        );
-        ReportMissingHandler(
+        return ZLinkSpotActorPacketDispatcher.MissingHandlerReply(
+            _dispatchErrors,
             actor,
             header,
-            ZLinkDispatchMessageKind.ActorRequest,
-            ZLinkDispatchErrorAction.ReplyError,
-            error,
             sourceSessionRid
         );
-        return ZLinkActorReply.FromError(error);
     }
 
     private async ValueTask NotifyDisconnectedByCurrentLocationAsync(
@@ -391,31 +382,6 @@ internal sealed class ZLinkActorDispatchRouter(
         await runtime
             .TryNotifyEntrySpotActorDisconnectedAsync(actor, null, cancellationToken)
             .ConfigureAwait(false);
-    }
-
-    private void ReportMissingHandler(
-        IZLinkActor actor,
-        ZlinkStreamHeader header,
-        ZLinkDispatchMessageKind kind,
-        ZLinkDispatchErrorAction action,
-        Exception? exception,
-        RoutingId? sourceSessionRid
-    )
-    {
-        var scope = new ZLinkDispatchFlowScope(
-            ZLinkDispatchErrorSurface.SpotActor,
-            _dispatchErrors.Flow.CaptureEnabled,
-            kind,
-            header.Name,
-            correlationId: header.CorrelationId,
-            actorId: actor.Context.ActorId,
-            streamSessionId: _dispatchErrors.Enabled
-            && sourceSessionRid is { IsEmpty: false } sessionRid
-                ? sessionRid.ToHex()
-                : null
-        );
-
-        scope.HandlerMissing(_dispatchErrors, action, exception);
     }
 
     private void ReportReplyPathMissing(

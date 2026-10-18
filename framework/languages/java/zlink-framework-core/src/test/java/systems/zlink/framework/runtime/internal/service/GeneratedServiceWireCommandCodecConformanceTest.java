@@ -765,11 +765,13 @@ final class GeneratedServiceWireCommandCodecConformanceTest {
                     ServiceWirePilotCodec.encodeRelocationCutover34(
                             ServiceWirePilotCodec.decodeRelocationCutover34(bytes));
             case 40 ->
-                    ServiceWirePilotCodec.encodeRelocationPrepare40(
-                            ServiceWirePilotCodec.decodeRelocationPrepare40(bytes));
+                    new ZLinkCanonicalRelocationControlCodec()
+                            .encode(new ZLinkCanonicalRelocationControlCodec().decode(bytes));
             case 42 ->
-                    ServiceWirePilotCodec.encodeSessionRelocationSeal42(
-                            ServiceWirePilotCodec.decodeSessionRelocationSeal42(bytes));
+                    new ZLinkServiceM6BWireCodec()
+                            .encodeSessionRelocationSeal(
+                                    new ZLinkServiceM6BWireCodec()
+                                            .decodeSessionRelocationSeal(bytes));
             case 43 ->
                     ServiceWirePilotCodec.encodeSessionRelocationSealed43(
                             ServiceWirePilotCodec.decodeSessionRelocationSealed43(bytes));

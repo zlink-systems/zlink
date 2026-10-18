@@ -534,6 +534,11 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                     if (reply == null) {
                         return CompletableFuture.completedFuture(null);
                     }
+                    if (reply.sealed()) {
+                        ZLinkInternalMeshNode node = meshNodes.get(resolveActorDispatchMeshName());
+                        node.requestPeerReconcile(
+                                command.targetNodeRid(), command.targetNodeGeneration());
+                    }
                     CompletionStage<Void> recorded =
                             reply.sealed()
                                     ? CompletableFuture.completedFuture(null)

@@ -327,8 +327,9 @@ class raw_mesh_node_owner_t
     request_relocation_prepare (const std::vector<std::uint8_t> &target_routing_id,
                                 const protocol::relocation_prepare_t &prepare,
                                 std::chrono::milliseconds timeout);
-    bool reply_relocation_ready (const service_mailbox_record_t &request,
-                                 const protocol::relocation_ready_t &ready);
+    task_t<std::function<bool ()>>
+    prepare_relocation_ready_reply (const service_mailbox_record_t &request,
+                                    const protocol::relocation_ready_t &ready);
     bool reply_relocation_failed (const service_mailbox_record_t &request,
                                   const protocol::relocation_failed_t &failure);
     // actorJoin(28): durable admission over the ROUTER port.

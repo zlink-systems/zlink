@@ -1054,6 +1054,20 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
 
     private static final class RestartActorBackend
             implements ZLinkStandaloneActorRelocationStagingOwner.Backend {
+        @Override
+        public CompletionStage<List<CompletableFuture<Void>>> admitBacklogPrefix(
+                Object actor,
+                ZLinkStandaloneActorRelocationStagingOwner.Request request,
+                List<ZLinkSerialExecutionQueue.QueuedRecord> records,
+                java.util.function.BiFunction<
+                                ZLinkSerialExecutionQueue.QueuedRecord,
+                                CompletableFuture<Void>,
+                                java.util.function.Supplier<CompletionStage<Void>>>
+                        replay) {
+            assertTrue(records.isEmpty(), "the restart fixture has no accepted journal");
+            return CompletableFuture.completedFuture(List.of());
+        }
+
         private final List<String> operations;
 
         private RestartActorBackend(List<String> operations) {

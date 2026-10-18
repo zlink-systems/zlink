@@ -1087,6 +1087,7 @@ final class ZLinkStreamRuntimeIngressTest {
             assertEquals(PEER_B, second.context.routingId().orElseThrow());
             assertTrue(second.dispatchLatch.await(5, TimeUnit.SECONDS));
             assertEquals(List.of("b-first"), second.packetNames);
+            assertTrue(first.dispatchLatch.await(5, TimeUnit.SECONDS));
             assertEquals(List.of("a-first"), first.packetNames);
             assertEquals(2, TestSession.createdCount.get(), "one Session per peer");
 
@@ -1227,7 +1228,9 @@ final class ZLinkStreamRuntimeIngressTest {
                         coordinator,
                         ZLinkServiceM6BWireCodec.RelocationRole.SOURCE,
                         new ZLinkServiceM6BWireCodec.ActorRouteFence(actorRef, 3, 7, 11),
-                        owner);
+                        owner,
+                        RoutingId.from("relocation-target"),
+                        7);
 
         assertThrows(
                 CompletionException.class,
@@ -1244,6 +1247,9 @@ final class ZLinkStreamRuntimeIngressTest {
                                         actorRef.nodeRid(), codec.encodeSessionRelocationSeal(seal))
                                 .toCompletableFuture()
                                 .join());
+        assertEquals(seal.targetNodeRid(), fixture.requestedPeer().get());
+        assertEquals(seal.targetNodeGeneration(), fixture.requestedGeneration().get());
+        assertTrue(sealed.sealed(), "command 43 completes while target route is still unobserved");
         var abort =
                 new ZLinkServiceM6BWireCodec.SessionRelocationRoute(
                         relocation,
@@ -1436,7 +1442,9 @@ final class ZLinkStreamRuntimeIngressTest {
                         "session-owner",
                         5,
                         sessionRid,
-                        bindingGeneration));
+                        bindingGeneration),
+                RoutingId.from("relocation-target"),
+                7);
     }
 
     private static ZLinkServiceM6BWireCodec.SessionRelocationRoute sessionAbort(
@@ -1667,6 +1675,8 @@ final class ZLinkStreamRuntimeIngressTest {
                         serializer,
                         ZLinkHandlerActivator.reflection());
         actors.setMeshName(MESH);
+        var requestedPeer = new java.util.concurrent.atomic.AtomicReference<RoutingId>();
+        var requestedGeneration = new java.util.concurrent.atomic.AtomicLong();
         ZLinkInternalMeshNode ownerNode =
                 (ZLinkInternalMeshNode)
                         Proxy.newProxyInstance(
@@ -1679,6 +1689,15 @@ final class ZLinkStreamRuntimeIngressTest {
                                             case "lifecycleGeneration" -> 3L;
                                             case "localAuthorityOwnerId" -> "session-owner";
                                             case "localAuthorityLeaseGeneration" -> 5L;
+                                            case "requestPeerReconcile" -> {
+                                                requestedPeer.set((RoutingId) arguments[0]);
+                                                requestedGeneration.set((Long) arguments[1]);
+                                                yield null;
+                                            }
+                                            case "secureSessionOwnerRoute" ->
+                                                    throw new AssertionError(
+                                                            "Session seal must not wait for target"
+                                                                    + " route readiness");
                                             default -> defaultValue(method.getReturnType());
                                         });
         ZLinkStreamRuntime runtime =
@@ -1696,7 +1715,7 @@ final class ZLinkStreamRuntimeIngressTest {
                                 new FakeContext(),
                                 false)
                         .start();
-        return new ReplacementFixture(runtime, actors);
+        return new ReplacementFixture(runtime, actors, requestedPeer, requestedGeneration);
     }
 
     private static systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
@@ -1711,7 +1730,11 @@ final class ZLinkStreamRuntimeIngressTest {
                         RoutingId.from("session-owner-node"), 3, "session-owner", 5, PEER_A, 1));
     }
 
-    private record ReplacementFixture(ZLinkStreamRuntime runtime, ZLinkActorRuntime actors) {}
+    private record ReplacementFixture(
+            ZLinkStreamRuntime runtime,
+            ZLinkActorRuntime actors,
+            java.util.concurrent.atomic.AtomicReference<RoutingId> requestedPeer,
+            java.util.concurrent.atomic.AtomicLong requestedGeneration) {}
 
     private enum ReplacementMode {
         NONE,

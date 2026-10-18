@@ -3215,8 +3215,12 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             String spotId = "jvm-m6b-instance";
             spots.registerInstanceSpotType("alpha");
 
-            var first = spots.activateInstanceSpot(spotId, null).toCompletableFuture();
-            var joined = spots.activateInstanceSpot(spotId, "alpha").toCompletableFuture();
+            var first =
+                    spots.activateInstanceSpot(instanceRoute(node, spotId, 1), null)
+                            .toCompletableFuture();
+            var joined =
+                    spots.activateInstanceSpot(instanceRoute(node, spotId, 1), "alpha")
+                            .toCompletableFuture();
             assertTrue(
                     first.get(1, TimeUnit.SECONDS).spot()
                             == joined.get(1, TimeUnit.SECONDS).spot());
@@ -3224,14 +3228,17 @@ final class ZLinkJavaRawSpotNodeM6BTest {
 
             spots.registerInstanceSpotType("beta");
             assertThrows(
-                    IllegalStateException.class, () -> spots.activateInstanceSpot(spotId, "beta"));
+                    IllegalStateException.class,
+                    () -> spots.activateInstanceSpot(instanceRoute(node, spotId, 1), "beta"));
             assertThrows(
                     IllegalStateException.class,
-                    () -> spots.activateInstanceSpot("jvm-m6b-instance-ambiguous", null));
+                    () ->
+                            spots.activateInstanceSpot(
+                                    instanceRoute(node, "jvm-m6b-instance-ambiguous", 1), null));
 
             assertTrue(spots.closeInstanceSpot(spotId, firstGeneration));
             var reactivated =
-                    spots.activateInstanceSpot(spotId, null)
+                    spots.activateInstanceSpot(instanceRoute(node, spotId, 2), null)
                             .toCompletableFuture()
                             .get(1, TimeUnit.SECONDS);
             assertEquals("alpha", reactivated.stableType());
@@ -3248,10 +3255,12 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             String spotId = "jvm-m6b-instance-join";
             spots.registerInstanceSpotType("alpha");
 
-            var first = spots.activateInstanceSpot(spotId, null).toCompletableFuture();
+            var first =
+                    spots.activateInstanceSpot(instanceRoute(node, spotId, 1), null)
+                            .toCompletableFuture();
             // The join's completion continuation observes the registry the moment it runs.
             var closedOnJoin =
-                    spots.activateInstanceSpot(spotId, "alpha")
+                    spots.activateInstanceSpot(instanceRoute(node, spotId, 1), "alpha")
                             .thenApply(
                                     joined ->
                                             spots.closeInstanceSpot(
@@ -3394,7 +3403,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                             "store-3");
             spots.registerInstanceSpotAuthority("orders", route);
             ZLinkBackendSpot spot =
-                    spots.activateInstanceSpot(spotId, "orders")
+                    spots.activateInstanceSpot(route, "orders")
                             .toCompletableFuture()
                             .get(2, TimeUnit.SECONDS)
                             .spot();
@@ -3740,5 +3749,11 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                         ignored -> {})
                 .toCompletableFuture()
                 .join();
+    }
+
+    private static ZLinkServiceM6BWireCodec.InstanceRouteFence instanceRoute(
+            ZLinkJavaRawMeshNode node, String spotId, long generation) {
+        return new ZLinkServiceM6BWireCodec.InstanceRouteFence(
+                node.routingId(), 1, spotId, generation, "owner", 1, 1, "version");
     }
 }

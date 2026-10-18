@@ -4223,7 +4223,9 @@ void verify_same_node_session_seal_waits_for_active_ingress ()
       "same-node-session-owner",
       19,
       session_rid,
-      binding.binding_generation};
+      binding.binding_generation,
+      status.routing_id ().to_bytes (),
+      status.lifecycle_generation ()};
     using seal_completion_t = std::pair<foundation::operation_terminal_t,
                                         std::optional<host::session_relocation_seal_result_t>>;
     std::size_t journal_capture_count = 0;
@@ -4353,7 +4355,9 @@ void verify_configured_session_seal_timeout_closes_actual_owner ()
       "configured-session-owner",
       19,
       session_rid,
-      binding.binding_generation};
+      binding.binding_generation,
+      status.routing_id ().to_bytes (),
+      status.lifecycle_generation ()};
     std::atomic_int journal_capture_count{0};
     std::atomic_int completion_count{0};
     std::atomic_int completion_terminal{-1};
@@ -7638,7 +7642,8 @@ void verify_draining_target_relocation_prepare (bool already_accepted)
       1,
       1,
       1,
-      1};
+      1,
+      static_cast<std::uint64_t> (std::numeric_limits<std::int64_t>::max ())};
     std::optional<zlink::framework::task_t<mesh::relocation_prepare_response_t>> initial;
     if (already_accepted) {
         initial.emplace (source->transport ().request_relocation_prepare (
@@ -7673,11 +7678,12 @@ void verify_draining_target_relocation_prepare (bool already_accepted)
     const auto response = await_task (std::move (pending));
     assert (!response.ready);
     if (already_accepted) {
-        assert (!response.failed);
+        assert (response.failed);
         const auto accepted = await_task (std::move (*initial));
         assert (accepted.failed);
         assert (accepted.failed->failure_code
                 == static_cast<std::uint32_t> (protocol::framework_error_code::relocationDataLost));
+        assert (response.failed->failure_code == accepted.failed->failure_code);
     } else {
         assert (response.failed);
         assert (response.failed->failure_code

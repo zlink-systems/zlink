@@ -78,6 +78,29 @@ final class ZLinkAutoConnectLoop implements AutoCloseable {
         return stopping;
     }
 
+    /**
+     * Applies the ordinary reconcile now instead of at the next period (MeshNode §7.1). A tick in
+     * flight may have read the store before the request, so the immediate tick follows it.
+     */
+    void reconcileNow() {
+        synchronized (lifecycleGate) {
+            if (!running) return;
+            // The executor keeps a completed in-flight tick from recursively calling this
+            // method before its next task has been published.
+            executor.execute(
+                    () -> {
+                        synchronized (lifecycleGate) {
+                            if (!running) return;
+                            if (task == null) {
+                                inFlightTick.whenComplete((ignored, failure) -> reconcileNow());
+                            } else if (task.cancel(false)) {
+                                task = executor.schedule(this::tickOnLoop, 0, TimeUnit.NANOSECONDS);
+                            }
+                        }
+                    });
+        }
+    }
+
     CompletionStage<Void> markDraining() {
         return reconciler.markDraining();
     }

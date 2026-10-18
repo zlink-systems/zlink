@@ -632,3 +632,43 @@ for (const beforeSnapshot of [false, true]) {
     } finally { h.runtime.close(); }
   });
 }
+
+test('peer route readiness wait uses existing admission notifications and removes listeners', async () => {
+  const h = selectedRouteRuntime(new Map([['peer', 11n]]));
+  const peer = descriptor('peer');
+  try {
+    const ready = h.runtime.waitForPeerRoute('peer', 1n, BigInt(Date.now() + 10000));
+    assert.equal(h.runtime.pendingOperationCount, 1);
+    h.runtime.connectPeerByRoutingId(peer.advertisedEndpoint, 'peer');
+    await h.runtime.observeSelectedRoutes();
+    await h.processReceived({ sourceRid: 'peer', routeGeneration: 11n,
+      parts: [Buffer.from(wire.encodeRouteMeshAdmission(wire.M6aServiceWireCommand.admit, peer))] });
+    await ready;
+    assert.equal(h.runtime.pendingOperationCount, 0);
+    assert.equal(h.runtime.peerRouteChanged.size, 0);
+    // A different lifecycle must wait even when the RID has a ready route.
+    const stale = h.runtime.waitForPeerRoute('peer', 2n, BigInt(Date.now() + 10000));
+    const rejected = assert.rejects(stale, { name: 'OperationTimeoutError' });
+    h.runtime.expireOperations(performance.now() + 20000, performance.now() + 1000);
+    await rejected;
+    assert.equal(h.runtime.pendingOperationCount, 0);
+    assert.equal(h.runtime.peerRouteChanged.size, 0);
+  } finally { h.runtime.close(); }
+});
+
+for (const terminal of ['deadline', 'cancel', 'close']) {
+  test(`peer route readiness ends on ${terminal} without a relocation timer`, async () => {
+    const h = selectedRouteRuntime(new Map());
+    const controller = new AbortController();
+    try {
+      const wait = h.runtime.waitForPeerRoute('missing', 1n, BigInt(Date.now() + 10000), controller.signal);
+      const rejected = assert.rejects(wait);
+      if (terminal === 'deadline') h.runtime.expireOperations(performance.now() + 20000, performance.now() + 1000);
+      if (terminal === 'cancel') controller.abort(new Error('target stopped'));
+      if (terminal === 'close') h.runtime.close();
+      await rejected;
+      assert.equal(h.runtime.pendingOperationCount, 0);
+      assert.equal(h.runtime.peerRouteChanged.size, 0);
+    } finally { h.runtime.close(); }
+  });
+}

@@ -1536,23 +1536,24 @@ task_t<relocation_prepare_response_t> raw_mesh_node_owner_t::request_relocation_
     co_return response;
 }
 
-bool raw_mesh_node_owner_t::reply_relocation_ready (const service_mailbox_record_t &request,
-                                                    const protocol::relocation_ready_t &ready)
+task_t<std::function<bool ()>>
+raw_mesh_node_owner_t::prepare_relocation_ready_reply (const service_mailbox_record_t &request,
+                                                       const protocol::relocation_ready_t &ready)
 {
     if (request.source_routing_id.empty () || !request.reply_token)
-        return false;
-    const auto port = _lane
-                        .run ([this] {
-                            std::lock_guard lifecycle_lock (_lifecycle_mutex);
-                            return _port;
-                        })
-                        .get ();
+        co_return std::function<bool ()>{};
+    auto port = co_await _lane.run_task ([this] {
+        std::lock_guard lifecycle_lock (_lifecycle_mutex);
+        return _port;
+    });
     if (!port)
-        return false;
-    detail::backend::raw_message_t parts{protocol::encode_relocation_control (ready)};
-    return port->reply (
-      detail::backend::raw_received_t{request.source_routing_id, request.reply_token, {}},
-      std::move (parts));
+        co_return std::function<bool ()>{};
+    co_return std::function<bool ()>{[port = std::move (port), source = request.source_routing_id,
+                                      token = request.reply_token,
+                                      parts = detail::backend::raw_message_t{
+                                        protocol::encode_relocation_control (ready)}] () mutable {
+        return port->reply (detail::backend::raw_received_t{source, token, {}}, std::move (parts));
+    }};
 }
 
 bool raw_mesh_node_owner_t::reply_relocation_failed (const service_mailbox_record_t &request,

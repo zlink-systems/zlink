@@ -6,6 +6,45 @@ namespace Zlink.Framework.UnitTests;
 
 public sealed class ServiceWireRelocationCodecTests
 {
+    [Theory]
+    [InlineData(1UL)]
+    [InlineData(ulong.MaxValue)]
+    public void Command_40_deadline_is_a_required_unsigned_wire_field(ulong deadline)
+    {
+        var record = new ZLinkServiceWireCodec.RelocationPrepareRecord(
+            new(4, 5),
+            6,
+            Coordinator(),
+            Target(),
+            1,
+            Object(),
+            RoutingId.From("node-a"),
+            11,
+            0,
+            0,
+            0,
+            1,
+            deadline
+        );
+        var encoded = ZLinkServiceWireCodec.EncodeRelocationPrepare(record);
+        Assert.Equal(
+            deadline,
+            System.Buffers.Binary.BinaryPrimitives.ReadUInt64BigEndian(encoded.AsSpan(^8))
+        );
+        Assert.True(
+            ZLinkServiceWireCodec.TryDecodeRelocationPrepare(encoded, out var decoded, out _)
+        );
+        Assert.Equal(record, decoded);
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            ZLinkServiceWireCodec.EncodeRelocationPrepare(record with { DeadlineUnixMs = 0 })
+        );
+        encoded.AsSpan(^8).Clear();
+        Assert.False(
+            ZLinkServiceWireCodec.TryDecodeRelocationPrepare(encoded, out _, out var error)
+        );
+        Assert.Equal(ZLinkServiceWireCodec.DecodeError.InvalidField, error);
+    }
+
     [Fact]
     public void Commands_30_31_34_and_40_match_the_shared_golden_vectors()
     {
@@ -70,7 +109,10 @@ public sealed class ServiceWireRelocationCodecTests
                 24,
                 2,
                 0x29BC8795,
-                1
+                1,
+                System.Buffers.Binary.BinaryPrimitives.ReadUInt64BigEndian(
+                    ReadRelocationControlGolden("relocationPrepareRestore").AsSpan(^8)
+                )
             ),
             ZLinkServiceWireCodec.EncodeRelocationPrepare,
             ZLinkServiceWireCodec.TryDecodeRelocationPrepare
@@ -259,6 +301,7 @@ public sealed class ServiceWireRelocationCodecTests
                 "PayloadChunkCount",
                 "PayloadChecksumCrc32c",
                 "ApplicationVersion",
+                "DeadlineUnixMs",
             },
             PublicPropertyNames<ZLinkServiceWireCodec.RelocationPrepareRecord>()
         );
@@ -334,7 +377,8 @@ public sealed class ServiceWireRelocationCodecTests
             0,
             0,
             0,
-            0
+            0,
+            checked((ulong)DateTimeOffset.UtcNow.AddMinutes(1).ToUnixTimeMilliseconds())
         );
 
         var encoded = ZLinkServiceWireCodec.EncodeRelocationPrepare(prepare);
