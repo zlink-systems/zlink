@@ -17,14 +17,6 @@
 namespace zlink::framework::detail
 {
 
-struct spot_multicast_route_send_t
-{
-    static constexpr const char *packet_name = "__zlink.spot.multicast";
-
-    std::string topic;
-    std::vector<std::uint8_t> frame;
-};
-
 struct spot_actor_admission_route_request_t
 {
     static constexpr const char *packet_name = "__zlink.spot.actor.join.admission";
@@ -215,8 +207,6 @@ struct actor_bound_session_route_reply_t
 // These declarations make the framework's normal typed JSON serializer the
 // single codec path for internal Spot route packets. Definitions stay in the
 // implementation file with the wire-field validation.
-void to_json (nlohmann::json &json, const spot_multicast_route_send_t &value);
-void from_json (const nlohmann::json &json, spot_multicast_route_send_t &value);
 void to_json (nlohmann::json &json, const spot_actor_admission_route_request_t &value);
 void from_json (const nlohmann::json &json, spot_actor_admission_route_request_t &value);
 void to_json (nlohmann::json &json, const spot_actor_admission_route_reply_t &value);

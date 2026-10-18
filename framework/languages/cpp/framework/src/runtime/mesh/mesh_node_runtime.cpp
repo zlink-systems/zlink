@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 
 #include "runtime/mesh/mesh_node_runtime.hpp"
+#include "runtime/mesh/service_channel_membership.hpp"
 #include "runtime/timers/async_delay.hpp"
 #include "runtime/actors/actor_gateway_runtime.hpp"
 #include "runtime/locations/actor_authority_payload.hpp"
@@ -4541,10 +4542,6 @@ void mesh_node_runtime_t::set_channel_weight (const std::string &channel_name, i
     int placement_weight = 100;
     _state->lane
       .run ([&] {
-          const auto found = _state->channels.find (channel_name);
-          if (found == _state->channels.end () || !found->second.server)
-              throw configuration_error ("RouteMesh channel is not configured: " + _state->mesh_name
-                                         + "/" + channel_name);
           for (const auto &[name, registration] : _state->channels)
               if (registration.server)
                   channel_weights.emplace (name,
@@ -4556,9 +4553,8 @@ void mesh_node_runtime_t::set_channel_weight (const std::string &channel_name, i
     const auto published = native_node ().transport ().publish_descriptor_update (
       [&channel_name, weight] (runtime::mesh::service_node_descriptor_t &descriptor) {
           const auto descriptor_channel =
-            std::find_if (descriptor.channels.begin (), descriptor.channels.end (),
-                          [&] (const auto &candidate) { return candidate.name == channel_name; });
-          if (descriptor_channel == descriptor.channels.end ())
+            runtime::mesh::find_service_channel (descriptor, channel_name);
+          if (!descriptor_channel)
               throw configuration_error ("RouteMesh channel is not configured: "
                                          + descriptor.mesh_name + "/" + channel_name);
           descriptor_channel->weight = weight;

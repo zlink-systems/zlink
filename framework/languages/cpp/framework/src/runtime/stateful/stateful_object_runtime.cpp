@@ -480,6 +480,77 @@ std::optional<object_ref_t> stateful_object_runtime_t::find (object_kind_t kind,
       .get ();
 }
 
+std::optional<object_ref_t> stateful_object_runtime_t::resolve_spot (const std::string &key) const
+{
+    return _lane
+      .run ([&, this] () -> std::optional<object_ref_t> {
+          for (const auto kind : {object_kind_t::user_spot, object_kind_t::instance_spot}) {
+              const auto record = _objects.find ({kind, key});
+              if (record != _objects.end ())
+                  return record->second.reference;
+          }
+          return std::nullopt;
+      })
+      .get ();
+}
+
+stateful_error_t stateful_object_runtime_t::set_subscription (const object_ref_t &spot,
+                                                              const std::string &channel_name,
+                                                              const std::string &topic)
+{
+    return _lane
+      .run ([&, this] {
+          if (spot.kind == object_kind_t::actor)
+              return stateful_error_t::invalid;
+          stateful_error_t error = stateful_error_t::none;
+          auto *record = find_record_locked (spot, error);
+          if (!record)
+              return error;
+          record->subscriptions.emplace (channel_name, topic);
+          return stateful_error_t::none;
+      })
+      .get ();
+}
+
+void stateful_object_runtime_t::unset_subscription (const object_ref_t &spot,
+                                                    const std::string &channel_name,
+                                                    const std::string &topic)
+{
+    _lane
+      .run ([&, this] {
+          stateful_error_t error = stateful_error_t::none;
+          if (auto *record = find_record_locked (spot, error))
+              record->subscriptions.erase ({channel_name, topic});
+      })
+      .get ();
+}
+
+task_t<std::vector<object_ref_t>>
+stateful_object_runtime_t::multicast_local_targets (std::string channel_name,
+                                                    std::string topic) const
+{
+    return _lane.run_task (
+      [this, subscription = std::make_pair (std::move (channel_name), std::move (topic))] {
+          std::vector<object_ref_t> targets;
+          for (const auto kind : {object_kind_t::user_spot, object_kind_t::instance_spot}) {
+              for (auto record = _objects.lower_bound ({kind, {}});
+                   record != _objects.end () && record->first.kind == kind; ++record) {
+                  if (record->second.subscriptions.contains (subscription))
+                      targets.push_back (record->second.reference);
+              }
+          }
+          return targets;
+      });
+}
+
+task_t<bool> stateful_object_runtime_t::contains_async (object_ref_t reference) const
+{
+    return _lane.run_task ([this, reference = std::move (reference)] {
+        stateful_error_t error = stateful_error_t::none;
+        return find_record_locked (reference, error) != nullptr;
+    });
+}
+
 std::pair<stateful_error_t, membership_token_t>
 stateful_object_runtime_t::begin_membership_move (const object_ref_t &actor,
                                                   const object_ref_t &target_spot)
@@ -2250,24 +2321,8 @@ stateful_object_runtime_t::object_record_t *
 stateful_object_runtime_t::find_record_locked (const object_ref_t &reference,
                                                stateful_error_t &error)
 {
-    const auto entry = _objects.find (key_for (reference));
-    if (entry == _objects.end ()) {
-        error = stateful_error_t::not_found;
-        return nullptr;
-    }
-    if (entry->second.reference.object_generation != reference.object_generation) {
-        error = stateful_error_t::generation_stale;
-        return nullptr;
-    }
-    if (!same_exact_ref (entry->second.reference, reference)) {
-        error =
-          entry->second.reference.authority_owner_generation != reference.authority_owner_generation
-            ? stateful_error_t::generation_stale
-            : stateful_error_t::conflict;
-        return nullptr;
-    }
-    error = stateful_error_t::none;
-    return &entry->second;
+    return const_cast<object_record_t *> (
+      std::as_const (*this).find_record_locked (reference, error));
 }
 
 const stateful_object_runtime_t::object_record_t *
