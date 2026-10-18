@@ -135,8 +135,16 @@ task_t<bool> actor_transfer_coordinator_t::try_seal_maintenance_inventory ()
     });
     if (!sealed)
         co_return false;
-    co_await wait_for_source_completions ();
-    co_return true;
+    std::exception_ptr failure;
+    try {
+        co_await wait_for_source_completions ();
+        co_return true;
+    }
+    catch (...) {
+        failure = std::current_exception ();
+    }
+    co_await end_maintenance_inventory ();
+    std::rethrow_exception (failure);
 }
 
 task_t<void> actor_transfer_coordinator_t::end_maintenance_inventory ()

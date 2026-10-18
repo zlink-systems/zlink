@@ -1273,11 +1273,19 @@ stateful_object_runtime_t::try_begin_maintenance_inventory (bool actors_only)
 {
     if (!co_await _actor_transfers->try_seal_maintenance_inventory ())
         co_return std::nullopt;
-    co_return co_await _lane.run_task ([this, actors_only] {
-        auto inventory = inventory_on_lane (actors_only);
-        _maintenance_inventory_active = true;
-        return inventory;
-    });
+    std::exception_ptr failure;
+    try {
+        co_return co_await _lane.run_task ([this, actors_only] {
+            auto inventory = inventory_on_lane (actors_only);
+            _maintenance_inventory_active = true;
+            return inventory;
+        });
+    }
+    catch (...) {
+        failure = std::current_exception ();
+    }
+    co_await end_maintenance_inventory ();
+    std::rethrow_exception (failure);
 }
 
 task_t<void> stateful_object_runtime_t::end_maintenance_inventory ()

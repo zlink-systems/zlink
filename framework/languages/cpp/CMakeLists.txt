@@ -1741,6 +1741,14 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
       TIMEOUT 30)
   endforeach()
   add_zlink_framework_test(
+    test_cpp_framework_maintenance_failure
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_maintenance_failure.cpp
+    "framework-unit;framework-contract;framework-actor;relocation"
+    unit)
+  target_use_zlink_gtest_main(test_cpp_framework_maintenance_failure)
+  target_include_directories(test_cpp_framework_maintenance_failure PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  add_zlink_framework_test(
     test_cpp_framework_relocation_seal_contract
     tests/Zlink.Framework.UnitTests/test_cpp_framework_relocation_seal_contract.cpp
     "framework-unit;framework-contract;framework-actor;stream;relocation"
