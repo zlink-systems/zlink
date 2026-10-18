@@ -75,7 +75,7 @@ class Dungeon final : public fx::spot_t<Player>
     }
     fx::task_t<void> deliver (Player &actor, fx::message_context_t &, const DungeonView &update)
     {
-        return actor.deliver (update.dungeonId, update, true);
+        return actor.deliver (update.dungeonId, update);
     }
 };
 using DungeonRelocation = StateRelocation<Dungeon, DungeonState>;
