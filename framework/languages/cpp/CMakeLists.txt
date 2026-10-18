@@ -388,6 +388,9 @@ endif()
 include("${ZLINK_FRAMEWORK_CPP_DIR}/cmake/zlink-cpp-boost.cmake")
 
 zlink_framework_cpp_add_boost_headers(zlink_framework)
+zlink_framework_cpp_add_boost_headers(zlink_framework_provider_abstractions)
+target_link_libraries(zlink_framework_provider_abstractions PRIVATE Threads::Threads)
+zlink_framework_cpp_add_asio_system_libraries(zlink_framework_provider_abstractions)
 # The M6 objects are linked into zlink_framework, so they must see the same
 # Boost headers as the rest of its translation units.
 zlink_framework_cpp_add_boost_headers(zlink_framework_m6a_objects)
@@ -977,7 +980,6 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
   add_executable(test_cpp_framework_submit_result_contract
     tests/Zlink.Framework.ContractTests/test_cpp_framework_submit_result_contract.cpp
     framework/src/runtime/backend/raw_dealer_port.cpp
-    framework/src/runtime/dispatch/provider_task_context.cpp
     framework/src/runtime/messaging/request_failure_mapper.cpp)
   target_compile_features(test_cpp_framework_submit_result_contract PRIVATE cxx_std_20)
   target_include_directories(test_cpp_framework_submit_result_contract PRIVATE
@@ -985,6 +987,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   target_link_libraries(test_cpp_framework_submit_result_contract PRIVATE
+    zlink::framework_provider_abstractions
     zlink::cpp
     opentelemetry-cpp::api
     Threads::Threads)
@@ -1156,6 +1159,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
   target_compile_definitions(test_cpp_framework_operation_registry PRIVATE
     ZLINK_COMPLETION_TERMINAL_CONFORMANCE_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/conformance/completion-terminal-v1.json")
   target_link_libraries(test_cpp_framework_operation_registry PRIVATE
+    zlink::framework_provider_abstractions
     zlink::cpp
     opentelemetry-cpp::metrics
     Threads::Threads
@@ -1855,6 +1859,15 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   add_zlink_framework_test(
     test_cpp_framework_async_task
     tests/Zlink.Framework.UnitTests/test_cpp_framework_async_task.cpp
+    "framework-unit;framework-regression;async")
+  zlink_framework_cpp_add_boost_headers(test_cpp_framework_async_task)
+  add_zlink_framework_test(
+    test_cpp_framework_completion_allocations
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_completion_allocations.cpp
+    "framework-unit;framework-regression;async")
+  add_zlink_framework_test(
+    test_cpp_framework_outside_runtime_resumption
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_outside_runtime_resumption.cpp
     "framework-unit;framework-regression;async")
   add_zlink_framework_test(
     test_cpp_framework_yield_admission

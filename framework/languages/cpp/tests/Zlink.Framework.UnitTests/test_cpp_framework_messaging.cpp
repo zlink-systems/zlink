@@ -27,6 +27,7 @@
 #include <ctime>
 #include <iomanip>
 #include <fstream>
+#include <future>
 #include <sstream>
 #include <mutex>
 #include <string>
@@ -1217,6 +1218,8 @@ int main ()
         {
             zlink::framework::task_completion_source_t<int> source;
             std::string observed_in_callback;
+            std::promise<void> callback_delivered;
+            auto delivered = callback_delivered.get_future ();
             bool leaked_on_completer = false;
             {
                 auto scope = rt::flow_context_t::enter (
@@ -1225,10 +1228,12 @@ int main ()
                   zlink::framework::flow_origin_t::inbound, std::nullopt);
                 auto task = source.task ();
                 zlink::framework::detail::observe_task_completion (
-                  task, [&observed_in_callback] (const zlink::framework::result_t<int> &) {
+                  task, [&observed_in_callback,
+                         &callback_delivered] (const zlink::framework::result_t<int> &) {
                       if (const auto &flow = rt::flow_context_t::current ()) {
                           observed_in_callback = flow->flow_id;
                       }
+                      callback_delivered.set_value ();
                   });
             }
             std::thread completer ([&source, &leaked_on_completer] {
@@ -1236,6 +1241,7 @@ int main ()
                 leaked_on_completer = rt::flow_context_t::current ().has_value ();
             });
             completer.join ();
+            delivered.get ();
             if (observed_in_callback != created) {
                 return 51;
             }
