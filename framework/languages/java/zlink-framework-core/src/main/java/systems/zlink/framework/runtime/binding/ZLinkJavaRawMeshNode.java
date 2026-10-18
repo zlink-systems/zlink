@@ -4606,6 +4606,11 @@ final class ZLinkJavaRawMeshNode
     }
 
     @Override
+    public void cancelPendingOperations() {
+        operations.cancelPendingOperations();
+    }
+
+    @Override
     public void close() {
         if (!closed.compareAndSet(false, true)) {
             return;

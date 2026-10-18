@@ -29,6 +29,8 @@ import java.util.function.Consumer;
 import java.util.function.Function;
 
 public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
+    default void cancelPendingOperations() {}
+
     /** Installs the host-owned dispatch-error sink used by transport completion observers. */
     default void setDispatchErrorReporter(ZLinkDispatchErrorReporter reporter) {
         // Alternate backends may report transport failures through their own diagnostics path.

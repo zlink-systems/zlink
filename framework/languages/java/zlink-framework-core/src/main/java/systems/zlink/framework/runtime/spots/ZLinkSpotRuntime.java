@@ -202,6 +202,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             new ZLinkSpotRelocationReplyRoutes();
     private final ZLinkSpotOutboundScope outboundScope = new ZLinkSpotOutboundScope();
     private volatile boolean closing;
+    private volatile CompletionStage<Void> applicationCleanup =
+            CompletableFuture.completedFuture(null);
     private volatile boolean draining;
     private volatile boolean relocating;
     private int drainInitialUserSpots;
@@ -1947,40 +1949,74 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
     }
 
     public CompletionStage<Void> closeAsync() {
+        return closeAsync(new CompletableFuture<>());
+    }
+
+    public CompletionStage<Void> applicationCleanup() {
+        return applicationCleanup;
+    }
+
+    public CompletionStage<Void> closeAsync(CompletionStage<? extends Throwable> forceStop) {
         beginClose();
         // Accepted Instance activations finish their first-message Store cleanup before Spots
         // close; the host drain stage bounds this wait with its deadline.
-        return CompletableFuture.allOf(
-                        nodes.stream()
-                                .map(
-                                        node ->
-                                                node.instanceActivationTerminals()
-                                                        .toCompletableFuture())
-                                .toArray(CompletableFuture[]::new))
-                .thenCompose(ignored -> spotLifecycle.closeAllAsync())
-                .handle(
+        CompletionStage<Void> applicationClosing =
+                CompletableFuture.allOf(
+                                nodes.stream()
+                                        .map(
+                                                node ->
+                                                        node.instanceActivationTerminals()
+                                                                .toCompletableFuture())
+                                        .toArray(CompletableFuture[]::new))
+                        .thenCompose(ignored -> spotLifecycle.closeAllAsync())
+                        .handle(
+                                (ignored, failure) -> {
+                                    CompletionStage<Void> closing =
+                                            CompletableFuture.completedFuture(null);
+                                    for (ZLinkInstanceSpotActivation activation :
+                                            instanceSpotActivations.values()) {
+                                        closing =
+                                                closing.handle(
+                                                                (nothing, closeFailure) ->
+                                                                        SpotActivationBase
+                                                                                .finishCleanup(
+                                                                                        closeFailure,
+                                                                                        activation
+                                                                                                .closeAsync(
+                                                                                                        systems
+                                                                                                                .zlink
+                                                                                                                .framework
+                                                                                                                .spots
+                                                                                                                .ZLinkSpotCloseReason
+                                                                                                                .HOST_SHUTDOWN,
+                                                                                                        Instant
+                                                                                                                .now())))
+                                                        .thenCompose(stage -> stage);
+                                    }
+                                    return SpotActivationBase.finishCleanup(failure, closing);
+                                })
+                        .thenCompose(stage -> stage);
+        applicationCleanup =
+                applicationClosing.whenComplete(
                         (ignored, failure) -> {
-                            CompletionStage<Void> closing = CompletableFuture.completedFuture(null);
-                            for (ZLinkInstanceSpotActivation activation :
-                                    instanceSpotActivations.values()) {
-                                closing =
-                                        closing.handle(
-                                                        (nothing, closeFailure) ->
-                                                                SpotActivationBase.finishCleanup(
-                                                                        closeFailure,
-                                                                        activation.closeAsync(
-                                                                                systems.zlink
-                                                                                        .framework
-                                                                                        .spots
-                                                                                        .ZLinkSpotCloseReason
-                                                                                        .HOST_SHUTDOWN,
-                                                                                Instant.now())))
-                                                .thenCompose(stage -> stage);
+                            if (!instanceSpotActivations.isEmpty()) {
+                                instanceSpotActivations.clear();
+                                signalCountChanged();
                             }
-                            return SpotActivationBase.finishCleanup(failure, closing);
-                        })
-                .thenCompose(stage -> stage)
-                .handle(
+                        });
+        var observed = new CompletableFuture<Void>();
+        applicationCleanup.whenComplete(
+                (ignored, failure) -> {
+                    if (failure == null) {
+                        observed.complete(null);
+                    } else if (!observed.completeExceptionally(failure)) {
+                        reportSpotLifecycleFailure(null, failure);
+                    }
+                });
+        forceStop.whenComplete(
+                (cause, failure) ->
+                        observed.completeExceptionally(failure == null ? cause : failure));
+        return observed.handle(
                         (ignored, failure) ->
                                 SpotActivationBase.finishCleanup(failure, publishers.closeAsync()))
                 .thenCompose(stage -> stage)
@@ -1992,10 +2028,6 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                             : failure instanceof RuntimeException runtime
                                                     ? runtime
                                                     : new RuntimeException(failure);
-                            if (!instanceSpotActivations.isEmpty()) {
-                                instanceSpotActivations.clear();
-                                signalCountChanged();
-                            }
                             for (ZLinkInternalSpotNode node : nodes) {
                                 firstFailure = closeRuntimeComponent(node::close, firstFailure);
                             }
