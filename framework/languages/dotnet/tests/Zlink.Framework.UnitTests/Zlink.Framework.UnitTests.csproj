@@ -38,6 +38,7 @@
 
     <ItemGroup>
         <Compile Include="AssemblyInfo.cs"/>
+        <Compile Include="Runtime/InstanceReadyAdmissionTests.cs"/>
         <Compile Include="Runtime/SessionFailureClassificationTests.cs"/>
         <Compile Include="Runtime/SpotShutdownExecutionTests.cs"/>
         <Compile Include="Runtime/MeshLivenessPhysicalCloseTests.cs"/>
