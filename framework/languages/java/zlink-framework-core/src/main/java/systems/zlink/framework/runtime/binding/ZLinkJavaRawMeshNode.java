@@ -252,6 +252,7 @@ final class ZLinkJavaRawMeshNode
     private volatile ZLinkInternalMeshNode.PeerAuthorityResolver peerAuthorityResolver;
     private volatile ZLinkInternalMeshNode.PeerAuthorityFence localAuthorityFence;
     private volatile ZLinkInternalMeshNode.RelocationControlHandler relocationControlHandler;
+    private volatile Consumer<RoutingId> peerReconcileRequester = peer -> {};
     private volatile ZLinkInternalMeshNode.CanonicalRelocationControlHandler
             canonicalRelocationControlHandler;
     private volatile ZLinkInternalMeshNode.ActorLeftHandler actorLeftHandler;
@@ -4284,9 +4285,8 @@ final class ZLinkJavaRawMeshNode
 
     CompletionStage<Void> sendBoundSession(
             ZLinkJavaRawSpotNode.ActorSessionBinding binding, List<Message> parts) {
-        BoundSessionRouteStateSnapshot route = boundSessionRouteStateSnapshot(binding);
-        boolean ready = route.readyFor(binding);
-        if (!ready) {
+        if (!sessionOwnerRouteReady(
+                binding.sessionOwnerNodeRid(), binding.sessionOwnerNodeGeneration())) {
             return CompletableFuture.failedFuture(
                     new ZlinkSubmitException(SubmitResult.NOT_CONNECTED));
         }
@@ -4305,17 +4305,62 @@ final class ZLinkJavaRawMeshNode
         return submission;
     }
 
-    private BoundSessionRouteStateSnapshot boundSessionRouteStateSnapshot(
-            ZLinkJavaRawSpotNode.ActorSessionBinding binding) {
-        RoutingId target = binding.sessionOwnerNodeRid();
+    /**
+     * The one ready condition for a route to a Session owner: the push submits on it, and a
+     * relocation target waits for it before relay-ready (relocation §4.3).
+     */
+    private boolean sessionOwnerRouteReady(RoutingId sessionOwner, long sessionOwnerGeneration) {
         ZLinkServiceTopologyRegistry currentTopology = topology;
         ZLinkServiceTopologyRegistry.Peer peer =
-                currentTopology == null ? null : currentTopology.peerFromOwner(target).orElse(null);
-        if (peer == null) {
-            return new BoundSessionRouteStateSnapshot(null, null, false);
+                currentTopology == null
+                        ? null
+                        : currentTopology.peerFromOwner(sessionOwner).orElse(null);
+        return peer != null
+                && peer.descriptor().lifecycleGeneration() == sessionOwnerGeneration
+                && isReadyPeer(peer);
+    }
+
+    @Override
+    public CompletionStage<Void> secureSessionOwnerRoute(
+            RoutingId sessionOwnerNodeRid, long sessionOwnerNodeGeneration) {
+        Objects.requireNonNull(sessionOwnerNodeRid, "sessionOwnerNodeRid");
+        if (sessionOwnerRouteReady(sessionOwnerNodeRid, sessionOwnerNodeGeneration)) {
+            return CompletableFuture.completedFuture(null);
         }
-        String admissionConnectionId = admissionControlReadyConnections.get(target);
-        return new BoundSessionRouteStateSnapshot(peer, admissionConnectionId, isReadyPeer(peer));
+        var ready = new CompletableFuture<Void>();
+        AutoCloseable registration =
+                onPeerStateChanged(
+                        sessionOwnerNodeRid,
+                        () -> {
+                            if (sessionOwnerRouteReady(
+                                    sessionOwnerNodeRid, sessionOwnerNodeGeneration))
+                                ready.complete(null);
+                        });
+        ready.whenComplete(
+                (unused, failure) -> {
+                    try {
+                        registration.close();
+                    } catch (Exception cleanupFailure) {
+                        LOGGER.log(
+                                Level.WARNING,
+                                "Session owner route observer cleanup failed",
+                                cleanupFailure);
+                    }
+                });
+        requestPeerReconcile(sessionOwnerNodeRid, sessionOwnerNodeGeneration);
+        return ready;
+    }
+
+    @Override
+    public void requestPeerReconcile(RoutingId peerRid, long peerGeneration) {
+        if (!routingId.equals(peerRid) && !sessionOwnerRouteReady(peerRid, peerGeneration)) {
+            peerReconcileRequester.accept(peerRid);
+        }
+    }
+
+    @Override
+    public void setPeerReconcileRequester(Consumer<RoutingId> requester) {
+        peerReconcileRequester = Objects.requireNonNull(requester, "requester");
     }
 
     private void completeActorRequest(
@@ -7547,32 +7592,6 @@ final class ZLinkJavaRawMeshNode
         CompletionStage<List<byte[]>> submission =
                 port.request(requireStarted(), target, frames, timeout, requestAdmission);
         return submission;
-    }
-
-    private record BoundSessionRouteStateSnapshot(
-            ZLinkServiceTopologyRegistry.Peer peer,
-            String admissionConnectionId,
-            boolean livenessReady) {
-
-        boolean peerPresent() {
-            return peer != null;
-        }
-
-        long peerGeneration() {
-            return peer == null ? 0L : peer.descriptor().lifecycleGeneration();
-        }
-
-        boolean admissionConnectionMatches() {
-            return peer != null && peer.connectionId().equals(admissionConnectionId);
-        }
-
-        boolean readyFor(ZLinkJavaRawSpotNode.ActorSessionBinding binding) {
-            return peer != null
-                    && peer.descriptor().lifecycleGeneration()
-                            == binding.sessionOwnerNodeGeneration()
-                    && admissionConnectionMatches()
-                    && livenessReady;
-        }
     }
 
     private record PeerCloseRequest(long connectionIntentId, String endpoint) {}

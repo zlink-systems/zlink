@@ -706,6 +706,8 @@ internal sealed class ZLinkActorRemoteJoiner(
                         actorRef.NodeRid,
                         boundSession,
                         sessionRelocationContext,
+                        targetNodeRid,
+                        targetReservation.TargetNodeGeneration,
                         cancellationToken
                     )
                     .ConfigureAwait(false);
@@ -943,7 +945,8 @@ internal sealed class ZLinkActorRemoteJoiner(
                 targetDescriptor,
                 initialEnvelope,
                 transferPayload,
-                registration.ApplicationVersion
+                registration.ApplicationVersion,
+                deadline.Utc
             );
             _ = await canonical
                 .PrepareCanonicalRelocationAsync(
@@ -1483,6 +1486,8 @@ internal sealed class ZLinkActorRemoteJoiner(
         RoutingId actorNodeRid,
         ZLinkActorBoundSession session,
         ZLinkSessionRelocationContext wireContext,
+        RoutingId targetNodeRid,
+        ulong targetNodeGeneration,
         CancellationToken cancellationToken
     )
     {
@@ -1498,7 +1503,14 @@ internal sealed class ZLinkActorRemoteJoiner(
             .SealSessionRelocationAsync(
                 meshName,
                 sessionOwnerNode,
-                ZLinkSessionRelocationWire.CreateSeal(actorId, actorNodeRid, session, wireContext),
+                ZLinkSessionRelocationWire.CreateSeal(
+                    actorId,
+                    actorNodeRid,
+                    session,
+                    wireContext,
+                    targetNodeRid,
+                    targetNodeGeneration
+                ),
                 cancellationToken
             )
             .ConfigureAwait(false);

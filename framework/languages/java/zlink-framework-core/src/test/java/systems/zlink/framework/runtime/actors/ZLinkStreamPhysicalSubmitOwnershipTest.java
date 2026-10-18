@@ -604,7 +604,9 @@ final class ZLinkStreamPhysicalSubmitOwnershipTest {
                 new ZLinkServiceM6BWireCodec.ActorRouteFence(
                         new ZLinkBackendActorRef(NODE_A, "actor-1", 7), 3, 9, 4),
                 new ZLinkServiceM6BWireCodec.SessionOwnerFence(
-                        NODE_A, 3, "session-owner", 4, SESSION, BINDING_GENERATION));
+                        NODE_A, 3, "session-owner", 4, SESSION, BINDING_GENERATION),
+                RoutingId.from("relocation-target"),
+                7);
     }
 
     private static ZLinkServiceM6BWireCodec.SessionRelocationRoute route(

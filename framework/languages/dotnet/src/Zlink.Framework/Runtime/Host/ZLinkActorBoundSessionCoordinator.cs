@@ -356,8 +356,9 @@ internal sealed class ZLinkActorBoundSessionCoordinator
 
     internal ValueTask<ZLinkServiceWireCodec.SessionRelocationSealedRecord?> SealCanonicalSessionRouteAsync(
         ZLinkServiceWireCodec.SessionRelocationSealRecord request,
-        CancellationToken cancellationToken
-    ) => _sessionBindings.SealCanonicalRouteAsync(request, cancellationToken);
+        CancellationToken cancellationToken,
+        Action? onSealInstalled = null
+    ) => _sessionBindings.SealCanonicalRouteAsync(request, cancellationToken, onSealInstalled);
 
     internal bool RouteCanonicalSession(
         ZLinkServiceWireCodec.SessionRelocationRouteRecord request,

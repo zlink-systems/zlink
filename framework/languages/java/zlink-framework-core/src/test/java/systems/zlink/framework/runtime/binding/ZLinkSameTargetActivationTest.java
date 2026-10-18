@@ -267,7 +267,11 @@ final class ZLinkSameTargetActivationTest {
         registry.register("room", (id, generation) -> backendSpot(generation));
         var first =
                 registry.activate(
-                        "spot", "room", route(), Long.MAX_VALUE, (spot, admission) -> firstTerminal);
+                        "spot",
+                        "room",
+                        route(),
+                        Long.MAX_VALUE,
+                        (spot, admission) -> firstTerminal);
         var joined = registry.activate("spot", "room", route()).toCompletableFuture();
         assertTrue(joined.isDone(), "Ready join waited for the earlier Store terminal");
         var terminals = registry.terminals().toCompletableFuture();

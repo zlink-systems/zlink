@@ -190,6 +190,12 @@ export interface ZLinkBackendMeshNode {
   ): import('../../foundation/durable-service-request').PeerRouteObservation;
   hasPeerRouteOrConnectionIntent?(targetRid: unknown, endpoint: string): boolean;
   isPeerRouteReady?(targetRid: unknown, lifecycleGeneration?: bigint): boolean;
+  waitForPeerRoute?(
+    targetRid: unknown,
+    lifecycleGeneration: bigint,
+    deadlineUnixMs: bigint,
+    signal?: AbortSignal
+  ): Promise<void>;
   sendToNode(
     targetRid: unknown,
     parts: MessageLike | readonly MessageLike[],

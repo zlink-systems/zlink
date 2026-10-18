@@ -2025,6 +2025,8 @@ internal abstract partial class ZLinkSpotActivation
     internal async ValueTask<ZLinkRemoteActorBoundSessionRoute> SealActorBoundSessionRouteForRetireAsync(
         string actorId,
         ZLinkSessionRelocationContext wireContext,
+        RoutingId targetNodeRid,
+        ulong targetNodeGeneration,
         CancellationToken cancellationToken
     )
     {
@@ -2040,7 +2042,14 @@ internal abstract partial class ZLinkSpotActivation
             .SealSessionRelocationAsync(
                 route.MeshName!,
                 routeNodeRid,
-                ZLinkSessionRelocationWire.CreateSeal(actorId, NodeRid, route, wireContext),
+                ZLinkSessionRelocationWire.CreateSeal(
+                    actorId,
+                    NodeRid,
+                    route,
+                    wireContext,
+                    targetNodeRid,
+                    targetNodeGeneration
+                ),
                 cancellationToken
             )
             .ConfigureAwait(false);

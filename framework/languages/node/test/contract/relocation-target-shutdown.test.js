@@ -109,9 +109,8 @@ function targetFixture(runtime = new ZLinkHostServiceRelocationRuntime({}), mesh
     kind: 'committed',
     authorities: new Map([['actor-key', authority]])
   });
-  runtime.clearTargetRelocationPublication = async () => {};
+  runtime.clearTargetRelocationPublication = async (_stage, authority) => authority;
   runtime.targetReplyRelayCoordinator = () => coordinator;
-  runtime.relayTerminalReplies = async () => {};
   runtime.targetStages.set('0:17:1', stage);
   const cutover = {
     ...prepare,
@@ -291,6 +290,7 @@ for (const responseKind of ['pending', 'committed', 'unknown']) {
 function newPrepare() {
   return {
     kind: 'prepare',
+    deadlineUnixMs: BigInt(Date.now() + 10000),
     relocation: { high: 0n, low: 99n },
     targetAttemptGeneration: 1n,
     sourceNodeRid: 'source',

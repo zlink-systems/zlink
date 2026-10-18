@@ -4,6 +4,7 @@ import java.lang.invoke.MethodHandles;
 import java.lang.invoke.VarHandle;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 
 /**
  * Carries one host queue reservation across Framework-owned serial and executor boundaries. The
@@ -26,7 +27,7 @@ public final class ZLinkApplicationJobContext {
     /** Returns the reservation currently carried by this Framework turn. */
     public static Optional<ZLinkApplicationJobQueue.Permit> current() {
         State state = CURRENT.get();
-        return state == null ? Optional.empty() : Optional.of(state.permit);
+        return state == null ? Optional.empty() : Optional.ofNullable(state.permit);
     }
 
     /**
@@ -53,15 +54,15 @@ public final class ZLinkApplicationJobContext {
     /** Transfers queued ownership without entering the host permit owner. */
     public static QueuedOwnership transferQueuedOwnership() {
         State state = CURRENT.get();
-        if (state == null || state.ownership == null || !state.ownership.handoff()) {
-            return null;
-        }
-        return new QueuedOwnership(state.permit);
+        if (state == null || state.ownership == null) return null;
+        return state.ownership.handoff();
     }
 
     /** Re-enters a permit already owned by a queued Framework job. */
     public static Scope enterQueued(QueuedOwnership ownership) {
-        return ownership == null ? () -> {} : enter(new State(ownership.permit, ownership));
+        return ownership == null
+                ? () -> {}
+                : enter(new State(ownership.currentPermit(), ownership));
     }
 
     /** Test/direct-invocation bridge for a permit already marked queued. */
@@ -97,44 +98,153 @@ public final class ZLinkApplicationJobContext {
     /** One queue/executor boundary's exact ownership of a queued permit. */
     public static final class QueuedOwnership implements AutoCloseable {
         private static final VarHandle HANDED_OFF;
+        private static final VarHandle RESERVATION;
 
         static {
             try {
                 HANDED_OFF =
                         MethodHandles.lookup()
                                 .findVarHandle(QueuedOwnership.class, "handedOff", boolean.class);
+                RESERVATION =
+                        MethodHandles.lookup()
+                                .findVarHandle(QueuedOwnership.class, "reservation", Object.class);
             } catch (ReflectiveOperationException failure) {
                 throw new ExceptionInInitializerError(failure);
             }
         }
 
-        private final ZLinkApplicationJobQueue.Permit permit;
-        // C3 flag: set exactly once, by the handoff or the close that wins it.
+        private final ZLinkApplicationJobQueue owner;
         private volatile boolean handedOff;
+        // Null is durable payload ownership without a runnable reservation. A pending
+        // future is the host's cancellable waiter, not an execution-gate claim.
+        private volatile Object reservation;
 
         private QueuedOwnership(ZLinkApplicationJobQueue.Permit permit) {
-            this.permit = permit;
+            this(permit.owner(), permit);
         }
 
-        private boolean handoff() {
-            return HANDED_OFF.compareAndSet(this, false, true);
+        private QueuedOwnership(ZLinkApplicationJobQueue owner, Object reservation) {
+            this.owner = owner;
+            this.reservation = reservation;
+        }
+
+        private QueuedOwnership handoff() {
+            return HANDED_OFF.compareAndSet(this, false, true)
+                    ? new QueuedOwnership(owner, reservation)
+                    : null;
         }
 
         private boolean canHandoff() {
             return !handedOff;
         }
 
+        private ZLinkApplicationJobQueue.Permit currentPermit() {
+            var current = reservation;
+            if (current instanceof ZLinkApplicationJobQueue.Permit permit) return permit;
+            if (current instanceof CompletableFuture<?> future
+                    && future.isDone()
+                    && !future.isCompletedExceptionally())
+                return (ZLinkApplicationJobQueue.Permit) future.getNow(null);
+            return null;
+        }
+
         /** Accounts an accepted queued job on its host permit owner. */
         public void markQueued() {
-            permit.queued();
+            var permit = currentPermit();
+            if (permit != null) permit.queued();
+        }
+
+        /** Returns the initial reservation when the owner FIFO takes durable payload ownership. */
+        public boolean takeDurable() {
+            Object current = reservation;
+            return current instanceof ZLinkApplicationJobQueue.Permit
+                    && RESERVATION.compareAndSet(this, current, Optional.of(current));
+        }
+
+        public boolean isDurable() {
+            return !(reservation instanceof ZLinkApplicationJobQueue.Permit);
+        }
+
+        /** Host bookkeeping runs after the owner committed the position, outside its monitor. */
+        public Object settleAdmission() {
+            Object current = reservation;
+            if (current instanceof Optional<?> detached) {
+                if (RESERVATION.compareAndSet(this, current, null)) {
+                    release(detached.orElseThrow());
+                    return detached.orElseThrow();
+                }
+            } else markQueued();
+            return null;
+        }
+
+        public boolean isRunnable() {
+            Object current = reservation;
+            return current instanceof ZLinkApplicationJobQueue.Permit
+                    || current instanceof CompletableFuture<?> waiting && waiting.isDone();
+        }
+
+        /**
+         * Registers capacity outside the serial monitor and without claiming its execution gate.
+         */
+        public void prepareRunnable(Runnable ready) {
+            if (handedOff || reservation != null) return;
+            var claim = new CompletableFuture<ZLinkApplicationJobQueue.Permit>();
+            if (!RESERVATION.compareAndSet(this, null, claim)) return;
+            if (handedOff) {
+                releaseReservation();
+                return;
+            }
+            var acquisition =
+                    owner.acquire(ZLinkApplicationJobQueue.Origin.LOCAL).toCompletableFuture();
+            claim.whenComplete(
+                    (permit, failure) -> {
+                        if (claim.isCancelled()) acquisition.cancel(false);
+                        ready.run();
+                    });
+            acquisition.whenComplete(
+                    (permit, failure) -> {
+                        if (failure != null) claim.completeExceptionally(failure);
+                        else if (!claim.complete(permit)) permit.close();
+                    });
+        }
+
+        /** Observes only an already completed head acquisition outside the serial monitor. */
+        public void requireRunnable() {
+            if (reservation instanceof CompletableFuture<?> future) future.join();
+            markQueued();
+        }
+
+        /** Detaches a head claim atomically; the caller settles it outside its serial monitor. */
+        public void suspendRunnable() {
+            while (true) {
+                Object current = reservation;
+                if (current == null || current instanceof Optional<?>) return;
+                if (RESERVATION.compareAndSet(this, current, Optional.of(current))) return;
+            }
+        }
+
+        private void releaseReservation() {
+            release(RESERVATION.getAndSet(this, null));
+        }
+
+        private static void release(Object current) {
+            if (current instanceof ZLinkApplicationJobQueue.Permit permit) permit.close();
+            else if (current instanceof Optional<?> detached) release(detached.orElseThrow());
+            else if (current instanceof CompletableFuture<?> waiting && !waiting.cancel(false))
+                waiting.thenAccept(permit -> ((ZLinkApplicationJobQueue.Permit) permit).close());
         }
 
         @Override
         public void close() {
             if (HANDED_OFF.compareAndSet(this, false, true)) {
-                permit.close();
+                releaseReservation();
             }
         }
+    }
+
+    /** Carries already durable payloads into their existing FIFO without an ingress reservation. */
+    public static Scope enterDurable(ZLinkApplicationJobQueue owner) {
+        return enter(new State(null, new QueuedOwnership(Objects.requireNonNull(owner), null)));
     }
 
     private static final class State {
