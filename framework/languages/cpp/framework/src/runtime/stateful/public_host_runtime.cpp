@@ -6862,10 +6862,10 @@ bool public_host_runtime_t::claim_stateful_owner (
         };
         if (application_record)
             application_record->native_reply = finish;
-        record.complete_stateful_dispatch = [finish, application_record,
-                                             request = delivery->request] {
-            // A transferred request retains its original reply terminal.
-            if (request && application_record && !application_record->transferred)
+        record.complete_stateful_dispatch = [finish, application_record] {
+            // A transferred payload keeps its native terminal until the FIFO
+            // that owns the accepted record settles it, including after abort.
+            if (application_record && !application_record->transferred)
                 return;
             (void) finish (std::nullopt);
         };

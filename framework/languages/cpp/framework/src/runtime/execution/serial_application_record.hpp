@@ -98,6 +98,13 @@ struct serial_application_record_t
     // Returning this claim does not complete the pending native reply.
     std::function<void ()> transferred;
 
+    bool complete_native (std::optional<protocol::application_payload_t> reply)
+    {
+        if (auto terminal = std::exchange (native_reply, {}))
+            return terminal (std::move (reply));
+        return false;
+    }
+
     bool saved_work () const noexcept
     {
         return admission.durable ()

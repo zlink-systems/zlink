@@ -2019,7 +2019,8 @@ TEST (NativeIntake, NativeMailboxTransferKeepsActualPrivateMClaim)
             EXPECT_TRUE (queue->try_post_async (
               "native-private-M",
               [&, accepted, first, operation = record.operation_id.low,
-               terminal = record.complete_stateful_dispatch] (auto complete) {
+               terminal = std::function<void ()> (
+                 [accepted] { (void) accepted->complete_native (std::nullopt); })] (auto complete) {
                   ++handlers;
                   EXPECT_EQ (operation, static_cast<std::uint64_t> (handlers));
                   accepted->admission.enter_handler ();
@@ -5221,7 +5222,7 @@ void capacity_probe (bool handler_failure = false, bool extra_supply = false)
         scheduler->run_all ();
         const auto entered = first_started.load ();
         release_first.complete (fw::result_t<void>::success ());
-        scheduler->run_all ();
+        scheduler->run_until (failed);
         const auto activated = join_activated;
         const auto cancelled = join_cancelled;
         const auto failed_ready = failed.await_ready ();

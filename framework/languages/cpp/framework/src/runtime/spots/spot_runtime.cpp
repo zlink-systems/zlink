@@ -670,9 +670,8 @@ task_t<bool> settle_handoff_packet (std::shared_ptr<detail::spot_node_builder_st
                                     result_t<zlink::message_t> completed)
 {
     if (record && record->native_reply) {
-        auto reply = std::exchange (record->native_reply, {});
         if (!request)
-            co_return reply (std::nullopt);
+            co_return record->complete_native (std::nullopt);
         auto header = runtime::stateful::with_accepted_application (
           *record->payload, [] (auto, const auto &application) {
               return runtime::messaging::envelope_codec_t{}.decode_header (
@@ -683,7 +682,8 @@ task_t<bool> settle_handoff_packet (std::shared_ptr<detail::spot_node_builder_st
         if (!header)
             std::rethrow_exception (header.exception ());
         auto terminal = handoff_reply_envelope (header.value (), completed);
-        co_return reply (runtime::protocol::application_payload_t::from_parts (terminal.items ()));
+        co_return record->complete_native (
+          runtime::protocol::application_payload_t::from_parts (terminal.items ()));
     }
     if (!request)
         co_return true;
@@ -12694,9 +12694,9 @@ task_t<std::optional<zlink::message_t>> spot_node_runtime_t::relay_actor_packet 
                   "relay_actor_packet.try_append_backlog", "result=appended");
             return final_admission->queue_submission;
         };
-    zlink::message_t reply;
+    auto invoked = result_t<zlink::message_t>::success ({});
     try {
-        reply =
+        invoked = result_t<zlink::message_t>::success (
           co_await spot_handler_registry_t (dispatch_plan.context_state)
             .invoke_erased (
               handler_kind, packet_name, {}, factory.actor_type, dispatch_plan.spot_instance.get (),
@@ -12708,24 +12708,16 @@ task_t<std::optional<zlink::message_t>> spot_node_runtime_t::relay_actor_packet 
               admit_queue, {}, application_record, [&final_admission] {
                   final_admission.emplace ();
                   final_admission->append_result = detail::handoff_append_result_t::appended;
-              });
+              }));
     }
     catch (const framework_exception_t &error) {
-        if (dedup_operation && request_claim == runtime::exactly_once_claim_state::claimed) {
-            (void) state_owner->dispatched_request_replies.erase (
-              actor_request_dedup_key (key, *dedup_operation));
-        }
-        co_return detail::result_access_t::failure<std::optional<zlink::message_t>> (error);
+        invoked = detail::result_access_t::failure<zlink::message_t> (error);
     }
     catch (const std::exception &error) {
-        if (dedup_operation && request_claim == runtime::exactly_once_claim_state::claimed) {
-            (void) state_owner->dispatched_request_replies.erase (
-              actor_request_dedup_key (key, *dedup_operation));
-        }
-        co_return result_t<std::optional<zlink::message_t>>::failure (
-          framework_error_kind_t::internal_failure, error.what ());
+        invoked = result_t<zlink::message_t>::failure (framework_error_kind_t::internal_failure,
+                                                       error.what ());
     }
-    if (final_admission && !final_admission->queue_submission) {
+    if (invoked && final_admission && !final_admission->queue_submission) {
         if (final_admission->message_follow_source)
             co_return co_await relay_message_follow (*final_admission->message_follow_source,
                                                      *final_admission->released_packet);
@@ -12744,11 +12736,24 @@ task_t<std::optional<zlink::message_t>> spot_node_runtime_t::relay_actor_packet 
                                          detail::failure_origin_t::actor_transfer_in_progress,
                                          "actor transfer is in progress"));
     }
+    if (message_kind == stream_message_kind_t::send && application_record
+        && application_record->admission.durable () && application_record->native_reply) {
+        // An ordinary native send can also own a durable FIFO position. Its
+        // accepted terminal belongs to the completed handler, just as in replay.
+        (void) application_record->complete_native (std::nullopt);
+    }
+    if (!invoked) {
+        if (dedup_operation && request_claim == runtime::exactly_once_claim_state::claimed)
+            (void) state_owner->dispatched_request_replies.erase (
+              actor_request_dedup_key (key, *dedup_operation));
+        co_return detail::propagate_failure<std::optional<zlink::message_t>> (
+          invoked, "Actor handler failed");
+    }
     if (dedup_operation && request_claim == runtime::exactly_once_claim_state::claimed) {
         (void) state_owner->dispatched_request_replies.complete (
-          actor_request_dedup_key (key, *dedup_operation), reply);
+          actor_request_dedup_key (key, *dedup_operation), invoked.value ());
     }
-    co_return result_t<std::optional<zlink::message_t>>::success (std::move (reply));
+    co_return result_t<std::optional<zlink::message_t>>::success (invoked.value ());
 }
 
 task_t<zlink::message_t>
@@ -15335,7 +15340,8 @@ bool spot_node_runtime_t::dispatch_mesh_record (
         const auto handoff_pending =
           handoff_pending_key (record.source_node_rid, handoff_operation, handoff_source_fence);
         bool deferred_handoff_request = false;
-        /* A request that carries an operation id travels with a handoff
+        /* Native accepted records carry their original reply terminal. For
+         * records without that owner, a request operation travels with a handoff
          * terminal route naming THIS node as the parking node (see the relay
          * metadata below), so its reply may return as a handoff terminal
          * whenever any downstream hop parks it — during the local transfer,
@@ -15351,6 +15357,7 @@ bool spot_node_runtime_t::dispatch_mesh_record (
          * like a fenced one; requiring the fence here silently orphaned its
          * terminal, leaving the requester waiting forever. */
         if (record.kind == service::record_kind_t::actor_request && !semantic_send
+            && (!record.application_record || !record.application_record->native_reply)
             && (record.operation_id.high != 0 || record.operation_id.low != 0)
             && !header.metadata.contains (std::string (detail::actor_handoff_source_node_key))) {
             const auto now = std::chrono::steady_clock::now ();
@@ -15460,12 +15467,14 @@ bool spot_node_runtime_t::dispatch_mesh_record (
             return false;
         }
         detail::observe_task_completion (
-          relayed, [state = _state, admission_token, deferred_handoff_request, handoff_pending,
-                    request_header, reply_token = record.reply_token, terminal_claimed,
-                    terminal_owner, application_completed] (
-                     const result_t<std::optional<zlink::message_t>> &result) mutable {
-              /* An empty relay result with a recorded pending entry means the
-               * request was parked for a handoff replay: the reply token stays
+          relayed,
+          [state = _state, admission_token, deferred_handoff_request, handoff_pending,
+           request_header, reply_token = record.reply_token, terminal_claimed, terminal_owner,
+           application_completed, application_record = record.application_record] (
+            const result_t<std::optional<zlink::message_t>> &result) mutable {
+              /* An empty relay result retains the existing native reply owner
+               * or the legacy pending entry while handoff replay owns the request.
+               * For the legacy path, the reply token stays
                * in pending_handoff_requests and the handoff terminal from the
                * follow target restores the reply. Replying (or erasing the
                * entry) here would orphan that terminal. Any other outcome —
@@ -15478,7 +15487,9 @@ bool spot_node_runtime_t::dispatch_mesh_record (
               const bool handoff_reserved =
                 deferred_handoff_request
                 || (admission_token && admission_token->handoff_reserved ());
-              const bool parked = handoff_reserved && result && !result.value ();
+              const bool parked =
+                (handoff_reserved || (application_record && application_record->native_reply))
+                && result && !result.value ();
               if (!parked && handoff_reserved) {
                   try {
                       state->lane
