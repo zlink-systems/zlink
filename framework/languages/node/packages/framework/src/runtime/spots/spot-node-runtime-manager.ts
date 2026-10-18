@@ -117,6 +117,7 @@ const ZLINK_SEND_DONT_WAIT = 1;
 const EMPTY_SPOT_METADATA: ReadonlyMap<string, string> = new Map();
 
 export interface ZLinkSpotNodeRuntimeManagerOptions {
+  readonly admission?: import('../admission').ZLinkRuntimeAdmissionGate;
   readonly errorSink: import('../diagnostics/dispatch-error-port').ZLinkDispatchErrorSink;
   readonly listenerRecords?: ZLinkListenerRecords;
   readonly registration: ZLinkFrameworkRegistration;
@@ -1027,6 +1028,7 @@ export class ZLinkSpotNodeRuntimeManager {
       return;
     }
     const activation = new ZLinkEntrySpotActivation({
+      admission: this.options.admission,
       entrySpotType: spotNode.entrySpotType,
       nativeSpot: node.entrySpot() as never,
       nativeNode: node as unknown as ZLinkBackendSpotNode,
