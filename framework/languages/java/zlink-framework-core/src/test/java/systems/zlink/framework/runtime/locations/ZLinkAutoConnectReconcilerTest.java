@@ -22,6 +22,30 @@ import java.util.concurrent.atomic.AtomicLong;
 
 final class ZLinkAutoConnectReconcilerTest {
     @Test
+    void reconcileCompletionIncludesDescriptorRegistrationAndRemoval() {
+        var resolver = new MutableResolver();
+        resolver.rows = List.of(peer());
+        var executor = new RecordingExecutor();
+        executor.registration = new CompletableFuture<>();
+        var reconciler =
+                reconciler(resolver, executor, new ZLinkLocationOptions(), new AtomicLong());
+        var registered = reconciler.tick().toCompletableFuture();
+        assertFalse(registered.isDone());
+        assertEquals(0, executor.connects);
+        executor.registration.complete(null);
+        registered.join();
+        assertEquals(1, executor.connects);
+        resolver.rows = List.of();
+        executor.removal = new CompletableFuture<>();
+        var removed = reconciler.tick().toCompletableFuture();
+        assertFalse(removed.isDone());
+        assertEquals(0, executor.disconnects);
+        executor.removal.complete(null);
+        removed.join();
+        assertEquals(1, executor.disconnects);
+    }
+
+    @Test
     void bindingRejectionReportsTypedErrorAndRetainsIntentForNextReconcile() {
         MutableResolver resolver = new MutableResolver();
         resolver.rows = List.of(peer());
@@ -186,7 +210,7 @@ final class ZLinkAutoConnectReconcilerTest {
                                 (proxy, method, arguments) -> {
                                     if (method.getName().equals("isManual")) return false;
                                     if (method.getName().equals("observeAdmissionExpectation"))
-                                        return null;
+                                        return CompletableFuture.completedFuture(null);
                                     connectionOperations.add(method.getName());
                                     return method.getReturnType() == boolean.class ? true : null;
                                 });
@@ -415,6 +439,8 @@ final class ZLinkAutoConnectReconcilerTest {
     }
 
     private static final class RecordingExecutor implements ZLinkAutoConnectExecutor {
+        private CompletableFuture<Void> registration = CompletableFuture.completedFuture(null);
+        private CompletableFuture<Void> removal = CompletableFuture.completedFuture(null);
         private int connects;
         private int disconnects;
         private int notRequiredMarks;
@@ -454,13 +480,17 @@ final class ZLinkAutoConnectReconcilerTest {
         }
 
         @Override
-        public void observeAdmissionExpectation(ZLinkAutoConnectPlanner.Target target) {
+        public CompletionStage<Void> observeAdmissionExpectation(
+                ZLinkAutoConnectPlanner.Target target) {
             admissionExpectations++;
+            return registration;
         }
 
         @Override
-        public void forgetAdmissionExpectation(ZLinkAutoConnectPlanner.Target target) {
+        public CompletionStage<Void> forgetAdmissionExpectation(
+                ZLinkAutoConnectPlanner.Target target) {
             forgottenAdmissionExpectations++;
+            return removal;
         }
     }
 }

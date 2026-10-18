@@ -28,19 +28,18 @@ final class ZLinkActorRelocationTestQueue {
                             CompletableFuture<Void>,
                             Supplier<CompletionStage<Void>>>
                     replay) {
-        if (fifo != null)
-            throw new IllegalStateException(
-                    "one fixture queue belongs to one prepared Actor prefix");
-        fifo =
-                new ZLinkSerialExecutionQueue(
-                        new InlineExecutor(), ZLinkExecutionLanePolicy.actorDelivery());
-        jobs =
-                new ZLinkApplicationJobQueue(
-                        ZLinkApplicationJobQueueProfile.BALANCED,
-                        OptionalLong.of(1),
-                        new ZLinkApplicationJobQueue.ProcessorCandidates(1, null, null, null));
-        fifo.enqueueBarrierNext(() -> opened, null);
-        admission =
+        if (fifo == null) {
+            fifo =
+                    new ZLinkSerialExecutionQueue(
+                            new InlineExecutor(), ZLinkExecutionLanePolicy.actorDelivery());
+            jobs =
+                    new ZLinkApplicationJobQueue(
+                            ZLinkApplicationJobQueueProfile.BALANCED,
+                            OptionalLong.of(1),
+                            new ZLinkApplicationJobQueue.ProcessorCandidates(1, null, null, null));
+            fifo.enqueueBarrierNext(() -> opened, null);
+        }
+        var batch =
                 fifo.admitDurablePrefix(
                                 records,
                                 (record, terminal) -> {
@@ -65,7 +64,17 @@ final class ZLinkActorRelocationTestQueue {
                                                                 closeWhenQuiescent());
                                     }
                                 });
-        return admission;
+        admission =
+                admission == null
+                        ? batch
+                        : admission.thenCombine(
+                                batch,
+                                (prefix, suffix) -> {
+                                    var terminals = new java.util.ArrayList<>(prefix);
+                                    terminals.addAll(suffix);
+                                    return List.copyOf(terminals);
+                                });
+        return batch;
     }
 
     private void closeWhenQuiescent() {

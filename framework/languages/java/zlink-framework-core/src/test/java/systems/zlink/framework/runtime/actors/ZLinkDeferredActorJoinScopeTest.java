@@ -47,6 +47,189 @@ final class ZLinkDeferredActorJoinScopeTest {
     private static final String BULK_TARGET_SPOT_ID = "bulk-target";
 
     @Test
+    void completedActorsNextJoinDoesNotWaitForAnotherActorsCompletion() throws Exception {
+        BulkActorFactory.reset();
+        BulkTargetSpot.reset();
+        CompletableFuture<Void> completionA = new CompletableFuture<>();
+        CompletableFuture<Void> completionB = new CompletableFuture<>();
+        BulkActorFactory.completions.put("actor-a", completionA);
+        BulkActorFactory.completions.put("actor-b", completionB);
+        CompletableFuture<Void> startedA = new CompletableFuture<>();
+        CompletableFuture<Void> startedB = new CompletableFuture<>();
+        BulkActorFactory.completionStarts.put("actor-a", startedA);
+        BulkActorFactory.completionStarts.put("actor-b", startedB);
+        DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
+        options.addLocationStore(new ZLinkInMemoryLocationStore());
+        var node = options.addRouteMesh("claim-join");
+        node.listen("inproc://claim-deferred-join-" + System.nanoTime())
+                .setRoutingId(RoutingId.from("claim-deferred-join"));
+        var objects = node.objects().server();
+        objects.addEntrySpot(BulkEntrySpot.class);
+        objects.addSpotFactory(
+                "bulk-target", BulkTargetSpot.class, factory -> factory.disableRelocation());
+        objects.addActorFactory(
+                "bulk-actor",
+                BulkActor.class,
+                BulkActorFactory.class,
+                factory -> factory.disableRelocation());
+        try (ZLinkFrameworkRuntime runtime =
+                ZLinkFrameworkRuntimeTestAccess.start(
+                        options, new ZLinkJavaBackendAdapterFactory())) {
+            try {
+                runtime.spotManager()
+                        .getOrCreate(BULK_TARGET_SPOT_ID, "bulk-target")
+                        .submit()
+                        .toCompletableFuture()
+                        .get(3, TimeUnit.SECONDS);
+                for (String actorId : List.of("actor-a", "actor-b")) {
+                    runtime.actorManager()
+                            .create(actorId, "bulk-actor")
+                            .submit()
+                            .toCompletableFuture()
+                            .get(3, TimeUnit.SECONDS);
+                }
+                ZLinkActorRuntime actors = (ZLinkActorRuntime) runtime.actorManager();
+                ZLinkDeferredActorJoinHandlerScope.run(
+                                actors.deferredJoinRuntimeScope(),
+                                id -> true,
+                                () -> {
+                                    BulkActorFactory.actor("actor-a")
+                                            .context()
+                                            .joinSpot(BULK_TARGET_SPOT_ID, "a")
+                                            .defer();
+                                    BulkActorFactory.actor("actor-b")
+                                            .context()
+                                            .joinSpot(BULK_TARGET_SPOT_ID, "b")
+                                            .defer();
+                                    return CompletableFuture.completedFuture(null);
+                                })
+                        .toCompletableFuture()
+                        .get(3, TimeUnit.SECONDS);
+                startedA.get(3, TimeUnit.SECONDS);
+                assertFalse(BulkActorFactory.allCompleted().isCompletedExceptionally());
+                assertEquals(
+                        BULK_TARGET_SPOT_ID,
+                        BulkActorFactory.actor("actor-a").context().spotId().orElseThrow());
+                // Accepted membership is visible, but completion ordering still owns the claim.
+                CompletionException pending =
+                        assertThrows(
+                                CompletionException.class,
+                                () -> deferAgain(actors, "actor-a").toCompletableFuture().join());
+                ZLinkFrameworkException error =
+                        assertInstanceOf(ZLinkFrameworkException.class, pending.getCause());
+                assertEquals(ZLinkFrameworkErrorKind.UNAVAILABLE, error.kind());
+                assertEquals(
+                        "Actor already has a pending membership transition", error.getMessage());
+                completionA.complete(null);
+                startedB.get(3, TimeUnit.SECONDS);
+                assertFalse(BulkActorFactory.allCompleted().isCompletedExceptionally());
+                assertEquals(2, BulkTargetSpot.joinCount());
+                assertFalse(completionB.isDone());
+                // B can remain pending while A starts its own next operation.
+                deferAgain(actors, "actor-a").toCompletableFuture().get(3, TimeUnit.SECONDS);
+                assertFalse(completionB.isDone());
+            } finally {
+                completionA.complete(null);
+                completionB.complete(null);
+            }
+        }
+    }
+
+    private static CompletionStage<Void> deferAgain(ZLinkActorRuntime actors, String actorId) {
+        return ZLinkDeferredActorJoinHandlerScope.run(
+                actors.deferredJoinRuntimeScope(),
+                actorId::equals,
+                () -> {
+                    BulkActorFactory.actor(actorId)
+                            .context()
+                            .joinSpot(BULK_TARGET_SPOT_ID, "next")
+                            .defer();
+                    return CompletableFuture.completedFuture(null);
+                });
+    }
+
+    @Test
+    void claimRemainsUntilTheMailboxBarrierCompletesAfterTheOperation() {
+        Object runtime = new Object();
+        CompletableFuture<Void> barrier = new CompletableFuture<>();
+        AtomicReference<Supplier<CompletionStage<Void>>> queued = new AtomicReference<>();
+        AtomicInteger releases = new AtomicInteger();
+        try (var scope = ZLinkDeferredActorJoinScope.enterHandler(runtime, id -> true)) {
+            ZLinkDeferredActorJoinScope.registerWithActorBarrier(
+                    runtime,
+                    new Object(),
+                    "actor-a",
+                    Long.MAX_VALUE,
+                    () -> CompletableFuture.completedFuture(null),
+                    operation -> {
+                        queued.set(operation);
+                        return barrier;
+                    },
+                    releases::incrementAndGet);
+            scope.finish(CompletableFuture.completedFuture(null), null)
+                    .toCompletableFuture()
+                    .join();
+            queued.get().get().toCompletableFuture().join();
+            assertEquals(0, releases.get());
+            barrier.complete(null);
+            assertEquals(1, releases.get());
+        }
+        assertEquals(1, releases.get());
+    }
+
+    @Test
+    void registrationFailureHandlerFailureAndUnfinishedCloseReleaseEachClaimOnce() {
+        Object runtime = new Object();
+        AtomicInteger releases = new AtomicInteger();
+        IllegalStateException failure = new IllegalStateException("registration failed");
+        try (var scope = ZLinkDeferredActorJoinScope.enterHandler(runtime, id -> true)) {
+            assertEquals(
+                    failure,
+                    assertThrows(
+                            IllegalStateException.class,
+                            () ->
+                                    ZLinkDeferredActorJoinScope.registerWithActorBarrier(
+                                            runtime,
+                                            new Object(),
+                                            "actor-a",
+                                            Long.MAX_VALUE,
+                                            () -> CompletableFuture.completedFuture(null),
+                                            operation -> {
+                                                throw failure;
+                                            },
+                                            releases::incrementAndGet)));
+            assertEquals(1, releases.get());
+            ZLinkDeferredActorJoinScope.registerWithActorBarrier(
+                    runtime,
+                    new Object(),
+                    "actor-a",
+                    Long.MAX_VALUE,
+                    () -> CompletableFuture.completedFuture(null),
+                    operation -> operation.get(),
+                    releases::incrementAndGet);
+            assertThrows(
+                    CompletionException.class,
+                    () ->
+                            scope.finish(CompletableFuture.failedFuture(failure), null)
+                                    .toCompletableFuture()
+                                    .join());
+            assertEquals(2, releases.get());
+        }
+        assertEquals(2, releases.get());
+        try (var ignored = ZLinkDeferredActorJoinScope.enterHandler(runtime, id -> true)) {
+            ZLinkDeferredActorJoinScope.registerWithActorBarrier(
+                    runtime,
+                    new Object(),
+                    "actor-a",
+                    Long.MAX_VALUE,
+                    () -> CompletableFuture.completedFuture(null),
+                    operation -> operation.get(),
+                    releases::incrementAndGet);
+        }
+        assertEquals(3, releases.get());
+    }
+
+    @Test
     void oneHandlerCompletes65ActualDeferredActorJoinsWhoseRequestsTotalMoreThan8MiB()
             throws Exception {
         BulkActorFactory.reset();
@@ -562,16 +745,26 @@ final class ZLinkDeferredActorJoinScopeTest {
             } catch (RuntimeException | AssertionError error) {
                 BulkActorFactory.joinFailed(error);
             }
-            return CompletableFuture.completedFuture(null);
+            CompletableFuture<Void> started =
+                    BulkActorFactory.completionStarts.get(context.actorId());
+            if (started != null) started.complete(null);
+            return BulkActorFactory.completions.getOrDefault(
+                    context.actorId(), CompletableFuture.completedFuture(null));
         }
     }
 
     public static final class BulkActorFactory implements ZLinkActorFactory {
+        private static final Map<String, CompletableFuture<Void>> completions =
+                new ConcurrentHashMap<>();
+        private static final Map<String, CompletableFuture<Void>> completionStarts =
+                new ConcurrentHashMap<>();
         private static final Map<String, BulkActor> ACTORS = new ConcurrentHashMap<>();
         private static final AtomicInteger COMPLETED = new AtomicInteger();
         private static CompletableFuture<Void> allCompleted = new CompletableFuture<>();
 
         static void reset() {
+            completions.clear();
+            completionStarts.clear();
             ACTORS.clear();
             COMPLETED.set(0);
             allCompleted = new CompletableFuture<>();

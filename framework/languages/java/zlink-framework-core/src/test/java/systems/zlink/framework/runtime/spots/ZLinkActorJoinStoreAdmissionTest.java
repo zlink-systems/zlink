@@ -98,32 +98,29 @@ final class ZLinkActorJoinStoreAdmissionTest {
                     }
                     permits.add(claim.join());
                 }
-                Thread.currentThread().interrupt();
-                var interrupted =
-                        assertThrows(
-                                CompletionException.class,
-                                () ->
-                                        activation
-                                                .admitLocalActorJoin(
-                                                        () -> {
-                                                            callbacks.incrementAndGet();
-                                                            return CompletableFuture
-                                                                    .completedFuture(
-                                                                            ZLinkSpotActorJoinResult
-                                                                                    .accept());
-                                                        })
-                                                .toCompletableFuture()
-                                                .join());
-                assertTrue(Thread.currentThread().isInterrupted());
-                assertTrue(interrupted.getCause().getMessage().contains("interrupted"));
+                var cancelled =
+                        activation
+                                .admitActorJoin(
+                                        () -> {
+                                            callbacks.incrementAndGet();
+                                            return CompletableFuture.completedFuture(
+                                                    ZLinkSpotActorJoinResult.accept());
+                                        })
+                                .toCompletableFuture();
+                assertEquals(1, jobs.snapshot().capacityWaiters());
+                assertTrue(cancelled.cancel(false));
+                var cancellation = assertThrows(CompletionException.class, cancelled::join);
+                org.junit.jupiter.api.Assertions.assertInstanceOf(
+                        java.util.concurrent.CancellationException.class, cancellation.getCause());
+                assertEquals(0, jobs.snapshot().capacityWaiters());
                 assertEquals(0, callbacks.get());
             } finally {
-                Thread.interrupted();
                 permits.forEach(
                         systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue
                                         .Permit
                                 ::close);
             }
+            assertEquals(0, jobs.snapshot().permitsInUse());
             try {
                 activation.context.enqueueJoinLifecycle(
                         () -> {
@@ -132,12 +129,18 @@ final class ZLinkActorJoinStoreAdmissionTest {
                         });
                 entered.get(5, TimeUnit.SECONDS);
                 var accepted =
-                        activation.admitLocalActorJoin(
+                        activation.admitActorJoin(
                                 () -> {
                                     callbacks.incrementAndGet();
                                     return CompletableFuture.completedFuture(
                                             ZLinkSpotActorJoinResult.accept());
                                 });
+                activation
+                        .context
+                        .enqueueInfrastructureDispatch(
+                                () -> CompletableFuture.completedFuture(null))
+                        .toCompletableFuture()
+                        .get(5, TimeUnit.SECONDS);
                 host.beginDrain().toCompletableFuture().get(5, TimeUnit.SECONDS);
                 assertEquals(0, callbacks.get());
                 org.junit.jupiter.api.Assertions.assertFalse(
@@ -150,7 +153,7 @@ final class ZLinkActorJoinStoreAdmissionTest {
                                 CompletionException.class,
                                 () ->
                                         activation
-                                                .admitLocalActorJoin(
+                                                .admitActorJoin(
                                                         () -> {
                                                             callbacks.incrementAndGet();
                                                             return CompletableFuture

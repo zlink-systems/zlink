@@ -67,7 +67,10 @@ final class ZLinkDefaultSpotContextTest {
                         () -> {
                             requested.set(context.close());
                             return CompletableFuture.completedFuture(null);
-                        })
+                        },
+                        null,
+                        null,
+                        null)
                 .toCompletableFuture()
                 .join();
         host.userCloseSeen.join();
@@ -131,11 +134,11 @@ final class ZLinkDefaultSpotContextTest {
                     .toCompletableFuture()
                     .join();
             host.userContext(ZLinkUserSpotExecutionMode.PER_ACTOR)
-                    .enqueueActorDispatch("actor", 0, callback)
+                    .enqueueActorDispatch("actor", 0, callback, null, null, null)
                     .toCompletableFuture()
                     .join();
             host.entryContext()
-                    .enqueueActorDispatch("actor", 0, callback)
+                    .enqueueActorDispatch("actor", 0, callback, null, null, null)
                     .toCompletableFuture()
                     .join();
             host.instanceContext(workers)
@@ -196,7 +199,10 @@ final class ZLinkDefaultSpotContextTest {
                             assertFalse(execution.yieldAllowed());
                             firstStarted.complete(null);
                             return firstRelease;
-                        });
+                        },
+                        null,
+                        null,
+                        null);
         firstStarted.join();
         CompletionStage<Void> second =
                 context.enqueueActorDispatch(
@@ -205,7 +211,10 @@ final class ZLinkDefaultSpotContextTest {
                         () -> {
                             secondStarted.complete(null);
                             return CompletableFuture.completedFuture(null);
-                        });
+                        },
+                        null,
+                        null,
+                        null);
 
         assertFalse(secondStarted.isDone());
         firstRelease.complete(null);
@@ -235,7 +244,10 @@ final class ZLinkDefaultSpotContextTest {
                             assertTrue(execution.yieldAllowed());
                             firstStarted.complete(null);
                             return firstRelease;
-                        });
+                        },
+                        null,
+                        null,
+                        null);
         firstStarted.join();
         CompletionStage<Void> second =
                 context.enqueueActorDispatch(
@@ -244,7 +256,10 @@ final class ZLinkDefaultSpotContextTest {
                         () -> {
                             secondStarted.complete(null);
                             return CompletableFuture.completedFuture(null);
-                        });
+                        },
+                        null,
+                        null,
+                        null);
 
         assertFalse(secondStarted.isDone());
         firstRelease.complete(null);
@@ -272,7 +287,10 @@ final class ZLinkDefaultSpotContextTest {
                                             assertTrue(execution.yieldAllowed());
                                             actorStarted.complete(null);
                                             return CompletableFuture.completedFuture(null);
-                                        }));
+                                        },
+                                        null,
+                                        null,
+                                        null));
 
         dispatch.toCompletableFuture().join();
         assertTrue(actorStarted.isDone());
@@ -293,25 +311,33 @@ final class ZLinkDefaultSpotContextTest {
             CompletionStage<Void> first =
                     context.enqueueActorDispatch(
                             "actor-a",
+                            0,
                             () -> {
                                 int active = activeCallbacks.incrementAndGet();
                                 maximumActiveCallbacks.accumulateAndGet(active, Math::max);
                                 firstStarted.complete(null);
                                 return firstRelease.whenComplete(
                                         (ignored, error) -> activeCallbacks.decrementAndGet());
-                            });
+                            },
+                            null,
+                            null,
+                            null);
             firstStarted.get(2, TimeUnit.SECONDS);
 
             CompletionStage<Void> second =
                     context.enqueueActorDispatch(
                             "actor-b",
+                            0,
                             () -> {
                                 int active = activeCallbacks.incrementAndGet();
                                 maximumActiveCallbacks.accumulateAndGet(active, Math::max);
                                 secondStarted.complete(null);
                                 activeCallbacks.decrementAndGet();
                                 return CompletableFuture.completedFuture(null);
-                            });
+                            },
+                            null,
+                            null,
+                            null);
 
             assertEquals(2, host.actorDispatchSubmissions.get());
             assertFalse(secondStarted.isDone());
@@ -635,7 +661,10 @@ final class ZLinkDefaultSpotContextTest {
                                                 firstStarted.complete(null);
                                                 return ZLinkSerialExecutionQueue.yieldCurrent(
                                                         firstRelease);
-                                            }));
+                                            },
+                                            null,
+                                            null,
+                                            null));
             firstStarted.get(2, TimeUnit.SECONDS);
 
             CompletionStage<Void> second =
@@ -645,7 +674,10 @@ final class ZLinkDefaultSpotContextTest {
                             () -> {
                                 secondStarted.complete(null);
                                 return CompletableFuture.completedFuture(null);
-                            });
+                            },
+                            null,
+                            null,
+                            null);
 
             secondStarted.get(2, TimeUnit.SECONDS);
             firstRelease.complete(null);
@@ -671,6 +703,7 @@ final class ZLinkDefaultSpotContextTest {
             CompletionStage<Void> active =
                     context.enqueueActorDispatch(
                             "actor-a",
+                            0,
                             () -> {
                                 handle.set(
                                         ZLinkSerialExecutionQueue
@@ -678,7 +711,10 @@ final class ZLinkDefaultSpotContextTest {
                                                 .orElseThrow());
                                 activeStarted.complete(null);
                                 return activeRelease;
-                            });
+                            },
+                            null,
+                            null,
+                            null);
             activeStarted.get(2, TimeUnit.SECONDS);
             CompletionStage<Void> pending =
                     context.enqueueActorDispatch(
@@ -686,7 +722,10 @@ final class ZLinkDefaultSpotContextTest {
                             () -> acceptedRecord,
                             acceptedRecord.length,
                             () -> CompletableFuture.completedFuture(null),
-                            () -> {});
+                            () -> {},
+                            null,
+                            null,
+                            null);
 
             ZLinkSerialExecutionQueue queue = context.actorRelocationLane("actor-a");
             ZLinkSerialExecutionQueue.RelocationSeal seal =
@@ -725,7 +764,10 @@ final class ZLinkDefaultSpotContextTest {
                             assertFalse(execution.yieldAllowed());
                             firstStarted.complete(null);
                             return firstRelease;
-                        });
+                        },
+                        null,
+                        null,
+                        null);
         firstStarted.join();
         CompletionStage<Void> second =
                 context.enqueueActorDispatch(
@@ -734,7 +776,10 @@ final class ZLinkDefaultSpotContextTest {
                         () -> {
                             secondStarted.complete(null);
                             return CompletableFuture.completedFuture(null);
-                        });
+                        },
+                        null,
+                        null,
+                        null);
 
         assertFalse(secondStarted.isDone());
         firstRelease.complete(null);
@@ -910,29 +955,15 @@ final class ZLinkDefaultSpotContextTest {
 
         @Override
         CompletionStage<Void> enqueueActorDispatch(
-                String actorId, long payloadBytes, Supplier<CompletionStage<Void>> operation) {
-            throw new AssertionError("actor dispatch must use its coordinator target");
-        }
-
-        @Override
-        CompletionStage<Void> enqueueActorDispatch(
                 ZLinkActorDispatchTarget target,
                 String actorId,
                 long payloadBytes,
                 Supplier<CompletionStage<Void>> operation,
-                CompletableFuture<Void> admission) {
+                CompletableFuture<Void> admission,
+                systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorReceived header,
+                Message payload) {
             actorDispatchSubmissions.incrementAndGet();
             return target.executeActor(actorId, payloadBytes, operation, admission);
-        }
-
-        @Override
-        CompletionStage<Void> enqueueActorDispatch(
-                String actorId,
-                Supplier<byte[]> acceptedJournalRecord,
-                long acceptedJournalRecordSizeHint,
-                Supplier<CompletionStage<Void>> operation,
-                Runnable relocationRelease) {
-            throw new AssertionError("actor dispatch must use its coordinator target");
         }
 
         @Override
@@ -943,7 +974,9 @@ final class ZLinkDefaultSpotContextTest {
                 long acceptedJournalRecordSizeHint,
                 Supplier<CompletionStage<Void>> operation,
                 Runnable relocationRelease,
-                CompletableFuture<Void> admission) {
+                CompletableFuture<Void> admission,
+                systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorReceived header,
+                Message payload) {
             actorDispatchSubmissions.incrementAndGet();
             return target.executeActorLazyRecord(
                     actorId,

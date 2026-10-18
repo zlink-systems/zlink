@@ -256,46 +256,23 @@ final class SpotActivation extends SpotActivationBase<DefaultSpotContext> {
         }
     }
 
-    CompletionStage<ZLinkSpotActorJoinResult> admitLocalActorJoin(
-            java.util.function.Supplier<CompletionStage<ZLinkSpotActorJoinResult>> operation) {
-        var permit = host.reserveApplicationJob();
-        if (permit == null) {
-            Thread.currentThread().interrupt();
-            return CompletableFuture.failedFuture(
-                    new IllegalStateException("application job reservation was interrupted"));
-        }
-        try (var ignored =
-                systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext.enter(
-                        permit)) {
-            var rejection = host.spotHostAdmissionFailure(context.spotId());
-            if (rejection != null) {
-                return CompletableFuture.failedFuture(rejection);
-            }
-            var ownership =
-                    systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext
-                            .transferToQueuedJob();
-            CompletableFuture<ZLinkSpotActorJoinResult> response = new CompletableFuture<>();
-            CompletionStage<Void> admitted;
-            try {
-                admitted =
-                        context.enqueueJoinLifecycle(
-                                () ->
-                                        host.runQueuedApplicationJob(ownership, operation)
-                                                .thenAccept(response::complete));
-            } catch (RuntimeException | Error failure) {
-                ownership.close();
-                throw failure;
-            }
-            return admitted.whenComplete(
-                            (done, failure) -> {
-                                if (failure != null) {
-                                    ownership.close();
-                                }
-                            })
-                    .thenCompose(done -> response);
-        } finally {
-            permit.abandonReservation();
-        }
+    CompletionStage<ZLinkSpotActorJoinResult> admitActorJoin(
+            Supplier<CompletionStage<ZLinkSpotActorJoinResult>> operation) {
+        return host.admitNewApplicationJob(
+                context,
+                systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue.Origin
+                        .REMOTE,
+                () -> {
+                    var rejection = host.spotHostAdmissionFailure(context.spotId());
+                    if (rejection != null) {
+                        return CompletableFuture.failedFuture(rejection);
+                    }
+                    CompletableFuture<ZLinkSpotActorJoinResult> response =
+                            new CompletableFuture<>();
+                    return context.enqueueJoinLifecycle(
+                                    () -> operation.get().thenAccept(response::complete))
+                            .thenCompose(done -> response);
+                });
     }
 
     @Override
@@ -539,23 +516,27 @@ final class SpotActivation extends SpotActivationBase<DefaultSpotContext> {
                         payload.toByteArray(),
                         actor -> host.notifySpotActorLifecycle(spot, actor, true),
                         actorId ->
-                                host.runWithOutbound(
-                                        context.dispatchOutbound(),
+                                admitActorJoin(
                                         () ->
-                                                ZLinkHandlerStages.fromStageSupplier(
+                                                host.runWithOutbound(
+                                                        context.dispatchOutbound(),
                                                         () ->
-                                                                (CompletionStage<
-                                                                                ZLinkSpotActorJoinResult>)
-                                                                        ((ZLinkSpot) spot)
-                                                                                .onActorJoin(
-                                                                                        actorId,
-                                                                                        ZLinkMessage
-                                                                                                .fromEncoded(
-                                                                                                        ZLinkMessagePayloads
-                                                                                                                .encoded(
-                                                                                                                        payload),
-                                                                                                        host
-                                                                                                                .serializerForSpot())))));
+                                                                ZLinkHandlerStages
+                                                                        .fromStageSupplier(
+                                                                                () ->
+                                                                                        (CompletionStage<
+                                                                                                        ZLinkSpotActorJoinResult>)
+                                                                                                ((ZLinkSpot)
+                                                                                                                spot)
+                                                                                                        .onActorJoin(
+                                                                                                                actorId,
+                                                                                                                ZLinkMessage
+                                                                                                                        .fromEncoded(
+                                                                                                                                ZLinkMessagePayloads
+                                                                                                                                        .encoded(
+                                                                                                                                                payload),
+                                                                                                                                host
+                                                                                                                                        .serializerForSpot()))))));
     }
 
     CompletionStage<Void> closeAsync() {

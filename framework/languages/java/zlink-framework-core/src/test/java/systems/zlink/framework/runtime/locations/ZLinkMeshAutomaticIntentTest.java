@@ -91,14 +91,17 @@ final class ZLinkMeshAutomaticIntentTest {
                                     if (method.getName()
                                             .equals("observePeerAdmissionExpectation")) {
                                         observed.set((ZLinkMeshNodeObjectRole) args[4]);
-                                        return null;
+                                        return java.util.concurrent.CompletableFuture
+                                                .completedFuture(null);
                                     }
                                     throw new UnsupportedOperationException(method.getName());
                                 });
         var targets = ZLinkAutoConnectPlanner.computeDesired(local, List.of(peer));
         assertEquals(1, targets.size());
         new ZLinkLocationAutoConnectHost.MeshNodeExecutor(node, Set.of(), Map.of())
-                .observeAdmissionExpectation(targets.values().iterator().next());
+                .observeAdmissionExpectation(targets.values().iterator().next())
+                .toCompletableFuture()
+                .join();
         assertEquals(ZLinkMeshNodeObjectRole.CLIENT, observed.get());
     }
 

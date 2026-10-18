@@ -100,6 +100,9 @@ final class ZLinkActorClientMessageFollowRuntimePortTest {
             source.start();
             target.start();
             clientNode.start();
+            source.refreshLocalAuthorityFence().toCompletableFuture().join();
+            target.refreshLocalAuthorityFence().toCompletableFuture().join();
+            clientNode.refreshLocalAuthorityFence().toCompletableFuture().join();
             // MeshNode §7.1: admission belongs to the selected route. Await its owner's
             // completion; two peers() snapshots can straddle a Core route replacement.
             CompletableFuture.allOf(
@@ -229,7 +232,7 @@ final class ZLinkActorClientMessageFollowRuntimePortTest {
                                     assertTrue(
                                             target.spotNode()
                                                     .sendToActor(
-                                                            targetActor,
+                                                            targetRoute,
                                                             parts,
                                                             SendFlags.DONT_WAIT));
                                 } finally {

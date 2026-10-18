@@ -1,9 +1,11 @@
 package systems.zlink.framework.runtime.spots;
 
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.execution.ZLinkExecutionLanePolicy;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.execution.ZLinkWorkerPool;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpot;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerInstanceOwner;
@@ -337,18 +339,14 @@ final class DefaultInstanceSpotContext implements ZLinkInstanceSpotContext, Spot
 
     @Override
     public CompletionStage<Void> enqueueActorDispatch(
-            String actorId, Supplier<CompletionStage<Void>> operation) {
-        return CompletableFuture.failedFuture(
-                new IllegalStateException("Instance Spot does not own Actor dispatch"));
-    }
-
-    @Override
-    public CompletionStage<Void> enqueueActorDispatch(
             String actorId,
             long payloadBytes,
             Supplier<CompletionStage<Void>> operation,
-            CompletableFuture<Void> admission) {
-        return enqueueActorDispatch(actorId, operation);
+            CompletableFuture<Void> admission,
+            ZLinkBackendActorReceived header,
+            Message payload) {
+        return CompletableFuture.failedFuture(
+                new IllegalStateException("Instance Spot does not own Actor dispatch"));
     }
 
     @Override
@@ -358,8 +356,11 @@ final class DefaultInstanceSpotContext implements ZLinkInstanceSpotContext, Spot
             long acceptedJournalRecordSizeHint,
             Supplier<CompletionStage<Void>> operation,
             Runnable relocationRelease,
-            CompletableFuture<Void> admission) {
-        return enqueueActorDispatch(actorId, operation);
+            CompletableFuture<Void> admission,
+            ZLinkBackendActorReceived header,
+            Message payload) {
+        return CompletableFuture.failedFuture(
+                new IllegalStateException("Instance Spot does not own Actor dispatch"));
     }
 
     @Override
