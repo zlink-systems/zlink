@@ -376,7 +376,8 @@ class stateful_object_runtime_t
     std::vector<logical_timer_t> timers (const object_ref_t &owner) const;
     std::vector<object_inventory_t> inventory () const;
     task_t<std::vector<object_inventory_t>> actor_inventory () const;
-    task_t<std::optional<std::vector<object_inventory_t>>> try_begin_maintenance_inventory ();
+    task_t<std::optional<std::vector<object_inventory_t>>>
+    try_begin_maintenance_inventory (bool actors_only = false);
     task_t<void> end_maintenance_inventory ();
     task_t<aggregate_relocation_seal_attempt_t>
     try_seal_relocation_aggregate (const std::vector<object_ref_t> &participants,
@@ -505,7 +506,10 @@ class stateful_object_runtime_t
 
     std::shared_ptr<detail::actor_transfer_coordinator_t> _actor_transfers =
       std::make_shared<detail::actor_transfer_coordinator_t> ();
-    runtime::state_lane_t &_lane = _actor_transfers->state_lane ();
+    std::vector<object_inventory_t> inventory_on_lane (bool actors_only) const;
+
+    runtime::offload_executor_t _lane_executor;
+    mutable runtime::state_lane_t _lane{_lane_executor};
     std::mutex _quiescence_mutex;
     std::condition_variable _quiescence;
     std::atomic_uint64_t _quiescence_epoch = 0;
@@ -521,6 +525,8 @@ class stateful_object_runtime_t
     relocation_state_materialize_t _relocation_state_materialize;
     relocation_state_commit_t _relocation_state_commit;
     relocation_state_abort_t _relocation_state_abort;
+    // Protects the object set after preceding Join claims have terminalized.
+    bool _maintenance_inventory_active = false;
     std::uint64_t _next_attempt = 1;
     std::uint64_t _next_membership_token = 1;
     std::uint64_t _next_relocation_token = 1;

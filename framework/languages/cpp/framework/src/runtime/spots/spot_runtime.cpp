@@ -6537,9 +6537,7 @@ task_t<actor_join_reply_t> spot_node_runtime_t::join_actor_to_spot_erased (
 
     try {
         co_await seal_actor_application_suffix (actor_ref, [state = _state, key] {
-            if (!state->actor_transfer_coordinator->try_begin_local (key))
-                throw framework_exception_t (framework_error_kind_t::rejected,
-                                             "actor move is already in progress");
+            state->actor_transfer_coordinator->try_begin_local (key).value ();
         });
     }
     catch (const framework_exception_t &error) {
@@ -9015,12 +9013,10 @@ spot_node_runtime_t::transfer_actor_out (const actor_ref_t &actor_ref,
     }
     auto prepared = std::move (plan.value ());
     try {
-        co_await seal_actor_application_suffix (
-          actor_ref, [state = _state, key = prepared.key, transfer_id] {
-              if (!state->actor_transfer_coordinator->try_begin_source_remote (key, transfer_id))
-                  throw framework_exception_t (framework_error_kind_t::rejected,
-                                               "actor transfer is already in progress");
-          });
+        co_await seal_actor_application_suffix (actor_ref, [state = _state, key = prepared.key,
+                                                            transfer_id] {
+            state->actor_transfer_coordinator->try_begin_source_remote (key, transfer_id).value ();
+        });
     }
     catch (const framework_exception_t &error) {
         replay_actor_handoff_until_move_closed (actor_ref);
@@ -14224,6 +14220,21 @@ std::vector<actor_ref_t> spot_node_runtime_t::local_actor_refs () const
     return refs;
 }
 
+void spot_node_runtime_t::filter_local_actor_inventory_on_lane (
+  const spot_node_builder_state_t &state,
+  std::vector<runtime::stateful::object_inventory_t> &inventory)
+{
+    const auto node_rid = detail::effective_spot_node_rid (state.snapshot);
+    std::erase_if (inventory, [&] (const auto &actor) {
+        if (actor.owner.node_id != node_rid
+            || (actor.state != runtime::stateful::object_state_t::ready
+                && actor.state != runtime::stateful::object_state_t::moving))
+            return true;
+        const auto instance =
+          state.actor_instances.find (actor_key (actor.stable_type, actor.owner.key));
+        return instance == state.actor_instances.end () || !instance->second;
+    });
+}
 task_t<std::vector<runtime::stateful::object_inventory_t>>
 spot_node_runtime_t::local_actor_inventory_async () const
 {
@@ -14234,16 +14245,7 @@ spot_node_runtime_t::local_actor_inventory_async () const
         co_return std::vector<runtime::stateful::object_inventory_t>{};
     auto inventory = co_await native->objects ().actor_inventory ();
     co_return co_await state->lane.run_task ([state, inventory = std::move (inventory)] () mutable {
-        const auto node_rid = detail::effective_spot_node_rid (state->snapshot);
-        std::erase_if (inventory, [&] (const auto &actor) {
-            if (actor.owner.node_id != node_rid
-                || (actor.state != runtime::stateful::object_state_t::ready
-                    && actor.state != runtime::stateful::object_state_t::moving))
-                return true;
-            const auto instance =
-              state->actor_instances.find (actor_key (actor.stable_type, actor.owner.key));
-            return instance == state->actor_instances.end () || !instance->second;
-        });
+        filter_local_actor_inventory_on_lane (*state, inventory);
         return std::move (inventory);
     });
 }
@@ -14515,45 +14517,42 @@ bool spot_node_runtime_t::relocation_ready () const
 task_t<spot_node_runtime_t::relocation_units_t> spot_node_runtime_t::relocation_units () const
 {
     const auto state = _state;
-    const spot_node_runtime_t self (state);
     const auto native =
       co_await state->lane.run_task ([state] { return state->native_node.lock (); });
     if (!native)
         co_return relocation_units_t{};
-    if (!(co_await native->objects ().actor_transfers ()->try_seal_maintenance_inventory ()))
+    auto inventory = co_await native->objects ().try_begin_maintenance_inventory (true);
+    if (!inventory)
         throw framework_exception_t (framework_error_kind_t::shutting_down,
                                      "Actor maintenance inventory is already sealed");
     relocation_units_t units;
     std::exception_ptr error;
     try {
-        // A prior Join can have committed to another owner. Reuse the native
-        // active inventory, including its finalized-source exclusion, only
-        // after the existing source completion has terminalized that Join.
-        auto inventory = co_await self.local_actor_inventory_async ();
-        units = co_await state->lane.run_task ([state, inventory = std::move (inventory)] {
-            relocation_units_t result;
-            for (const auto &[_, context] : state->spot_contexts_by_id) {
-                const auto state = context._state;
-                if (!state || state->is_entry_spot () || state->is_instance_spot ()
-                    || state->execution_mode != user_spot_execution_mode_t::spot_wide)
-                    continue;
-                result.spots.push_back ({state->spot_id, state->spot_name, {}});
-            }
-            for (const auto &actor : inventory) {
-                auto ref = ::zlink::framework::detail::actor_ref_access_t::make (
-                  node_rid_t::from_string (actor.owner.node_id), actor.stable_type, actor.owner.key,
-                  actor.owner.object_generation);
-                const auto spot =
-                  std::find_if (result.spots.begin (), result.spots.end (), [&] (const auto &unit) {
-                      return unit.spot_id == actor.membership;
-                  });
-                if (spot != result.spots.end ())
-                    spot->actors.push_back (std::move (ref));
-                else
-                    result.standalone_actors.push_back (std::move (ref));
-            }
-            return result;
-        });
+        units =
+          co_await state->lane.run_task ([state, inventory = std::move (*inventory)] () mutable {
+              filter_local_actor_inventory_on_lane (*state, inventory);
+              relocation_units_t result;
+              for (const auto &[_, context] : state->spot_contexts_by_id) {
+                  const auto state = context._state;
+                  if (!state || state->is_entry_spot () || state->is_instance_spot ()
+                      || state->execution_mode != user_spot_execution_mode_t::spot_wide)
+                      continue;
+                  result.spots.push_back ({state->spot_id, state->spot_name, {}});
+              }
+              for (const auto &actor : inventory) {
+                  auto ref = ::zlink::framework::detail::actor_ref_access_t::make (
+                    node_rid_t::from_string (actor.owner.node_id), actor.stable_type,
+                    actor.owner.key, actor.owner.object_generation);
+                  const auto spot = std::find_if (
+                    result.spots.begin (), result.spots.end (),
+                    [&] (const auto &unit) { return unit.spot_id == actor.membership; });
+                  if (spot != result.spots.end ())
+                      spot->actors.push_back (std::move (ref));
+                  else
+                      result.standalone_actors.push_back (std::move (ref));
+              }
+              return result;
+          });
     }
     catch (...) {
         error = std::current_exception ();

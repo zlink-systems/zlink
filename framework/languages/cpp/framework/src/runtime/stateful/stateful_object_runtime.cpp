@@ -127,7 +127,7 @@ create_result_t stateful_object_runtime_t::begin_create (const create_request_t 
               || request.creation_request.size () > protocol::creationIntentBytes) {
               return {create_status_t::failed, stateful_error_t::invalid, 0, {}, false};
           }
-          if (_actor_transfers->maintenance_inventory_active_on_lane ()) {
+          if (_maintenance_inventory_active) {
               return {create_status_t::failed, stateful_error_t::moving, 0, {}, false};
           }
           if (request.kind == object_kind_t::instance_spot && !request.instance_intent) {
@@ -209,7 +209,7 @@ stateful_object_runtime_t::begin_reserved_object (const object_ref_t &reserved,
               || creation_request.size () > protocol::creationIntentBytes) {
               return {create_status_t::failed, stateful_error_t::invalid, 0, {}, false};
           }
-          if (_actor_transfers->maintenance_inventory_active_on_lane ()) {
+          if (_maintenance_inventory_active) {
               return {create_status_t::failed, stateful_error_t::moving, 0, {}, false};
           }
           const object_key_t key{reserved.kind, reserved.key};
@@ -699,7 +699,7 @@ stateful_error_t stateful_object_runtime_t::destroy_actor (const object_ref_t &a
 {
     return _lane
       .run ([&, this] () -> stateful_error_t {
-          if (_actor_transfers->maintenance_inventory_active_on_lane ())
+          if (_maintenance_inventory_active)
               return stateful_error_t::moving;
           stateful_error_t error = stateful_error_t::none;
           auto *record = find_record_locked (actor, error);
@@ -732,7 +732,7 @@ const stateful_object_runtime_t::object_record_t *
 stateful_object_runtime_t::find_closeable_spot_locked (const object_ref_t &spot,
                                                        stateful_error_t &error) const
 {
-    if (_actor_transfers->maintenance_inventory_active_on_lane ()) {
+    if (_maintenance_inventory_active) {
         error = stateful_error_t::moving;
         return nullptr;
     }
@@ -1191,60 +1191,49 @@ std::vector<logical_timer_t> stateful_object_runtime_t::timers (const object_ref
 
 std::vector<object_inventory_t> stateful_object_runtime_t::inventory () const
 {
-    return _lane
-      .run ([&, this] () -> std::vector<object_inventory_t> {
-          std::vector<object_inventory_t> result;
-          result.reserve (_objects.size ());
-          for (const auto &[_, object] : _objects) {
-              result.push_back ({.owner = object.reference,
-                                 .stable_type = object.stable_type,
-                                 .state = object.state,
-                                 .membership = object.membership});
-          }
-          return result;
-      })
-      .get ();
+    return _lane.run ([this] { return inventory_on_lane (false); }).get ();
 }
 
 task_t<std::vector<object_inventory_t>> stateful_object_runtime_t::actor_inventory () const
 {
-    return _lane.run_task ([this] {
-        std::vector<object_inventory_t> result;
-        result.reserve (_objects.size ());
-        for (const auto &[_, object] : _objects) {
-            if (object.reference.kind != object_kind_t::actor
-                || finalized_relocation_source_on_lane (object))
-                continue;
-            result.push_back ({.owner = object.reference,
-                               .stable_type = object.stable_type,
-                               .state = object.state,
-                               .membership = object.membership});
-        }
-        return result;
-    });
+    return _lane.run_task ([this] { return inventory_on_lane (true); });
+}
+
+std::vector<object_inventory_t>
+stateful_object_runtime_t::inventory_on_lane (bool actors_only) const
+{
+    assert (_lane.is_on_lane ());
+    std::vector<object_inventory_t> result;
+    result.reserve (_objects.size ());
+    for (const auto &[_, object] : _objects) {
+        if (actors_only
+            && (object.reference.kind != object_kind_t::actor
+                || finalized_relocation_source_on_lane (object)))
+            continue;
+        result.push_back ({.owner = object.reference,
+                           .stable_type = object.stable_type,
+                           .state = object.state,
+                           .membership = object.membership});
+    }
+    return result;
 }
 
 task_t<std::optional<std::vector<object_inventory_t>>>
-stateful_object_runtime_t::try_begin_maintenance_inventory ()
+stateful_object_runtime_t::try_begin_maintenance_inventory (bool actors_only)
 {
     if (!co_await _actor_transfers->try_seal_maintenance_inventory ())
         co_return std::nullopt;
-    co_return co_await _lane.run_task ([this] {
-        std::vector<object_inventory_t> result;
-        result.reserve (_objects.size ());
-        for (const auto &[_, object] : _objects) {
-            result.push_back ({.owner = object.reference,
-                               .stable_type = object.stable_type,
-                               .state = object.state,
-                               .membership = object.membership});
-        }
-        return result;
+    co_return co_await _lane.run_task ([this, actors_only] {
+        auto inventory = inventory_on_lane (actors_only);
+        _maintenance_inventory_active = true;
+        return inventory;
     });
 }
 
 task_t<void> stateful_object_runtime_t::end_maintenance_inventory ()
 {
-    return _actor_transfers->end_maintenance_inventory ();
+    co_await _lane.run_task ([this] { _maintenance_inventory_active = false; });
+    co_await _actor_transfers->end_maintenance_inventory ();
 }
 
 task_t<aggregate_relocation_seal_attempt_t>

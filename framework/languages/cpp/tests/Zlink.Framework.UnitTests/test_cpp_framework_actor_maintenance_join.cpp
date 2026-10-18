@@ -1630,6 +1630,84 @@ struct native_intake_fixture_t
     }
 };
 
+TEST (ActorMaintenanceJoin, MaintenanceSealPreservesLocalAndRemoteClaimErrorKinds)
+{
+    for (const bool remote : {false, true}) {
+        SCOPED_TRACE (remote ? "remote" : "local");
+        fw::detail::actor_transfer_coordinator_t transfers;
+        const auto begin = [&] (const std::string &key) {
+            return remote ? transfers.try_begin_source_remote (key)
+                          : transfers.try_begin_local (key);
+        };
+        ASSERT_TRUE (begin ("existing"));
+        const auto conflict = begin ("existing");
+        EXPECT_FALSE (conflict);
+        EXPECT_EQ (fw::framework_error_kind_t::rejected, conflict.error_kind ());
+        transfers.cancel_move ("existing");
+        ASSERT_TRUE (transfers.try_seal_maintenance_inventory ().result ().value ());
+        const auto sealed = begin ("late");
+        EXPECT_FALSE (sealed);
+        EXPECT_EQ (fw::framework_error_kind_t::unavailable, sealed.error_kind ());
+        transfers.end_maintenance_inventory ().result ().value ();
+        ASSERT_TRUE (transfers.try_reserve_source ("prior"));
+        auto waiting = transfers.try_seal_maintenance_inventory ();
+        EXPECT_FALSE (waiting.await_ready ());
+        EXPECT_TRUE (begin ("prior"));
+        transfers.cancel_move ("prior");
+        ASSERT_TRUE (waiting.result ().value ());
+        transfers.end_maintenance_inventory ().result ().value ();
+    }
+}
+
+TEST (NativeIntake, CoordinatorAdmissionReturnsNativeClaimWithoutLaneReentry)
+{
+    namespace rt = fw::runtime;
+    namespace st = rt::stateful;
+    native_intake_fixture_t fixture;
+    auto &objects = fixture.host->objects ();
+    const st::object_ref_t object{st::object_kind_t::actor,
+                                  actor_id,
+                                  1,
+                                  1,
+                                  mesh_name,
+                                  zlink::routing_id_t::from (fixture.rid).to_string ()};
+    const auto created = objects.begin_reserved_object (object, actor_type, {});
+    ASSERT_EQ (st::stateful_error_t::none, created.error);
+    ASSERT_EQ (st::stateful_error_t::none, objects.commit_create (created.attempt));
+    st::raw_stateful_dispatch_t raw (objects, fixture.host->transport (), fixture.resolver);
+    ASSERT_EQ (st::stateful_error_t::none,
+               raw.ingest_claimed (object, fixture.actor_record (1), std::function<void ()> ([] {}))
+                 .result ()
+                 .value ());
+    auto [claim_error, delivery] = raw.try_claim (object);
+    ASSERT_EQ (st::stateful_error_t::none, claim_error);
+    ASSERT_TRUE (delivery);
+    fw::test::manual_internal_scheduler_t worker;
+    auto queue = std::make_shared<rt::serial_execution_queue_t> (worker);
+    auto record = std::make_shared<rt::serial_application_record_t> ();
+    record->transferred = [&] {
+        EXPECT_EQ (st::stateful_error_t::none,
+                   raw.transfer_application_claim (object, delivery->turn.sequence));
+    };
+    rt::serial_work_options_t options;
+    options.application_record = record;
+    EXPECT_NO_THROW ({
+        const auto admitted = objects.actor_transfers ()->admit_dispatch_packet (
+          "member:member", nullptr, true, {},
+          [&] { return queue->try_post ("native-claim", [] {}, options); });
+        EXPECT_EQ (std::optional<bool> (true), admitted.queue_submission);
+    });
+    // On the red input the callback threw before releasing the stateful claim.
+    (void) objects.complete_claim (object, st::turn_domain_t::application);
+    EXPECT_TRUE (queue->try_post ("after-native-claim", [] {}));
+    worker.run_all ();
+    queue->close ();
+    worker.run_all ();
+    queue->drain ();
+    worker.retire ();
+    fixture.host->close ();
+}
+
 TEST (ActorMaintenanceJoin, MaintenanceSealRejectsClaimAfterPriorSourceCompletion)
 {
     native_intake_fixture_t fixture;
@@ -1708,6 +1786,62 @@ TEST (ActorMaintenanceJoin, ClaimedJoinKeepsNativeAdmissionWhileMaintenanceSeals
 TEST (ActorMaintenanceJoin, ClaimedLocalJoinKeepsNativeAdmissionWhileMaintenanceSeals)
 {
     claimed_join_native_admission (false);
+}
+
+TEST (ActorMaintenanceJoin, ObjectSealCapturesChangesAfterJoinSealAndRejectsLaterChanges)
+{
+    namespace st = fw::runtime::stateful;
+    st::stateful_object_runtime_t objects;
+    objects.replace_placement_candidates (
+      {{mesh_name, first_rid, {actor_type}, 100, 16, 0, 16, 0}});
+    const auto create = [&] (st::object_kind_t kind, const std::string &key) {
+        return objects.begin_create (
+          {kind, key, actor_type, std::string (mesh_name), {}, false, false});
+    };
+    const auto old = create (st::object_kind_t::actor, "old");
+    ASSERT_EQ (st::create_status_t::reserved, old.status);
+    ASSERT_EQ (st::stateful_error_t::none, objects.commit_create (old.attempt));
+    const auto spot = create (st::object_kind_t::user_spot, "old-spot");
+    ASSERT_EQ (st::create_status_t::reserved, spot.status);
+    ASSERT_EQ (st::stateful_error_t::none, objects.commit_create (spot.attempt));
+    auto transfers = objects.actor_transfers ();
+    ASSERT_TRUE (transfers->try_reserve_source ("prior"));
+    auto inventory = objects.try_begin_maintenance_inventory ();
+    ASSERT_FALSE (inventory.await_ready ());
+    EXPECT_FALSE (transfers->try_reserve_source ("late"));
+    // Only Join claims are sealed while the preceding source finishes.
+    EXPECT_EQ (st::stateful_error_t::none, objects.destroy_actor (old.object));
+    EXPECT_EQ (st::stateful_error_t::none, objects.close_spot (spot.object).first);
+    const auto added = create (st::object_kind_t::actor, "added");
+    const auto added_commit = objects.commit_create (added.attempt);
+    const st::object_ref_t reserved{
+      st::object_kind_t::user_spot, "reserved", 1, 1, mesh_name, first_rid};
+    const auto reserved_create = objects.begin_reserved_object (reserved, actor_type, {});
+    const auto reserved_commit = objects.commit_create (reserved_create.attempt);
+    transfers->cancel_move ("prior");
+    const auto snapshot = inventory.result ().value ();
+    ASSERT_EQ (st::create_status_t::reserved, added.status);
+    ASSERT_EQ (st::stateful_error_t::none, added_commit);
+    ASSERT_EQ (st::stateful_error_t::none, reserved_create.error);
+    ASSERT_EQ (st::stateful_error_t::none, reserved_commit);
+    ASSERT_TRUE (snapshot);
+    ASSERT_EQ (2u, snapshot->size ());
+    EXPECT_TRUE (std::any_of (snapshot->begin (), snapshot->end (),
+                              [&] (const auto &entry) { return entry.owner == added.object; }));
+    EXPECT_TRUE (std::any_of (snapshot->begin (), snapshot->end (),
+                              [&] (const auto &entry) { return entry.owner == reserved; }));
+    EXPECT_EQ (st::stateful_error_t::moving, create (st::object_kind_t::actor, "after").error);
+    auto late_reserved = reserved;
+    late_reserved.key = "after-reserved";
+    EXPECT_EQ (st::stateful_error_t::moving,
+               objects.begin_reserved_object (late_reserved, actor_type, {}).error);
+    EXPECT_EQ (st::stateful_error_t::moving, objects.destroy_actor (added.object));
+    EXPECT_EQ (st::stateful_error_t::moving, objects.close_spot (reserved).first);
+    objects.end_maintenance_inventory ().result ().value ();
+    EXPECT_TRUE (transfers->try_begin_local ("released"));
+    transfers->cancel_move ("released");
+    EXPECT_EQ (st::stateful_error_t::none, objects.destroy_actor (added.object));
+    EXPECT_EQ (st::stateful_error_t::none, objects.close_spot (reserved).first);
 }
 
 TEST (ActorMaintenanceJoin, LocalNextJoinPreservesClaimedNativeSuffixBeforePrivateAdmission)

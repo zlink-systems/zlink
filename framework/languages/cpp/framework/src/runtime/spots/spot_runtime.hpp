@@ -2309,6 +2309,9 @@ class spot_node_runtime_t
       std::string actor_key,
       std::optional<runtime::protocol::actor_route_fence_t> source_fence);
     task_t<std::vector<runtime::stateful::object_inventory_t>> local_actor_inventory_async () const;
+    static void filter_local_actor_inventory_on_lane (
+      const spot_node_builder_state_t &state,
+      std::vector<runtime::stateful::object_inventory_t> &inventory);
     std::size_t active_user_spot_count_on_lane () const;
     std::optional<std::string> spot_name_for_unlocked (const spot_id_t &spot_id) const;
 
