@@ -6,6 +6,7 @@
 #include "runtime/dispatch/coroutine_executor.hpp"
 #include "runtime/foundation/operation_registry.hpp"
 #include "runtime/spots/spot_runtime.hpp"
+#include "runtime/stateful/stateful_object_runtime.hpp"
 #include "../support/runtime_failure_fixture.hpp"
 #include "../support/manual_internal_scheduler.hpp"
 #ifdef ZLINK_FRAMEWORK_DEBUG_WAIT_GUARD
@@ -31,6 +32,12 @@ namespace zlink::framework::detail
 // The baseline adapter calls this immediately before its pending synchronous
 // wait. The production implementation has no dependency on this observer.
 std::function<void ()> suffix_blocking_wait_observer;
+std::function<void ()> restore_blocking_wait_observer;
+void observe_restore_blocking_wait ()
+{
+    if (restore_blocking_wait_observer)
+        restore_blocking_wait_observer ();
+}
 void observe_suffix_blocking_wait ()
 {
     if (suffix_blocking_wait_observer)
@@ -76,6 +83,130 @@ static_assert (std::is_same_v<decltype (std::declval<state_lane_t &> ().run (voi
                               std::future<void>>);
 static_assert (std::is_same_v<decltype (std::declval<state_lane_t &> ().run (reference_work_t{})),
                               std::future<int &>>);
+
+TEST (ZLinkStateLane, MaintenanceInventoryAwaitPreservesSealAndReacquisition)
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::runtime;
+    stateful::stateful_object_runtime_t objects;
+    objects.replace_placement_candidates ({{"mesh", "node", {"player"}, 100, 16, 0, 4, 0}});
+    const stateful::create_request_t request{
+      stateful::object_kind_t::actor, "actor", "player", std::string ("mesh"), {}, false, false};
+    const auto created = objects.begin_create (request);
+    ASSERT_EQ (stateful::create_status_t::reserved, created.status);
+    ASSERT_EQ (stateful::stateful_error_t::none, objects.commit_create (created.attempt));
+
+    const auto exercise = [&] () -> task_t<void> {
+        const auto inventory = co_await objects.try_begin_maintenance_inventory ();
+        EXPECT_TRUE (inventory);
+        if (inventory) {
+            EXPECT_EQ (1u, inventory->size ());
+            if (!inventory->empty ())
+                EXPECT_EQ (created.object, inventory->front ().owner);
+        }
+        EXPECT_FALSE (co_await objects.try_begin_maintenance_inventory ());
+        EXPECT_EQ (stateful::stateful_error_t::moving, objects.begin_create (request).error);
+        co_await objects.end_maintenance_inventory ();
+        EXPECT_EQ (stateful::create_status_t::existing, objects.begin_create (request).status);
+        EXPECT_TRUE (co_await objects.try_begin_maintenance_inventory ());
+        co_await objects.end_maintenance_inventory ();
+    };
+    exercise ().result ().value ();
+}
+
+
+TEST (ZLinkStateLane, SpotRestoreReturnsPendingWhileNodeOwnerIsHeld)
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+    auto node = test::runtime_failure_fixture<spot_node_builder_state_t> ("restore-owner");
+    spot_node_runtime_t spots (node);
+    std::promise<void> held;
+    std::promise<void> release;
+    auto released = release.get_future ().share ();
+    node->lane.try_post ([&] {
+        held.set_value ();
+        released.get ();
+    });
+    held.get_future ().get ();
+    std::promise<bool> returned;
+    auto observed = returned.get_future ();
+    std::atomic<bool> observed_once{false};
+    restore_blocking_wait_observer = [&] {
+        if (!observed_once.exchange (true))
+            returned.set_value (false);
+    };
+    std::promise<task_t<bool>> submitted;
+    std::thread caller ([&] {
+        runtime::stateful::frozen_object_state_t frozen;
+        frozen.stable_type = "missing";
+        const runtime::stateful::object_ref_t target{
+          runtime::stateful::object_kind_t::user_spot, "target", 1, 1, "mesh", "restore-owner"};
+        auto task = spots.materialize_relocation_state (frozen, target, std::nullopt);
+        if (!observed_once.exchange (true))
+            returned.set_value (true);
+        submitted.set_value (std::move (task));
+    });
+    const bool returned_before_release = observed.get ();
+    release.set_value ();
+    caller.join ();
+    restore_blocking_wait_observer = {};
+    auto terminal = submitted.get_future ().get ();
+    EXPECT_FALSE (terminal.result ().value ());
+    EXPECT_TRUE (returned_before_release);
+    node->lane_executor.drain ();
+}
+
+TEST (ZLinkStateLane, SpotRestoreReturnsPendingUntilLifecycleRestoreTerminal)
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+    auto node = test::runtime_failure_fixture<spot_node_builder_state_t> ("restore-lifecycle");
+    spot_node_runtime_t spots (node);
+    task_completion_source_t<void> restore_release;
+    std::promise<void> restore_entered;
+    factory_relocation_configuration_t relocation;
+    relocation.kind = factory_relocation_kind_t::preserve_state;
+    relocation.restore = [&] (void *, std::vector<std::byte>, std::stop_token) -> task_t<void> {
+        restore_entered.set_value ();
+        co_await restore_release.task ();
+    };
+    node->spot_factories.emplace ("restored", std::type_index (typeid (int)));
+    node->spot_factory_relocations.emplace ("restored", std::move (relocation));
+    spot_lifecycle_callbacks_t lifecycle;
+    lifecycle.create_spot_context_instance = [] (spot_context_t, service_provider_t &) {
+        return std::static_pointer_cast<void> (std::make_shared<int> (7));
+    };
+    node->spot_lifecycles.emplace ("restored", std::move (lifecycle));
+    std::promise<bool> returned;
+    auto observed = returned.get_future ();
+    std::atomic<bool> observed_once{false};
+    restore_blocking_wait_observer = [&] {
+        if (!observed_once.exchange (true))
+            returned.set_value (false);
+    };
+    runtime::stateful::frozen_object_state_t frozen;
+    frozen.stable_type = "restored";
+    const runtime::stateful::object_ref_t target{
+      runtime::stateful::object_kind_t::user_spot, "target", 1, 1, "mesh", "restore-lifecycle"};
+    std::promise<task_t<bool>> submitted;
+    std::thread caller ([&] {
+        auto task = spots.materialize_relocation_state (frozen, target, std::nullopt);
+        if (!observed_once.exchange (true))
+            returned.set_value (true);
+        submitted.set_value (std::move (task));
+    });
+    const bool returned_before_release = observed.get ();
+    restore_entered.get_future ().get ();
+    restore_release.complete (result_t<void>::success ());
+    caller.join ();
+    restore_blocking_wait_observer = {};
+    auto terminal = submitted.get_future ().get ();
+    EXPECT_TRUE (terminal.result ().value ());
+    EXPECT_TRUE (returned_before_release);
+    spots.abort_relocation_materialization ({target}).result ().value ();
+    node->lane_executor.drain ();
+}
 
 TEST (ZLinkStateLane, RunReturnsTheResultOfTheWork)
 {

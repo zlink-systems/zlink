@@ -1181,7 +1181,11 @@ task_t<bool> serial_execution_queue_t::accept_application_ready (
                 lock.lock ();
             const bool accepted = !_closed
                                   && enqueue_locked (std::move (item->name), std::move (item->work),
-                                                     std::move (item->options), 0, item->cancel);
+                                                     std::move (item->options), 0,
+                                                     [cancel = item->cancel] (auto) {
+                                                         if (cancel)
+                                                             cancel ();
+                                                     });
             if (owns_shared_gate ())
                 lock.unlock ();
             if (!accepted) {
@@ -1216,7 +1220,11 @@ task_t<bool> serial_execution_queue_t::adopt_application_prefix (
                   if (lock.owns_lock ())
                       lock.unlock ();
                   for (const auto &item : prefix)
-                      cancel_pending_work (item.options.application_record, item.cancel);
+                      cancel_pending_work (item.options.application_record,
+                                           [cancel = item.cancel] (auto) {
+                                               if (cancel)
+                                                   cancel ();
+                                           });
                   return false;
               }
               if (prefix.empty ())
@@ -1233,7 +1241,10 @@ task_t<bool> serial_execution_queue_t::adopt_application_prefix (
                   work_item_t item;
                   item.name = std::move (it->name);
                   item.work = std::move (it->work);
-                  item.cancel = std::move (it->cancel);
+                  item.cancel = [cancel = std::move (it->cancel)] (auto) {
+                      if (cancel)
+                          cancel ();
+                  };
                   item.lane = it->options.lane;
                   item.byte_cost = normalized_byte_cost (it->options);
                   item.retained_message = std::move (it->options.retained_message);
@@ -1376,6 +1387,17 @@ bool serial_execution_queue_t::try_post_async (std::string name,
 result_t<serial_submission_id_t> serial_execution_queue_t::try_post_cancellable_async (
   std::string name, async_work_t work, std::function<void ()> cancel, serial_work_options_t options)
 {
+    if (!cancel)
+        throw std::invalid_argument ("serial execution queue cancellation is empty");
+    return try_post_cancellable_async (
+      std::move (name), std::move (work),
+      [cancel = std::move (cancel)] (serial_cancel_submission_outcome_t) { cancel (); },
+      std::move (options));
+}
+
+result_t<serial_submission_id_t> serial_execution_queue_t::try_post_cancellable_async (
+  std::string name, async_work_t work, cancellation_t cancel, serial_work_options_t options)
+{
     if (!work) {
         throw std::invalid_argument ("serial execution queue work is empty");
     }
@@ -1444,7 +1466,7 @@ serial_execution_queue_t::cancel_submission_owned (serial_submission_id_t submis
     if (submission_id == 0)
         return serial_cancel_submission_outcome_t::already_terminal;
     std::optional<work_item_t> cancelled_item;
-    std::function<void ()> active_cancel;
+    cancellation_t active_cancel;
     serial_cancel_submission_outcome_t outcome =
       serial_cancel_submission_outcome_t::already_terminal;
     {
@@ -1506,9 +1528,9 @@ serial_execution_queue_t::cancel_submission_owned (serial_submission_id_t submis
     if (cancelled_item && cancelled_item->application_record)
         cancelled_item->application_record->admission.discard ();
     if (cancelled_item && cancelled_item->cancel)
-        cancelled_item->cancel ();
+        cancelled_item->cancel (outcome);
     if (active_cancel)
-        active_cancel ();
+        active_cancel (outcome);
     if (shared_spot_gate () && outcome == serial_cancel_submission_outcome_t::queued_cancelled)
         _spot_gate->disconnect_actor_head (shared_from_this ());
     if (shared_spot_gate ())
@@ -1591,7 +1613,7 @@ serial_execution_queue_t::reserve_deferred_barrier_next (
                      [barrier] (auto complete) { barrier->reached (std::move (complete)); },
                      serial_work_options_t{.lane = serial_work_lane_t::lifecycle,
                                            .holds_application_while_waiting = true},
-                     0, [barrier] { barrier->cancel (); }, item_origin_t{{}, barrier});
+                     0, [barrier] (auto) { barrier->cancel (); }, item_origin_t{{}, barrier});
     }
     if (!accepted) {
         barrier->cancel ();
@@ -1998,7 +2020,7 @@ void serial_execution_queue_t::cancel_pending () noexcept
 
 void serial_execution_queue_t::cancel_pending_work (
   const std::shared_ptr<serial_application_record_t> &record,
-  const std::function<void ()> &cancel) noexcept
+  const cancellation_t &cancel) noexcept
 {
     if (record) {
         record->admission.discard ();
@@ -2007,13 +2029,13 @@ void serial_execution_queue_t::cancel_pending_work (
                                              "Actor application queue is stopping"));
     }
     if (cancel)
-        cancel ();
+        cancel (serial_cancel_submission_outcome_t::queued_cancelled);
 }
 
 void serial_execution_queue_t::cancel_pending_owned () noexcept
 {
     std::vector<work_item_t> cancelled_items;
-    std::vector<std::function<void ()>> active_cancellations;
+    std::vector<cancellation_t> active_cancellations;
     {
         std::unique_lock<std::mutex> lock (_mutex, std::defer_lock);
         if (!owns_shared_gate ())
@@ -2067,7 +2089,7 @@ void serial_execution_queue_t::cancel_pending_owned () noexcept
         cancel_pending_work (item.application_record, item.cancel);
     }
     for (auto &cancel : active_cancellations)
-        cancel ();
+        cancel (serial_cancel_submission_outcome_t::active_cancel_requested);
     if (shared_spot_gate ())
         _spot_gate->disconnect_actor_head (shared_from_this ());
 }
@@ -2303,7 +2325,7 @@ bool serial_execution_queue_t::enqueue_locked (std::string name,
                                                async_work_t work,
                                                serial_work_options_t options,
                                                serial_submission_id_t submission_id,
-                                               std::function<void ()> cancel,
+                                               cancellation_t cancel,
                                                item_origin_t origin)
 {
     const auto bytes = normalized_byte_cost (options);

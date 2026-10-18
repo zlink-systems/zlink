@@ -122,40 +122,35 @@ class location_lifecycle_t
 
     spot_claim_result_t claim_spot (spot_location_t spot)
     {
+        return claim_spot_async (std::move (spot)).get ();
+    }
+
+    task_t<spot_claim_result_t> claim_spot_async (spot_location_t spot)
+    {
         const auto now = std::chrono::system_clock::now ();
-        return _state->lane
-          .run ([&] {
-              if (_state->active) {
-                  _state->spots[spot_key (spot)] = spot;
-              }
-              return spot_claim_result_t{location_write_status_t::stored, std::move (spot), now};
-          })
-          .get ();
+        return _state->lane.run_task ([state = _state, spot = std::move (spot), now] () mutable {
+            if (state->active)
+                state->spots[spot_key (spot)] = spot;
+            return spot_claim_result_t{location_write_status_t::stored, std::move (spot), now};
+        });
     }
 
     location_write_result_t release_spot (spot_location_key_t key)
     {
-        spot_location_t spot;
-        const auto found = _state->lane
-                             .run ([&] {
-                                 const auto found = _state->spots.find (spot_key (key));
-                                 if (found == _state->spots.end ()) {
-                                     return false;
-                                 }
-                                 spot = found->second;
-                                 return true;
-                             })
-                             .get ();
-        if (!found) {
-            return {location_write_status_t::ignored_stale, 0, {}};
-        }
-        return _state->lane
-          .run ([&] {
-              _state->spots.erase (spot_key (spot));
-              return location_write_result_t{location_write_status_t::stored, spot.generation,
-                                             std::chrono::system_clock::now ()};
-          })
-          .get ();
+        return release_spot_async (std::move (key)).get ();
+    }
+
+    task_t<location_write_result_t> release_spot_async (spot_location_key_t key)
+    {
+        return _state->lane.run_task ([state = _state, key = std::move (key)] {
+            const auto found = state->spots.find (spot_key (key));
+            if (found == state->spots.end ())
+                return location_write_result_t{location_write_status_t::ignored_stale, 0, {}};
+            const auto generation = found->second.generation;
+            state->spots.erase (found);
+            return location_write_result_t{location_write_status_t::stored, generation,
+                                           std::chrono::system_clock::now ()};
+        });
     }
 
     location_write_result_t renew_actor (actor_location_key_t key)

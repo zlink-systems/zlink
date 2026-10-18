@@ -215,7 +215,7 @@ final class ZLinkSpotLifecycle {
         if (current != null && current != activation) {
             return SpotActivationBase.finishCleanup(
                     new IllegalStateException("User Spot Ready publication lost local admission"),
-                    activation.closeAsync());
+                    activation.context.closeResourcesAsync());
         }
         if (current == null) countChanged.run();
         recordSpotCount(USER_SPOT_METRIC_KIND, 1);

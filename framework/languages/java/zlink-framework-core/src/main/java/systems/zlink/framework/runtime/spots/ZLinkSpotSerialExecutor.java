@@ -105,7 +105,7 @@ public final class ZLinkSpotSerialExecutor implements ZLinkActorDispatchTarget {
                                                         payloadBytes,
                                                         operation,
                                                         admission)),
-                admission);
+                null);
     }
 
     @Override
@@ -115,7 +115,7 @@ public final class ZLinkSpotSerialExecutor implements ZLinkActorDispatchTarget {
             Supplier<CompletionStage<Void>> operation,
             CompletableFuture<Void> admission) {
         return submitActor(
-                () -> enqueueActor(activation, payloadBytes, operation, admission), admission);
+                () -> enqueueActor(activation, payloadBytes, operation, admission), null);
     }
 
     private CompletionStage<Void> enqueueActor(
@@ -195,7 +195,7 @@ public final class ZLinkSpotSerialExecutor implements ZLinkActorDispatchTarget {
                                                         operation,
                                                         relocationRelease,
                                                         admission)),
-                admission);
+                null);
     }
 
     @Override
@@ -215,7 +215,7 @@ public final class ZLinkSpotSerialExecutor implements ZLinkActorDispatchTarget {
                                 operation,
                                 relocationRelease,
                                 admission),
-                admission);
+                null);
     }
 
     private CompletionStage<Void> enqueueActorLazyRecord(
@@ -460,6 +460,10 @@ public final class ZLinkSpotSerialExecutor implements ZLinkActorDispatchTarget {
         return spotQueue.finishActivationPreparation().thenCompose(ignored -> resumeTimerQueues());
     }
 
+    CompletionStage<Void> discardActivationPreparation() {
+        return spotQueue.discardActivationPreparation();
+    }
+
     private CompletionStage<Void> resumeTimerQueues() {
         return stateLane
                 .runNowOrQueue(() -> List.copyOf(timerQueues.values()))
@@ -575,8 +579,8 @@ public final class ZLinkSpotSerialExecutor implements ZLinkActorDispatchTarget {
         return spotQueue.admitIngress(admission);
     }
 
-    boolean tryEnqueueSpot(Supplier<CompletionStage<Void>> operation) {
-        return spotQueue.tryEnqueue(operation);
+    boolean tryEnqueueSpot(Supplier<CompletionStage<Void>> operation, Runnable release) {
+        return spotQueue.tryEnqueue(operation, release);
     }
 
     CompletionStage<Boolean> abortRelocation(ZLinkSerialExecutionQueue.RelocationSeal seal) {

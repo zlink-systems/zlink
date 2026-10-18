@@ -58,7 +58,7 @@ class actor_serial_executor_t
 
     result_t<serial_submission_id_t> execute_actor (std::string name,
                                                     queue_t::async_work_t work,
-                                                    std::function<void ()> cancel,
+                                                    queue_t::cancellation_t cancel,
                                                     serial_work_options_t options = {}) const
     {
         return _queue->try_post_cancellable_async (std::move (name), std::move (work),

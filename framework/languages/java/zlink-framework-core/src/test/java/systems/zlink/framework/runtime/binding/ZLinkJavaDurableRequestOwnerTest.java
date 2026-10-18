@@ -33,9 +33,8 @@ final class ZLinkJavaDurableRequestOwnerTest {
                 ZLinkJavaDurableRequest.request(
                                 () -> reply,
                                 (frames, timeout, admission) -> pending,
-                                () -> false,
                                 () -> new PeerRouteObservation(1, true),
-                                listener -> {
+                                (listener, ended) -> {
                                     listener.run();
                                     return () -> {};
                                 },

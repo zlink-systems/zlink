@@ -1,10 +1,15 @@
 package systems.zlink.framework.runtime.spots;
 
+import static systems.zlink.framework.runtime.protocol.ServiceWireConstants.FRAMEWORK_ERROR_NONE;
+
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
+import systems.zlink.contracts.sockets.RequestResult;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResult;
+import systems.zlink.framework.runtime.internal.backend.ZLinkRequestFailureMapping;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceFrozenRecordCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceMessageFollowWireCodec;
@@ -516,7 +521,8 @@ final class ZLinkSpotRelocationReplyRoutes {
                 route.participantId);
     }
 
-    CompletionStage<Ack> deliverCanonical(CanonicalRoute selected, List<byte[]> parts) {
+    CompletionStage<Ack> deliverCanonical(
+            CanonicalRoute selected, List<byte[]> parts, int terminalResult, int failureCode) {
         Objects.requireNonNull(selected, "selected");
         Objects.requireNonNull(parts, "parts");
         RouteSelection selection =
@@ -529,49 +535,9 @@ final class ZLinkSpotRelocationReplyRoutes {
                                     || route.participantId != selected.participantId()) {
                                 return RouteSelection.notAcknowledged();
                             }
-                            if (route.delivered) {
-                                return RouteSelection.alreadyTerminal();
-                            }
-                            if (route.relayInProgress || route.delivery == null) {
-                                return RouteSelection.notAcknowledged();
-                            }
-                            route.relayInProgress = true;
-                            return RouteSelection.delivery(route);
+                            return claimTerminal(route);
                         });
-        if (selection.ack() != null) return CompletableFuture.completedFuture(selection.ack());
-        Route route = selection.route();
-        CompletionStage<Void> delivery;
-        try {
-            delivery =
-                    Objects.requireNonNull(
-                            route.delivery.deliver(parts), "relocation reply delivery result");
-        } catch (RuntimeException failure) {
-            inStateLane(
-                    () -> {
-                        route.relayInProgress = false;
-                        return null;
-                    });
-            return CompletableFuture.failedFuture(failure);
-        }
-        return delivery.thenApply(
-                        ignored -> {
-                            inStateLane(
-                                    () -> {
-                                        route.relayInProgress = false;
-                                        route.delivered = true;
-                                        return null;
-                                    });
-                            return Ack.TERMINAL_RECEIVED;
-                        })
-                .exceptionallyCompose(
-                        failure -> {
-                            inStateLane(
-                                    () -> {
-                                        route.relayInProgress = false;
-                                        return null;
-                                    });
-                            return CompletableFuture.failedFuture(failure);
-                        });
+        return deliverTerminal(selection, parts, terminalResult, failureCode);
     }
 
     /**
@@ -642,22 +608,41 @@ final class ZLinkSpotRelocationReplyRoutes {
                                             > ZLinkServiceMessageFollowWireCodec.MAX_HOP_COUNT) {
                                 return RouteSelection.notAcknowledged();
                             }
-                            if (route.delivered) {
-                                return RouteSelection.alreadyTerminal();
-                            }
-                            if (route.relayInProgress || route.delivery == null) {
-                                return RouteSelection.notAcknowledged();
-                            }
-                            route.relayInProgress = true;
-                            return RouteSelection.delivery(route);
+                            return claimTerminal(route);
                         });
+        return deliverTerminal(
+                selection, relay.parts(), RequestResult.OK.value(), (int) FRAMEWORK_ERROR_NONE);
+    }
+
+    private RouteSelection claimTerminal(Route route) {
+        if (route.delivered) {
+            return RouteSelection.alreadyTerminal();
+        }
+        if (route.relayInProgress || route.delivery == null) {
+            return RouteSelection.notAcknowledged();
+        }
+        route.relayInProgress = true;
+        return RouteSelection.delivery(route);
+    }
+
+    private CompletionStage<Ack> deliverTerminal(
+            RouteSelection selection, List<byte[]> parts, int terminalResult, int failureCode) {
         if (selection.ack() != null) return CompletableFuture.completedFuture(selection.ack());
         Route route = selection.route();
         CompletionStage<Void> delivery;
         try {
             delivery =
                     Objects.requireNonNull(
-                            route.delivery.deliver(relay.parts()),
+                            terminalResult == RequestResult.OK.value()
+                                    ? route.delivery.deliver(parts)
+                                    : route.failure.apply(
+                                            ZLinkRequestFailureMapping.receivedFailure(
+                                                    ZLinkBackendRequestResult.fromWireTerminal(
+                                                                    terminalResult)
+                                                            .toFrameworkErrorKind(failureCode),
+                                                    "relocated request failed",
+                                                    failureCode,
+                                                    ZLinkFrameworkErrorOrigin.frameworkMetadata())),
                             "relocation reply delivery result");
         } catch (RuntimeException failure) {
             inStateLane(

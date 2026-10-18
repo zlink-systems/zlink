@@ -188,7 +188,7 @@ export class ZLinkSpotSubscriptionDispatch {
       undefined
     );
     try {
-      await this.options.serial.execute(
+      await this.options.serial.post(
         () =>
           runWithFlow(inboundFlow, async () => {
             // Payload deserialization belongs to the Spot serial turn. Queue

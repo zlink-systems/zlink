@@ -518,27 +518,18 @@ class spot_handle_t
                                                     std::chrono::milliseconds timeout,
                                                     std::span<const std::uint8_t> metadata = {},
                                                     spot_request_completion_t completion = {});
-    zlink::submit_result_t publish (const std::string &channel_name,
-                                    const std::string &topic,
-                                    const std::vector<zlink::message_t> &parts,
-                                    zlink::send_flags_t flags = zlink::send_flags_t::none,
-                                    std::span<const std::uint8_t> metadata = {});
-    task_t<void> publish_tail (const std::vector<zlink::message_t> &parts,
-                               std::span<const std::uint8_t> metadata = {});
-    task_t<void> publish_tail (
-      const std::vector<zlink::message_t> &parts,
-      std::span<const std::uint8_t> metadata,
-      std::function<void (const zlink::routing_id_t &, zlink::submit_result_t)> failure_observer);
+    task_t<void> publish (std::string channel_name,
+                          std::string topic,
+                          std::vector<zlink::message_t> parts,
+                          std::vector<std::uint8_t> metadata = {},
+                          std::function<void (const zlink::routing_id_t &, zlink::submit_result_t)>
+                            failure_observer = {});
     void set_subscription (const std::string &channel_name, const std::string &topic);
+    task_t<void> set_subscription_async (std::string channel_name, std::string topic);
     void unset_subscription (const std::string &channel_name, const std::string &topic);
     bool close () noexcept;
 
   private:
-    task_t<void> publish_tail_impl (
-      const std::vector<zlink::message_t> &parts,
-      std::span<const std::uint8_t> metadata,
-      const std::function<void (const zlink::routing_id_t &, zlink::submit_result_t)>
-        *failure_observer);
     std::shared_ptr<public_host_runtime_t> _host;
     stateful::object_ref_t _object;
 };
@@ -771,7 +762,9 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
                                          user_spot_close_completion_t completion);
 
     spot_handle_t entry_spot ();
+    task_t<spot_handle_t> entry_spot_async ();
     spot_handle_t get_or_create_spot (std::string spot_id);
+    task_t<spot_handle_t> get_or_create_spot_async (std::string spot_id);
     actor_handle_t create_actor (std::string actor_type, std::string actor_id);
     actor_handle_t create_reserved_actor (std::string actor_type, stateful::object_ref_t reserved);
     task_t<zlink::submit_result_t> send_to_actor (
@@ -1252,10 +1245,18 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     task_t<stateful::object_ref_t> accept_local_application (local_application_dispatch_t dispatch);
     void
     admit_local_application (local_application_dispatch_t dispatch,
-                             const std::shared_ptr<application_job_queue_t::waiter_t> &waiter = {});
+                             const std::shared_ptr<application_job_queue_t::waiter_t> &waiter = {},
+                             std::shared_ptr<task_completion_source_t<void>> admitted = {});
     std::function<void ()>
     local_request_wait_cleanup (const std::shared_ptr<application_job_queue_t::waiter_t> &waiter);
-    std::map<std::string, stateful::object_ref_t> _spots;
+    task_t<void>
+    enqueue_local_multicast (task_t<std::vector<stateful::object_ref_t>> target_snapshot,
+                             std::string channel_name,
+                             std::string topic,
+                             std::vector<zlink::message_t> parts,
+                             std::shared_ptr<const std::vector<std::uint8_t>> metadata,
+                             zlink::routing_id_t source_node,
+                             std::function<void ()> before_application_handler = {});
     std::map<std::string, std::pair<std::string, stateful::object_ref_t>> _actors;
     runtime::offload_executor_t _spot_actor_index_lane_executor;
     mutable runtime::state_lane_t _spot_actor_index_lane{_spot_actor_index_lane_executor};

@@ -79,8 +79,7 @@ bool spot_route_internal_dispatcher_t::can_handle_send (std::string_view packet_
 {
     return packet_name == actor_bound_session_route_request_t::packet_name
            || packet_name == spot_actor_commit_route_request_t::packet_name
-           || packet_name == spot_actor_leave_route_command_t::packet_name
-           || packet_name == spot_multicast_route_send_t::packet_name;
+           || packet_name == spot_actor_leave_route_command_t::packet_name;
 }
 
 bool spot_route_internal_dispatcher_t::can_handle_request (std::string_view packet_name) const
@@ -128,17 +127,6 @@ task_t<void> spot_route_internal_dispatcher_t::dispatch_send_task (
                                                            : "actor route send body missing");
     }
     try {
-        if (header.message_name == spot_multicast_route_send_t::packet_name) {
-            auto request = self._serializers->get<spot_multicast_route_send_t> ().deserialize (
-              detail::encoded_payload_from_raw (body.value ()));
-            std::vector<zlink::message_t> multicast_parts;
-            multicast_parts.push_back (zlink::message_t::from (std::move (request.frame)));
-            auto dispatched = co_await runtime::await_result (self._runtime.dispatch_multicast (
-              std::move (request.topic), multicast_parts, services, *self._serializers));
-            if (!dispatched)
-                std::rethrow_exception (dispatched.exception ());
-            co_return;
-        }
         if (header.message_name == spot_actor_commit_route_request_t::packet_name) {
             auto request =
               self._serializers->get<spot_actor_commit_route_request_t> ().deserialize (

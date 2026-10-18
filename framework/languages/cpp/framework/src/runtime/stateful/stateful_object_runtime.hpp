@@ -297,6 +297,7 @@ class stateful_object_runtime_t
 
     void replace_placement_candidates (std::vector<placement_candidate_t> candidates);
     create_result_t begin_create (const create_request_t &request);
+    task_t<create_result_t> begin_create_async (create_request_t request);
     create_result_t begin_reserved_object (const object_ref_t &reserved,
                                            const std::string &stable_type,
                                            std::vector<std::uint8_t> creation_request);
@@ -313,6 +314,7 @@ class stateful_object_runtime_t
                                             const object_ref_t &committed,
                                             const relocation_restore_identity_t &identity);
     stateful_error_t commit_create (std::uint64_t attempt);
+    task_t<stateful_error_t> commit_create_async (std::uint64_t attempt);
     stateful_error_t abort_create (std::uint64_t attempt);
     create_result_t activate_instance (create_request_t request,
                                        const std::function<bool (const object_ref_t &)> &factory);
@@ -322,6 +324,24 @@ class stateful_object_runtime_t
     find (object_kind_t kind,
           const std::string &key,
           std::optional<object_state_t> required_state = object_state_t::ready) const;
+    task_t<std::optional<object_ref_t>>
+    find_async (object_kind_t kind,
+                std::string key,
+                std::optional<object_state_t> required_state = object_state_t::ready) const;
+    std::optional<object_ref_t> resolve_spot (const std::string &key) const;
+    task_t<std::optional<object_ref_t>> resolve_spot_async (std::string key) const;
+    task_t<stateful_error_t> set_subscription_async (object_ref_t spot,
+                                                    std::string channel_name,
+                                                    std::string topic);
+    stateful_error_t set_subscription (const object_ref_t &spot,
+                                       const std::string &channel_name,
+                                       const std::string &topic);
+    void unset_subscription (const object_ref_t &spot,
+                             const std::string &channel_name,
+                             const std::string &topic);
+    task_t<std::vector<object_ref_t>> multicast_local_targets (std::string channel_name,
+                                                               std::string topic) const;
+    task_t<bool> contains_async (object_ref_t reference) const;
     // Observes the existing source seal; does not resolve Store authority.
     bool finalized_relocation_source (object_kind_t kind,
                                       const std::string &key,
@@ -360,8 +380,8 @@ class stateful_object_runtime_t
     std::vector<logical_timer_t> timers (const object_ref_t &owner) const;
     std::vector<object_inventory_t> inventory () const;
     task_t<std::vector<object_inventory_t>> actor_inventory () const;
-    std::optional<std::vector<object_inventory_t>> try_begin_maintenance_inventory ();
-    void end_maintenance_inventory () noexcept;
+    task_t<std::optional<std::vector<object_inventory_t>>> try_begin_maintenance_inventory ();
+    task_t<void> end_maintenance_inventory ();
     task_t<aggregate_relocation_seal_attempt_t>
     try_seal_relocation_aggregate (const std::vector<object_ref_t> &participants,
                                    std::stop_token cancellation = {},
@@ -459,6 +479,7 @@ class stateful_object_runtime_t
         std::optional<relocation_restore_identity_t> restore_identity;
         queue_t queue;
         std::map<std::uint64_t, logical_timer_t> timers;
+        std::set<std::pair<std::string, std::string>> subscriptions;
         std::uint64_t barrier_generation = 0;
     };
 

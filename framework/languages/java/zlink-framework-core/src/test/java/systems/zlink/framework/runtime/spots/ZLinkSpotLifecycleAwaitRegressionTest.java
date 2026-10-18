@@ -298,14 +298,15 @@ final class ZLinkSpotLifecycleAwaitRegressionTest {
     @ValueSource(booleans = {false, true})
     void closeStepYieldsOnlyForInfrastructure(boolean userCallback) throws Exception {
         var release = new CompletableFuture<Void>();
-        var prefixReturned = new CompletableFuture<Void>();
+        var stepPrefixReturned = new CompletableFuture<Void>();
         var observeTurn = new AtomicReference<Runnable>();
         var gateHeld = new AtomicBoolean();
         var queue =
                 new ZLinkSerialExecutionQueue(
                         command -> {
                             command.run();
-                            prefixReturned.complete(null);
+                            // The commit can yield before the step registers its continuation.
+                            if (observeTurn.get() != null) stepPrefixReturned.complete(null);
                         },
                         ZLinkExecutionLanePolicy.spot());
         var serials =
@@ -336,7 +337,7 @@ final class ZLinkSpotLifecycleAwaitRegressionTest {
                     serials.enqueueClose(
                             () -> coordinator.close().thenApply(ignored -> null),
                             coordinator::committed);
-            prefixReturned.get(BOUND_SECONDS, TimeUnit.SECONDS);
+            stepPrefixReturned.get(BOUND_SECONDS, TimeUnit.SECONDS);
             observeTurn.get().run();
             boolean retained = gateHeld.get();
             release.complete(null);

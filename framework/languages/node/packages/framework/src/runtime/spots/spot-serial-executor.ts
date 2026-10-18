@@ -124,7 +124,7 @@ export class ZLinkSpotSerialExecutor {
     operation: () => Promise<T> | T,
     workOptions?: ZLinkSerialWorkOptions
   ): Promise<T> {
-    return this.timerSerial(timerName).execute(operation, workOptions);
+    return this.timerSerial(timerName).post(operation, workOptions);
   }
 
   /** Admits held packets through the same Actor FIFO as ordinary ingress. */

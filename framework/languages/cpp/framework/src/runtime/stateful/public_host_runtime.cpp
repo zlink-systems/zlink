@@ -5,6 +5,7 @@
 #include "runtime/diagnostics/dispatch_error_reporter.hpp"
 
 #include "runtime/stateful/public_host_runtime.hpp"
+#include "runtime/mesh/service_channel_membership.hpp"
 #include "runtime/backend/raw_binding_adapter.hpp"
 #include <zlink/framework/contracts/detail/handler_invocation.hpp>
 #include "runtime/locations/live_location_reader.hpp"
@@ -25,6 +26,7 @@
 
 #include <service_wire_constants.hpp>
 #include <service_wire_pilot_codec.hpp>
+#include <service_wire_codec.hpp>
 
 #include <nlohmann/json.hpp>
 
@@ -738,110 +740,108 @@ spot_handle_t::request_to_spot (const zlink::routing_id_t &target_node_rid,
     }
 }
 
-zlink::submit_result_t spot_handle_t::publish (const std::string &channel_name,
-                                               const std::string &,
-                                               const std::vector<zlink::message_t> &parts,
-                                               zlink::send_flags_t,
-                                               std::span<const std::uint8_t> metadata)
-{
-    if (!_host)
-        return zlink::submit_result_t::invalid_handle;
-    const auto targets = _host->transport ().topology ().peers ();
-    const auto encoded = _host->encode_application (parts, metadata);
-    ready_record_t owner;
-    owner.owner_kind = owner_kind_t::node;
-    owner.domain = ready_domain_t::application;
-    receive_record_t local;
-    local.kind = record_kind_t::node_send;
-    local.domain = ready_domain_t::application;
-    local.source_node_rid = _host->status ().routing_id ();
-    _host->_local_dispatch_completion_lane
-      .run ([&] {
-          _host->admit_local_application (
-            local_application_dispatch_t{std::move (owner), std::move (local), parts});
-      })
-      .get ();
-    _host->_transport->signal_activity ();
-
-    // The public publish boundary owns only local dequeue acceptance. Physical
-    // fanout is scheduled by the logical multicast executor above this host.
-    return zlink::submit_result_t::ok;
-}
-
-task_t<void> spot_handle_t::publish_tail (const std::vector<zlink::message_t> &parts,
-                                          std::span<const std::uint8_t> metadata)
-{
-    co_await publish_tail_impl (parts, metadata, nullptr);
-}
-
-task_t<void> spot_handle_t::publish_tail (
-  const std::vector<zlink::message_t> &parts,
-  std::span<const std::uint8_t> metadata,
+task_t<void> spot_handle_t::publish (
+  std::string channel_name,
+  std::string topic,
+  std::vector<zlink::message_t> parts,
+  std::vector<std::uint8_t> metadata,
   std::function<void (const zlink::routing_id_t &, zlink::submit_result_t)> failure_observer)
-{
-    co_await publish_tail_impl (parts, metadata, &failure_observer);
-}
-
-task_t<void> spot_handle_t::publish_tail_impl (
-  const std::vector<zlink::message_t> &parts,
-  std::span<const std::uint8_t> metadata,
-  const std::function<void (const zlink::routing_id_t &, zlink::submit_result_t)> *failure_observer)
 {
     if (!_host) {
         throw framework_exception_t (framework_error_kind_t::invalid_operation,
                                      "logical multicast publisher is not connected");
     }
-    const auto targets = _host->transport ().topology ().peers ();
-    const auto encoded = _host->encode_application (parts, metadata);
+    const auto targets = _host->transport ().topology ().multicast_targets (channel_name);
+    const auto local_descriptor = _host->transport ().topology ().local_descriptor ();
+    std::optional<task_t<std::vector<stateful::object_ref_t>>> local_targets;
+    if (mesh::find_service_channel (local_descriptor, channel_name))
+        local_targets.emplace (_host->_objects.multicast_local_targets (channel_name, topic));
     std::exception_ptr first_failure;
-    for (const auto &target : targets) {
-        try {
-            const auto submitted = co_await _host->transport ().send_to_node_result (
-              target.descriptor.node_routing_id, encoded);
-            if (submitted != zlink::submit_result_t::ok && !first_failure) {
-                first_failure = std::make_exception_ptr (framework_exception_t (
-                  runtime::messaging::map_submit_result_error_kind (submitted),
-                  "logical multicast physical fanout was not admitted"));
-            }
-            if (submitted != zlink::submit_result_t::ok && failure_observer != nullptr) {
-                (*failure_observer) (zlink::routing_id_t::from (target.descriptor.node_routing_id),
-                                     submitted);
-            }
-        }
-        catch (...) {
-            if (failure_observer != nullptr) {
-                auto submitted = zlink::submit_result_t::not_connected;
-                try {
-                    throw;
+    if (!targets.empty ()) {
+        const auto encoded = _host->encode_application (parts);
+        for (const auto &target : targets) {
+            try {
+                const auto submitted = co_await _host->transport ().send_logical_multicast (
+                  target.descriptor.node_routing_id, channel_name, topic, _object.key, encoded,
+                  metadata);
+                if (submitted != zlink::submit_result_t::ok && !first_failure) {
+                    first_failure = std::make_exception_ptr (framework_exception_t (
+                      runtime::messaging::map_submit_result_error_kind (submitted),
+                      "logical multicast physical fanout was not admitted"));
                 }
-                catch (const framework_exception_t &error) {
-                    if (detail::boundary_state (error) == detail::boundary_error_t::shutdown) {
-                        submitted = zlink::submit_result_t::terminated;
-                    } else if (detail::boundary_state (error)
-                               == detail::boundary_error_t::timed_out) {
-                        submitted = zlink::submit_result_t::backpressured;
+                if (submitted != zlink::submit_result_t::ok && failure_observer) {
+                    failure_observer (zlink::routing_id_t::from (target.descriptor.node_routing_id),
+                                      submitted);
+                }
+            }
+            catch (...) {
+                if (failure_observer) {
+                    auto submitted = zlink::submit_result_t::not_connected;
+                    try {
+                        throw;
                     }
+                    catch (const framework_exception_t &error) {
+                        if (detail::boundary_state (error) == detail::boundary_error_t::shutdown) {
+                            submitted = zlink::submit_result_t::terminated;
+                        } else if (detail::boundary_state (error)
+                                   == detail::boundary_error_t::timed_out) {
+                            submitted = zlink::submit_result_t::backpressured;
+                        }
+                    }
+                    catch (...) {
+                    }
+                    failure_observer (zlink::routing_id_t::from (target.descriptor.node_routing_id),
+                                      submitted);
                 }
-                catch (...) {
-                }
-                (*failure_observer) (zlink::routing_id_t::from (target.descriptor.node_routing_id),
-                                     submitted);
+                if (!first_failure)
+                    first_failure = std::current_exception ();
             }
-            if (!first_failure)
-                first_failure = std::current_exception ();
         }
+    }
+    if (local_targets) {
+        auto local_metadata =
+          metadata.empty ()
+            ? std::shared_ptr<const std::vector<std::uint8_t>>{}
+            : std::make_shared<const std::vector<std::uint8_t>> (std::move (metadata));
+        co_await _host->enqueue_local_multicast (
+          std::move (*local_targets), std::move (channel_name), std::move (topic),
+          std::move (parts), std::move (local_metadata),
+          zlink::routing_id_t::from (local_descriptor.node_routing_id));
     }
     if (first_failure)
         std::rethrow_exception (first_failure);
-    co_return;
 }
 
-void spot_handle_t::set_subscription (const std::string &, const std::string &)
+void spot_handle_t::set_subscription (const std::string &channel_name, const std::string &topic)
 {
+    set_subscription_async (channel_name, topic).get ();
 }
 
-void spot_handle_t::unset_subscription (const std::string &, const std::string &)
+task_t<void> spot_handle_t::set_subscription_async (std::string channel_name, std::string topic)
 {
+    const auto host = _host;
+    if (!host) {
+        throw framework_exception_t (framework_error_kind_t::invalid_operation,
+                                     "logical multicast subscriber is not connected");
+    }
+    const auto descriptor = host->transport ().topology ().local_descriptor ();
+    if (!mesh::find_service_channel (descriptor, channel_name)) {
+        throw framework_exception_t (framework_error_kind_t::invalid_operation,
+                                     "SPOT does not participate in subscription channel: "
+                                       + channel_name);
+    }
+    if (co_await host->_objects.set_subscription_async (_object, std::move (channel_name),
+                                                     std::move (topic))
+        != stateful::stateful_error_t::none)
+        throw framework_exception_t (framework_error_kind_t::invalid_operation,
+                                     "logical multicast subscriber is no longer registered");
+}
+
+void spot_handle_t::unset_subscription (const std::string &channel_name, const std::string &topic)
+{
+    if (!_host)
+        return;
+    _host->_objects.unset_subscription (_object, channel_name, topic);
 }
 
 bool spot_handle_t::close () noexcept
@@ -1276,10 +1276,8 @@ void public_host_runtime_t::set_channel_weight (const std::string &channel_name,
         throw std::invalid_argument ("channel weight exceeds 10000");
     }
     auto descriptor = _transport->topology ().local_descriptor ();
-    const auto found =
-      std::find_if (descriptor.channels.begin (), descriptor.channels.end (),
-                    [&] (const auto &channel) { return channel.name == channel_name; });
-    if (found == descriptor.channels.end ()) {
+    const auto found = mesh::find_service_channel (descriptor, channel_name);
+    if (!found) {
         throw std::invalid_argument ("channel is not registered");
     }
     found->weight = weight;
@@ -1494,17 +1492,16 @@ template <typename T> result_t<bool> close_store_failure (const result_t<T> &fai
 }
 
 /* Step 4: deletes the Closing authority with the same owner and generation
- * fence (the Closing StoreVersion). `after_delete` runs once the row is gone. */
+ * fence (the Closing StoreVersion). */
 std::function<task_t<bool> ()>
 release_closing_authority (std::shared_ptr<zlink::framework::location_repository_t> store,
                            authority_key_t authority_key,
                            std::string closing_version,
-                           std::function<result_t<bool> ()> before_delete,
-                           std::function<void ()> after_delete)
+                           std::function<result_t<bool> ()> before_delete)
 {
     return [store = std::move (store), authority_key = std::move (authority_key),
             closing_version = std::move (closing_version),
-            before_delete = std::move (before_delete), after_delete = std::move (after_delete)] () {
+            before_delete = std::move (before_delete)] () {
         auto completion = std::make_shared<task_completion_source_t<bool>> ();
         auto output = completion->task ();
         if (before_delete) {
@@ -1516,7 +1513,7 @@ release_closing_authority (std::shared_ptr<zlink::framework::location_repository
         }
         after_close_step (
           store->compare_exchange_authority (authority_key, closing_version, authority_delete_t{}),
-          {}, [completion, after_delete] (result_t<authority_compare_exchange_result_t> deleted) {
+          {}, [completion] (result_t<authority_compare_exchange_result_t> deleted) {
               if (!deleted) {
                   completion->complete (close_store_failure (deleted));
                   return;
@@ -1526,8 +1523,6 @@ release_closing_authority (std::shared_ptr<zlink::framework::location_repository
                     framework_error_kind_t::internal_failure, "Spot authority release failed"));
                   return;
               }
-              if (after_delete)
-                  after_delete ();
               completion->complete (result_t<bool>::success (true));
           });
         return output;
@@ -1613,11 +1608,11 @@ public_host_runtime_t::begin_instance_spot_close (const std::string &stable_type
               complete_close_step (
                 completion,
                 {result_t<bool>::success (true),
-                 release_closing_authority (store, authority_key, snapshot->store_version, {}, {}),
+                 release_closing_authority (store, authority_key, snapshot->store_version, {}),
                  reincarnate_closing_authority (store, authority_key, snapshot->store_version,
                                                 ready_payload),
                  [store, authority_key] (const authority_snapshot_t &next) {
-                     return release_closing_authority (store, authority_key, next.store_version, {},
+                     return release_closing_authority (store, authority_key, next.store_version,
                                                        {}) ();
                  }});
               return;
@@ -1657,12 +1652,12 @@ public_host_runtime_t::begin_instance_spot_close (const std::string &stable_type
                   completion,
                   {result_t<bool>::success (true),
                    release_closing_authority (store, authority_key, closing->snapshot.store_version,
-                                              {}, {}),
+                                              {}),
                    reincarnate_closing_authority (store, authority_key,
                                                   closing->snapshot.store_version, ready_payload),
                    [store, authority_key] (const authority_snapshot_t &next) {
                        return release_closing_authority (store, authority_key, next.store_version,
-                                                         {}, {}) ();
+                                                         {}) ();
                    }});
             });
       });
@@ -1788,11 +1783,10 @@ public_host_runtime_t::begin_user_spot_close (protocol::user_spot_close_fence_t 
             exact_ref, snapshot->allocation.stable_type, snapshot->allocation.target);
 
           // Step 4 releases the local object record, then the authority row.
-          const auto release_from = [self, store, authority_key, key = exact_ref.key] (
-                                      std::string closing_version, stateful::object_ref_t ref) {
+          const auto release_from = [self, store, authority_key] (std::string closing_version,
+                                                                  stateful::object_ref_t ref) {
               return release_closing_authority (
-                store, authority_key, std::move (closing_version),
-                [self, ref] {
+                store, authority_key, std::move (closing_version), [self, ref] {
                     // The record that the Closing commit sealed is found by its
                     // exact ref, so a resumed Close retries a failed release.
                     const auto [error, closed] = self->_objects.close_spot (ref);
@@ -1801,9 +1795,6 @@ public_host_runtime_t::begin_user_spot_close (protocol::user_spot_close_fence_t 
                         return result_t<bool>::failure (framework_error_kind_t::internal_failure,
                                                         "User Spot record release failed");
                     return result_t<bool>::success (true);
-                },
-                [self, key] {
-                    self->_spot_actor_index_lane.run ([&] { self->_spots.erase (key); }).get ();
                 });
           };
 
@@ -2643,22 +2634,23 @@ spot_handle_t public_host_runtime_t::entry_spot ()
     return get_or_create_spot (_entry_spot_id);
 }
 
+task_t<spot_handle_t> public_host_runtime_t::entry_spot_async ()
+{
+    return get_or_create_spot_async (_entry_spot_id);
+}
+
 spot_handle_t public_host_runtime_t::get_or_create_spot (std::string spot_id)
 {
+    return get_or_create_spot_async (std::move (spot_id)).get ();
+}
+
+task_t<spot_handle_t> public_host_runtime_t::get_or_create_spot_async (std::string spot_id)
+{
     const auto &key = spot_id;
-    const auto existing = _spot_actor_index_lane
-                            .run ([&] () -> std::optional<stateful::object_ref_t> {
-                                const auto found = _spots.find (key);
-                                if (found != _spots.end ()) {
-                                    return found->second;
-                                }
-                                return std::nullopt;
-                            })
-                            .get ();
-    if (existing)
-        return spot_handle_t (shared_from_this (), *existing);
+    if (const auto existing = co_await _objects.resolve_spot_async (key))
+        co_return spot_handle_t (shared_from_this (), *existing);
     auto created =
-      _objects.begin_create (stateful::create_request_t{stateful::object_kind_t::user_spot,
+      co_await _objects.begin_create_async (stateful::create_request_t{stateful::object_kind_t::user_spot,
                                                         key,
                                                         "framework.spot",
                                                         _options.mesh.descriptor.mesh_name,
@@ -2669,27 +2661,19 @@ spot_handle_t public_host_runtime_t::get_or_create_spot (std::string spot_id)
         throw std::runtime_error ("framework Spot authority creation failed");
     }
     if (created.factory_owner
-        && _objects.commit_create (created.attempt) != stateful::stateful_error_t::none) {
+        && co_await _objects.commit_create_async (created.attempt) != stateful::stateful_error_t::none) {
         throw std::runtime_error ("framework Spot Ready commit failed");
     }
-    auto object = _objects.find (stateful::object_kind_t::user_spot, key);
+    auto object = co_await _objects.find_async (stateful::object_kind_t::user_spot, key);
     if (!object) {
         throw std::runtime_error ("framework Spot authority is unavailable");
     }
-    _spot_actor_index_lane.run ([&] { _spots.insert_or_assign (key, *object); }).get ();
-    return spot_handle_t (shared_from_this (), *object);
+    co_return spot_handle_t (shared_from_this (), *object);
 }
 
 spot_handle_t public_host_runtime_t::bind_relocation_spot (stateful::object_ref_t object)
 {
-    const auto bound = _spot_actor_index_lane
-                         .run ([&] {
-                             const auto [found, _] =
-                               _spots.insert_or_assign (object.key, std::move (object));
-                             return found->second;
-                         })
-                         .get ();
-    return spot_handle_t (shared_from_this (), bound);
+    return spot_handle_t (shared_from_this (), std::move (object));
 }
 
 stateful::stateful_error_t
@@ -6413,9 +6397,6 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                                   protocol::user_spot_create_result_t::rejected, {}, 0);
                         continue;
                     }
-                    _spot_actor_index_lane
-                      .run ([&] { _spots.insert_or_assign (exact_ref.key, exact_ref); })
-                      .get ();
                     co_await preparation_terminal.finish ();
                     terminal (static_cast<std::uint32_t> (protocol::request_terminal_result::ok), 0,
                               protocol::user_spot_create_result_t::created, request.spot_id,
@@ -6706,6 +6687,19 @@ public_host_runtime_t::dispatch_ready (mesh::service_mailbox_t::application_disp
                     break;
                 if (skip)
                     continue;
+                if (pending->record.kind == record_kind_t::spot_multicast
+                    && pending->record.spot_route) {
+                    const auto &target = *pending->record.spot_route;
+                    const stateful::object_ref_t reference{
+                      stateful::object_kind_t::user_spot,
+                      target.spot_id,
+                      target.object_generation,
+                      target.authority_owner_generation,
+                      _options.mesh.descriptor.mesh_name,
+                      zlink::routing_id_t::from (target.target_node_routing_id).to_string ()};
+                    if (!co_await _objects.contains_async (reference))
+                        continue;
+                }
                 co_await dispatch (pending->owner, pending->record, std::move (pending->parts));
                 ++count;
                 application_dispatch_started = true;
@@ -6996,10 +6990,37 @@ task_t<std::size_t> public_host_runtime_t::dispatch_application_claim (
                     release_mailbox_reservation ();
                 continue;
             }
-            if (mailbox_record.parts.size () != 2)
-                throw protocol::service_wire_error_t ("application wire requires two parts");
             const auto wire =
               protocol::decode_header (protocol::message_bytes (mailbox_record.parts.front ()));
+            if (wire.kind == protocol::command::logicalMulticast) {
+                namespace generated = protocol::generated::detail;
+                generated::logicalMulticast_23_t multicast;
+                generated::reader_t reader (
+                  protocol::message_bytes (mailbox_record.parts.front ()));
+                if (generated::decode_head_logicalMulticast_23 (reader, multicast)
+                    != generated::error_code::ok)
+                    throw protocol::service_wire_error_t ("invalid logical multicast frame");
+                auto targets = _objects.multicast_local_targets (multicast.channelName.value,
+                                                                 multicast.topic.value);
+                auto metadata =
+                  (multicast.flags & static_cast<std::uint8_t> (protocol::flag::metadata)) == 0
+                    ? std::shared_ptr<const std::vector<std::uint8_t>>{}
+                    : std::make_shared<const std::vector<std::uint8_t>> (
+                        mailbox_record.parts[1].to_bytes ());
+                auto parts =
+                  protocol::decode_application_parts (std::move (mailbox_record.parts.back ()));
+                auto pending = std::make_shared<task_t<void>> (enqueue_local_multicast (
+                  std::move (targets), std::move (multicast.channelName.value),
+                  std::move (multicast.topic.value), std::move (parts), std::move (metadata),
+                  zlink::routing_id_t::from (mailbox_record.source_routing_id),
+                  std::move (mailbox_record.before_application_handler)));
+                detail::observe_task_completion (
+                  *pending, [self = shared_from_this (), pending] (const result_t<void> &) {});
+                ++count;
+                if (!release_state->retained (index))
+                    release_mailbox_reservation ();
+                continue;
+            }
             if (wire.kind == protocol::command::boundSessionSend) {
                 // The outbound stream delivery is a transport handoff, not an application handler.
                 mailbox_record.before_application_handler = {};
@@ -7338,13 +7359,7 @@ public_host_runtime_t::resolve_actor (std::string_view actor_id) const
 std::optional<stateful::object_ref_t>
 public_host_runtime_t::resolve_spot (const std::string &spot_id) const
 {
-    return _spot_actor_index_lane
-      .run ([&] {
-          const auto found = _spots.find (spot_id);
-          return found == _spots.end () ? std::optional<stateful::object_ref_t>{}
-                                        : std::make_optional (found->second);
-      })
-      .get ();
+    return _objects.resolve_spot (spot_id);
 }
 
 protocol::application_payload_t
@@ -7705,45 +7720,119 @@ public_host_runtime_t::accept_local_application (local_application_dispatch_t di
     co_return *owner;
 }
 
+task_t<void> public_host_runtime_t::enqueue_local_multicast (
+  task_t<std::vector<stateful::object_ref_t>> target_snapshot,
+  std::string channel_name,
+  std::string topic,
+  std::vector<zlink::message_t> parts,
+  std::shared_ptr<const std::vector<std::uint8_t>> metadata,
+  zlink::routing_id_t source_node,
+  std::function<void ()> before_application_handler)
+{
+    const auto targets = co_await target_snapshot;
+    const auto local = _transport->topology ().local_descriptor ();
+    for (const auto &target : targets) {
+        if (!co_await _objects.contains_async (target))
+            continue;
+        ready_record_t owner;
+        owner.owner_kind = owner_kind_t::spot;
+        owner.domain = ready_domain_t::application;
+        owner.spot_id = target.key;
+        receive_record_t record;
+        record.kind = record_kind_t::spot_multicast;
+        record.source_node_rid = source_node;
+        record.channel_name = channel_name;
+        record.topic = topic;
+        record.spot_route = protocol::spot_route_fence_t{
+          target.key, target.object_generation, local.node_routing_id, local.lifecycle_generation,
+          target.authority_owner_generation};
+        record.metadata = metadata;
+        record.before_application_handler = std::move (before_application_handler);
+        auto completion = _options.mesh.application_jobs
+                            ? std::make_shared<task_completion_source_t<void>> ()
+                            : std::shared_ptr<task_completion_source_t<void>>{};
+        const auto enqueue = [&] {
+            admit_local_application (
+              local_application_dispatch_t{std::move (owner), std::move (record), parts}, {},
+              completion);
+        };
+        if (_local_dispatch_completion_lane.is_on_lane ())
+            enqueue ();
+        else
+            co_await _local_dispatch_completion_lane.run_task (enqueue);
+        _transport->signal_activity ();
+        if (completion)
+            co_await completion->task ();
+    }
+}
+
 void public_host_runtime_t::admit_local_application (
   local_application_dispatch_t dispatch,
-  const std::shared_ptr<application_job_queue_t::waiter_t> &waiter)
+  const std::shared_ptr<application_job_queue_t::waiter_t> &waiter,
+  std::shared_ptr<task_completion_source_t<void>> admitted)
 {
-    if (!_options.mesh.application_jobs) {
+    if (!_options.mesh.application_jobs || dispatch.record.before_application_handler) {
         publish_local_application (std::move (dispatch));
+        if (admitted)
+            admitted->complete (result_t<void>::success ());
         return;
     }
     auto pending = waiter ? waiter : std::make_shared<application_job_queue_t::waiter_t> ();
     std::weak_ptr<public_host_runtime_t> weak = shared_from_this ();
     *pending = _options.mesh.application_jobs->wait_for_supply (
-      [weak, waiter = pending, dispatch = std::move (dispatch)] (
-        std::optional<application_job_queue_t::permit_t> reserved) mutable {
+      [weak, waiter = pending, dispatch = std::move (dispatch),
+       admitted] (std::optional<application_job_queue_t::permit_t> reserved) mutable {
           auto waiting = std::move (waiter);
-          if (!reserved)
+          if (!reserved) {
+              if (admitted)
+                  admitted->complete (
+                    result_t<void>::failure (framework_error_kind_t::unavailable,
+                                             "application queue stopped before admission"));
               return;
+          }
           auto host = weak.lock ();
-          if (!host)
+          if (!host) {
+              if (admitted)
+                  admitted->complete (
+                    result_t<void>::failure (framework_error_kind_t::unavailable,
+                                             "application owner closed before admission"));
               return;
+          }
           auto permit = std::make_shared<application_job_queue_t::permit_t> (std::move (*reserved));
-          auto publish = [weak, waiting, permit, dispatch = std::move (dispatch)] () mutable {
+          auto publish = [weak, waiting, permit, dispatch = std::move (dispatch),
+                          admitted] () mutable {
               *waiting = {};
               auto host = weak.lock ();
-              if (!host || !host->_transport->started ())
+              if (!host || !host->_transport->started ()) {
+                  if (admitted)
+                      admitted->complete (
+                        result_t<void>::failure (framework_error_kind_t::unavailable,
+                                                 "application owner closed before admission"));
                   return;
+              }
               if (uses_local_operation_registry (dispatch.record.kind)
-                  && !host->_transport->operation_pending (dispatch.record.operation_id))
+                  && !host->_transport->operation_pending (dispatch.record.operation_id)) {
+                  if (admitted)
+                      admitted->complete (
+                        result_t<void>::failure (framework_error_kind_t::unavailable,
+                                                 "application operation ended before admission"));
                   return;
+              }
               permit->mark_queued ();
               dispatch.record.before_application_handler = [permit] {
                   permit->release_for_handler_entry ();
               };
               host->publish_local_application (std::move (dispatch));
               host->_transport->signal_activity ();
+              if (admitted)
+                  admitted->complete (result_t<void>::success ());
           };
           if (host->_local_dispatch_completion_lane.is_on_lane ())
               publish ();
-          else
-              host->_local_dispatch_completion_lane.try_post (std::move (publish));
+          else if (!host->_local_dispatch_completion_lane.try_post (std::move (publish))
+                   && admitted)
+              admitted->complete (result_t<void>::failure (framework_error_kind_t::unavailable,
+                                                           "application admission lane closed"));
       },
       application_job_queue_t::origin_t::local);
 }

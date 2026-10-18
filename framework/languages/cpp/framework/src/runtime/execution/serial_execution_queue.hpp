@@ -155,6 +155,7 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
     using error_handler_t = std::function<void (const std::string &, const std::exception_ptr &)>;
     using async_completion_t = std::function<void (std::function<void ()>)>;
     using async_work_t = std::function<void (async_completion_t)>;
+    using cancellation_t = std::function<void (serial_cancel_submission_outcome_t)>;
 
     serial_execution_queue_t (
       offload_executor_t &executor,
@@ -181,6 +182,11 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
     try_post_cancellable_async (std::string name,
                                 async_work_t work,
                                 std::function<void ()> cancel,
+                                serial_work_options_t options = {});
+    result_t<serial_submission_id_t>
+    try_post_cancellable_async (std::string name,
+                                async_work_t work,
+                                cancellation_t cancel,
                                 serial_work_options_t options = {});
     task_t<serial_cancel_submission_outcome_t>
     cancel_submission (serial_submission_id_t submission_id);
@@ -244,7 +250,7 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
         serial_work_lane_t lane = serial_work_lane_t::application;
         std::size_t byte_cost = fixed_work_byte_cost;
         serial_submission_id_t submission_id = 0;
-        std::function<void ()> cancel;
+        cancellation_t cancel;
         std::shared_ptr<serial_turn_handle_impl_t> turn;
         bool cancel_requested = false;
         std::optional<std::function<void ()>> suspended_completion;
@@ -281,7 +287,7 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
     {
         serial_submission_id_t submission_id = 0;
         std::shared_ptr<serial_turn_handle_impl_t> turn;
-        std::function<void ()> cancel;
+        cancellation_t cancel;
         async_work_t ready_continuation;
         bool cancel_requested = false;
     };
@@ -369,7 +375,7 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
                                          std::function<void ()> cancel,
                                          std::function<void (const result_t<void> &)> released);
     void cancel_pending_work (const std::shared_ptr<serial_application_record_t> &record,
-                              const std::function<void ()> &cancel) noexcept;
+                              const cancellation_t &cancel) noexcept;
     serial_cancel_submission_outcome_t
     cancel_submission_owned (serial_submission_id_t submission_id) noexcept;
     std::shared_ptr<const void> first_pending_message_or_close_owned ();
@@ -410,7 +416,7 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
                          async_work_t work,
                          serial_work_options_t options,
                          serial_submission_id_t submission_id = 0,
-                         std::function<void ()> cancel = {},
+                         cancellation_t cancel = {},
                          item_origin_t origin = {});
     /* A lifecycle operation that released its turn (Yield) keeps the lifecycle
      * lane until its terminal (§7): only its own continuation runs there. */

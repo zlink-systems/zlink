@@ -34,7 +34,7 @@ import java.util.function.Predicate;
 final class ZLinkRelocationObservationPublicTest {
     private static final String MESH = "observation";
     private static final String RELOCATION_FLOW = "01900000-0000-7000-8000-000000001882";
-    private static final Duration WAIT = Duration.ofSeconds(15);
+    static final Duration WAIT = Duration.ofSeconds(15);
     private static CompletableFuture<ZLinkActorJoinCompletion> joined;
     private static CompletableFuture<ZLinkSessionContext> connected;
     private static CompletableFuture<String> relayed;
@@ -492,14 +492,14 @@ final class ZLinkRelocationObservationPublicTest {
         return options;
     }
 
-    private static <T> Observation<T> observe(
+    static <T> Observation<T> observe(
             Flow.Publisher<ZLinkObservedStatus<T>> publisher, Predicate<T> predicate) {
         var observation = new Observation<T>(predicate);
         publisher.subscribe(observation);
         return observation;
     }
 
-    private static final class Observation<T>
+    static final class Observation<T>
             implements Flow.Subscriber<ZLinkObservedStatus<T>>, AutoCloseable {
         final CompletableFuture<T> result = new CompletableFuture<>();
         private final Predicate<T> predicate;

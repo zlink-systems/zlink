@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 
 #include <zlink/framework/contracts/dispatch/task.hpp>
+#include <zlink/framework.hpp>
 
 #include "runtime/dispatch/coroutine_executor.hpp"
 
@@ -13,6 +14,7 @@
 #include <iostream>
 #include <new>
 #include <stdexcept>
+#include <string>
 #include <thread>
 #include <utility>
 
@@ -148,6 +150,39 @@ std::size_t measure_task_wait_resumption ()
     return allocations;
 }
 
+struct allocation_spot_t
+{
+    std::size_t calls = 0;
+    void on_packet (const std::string &) { ++calls; }
+};
+
+std::size_t measure_spot_dispatch ()
+{
+    using namespace zlink::framework;
+    service_collection_t services;
+    auto provider = services.build_provider ();
+    serializer_registry_t serializers;
+    spot_handler_registry_t registry;
+    registry.add_handler<&allocation_spot_t::on_packet> ("allocation-packet");
+    allocation_spot_t spot;
+    const auto payload = zlink::message_t::from (std::string ("payload"));
+    const auto invoke = [&] {
+        auto result =
+          registry.invoke_packet ("allocation-packet", spot, provider, serializers, payload);
+        if (!result)
+            throw std::runtime_error (result.error ()->what ());
+    };
+    invoke ();
+    constexpr std::size_t dispatches = 100;
+    const auto allocations = count_allocations ([&] {
+        for (std::size_t index = 0; index < dispatches; ++index)
+            invoke ();
+    });
+    if (spot.calls != dispatches + 1)
+        throw std::runtime_error ("ordinary Spot dispatch did not invoke each handler once");
+    return allocations;
+}
+
 bool exceeds_main_baseline (const char *variable, std::size_t observed)
 {
     const char *const text = std::getenv (variable);
@@ -241,16 +276,20 @@ int main ()
     (void) measure_task_wait_resumption ();
     const std::size_t native = measure_native_completion ();
     const std::size_t task_wait = measure_task_wait_resumption ();
+    const std::size_t spot_dispatch = measure_spot_dispatch ();
 
     zlink::framework::runtime::shutdown_handler_coroutine_executor ();
     zlink::framework::detail::set_runtime_execution_hooks (nullptr);
     zlink::framework::detail::set_ambient_context_hooks (nullptr);
 
     std::cout << "allocation probe=" << probe << " function-copy-probe=" << function_copy_probe
-              << " native-completion=" << native << " task-wait-resumption=" << task_wait << '\n';
+              << " native-completion=" << native << " task-wait-resumption=" << task_wait
+              << " spot-dispatches=100 spot-dispatch-allocations=" << spot_dispatch << '\n';
     const bool native_regressed =
       exceeds_main_baseline ("ZLINK_EXPECT_MAIN_NATIVE_COMPLETION_ALLOCATIONS", native);
     const bool task_wait_regressed =
       exceeds_main_baseline ("ZLINK_EXPECT_MAIN_TASK_WAIT_ALLOCATIONS", task_wait);
-    return native_regressed || task_wait_regressed ? 2 : 0;
+    const bool spot_dispatch_regressed =
+      exceeds_main_baseline ("ZLINK_EXPECT_MAIN_SPOT_DISPATCH_ALLOCATIONS", spot_dispatch);
+    return native_regressed || task_wait_regressed || spot_dispatch_regressed ? 2 : 0;
 }

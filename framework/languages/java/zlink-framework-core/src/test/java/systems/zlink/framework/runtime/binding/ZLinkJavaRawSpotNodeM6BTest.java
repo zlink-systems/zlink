@@ -394,6 +394,9 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                 var node = new ZLinkJavaRawMeshNode(context, "mesh")) {
             RoutingId nodeRid = RoutingId.from("jvm-m6b-actor-content-type-node");
             node.setRoutingId(nodeRid);
+            node.setBind("inproc://" + nodeRid);
+            node.start();
+            installLocalActorAuthority(node);
             CompletableFuture<String> receivedContentType = new CompletableFuture<>();
             ZLinkBackendSpot entry = node.spotNode().entrySpot();
             entry.onDispatchEvent(
@@ -423,7 +426,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                 assertTrue(
                         node.spotNode()
                                 .sendToActor(
-                                        actor,
+                                        actorRoute(node, actor),
                                         List.of(packet, payload, contentType),
                                         SendFlags.DONT_WAIT));
                 assertEquals("application/example", receivedContentType.get(1, TimeUnit.SECONDS));
@@ -485,6 +488,8 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             RoutingId sourceRid = RoutingId.from("jvm-m6b-owner-source");
             String spotId = "jvm-m6b-owner-spot";
             node.setRoutingId(nodeRid);
+            node.setBind("inproc://" + nodeRid);
+            node.start();
             ZLinkJavaRawSpotNode spots = (ZLinkJavaRawSpotNode) node.spotNode();
             ZLinkBackendSpot spot = spots.createSpot(spotId);
             spot.rememberSpotAuthority(nodeRid, spotId, spot.lifecycleGeneration(), 31, 1);
@@ -495,7 +500,12 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                             null,
                             sourceRid.toString(),
                             new ZLinkServiceM6BWireCodec.SpotRouteFence(
-                                    spotId, spot.lifecycleGeneration(), nodeRid, 1, 32, 1));
+                                    spotId,
+                                    spot.lifecycleGeneration(),
+                                    nodeRid,
+                                    node.lifecycleGeneration(),
+                                    32,
+                                    1));
             assertFalse(
                     spots.enqueueRemoteSpot(
                             sourceRid, staleSpot, new byte[0], List.of(), ignored -> {}));
@@ -511,7 +521,8 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                             0,
                             null,
                             null,
-                            new ZLinkServiceM6BWireCodec.ActorRouteFence(actor, 1, 42, 1));
+                            new ZLinkServiceM6BWireCodec.ActorRouteFence(
+                                    actor, node.lifecycleGeneration(), 42, 1));
             assertFalse(spots.enqueueRemoteActor(sourceRid, staleActor, List.of(), ignored -> {}));
         }
     }
@@ -657,7 +668,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                                 Message.from("suffix-" + index));
                 try {
                     caller.spotNode()
-                            .sendToActorAsync(sourceRoute.actor(), parts)
+                            .sendToActorAsync(sourceRoute, parts)
                             .toCompletableFuture()
                             .get(1, TimeUnit.SECONDS);
                 } finally {
@@ -678,7 +689,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             pendingReply =
                     caller.spotNode()
                             .requestToActor(
-                                    sourceRoute.actor(),
+                                    sourceRoute,
                                     requestParts,
                                     SendFlags.DONT_WAIT,
                                     Duration.ofSeconds(3),
@@ -1035,6 +1046,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             node.setRoutingId(nodeRid);
             node.setBind("inproc://jvm-actor-dispatch-failure-" + System.nanoTime());
             node.start();
+            installLocalActorAuthority(node);
 
             ZLinkJavaRawSpotNode spots = (ZLinkJavaRawSpotNode) node.spotNode();
             ZLinkBackendActorRef actor;
@@ -1101,7 +1113,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             AtomicInteger localTerminals = new AtomicInteger();
             CompletionStage<Void> local;
             try (Message payload = Message.from("local-send")) {
-                local = spots.sendToActorAsync(actor, List.of(payload));
+                local = spots.sendToActorAsync(actorRoute(node, actor), List.of(payload));
             }
             ExecutionException localFailure =
                     assertThrows(
@@ -1119,7 +1131,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             try (Message payload = Message.from("local-request")) {
                 localRequest =
                         spots.requestToActor(
-                                actor,
+                                actorRoute(node, actor),
                                 List.of(payload),
                                 SendFlags.DONT_WAIT,
                                 Duration.ofSeconds(1),
@@ -1686,6 +1698,9 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                 var node = new ZLinkJavaRawMeshNode(context, "mesh")) {
             RoutingId nodeRid = RoutingId.from("jvm-m6b-actor-node");
             node.setRoutingId(nodeRid);
+            node.setBind("inproc://" + nodeRid);
+            node.start();
+            installLocalActorAuthority(node);
             ZLinkBackendSpot entry = node.spotNode().entrySpot();
             entry.onDispatchEvent(
                     info -> {
@@ -1720,7 +1735,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                 reply =
                         node.spotNode()
                                 .requestToActor(
-                                        actor,
+                                        actorRoute(node, actor),
                                         List.of(request),
                                         SendFlags.DONT_WAIT,
                                         Duration.ofSeconds(1),
@@ -1737,9 +1752,12 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                 assertTrue(
                         node.spotNode()
                                 .sendToActor(
-                                        new systems.zlink.framework.runtime.internal.backend
-                                                .ZLinkBackendActorRef(
-                                                nodeRid, actor.actorId(), actor.generation() + 1),
+                                        actorRoute(
+                                                node,
+                                                new ZLinkBackendActorRef(
+                                                        nodeRid,
+                                                        actor.actorId(),
+                                                        actor.generation() + 1)),
                                         List.of(staleAddress),
                                         SendFlags.DONT_WAIT));
             }
@@ -1752,6 +1770,9 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                 var node = new ZLinkJavaRawMeshNode(context, "mesh")) {
             RoutingId nodeRid = RoutingId.from("jvm-m6b-actor-reply-after-move");
             node.setRoutingId(nodeRid);
+            node.setBind("inproc://" + nodeRid);
+            node.start();
+            installLocalActorAuthority(node);
             CompletableFuture<
                             systems.zlink.framework.runtime.internal.backend
                                     .ZLinkBackendActorReceived>
@@ -1774,7 +1795,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                 request =
                         node.spotNode()
                                 .requestToActor(
-                                        actor,
+                                        actorRoute(node, actor),
                                         List.of(payload),
                                         SendFlags.DONT_WAIT,
                                         Duration.ofSeconds(2),
@@ -1881,7 +1902,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                 firstRequest =
                         right.spotNode()
                                 .requestToActor(
-                                        actor,
+                                        actorRoute(left, actor),
                                         List.of(request),
                                         SendFlags.DONT_WAIT,
                                         Duration.ofSeconds(2),
@@ -1921,7 +1942,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                 reply =
                         right.spotNode()
                                 .requestToActor(
-                                        staleAddress,
+                                        actorRoute(left, staleAddress),
                                         List.of(request),
                                         SendFlags.DONT_WAIT,
                                         Duration.ofSeconds(2),
@@ -3749,6 +3770,29 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                         ignored -> {})
                 .toCompletableFuture()
                 .join();
+    }
+
+    private static void installLocalActorAuthority(ZLinkJavaRawMeshNode node) {
+        node.setPeerAuthorityResolver(
+                (mesh, rid, generation) ->
+                        CompletableFuture.completedFuture(
+                                Optional.of(
+                                        new ZLinkInternalMeshNode.PeerAuthorityFence(
+                                                rid,
+                                                generation,
+                                                "test-owner",
+                                                node.localAuthorityLeaseGeneration()))));
+        node.refreshLocalAuthorityFence().toCompletableFuture().join();
+    }
+
+    private static ZLinkServiceM6BWireCodec.ActorRouteFence actorRoute(
+            ZLinkJavaRawMeshNode node, ZLinkBackendActorRef selectedActor) {
+        var resident = node.spotNode().actorLookup(selectedActor.actorId());
+        return new ZLinkServiceM6BWireCodec.ActorRouteFence(
+                selectedActor,
+                node.lifecycleGeneration(),
+                node.spotNode().actorAuthorityOwnerGeneration(resident),
+                node.spotNode().actorAuthorityOwnerLeaseGeneration(resident));
     }
 
     private static ZLinkServiceM6BWireCodec.InstanceRouteFence instanceRoute(
