@@ -17,6 +17,7 @@ import {
   type ZLinkNestMeshNodeBuilder
 } from '@zlink-systems/nestjs';
 import {
+  ZLinkFrameworkRuntimeState,
   ZLinkFrameworkRelocationMode,
   ZLinkFrameworkRelocationOutcome,
   ZLinkFrameworkTerminationOutcome,
@@ -82,6 +83,16 @@ export async function runHost(
       typeof value === 'bigint' ? value.toString() : value
     );
   }
+  async function waitServing(): Promise<void> {
+    for await (const observed of runtime.observe()) {
+      if (observed.loss.discardedTerminalCount !== 0n)
+        throw new Error('Startup observation lost');
+      if (observed.status.state === ZLinkFrameworkRuntimeState.Serving) return;
+      if (observed.status.state !== ZLinkFrameworkRuntimeState.Preparing)
+        throw new Error(`Runtime startup failed: ${observed.status.state}`);
+    }
+    throw new Error('Runtime observation ended before Serving');
+  }
   async function waitReady(): Promise<void> {
     let lastStatus: ZLinkRouteMeshStatus | undefined;
     for await (const observed of meshes.observe(
@@ -118,6 +129,7 @@ export async function runHost(
   const input = createInterface({ input: process.stdin });
   const failures: unknown[] = [];
   try {
+    await waitServing();
     await waitReady();
     const listener = runtime.getListenerStatus(
       composition.listener.kind,
