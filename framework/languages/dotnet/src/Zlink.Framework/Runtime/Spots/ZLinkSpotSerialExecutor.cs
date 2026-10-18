@@ -516,12 +516,14 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
 
     internal async ValueTask<bool> ExecuteQuiescentLifecycleAsync(
         Func<ZLinkSpotActivation, CancellationToken, ValueTask<bool>> operation,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        ZLinkSpotCloseReason? closeReason = null
     )
     {
         var barrier = await TryBeginRelocationBarrierAsync(
                 ZLinkExecutionSealKind.Quiescent,
-                allowActorClaims: false
+                allowActorClaims: false,
+                closeReason
             )
             .ConfigureAwait(false);
         if (barrier is null)
@@ -1975,12 +1977,18 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
 
     private ValueTask<ZLinkExecutionBarrierState?> TryBeginRelocationBarrierAsync(
         ZLinkExecutionSealKind kind,
-        bool allowActorClaims
+        bool allowActorClaims,
+        ZLinkSpotCloseReason? closeReason = null
     )
     {
         return RunBarrierStateAsync<ZLinkExecutionBarrierState?>(() =>
         {
-            if (_relocationBarrier is not null || _nextBarrierGeneration == ulong.MaxValue)
+            // Terminal host cleanup owns the final seal. Replacing its generation
+            // fences a cancelled relocation without creating a second gate.
+            if (
+                _relocationBarrier is not null && closeReason != ZLinkSpotCloseReason.HostShutdown
+                || _nextBarrierGeneration == ulong.MaxValue
+            )
                 return null;
 
             var created = new ZLinkExecutionBarrierState(

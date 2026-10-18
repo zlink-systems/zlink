@@ -871,18 +871,24 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
     {
         var failures = new List<Exception>();
         Capture(DetachManualConnections);
-        if (!forceStopToken.CanBeCanceled)
-            await CaptureAsync(CloseLifecycleAsync).ConfigureAwait(false);
-        Capture(RequestStop);
+        await CaptureAsync(async () =>
+            {
+                try
+                {
+                    await CloseLifecycleAsync().ConfigureAwait(false);
+                }
+                finally
+                {
+                    RequestStop();
+                }
+            })
+            .ConfigureAwait(false);
         if (_entryDispatchPump is { } entryDispatchPump)
             await CaptureAsync(entryDispatchPump.DisposeAsync).ConfigureAwait(false);
         await CaptureAsync(_taskRunner.StopAsync).ConfigureAwait(false);
         if (_nodeRouteDispatcher is { } nodeRouteDispatcher)
             await CaptureAsync(nodeRouteDispatcher.DisposeAsync).ConfigureAwait(false);
-        await CaptureAsync(
-                forceStopToken.CanBeCanceled ? _spots.ForceStopAsync : _spots.DisposeAsync
-            )
-            .ConfigureAwait(false);
+        await CaptureAsync(_spots.DisposeAsync).ConfigureAwait(false);
         await CaptureAsync(_bundles.DisposeAsync).ConfigureAwait(false);
         await CaptureAsync(DisposeEntrySpotAsync).ConfigureAwait(false);
         await CaptureAsync(
@@ -902,7 +908,9 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
         {
             try
             {
-                await cleanup().ConfigureAwait(false);
+                // The host bounds observation; the owned cleanup retains its
+                // scopes and resources until its actual completion.
+                await cleanup().AsTask().WaitAsync(forceStopToken).ConfigureAwait(false);
             }
             catch (Exception exception)
             {
