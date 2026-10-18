@@ -217,23 +217,43 @@ final class SpotActivation extends SpotActivationBase<DefaultSpotContext> {
         var ownership =
                 systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext
                         .transferToQueuedJob();
+        TopicJob job = new TopicJob(message, ownership);
         boolean accepted;
         try {
-            accepted =
-                    context.tryEnqueueSpot(
-                            () ->
-                                    host.runQueuedApplicationJob(
-                                            ownership, () -> dispatchSpotSubscription(message)));
+            accepted = context.tryEnqueueSpot(job, job);
         } catch (RuntimeException | Error failure) {
-            ownership.close();
-            message.parts().forEach(Message::close);
+            job.run();
             throw failure;
         }
-        if (!accepted) {
+        if (!accepted) job.run();
+        return accepted;
+    }
+
+    private final class TopicJob implements Supplier<CompletionStage<Void>>, Runnable {
+        private final ZLinkBackendTopicMessage message;
+        private final systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext
+                        .QueuedOwnership
+                ownership;
+
+        private TopicJob(
+                ZLinkBackendTopicMessage message,
+                systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext
+                                .QueuedOwnership
+                        ownership) {
+            this.message = message;
+            this.ownership = ownership;
+        }
+
+        @Override
+        public CompletionStage<Void> get() {
+            return host.runQueuedApplicationJob(ownership, () -> dispatchSpotSubscription(message));
+        }
+
+        @Override
+        public void run() {
             ownership.close();
             message.parts().forEach(Message::close);
         }
-        return accepted;
     }
 
     CompletionStage<ZLinkSpotActorJoinResult> admitActorJoin(

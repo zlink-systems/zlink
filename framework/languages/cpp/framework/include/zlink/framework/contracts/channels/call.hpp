@@ -388,12 +388,20 @@ class publish_call_t
               result_t<void>::failure (framework_error_kind_t::invalid_operation,
                                        "logical multicast call has already been submitted"));
         }
+        if (_preflight) {
+            const auto admitted = _preflight ();
+            if (!admitted) {
+                return task_t<void> (admitted);
+            }
+        }
         if (_immediate) {
             return task_t<void> (*_immediate);
         }
         if (_async_submit) {
             return detail::submit_logical_multicast_async_task (
-              [submit = _async_submit, metadata = _metadata] () mutable {
+              [submit = _async_submit, metadata = _metadata,
+               context_lifetime = _context_lifetime] () mutable {
+                  (void) context_lifetime;
                   if (!submit) {
                       throw framework_exception_t (
                         framework_error_kind_t::protocol_error,
@@ -404,7 +412,9 @@ class publish_call_t
               _timeout);
         }
         return detail::submit_logical_multicast_task (
-          [submit = _submit, metadata = _metadata] () mutable {
+          [submit = _submit, metadata = _metadata,
+           context_lifetime = _context_lifetime] () mutable {
+              (void) context_lifetime;
               if (!submit) {
                   throw framework_exception_t (
                     framework_error_kind_t::protocol_error,
@@ -416,10 +426,15 @@ class publish_call_t
     }
 
   private:
+    friend class spot_context_t;
+
     std::optional<result_t<void>> _immediate;
     metadata_map_t _metadata;
     submit_fn_t _submit;
     async_submit_fn_t _async_submit;
+    std::function<result_t<void> ()> _preflight;
+    // Retain the source Context through submission, as its erased callback did.
+    std::shared_ptr<void> _context_lifetime;
     std::chrono::milliseconds _timeout{std::chrono::seconds (1)};
     std::shared_ptr<detail::submit_once_t> _submission = std::make_shared<detail::submit_once_t> ();
 };

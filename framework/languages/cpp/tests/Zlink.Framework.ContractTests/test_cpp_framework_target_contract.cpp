@@ -904,9 +904,9 @@ int main ()
                     && redis_hpp.find ("parse_offset") == std::string::npos,
                   "IMP-CP-36", "Redis public Store still exposes a provider-specific paging codec");
 
-    /* IMP-CP-01 — subscription dispatch key is topic plus decoded packet name. */
-    gate.require (spot_runtime.find ("descriptor.packet_name == *packet_name") != std::string::npos,
-                  "IMP-CP-01", "spot subscription lookup ignores the wire packet name");
+    /* IMP-CP-01 is covered by SpotSubscribe.WirePacketNameIsPartOfTheSubscriptionKey.
+     * The runtime test checks rejection and delivery, independent of where the
+     * registry owns its key comparison. */
 
     /* IMP-CP-32 — runtime snapshots and the pending table are not public contracts. */
     gate.require (zlink_builder_hpp.find ("channels () const") == std::string::npos

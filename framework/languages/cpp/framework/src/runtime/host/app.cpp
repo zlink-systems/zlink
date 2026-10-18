@@ -1484,16 +1484,18 @@ void app_t::_apply_zlink_framework ()
         return false;
     };
     auto monitoring_state = _state->monitoring;
-    const auto application_mesh_registration =
+    auto application_mesh_registration =
       std::find_if (mesh_node_registrations.begin (), mesh_node_registrations.end (),
                     [] (const auto &registration) {
                         return registration->spot_state->snapshot.entry_spot_name.has_value ();
                     });
+    if (application_mesh_registration == mesh_node_registrations.end ()
+        && !mesh_node_registrations.empty ())
+        application_mesh_registration = mesh_node_registrations.begin ();
     const auto application_mesh_name =
       application_mesh_registration != mesh_node_registrations.end ()
         ? (*application_mesh_registration)->mesh_name
-        : (mesh_node_registrations.empty () ? std::string{}
-                                            : mesh_node_registrations.front ()->mesh_name);
+        : std::string{};
     *actor_mesh_name = application_mesh_name;
     {
         auto provider = _state->services.build_provider ();
@@ -1542,11 +1544,7 @@ void app_t::_apply_zlink_framework ()
     if (!mesh_node_registrations.empty ()
         && !_state->services.contains (std::type_index (typeid (spot_manager_t)))) {
         _state->services.add_singleton<spot_manager_t> (std::make_unique<spot_manager_t> (
-          detail::spot_node_runtime_t (application_mesh_registration
-                                           != mesh_node_registrations.end ()
-                                         ? (*application_mesh_registration)->spot_state
-                                         : mesh_node_registrations.front ()->spot_state)
-            .manager ()));
+          detail::spot_node_runtime_t ((*application_mesh_registration)->spot_state).manager ()));
     }
     if (!mesh_node_registrations.empty ()
         && !_state->services.contains (std::type_index (typeid (spot_publisher_client_t)))) {
@@ -1561,6 +1559,12 @@ void app_t::_apply_zlink_framework ()
     const auto callback_registrations = mesh_node_registrations;
     runtime::mesh_node_host_service_t *mesh_node_service = nullptr;
     if (!mesh_node_registrations.empty ()) {
+        actor_gateway_runtime.on_membership (
+          [node = std::weak_ptr<detail::spot_node_builder_state_t> (
+             (*application_mesh_registration)->spot_state)] (const actor_ref_t &actor) {
+              const auto owner = node.lock ();
+              return owner ? detail::spot_node_runtime_t (owner).actor_spot (actor) : std::nullopt;
+          });
         auto mesh_service = std::make_unique<runtime::mesh_node_host_service_t> (
           _state->monitoring->runtime_failures, std::move (mesh_node_registrations),
           _state->serializers, _state->handlers, options.dispatch_options (),

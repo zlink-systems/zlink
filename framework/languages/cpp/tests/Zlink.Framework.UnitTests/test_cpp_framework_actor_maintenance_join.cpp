@@ -150,6 +150,7 @@ struct observations_t
     std::condition_variable changed;
     std::vector<fw::actor_join_completion_t> completions;
     std::vector<std::string> completion_owners;
+    std::vector<std::optional<fw::spot_id_t>> completion_spots;
     bool leave_entered = false;
     bool materialization_entered = false;
     int instances = 0;
@@ -243,8 +244,10 @@ class actor_t final : public fw::actor_t
     fw::task_t<void> on_join_completed (const fw::actor_join_completion_t &completion) override
     {
         bool hold = false;
+        const auto current_spot = _context.spot_id ();
         {
             std::lock_guard lock (observations->mutex);
+            observations->completion_spots.push_back (current_spot);
             observations->completions.push_back (completion);
             observations->completion_owners.push_back (
               std::string (_context.actor_ref ().node_rid ().value ()));
@@ -2206,6 +2209,7 @@ TEST (ActorMaintenanceJoin, RemoteJoinReturnsToPreviousSourceNode)
     auto &client = services.get_required<fw::actor_client_t> ();
     ASSERT_TRUE (move_to (client, evidence, local_spot, 1));
     ASSERT_TRUE (std::holds_alternative<fw::actor_join_accepted_t> (evidence.completions.at (0)));
+    EXPECT_EQ (evidence.completion_spots.at (0), fw::spot_id_t (local_spot));
     configure (second, second_rid, store, relocations);
     second.start ();
     ASSERT_TRUE (ready (second));
@@ -2220,6 +2224,7 @@ TEST (ActorMaintenanceJoin, RemoteJoinReturnsToPreviousSourceNode)
     ASSERT_TRUE (move_to (client, evidence, current_spot, 2));
     ASSERT_TRUE (std::holds_alternative<fw::actor_join_accepted_t> (evidence.completions.at (1)));
     EXPECT_EQ (evidence.completion_owners.at (1), second_rid);
+    EXPECT_EQ (evidence.completion_spots.at (1), fw::spot_id_t (current_spot));
     // Return through the public Deferred Join immediately after Accepted.
     // Source OnLeave and stale instance destruction remain independent.
     ASSERT_TRUE (
@@ -2230,6 +2235,7 @@ TEST (ActorMaintenanceJoin, RemoteJoinReturnsToPreviousSourceNode)
                 std::get<fw::actor_join_failed_t> (evidence.completions.at (2)).error_kind)
             : -1);
     EXPECT_EQ (evidence.completion_owners.at (2), first_rid);
+    EXPECT_EQ (evidence.completion_spots.at (2), fw::spot_id_t (source_spot));
 }
 
 TEST (ActorMaintenanceJoin, ReturnAdmissionWaitsOutsideTargetLifecycleForSourceTerminal)

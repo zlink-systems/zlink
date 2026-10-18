@@ -460,6 +460,10 @@ public final class ZLinkSpotSerialExecutor implements ZLinkActorDispatchTarget {
         return spotQueue.finishActivationPreparation().thenCompose(ignored -> resumeTimerQueues());
     }
 
+    CompletionStage<Void> discardActivationPreparation() {
+        return spotQueue.discardActivationPreparation();
+    }
+
     private CompletionStage<Void> resumeTimerQueues() {
         return stateLane
                 .runNowOrQueue(() -> List.copyOf(timerQueues.values()))
@@ -575,8 +579,8 @@ public final class ZLinkSpotSerialExecutor implements ZLinkActorDispatchTarget {
         return spotQueue.admitIngress(admission);
     }
 
-    boolean tryEnqueueSpot(Supplier<CompletionStage<Void>> operation) {
-        return spotQueue.tryEnqueue(operation);
+    boolean tryEnqueueSpot(Supplier<CompletionStage<Void>> operation, Runnable release) {
+        return spotQueue.tryEnqueue(operation, release);
     }
 
     CompletionStage<Boolean> abortRelocation(ZLinkSerialExecutionQueue.RelocationSeal seal) {

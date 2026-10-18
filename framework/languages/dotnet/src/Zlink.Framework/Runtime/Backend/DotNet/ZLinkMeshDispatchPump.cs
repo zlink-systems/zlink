@@ -183,7 +183,7 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
     {
         var state = RegisterSpot(spotId);
         state.DispatchHandler = handler;
-        if (!state.Routes.IsEmpty)
+        if (!state.Routes.IsEmpty || !state.Subscriptions.IsEmpty)
         {
             var runner =
                 _applicationTaskRunner
@@ -196,10 +196,16 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
                     async _ =>
                     {
                         var pending = new List<Task>();
-                        ObserveDispatchResult(
-                            state.Raise(ZLinkBackendSpotDispatchEvent.RouteReadable),
-                            pending
-                        );
+                        if (!state.Routes.IsEmpty)
+                            ObserveDispatchResult(
+                                state.Raise(ZLinkBackendSpotDispatchEvent.RouteReadable),
+                                pending
+                            );
+                        if (!state.Subscriptions.IsEmpty)
+                            ObserveDispatchResult(
+                                state.Raise(ZLinkBackendSpotDispatchEvent.SubscribeReadable),
+                                pending
+                            );
                         if (pending.Count != 0)
                             await Task.WhenAll(pending).ConfigureAwait(false);
                     }

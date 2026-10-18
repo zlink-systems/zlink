@@ -65,6 +65,7 @@ class play_server_host_factory_t
               topology.play_b_route_endpoint);
         }
         game_spot.listen (topology.selected_play_route_endpoint ());
+        game_spot.channel (sample_names_t::game_spot_node).server ();
         game_spot.objects ()
           .server ()
           .add_entry_spot<tictactoe_entry_spot_t> ()

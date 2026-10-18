@@ -205,6 +205,30 @@ final class ZLinkSerialExecutionQueueTest {
     }
 
     @Test
+    void successfulActivationPreparationDoesNotRunFailureCleanup() throws Exception {
+        var executor = new CountingExecutor();
+        var queue = new ZLinkSerialExecutionQueue(executor, ZLinkExecutionLanePolicy.spot());
+        var prepared = queue.prepareActivation(() -> CompletableFuture.completedFuture(null));
+        executor.runUntil(prepared.toCompletableFuture());
+        var discarded = new AtomicBoolean();
+        try {
+            var completed =
+                    queue.completeActivationPreparation(
+                            null,
+                            null,
+                            () -> {
+                                discarded.set(true);
+                                return CompletableFuture.completedFuture(null);
+                            });
+            executor.runUntil(completed.toCompletableFuture());
+            executor.runUntil(queue.awaitQuiescence().toCompletableFuture());
+            assertFalse(discarded.get());
+        } finally {
+            queue.close();
+        }
+    }
+
+    @Test
     void failedActivationPreparationRejectsPendingApplicationAndCloseWithOriginalFailure()
             throws Exception {
         var executor = new CountingExecutor();
@@ -356,6 +380,48 @@ final class ZLinkSerialExecutionQueueTest {
             firstHandler.complete(null);
             executor.runUntil(queue.finishActivationPreparation().toCompletableFuture());
             executor.runUntil(queue.awaitQuiescence().toCompletableFuture());
+            queue.close();
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void discardedLifecycleMessagesReachQuiescence(boolean shared) throws Exception {
+        var queue = new ZLinkSerialExecutionQueue(Runnable::run, ZLinkExecutionLanePolicy.spot());
+        if (shared) new ZLinkSerialExecutionQueue.SharedSpotGate(queue);
+        var lifecycle = new CompletableFuture<Void>();
+        var entered = new CompletableFuture<Void>();
+        var calls = new AtomicInteger();
+        var releases = new AtomicInteger();
+        try {
+            var transition =
+                    queue.enqueueLifecycleTransition(
+                            () -> {
+                                entered.complete(null);
+                                return ZLinkSerialExecutionQueue.yieldCurrent(lifecycle);
+                            },
+                            ignored -> CompletableFuture.completedFuture(null),
+                            () -> false,
+                            ignored -> false);
+            entered.get(3, TimeUnit.SECONDS);
+            assertTrue(
+                    queue.tryEnqueue(
+                            () -> {
+                                calls.incrementAndGet();
+                                return CompletableFuture.completedFuture(null);
+                            },
+                            releases::incrementAndGet));
+            var drained = queue.awaitQuiescence().toCompletableFuture();
+            assertFalse(drained.isDone());
+            queue.commitLifecycleTransition().toCompletableFuture().get(3, TimeUnit.SECONDS);
+            assertEquals(1, releases.get());
+            lifecycle.complete(null);
+            transition.toCompletableFuture().get(3, TimeUnit.SECONDS);
+            drained.get(3, TimeUnit.SECONDS);
+            assertEquals(0, calls.get());
+            assertEquals(1, releases.get());
+        } finally {
+            lifecycle.complete(null);
             queue.close();
         }
     }
