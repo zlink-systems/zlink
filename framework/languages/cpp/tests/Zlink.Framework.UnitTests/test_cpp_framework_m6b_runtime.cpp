@@ -4470,10 +4470,12 @@ void verify_location_store_accepted_record_authority ()
           .descriptor_revision = 1,
           .endpoint = "tcp://127.0.0.1:1",
           .application_version = 1,
-          .object_capabilities = {{.object_kind = placement_object_kind_t::actor,
-                                   .stable_type = "player"}},
+          .object_capabilities =
+            {{.object_kind = placement_object_kind_t::actor, .stable_type = "player"},
+             {.object_kind = placement_object_kind_t::user_spot, .stable_type = "room"},
+             {.object_kind = placement_object_kind_t::instance_spot, .stable_type = "room"}},
           .object_role = object_role_t::server,
-          .capacity = {.actors = {.limit = 8}},
+          .capacity = {.actors = {.limit = 8}, .spots = {.limit = 8}},
           .state = framework_runtime_state_t::serving,
           .security_identity = "test",
           .owner_id = owner.owner_id,
@@ -4550,6 +4552,44 @@ void verify_location_store_accepted_record_authority ()
       .target_node_generation = 1,
       .source_kind = protocol::frozen_source_kind_t::node};
     assert (!resolver (stale).result ().value ());
+
+    for (const auto kind :
+         {placement_object_kind_t::user_spot, placement_object_kind_t::instance_spot}) {
+        auto spot_request = request;
+        spot_request.key = {kind, kind == placement_object_kind_t::user_spot
+                                    ? "user-authority"
+                                    : "instance-authority"};
+        spot_request.intent.stable_type = "room";
+        spot_request.capacity_bundle = {.spot_slots = 1,
+                                        .spot_type = spot_type_capacity_delta_t{kind, "room", 1}};
+        const auto spot_reserved =
+          std::get<object_reserved_t> (store.reserve (spot_request).result ().value ());
+        const auto spot_committed = std::get<object_committed_t> (
+          store.commit ({spot_request.key, spot_reserved.fence, {std::byte{1}}})
+            .result ()
+            .value ());
+        auto query = stale;
+        query.target = {stateful::object_kind_t::user_spot,
+                        spot_request.key.global_id,
+                        spot_committed.ready.object_generation,
+                        spot_committed.ready.authority_owner_generation,
+                        "m6b-mesh",
+                        "raw-target"};
+        query.source_node_generation = 1;
+        assert (resolver (query).result ().value ());
+        auto wrong_generation = query;
+        ++wrong_generation.target.object_generation;
+        assert (!resolver (wrong_generation).result ().value ());
+        auto wrong_authority = query;
+        ++wrong_authority.target.authority_owner_generation;
+        assert (!resolver (wrong_authority).result ().value ());
+        auto wrong_node = query;
+        ++wrong_node.target_node_generation;
+        assert (!resolver (wrong_node).result ().value ());
+        auto wrong_kind = query;
+        wrong_kind.target.kind = stateful::object_kind_t::actor;
+        assert (!resolver (wrong_kind).result ().value ());
+    }
 }
 
 void verify_raw_spot_and_actor_routing ()

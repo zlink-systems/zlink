@@ -50,6 +50,9 @@ struct accepted_record_authority_t
     std::uint64_t target_owner_lease_generation = 0;
 };
 
+using local_source_fence_resolver_t =
+  std::function<std::optional<protocol::request_source_fence_t> ()>;
+
 using accepted_record_authority_resolver_t =
   std::function<task_t<std::optional<accepted_record_authority_t>> (
     accepted_record_authority_query_t)>;
@@ -101,7 +104,14 @@ class raw_stateful_dispatch_t
                               protocol::actor_message_header_t header,
                               std::vector<std::uint8_t> source_node_routing_id,
                               std::uint64_t source_node_generation,
-                              bool bound_session_routed = false) const;
+                              bool bound_session_routed = false,
+                              local_source_fence_resolver_t local_source = {}) const;
+    task_t<std::pair<stateful_error_t, std::optional<accepted_record_authority_t>>>
+    accepted_spot_authority (object_ref_t owner,
+                             protocol::spot_message_header_t header,
+                             std::vector<std::uint8_t> source_node_routing_id,
+                             std::uint64_t source_node_generation,
+                             local_source_fence_resolver_t local_source = {}) const;
     task_t<bool> forward_accepted (object_ref_t owner,
                                    turn_record_t turn,
                                    std::vector<std::uint8_t> target_routing_id,
@@ -174,6 +184,10 @@ class raw_stateful_dispatch_t
     stateful_error_t complete_with_claim (const stateful_delivery_t &delivery,
                                           std::optional<protocol::application_payload_t> reply,
                                           const std::function<stateful_error_t ()> &release_claim);
+    task_t<std::pair<stateful_error_t, std::optional<accepted_record_authority_t>>>
+    resolve_accepted_authority (accepted_record_authority_query_t query,
+                                std::uint64_t target_owner_lease_generation,
+                                local_source_fence_resolver_t local_source) const;
     stateful_error_t discard_owner_pending (const object_ref_t &owner, bool reply_unavailable);
     static std::string mailbox_owner (const object_ref_t &owner);
     static bool matches_application_route (const object_ref_t &owner,

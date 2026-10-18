@@ -68,4 +68,26 @@ accepted_actor_record (const protocol::actor_message_header_t &header,
     record.body = protocol::frozen_actor_application_body_t{header.target, std::move (application)};
     return record;
 }
+inline protocol::frozen_application_record_t
+accepted_spot_record (const protocol::spot_message_header_t &header,
+                      protocol::request_source_fence_t source,
+                      protocol::application_payload_t application,
+                      bool request)
+{
+    constexpr std::uint32_t spot_request_operation_kind = 3;
+    protocol::frozen_application_record_t record;
+    record.kind = request ? protocol::frozen_record_kind_t::spot_request
+                          : protocol::frozen_record_kind_t::spot_send;
+    record.source = std::move (source);
+    record.source_kind = header.source_spot_id.empty () ? protocol::frozen_source_kind_t::node
+                                                        : protocol::frozen_source_kind_t::spot;
+    if (!header.source_spot_id.empty ())
+        record.source_spot_id = header.source_spot_id;
+    record.operation = header.operation;
+    record.operation_kind = request ? spot_request_operation_kind : 0;
+    record.reply_route_id = header.correlation;
+    record.body = protocol::frozen_spot_application_body_t{
+      header.target, header.target.owner_lease_generation, std::move (application)};
+    return record;
+}
 } // namespace zlink::framework::runtime::stateful

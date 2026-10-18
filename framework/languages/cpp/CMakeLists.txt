@@ -1361,6 +1361,17 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     LABELS "framework-unit;framework-m6-runtime;maintenance;relocation;termination"
     TIMEOUT 30)
 
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_relocated_actor_shutdown
+    COMMAND test_cpp_framework_host_lifecycle relocated-actor-shutdown
+    LABELS "framework-contract;relocation;termination"
+    TIMEOUT 30)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_relocated_aggregate_shutdown
+    COMMAND test_cpp_framework_host_lifecycle relocated-aggregate-shutdown
+    LABELS "framework-contract;relocation;termination"
+    TIMEOUT 30)
+
   add_executable(test_cpp_framework_host_startup_failure
     tests/Zlink.Framework.UnitTests/test_cpp_framework_host_startup_failure.cpp)
   target_compile_features(test_cpp_framework_host_startup_failure PRIVATE cxx_std_20)
@@ -2064,6 +2075,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   add_executable(test_cpp_framework_spot_close_conformance
     tests/Zlink.Framework.UnitTests/test_cpp_framework_spot_close_conformance.cpp
     tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_spotwide_host_relocation.cpp
     tests/Zlink.Framework.UnitTests/test_cpp_framework_spot_reincarnate_conformance.cpp)
   target_compile_features(test_cpp_framework_spot_close_conformance PRIVATE cxx_std_20)
   target_link_zlink_test_harness(test_cpp_framework_spot_close_conformance)

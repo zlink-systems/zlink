@@ -1765,12 +1765,16 @@ class spot_node_runtime_t
     friend struct spot_context_state_t;
 
   public:
-    struct application_relocation_unit_t
+    struct spot_relocation_unit_t
     {
         spot_id_t spot_id;
         std::string spot_type;
-        bool ready = false;
         std::vector<actor_ref_t> actors;
+    };
+    struct relocation_units_t
+    {
+        std::vector<spot_relocation_unit_t> spots;
+        std::vector<actor_ref_t> standalone_actors;
     };
     struct remote_actor_transfer_t
     {
@@ -1884,8 +1888,8 @@ class spot_node_runtime_t
     /* Actors still joined to this node's spots, for the drain handoff pass
      * (graceful-drain-handoff §5.2). */
     std::vector<actor_ref_t> local_actor_refs () const;
-    std::vector<spot_id_t> deferred_relocation_ready_spots () const;
-    std::vector<application_relocation_unit_t> application_relocation_units () const;
+    task_t<bool> relocation_ready_async () const;
+    task_t<relocation_units_t> relocation_units_async () const;
     void begin_relocation_readiness ();
     void end_relocation_readiness (const std::vector<spot_id_t> &relocated_spots);
     /* Domain snapshot for the drain handoff join — the same shape the erased
@@ -2186,6 +2190,8 @@ class spot_node_runtime_t
                                   std::stop_token cancellation = {});
     bool
     commit_relocation_materialization (const std::vector<runtime::stateful::object_ref_t> &targets);
+    task_t<void>
+    retire_relocation_source (const std::vector<runtime::stateful::object_ref_t> &sources);
     void abort_relocation_materialization (
       const std::vector<runtime::stateful::object_ref_t> &targets) noexcept;
     task_t<result_t<remote_actor_transfer_t>> transfer_actor_out (const actor_ref_t &actor_ref,
@@ -2302,12 +2308,16 @@ class spot_node_runtime_t
     }
 
   private:
+    result_t<bool> release_local_actor_on_lane (const actor_ref_t &actor_ref);
+    static task_t<void>
+    retire_relocation_source_in (spot_node_runtime_t self,
+                                 std::vector<runtime::stateful::object_ref_t> sources);
     static task_t<void> fast_fail_reconcile_backlog_core (
       std::shared_ptr<spot_node_builder_state_t> state,
       actor_ref_t actor_ref,
       std::string actor_key,
       std::optional<runtime::protocol::actor_route_fence_t> source_fence);
-    task_t<std::vector<actor_ref_t>> local_actor_refs_async () const;
+    task_t<std::vector<runtime::stateful::object_inventory_t>> local_actor_inventory_async () const;
     std::size_t active_user_spot_count_on_lane () const;
     std::optional<std::string> spot_name_for_unlocked (const spot_id_t &spot_id) const;
 
@@ -2328,8 +2338,13 @@ class spot_node_runtime_t
 
     static std::string actor_key (const actor_ref_t &actor_ref)
     {
-        return std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (actor_ref))
-               + ":" + std::string (actor_ref.actor_id ().value ());
+        return actor_key (::zlink::framework::detail::actor_ref_access_t::actor_type (actor_ref),
+                          actor_ref.actor_id ().value ());
+    }
+
+    static std::string actor_key (std::string_view actor_type, std::string_view actor_id)
+    {
+        return std::string (actor_type) + ":" + std::string (actor_id);
     }
 
     /* `refuse_destroyed` re-checks the destroy tombstone in the same lane turn

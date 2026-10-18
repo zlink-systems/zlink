@@ -372,19 +372,24 @@ stateful_error_t stateful_object_runtime_t::commit_create (std::uint64_t attempt
               return stateful_error_t::conflict;
           }
           release_pending_capacity_locked (record->second);
-          for (auto &candidate : _candidates) {
-              if (candidate.mesh_name == record->second.reference.mesh_name
-                  && candidate.node_id == record->second.reference.node_id) {
-                  ++candidate.active_count;
-                  break;
-              }
-          }
-          record->second.state = object_state_t::ready;
+          activate_object_on_lane (record->second);
           record->second.attempt = 0;
           _attempts.erase (attempt_entry);
           return stateful_error_t::none;
       })
       .get ();
+}
+
+void stateful_object_runtime_t::activate_object_on_lane (object_record_t &object)
+{
+    for (auto &candidate : _candidates) {
+        if (candidate.mesh_name == object.reference.mesh_name
+            && candidate.node_id == object.reference.node_id) {
+            ++candidate.active_count;
+            break;
+        }
+    }
+    object.state = object_state_t::ready;
 }
 
 bool stateful_object_runtime_t::finalized_relocation_source (object_kind_t kind,
@@ -404,11 +409,27 @@ bool stateful_object_runtime_t::finalized_relocation_source (object_kind_t kind,
 bool stateful_object_runtime_t::finalized_relocation_source_on_lane (
   const object_record_t &object) const
 {
-    if (object.state != object_state_t::moving)
-        return false;
-    const auto seal = _relocation_seals.find (object.barrier_generation);
-    return seal != _relocation_seals.end ()
-           && seal->second.ingress_phase == relocation_ingress_phase_t::follow_only;
+    const auto seal = relocation_source_seal_on_lane (object);
+    return seal
+           && _relocation_seals.at (*seal).ingress_phase == relocation_ingress_phase_t::follow_only;
+}
+
+std::optional<std::uint64_t>
+stateful_object_runtime_t::relocation_source_seal_on_lane (const object_record_t &object) const
+{
+    if (object.state == object_state_t::moving
+        && _relocation_seals.contains (object.barrier_generation))
+        return object.barrier_generation;
+    return std::nullopt;
+}
+
+task_t<bool> stateful_object_runtime_t::retained_relocation_source (object_ref_t owner) const
+{
+    co_return co_await _lane.run_task ([this, owner = std::move (owner)] {
+        const auto object = _objects.find (object_key_t{owner.kind, owner.key});
+        return object != _objects.end () && same_exact_ref (object->second.reference, owner)
+               && relocation_source_seal_on_lane (object->second).has_value ();
+    });
 }
 
 stateful_error_t stateful_object_runtime_t::abort_create (std::uint64_t attempt)
@@ -744,9 +765,9 @@ stateful_error_t stateful_object_runtime_t::enqueue (const object_ref_t &owner,
                 return error;
             }
             if (domain == turn_domain_t::application) {
-                const auto seal = object->state == object_state_t::moving
-                                    ? _relocation_seals.find (object->barrier_generation)
-                                    : _relocation_seals.end ();
+                const auto token = relocation_source_seal_on_lane (*object);
+                const auto seal =
+                  token ? _relocation_seals.find (*token) : _relocation_seals.end ();
                 if (seal != _relocation_seals.end ()) {
                     auto &attempt = seal->second;
                     const auto source =
@@ -1509,9 +1530,7 @@ stateful_error_t stateful_object_runtime_t::finalize_relocation_cutover (
           }
           if (deliver)
               seal->second.deliver = std::move (*deliver);
-          seal->second.ingress_phase = relocation_ingress_phase_t::follow_only;
-          seal->second.frozen.clear ();
-          seal->second.boundary_application.clear ();
+          finalize_relocation_source_on_lane (seal->second);
           return stateful_error_t::none;
       })
       .get ();
@@ -1549,12 +1568,30 @@ stateful_object_runtime_t::commit_relocation_aggregate (std::uint64_t token,
               ++target.authority_owner_generation;
               result.push_back (std::move (target));
           }
-          seal->second.ingress_phase = relocation_ingress_phase_t::follow_only;
-          seal->second.frozen.clear ();
-          seal->second.boundary_application.clear ();
+          finalize_relocation_source_on_lane (seal->second);
           return {stateful_error_t::none, std::move (result)};
       })
       .get ();
+}
+
+void stateful_object_runtime_t::finalize_relocation_source_on_lane (relocation_seal_state_t &seal)
+{
+    for (const auto &key : seal.keys) {
+        auto &object = _objects.at (key);
+        for (auto &candidate : _candidates) {
+            if (candidate.mesh_name == object.reference.mesh_name
+                && candidate.node_id == object.reference.node_id) {
+                if (candidate.active_count != 0)
+                    --candidate.active_count;
+                break;
+            }
+        }
+        object.membership.clear ();
+        object.timers.clear ();
+    }
+    seal.ingress_phase = relocation_ingress_phase_t::follow_only;
+    seal.frozen.clear ();
+    seal.boundary_application.clear ();
 }
 
 task_t<stateful_error_t>
@@ -1809,7 +1846,7 @@ stateful_object_runtime_t::commit_relocation_restore (const object_ref_t &target
               || record->restore_identity != std::optional<relocation_restore_identity_t>{identity})
               return stateful_error_t::conflict;
           move_held_application_locked (*record);
-          record->state = object_state_t::ready;
+          activate_object_on_lane (*record);
           record->restore_identity.reset ();
           notify_quiescence ();
           return stateful_error_t::none;
@@ -1868,7 +1905,7 @@ stateful_error_t stateful_object_runtime_t::commit_relocation_restore_aggregate 
           }
           for (auto *record : records) {
               move_held_application_locked (*record);
-              record->state = object_state_t::ready;
+              activate_object_on_lane (*record);
               record->restore_identity.reset ();
           }
           notify_quiescence ();

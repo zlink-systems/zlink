@@ -850,6 +850,7 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
 
   private:
     std::optional<stateful::object_ref_t> resolve_actor (std::string_view actor_id) const;
+    void attach_relocation_terminals (stateful::maintenance_runtime_t &maintenance);
 
     struct instance_activation_ready_t
     {
@@ -926,13 +927,15 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
       std::uint64_t authority_owner_generation = 0,
       std::uint64_t owner_lease_generation = 0);
     zlink::submit_result_t enqueue_local_spot_send (const protocol::spot_route_fence_t &target,
-                                                    const std::vector<zlink::message_t> &parts);
+                                                    const std::vector<zlink::message_t> &parts,
+                                                    std::string source_spot_id = {});
     zlink::submit_result_t enqueue_local_spot_request (const protocol::spot_route_fence_t &target,
                                                        const std::vector<zlink::message_t> &parts,
                                                        pending_operation_t &operation,
                                                        std::chrono::milliseconds timeout,
                                                        std::span<const std::uint8_t> metadata,
-                                                       spot_request_completion_t completion = {});
+                                                       spot_request_completion_t completion = {},
+                                                       std::string source_spot_id = {});
     task_t<std::optional<route_fence_t>>
     resolve_spot_route_fence (zlink::routing_id_t target_node_rid,
                               std::string target_spot_id,

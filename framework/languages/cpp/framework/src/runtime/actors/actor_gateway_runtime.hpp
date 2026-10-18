@@ -351,6 +351,7 @@ class actor_gateway_runtime_t
                                     const actor_context_t &right) const noexcept;
     result_t<void> update_actor_ref (const actor_ref_t &actor_ref);
     result_t<void> destroy_actor (const actor_ref_t &actor_ref);
+    task_t<result_t<void>> destroy_actor_async (actor_ref_t actor_ref);
     actor_session_binding_snapshot_t
     bind_session_stream (std::string actor_id,
                          stream_t stream,
@@ -493,6 +494,7 @@ class actor_gateway_runtime_t
     void set_dispatch (dispatch_options_t options);
 
   private:
+    result_t<void> destroy_actor_on_lane (const actor_ref_t &actor_ref);
     std::shared_ptr<actor_gateway_state_t> _state;
 };
 

@@ -327,6 +327,7 @@ class stateful_object_runtime_t
     bool finalized_relocation_source (object_kind_t kind,
                                       const std::string &key,
                                       std::uint64_t object_generation) const;
+    task_t<bool> retained_relocation_source (object_ref_t owner) const;
 
     std::pair<stateful_error_t, membership_token_t>
     begin_membership_move (const object_ref_t &actor, const object_ref_t &target_spot);
@@ -461,6 +462,10 @@ class stateful_object_runtime_t
     };
 
     bool finalized_relocation_source_on_lane (const object_record_t &object) const;
+    std::optional<std::uint64_t>
+    relocation_source_seal_on_lane (const object_record_t &object) const;
+    void activate_object_on_lane (object_record_t &object);
+    void finalize_relocation_source_on_lane (relocation_seal_state_t &seal);
     static bool valid_text (const std::string &value);
     static bool same_exact_ref (const object_ref_t &left, const object_ref_t &right);
     /* Return-relocation remnant (spec 28 §2/§8): after this node handed an

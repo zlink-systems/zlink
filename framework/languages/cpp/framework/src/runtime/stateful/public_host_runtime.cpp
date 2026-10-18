@@ -460,6 +460,12 @@ bool is_actor_application (record_kind_t kind)
     return kind == record_kind_t::actor_send || kind == record_kind_t::actor_request;
 }
 
+bool is_stateful_application (record_kind_t kind)
+{
+    return is_actor_application (kind) || kind == record_kind_t::spot_send
+           || kind == record_kind_t::spot_request;
+}
+
 
 std::string user_spot_operation_key (const std::vector<std::uint8_t> &source,
                                      std::uint64_t source_generation,
@@ -648,7 +654,7 @@ spot_handle_t::send_to_spot (const zlink::routing_id_t &target_node_rid,
       target_spot_id,         target_spot_generation, target_node_rid.to_bytes (),
       target_node_generation, route_fence->first,     route_fence->second};
     if (target.target_node_routing_id == _host->status ().routing_id ().to_bytes ()) {
-        co_return _host->enqueue_local_spot_send (target, parts);
+        co_return _host->enqueue_local_spot_send (target, parts, spot_id ());
     }
     co_return co_await _host->transport ().send_to_spot_result (
       target_node_rid.to_bytes (), spot_id (), target, _host->encode_application (parts, metadata));
@@ -687,7 +693,7 @@ spot_handle_t::request_to_spot (const zlink::routing_id_t &target_node_rid,
         const auto direct_completion = static_cast<bool> (completion);
         if (target.target_node_routing_id == host->status ().routing_id ().to_bytes ()) {
             const auto submitted = host->enqueue_local_spot_request (
-              target, parts, operation, timeout, metadata, std::move (completion));
+              target, parts, operation, timeout, metadata, std::move (completion), spot_id ());
             co_return submitted;
         }
         operation.prepare_for_registration ();
@@ -6960,7 +6966,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_application_claim (
                 application.record.release_mailbox_reservation = release_mailbox_reservation;
                 application.record.retain_mailbox_reservation = retain_mailbox_reservation;
                 application.record.transferred_owner_byte_cost = claim_holder->record_bytes[index];
-                if (_stateful_dispatch && is_actor_application (application.record.kind)
+                if (_stateful_dispatch && is_stateful_application (application.record.kind)
                     && !application.record.application_record) {
                     const auto object = co_await accept_local_application (std::move (application));
                     (void) co_await dispatch_stateful_owner (object, dispatch);
@@ -6986,9 +6992,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_application_claim (
                 continue;
             }
             const auto kind = record_kind (wire.kind);
-            if (_stateful_dispatch
-                && (is_actor_application (kind) || kind == record_kind_t::spot_send
-                    || kind == record_kind_t::spot_request)) {
+            if (_stateful_dispatch && is_stateful_application (kind)) {
                 std::optional<stateful::object_ref_t> native_owner;
                 if (mailbox_record.owner.starts_with (
                       detail::activation_admission_t::actor_key_prefix))
@@ -7600,7 +7604,7 @@ std::function<void ()> public_host_runtime_t::local_request_wait_cleanup (
 
 void public_host_runtime_t::publish_local_application (local_application_dispatch_t dispatch)
 {
-    if (!_stateful_dispatch || !is_actor_application (dispatch.record.kind)) {
+    if (!_stateful_dispatch || !is_stateful_application (dispatch.record.kind)) {
         _local_application_dispatches.push_back (std::move (dispatch));
         return;
     }
@@ -7621,36 +7625,78 @@ void public_host_runtime_t::publish_local_application (local_application_dispatc
 task_t<stateful::object_ref_t>
 public_host_runtime_t::accept_local_application (local_application_dispatch_t dispatch)
 {
-    const auto owner = resolve_actor (dispatch.owner.actor->actor_id ().value ());
+    const bool actor = is_actor_application (dispatch.record.kind);
+    const auto owner = actor ? resolve_actor (dispatch.owner.actor->actor_id ().value ())
+                             : resolve_spot (dispatch.owner.spot_id);
     if (!owner)
-        throw protocol::service_wire_error_t ("local accepted Actor owner is unavailable");
-    protocol::actor_message_header_t header;
-    header.target = *dispatch.record.actor_route;
-    header.operation = {dispatch.record.operation_id.high, dispatch.record.operation_id.low};
-    if (is_request (dispatch.record.kind))
-        header.correlation = dispatch.record.reply_route_id;
-    if (dispatch.record.source_session_rid)
-        header.bound_session_source = protocol::actor_message_header_t::bound_session_source_t{
-          dispatch.record.source_session_rid->to_bytes (),
-          dispatch.record.source_binding_generation, dispatch.record.source_session_sequence};
-    const auto [validation, authority] = co_await _stateful_dispatch->accepted_actor_authority (
-      *owner, header, dispatch.record.source_node_rid.to_bytes (),
-      _options.mesh.descriptor.lifecycle_generation);
+        throw protocol::service_wire_error_t ("local accepted owner is unavailable");
+    std::variant<protocol::actor_message_header_t, protocol::spot_message_header_t> header;
+    if (actor) {
+        protocol::actor_message_header_t value;
+        value.target = *dispatch.record.actor_route;
+        value.operation = {dispatch.record.operation_id.high, dispatch.record.operation_id.low};
+        if (is_request (dispatch.record.kind))
+            value.correlation = dispatch.record.reply_route_id;
+        if (dispatch.record.source_session_rid)
+            value.bound_session_source = protocol::actor_message_header_t::bound_session_source_t{
+              dispatch.record.source_session_rid->to_bytes (),
+              dispatch.record.source_binding_generation, dispatch.record.source_session_sequence};
+        header = std::move (value);
+    } else {
+        protocol::spot_message_header_t value;
+        value.target = *dispatch.record.spot_route;
+        value.source_spot_id = std::move (dispatch.source_spot_id);
+        value.operation = {dispatch.record.operation_id.high, dispatch.record.operation_id.low};
+        if (is_request (dispatch.record.kind))
+            value.correlation = dispatch.record.reply_route_id;
+        header = std::move (value);
+    }
+    auto local_source = [this] () -> std::optional<protocol::request_source_fence_t> {
+        const auto source =
+          _session_route_owner_resolver ? _session_route_owner_resolver () : std::nullopt;
+        if (!source)
+            return std::nullopt;
+        return protocol::request_source_fence_t{
+          source->owner_id, static_cast<std::uint64_t> (source->lease_generation),
+          _options.mesh.descriptor.node_routing_id, _options.mesh.descriptor.lifecycle_generation};
+    };
+    const auto [validation, authority] = co_await std::visit (
+      [&] (const auto &value) {
+          if constexpr (std::is_same_v<std::decay_t<decltype (value)>,
+                                       protocol::actor_message_header_t>)
+              return _stateful_dispatch->accepted_actor_authority (
+                *owner, value, dispatch.record.source_node_rid.to_bytes (),
+                _options.mesh.descriptor.lifecycle_generation, false, local_source);
+          else
+              return _stateful_dispatch->accepted_spot_authority (
+                *owner, value, dispatch.record.source_node_rid.to_bytes (),
+                _options.mesh.descriptor.lifecycle_generation, local_source);
+      },
+      header);
     if (validation != stateful::stateful_error_t::none)
         throw protocol::service_wire_error_t (
           "local accepted Actor source authority is unavailable");
     co_await _local_dispatch_completion_lane.run_task (
       [this, owner, header = std::move (header), authority,
        dispatch = std::move (dispatch)] () mutable {
-          header.target.owner_lease_generation = authority->target_owner_lease_generation;
           dispatch.record.application_record =
             std::make_shared<runtime::serial_application_record_t> ();
           dispatch.record.application_record->admission.jobs = _options.mesh.application_jobs;
           dispatch.record.application_record->payload.emplace ();
-          dispatch.record.application_record->payload->application_record =
-            stateful::accepted_actor_record (header, authority->source,
-                                             encode_application (dispatch.parts),
-                                             is_request (dispatch.record.kind));
+          dispatch.record.application_record->payload->application_record = std::visit (
+            [&] (auto &value) {
+                value.target.owner_lease_generation = authority->target_owner_lease_generation;
+                if constexpr (std::is_same_v<std::decay_t<decltype (value)>,
+                                             protocol::actor_message_header_t>)
+                    return stateful::accepted_actor_record (value, authority->source,
+                                                            encode_application (dispatch.parts),
+                                                            is_request (dispatch.record.kind));
+                else
+                    return stateful::accepted_spot_record (value, authority->source,
+                                                           encode_application (dispatch.parts),
+                                                           is_request (dispatch.record.kind));
+            },
+            header);
           auto reply = std::move (dispatch.record.reply_token.local_reply);
           std::function<bool (const std::optional<protocol::application_payload_t> &)> terminal;
           if (reply) {
@@ -7822,7 +7868,8 @@ zlink::submit_result_t public_host_runtime_t::enqueue_local_actor_message (
 
 zlink::submit_result_t
 public_host_runtime_t::enqueue_local_spot_send (const protocol::spot_route_fence_t &target,
-                                                const std::vector<zlink::message_t> &parts)
+                                                const std::vector<zlink::message_t> &parts,
+                                                std::string source_spot_id)
 {
     const auto local = status ();
     if (target.target_node_routing_id != local.routing_id ().to_bytes ()
@@ -7842,21 +7889,24 @@ public_host_runtime_t::enqueue_local_spot_send (const protocol::spot_route_fence
     record.domain = ready_domain_t::application;
     record.source_node_rid = local.routing_id ();
     record.spot_route = target;
+    record.operation_id = {_options.mesh.descriptor.lifecycle_generation,
+                           _transport->next_operation_sequence ()};
 
-    const auto submitted = _lifecycle_configuration_lane
-                             .run ([&] {
-                                 if (!_started || _closing) {
-                                     return zlink::submit_result_t::terminated;
-                                 }
-                                 return _local_dispatch_completion_lane
-                                   .run ([&] {
-                                       admit_local_application (local_application_dispatch_t{
-                                         std::move (owner), std::move (record), parts});
-                                       return zlink::submit_result_t::ok;
-                                   })
-                                   .get ();
-                             })
-                             .get ();
+    const auto submitted =
+      _lifecycle_configuration_lane
+        .run ([&] {
+            if (!_started || _closing) {
+                return zlink::submit_result_t::terminated;
+            }
+            return _local_dispatch_completion_lane
+              .run ([&] {
+                  admit_local_application (local_application_dispatch_t{
+                    std::move (owner), std::move (record), parts, std::move (source_spot_id)});
+                  return zlink::submit_result_t::ok;
+              })
+              .get ();
+        })
+        .get ();
     if (submitted == zlink::submit_result_t::ok)
         _transport->signal_activity ();
     return submitted;
@@ -7868,7 +7918,8 @@ public_host_runtime_t::enqueue_local_spot_request (const protocol::spot_route_fe
                                                    pending_operation_t &operation,
                                                    std::chrono::milliseconds timeout,
                                                    std::span<const std::uint8_t> metadata,
-                                                   spot_request_completion_t completion)
+                                                   spot_request_completion_t completion,
+                                                   std::string source_spot_id)
 {
     const auto local = status ();
     if (target.target_node_routing_id != local.routing_id ().to_bytes ()
@@ -7903,6 +7954,7 @@ public_host_runtime_t::enqueue_local_spot_request (const protocol::spot_route_fe
                                              local_request_wait_cleanup (waiter),
                                              mesh_request_surface_t::spot);
                   record.operation_id = operation.id;
+                  record.reply_route_id = operation.id.low;
                   std::weak_ptr<public_host_runtime_t> weak = shared_from_this ();
                   record.reply_token.host = weak;
                   record.reply_token.local_reply =
@@ -7916,7 +7968,8 @@ public_host_runtime_t::enqueue_local_spot_request (const protocol::spot_route_fe
 
                   try {
                       admit_local_application (
-                        local_application_dispatch_t{std::move (owner), std::move (record), parts},
+                        local_application_dispatch_t{std::move (owner), std::move (record), parts,
+                                                     std::move (source_spot_id)},
                         waiter);
                   }
                   catch (...) {

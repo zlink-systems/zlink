@@ -1836,6 +1836,23 @@ void host_maintenance_runtime_t::complete_termination (const termination_result_
 namespace zlink::framework::runtime::host
 {
 
+void public_host_runtime_t::attach_relocation_terminals (
+  stateful::maintenance_runtime_t &maintenance)
+{
+    if (_delay_owner)
+        maintenance.bind_delay_owner (*_delay_owner);
+    maintenance.attach_relocation_wire (*_relocation_wire,
+                                        [this] { return _stateful_dispatch.get (); });
+    maintenance.attach_committed_terminal ([this] (const stateful::object_ref_t &owner) {
+        if (_stateful_dispatch)
+            _stateful_dispatch->release_relocated_payloads (owner);
+    });
+    maintenance.attach_unavailable_terminal ([this] (const stateful::object_ref_t &owner) {
+        if (_stateful_dispatch)
+            (void) _stateful_dispatch->fail_pending_unavailable (owner);
+    });
+}
+
 void public_host_runtime_t::configure_relocation (
   std::shared_ptr<stateful::authority_relocation_port_t> authority,
   std::shared_ptr<stateful::relocation_store_port_t> relocations,
@@ -1856,18 +1873,7 @@ void public_host_runtime_t::configure_relocation (
     auto maintenance = std::make_unique<stateful::maintenance_runtime_t> (
       _objects, std::move (authority), std::move (relocations), limits,
       std::move (relocation_observer), std::move (aggregate_authority));
-    if (_delay_owner)
-        maintenance->bind_delay_owner (*_delay_owner);
-    maintenance->attach_relocation_wire (*_relocation_wire,
-                                         [this] { return _stateful_dispatch.get (); });
-    maintenance->attach_committed_terminal ([this] (const stateful::object_ref_t &owner) {
-        if (_stateful_dispatch)
-            _stateful_dispatch->release_relocated_payloads (owner);
-    });
-    maintenance->attach_unavailable_terminal ([this] (const stateful::object_ref_t &owner) {
-        if (_stateful_dispatch)
-            (void) _stateful_dispatch->fail_pending_unavailable (owner);
-    });
+    attach_relocation_terminals (*maintenance);
     _maintenance = std::move (maintenance);
 }
 
@@ -1905,18 +1911,7 @@ void public_host_runtime_t::configure_maintenance (
     _relocation_cutover_wait = limits.cutover_wait_timeout;
     auto maintenance = std::make_unique<stateful::maintenance_runtime_t> (
       _objects, std::move (providers), limits, std::move (relocation_observer));
-    if (_delay_owner)
-        maintenance->bind_delay_owner (*_delay_owner);
-    maintenance->attach_relocation_wire (*_relocation_wire,
-                                         [this] { return _stateful_dispatch.get (); });
-    maintenance->attach_committed_terminal ([this] (const stateful::object_ref_t &owner) {
-        if (_stateful_dispatch)
-            _stateful_dispatch->release_relocated_payloads (owner);
-    });
-    maintenance->attach_unavailable_terminal ([this] (const stateful::object_ref_t &owner) {
-        if (_stateful_dispatch)
-            (void) _stateful_dispatch->fail_pending_unavailable (owner);
-    });
+    attach_relocation_terminals (*maintenance);
     auto termination = std::make_unique<stateful::host_maintenance_runtime_t> (
       _objects, _sessions, [this] { return seal_relocation_targets (); });
     _maintenance = std::move (maintenance);

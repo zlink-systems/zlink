@@ -2594,26 +2594,34 @@ result_t<void> actor_gateway_runtime_t::update_actor_ref (const actor_ref_t &act
 
 result_t<void> actor_gateway_runtime_t::destroy_actor (const actor_ref_t &actor_ref)
 {
-    return _state->sync ([this, &actor_ref] {
-        if (::zlink::framework::detail::actor_ref_access_t::empty (actor_ref)) {
-            return result_t<void>::failure (framework_error_kind_t::not_found,
-                                            "actor ref is empty");
-        }
-        const auto found = _state->actors_by_id.find (std::string (actor_ref.actor_id ().value ()));
-        if (found == _state->actors_by_id.end ()) {
-            return result_t<void>::success ();
-        }
-        if (!actor_types_compatible (found->second.ref, actor_ref)) {
-            return result_t<void>::failure (framework_error_kind_t::type_mismatch,
-                                            "actor id is already bound to another type");
-        }
-        if (found->second.ref.object_generation () != actor_ref.object_generation ()) {
-            return result_t<void>::success ();
-        }
-        _state->bound_session_sinks.erase (std::string (actor_ref.actor_id ().value ()));
-        _state->actors_by_id.erase (found);
+    return _state->sync ([&] { return destroy_actor_on_lane (actor_ref); });
+}
+
+task_t<result_t<void>> actor_gateway_runtime_t::destroy_actor_async (actor_ref_t actor_ref)
+{
+    co_return co_await _state->lane.run_task (
+      [this, actor_ref] { return destroy_actor_on_lane (actor_ref); });
+}
+
+result_t<void> actor_gateway_runtime_t::destroy_actor_on_lane (const actor_ref_t &actor_ref)
+{
+    if (::zlink::framework::detail::actor_ref_access_t::empty (actor_ref)) {
+        return result_t<void>::failure (framework_error_kind_t::not_found, "actor ref is empty");
+    }
+    const auto found = _state->actors_by_id.find (std::string (actor_ref.actor_id ().value ()));
+    if (found == _state->actors_by_id.end ()) {
         return result_t<void>::success ();
-    });
+    }
+    if (!actor_types_compatible (found->second.ref, actor_ref)) {
+        return result_t<void>::failure (framework_error_kind_t::type_mismatch,
+                                        "actor id is already bound to another type");
+    }
+    if (found->second.ref.object_generation () != actor_ref.object_generation ()) {
+        return result_t<void>::success ();
+    }
+    _state->bound_session_sinks.erase (std::string (actor_ref.actor_id ().value ()));
+    _state->actors_by_id.erase (found);
+    return result_t<void>::success ();
 }
 
 actor_session_binding_snapshot_t
