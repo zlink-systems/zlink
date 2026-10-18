@@ -5,7 +5,7 @@ import type { ZLinkLocationRuntime } from '../locations';
 import type { ZLinkSpotNodeRuntimeManager } from '../spots';
 import type { ZLinkStreamRuntimeManager } from '../streams';
 import type { ZLinkLocationRuntimeStopSnapshot } from './location-runtime-owner';
-import { isAbortError } from '../abort';
+import { awaitWithAbort, isAbortError } from '../abort';
 
 interface ZLinkRuntimeOwnedStore {
   dispose?(): void | Promise<void>;
@@ -29,7 +29,10 @@ export interface ZLinkRuntimeStopParts {
   readonly streamRuntime?: ZLinkStreamRuntimeManager;
   readonly spotNodeRuntime?: ZLinkSpotNodeRuntimeManager;
   readonly channelRuntime?: ZLinkChannelRuntimeManager;
-  readonly serviceRelocation?: { dispose(): Promise<void> };
+  readonly serviceRelocation?: {
+    drainActorJoinSources?(): Promise<void>;
+    dispose(): Promise<void>;
+  };
   readonly ownedStores?: readonly ZLinkRuntimeOwnedStore[];
 }
 
@@ -48,12 +51,20 @@ export async function rollbackRuntimeStart(parts: ZLinkRuntimeStartRollbackParts
 export async function stopRuntimeParts(parts: ZLinkRuntimeStopParts): Promise<void> {
   const state = parts.state;
   const errors: unknown[] = [];
+  await runShutdownStep(errors, () =>
+    awaitWithAbort(
+      Promise.resolve(parts.serviceRelocation?.drainActorJoinSources?.()),
+      parts.shutdownSignal
+    )
+  );
   await runShutdownStep(errors, () => parts.streamRuntime?.dispose());
   await runShutdownStep(errors, () =>
     parts.spotNodeRuntime?.dispose(undefined, parts.cleanupDeadline)
   );
   await runShutdownStep(errors, () => parts.channelRuntime?.dispose());
-  await runShutdownStep(errors, () => parts.serviceRelocation?.dispose());
+  await runShutdownStep(errors, () =>
+    awaitWithAbort(Promise.resolve(parts.serviceRelocation?.dispose()), parts.shutdownSignal)
+  );
   await runShutdownStep(errors, () => parts.locationSnapshot.lifecycle?.dispose());
   await runShutdownStep(errors, () => parts.locationSnapshot.runtime?.stop(parts.shutdownSignal));
   await Promise.allSettled(state.listenerTasks);

@@ -8856,7 +8856,7 @@ const frames: Uint8Array[] = [writer.result()];
 return frames; }
 export function validateInstanceSpotCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context;  }
 
-export type RelocationPrepareCommand = { readonly command: "relocationPrepare"; readonly flags: number; readonly relocation: RelocationId; readonly targetAttemptGeneration: NonzeroU64; readonly coordinator: RelocationCoordinatorFence; readonly target: RelocationTargetFence; readonly initiatorRole: RelocationRole; readonly object: RelocationObjectIdentity; readonly sourceNodeRid: Rid; readonly sourceNodeGeneration: NonzeroU64; readonly payloadTotalLength: RelocationLogicalLength; readonly payloadChunkCount: RelocationChunkCount; readonly payloadChecksumCrc32c: U32; readonly applicationVersion: ApplicationVersion; };
+export type RelocationPrepareCommand = { readonly command: "relocationPrepare"; readonly flags: number; readonly relocation: RelocationId; readonly targetAttemptGeneration: NonzeroU64; readonly coordinator: RelocationCoordinatorFence; readonly target: RelocationTargetFence; readonly initiatorRole: RelocationRole; readonly object: RelocationObjectIdentity; readonly sourceNodeRid: Rid; readonly sourceNodeGeneration: NonzeroU64; readonly payloadTotalLength: RelocationLogicalLength; readonly payloadChunkCount: RelocationChunkCount; readonly payloadChecksumCrc32c: U32; readonly applicationVersion: ApplicationVersion; readonly deadlineUnixMs: NonzeroU64; };
 export function decodeRelocationPrepareCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): RelocationPrepareCommand { if (!frames.length) fail("relocationPrepare frames"); const reader = new Reader(frames[0]); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1 || Number(reader.u(1)) !== 40) fail("relocationPrepare header"); const flags = Number(reader.u(1)); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("relocationPrepare flags"); const value: any = { command: "relocationPrepare", flags };
   value["relocation"] = readRelocationId(reader, context, value, flags);
 
@@ -8892,6 +8892,9 @@ export function decodeRelocationPrepareCommand(frames: readonly Uint8Array[], co
 
 
   value["applicationVersion"] = readApplicationVersion(reader, context, value, flags);
+
+
+  value["deadlineUnixMs"] = readNonzeroU64(reader, context, value, flags);
 
 
 reader.done("relocationPrepare"); let frameIndex = 1;
@@ -8948,12 +8951,16 @@ export function encodeRelocationPrepareCommand(value: RelocationPrepareCommand, 
 
 
   writeApplicationVersion(numeric(value["applicationVersion"]), writer, context, value, value.flags);
+  if (value["deadlineUnixMs"] === undefined) fail("deadlineUnixMs required");
+
+
+  writeNonzeroU64(numeric(value["deadlineUnixMs"]), writer, context, value, value.flags);
 const frames: Uint8Array[] = [writer.result()];
 
 return frames; }
 export function validateRelocationPrepareCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context;  }
 
-export type SessionRelocationSealCommand = { readonly command: "sessionRelocationSeal"; readonly flags: number; readonly relocation: RelocationId; readonly coordinator: RelocationCoordinatorFence; readonly senderRole: RelocationRole; readonly actor: ActorRouteFence; readonly sessionOwnerNodeRid: Rid; readonly sessionOwnerNodeGeneration: NonzeroU64; readonly sessionOwnerId: Text8; readonly sessionOwnerLeaseGeneration: NonzeroU64; readonly sessionRid: Rid; readonly bindingGeneration: NonzeroU64; };
+export type SessionRelocationSealCommand = { readonly command: "sessionRelocationSeal"; readonly flags: number; readonly relocation: RelocationId; readonly coordinator: RelocationCoordinatorFence; readonly senderRole: RelocationRole; readonly actor: ActorRouteFence; readonly sessionOwnerNodeRid: Rid; readonly sessionOwnerNodeGeneration: NonzeroU64; readonly sessionOwnerId: Text8; readonly sessionOwnerLeaseGeneration: NonzeroU64; readonly sessionRid: Rid; readonly bindingGeneration: NonzeroU64; readonly targetNodeRid: Rid; readonly targetNodeGeneration: NonzeroU64; };
 export function decodeSessionRelocationSealCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): SessionRelocationSealCommand { if (!frames.length) fail("sessionRelocationSeal frames"); const reader = new Reader(frames[0]); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1 || Number(reader.u(1)) !== 42) fail("sessionRelocationSeal header"); const flags = Number(reader.u(1)); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("sessionRelocationSeal flags"); const value: any = { command: "sessionRelocationSeal", flags };
   value["relocation"] = readRelocationId(reader, context, value, flags);
 
@@ -8983,6 +8990,12 @@ export function decodeSessionRelocationSealCommand(frames: readonly Uint8Array[]
 
 
   value["bindingGeneration"] = readNonzeroU64(reader, context, value, flags);
+
+
+  value["targetNodeRid"] = readRid(reader, context, value, flags);
+
+
+  value["targetNodeGeneration"] = readNonzeroU64(reader, context, value, flags);
 
 
 reader.done("sessionRelocationSeal"); let frameIndex = 1;
@@ -9031,6 +9044,14 @@ export function encodeSessionRelocationSealCommand(value: SessionRelocationSealC
 
 
   writeNonzeroU64(numeric(value["bindingGeneration"]), writer, context, value, value.flags);
+  if (value["targetNodeRid"] === undefined) fail("targetNodeRid required");
+
+
+  writeRid(value["targetNodeRid"], writer, context, value, value.flags);
+  if (value["targetNodeGeneration"] === undefined) fail("targetNodeGeneration required");
+
+
+  writeNonzeroU64(numeric(value["targetNodeGeneration"]), writer, context, value, value.flags);
 const frames: Uint8Array[] = [writer.result()];
 
 return frames; }

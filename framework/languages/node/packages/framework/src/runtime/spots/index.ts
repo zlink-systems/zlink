@@ -2984,7 +2984,7 @@ export class DefaultZLinkSpotManager {
             // ingress hold) migrate into the real Actor queue next, in the
             // order they parked — after the relayed backlog above, before
             // regular ingress opens.
-            await this.migrateActorJoinPrewarm(activation, actor, pendingTransfer.transferId);
+            this.migrateActorJoinPrewarm(activation, actor, pendingTransfer.transferId);
             // This registry owns target lifecycle and saved backlog
             // reconciliation only. Session route readiness is enforced by
             // the Session binding aggregate after this boundary.
@@ -3135,7 +3135,7 @@ export class DefaultZLinkSpotManager {
             if (activation === undefined) {
               throw new Error(`Actor Join relocation '${relocationId}' target mailbox is missing.`);
             }
-            return activation.executeActor(actor.context.actorId, operation);
+            return activation.executeActor(actor.context.actorId, operation, { lane: 'lifecycle' });
           };
       await this.options.actorTransferRuntime.deliverDeferredJoinCompletion(
         lifecycleFailure === undefined
@@ -3159,6 +3159,16 @@ export class DefaultZLinkSpotManager {
   beginActorJoinRelocation(relocationId: string): () => void {
     this.formalRemoteActorAdmissions.beginRestore(relocationId);
     return () => this.formalRemoteActorAdmissions.finishRestore(relocationId);
+  }
+
+  /** @internal Transfers accepted ingress after the target Actor becomes visible. */
+  openActorJoinRelocation(meshName: string, relocationId: string, actor: ZLinkActor): void {
+    const admission = this.formalRemoteActorAdmissions.get(relocationId);
+    if (admission === undefined) return;
+    const activation = this.activations.resolve(meshName, admission.admission.spotId);
+    if (activation !== undefined) {
+      this.migrateActorJoinPrewarm(activation, actor, relocationId);
+    }
   }
 
   async restoreCanonicalActorJoinRecovery(
@@ -3345,13 +3355,14 @@ export class DefaultZLinkSpotManager {
    * either lands in the snapshot or resolves the Actor directly through
    * ordinary ingress — never both, never neither.
    */
-  private async migrateActorJoinPrewarm(
+  private migrateActorJoinPrewarm(
     activation: ZLinkSpotActivation,
     actor: ZLinkActor,
     transferId: string
-  ): Promise<void> {
+  ): void {
     const drained = this.formalRemoteActorAdmissions.completeMigration(transferId);
-    for (const arrival of drained) {
+    if (drained.length === 0) return;
+    const terminals = drained.map(async (arrival) => {
       try {
         const response = await this.dispatchActorPacket(
           arrival.origin,
@@ -3367,7 +3378,16 @@ export class DefaultZLinkSpotManager {
       } catch (error) {
         arrival.reject(error);
       }
-    }
+    });
+    // Reserve every retained arrival's FIFO position before ordinary ingress
+    // can resume. Handler terminals must not hold the relocation finalize that
+    // releases an earlier saved-work prefix.
+    this.options.detachedTaskRunner.runDetached(
+      `actor Join ingress migration ${actor.context.actorId}`,
+      async () => {
+        await Promise.all(terminals);
+      }
+    );
   }
 
   private async dispatchMeshActorPacket(

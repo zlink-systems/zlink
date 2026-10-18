@@ -3,6 +3,7 @@ import {
   type ActorRef,
   type RoutingId,
   type ZLinkActor,
+  type ZLinkMeshNodeDescriptor,
   type ZLinkActorJoinOperationId,
   type ZLinkMessageSerializer,
   type ZLinkSpot,
@@ -223,6 +224,30 @@ export class ZLinkActorTransferRuntime {
       actorId,
       requireSourceObjectGeneration(actorId, state)
     );
+  }
+
+  /** Relocation activation owns admission; handler terminals are observed independently. */
+  admitRelocationPrefix(
+    actor: ZLinkActor,
+    objectGeneration: bigint,
+    packets: readonly ZLinkActorHandoffPacket[],
+    start: Promise<void>,
+    onResult: (packet: ZLinkActorHandoffPacket, result: ZLinkActorHandoffResult) => Promise<void>
+  ): void {
+    const manager = this.options.spotManager();
+    if (manager === undefined) throw new Error('Relocated Actor has no local FIFO owner.');
+    const admitted = this.options.actorHandoff.admitTransferredPrefix(
+      actor.context.actorId,
+      objectGeneration,
+      packets,
+      (records) => manager.admitSourceActorPacketPrefix(actor.context.actorId, records),
+      this.options.prepareApplicationJob,
+      start,
+      (packet, result) => {
+        void this.observeHandoffReplay(onResult(packet, result));
+      }
+    );
+    void this.observeHandoffReplay(admitted.terminal);
   }
 
   async completeDeferredActorHandoff(
@@ -481,7 +506,8 @@ export class ZLinkActorTransferRuntime {
     state: ZLinkActorRuntimeState,
     signal?: AbortSignal,
     manageMembership = true,
-    relocation?: ServiceWireOperationId
+    relocation?: ServiceWireOperationId,
+    relocationTarget?: Pick<ZLinkMeshNodeDescriptor, 'rid' | 'lifecycleGeneration'>
   ): Promise<{
     readonly target?: ZLinkRemoteBoundSessionTarget;
     readonly handoffBacklog: readonly import('../actors').ZLinkActorHandoffPacket[];
@@ -511,7 +537,7 @@ export class ZLinkActorTransferRuntime {
     // (Session–Actor binding §8.1).
     const bound = state.boundSession !== undefined;
     const sealedSession = bound
-      ? await this.sealBoundSessionRoute(actor, state, signal, relocation)
+      ? await this.sealBoundSessionRoute(actor, state, signal, relocation, relocationTarget)
       : undefined;
     try {
       if (manageMembership) {
@@ -686,7 +712,8 @@ export class ZLinkActorTransferRuntime {
     actor: ZLinkActor,
     state: ZLinkActorRuntimeState,
     signal?: AbortSignal,
-    relocation?: ServiceWireOperationId
+    relocation?: ServiceWireOperationId,
+    relocationTarget?: Pick<ZLinkMeshNodeDescriptor, 'rid' | 'lifecycleGeneration'>
   ): Promise<ZLinkRemoteBoundSessionTarget | undefined> {
     const target = state.boundSession;
     const actorRef = state.nativeActorRef;
@@ -709,6 +736,7 @@ export class ZLinkActorTransferRuntime {
     const descriptors = this.options.liveDescriptors;
     if (
       relocation === undefined ||
+      relocationTarget === undefined ||
       serviceWire === undefined ||
       authorityStore === undefined ||
       descriptors === undefined ||
@@ -757,6 +785,8 @@ export class ZLinkActorTransferRuntime {
       bindingGeneration: target.bindingGeneration
     };
     const request: ServiceSessionRelocationSeal = {
+      targetNodeRid: relocationTarget.rid as string,
+      targetNodeGeneration: relocationTarget.lifecycleGeneration,
       relocation,
       coordinator,
       senderRole: 'source',

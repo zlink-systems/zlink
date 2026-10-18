@@ -18,6 +18,7 @@
 #include "runtime/dispatch/receive_batch_budget.hpp"
 #include "runtime/messaging/submit_result_mapper.hpp"
 #include "runtime/messaging/request_failure_mapper.hpp"
+#include "runtime/messaging/request_deadline.hpp"
 
 #include <service_wire_constants.hpp>
 #include <service_wire_pilot_codec.hpp>
@@ -43,6 +44,11 @@ namespace zlink::framework::runtime::host
 
 namespace
 {
+template <typename Peer> bool peer_route_ready (const Peer &peer, std::uint64_t generation)
+{
+    return peer && peer->ready && peer->descriptor.lifecycle_generation == generation;
+}
+
 std::pair<std::uint32_t, std::uint32_t> stateful_failure_pair (stateful::stateful_error_t failure)
 {
     switch (failure) {
@@ -1070,6 +1076,12 @@ void public_host_runtime_t::close () noexcept
     _lifecycle_configuration_lane.run ([&] { _closing = false; }).get ();
 }
 
+void public_host_runtime_t::configure_peer_reconcile (
+  std::function<void (const std::vector<std::uint8_t> &)> request)
+{
+    _lifecycle_configuration_lane.run ([&] { _peer_reconcile = std::move (request); }).get ();
+}
+
 bool public_host_runtime_t::connect_peer (const std::string &endpoint,
                                           std::optional<zlink::routing_id_t> expected,
                                           std::uint64_t expected_lifecycle_generation,
@@ -1824,7 +1836,8 @@ public_host_runtime_t::admit_session_relocation_seal (
   const protocol::session_relocation_seal_t &seal,
   const location_owner_token_t &session_owner,
   std::vector<std::uint8_t> response_routing_id,
-  session_seal_local_completion_t local_completion)
+  session_seal_local_completion_t local_completion,
+  const std::function<void (const std::vector<std::uint8_t> &)> &reconcile)
 {
     if (session_owner.owner_id != seal.session_owner_id
         || seal.session_owner_lease_generation
@@ -1932,6 +1945,7 @@ public_host_runtime_t::admit_session_relocation_seal (
         if (!stored_matches)
             return {false, std::nullopt};
     }
+    request_peer_reconcile (seal.target_node_routing_id, seal.target_node_generation, reconcile);
     return {true, std::move (immediate)};
 }
 
@@ -2063,7 +2077,12 @@ task_t<bool> public_host_runtime_t::seal_session_remote (
     const auto local = status ();
     if (local.routing_id ().to_bytes () == session_owner_node.to_bytes ()) {
         std::function<std::optional<location_owner_token_t> ()> owner_resolver;
-        _lifecycle_configuration_lane.run ([&] { owner_resolver = _session_route_owner_resolver; })
+        std::function<void (const std::vector<std::uint8_t> &)> reconcile;
+        _lifecycle_configuration_lane
+          .run ([&] {
+              owner_resolver = _session_route_owner_resolver;
+              reconcile = _peer_reconcile;
+          })
           .get ();
         if (local.lifecycle_generation () != seal.session_owner_node_generation || !owner_resolver)
             co_return false;
@@ -2079,7 +2098,7 @@ task_t<bool> public_host_runtime_t::seal_session_remote (
                                        : zlink::message_t{});
           };
         auto [accepted, immediate] =
-          admit_session_relocation_seal (seal, *owner, {}, local_completion);
+          admit_session_relocation_seal (seal, *owner, {}, local_completion, reconcile);
         if (!accepted)
             co_return false;
         if (immediate)
@@ -2927,6 +2946,12 @@ public_host_runtime_t::request_to_channel (const std::string &channel_name,
     co_return submitted (accepted);
 }
 
+bool public_host_runtime_t::relocation_target_wire_ready (
+  const relocation_target_attempt_t &attempt) noexcept
+{
+    return attempt.next_finalize_at != std::chrono::steady_clock::time_point{};
+}
+
 bool public_host_runtime_t::relocation_target_terminal (const relocation_target_attempt_t &attempt)
 {
     return attempt.terminal && attempt.terminal->task ().await_ready ();
@@ -2939,8 +2964,11 @@ public_host_runtime_t::take_relocation_target_discard (relocation_target_attempt
         return std::nullopt;
     auto terminal = attempt.terminal;
     auto discarded = std::move (attempt);
-    // Retain only the terminal while cleanup runs, so shutdown cannot miss it.
+    // Keep the same request identity and completion while cleanup runs.
     attempt = relocation_target_attempt_t{};
+    attempt.prepare = discarded.prepare;
+    attempt.pending = discarded.pending;
+    attempt.restore_identity = discarded.restore_identity;
     attempt.terminal = std::move (terminal);
     return discarded;
 }
@@ -2970,18 +2998,33 @@ void public_host_runtime_t::discard_unverified_relocation_targets (
 
 task_t<void> public_host_runtime_t::seal_relocation_targets ()
 {
+    std::vector<std::shared_ptr<std::stop_source>> cancellations;
+    std::vector<pending_relocation_assembly_t> assemblies;
     auto terminals =
       _relocation_session_terminal_lane
-        .run ([this] {
+        .run ([this, &cancellations, &assemblies] {
             _options.mesh.shutdown_admission_seal->store (true, std::memory_order_release);
             lower_relocation_next_due_on_lane (relocation_due_now);
             std::vector<task_t<void>> result;
-            for (const auto &[key, attempt] : _relocation_target_attempts)
+            for (const auto &[key, attempt] : _relocation_target_attempts) {
                 if (attempt.terminal)
                     result.push_back (attempt.terminal->task ());
+                if (attempt.pending)
+                    cancellations.push_back (attempt.pending->cancellation);
+            }
+            for (auto &[key, assembly] : _relocation_assemblies)
+                assemblies.push_back (std::move (assembly));
+            _relocation_assemblies.clear ();
             return result;
         })
         .get ();
+    for (const auto &cancellation : cancellations)
+        cancellation->request_stop ();
+    for (const auto &assembly : assemblies)
+        reply_relocation_assembly_failure (
+          assembly, static_cast<protocol::framework_error_code> (
+                      messaging::request_failure_mapper_t{}.target_failure_code (
+                        framework_error_kind_t::shutting_down)));
     auto activations =
       _lifecycle_configuration_lane
         .run ([this] { return std::exchange (_instance_spot_activation_admissions, {}); })
@@ -2997,7 +3040,8 @@ task_t<void> public_host_runtime_t::seal_relocation_targets ()
 }
 
 void public_host_runtime_t::discard_relocation_target_attempts (
-  std::vector<relocation_target_attempt_t> attempts) noexcept
+  std::vector<relocation_target_attempt_t> attempts,
+  std::optional<framework_exception_t> failure) noexcept
 {
     for (auto &attempt : attempts) {
         _spot_actor_index_lane
@@ -3047,6 +3091,16 @@ void public_host_runtime_t::discard_relocation_target_attempts (
         const relocation_attempt_key_t key{attempt.prepare.relocation.high,
                                            attempt.prepare.relocation.low,
                                            attempt.prepare.target_attempt_generation};
+        if (attempt.pending && !attempt.pending->ready->task ().await_ready ()) {
+            const auto stopped = framework_exception_t (
+              framework_error_kind_t::shutting_down, "Relocation target stopped before readiness");
+            const auto &cause = failure ? *failure : stopped;
+            trace_mesh_host ("relocation-assembly-failed", cause.what ());
+            reply_relocation_assembly_failure (
+              *attempt.pending, static_cast<protocol::framework_error_code> (
+                                  messaging::request_failure_mapper_t{}.target_failure_code (
+                                    cause.kind (), detail::failure_code (cause))));
+        }
         _relocation_session_terminal_lane
           .run ([&] {
               const auto found = _relocation_target_attempts.find (key);
@@ -3115,8 +3169,7 @@ void public_host_runtime_t::poll_relocation_target_attempts ()
     _relocation_session_terminal_lane
       .run ([&] {
           for (auto &[key, attempt] : _relocation_target_attempts) {
-              if (relocation_target_terminal (attempt)
-                  || attempt.next_finalize_at == std::chrono::steady_clock::time_point{}
+              if (relocation_target_terminal (attempt) || !relocation_target_wire_ready (attempt)
                   || attempt.next_finalize_at > now)
                   continue;
               if (attempt.cutover_received) {
@@ -3569,8 +3622,7 @@ bool public_host_runtime_t::try_finalize_relocation_target (const relocation_att
                 attempt = found->second;
             } else {
                 const auto now = std::chrono::steady_clock::now ();
-                if (!found->second.cutover_received
-                    || found->second.next_finalize_at == std::chrono::steady_clock::time_point{}
+                if (!found->second.cutover_received || !relocation_target_wire_ready (found->second)
                     || now < found->second.next_finalize_at)
                     return false;
                 attempt = found->second;
@@ -3665,6 +3717,7 @@ bool public_host_runtime_t::try_finalize_relocation_target (const relocation_att
     }
 
     try {
+        // Membership §4.2 steps 7-8: lifecycle and queue opening precede command 44.
         const auto committed = attempt.targets.size () == 1
                                  ? _objects.commit_relocation_restore (attempt.targets.front (),
                                                                        attempt.restore_identity)
@@ -3716,6 +3769,11 @@ bool public_host_runtime_t::try_finalize_relocation_target (const relocation_att
 void public_host_runtime_t::reply_relocation_assembly_failure (
   const pending_relocation_assembly_t &pending, protocol::framework_error_code code)
 {
+    pending.ready->complete (detail::result_access_t::failure<void> (detail::with_failure_code (
+      framework_exception_t (
+        messaging::request_failure_mapper_t{}.failure_code_kind (static_cast<std::uint32_t> (code)),
+        "Relocation target preparation failed"),
+      static_cast<std::uint32_t> (code))));
     (void) _transport->reply_relocation_failed (
       pending.request, protocol::relocation_failed_t{
                          pending.prepare.relocation, pending.prepare.target_attempt_generation,
@@ -3794,13 +3852,14 @@ task_t<bool> public_host_runtime_t::restore_relocation_assembly (
                   staging->targets.front ().mesh_name, staging->targets.front ().node_id};
             }
         }
-        restored =
-          co_await (staging->targets.size () == 1
-                      ? _objects.restore_relocation (
-                          staging->frozen.front (), staging->targets.front (),
-                          staging->restore_identity, {}, std::move (actor_target_spot))
-                      : _objects.restore_relocation_aggregate (staging->frozen, staging->targets,
-                                                               staging->restore_identity, {}));
+        restored = co_await (
+          staging->targets.size () == 1
+            ? _objects.restore_relocation (
+                staging->frozen.front (), staging->targets.front (), staging->restore_identity,
+                pending->cancellation->get_token (), std::move (actor_target_spot))
+            : _objects.restore_relocation_aggregate (staging->frozen, staging->targets,
+                                                     staging->restore_identity,
+                                                     pending->cancellation->get_token ()));
         if (restored == stateful::stateful_error_t::none
             || restored == stateful::stateful_error_t::already_exists) {
             // Restore owns the retirement of a previous moving source record.
@@ -3837,401 +3896,629 @@ task_t<bool> public_host_runtime_t::restore_relocation_assembly (
     co_return false;
 }
 
-void public_host_runtime_t::activate_relocation_assembly (
-  const relocation_attempt_key_t &key,
-  const pending_relocation_assembly_t &pending,
-  relocation_assembly_staging_t staging)
+task_t<bool>
+public_host_runtime_t::submit_relocation_ready_reply (protocol::relocation_prepare_t prepare,
+                                                      const mesh::service_mailbox_record_t &request)
 {
-    relocation_target_attempt_t attempt;
-    attempt.terminal = std::make_shared<task_completion_source_t<void>> ();
-    attempt.prepare = pending.prepare;
-    attempt.restore_identity = staging.restore_identity;
-    attempt.sources = std::move (staging.sources);
-    attempt.targets = std::move (staging.targets);
-    attempt.wire_objects = std::move (staging.wire_objects);
-    for (const auto &route : staging.session_routes) {
-        attempt.session_routes.emplace_back ();
-        attempt.session_routes.back ().route = route;
-    }
-    bool inserted = false;
-    try {
-        inserted =
-          _spot_actor_index_lane
-            .run ([&] {
-                // Relocation §4.3/§4.5: materialize raw identities before
-                // Ready authority can route local ingress here. The
-                // existing recovering gate still prevents execution.
-                // Validate the whole unit before inserting any Actor.
-                for (const auto &target : attempt.targets) {
-                    if (target.kind != stateful::object_kind_t::actor)
-                        continue;
-                    const auto current = _actors.find (target.key);
-                    if (current != _actors.end () && current->second.second != target)
-                        return false;
-                }
-                for (std::size_t index = 0; index != attempt.targets.size (); ++index) {
-                    const auto &target = attempt.targets[index];
-                    if (target.kind == stateful::object_kind_t::actor)
-                        _actors.try_emplace (target.key, attempt.wire_objects[index].stable_type,
-                                             target);
-                }
-                return true;
-            })
-            .get ()
-          && _relocation_session_terminal_lane
-               .run ([&] {
-                   if (_options.mesh.shutdown_admission_seal->load (std::memory_order_acquire))
-                       return false;
-                   lower_relocation_next_due_on_lane (relocation_due_now);
-                   return _relocation_target_attempts.try_emplace (key, std::move (attempt)).second;
-               })
-               .get ();
-    }
-    catch (...) {
-        std::vector<relocation_target_attempt_t> cleanup;
-        cleanup.push_back (std::move (attempt));
-        discard_relocation_target_attempts (std::move (cleanup));
-        throw;
-    }
-    if (!inserted) {
-        std::vector<relocation_target_attempt_t> cleanup;
-        cleanup.push_back (std::move (attempt));
-        discard_relocation_target_attempts (std::move (cleanup));
-        reply_relocation_assembly_failure (
-          pending, static_cast<protocol::framework_error_code> (
-                     messaging::request_failure_mapper_t{}.target_failure_code (
-                       framework_error_kind_t::invalid_operation)));
-        return;
-    }
-    const auto ready_sent = _transport->reply_relocation_ready (
-      pending.request, protocol::relocation_ready_t{
-                         pending.prepare.relocation, pending.prepare.target_attempt_generation,
-                         pending.prepare.coordinator, pending.prepare.target,
-                         pending.prepare.object, protocol::relocation_role_t::target});
-    if (ready_sent) {
-        _relocation_session_terminal_lane
-          .run ([&] {
-              const auto found = _relocation_target_attempts.find (key);
-              if (found != _relocation_target_attempts.end ())
-                  set_relocation_finalize_at_on_lane (
-                    found->second, std::chrono::steady_clock::now () + _relocation_cutover_wait);
-          })
-          .get ();
-        return;
-    }
-    std::optional<relocation_target_attempt_t> aborted;
-    _relocation_session_terminal_lane
-      .run ([&] {
-          const auto found = _relocation_target_attempts.find (key);
-          if (found != _relocation_target_attempts.end ()) {
-              aborted = take_relocation_target_discard (found->second);
-          }
-      })
-      .get ();
-    if (!aborted)
-        return;
-    std::vector<relocation_target_attempt_t> cleanup;
-    cleanup.push_back (std::move (*aborted));
-    discard_relocation_target_attempts (std::move (cleanup));
+    auto submit = co_await _transport->prepare_relocation_ready_reply (
+      request, protocol::relocation_ready_t{prepare.relocation, prepare.target_attempt_generation,
+                                            prepare.coordinator, prepare.target, prepare.object,
+                                            protocol::relocation_role_t::target});
+    const relocation_attempt_key_t key{prepare.relocation.high, prepare.relocation.low,
+                                       prepare.target_attempt_generation};
+    co_return co_await _relocation_session_terminal_lane.run_task ([&] {
+        const auto found = _relocation_target_attempts.find (key);
+        if (_options.mesh.shutdown_admission_seal->load (std::memory_order_acquire)
+            || found == _relocation_target_attempts.end () || found->second.prepare != prepare
+            || !found->second.pending || found->second.targets.empty ())
+            throw framework_exception_t (framework_error_kind_t::shutting_down,
+                                         "Relocation target stopped before readiness reply");
+        const auto sent = submit && submit ();
+        if (sent && !relocation_target_wire_ready (found->second))
+            set_relocation_finalize_at_on_lane (found->second, std::chrono::steady_clock::now ()
+                                                                 + _relocation_cutover_wait);
+        return sent;
+    });
 }
 
-void public_host_runtime_t::complete_relocation_assembly (const relocation_attempt_key_t &key,
-                                                          pending_relocation_assembly_t pending)
+void public_host_runtime_t::observe_relocation_ready (
+  std::shared_ptr<task_completion_source_t<void>> ready,
+  mesh::service_mailbox_record_t request,
+  protocol::relocation_prepare_t prepare)
 {
+    auto ready_task = ready->task ();
+    detail::observe_task_completion (
+      ready_task, [self = shared_from_this (),
+                   request = std::make_shared<mesh::service_mailbox_record_t> (std::move (request)),
+                   prepare = std::move (prepare)] (const result_t<void> &result) {
+          const auto failed = [self, request, prepare] (const framework_exception_t &error) {
+              (void) self->_transport->reply_relocation_failed (
+                *request,
+                protocol::relocation_failed_t{
+                  prepare.relocation, prepare.target_attempt_generation, prepare.coordinator,
+                  prepare.target, prepare.object, protocol::relocation_role_t::target,
+                  messaging::request_failure_mapper_t{}.target_failure_code (
+                    error.kind (), detail::failure_code (error))});
+          };
+          if (!result) {
+              failed (result.error ()
+                        ? *result.error ()
+                        : framework_exception_t (framework_error_kind_t::internal_failure,
+                                                 "Relocation readiness failed without a cause"));
+              return;
+          }
+          auto submitted = std::make_shared<task_t<bool>> (
+            self->submit_relocation_ready_reply (prepare, *request));
+          detail::observe_task_completion (
+            *submitted, [submitted, failed] (const result_t<bool> &sent) {
+                if (!sent || !sent.value ())
+                    failed (sent.error () ? *sent.error ()
+                                          : framework_exception_t (
+                                              framework_error_kind_t::unavailable,
+                                              "Relocation readiness reply could not be submitted"));
+            });
+      });
+}
+
+void public_host_runtime_t::request_peer_reconcile (
+  const std::vector<std::uint8_t> &target,
+  std::uint64_t generation,
+  const std::function<void (const std::vector<std::uint8_t> &)> &reconcile)
+{
+    const auto local = _transport->topology ().local_descriptor ();
+    if (target == local.node_routing_id && generation == local.lifecycle_generation)
+        return;
+    if (!peer_route_ready (_transport->topology ().peer (target), generation) && reconcile)
+        reconcile (target);
+}
+
+task_t<void> public_host_runtime_t::await_relocation_session_routes (
+  std::shared_ptr<const pending_relocation_assembly_t> pending,
+  const std::vector<protocol::session_relocation_route_t> &routes)
+{
+    const auto local = _transport->topology ().local_descriptor ();
+    const auto reconcile =
+      co_await _lifecycle_configuration_lane.run_task ([this] { return _peer_reconcile; });
+    using route_identity_t = std::pair<std::vector<std::uint8_t>, std::uint64_t>;
+    std::map<route_identity_t, mesh::service_topology_registry_t::peer_observer_t> observers;
+    for (const auto &route : routes) {
+        if (route.session_owner_node_routing_id == local.node_routing_id
+            && route.session_owner_node_generation == local.lifecycle_generation)
+            continue;
+        const route_identity_t identity{route.session_owner_node_routing_id,
+                                        route.session_owner_node_generation};
+        if (observers.contains (identity))
+            continue;
+        auto observer = _transport->topology ().observe_peer (identity.first);
+        request_peer_reconcile (identity.first, identity.second, reconcile);
+        observers.emplace (identity, std::move (observer));
+    }
+    auto control = std::make_shared<task_completion_source_t<void>> ();
+    auto controlled = control->task ();
+    std::stop_callback stopped (
+      pending->cancellation->get_token (), [weak = std::weak_ptr{control}] {
+          if (const auto signal = weak.lock ())
+              signal->complete (result_t<void>::failure (framework_error_kind_t::shutting_down,
+                                                         "Relocation target stopped"));
+      });
+    struct deadline_registration_t
+    {
+        std::shared_ptr<detail::deadline_state_t> state =
+          std::make_shared<detail::deadline_state_t> ();
+        ~deadline_registration_t ()
+        {
+            state->cancelled.store (true, std::memory_order_release);
+            detail::deadline_scheduler_t::instance ().wake ();
+        }
+    } deadline;
+    const auto at = messaging::request_deadline_from_unix_ms (pending->prepare.deadline_unix_ms);
+    detail::deadline_scheduler_t::instance ().schedule (
+      at, deadline.state, [weak = std::weak_ptr{control}] {
+          if (const auto signal = weak.lock ())
+              signal->complete (result_t<void>::failure (framework_error_kind_t::deadline_exceeded,
+                                                         "Relocation source deadline expired"));
+      });
+    for (;;) {
+        auto wake = std::make_shared<task_completion_source_t<void>> ();
+        auto notified = wake->task ();
+        const auto notify = [weak = std::weak_ptr{wake}] (const result_t<void> &result) {
+            if (const auto signal = weak.lock ())
+                signal->complete (result);
+        };
+        struct subscriptions_t
+        {
+            std::stop_source owner;
+            ~subscriptions_t () { owner.request_stop (); }
+        } subscriptions;
+        bool all_ready = true;
+        {
+            detail::ambient_context_scope_t scope (nullptr, nullptr,
+                                                   subscriptions.owner.get_token (), false, true);
+            detail::observe_task_completion (controlled, notify);
+            for (const auto &[identity, observer] : observers) {
+                auto observation = observer ();
+                if (peer_route_ready (observation.peer, identity.second))
+                    continue;
+                all_ready = false;
+                detail::observe_task_completion (observation.changed, notify);
+            }
+        }
+        if (controlled.await_ready ())
+            co_await controlled;
+        if (std::chrono::steady_clock::now () >= at)
+            throw framework_exception_t (framework_error_kind_t::deadline_exceeded,
+                                         "Relocation source deadline expired");
+        if (all_ready)
+            co_return;
+        co_await notified;
+    }
+}
+
+task_t<void> public_host_runtime_t::finish_relocation_assembly (
+  relocation_attempt_key_t key,
+  std::shared_ptr<const pending_relocation_assembly_t> pending,
+  std::shared_ptr<relocation_assembly_staging_t> staging,
+  std::vector<std::pair<std::string, stateful::object_ref_t>> consumed)
+{
+    const auto registered = co_await _relocation_session_terminal_lane.run_task ([&] {
+        const auto found = _relocation_target_attempts.find (key);
+        return !_options.mesh.shutdown_admission_seal->load (std::memory_order_acquire)
+               && found != _relocation_target_attempts.end () && found->second.pending == pending;
+    });
+    if (!registered) {
+        rollback_actor_join_recoveries (consumed);
+        discard_relocation_assembly_staging (*pending, *staging);
+        co_await reply_relocation_assembly_failure (
+          key, pending,
+          static_cast<protocol::framework_error_code> (
+            messaging::request_failure_mapper_t{}.target_failure_code (
+              framework_error_kind_t::shutting_down)));
+        co_return;
+    }
+    bool restored = false;
+    std::optional<framework_exception_t> failure;
+    try {
+        restored = co_await restore_relocation_assembly (pending, staging);
+        if (restored) {
+            co_await await_relocation_session_routes (pending, staging->session_routes);
+            if (co_await activate_relocation_assembly (key, pending, staging))
+                co_return;
+            failure.emplace (framework_error_kind_t::unavailable,
+                             "Relocation readiness reply could not be submitted");
+        }
+    }
+    catch (const framework_exception_t &error) {
+        failure = error;
+    }
+    catch (const std::exception &error) {
+        failure.emplace (framework_error_kind_t::internal_failure, error.what ());
+    }
+    rollback_actor_join_recoveries (consumed);
+    if (!restored) {
+        auto code = protocol::framework_error_code::requestFailed;
+        if (failure) {
+            trace_mesh_host ("relocation-assembly-failed", failure->what ());
+            code = static_cast<protocol::framework_error_code> (
+              messaging::request_failure_mapper_t{}.target_failure_code (
+                failure->kind (), detail::failure_code (*failure)));
+            if (!pending->ready->task ().await_ready ())
+                discard_relocation_assembly_staging (*pending, *staging);
+        }
+        co_await reply_relocation_assembly_failure (key, pending, code);
+        co_return;
+    }
+    auto discarded = co_await _relocation_session_terminal_lane.run_task ([&] {
+        const auto found = _relocation_target_attempts.find (key);
+        if (found == _relocation_target_attempts.end () || found->second.pending != pending)
+            return std::optional<relocation_target_attempt_t>{};
+        if (found->second.targets.empty () && !found->second.restore_identity.reference.empty ())
+            return std::optional<relocation_target_attempt_t>{};
+        if (restored && found->second.targets.empty ()) {
+            found->second.restore_identity = staging->restore_identity;
+            found->second.sources = std::move (staging->sources);
+            found->second.targets = std::move (staging->targets);
+            found->second.wire_objects = std::move (staging->wire_objects);
+        }
+        if (!found->second.targets.empty ())
+            return take_relocation_target_discard (found->second);
+        return std::optional<relocation_target_attempt_t>{};
+    });
+    if (discarded) {
+        std::vector<relocation_target_attempt_t> cleanup;
+        cleanup.push_back (std::move (*discarded));
+        discard_relocation_target_attempts (std::move (cleanup), std::move (failure));
+    }
+}
+
+task_t<bool> public_host_runtime_t::activate_relocation_assembly (
+  const relocation_attempt_key_t &key,
+  std::shared_ptr<const pending_relocation_assembly_t> pending,
+  std::shared_ptr<relocation_assembly_staging_t> staging)
+{
+    std::optional<task_t<bool>> register_indexes;
+    co_await _relocation_session_terminal_lane.run_task ([&] {
+        const auto found = _relocation_target_attempts.find (key);
+        if (_options.mesh.shutdown_admission_seal->load (std::memory_order_acquire)
+            || found == _relocation_target_attempts.end () || found->second.pending != pending
+            || relocation_target_terminal (found->second))
+            throw framework_exception_t (framework_error_kind_t::shutting_down,
+                                         "Relocation target stopped before activation");
+        auto &attempt = found->second;
+        attempt.restore_identity = staging->restore_identity;
+        attempt.sources = std::move (staging->sources);
+        attempt.targets = std::move (staging->targets);
+        attempt.wire_objects = std::move (staging->wire_objects);
+        for (auto &route : staging->session_routes) {
+            attempt.session_routes.emplace_back ();
+            attempt.session_routes.back ().route = std::move (route);
+        }
+        // The attempt owns cleanup before any raw identity is registered.
+        // Submit on this turn so a later discard queues its index removal
+        // after registration. The index turn reads only its owned inputs.
+        register_indexes.emplace (_spot_actor_index_lane.run_task (
+          [this, targets = attempt.targets, wire_objects = attempt.wire_objects] {
+              // Relocation §4.3/§4.5: prepare raw identities before Ready CAS.
+              // The recovering gate still prevents application execution.
+              // Validate the whole unit before inserting any Actor.
+              for (const auto &target : targets) {
+                  if (target.kind != stateful::object_kind_t::actor)
+                      continue;
+                  const auto current = _actors.find (target.key);
+                  if (current != _actors.end () && current->second.second != target)
+                      return false;
+              }
+              for (std::size_t index = 0; index != targets.size (); ++index) {
+                  const auto &target = targets[index];
+                  if (target.kind == stateful::object_kind_t::actor)
+                      _actors.try_emplace (target.key, wire_objects[index].stable_type, target);
+              }
+              return true;
+          }));
+    });
+    if (!co_await *register_indexes)
+        throw framework_exception_t (framework_error_kind_t::invalid_operation,
+                                     "Relocation target Actor identity is already registered");
+    if (!co_await submit_relocation_ready_reply (pending->prepare, pending->request))
+        co_return false;
+    pending->ready->complete (result_t<void>::success ());
+    co_return true;
+}
+
+task_t<void> public_host_runtime_t::reply_relocation_assembly_failure (
+  relocation_attempt_key_t key,
+  std::shared_ptr<const pending_relocation_assembly_t> pending,
+  protocol::framework_error_code code)
+{
+    const auto terminal = co_await _relocation_session_terminal_lane.run_task ([&] {
+        const auto found = _relocation_target_attempts.find (key);
+        if (found == _relocation_target_attempts.end () || found->second.pending != pending)
+            return std::shared_ptr<task_completion_source_t<void>>{};
+        return found->second.terminal;
+    });
+    if (!pending->ready->task ().await_ready ())
+        reply_relocation_assembly_failure (*pending, code);
+    co_await _relocation_session_terminal_lane.run_task ([&] {
+        const auto found = _relocation_target_attempts.find (key);
+        if (found != _relocation_target_attempts.end () && found->second.pending == pending)
+            _relocation_target_attempts.erase (found);
+    });
+    if (terminal)
+        terminal->complete (result_t<void>::success ());
+}
+
+void public_host_runtime_t::complete_relocation_assembly (
+  const relocation_attempt_key_t &key, std::shared_ptr<pending_relocation_assembly_t> held_pending)
+{
+    auto &pending = *held_pending;
     // Verified identity and payload-integrity failures retain relocationDataLost.
     // Restore failures preserve their Framework kind and cause code instead.
     const auto reply_failure = [&] (protocol::framework_error_code code =
                                       protocol::framework_error_code::relocationDataLost) {
-        reply_relocation_assembly_failure (pending, code);
+        auto failed = std::make_shared<task_t<void>> (
+          reply_relocation_assembly_failure (key, held_pending, code));
+        detail::observe_task_completion (
+          *failed, [self = shared_from_this (), failed] (const result_t<void> &result) {
+              self->_options.mesh.runtime_failures->capture ([&] { result.value (); });
+          });
     };
-    auto payload = pending.assembly.take_payload ();
-    /* The direct-transfer payload is exactly the schema's
+    try {
+        auto payload = pending.assembly.take_payload ();
+        /* The direct-transfer payload is exactly the schema's
      * relocation-envelope-v1 logical stream (28 §4.2): no provider
      * envelope, no embedded digest, no session-route section. Identity
      * and integrity were already verified by the assembly against the
      * command-40 manifest. */
-    const auto envelope = stateful::maintenance_runtime_t::decode_envelope (payload);
-    if (!envelope) {
-        trace_mesh_host ("relocation-assembly-failed", "stage=decode");
-        reply_failure ();
-        return;
-    }
-    if (envelope->object.kind != pending.prepare.object.kind
-        || envelope->object.object_id != pending.prepare.object.object_id
-        || envelope->object.object_generation != pending.prepare.object.object_generation
-        || envelope->application_version != pending.prepare.application_version
-        || (envelope->object.kind != protocol::relocation_object_kind_t::instance_spot
-            && envelope->object.expected_authority_owner_generation
-                 != pending.prepare.object.expected_authority_owner_generation)) {
-        trace_mesh_host ("relocation-assembly-failed",
-                         "stage=principal-identity-or-application-version");
-        reply_failure ();
-        return;
-    }
-
-    const auto local = status ();
-    stateful::object_kind_t principal_kind;
-    switch (envelope->object.kind) {
-        case protocol::relocation_object_kind_t::actor:
-            principal_kind = stateful::object_kind_t::actor;
-            break;
-        case protocol::relocation_object_kind_t::user_spot:
-            principal_kind = stateful::object_kind_t::user_spot;
-            break;
-        case protocol::relocation_object_kind_t::instance_spot:
-            principal_kind = stateful::object_kind_t::instance_spot;
-            break;
-        default:
+        const auto envelope = stateful::maintenance_runtime_t::decode_envelope (payload);
+        if (!envelope) {
+            trace_mesh_host ("relocation-assembly-failed", "stage=decode");
             reply_failure ();
             return;
-    }
-    stateful::relocation_participant_identity_t principal_identity;
-    principal_identity.owner.kind = principal_kind;
-    principal_identity.owner.key = envelope->object.object_id;
-    principal_identity.owner.object_generation = envelope->object.object_generation;
-    principal_identity.owner.authority_owner_generation =
-      pending.prepare.object.expected_authority_owner_generation != 0
-        ? pending.prepare.object.expected_authority_owner_generation
-        : envelope->object.expected_authority_owner_generation;
-    principal_identity.owner.mesh_name = _options.mesh.descriptor.mesh_name;
-    principal_identity.owner.node_id = std::string (pending.prepare.source_node_routing_id.begin (),
-                                                    pending.prepare.source_node_routing_id.end ());
-    principal_identity.stable_type = pending.prepare.object.stable_type;
-
-    /* Participant identity is deliberately absent from the stream. The
-     * canonical ordered inventory is reconstructed from Location Store
-     * authority keys: the principal row plus, for a User Spot aggregate,
-     * every Actor row whose authority payload projects membership of that
-     * exact Spot. */
-    std::vector<stateful::relocation_participant_identity_t> inventory;
-    std::optional<std::vector<stateful::relocation_participant_identity_t>> rows;
-    try {
-        rows = _relocation_authority ? _relocation_authority->list_participant_identities ()
-                                     : std::nullopt;
-    }
-    catch (...) {
-        rows = std::nullopt;
-    }
-    if (envelope->application_states.size () == 1) {
-        /* Even a single-participant unit takes its stable type (which the
-         * wire object deliberately omits for Actors and User Spots) from
-         * the principal's authority row when the store can serve it. */
-        if (rows) {
-            for (const auto &row : *rows) {
-                if (row.owner.kind != principal_kind
-                    || row.owner.key != principal_identity.owner.key)
-                    continue;
-                if (!row.stable_type.empty ())
-                    principal_identity.stable_type = row.stable_type;
-                if (!row.owner.mesh_name.empty ())
-                    principal_identity.owner.mesh_name = row.owner.mesh_name;
-                if (!row.owner.node_id.empty ())
-                    principal_identity.owner.node_id = row.owner.node_id;
-                break;
-            }
         }
-        inventory.push_back (principal_identity);
-    } else {
-        if (!rows) {
-            // Inventory enumeration unavailable — a staging failure, not a
-            // verified payload integrity failure.
-            reply_failure (protocol::framework_error_code::requestFailed);
-            return;
-        }
-        for (auto &row : *rows) {
-            if (row.owner.kind == principal_kind && row.owner.key == principal_identity.owner.key) {
-                if (row.owner.object_generation != principal_identity.owner.object_generation
-                    || row.owner.authority_owner_generation
-                         != principal_identity.owner.authority_owner_generation) {
-                    trace_mesh_host ("relocation-assembly-failed", "stage=principal-row-fence");
-                    reply_failure ();
-                    return;
-                }
-                auto principal_row = principal_identity;
-                if (!row.stable_type.empty ())
-                    principal_row.stable_type = row.stable_type;
-                if (!row.owner.mesh_name.empty ())
-                    principal_row.owner.mesh_name = row.owner.mesh_name;
-                if (!row.owner.node_id.empty ())
-                    principal_row.owner.node_id = row.owner.node_id;
-                inventory.push_back (std::move (principal_row));
-            } else if ((principal_kind == stateful::object_kind_t::user_spot
-                        || principal_kind == stateful::object_kind_t::instance_spot)
-                       && row.owner.kind == stateful::object_kind_t::actor && row.spot_membership
-                       && row.spot_membership->first == principal_identity.owner.key
-                       && row.spot_membership->second
-                            == principal_identity.owner.object_generation) {
-                if (row.owner.mesh_name.empty ())
-                    row.owner.mesh_name = principal_identity.owner.mesh_name;
-                if (row.owner.node_id.empty ())
-                    row.owner.node_id = principal_identity.owner.node_id;
-                inventory.push_back (std::move (row));
-            }
-        }
-        if (inventory.size () != envelope->application_states.size ()) {
+        if (envelope->object.kind != pending.prepare.object.kind
+            || envelope->object.object_id != pending.prepare.object.object_id
+            || envelope->object.object_generation != pending.prepare.object.object_generation
+            || envelope->application_version != pending.prepare.application_version
+            || (envelope->object.kind != protocol::relocation_object_kind_t::instance_spot
+                && envelope->object.expected_authority_owner_generation
+                     != pending.prepare.object.expected_authority_owner_generation)) {
             trace_mesh_host ("relocation-assembly-failed",
-                             "stage=inventory-count derived=" + std::to_string (inventory.size ())
-                               + " declared="
-                               + std::to_string (envelope->application_states.size ()));
+                             "stage=principal-identity-or-application-version");
             reply_failure ();
             return;
         }
-    }
 
-    auto materialized =
-      stateful::maintenance_runtime_t::materialize_envelope (*envelope, std::move (inventory));
-    if (!materialized) {
-        trace_mesh_host ("relocation-assembly-failed", "stage=materialize");
-        reply_failure ();
-        return;
-    }
-    relocation_assembly_staging_t staging;
-    staging.frozen = std::move (*materialized);
-    auto &frozen = staging.frozen;
-
-    auto &sources = staging.sources;
-    auto &targets = staging.targets;
-    auto &wire_objects = staging.wire_objects;
-    bool principal_found = false;
-    for (const auto &saved : frozen) {
-        protocol::relocation_object_kind_t kind;
-        switch (saved.owner.kind) {
-            case stateful::object_kind_t::actor:
-                kind = protocol::relocation_object_kind_t::actor;
+        const auto local = status ();
+        stateful::object_kind_t principal_kind;
+        switch (envelope->object.kind) {
+            case protocol::relocation_object_kind_t::actor:
+                principal_kind = stateful::object_kind_t::actor;
                 break;
-            case stateful::object_kind_t::user_spot:
-                kind = protocol::relocation_object_kind_t::user_spot;
+            case protocol::relocation_object_kind_t::user_spot:
+                principal_kind = stateful::object_kind_t::user_spot;
                 break;
-            case stateful::object_kind_t::instance_spot:
-                kind = protocol::relocation_object_kind_t::instance_spot;
+            case protocol::relocation_object_kind_t::instance_spot:
+                principal_kind = stateful::object_kind_t::instance_spot;
                 break;
             default:
                 reply_failure ();
                 return;
         }
-        if (saved.owner.authority_owner_generation == std::numeric_limits<std::uint64_t>::max ()) {
+        stateful::relocation_participant_identity_t principal_identity;
+        principal_identity.owner.kind = principal_kind;
+        principal_identity.owner.key = envelope->object.object_id;
+        principal_identity.owner.object_generation = envelope->object.object_generation;
+        principal_identity.owner.authority_owner_generation =
+          pending.prepare.object.expected_authority_owner_generation != 0
+            ? pending.prepare.object.expected_authority_owner_generation
+            : envelope->object.expected_authority_owner_generation;
+        principal_identity.owner.mesh_name = _options.mesh.descriptor.mesh_name;
+        principal_identity.owner.node_id =
+          std::string (pending.prepare.source_node_routing_id.begin (),
+                       pending.prepare.source_node_routing_id.end ());
+        principal_identity.stable_type = pending.prepare.object.stable_type;
+
+        /* Participant identity is deliberately absent from the stream. The
+     * canonical ordered inventory is reconstructed from Location Store
+     * authority keys: the principal row plus, for a User Spot aggregate,
+     * every Actor row whose authority payload projects membership of that
+     * exact Spot. */
+        std::vector<stateful::relocation_participant_identity_t> inventory;
+        std::optional<std::vector<stateful::relocation_participant_identity_t>> rows;
+        try {
+            rows = _relocation_authority ? _relocation_authority->list_participant_identities ()
+                                         : std::nullopt;
+        }
+        catch (...) {
+            rows = std::nullopt;
+        }
+        if (envelope->application_states.size () == 1) {
+            /* Even a single-participant unit takes its stable type (which the
+         * wire object deliberately omits for Actors and User Spots) from
+         * the principal's authority row when the store can serve it. */
+            if (rows) {
+                for (const auto &row : *rows) {
+                    if (row.owner.kind != principal_kind
+                        || row.owner.key != principal_identity.owner.key)
+                        continue;
+                    if (!row.stable_type.empty ())
+                        principal_identity.stable_type = row.stable_type;
+                    if (!row.owner.mesh_name.empty ())
+                        principal_identity.owner.mesh_name = row.owner.mesh_name;
+                    if (!row.owner.node_id.empty ())
+                        principal_identity.owner.node_id = row.owner.node_id;
+                    break;
+                }
+            }
+            inventory.push_back (principal_identity);
+        } else {
+            if (!rows) {
+                // Inventory enumeration unavailable — a staging failure, not a
+                // verified payload integrity failure.
+                reply_failure (protocol::framework_error_code::requestFailed);
+                return;
+            }
+            for (auto &row : *rows) {
+                if (row.owner.kind == principal_kind
+                    && row.owner.key == principal_identity.owner.key) {
+                    if (row.owner.object_generation != principal_identity.owner.object_generation
+                        || row.owner.authority_owner_generation
+                             != principal_identity.owner.authority_owner_generation) {
+                        trace_mesh_host ("relocation-assembly-failed", "stage=principal-row-fence");
+                        reply_failure ();
+                        return;
+                    }
+                    auto principal_row = principal_identity;
+                    if (!row.stable_type.empty ())
+                        principal_row.stable_type = row.stable_type;
+                    if (!row.owner.mesh_name.empty ())
+                        principal_row.owner.mesh_name = row.owner.mesh_name;
+                    if (!row.owner.node_id.empty ())
+                        principal_row.owner.node_id = row.owner.node_id;
+                    inventory.push_back (std::move (principal_row));
+                } else if ((principal_kind == stateful::object_kind_t::user_spot
+                            || principal_kind == stateful::object_kind_t::instance_spot)
+                           && row.owner.kind == stateful::object_kind_t::actor
+                           && row.spot_membership
+                           && row.spot_membership->first == principal_identity.owner.key
+                           && row.spot_membership->second
+                                == principal_identity.owner.object_generation) {
+                    if (row.owner.mesh_name.empty ())
+                        row.owner.mesh_name = principal_identity.owner.mesh_name;
+                    if (row.owner.node_id.empty ())
+                        row.owner.node_id = principal_identity.owner.node_id;
+                    inventory.push_back (std::move (row));
+                }
+            }
+            if (inventory.size () != envelope->application_states.size ()) {
+                trace_mesh_host (
+                  "relocation-assembly-failed",
+                  "stage=inventory-count derived=" + std::to_string (inventory.size ())
+                    + " declared=" + std::to_string (envelope->application_states.size ()));
+                reply_failure ();
+                return;
+            }
+        }
+
+        auto materialized =
+          stateful::maintenance_runtime_t::materialize_envelope (*envelope, std::move (inventory));
+        if (!materialized) {
+            trace_mesh_host ("relocation-assembly-failed", "stage=materialize");
             reply_failure ();
             return;
         }
-        protocol::relocation_object_t wire_object{kind, saved.stable_type, saved.owner.key,
-                                                  saved.owner.object_generation,
-                                                  saved.owner.authority_owner_generation};
-        principal_found = principal_found || wire_object == pending.prepare.object;
-        auto target = saved.owner;
-        target.node_id = local.routing_id ().to_string ();
-        // Hidden staging has no target-issued generation until Store CAS.
-        sources.push_back (saved.owner);
-        targets.push_back (std::move (target));
-        wire_objects.push_back (std::move (wire_object));
-    }
-    if (!principal_found) {
-        trace_mesh_host ("relocation-assembly-failed", "stage=principal-not-found");
-        reply_failure ();
-        return;
-    }
+        relocation_assembly_staging_t staging;
+        staging.frozen = std::move (*materialized);
+        auto &frozen = staging.frozen;
 
-    /* No wrapper digest travels with the stream any more: the derived
+        auto &sources = staging.sources;
+        auto &targets = staging.targets;
+        auto &wire_objects = staging.wire_objects;
+        bool principal_found = false;
+        for (const auto &saved : frozen) {
+            protocol::relocation_object_kind_t kind;
+            switch (saved.owner.kind) {
+                case stateful::object_kind_t::actor:
+                    kind = protocol::relocation_object_kind_t::actor;
+                    break;
+                case stateful::object_kind_t::user_spot:
+                    kind = protocol::relocation_object_kind_t::user_spot;
+                    break;
+                case stateful::object_kind_t::instance_spot:
+                    kind = protocol::relocation_object_kind_t::instance_spot;
+                    break;
+                default:
+                    reply_failure ();
+                    return;
+            }
+            if (saved.owner.authority_owner_generation
+                == std::numeric_limits<std::uint64_t>::max ()) {
+                reply_failure ();
+                return;
+            }
+            protocol::relocation_object_t wire_object{kind, saved.stable_type, saved.owner.key,
+                                                      saved.owner.object_generation,
+                                                      saved.owner.authority_owner_generation};
+            principal_found = principal_found || wire_object == pending.prepare.object;
+            auto target = saved.owner;
+            target.node_id = local.routing_id ().to_string ();
+            // Hidden staging has no target-issued generation until Store CAS.
+            sources.push_back (saved.owner);
+            targets.push_back (std::move (target));
+            wire_objects.push_back (std::move (wire_object));
+        }
+        if (!principal_found) {
+            trace_mesh_host ("relocation-assembly-failed", "stage=principal-not-found");
+            reply_failure ();
+            return;
+        }
+
+        /* No wrapper digest travels with the stream any more: the derived
      * inventory digest is recomputed from the reconstructed participants,
      * the same value every source computes before publishing an authority
      * row (an unpublished row's all-zero digest is the pending sentinel). */
-    std::vector<stateful::object_ref_t> digest_owners;
-    digest_owners.reserve (frozen.size ());
-    for (const auto &saved : frozen)
-        digest_owners.push_back (saved.owner);
-    const auto inventory_digest =
-      stateful::maintenance_runtime_t::compute_inventory_digest (digest_owners);
+        std::vector<stateful::object_ref_t> digest_owners;
+        digest_owners.reserve (frozen.size ());
+        for (const auto &saved : frozen)
+            digest_owners.push_back (saved.owner);
+        const auto inventory_digest =
+          stateful::maintenance_runtime_t::compute_inventory_digest (digest_owners);
 
-    for (const auto &binding : envelope->session_bindings) {
-        if (binding.participant_id == 0 || binding.participant_id > frozen.size ()) {
-            reply_failure ();
-            return;
-        }
-        const auto &saved = frozen[binding.participant_id - 1];
-        if (saved.owner.kind != stateful::object_kind_t::actor) {
-            reply_failure ();
-            return;
-        }
-        protocol::session_relocation_route_t route;
-        route.relocation = pending.prepare.relocation;
-        route.coordinator = pending.prepare.coordinator;
-        route.sender_role = protocol::relocation_role_t::target;
-        route.actor = {saved.owner.key, saved.owner.object_generation};
-        route.session_owner_node_routing_id = binding.session_owner_node_rid;
-        route.session_owner_node_generation = binding.session_owner_node_generation;
-        route.session_owner_id = binding.session_owner_id;
-        route.session_owner_lease_generation = binding.session_owner_lease_generation;
-        route.session_routing_id = binding.session_rid;
-        route.binding_generation = binding.binding_generation;
-        route.route.action = protocol::session_relocation_route_action_t::commit;
-        route.route.previous_authority_owner_generation = saved.owner.authority_owner_generation;
-        route.route.target_node_routing_id = local.routing_id ().to_bytes ();
-        route.route.target_node_generation = local.lifecycle_generation ();
-        route.route.target_owner_lease_generation =
-          pending.prepare.target.target_owner_lease_generation;
-        staging.session_routes.push_back (std::move (route));
-    }
-
-    staging.restore_identity = {"direct:" + std::to_string (pending.prepare.relocation.high) + ":"
-                                  + std::to_string (pending.prepare.relocation.low) + ":"
-                                  + std::to_string (pending.prepare.target_attempt_generation),
-                                pending.prepare.payload_checksum_crc32c, inventory_digest};
-    std::size_t registered_count = 0;
-    for (; registered_count != targets.size (); ++registered_count) {
-        if (register_relocation_target_queue (pending.prepare, targets[registered_count],
-                                              wire_objects[registered_count]))
-            continue;
-        for (std::size_t index = 0; index != registered_count; ++index) {
-            try {
-                (void) _relocation_wire->unregister_target (
-                  pending.prepare.relocation, pending.prepare.target_attempt_generation,
-                  wire_objects[index]);
-            }
-            catch (...) {
-            }
-        }
-        // Target relocation-wire registration failed (e.g. an existing
-        // registration for this object) — a staging conflict, not a
-        // payload integrity failure.
-        reply_failure (protocol::framework_error_code::requestFailed);
-        return;
-    }
-    /* Every Actor whose ZLJR record the consumer already took. A staging
-     * failure past this point must give those entries back (15 §4.2), or the
-     * leftover refuses every later Join attempt for that Actor on this node. */
-    std::vector<std::pair<std::string, stateful::object_ref_t>> consumed;
-    if (_actor_join_recovery_consumer) {
-        for (std::size_t index = 0; index != frozen.size (); ++index) {
-            if (frozen[index].owner.kind != stateful::object_kind_t::actor)
-                continue;
-            const auto stable_type = frozen[index].stable_type;
-            if (!_actor_join_recovery_consumer (frozen[index], targets[index], pending.prepare)) {
-                rollback_actor_join_recoveries (consumed);
-                unregister_relocation_wire_targets (pending.prepare.relocation,
-                                                    pending.prepare.target_attempt_generation,
-                                                    wire_objects);
-                reply_failure (protocol::framework_error_code::requestProtocolError);
+        for (const auto &binding : envelope->session_bindings) {
+            if (binding.participant_id == 0 || binding.participant_id > frozen.size ()) {
+                reply_failure ();
                 return;
             }
-            consumed.emplace_back (stable_type, targets[index]);
+            const auto &saved = frozen[binding.participant_id - 1];
+            if (saved.owner.kind != stateful::object_kind_t::actor) {
+                reply_failure ();
+                return;
+            }
+            protocol::session_relocation_route_t route;
+            route.relocation = pending.prepare.relocation;
+            route.coordinator = pending.prepare.coordinator;
+            route.sender_role = protocol::relocation_role_t::target;
+            route.actor = {saved.owner.key, saved.owner.object_generation};
+            route.session_owner_node_routing_id = binding.session_owner_node_rid;
+            route.session_owner_node_generation = binding.session_owner_node_generation;
+            route.session_owner_id = binding.session_owner_id;
+            route.session_owner_lease_generation = binding.session_owner_lease_generation;
+            route.session_routing_id = binding.session_rid;
+            route.binding_generation = binding.binding_generation;
+            route.route.action = protocol::session_relocation_route_action_t::commit;
+            route.route.previous_authority_owner_generation =
+              saved.owner.authority_owner_generation;
+            route.route.target_node_routing_id = local.routing_id ().to_bytes ();
+            route.route.target_node_generation = local.lifecycle_generation ();
+            route.route.target_owner_lease_generation =
+              pending.prepare.target.target_owner_lease_generation;
+            staging.session_routes.push_back (std::move (route));
         }
+
+        staging.restore_identity = {"direct:" + std::to_string (pending.prepare.relocation.high)
+                                      + ":" + std::to_string (pending.prepare.relocation.low) + ":"
+                                      + std::to_string (pending.prepare.target_attempt_generation),
+                                    pending.prepare.payload_checksum_crc32c, inventory_digest};
+        std::size_t registered_count = 0;
+        for (; registered_count != targets.size (); ++registered_count) {
+            if (register_relocation_target_queue (pending.prepare, targets[registered_count],
+                                                  wire_objects[registered_count]))
+                continue;
+            for (std::size_t index = 0; index != registered_count; ++index) {
+                try {
+                    (void) _relocation_wire->unregister_target (
+                      pending.prepare.relocation, pending.prepare.target_attempt_generation,
+                      wire_objects[index]);
+                }
+                catch (...) {
+                }
+            }
+            // Target relocation-wire registration failed (e.g. an existing
+            // registration for this object) — a staging conflict, not a
+            // payload integrity failure.
+            reply_failure (protocol::framework_error_code::requestFailed);
+            return;
+        }
+        /* Every Actor whose ZLJR record the consumer already took. A staging
+     * failure past this point must give those entries back (15 §4.2), or the
+     * leftover refuses every later Join attempt for that Actor on this node. */
+        std::vector<std::pair<std::string, stateful::object_ref_t>> consumed;
+        if (_actor_join_recovery_consumer) {
+            for (std::size_t index = 0; index != frozen.size (); ++index) {
+                if (frozen[index].owner.kind != stateful::object_kind_t::actor)
+                    continue;
+                const auto stable_type = frozen[index].stable_type;
+                if (!_actor_join_recovery_consumer (frozen[index], targets[index],
+                                                    pending.prepare)) {
+                    rollback_actor_join_recoveries (consumed);
+                    unregister_relocation_wire_targets (pending.prepare.relocation,
+                                                        pending.prepare.target_attempt_generation,
+                                                        wire_objects);
+                    reply_failure (protocol::framework_error_code::requestProtocolError);
+                    return;
+                }
+                consumed.emplace_back (stable_type, targets[index]);
+            }
+        }
+        auto held_staging = std::make_shared<relocation_assembly_staging_t> (std::move (staging));
+        auto preparing = std::make_shared<task_t<void>> (
+          finish_relocation_assembly (key, held_pending, held_staging, std::move (consumed)));
+        detail::observe_task_completion (
+          *preparing, [self = shared_from_this (), preparing] (const result_t<void> &result) {
+              self->_options.mesh.runtime_failures->capture ([&] { result.value (); });
+          });
     }
-    // Factory/restore failures are staging failures, not payload-integrity
-    // failures; the helper tears down every queue it registered first. The
-    // restore completes when its application materialization does; this
-    // pump continues meanwhile and the attempt activates from that completion.
-    auto held_pending = std::make_shared<pending_relocation_assembly_t> (std::move (pending));
-    auto held_staging = std::make_shared<relocation_assembly_staging_t> (std::move (staging));
-    auto restoring =
-      std::make_shared<task_t<bool>> (restore_relocation_assembly (held_pending, held_staging));
-    detail::observe_task_completion (
-      *restoring, [self = shared_from_this (), restoring, key, held_pending, held_staging,
-                   consumed = std::move (consumed)] (const result_t<bool> &restored) mutable {
-          if (!restored || !restored.value ()) {
-              self->rollback_actor_join_recoveries (consumed);
-              return;
-          }
-          self->activate_relocation_assembly (key, *held_pending, std::move (*held_staging));
-      });
+    catch (const framework_exception_t &error) {
+        _options.mesh.runtime_failures->report (std::current_exception ());
+        reply_failure (static_cast<protocol::framework_error_code> (
+          messaging::request_failure_mapper_t{}.target_failure_code (
+            error.kind (), detail::failure_code (error))));
+    }
+    catch (const std::exception &) {
+        _options.mesh.runtime_failures->report (std::current_exception ());
+        reply_failure (static_cast<protocol::framework_error_code> (
+          messaging::request_failure_mapper_t{}.target_failure_code (
+            framework_error_kind_t::internal_failure)));
+    }
 }
 
 bool public_host_runtime_t::register_relocation_target_queue (
@@ -4254,7 +4541,8 @@ bool public_host_runtime_t::register_relocation_target_queue (
                return _relocation_session_terminal_lane
                  .run ([&] {
                      const auto found = _relocation_target_attempts.find (attempt_key);
-                     if (found == _relocation_target_attempts.end ())
+                     if (found == _relocation_target_attempts.end ()
+                         || !relocation_target_wire_ready (found->second))
                          return false;
                      if (!found->second.cutover_received)
                          found->second.boundary_batch.emplace_back (target, data);
@@ -4999,18 +5287,9 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
               }
           })
           .get ();
-        for (const auto &expired : expired_relocation_assemblies) {
-            (void) _transport->reply_relocation_failed (
-              expired.request,
-              protocol::relocation_failed_t{
-                expired.prepare.relocation, expired.prepare.target_attempt_generation,
-                expired.prepare.coordinator, expired.prepare.target, expired.prepare.object,
-                protocol::relocation_role_t::target,
-                messaging::request_failure_mapper_t{}.target_failure_code (
-                  framework_error_kind_t::data_lost,
-                  static_cast<std::uint32_t> (
-                    protocol::framework_error_code::relocationDataLost))});
-        }
+        for (const auto &expired : expired_relocation_assemblies)
+            reply_relocation_assembly_failure (expired,
+                                               protocol::framework_error_code::relocationDataLost);
         poll_relocation_target_attempts ();
         flush_pending_session_relocation_seals ();
         _relocation_session_terminal_lane.run ([this] { publish_relocation_next_due_on_lane (); })
@@ -5162,77 +5441,73 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                     const relocation_attempt_key_t key{prepare->relocation.high,
                                                        prepare->relocation.low,
                                                        prepare->target_attempt_generation};
+                    enum class prepare_state_t
+                    {
+                        fresh,
+                        duplicate,
+                        conflict,
+                        rejected
+                    };
                     const auto prepare_state =
-                      _relocation_session_terminal_lane
-                        .run ([&] {
-                            const auto found = _relocation_target_attempts.find (key);
-                            if (found == _relocation_target_attempts.end ())
-                                return 0;
-                            if (found->second.prepare != *prepare)
-                                return 2;
-                            return 1;
-                        })
-                        .get ();
-                    if (prepare_state == 2)
-                        continue;
-                    const auto duplicate = prepare_state == 1;
-                    if (duplicate) {
-                        (void) _transport->reply_relocation_ready (
-                          mailbox_record, protocol::relocation_ready_t{
-                                            prepare->relocation, prepare->target_attempt_generation,
-                                            prepare->coordinator, prepare->target, prepare->object,
-                                            protocol::relocation_role_t::target});
-                        continue;
-                    }
-
-                    if (prepare->payload_total_length == 0
-                        || prepare->payload_total_length > protocol::relocationLogicalBytes
-                        || prepare->payload_chunk_count == 0
-                        || prepare->payload_chunk_count > protocol::relocationChunkCount)
-                        continue;
-                    const auto accepted =
-                      _relocation_session_terminal_lane
-                        .run ([&] {
-                            const auto found = _relocation_assemblies.find (key);
-                            if (found != _relocation_assemblies.end ()) {
-                                if (found->second.prepare == *prepare) {
-                                    found->second.expires_at = std::chrono::steady_clock::now ()
-                                                               + relocation_assembly_retention;
-                                    lower_relocation_next_due_on_lane (found->second.expires_at);
-                                }
-                                return true;
-                            }
-                            const auto current_state = status ().state;
-                            if (current_state == node_status_t::state_t::draining
-                                || current_state == node_status_t::state_t::stopped
-                                || current_state == node_status_t::state_t::error)
-                                return false;
-                            lower_relocation_next_due_on_lane (relocation_due_now);
-                            _relocation_assemblies.emplace (
-                              key,
-                              pending_relocation_assembly_t{
-                                *prepare, std::move (mailbox_record),
-                                stateful::relocation_state_assembly_t{
-                                  prepare->relocation,
-                                  prepare->target_attempt_generation,
-                                  prepare->coordinator,
-                                  prepare->object,
-                                  {prepare->payload_total_length, prepare->payload_chunk_count,
-                                   prepare->payload_checksum_crc32c}},
-                                false,
-                                std::chrono::steady_clock::now () + relocation_assembly_retention});
-                            return true;
-                        })
-                        .get ();
-                    if (!accepted) {
+                      co_await _relocation_session_terminal_lane.run_task ([&] {
+                          using state_t =
+                            std::pair<prepare_state_t,
+                                      std::shared_ptr<task_completion_source_t<void>>>;
+                          const auto attempt = _relocation_target_attempts.find (key);
+                          if (attempt != _relocation_target_attempts.end ())
+                              return attempt->second.prepare == *prepare && attempt->second.pending
+                                       ? state_t{prepare_state_t::duplicate,
+                                                 attempt->second.pending->ready}
+                                       : state_t{prepare_state_t::conflict, nullptr};
+                          const auto assembly = _relocation_assemblies.find (key);
+                          if (assembly != _relocation_assemblies.end ()) {
+                              if (assembly->second.prepare != *prepare)
+                                  return state_t{prepare_state_t::conflict, nullptr};
+                              assembly->second.expires_at =
+                                std::chrono::steady_clock::now () + relocation_assembly_retention;
+                              lower_relocation_next_due_on_lane (assembly->second.expires_at);
+                              return state_t{prepare_state_t::duplicate, assembly->second.ready};
+                          }
+                          if (prepare->payload_total_length == 0
+                              || prepare->payload_total_length > protocol::relocationLogicalBytes
+                              || prepare->payload_chunk_count == 0
+                              || prepare->payload_chunk_count > protocol::relocationChunkCount)
+                              return state_t{prepare_state_t::conflict, nullptr};
+                          if (_options.mesh.shutdown_admission_seal->load (
+                                std::memory_order_acquire)
+                              || local.state == node_status_t::state_t::draining
+                              || local.state == node_status_t::state_t::stopped
+                              || local.state == node_status_t::state_t::error)
+                              return state_t{prepare_state_t::rejected, nullptr};
+                          lower_relocation_next_due_on_lane (relocation_due_now);
+                          _relocation_assemblies.emplace (
+                            key,
+                            pending_relocation_assembly_t{
+                              *prepare, std::move (mailbox_record),
+                              stateful::relocation_state_assembly_t{
+                                prepare->relocation,
+                                prepare->target_attempt_generation,
+                                prepare->coordinator,
+                                prepare->object,
+                                {prepare->payload_total_length, prepare->payload_chunk_count,
+                                 prepare->payload_checksum_crc32c}},
+                              std::chrono::steady_clock::now () + relocation_assembly_retention});
+                          return state_t{prepare_state_t::fresh, nullptr};
+                      });
+                    if (prepare_state.first == prepare_state_t::duplicate) {
+                        observe_relocation_ready (prepare_state.second, std::move (mailbox_record),
+                                                  *prepare);
+                    } else if (prepare_state.first != prepare_state_t::fresh) {
+                        const auto failure = prepare_state.first == prepare_state_t::conflict
+                                               ? framework_error_kind_t::protocol_error
+                                               : framework_error_kind_t::shutting_down;
                         (void) _transport->reply_relocation_failed (
                           mailbox_record,
                           protocol::relocation_failed_t{
                             prepare->relocation, prepare->target_attempt_generation,
                             prepare->coordinator, prepare->target, prepare->object,
                             protocol::relocation_role_t::target,
-                            messaging::request_failure_mapper_t{}.target_failure_code (
-                              framework_error_kind_t::shutting_down)});
+                            messaging::request_failure_mapper_t{}.target_failure_code (failure)});
                     }
                     continue;
                 }
@@ -5248,7 +5523,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                     const relocation_attempt_key_t key{state->relocation.high,
                                                        state->relocation.low,
                                                        state->target_attempt_generation};
-                    std::optional<pending_relocation_assembly_t> completed;
+                    std::shared_ptr<pending_relocation_assembly_t> completed;
                     std::optional<pending_relocation_assembly_t> failed;
                     const auto assembly_current =
                       _relocation_session_terminal_lane
@@ -5268,7 +5543,15 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                                 _relocation_assemblies.erase (found);
                             } else if (accepted
                                        == stateful::relocation_assembly_result_t::completed) {
-                                completed.emplace (std::move (found->second));
+                                completed = std::make_shared<pending_relocation_assembly_t> (
+                                  std::move (found->second));
+                                relocation_target_attempt_t attempt;
+                                attempt.prepare = completed->prepare;
+                                attempt.pending = completed;
+                                attempt.terminal =
+                                  std::make_shared<task_completion_source_t<void>> ();
+                                lower_relocation_next_due_on_lane (relocation_due_now);
+                                _relocation_target_attempts.emplace (key, std::move (attempt));
                                 _relocation_assemblies.erase (found);
                             }
                             return true;
@@ -5276,20 +5559,11 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                         .get ();
                     if (!assembly_current)
                         continue;
-                    if (failed) {
-                        (void) _transport->reply_relocation_failed (
-                          failed->request,
-                          protocol::relocation_failed_t{
-                            failed->prepare.relocation, failed->prepare.target_attempt_generation,
-                            failed->prepare.coordinator, failed->prepare.target,
-                            failed->prepare.object, protocol::relocation_role_t::target,
-                            messaging::request_failure_mapper_t{}.target_failure_code (
-                              framework_error_kind_t::data_lost,
-                              static_cast<std::uint32_t> (
-                                protocol::framework_error_code::relocationDataLost))});
-                    }
+                    if (failed)
+                        reply_relocation_assembly_failure (
+                          *failed, protocol::framework_error_code::relocationDataLost);
                     if (completed)
-                        complete_relocation_assembly (key, std::move (*completed));
+                        complete_relocation_assembly (key, std::move (completed));
                     continue;
                 }
                 if (wire.kind == protocol::command::relocationCutover) {
@@ -5311,6 +5585,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                       .run ([&] {
                           const auto found = _relocation_target_attempts.find (key);
                           if (found == _relocation_target_attempts.end ()
+                              || !relocation_target_wire_ready (found->second)
                               || found->second.prepare.coordinator != cutover->coordinator
                               || found->second.prepare.object != cutover->object
                               || found->second.prepare.source_node_routing_id
@@ -5410,8 +5685,10 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                     const auto owner = session_route_owner_resolver ();
                     if (!owner)
                         continue;
+                    const auto reconcile = co_await _lifecycle_configuration_lane.run_task (
+                      [this] { return _peer_reconcile; });
                     const auto [accepted, immediate] = admit_session_relocation_seal (
-                      seal, *owner, mailbox_record.source_routing_id);
+                      seal, *owner, mailbox_record.source_routing_id, {}, reconcile);
                     if (!accepted)
                         continue;
                     if (immediate)
@@ -6642,8 +6919,7 @@ void public_host_runtime_t::publish_relocation_next_due_on_lane () const
     for (const auto &[key, assembly] : _relocation_assemblies)
         include (assembly.expires_at);
     for (const auto &[key, attempt] : _relocation_target_attempts) {
-        if (!relocation_target_terminal (attempt)
-            && attempt.next_finalize_at != std::chrono::steady_clock::time_point{})
+        if (!relocation_target_terminal (attempt) && relocation_target_wire_ready (attempt))
             include (attempt.next_finalize_at);
     }
     for (const auto &[key, seal] : _session_seal_terminals) {

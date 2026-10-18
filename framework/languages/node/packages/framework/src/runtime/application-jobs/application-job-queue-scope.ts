@@ -99,6 +99,11 @@ export function hasApplicationJobPermit(): boolean {
   return applicationJobPermitScope.getStore() !== undefined;
 }
 
+/** The current ingress reservation; capacity remains owned by its host queue. */
+export function currentApplicationJobPermit(): ApplicationJobPermitPort | undefined {
+  return applicationJobPermitScope.getStore();
+}
+
 /** Keeps the ingress origin when a durable record later reacquires its permit. */
 export function currentApplicationJobOrigin(): ApplicationJobOrigin {
   return applicationJobPermitScope.getStore()!.origin;

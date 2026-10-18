@@ -470,90 +470,61 @@ public sealed class StandaloneActorRelocationRuntimeTests
     public async Task Canonical_durable_backlog_queues_fifo_one_shared_permit_per_turn()
     {
         using var queue = new ZLinkApplicationJobQueue(
-            new ZLinkApplicationJobQueueCapacity(
-                ZLinkApplicationJobQueueProfile.Balanced,
-                ConfiguredManualMax: 1,
-                EffectiveProcessorCount: 8,
-                EffectiveMaxQueuedApplicationJobs: 1
-            )
+            new(ZLinkApplicationJobQueueProfile.Balanced, 1, 8, 1)
         );
-        using var serialTurn = new SemaphoreSlim(1, 1);
-        var invoked = Enumerable
-            .Range(0, 3)
-            .Select(static _ => new TaskCompletionSource(
-                TaskCreationOptions.RunContinuationsAsynchronously
-            ))
-            .ToArray();
+        var mailbox = new ZLinkActorSerialExecutor();
         var started = Enumerable
             .Range(0, 3)
-            .Select(static _ => new TaskCompletionSource(
+            .Select(_ => new TaskCompletionSource(
                 TaskCreationOptions.RunContinuationsAsynchronously
             ))
             .ToArray();
         var finish = Enumerable
             .Range(0, 3)
-            .Select(static _ => new TaskCompletionSource(
+            .Select(_ => new TaskCompletionSource(
                 TaskCreationOptions.RunContinuationsAsynchronously
             ))
             .ToArray();
         var order = new System.Collections.Concurrent.ConcurrentQueue<int>();
-        var completions = new List<Task>();
+        var owned = 0;
         var active = 0;
         var maxActive = 0;
-
-        async Task Dispatch(int item)
+        var records = Enumerable
+            .Range(0, 3)
+            .Select(index =>
+            {
+                ZLinkApplicationJobQueueLease? permit = null;
+                return new ZLinkActorDurableRecord(
+                    async _ =>
+                    {
+                        using var invocation = ZLinkApplicationJobQueueInvocation.Enter(permit!);
+                        await ZLinkApplicationJobQueueInvocation.ReleaseForHandlerStartAsync();
+                        maxActive = Math.Max(maxActive, Interlocked.Increment(ref active));
+                        order.Enqueue(index + 1);
+                        started[index].SetResult();
+                        await finish[index].Task;
+                        Interlocked.Decrement(ref active);
+                    },
+                    async ct =>
+                    {
+                        permit = await queue.AcquireAsync(ct, ZLinkApplicationJobOrigin.Remote);
+                    },
+                    () => Interlocked.Exchange(ref permit, null)?.Dispose(),
+                    () => owned++
+                );
+            })
+            .ToArray();
+        var terminals = mailbox.AdmitDurablePrefix(records);
+        Assert.Equal(3, owned);
+        for (var index = 0; index < 3; index++)
         {
-            invoked[item - 1].TrySetResult();
-            await serialTurn.WaitAsync();
-            try
-            {
-                await ZLinkApplicationJobQueueInvocation.ReleaseForHandlerStartAsync();
-                var nowActive = Interlocked.Increment(ref active);
-                maxActive = Math.Max(maxActive, nowActive);
-                order.Enqueue(item);
-                started[item - 1].TrySetResult();
-                await finish[item - 1].Task;
-            }
-            finally
-            {
-                Interlocked.Decrement(ref active);
-                serialTurn.Release();
-            }
+            await started[index].Task;
+            Assert.Equal(Enumerable.Range(1, index + 1), order);
+            Assert.Equal(0UL, queue.GetStatus().PermitsInUse);
+            Assert.Equal(0UL, queue.GetStatus().CapacityWaiters);
+            finish[index].SetResult();
         }
-
-        var scheduling = ZLinkFrameworkRuntime
-            .QueueDurableBacklogWithSharedPermitsAsync(
-                queue,
-                new[] { 1, 2, 3 },
-                Dispatch,
-                completions,
-                CancellationToken.None,
-                static _ => ZLinkApplicationJobOrigin.Remote
-            )
-            .AsTask();
-
-        await started[0].Task;
-        await invoked[1].Task;
-        for (var attempt = 0; attempt < 100 && queue.GetStatus().CapacityWaiters != 1; attempt++)
-            await Task.Delay(10);
-        Assert.False(scheduling.IsCompleted);
-        Assert.False(invoked[2].Task.IsCompleted);
-        Assert.Equal(1UL, queue.GetStatus().QueuedApplicationJobs);
-        Assert.Equal(1UL, queue.GetStatus().CapacityWaiters);
-        Assert.Equal(new[] { 1 }, order.ToArray());
-
-        finish[0].TrySetResult();
-        await started[1].Task;
-        await invoked[2].Task;
-        Assert.Equal(new[] { 1, 2 }, order.ToArray());
-
-        finish[1].TrySetResult();
-        await started[2].Task;
-        finish[2].TrySetResult();
-        await scheduling;
-        await Task.WhenAll(completions);
-
-        Assert.Equal(new[] { 1, 2, 3 }, order.ToArray());
+        await Task.WhenAll(terminals);
         Assert.Equal(1, maxActive);
         Assert.Equal(0UL, queue.GetStatus().PermitsInUse);
     }
@@ -562,25 +533,24 @@ public sealed class StandaloneActorRelocationRuntimeTests
     public async Task Canonical_durable_backlog_failure_returns_the_shared_permit()
     {
         using var queue = new ZLinkApplicationJobQueue(
-            new ZLinkApplicationJobQueueCapacity(
-                ZLinkApplicationJobQueueProfile.Balanced,
-                ConfiguredManualMax: 1,
-                EffectiveProcessorCount: 8,
-                EffectiveMaxQueuedApplicationJobs: 1
-            )
+            new(ZLinkApplicationJobQueueProfile.Balanced, 1, 8, 1)
         );
-        var completions = new List<Task>();
-
-        await ZLinkFrameworkRuntime.QueueDurableBacklogWithSharedPermitsAsync(
-            queue,
-            new[] { 1 },
-            static _ => Task.FromException(new InvalidOperationException("dispatch failed")),
-            completions,
-            CancellationToken.None,
-            static _ => ZLinkApplicationJobOrigin.Remote
+        var mailbox = new ZLinkActorSerialExecutor();
+        ZLinkApplicationJobQueueLease? permit = null;
+        var terminals = mailbox.AdmitDurablePrefix(
+            new[]
+            {
+                new ZLinkActorDurableRecord(
+                    _ => throw new InvalidOperationException("dispatch failed"),
+                    async ct =>
+                    {
+                        permit = await queue.AcquireAsync(ct, ZLinkApplicationJobOrigin.Remote);
+                    },
+                    () => Interlocked.Exchange(ref permit, null)?.Dispose()
+                ),
+            }
         );
-
-        await Assert.ThrowsAsync<InvalidOperationException>(() => Task.WhenAll(completions));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Task.WhenAll(terminals));
         Assert.Equal(0UL, queue.GetStatus().PermitsInUse);
         Assert.Equal(0UL, queue.GetStatus().QueuedApplicationJobs);
     }

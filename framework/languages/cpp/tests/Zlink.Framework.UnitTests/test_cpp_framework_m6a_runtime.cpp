@@ -4,6 +4,7 @@
 #include "metric_test_reader.hpp"
 
 #include "runtime/mesh/raw_mesh_node_owner.hpp"
+#include <limits>
 #include <zlink/framework/contracts/dispatch/request_task.hpp>
 #include "runtime/diagnostics/dispatch_options_access.hpp"
 #include "runtime/backend/raw_binding_adapter.hpp"
@@ -2945,7 +2946,8 @@ relocation_prepare_request (const mesh::service_node_descriptor_t &source_descri
       1024,
       1,
       0xdeadbeefu,
-      1};
+      1,
+      static_cast<std::uint64_t> (std::numeric_limits<std::int64_t>::max ())};
 }
 
 // Spec 15/28 + node's own cross-language audit: an explicit, identity-

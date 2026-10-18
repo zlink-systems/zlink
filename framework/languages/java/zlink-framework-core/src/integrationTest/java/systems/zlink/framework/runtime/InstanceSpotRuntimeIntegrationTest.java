@@ -181,71 +181,97 @@ final class InstanceSpotRuntimeIntegrationTest {
 
     @Test
     void failedAuthorityReleaseResumesWithoutRepeatingClosing() throws Exception {
-        verifyCloseFailure("release");
+        verifyCloseFailure(CloseScenario.RELEASE);
     }
 
     @Test
     void failedClosingCommitKeepsAuthorityAndAdmission() throws Exception {
-        verifyCloseFailure("commit");
+        verifyCloseFailure(CloseScenario.COMMIT);
     }
 
     @Test
     void failedOnClosingStillReleasesAuthorityOnce() throws Exception {
-        verifyCloseFailure("callback");
+        verifyCloseFailure(CloseScenario.CALLBACK);
     }
 
     @Test
     void failedInstanceResourceReleaseResumesAtRelease() throws Exception {
-        verifyCloseFailure("resource");
+        verifyCloseFailure(CloseScenario.RESOURCE);
     }
 
     @Test
     void requestWithoutIntentDuringAuthorityReleaseDoesNotRun() throws Exception {
-        verifyCloseFailure("window");
+        verifyCloseFailure(CloseScenario.WINDOW);
     }
 
     @Test
     void requestWithoutIntentAfterClosingCommitDoesNotRun() throws Exception {
-        verifyCloseFailure("cas-window");
+        verifyCloseFailure(CloseScenario.CAS_WINDOW);
     }
 
     @Test
     void directMissingWithoutIntentDoesNotRun() throws Exception {
-        verifyCloseFailure("missing");
+        verifyCloseFailure(CloseScenario.MISSING);
     }
 
     @Test
     void directCreatingWithoutIntentIsNotFound() throws Exception {
-        verifyCloseFailure("creating");
+        verifyCloseFailure(CloseScenario.CREATING);
+    }
+
+    @Test
+    void intentAfterCloseReleaseDecisionIsRefusedBeforeAdmission() throws Exception {
+        verifyCloseFailure(CloseScenario.CREATING_SEALED);
     }
 
     @Test
     void creatingIntentCrossingClosePendingCutRetainsPayloadUntilSuccessorCompletes()
             throws Exception {
-        verifyCloseFailure("creating-retained");
+        verifyCloseFailure(CloseScenario.CREATING_RETAINED);
     }
 
     @Test
     void secondAuthorityReleaseFailureResumesOnSameOwnerReentry() throws Exception {
-        verifyCloseFailure("double-release");
+        verifyCloseFailure(CloseScenario.DOUBLE_RELEASE);
     }
 
     @Test
     void appliedClosingCommitFailureContinuesFromCommittedAuthority() throws Exception {
-        verifyCloseFailure("commit-applied-failure");
+        verifyCloseFailure(CloseScenario.COMMIT_APPLIED_FAILURE);
     }
 
     @Test
     void inconclusiveClosingCommitResumesOnSameOwnerReentry() throws Exception {
-        verifyCloseFailure("commit-applied-read-failure");
+        verifyCloseFailure(CloseScenario.COMMIT_APPLIED_READ_FAILURE);
     }
 
-    private void verifyCloseFailure(String failureStage) throws Exception {
-        boolean creating = failureStage.startsWith("creating");
-        boolean retainedBoundary = failureStage.equals("creating-retained");
+    private enum CloseScenario {
+        RELEASE,
+        COMMIT,
+        CALLBACK,
+        RESOURCE,
+        WINDOW,
+        CAS_WINDOW,
+        MISSING,
+        CREATING,
+        CREATING_SEALED,
+        CREATING_RETAINED,
+        DOUBLE_RELEASE,
+        COMMIT_APPLIED_FAILURE,
+        COMMIT_APPLIED_READ_FAILURE
+    }
+
+    private void verifyCloseFailure(CloseScenario failureStage) throws Exception {
+        boolean creating =
+                failureStage == CloseScenario.CREATING
+                        || failureStage == CloseScenario.CREATING_RETAINED
+                        || failureStage == CloseScenario.CREATING_SEALED;
+        boolean retainedBoundary = failureStage == CloseScenario.CREATING_RETAINED;
+        boolean sealedBoundary = failureStage == CloseScenario.CREATING_SEALED;
         boolean failRelease =
-                failureStage.equals("release") || failureStage.equals("double-release");
-        boolean failCommit = failureStage.equals("commit");
+                failureStage == CloseScenario.RELEASE
+                        || failureStage == CloseScenario.DOUBLE_RELEASE;
+        boolean failCommit = failureStage == CloseScenario.COMMIT;
         Zlink.version();
         EchoInstanceSpot.closes.set(null);
         EchoInstanceSpot.closingCalls.set(0);
@@ -254,21 +280,22 @@ final class InstanceSpotRuntimeIntegrationTest {
         EchoInstanceSpot.closeCompleted = new CompletableFuture<>();
         EchoInstanceSpot.closingRelease = CompletableFuture.completedFuture(null);
         EchoInstanceSpot.closingFailure =
-                failureStage.equals("callback")
+                failureStage == CloseScenario.CALLBACK
                         ? new IllegalStateException("injected OnClosing failure")
                         : null;
         SourceEntrySpot.reset();
         SourceEntrySpot.closeStart = new CompletableFuture<>();
+        if (creating) SourceEntrySpot.afterCloseStart = new CompletableFuture<>();
         if (failCommit
-                || failureStage.equals("window")
-                || failureStage.equals("cas-window")
-                || failureStage.equals("missing")
+                || failureStage == CloseScenario.WINDOW
+                || failureStage == CloseScenario.CAS_WINDOW
+                || failureStage == CloseScenario.MISSING
                 || creating) {
             SourceEntrySpot.probeStart = new CompletableFuture<>();
             SourceEntrySpot.probeFailure = new CompletableFuture<>();
             SourceEntrySpot.probeDirect = true;
         }
-        if (failureStage.equals("missing")) {
+        if (failureStage == CloseScenario.MISSING) {
             SourceEntrySpot.closeStart.complete(null);
             SourceEntrySpot.afterCloseStart = new CompletableFuture<>();
         }
@@ -278,13 +305,13 @@ final class InstanceSpotRuntimeIntegrationTest {
                 new GatedDeleteStore(
                         new ZLinkInMemoryLocationStore(),
                         spotId,
-                        failureStage.equals("double-release") ? 2 : failRelease ? 1 : 0,
-                        failureStage.equals("window"),
+                        failureStage == CloseScenario.DOUBLE_RELEASE ? 2 : failRelease ? 1 : 0,
+                        failureStage == CloseScenario.WINDOW || sealedBoundary,
                         creating);
-        if (!failureStage.equals("window")) {
+        if (failureStage != CloseScenario.WINDOW && !sealedBoundary) {
             store.releaseDelete.complete(null);
         }
-        if (retainedBoundary) {
+        if (retainedBoundary || sealedBoundary) {
             EchoInstanceSpot.retainedCalls.clear();
         }
         CompletableFuture<String> diagnostic = new CompletableFuture<>();
@@ -309,14 +336,14 @@ final class InstanceSpotRuntimeIntegrationTest {
                     @Override
                     public void close() {}
                 };
-        if (failureStage.equals("callback")) {
+        if (failureStage == CloseScenario.CALLBACK) {
             diagnosticLogger.addHandler(diagnosticHandler);
         }
         var targetOptions = new DefaultZLinkFrameworkOptions();
         targetOptions.addLocationStore(store);
         targetOptions.addRelocationStore(new InMemoryRelocationStore());
         targetOptions.configureLocations().setPollingInterval(Duration.ofMillis(20));
-        if (failureStage.equals("callback")) {
+        if (failureStage == CloseScenario.CALLBACK || sealedBoundary) {
             targetOptions
                     .configureDispatch()
                     .messageFlow(
@@ -356,7 +383,7 @@ final class InstanceSpotRuntimeIntegrationTest {
                     "release-failure-target-" + suffix);
             SourceEntrySpot.start.complete(null);
             try {
-                if (creating || failureStage.equals("missing")) {
+                if (creating || failureStage == CloseScenario.MISSING) {
                     if (creating) {
                         store.readyPending.get(5, TimeUnit.SECONDS);
                     } else {
@@ -378,15 +405,54 @@ final class InstanceSpotRuntimeIntegrationTest {
                                     : ZLinkFrameworkErrorKind.UNAVAILABLE,
                             probe);
                     store.releaseReady.complete(null);
-                    SourceEntrySpot.afterCloseStart.complete(null);
-                    if (retainedBoundary) {
+                    if (retainedBoundary || sealedBoundary) {
+                        if (retainedBoundary) SourceEntrySpot.afterCloseStart.complete(null);
                         SourceEntrySpot.beforeClose.get(5, TimeUnit.SECONDS);
                         try (var boundary = new RetainedAdmissionBoundary(target, spotId)) {
-                            boundary.start.complete(null);
-                            boundary.beforeAdmission.get(5, TimeUnit.SECONDS);
+                            if (!sealedBoundary) {
+                                boundary.start.complete(null);
+                                boundary.beforeAdmission.get(5, TimeUnit.SECONDS);
+                            }
                             SourceEntrySpot.closeStart.complete(null);
                             boundary.afterPendingCut.get(5, TimeUnit.SECONDS);
                             assertEquals(0, boundary.releases.get());
+                            if (sealedBoundary) {
+                                boundary.resumeClose.complete(null);
+                                store.deleteAttempted.get(5, TimeUnit.SECONDS);
+                                boundary.start.complete(null);
+                                boundary.beforeAdmission.get(5, TimeUnit.SECONDS);
+                                boundary.resumeAdmission.complete(null);
+                                // §7 step 3 ends admission together with the release decision.
+                                // This message reaches that old owner only after the decision.
+                                var refused =
+                                        assertThrows(
+                                                        java.util.concurrent.ExecutionException
+                                                                .class,
+                                                        () ->
+                                                                boundary.reply.get(
+                                                                        5, TimeUnit.SECONDS))
+                                                .getCause();
+                                assertProbeKind(ZLinkFrameworkErrorKind.UNAVAILABLE, refused);
+                                assertEquals(
+                                        systems.zlink.framework.runtime.protocol
+                                                .ServiceWireConstants.FRAMEWORK_ERROR_SPOT_MOVING,
+                                        systems.zlink.framework.runtime.internal.backend
+                                                .ZLinkRequestFailureMapping.causeCode(refused));
+                                assertThrows(
+                                        java.util.concurrent.ExecutionException.class,
+                                        () -> boundary.admitted.get(5, TimeUnit.SECONDS));
+                                boundary.released.get(5, TimeUnit.SECONDS);
+                                assertEquals(1, boundary.releases.get());
+                                assertTrue(EchoInstanceSpot.retainedCalls.isEmpty());
+                                store.releaseDelete.complete(null);
+                                assertTrue(
+                                        EchoInstanceSpot.closeCompleted.get(5, TimeUnit.SECONDS));
+                                SourceEntrySpot.afterCloseStart.complete(null);
+                                assertEquals(
+                                        "echo:hello|echo:again|echo:after-close",
+                                        SourceEntrySpot.reply.get(5, TimeUnit.SECONDS));
+                                return;
+                            }
                             boundary.resumeAdmission.complete(null);
                             boundary.admitted.get(5, TimeUnit.SECONDS);
                             assertEquals(0, boundary.releases.get());
@@ -408,7 +474,12 @@ final class InstanceSpotRuntimeIntegrationTest {
                     }
                     if (creating) {
                         SourceEntrySpot.closeStart.complete(null);
+                        // A send terminal completes the CloseInstance handler, which only
+                        // requests Close. The next cold call starts after Close itself ends.
+                        assertTrue(EchoInstanceSpot.closeCompleted.get(5, TimeUnit.SECONDS));
+                        assertEquals(0, target.activeSpotCount("game"));
                     }
+                    SourceEntrySpot.afterCloseStart.complete(null);
                     assertEquals(
                             "echo:hello|echo:again|echo:after-close",
                             SourceEntrySpot.reply.get(5, TimeUnit.SECONDS));
@@ -419,19 +490,19 @@ final class InstanceSpotRuntimeIntegrationTest {
                 assertTrue(SourceEntrySpot.beforeClose.isDone());
                 if (failCommit) {
                     store.failNextAuthorityPut.set(true);
-                } else if (failureStage.equals("commit-applied-failure")
-                        || failureStage.equals("commit-applied-read-failure")) {
+                } else if (failureStage == CloseScenario.COMMIT_APPLIED_FAILURE
+                        || failureStage == CloseScenario.COMMIT_APPLIED_READ_FAILURE) {
                     store.failNextAuthorityPutAfterApply.set(true);
                     store.failReadAfterAppliedPut.set(
-                            failureStage.equals("commit-applied-read-failure"));
-                } else if (failureStage.equals("cas-window")) {
+                            failureStage == CloseScenario.COMMIT_APPLIED_READ_FAILURE);
+                } else if (failureStage == CloseScenario.CAS_WINDOW) {
                     store.holdNextAuthorityPutAfterApply.set(true);
                 }
                 var field = ZLinkFrameworkRuntime.class.getDeclaredField("spots");
                 field.setAccessible(true);
                 var spots = field.get(target);
                 AtomicInteger completedBackendOperation =
-                        failureStage.equals("resource")
+                        failureStage == CloseScenario.RESOURCE
                                 ? installBackendFailure(spots, spotId, "closeInstanceSpot")
                                 : null;
                 var close =
@@ -443,7 +514,7 @@ final class InstanceSpotRuntimeIntegrationTest {
                         (CompletionStage<Boolean>)
                                 close.invoke(
                                         spots, spotId, EchoInstanceSpot.generations.getFirst());
-                if (failureStage.equals("double-release")) {
+                if (failureStage == CloseScenario.DOUBLE_RELEASE) {
                     store.deleteFailed.get(5, TimeUnit.SECONDS);
                     assertThrows(
                             java.util.concurrent.ExecutionException.class,
@@ -469,7 +540,7 @@ final class InstanceSpotRuntimeIntegrationTest {
                     assertEquals(1, EchoInstanceSpot.closingCalls.get());
                     return;
                 }
-                if (failureStage.equals("commit-applied-read-failure")) {
+                if (failureStage == CloseScenario.COMMIT_APPLIED_READ_FAILURE) {
                     store.putAppliedThenFailed.get(5, TimeUnit.SECONDS);
                     assertThrows(
                             java.util.concurrent.ExecutionException.class,
@@ -485,7 +556,7 @@ final class InstanceSpotRuntimeIntegrationTest {
                     assertEquals(1, EchoInstanceSpot.closingCalls.get());
                     return;
                 }
-                if (failureStage.equals("cas-window")) {
+                if (failureStage == CloseScenario.CAS_WINDOW) {
                     store.closingApplied.get(5, TimeUnit.SECONDS);
                     SourceEntrySpot.probeStart.complete(null);
                     // Spot address messaging §7 step 1: the probe reaches the owner while Close
@@ -500,7 +571,7 @@ final class InstanceSpotRuntimeIntegrationTest {
                     assertEquals(1, EchoInstanceSpot.closingCalls.get());
                     return;
                 }
-                if (failureStage.equals("window")) {
+                if (failureStage == CloseScenario.WINDOW) {
                     store.deleteAttempted.get(5, TimeUnit.SECONDS);
                     SourceEntrySpot.probeStart.complete(null);
                     // The authority is Closing until the held Delete applies. §9 Closing row: a
@@ -518,10 +589,10 @@ final class InstanceSpotRuntimeIntegrationTest {
                     store.deleteFailed.get(5, TimeUnit.SECONDS);
                 } else if (failCommit) {
                     store.putFailed.get(5, TimeUnit.SECONDS);
-                } else if (failureStage.equals("commit-applied-failure")) {
+                } else if (failureStage == CloseScenario.COMMIT_APPLIED_FAILURE) {
                     store.putAppliedThenFailed.get(5, TimeUnit.SECONDS);
                 }
-                if (failureStage.equals("callback")) {
+                if (failureStage == CloseScenario.CALLBACK) {
                     // Spot address messaging §7: OnClosing failure is diagnostic; Close continues.
                     assertTrue(closing.toCompletableFuture().get(5, TimeUnit.SECONDS));
                 } else {
@@ -546,7 +617,7 @@ final class InstanceSpotRuntimeIntegrationTest {
                     if (completedBackendOperation != null) {
                         assertEquals(1, completedBackendOperation.get());
                     }
-                    if (failureStage.equals("callback")) {
+                    if (failureStage == CloseScenario.CALLBACK) {
                         assertTrue(diagnostic.get(5, TimeUnit.SECONDS).contains(spotId));
                     }
                 } else {

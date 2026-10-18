@@ -148,40 +148,6 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
                 });
     }
 
-    /**
-     * Removes the transfer hold while retaining the packets for a source-side serial replay.
-     * Packets captured concurrently with this operation either join the returned snapshot or
-     * observe the removed hold and wait for the move completion fence.
-     */
-    List<ZLinkActorHandoffPacket> takeForRestore(
-            String actorId, List<ZLinkActorHandoffPacket> committed) {
-        return inStateLane(
-                () -> {
-                    Backlog backlog = backlogs.get(actorId);
-                    if (backlog == null) {
-                        return committed == null || committed.isEmpty()
-                                ? List.of()
-                                : List.copyOf(committed);
-                    }
-                    List<ZLinkActorHandoffPacket> restored =
-                            new ArrayList<>(
-                                    (committed == null ? 0 : committed.size())
-                                            + backlog.packets.size());
-                    if (committed != null) {
-                        restored.addAll(committed);
-                    }
-                    restored.addAll(backlog.packets);
-                    if (!backlogs.remove(actorId, backlog)) {
-                        throw new IllegalStateException(
-                                "Actor transfer hold changed during source restore: " + actorId);
-                    }
-                    backlog.packets.clear();
-                    backlog.bytes = 0;
-                    restored.sort(Comparator.comparingLong(ZLinkActorHandoffPacket::arrivalIndex));
-                    return List.copyOf(restored);
-                });
-    }
-
     void fail(String actorId, Throwable error) {
         List<ZLinkActorHandoffPacket> packets =
                 inStateLane(

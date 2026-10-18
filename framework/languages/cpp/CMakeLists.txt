@@ -2018,7 +2018,8 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     opentelemetry-cpp::metrics)
   target_include_directories(test_cpp_framework_location_runtime PRIVATE
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/include
-    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   zlink_framework_cpp_add_test(
     NAME test_cpp_framework_location_runtime
     COMMAND test_cpp_framework_location_runtime

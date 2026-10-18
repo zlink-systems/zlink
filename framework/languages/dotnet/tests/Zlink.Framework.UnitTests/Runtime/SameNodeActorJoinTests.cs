@@ -1,5 +1,7 @@
 using Zlink.Framework.Contracts.Messaging;
 using Zlink.Framework.LocationProvider;
+using Zlink.Framework.Runtime.Actors;
+using Zlink.Framework.Runtime.Dispatch;
 using Zlink.Framework.Runtime.Locations;
 using Zlink.Framework.Runtime.Spots;
 
@@ -7,6 +9,121 @@ namespace Zlink.Framework.UnitTests.Runtime;
 
 public sealed partial class EntrySpotActorDispatchTests
 {
+    [Theory]
+    [InlineData(ZLinkUserSpotExecutionMode.SpotWide)]
+    [InlineData(ZLinkUserSpotExecutionMode.PerActor)]
+    public async Task DeferredJoin_FromTransferredDurableHandler_CompletesBeforeNextActorWork(
+        ZLinkUserSpotExecutionMode executionMode
+    )
+    {
+        var observationTimeout = TimeSpan.FromSeconds(5);
+        var node = new CapturingSpotNode();
+        var (runtime, actorRef) = await CreateStartedRuntimeAsync(
+            node,
+            userSpotType: typeof(DurableJoinSpot),
+            userSpotExecutionMode: executionMode
+        );
+        try
+        {
+            var actor = RegisterProbeActor(runtime, actorRef);
+            var state = runtime.GetOrCreateActorState(actor.ActorId);
+            var source = await runtime.CreateAsync<DurableJoinSpot>();
+            var target = await runtime.CreateAsync<DurableJoinSpot>();
+            Assert.IsType<ZLinkActorJoinResult.Accepted>(
+                await runtime.JoinActorAsync(source.Spot.SpotId, actor, ZLinkMessage.Empty, default)
+            );
+            var sourceSpot = Assert.IsType<DurableJoinSpot>(state.LiveActivation!.Spot);
+            var pipeline = new ZLinkActorInboundPipeline(
+                runtime,
+                new ZLinkEntrySpotActorInboundEndpoint(runtime)
+            );
+            using var incoming = ZLinkActorHandoffIngress.CaptureMovingFrames(
+                ZLinkApplicationJobOrigin.Remote,
+                runtime,
+                CreateActorRequestParts(actorRef, "join", target.Spot.SpotId, 91, 1)
+            );
+            var transferred = ZLinkActorHandoffFrames.Capture(incoming[0], 0);
+            var prefix = state.AdmitDurablePrefix([
+                new ZLinkActorDurableRecord(async ct =>
+                {
+                    using var dispatch = state.EnterDispatch();
+                    await pipeline.DispatchOwnedFrameAsync(
+                        ZLinkActorHandoffFrames.Restore(actorRef, [transferred]),
+                        null,
+                        ct
+                    );
+                }),
+            ]);
+            await sourceSpot.Registered.Task.WaitAsync(observationTimeout);
+            Assert.False(actor.JoinCompletion.Task.IsCompleted);
+            Assert.Equal(source.Spot.SpotId, actor.Context.SpotId);
+            var next = state
+                .ExecuteDispatchAsync(
+                    _ =>
+                    {
+                        Assert.True(actor.JoinCompletion.Task.IsCompletedSuccessfully);
+                        Assert.Equal(target.Spot.SpotId, actor.Context.SpotId);
+                        return ValueTask.CompletedTask;
+                    },
+                    CancellationToken.None
+                )
+                .AsTask();
+            sourceSpot.Release.SetResult();
+            await Task.WhenAll(prefix).WaitAsync(observationTimeout);
+            Assert.IsType<ZLinkActorJoinCompletion.Accepted>(
+                await actor.JoinCompletion.Task.WaitAsync(observationTimeout)
+            );
+            await next.WaitAsync(observationTimeout);
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    private sealed class DurableJoinSpot(IZLinkSpotContext context) : IZLinkSpot<ProbeActor>
+    {
+        public IZLinkSpotContext Context { get; } = context;
+        public TaskCompletionSource Registered { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Release { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public void Configure() => Context.Handlers.AddHandler<DurableJoinHandler>("join");
+
+        public ValueTask<ZLinkSpotActorJoinResult> OnActorJoinAsync(
+            string actorId,
+            ZLinkMessage request,
+            CancellationToken cancellationToken
+        ) => ValueTask.FromResult(ZLinkSpotActorJoinResult.Accept());
+
+        public ValueTask OnJoinedActorAsync(
+            ProbeActor actor,
+            CancellationToken cancellationToken
+        ) => ValueTask.CompletedTask;
+
+        public ValueTask OnLeaveActorAsync(ProbeActor actor, CancellationToken cancellationToken) =>
+            ValueTask.CompletedTask;
+    }
+
+    private sealed class DurableJoinHandler
+        : IZLinkSpotActorRequestHandler<DurableJoinSpot, ProbeActor, string, ProbeReply>
+    {
+        public async ValueTask<ProbeReply> HandleAsync(
+            DurableJoinSpot spot,
+            ProbeActor actor,
+            IZLinkMessageContext context,
+            string request,
+            CancellationToken cancellationToken
+        )
+        {
+            actor.Context.JoinSpot(request, ZLinkMessage.Empty).Defer();
+            spot.Registered.SetResult();
+            await spot.Release.Task.WaitAsync(cancellationToken);
+            return new ProbeReply(request);
+        }
+    }
+
     [Fact]
     public async Task SameNodeJoin_PublicAndFacadeUseOneLocalPath()
     {

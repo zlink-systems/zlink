@@ -51,6 +51,32 @@ public sealed class JoinCallbackSendTests
         var ownershipUpdate = new TaskCompletionSource<Exception?>(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
+        var completionObserved = new TaskCompletionSource<Exception?>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        trace.OnPublicJoinCompleted = async actor =>
+        {
+            var failure = await Record.ExceptionAsync(async () =>
+            {
+                var authority = Assert.IsType<ZLinkAuthorityReadResult.Found>(
+                    await target
+                        .Runtime.Registration.Locations.ResolveStore()!
+                        .ReadAuthorityAsync(
+                            ZLinkActorAuthorityPayloadCodec.AuthorityKey(actor.ActorId)
+                        )
+                );
+                Assert.False(
+                    ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(
+                        authority.Snapshot.Payload.Span,
+                        out _
+                    )
+                );
+                Assert.True(target.Runtime.TryGetActorState(actor.ActorId, out var state));
+                Assert.False(state.Handoff.TargetActivation.IsCompleted);
+                Assert.Empty(trace.DeliveredMarkers);
+            });
+            completionObserved.SetResult(failure);
+        };
         trace.OnTargetJoined = async actor =>
         {
             var failure = await Record.ExceptionAsync(async () =>
@@ -78,6 +104,7 @@ public sealed class JoinCallbackSendTests
 
         Assert.True(ownershipUpdate.Task.IsCompleted);
         Assert.Null(await ownershipUpdate.Task);
+        Assert.Null(await completionObserved.Task.WaitAsync(TimeSpan.FromSeconds(5)));
     }
 
     [Fact]

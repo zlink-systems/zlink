@@ -269,7 +269,8 @@ async function targetCommand(action) {
       transferState,
       undefined,
       false,
-      { high: 7n, low: 9n }
+      { high: 7n, low: 9n },
+    { rid: 'target', lifecycleGeneration: 4n }
     );
     return {
       phase: 'sealed',

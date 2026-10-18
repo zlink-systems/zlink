@@ -321,6 +321,7 @@ struct relocation_prepare_t
     std::uint32_t payload_chunk_count = 0;
     std::uint32_t payload_checksum_crc32c = 0;
     std::uint64_t application_version = 0;
+    std::uint64_t deadline_unix_ms = 0;
     friend bool operator== (const relocation_prepare_t &, const relocation_prepare_t &) = default;
 };
 
@@ -571,6 +572,8 @@ struct session_relocation_seal_t
     std::uint64_t session_owner_lease_generation = 0;
     std::vector<std::uint8_t> session_routing_id;
     std::uint64_t binding_generation = 0;
+    std::vector<std::uint8_t> target_node_routing_id;
+    std::uint64_t target_node_generation = 0;
 
     friend bool operator== (const session_relocation_seal_t &,
                             const session_relocation_seal_t &) = default;
