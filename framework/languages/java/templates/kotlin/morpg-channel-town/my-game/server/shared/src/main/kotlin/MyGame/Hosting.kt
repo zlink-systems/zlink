@@ -68,7 +68,11 @@ fun configure(
     options.addRelocationStore(relocations)
 }
 
-fun <T> observe(publisher: Flow.Publisher<T>, action: (T) -> Unit): Flow.Subscription {
+fun <T> observe(
+    publisher: Flow.Publisher<T>,
+    ready: CompletableFuture<Void>,
+    action: (T) -> Unit,
+): Flow.Subscription {
     val subscribed = CompletableFuture<Flow.Subscription>()
     publisher.subscribe(
         object : Flow.Subscriber<T> {
@@ -80,10 +84,15 @@ fun <T> observe(publisher: Flow.Publisher<T>, action: (T) -> Unit): Flow.Subscri
             override fun onNext(item: T) = action(item)
 
             override fun onError(error: Throwable) {
+                ready.completeExceptionally(error)
                 error.printStackTrace(System.err)
             }
 
-            override fun onComplete() {}
+            override fun onComplete() {
+                ready.completeExceptionally(
+                    IllegalStateException("Runtime observation ended before Serving")
+                )
+            }
         }
     )
     return subscribed.join()
@@ -107,7 +116,7 @@ fun runNode(application: Class<*>, args: Array<String>) = runBlocking {
         val ready = CompletableFuture<Void>()
         val safe = CompletableFuture<Void>()
         val statusSubscription =
-            observe(runtime.observe()) { observed ->
+            observe(runtime.observe(), ready) { observed ->
                 val status = observed.status()
                 if (runtime.messageFlowMode() != ZLinkMessageFlowLogMode.OFF) {
                     System.err.println(
@@ -117,80 +126,90 @@ fun runNode(application: Class<*>, args: Array<String>) = runBlocking {
                             "termination=${status.terminationResult()}"
                     )
                 }
-                if (status.isReady) ready.complete(null)
+                if (observed.loss().discardedTerminalCount() != 0L)
+                    ready.completeExceptionally(IllegalStateException("Startup observation lost"))
+                else if (status.state() == ZLinkFrameworkRuntimeState.SERVING)
+                    ready.complete(null)
+                else if (status.state() != ZLinkFrameworkRuntimeState.PREPARING)
+                    ready.completeExceptionally(
+                        IllegalStateException("Runtime startup failed: ${status.state()}")
+                    )
                 if (
                     status.state() == ZLinkFrameworkRuntimeState.RELOCATED &&
                         status.safeToShutdown()
                 )
                     safe.complete(null)
             }
-        ready.get(Control.HOST_DEADLINE.toSeconds(), java.util.concurrent.TimeUnit.SECONDS)
-        if (config.townIds.isNotEmpty()) {
-            val spots = app.getBean(ZLinkSpotManager::class.java)
-            for (id in config.townIds) {
-                val result = spots.kotlin().getOrCreate(id, Names.TOWN).inMesh(Names.MESH).await()
-                check(result.state() != ZLinkSpotCreateState.REJECTED) {
-                    "Town bootstrap failed: $result"
+        try {
+            ready.get(Control.HOST_DEADLINE.toSeconds(), java.util.concurrent.TimeUnit.SECONDS)
+            if (config.townIds.isNotEmpty()) {
+                val spots = app.getBean(ZLinkSpotManager::class.java)
+                for (id in config.townIds) {
+                    val result = spots.kotlin().getOrCreate(id, Names.TOWN).inMesh(Names.MESH).await()
+                    check(result.state() != ZLinkSpotCreateState.REJECTED) {
+                        "Town bootstrap failed: $result"
+                    }
                 }
             }
-        }
-        println(
-            Control.READY +
-                Json.mapper.writeValueAsString(
-                    mapOf(
-                        "id" to config.id,
-                        "meshEndpoint" to
-                            runtime
-                                .listenerStatus(ZLinkListenerKind.ROUTE_MESH, Names.MESH)
-                                .endpoint(),
-                        "streamEndpoint" to
-                            config.streamEndpoint?.let {
+            println(
+                Control.READY +
+                    Json.mapper.writeValueAsString(
+                        mapOf(
+                            "id" to config.id,
+                            "meshEndpoint" to
                                 runtime
-                                    .listenerStatus(ZLinkListenerKind.STREAM, Names.STREAM)
-                                    .endpoint()
-                            },
-                    )
-                )
-        )
-        System.`in`.bufferedReader().useLines { commands ->
-            for (command in commands) {
-                when (command) {
-                    Control.DRAIN -> {
-                        println(Control.RELOCATION_REQUESTED)
-                        val result = runBlocking {
-                            runtime
-                                .relocate(
-                                    ZLinkFrameworkRelocationOptions(
-                                        ZLinkFrameworkRelocationMode.PLANNED_MAINTENANCE,
-                                        null,
-                                        Control.HOST_DEADLINE,
-                                    )
-                                )
-                                .await()
-                        }
-                        check(result.outcome() == ZLinkFrameworkRelocationOutcome.RELOCATED) {
-                            result.toString()
-                        }
-                        println(Control.RELOCATED)
-                        safe.get(
-                            Control.SAFE_DEADLINE.toSeconds(),
-                            java.util.concurrent.TimeUnit.SECONDS,
+                                    .listenerStatus(ZLinkListenerKind.ROUTE_MESH, Names.MESH)
+                                    .endpoint(),
+                            "streamEndpoint" to
+                                config.streamEndpoint?.let {
+                                    runtime
+                                        .listenerStatus(ZLinkListenerKind.STREAM, Names.STREAM)
+                                        .endpoint()
+                                },
                         )
-                        println(Control.SAFE_TO_SHUTDOWN)
-                    }
-                    Control.SHUTDOWN -> {
-                        runtime.shutdown().toCompletableFuture().join()
-                        check(runtime.status().state() == ZLinkFrameworkRuntimeState.STOPPED) {
-                            runtime.status().toString()
+                    )
+            )
+            System.`in`.bufferedReader().useLines { commands ->
+                for (command in commands) {
+                    when (command) {
+                        Control.DRAIN -> {
+                            println(Control.RELOCATION_REQUESTED)
+                            val result = runBlocking {
+                                runtime
+                                    .relocate(
+                                        ZLinkFrameworkRelocationOptions(
+                                            ZLinkFrameworkRelocationMode.PLANNED_MAINTENANCE,
+                                            null,
+                                            Control.HOST_DEADLINE,
+                                        )
+                                    )
+                                    .await()
+                            }
+                            check(result.outcome() == ZLinkFrameworkRelocationOutcome.RELOCATED) {
+                                result.toString()
+                            }
+                            println(Control.RELOCATED)
+                            safe.get(
+                                Control.SAFE_DEADLINE.toSeconds(),
+                                java.util.concurrent.TimeUnit.SECONDS,
+                            )
+                            println(Control.SAFE_TO_SHUTDOWN)
                         }
-                        println(Control.STOPPED)
-                        break
+                        Control.SHUTDOWN -> {
+                            runtime.shutdown().toCompletableFuture().join()
+                            check(runtime.status().state() == ZLinkFrameworkRuntimeState.STOPPED) {
+                                runtime.status().toString()
+                            }
+                            println(Control.STOPPED)
+                            break
+                        }
+                        else -> error("Unknown control command: $command")
                     }
-                    else -> error("Unknown control command: $command")
                 }
             }
+        } finally {
+            statusSubscription.cancel()
         }
-        statusSubscription.cancel()
     } finally {
         app.close()
     }

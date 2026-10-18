@@ -39,14 +39,24 @@ class NodeControl final : public fx::hosted_service_t
             throw std::runtime_error ("Zone creation rejected: " + id);
     }
 
-  public:
-    NodeControl (fx::app_t &app, const NodeConfig &config, bool placement) :
-        app_ (app), config_ (config), placement_ (placement)
+    fx::task_t<void> prepare (fx::service_provider_t &services)
     {
-    }
-    bool failed () const { return failed_; }
-    fx::task_t<void> start (fx::service_provider_t &services) override
-    {
+        auto &runtime = services.get_required<fx::framework_runtime_t> ();
+        auto serving = std::make_shared<fx::task_completion_source_t<void>> ();
+        auto lifecycle = runtime.observe (
+          Limits::observation_capacity, [serving] (const auto &observed) {
+              if (observed.loss.discarded_terminal_count != 0)
+                  serving->complete (fx::result_t<void>::failure (
+                    fx::framework_error_kind_t::internal_failure, "Startup observation lost"));
+              else if (observed.status.state == fx::framework_runtime_state_t::serving)
+                  serving->complete (fx::result_t<void>::success ());
+              else if (observed.status.state != fx::framework_runtime_state_t::preparing)
+                  serving->complete (fx::result_t<void>::failure (
+                    fx::framework_error_kind_t::internal_failure,
+                    "Runtime startup failed before Serving"));
+          });
+        co_await serving->task ();
+        lifecycle->close ();
         auto &meshes = services.get_required<fx::route_mesh_runtime_t> ();
         auto ready = std::make_shared<fx::task_completion_source_t<void>> ();
         auto observation = meshes.observe (
@@ -67,7 +77,6 @@ class NodeControl final : public fx::hosted_service_t
                 co_await create_zone (spots, id);
             }
         }
-        auto &runtime = services.get_required<fx::framework_runtime_t> ();
         nlohmann::json output{
           {"id", config_.Id},
           {"meshEndpoint",
@@ -79,8 +88,22 @@ class NodeControl final : public fx::hosted_service_t
                 runtime.listener_status (fx::listener_kind_t::stream, Names::stream).endpoint)
             : nlohmann::json (nullptr);
         std::cout << Control::ready << output.dump () << std::endl;
-        control_ = std::thread ([this, &runtime, &services] {
+        co_return;
+    }
+
+  public:
+    NodeControl (fx::app_t &app, const NodeConfig &config, bool placement) :
+        app_ (app), config_ (config), placement_ (placement)
+    {
+    }
+    bool failed () const { return failed_; }
+    fx::task_t<void> start (fx::service_provider_t &services) override
+    {
+        // The host enters Serving only after hosted-service start has returned.
+        control_ = std::thread ([this, &services] {
             try {
+                prepare (services).result ().value ();
+                auto &runtime = services.get_required<fx::framework_runtime_t> ();
                 std::string command;
                 while (std::getline (std::cin, command)) {
                     if (command == Control::drain) {
@@ -137,6 +160,7 @@ class NodeControl final : public fx::hosted_service_t
                 app_.request_stop ();
             }
         });
+        co_return;
     }
     void stop () noexcept override {}
     void join_control ()
