@@ -92,6 +92,58 @@ std::pair<std::uint32_t, std::uint32_t> stateful_failure_pair (stateful::statefu
                     static_cast<std::uint32_t> (protocol::framework_error_code::none)};
     }
 }
+
+void report_stateful_dispatch_error (
+  const dispatch_options_t &options,
+  const stateful::stateful_delivery_t &delivery,
+  std::exception_ptr error,
+  const runtime::serial_application_record_t *accepted = nullptr) noexcept
+{
+    detail::dispatch_error_reporter_t (options).report_lazy ([&] {
+        const bool actor = delivery.owner.kind == stateful::object_kind_t::actor;
+        message_dispatch_error_event_t event{
+          .surface =
+            actor ? dispatch_error_surface_t::spot_actor : dispatch_error_surface_t::spot_route,
+          .message_kind = actor ? (delivery.request ? dispatch_message_kind_t::actor_request
+                                                    : dispatch_message_kind_t::actor_send)
+                                : (delivery.request ? dispatch_message_kind_t::request
+                                                    : dispatch_message_kind_t::send),
+          .reason = dispatch_error_reason_t::handler_exception,
+          .action =
+            delivery.request ? dispatch_error_action_t::reply_error : dispatch_error_action_t::drop,
+          .source_rid =
+            zlink::routing_id_t::from (delivery.frozen.source.node_routing_id).to_string (),
+          .exception = std::move (error)};
+        if (actor)
+            event.actor_id = delivery.owner.key;
+        else
+            event.spot_id = delivery.owner.key;
+        try {
+            const auto &turn = accepted && accepted->payload ? *accepted->payload : delivery.turn;
+            stateful::with_accepted_application (turn, [&] (auto, const auto &application) {
+                event.packet_name = application.packet_name;
+                event.flow_id = application.flow_id;
+                event.flow_origin = application.flow_origin;
+                const auto header = messaging::envelope_codec_t{}.decode_header (
+                  messaging::message_parts_t (protocol::decode_application_parts (application)),
+                  true);
+                if (header) {
+                    event.packet_name = header.value ().message_name;
+                    event.correlation_id = header.value ().correlation_id;
+                    if (!event.flow_id) {
+                        event.flow_id = header.value ().flow_id;
+                        event.flow_origin = header.value ().flow_origin;
+                    }
+                }
+            });
+        }
+        catch (const protocol::service_wire_error_t &) {
+            // Spec 26 §6: optional diagnostic metadata must not replace the
+            // original dispatch exception already retained by this event.
+        }
+        return event;
+    });
+}
 }
 
 bool bound_session_bind_actor_matches (const protocol::actor_route_fence_t &requested,
@@ -3795,8 +3847,13 @@ bool public_host_runtime_t::try_finalize_relocation_target (const relocation_att
      * the Session owner's route commit after the target becomes Ready. */
     start_relocation_session_route_submission (key);
     finalized->complete (result_t<void>::success ());
-    for (const auto &target : attempt.targets)
-        (void) notify_stateful_owner (target);
+    for (const auto &target : attempt.targets) {
+        auto notified = std::make_shared<task_t<bool>> (notify_stateful_owner (target));
+        detail::observe_task_completion (
+          *notified, [self = shared_from_this (), notified] (const result_t<bool> &result) {
+              self->_options.mesh.runtime_failures->capture ([&] { (void) result.value (); });
+          });
+    }
     return true;
 }
 
@@ -6569,6 +6626,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_ready (
     if (!dispatch) {
         throw std::invalid_argument ("framework public host dispatch callback is required");
     }
+    // The mailbox dispatcher is bound at host start and unbound after receive shutdown.
     const bool standalone = !_transport->mailbox ().has_application_dispatch ();
     const auto now = mesh::service_liveness_registry_t::clock_t::now ();
     (void) co_await _relocation_wire->retry_terminal_relays (now);
@@ -6647,7 +6705,8 @@ task_t<std::size_t> public_host_runtime_t::dispatch_ready (
         if (accept_application_receive && !application_dispatch_started && _stateful_dispatch) {
             while (!application_dispatch_started && next_stateful_owner != stateful_owners.end ()) {
                 const auto &item = *next_stateful_owner++;
-                application_dispatch_started = dispatch_stateful_owner (item.owner, dispatch);
+                application_dispatch_started =
+                  co_await dispatch_stateful_owner (item.owner, dispatch);
                 if (application_dispatch_started)
                     ++count;
             }
@@ -6682,25 +6741,25 @@ task_t<std::size_t> public_host_runtime_t::dispatch_ready (
     co_return count;
 }
 
-bool public_host_runtime_t::notify_stateful_owner (const stateful::object_ref_t &object)
+task_t<bool> public_host_runtime_t::notify_stateful_owner (const stateful::object_ref_t &object)
 {
     if (object.kind != stateful::object_kind_t::actor)
-        return false;
-    return _transport->mailbox ().notify_stateful_ready (
+        co_return false;
+    co_return co_await _transport->mailbox ().notify_stateful_ready (
       object.key, [weak = weak_from_this (), object] (const auto &dispatch) {
           const auto host = weak.lock ();
           return host && host->claim_stateful_owner (object, dispatch);
       });
 }
 
-bool public_host_runtime_t::dispatch_stateful_owner (
+task_t<bool> public_host_runtime_t::dispatch_stateful_owner (
   const stateful::object_ref_t &object,
   const std::function<void (
     const ready_record_t &, const receive_record_t &, std::vector<zlink::message_t>)> &dispatch)
 {
-    if (notify_stateful_owner (object))
-        return true;
-    return claim_stateful_owner (object, dispatch);
+    if (co_await notify_stateful_owner (object))
+        co_return true;
+    co_return claim_stateful_owner (object, dispatch);
 }
 
 bool public_host_runtime_t::claim_stateful_owner (
@@ -6798,21 +6857,31 @@ bool public_host_runtime_t::claim_stateful_owner (
         auto completed = std::make_shared<std::atomic_bool> (false);
         auto finish = [weak = weak_from_this (), delivery = *delivery, completed,
                        accepted = std::weak_ptr (application_record)] (
-                        std::optional<protocol::application_payload_t> reply) {
+                        std::optional<protocol::application_payload_t> reply,
+                        std::exception_ptr error = {}) {
             const auto host = weak.lock ();
             if (!host)
                 return false;
             const auto accepted_record = accepted.lock ();
+            if (error)
+                report_stateful_dispatch_error (host->_options.mesh.dispatch, delivery,
+                                                std::move (error), accepted_record.get ());
             if (delivery.owner.kind == stateful::object_kind_t::actor && !accepted_record)
                 return false;
             if (completed->exchange (true, std::memory_order_acq_rel))
                 return false;
-            if (accepted_record)
-                (void) host->_stateful_dispatch->complete (delivery, std::move (reply),
-                                                           accepted_record);
-            else
-                (void) host->_stateful_dispatch->complete (delivery, std::move (reply));
-            return true;
+            try {
+                return (accepted_record
+                          ? host->_stateful_dispatch->complete (delivery, std::move (reply),
+                                                                accepted_record)
+                          : host->_stateful_dispatch->complete (delivery, std::move (reply)))
+                       == stateful::stateful_error_t::none;
+            }
+            catch (...) {
+                report_stateful_dispatch_error (host->_options.mesh.dispatch, delivery,
+                                                std::current_exception (), accepted_record.get ());
+                return false;
+            }
         };
         if (application_record)
             application_record->native_reply = finish;
@@ -6828,26 +6897,34 @@ bool public_host_runtime_t::claim_stateful_owner (
             record.reply_token.local_reply =
               [finish, application_record] (const std::vector<zlink::message_t> &parts) {
                   // Retain the accepted payload until its original token settles.
+                  std::optional<protocol::application_payload_t> reply;
                   try {
-                      return finish (protocol::application_payload_t::from_parts (parts));
+                      reply = protocol::application_payload_t::from_parts (parts);
                   }
                   catch (...) {
+                      (void) finish (std::nullopt, std::current_exception ());
                       return false;
                   }
+                  return finish (std::move (reply));
               };
         }
         dispatch (owner, record, std::move (parts));
         return true;
     }
     catch (...) {
+        report_stateful_dispatch_error (_options.mesh.dispatch, *delivery,
+                                        std::current_exception (),
+                                        record.application_record.get ());
         try {
-            if (record.complete_stateful_dispatch) {
-                record.complete_stateful_dispatch ();
-                return false;
-            }
-            (void) _stateful_dispatch->complete (*delivery, std::nullopt);
+            if (record.application_record && record.application_record->native_reply)
+                (void) record.application_record->native_reply (std::nullopt);
+            else
+                (void) _stateful_dispatch->complete (*delivery, std::nullopt);
         }
         catch (...) {
+            report_stateful_dispatch_error (_options.mesh.dispatch, *delivery,
+                                            std::current_exception (),
+                                            record.application_record.get ());
         }
     }
     return false;
@@ -6886,7 +6963,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_application_claim (
                 if (_stateful_dispatch && is_actor_application (application.record.kind)
                     && !application.record.application_record) {
                     const auto object = co_await accept_local_application (std::move (application));
-                    (void) dispatch_stateful_owner (object, dispatch);
+                    (void) co_await dispatch_stateful_owner (object, dispatch);
                 } else {
                     dispatch (application.owner, application.record, std::move (application.parts));
                 }
@@ -6933,7 +7010,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_application_claim (
                     (void) co_await _stateful_dispatch->ingest_claimed (
                       *native_owner, std::move (mailbox_record),
                       std::function<void ()> (release_mailbox_reservation));
-                    (void) dispatch_stateful_owner (*native_owner, dispatch);
+                    (void) co_await dispatch_stateful_owner (*native_owner, dispatch);
                     _transport->signal_activity ();
                     ++count;
                     continue;

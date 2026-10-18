@@ -51,6 +51,28 @@
 namespace zlink::framework::runtime
 {
 
+namespace
+{
+bool is_application_request (host::record_kind_t kind)
+{
+    using kind_t = host::record_kind_t;
+    return kind == kind_t::node_request || kind == kind_t::channel_request
+           || kind == kind_t::spot_request || kind == kind_t::actor_request;
+}
+
+dispatch_error_surface_t application_dispatch_surface (host::record_kind_t kind)
+{
+    using kind_t = host::record_kind_t;
+    return kind == kind_t::actor_send || kind == kind_t::actor_request
+             ? dispatch_error_surface_t::spot_actor
+           : kind == kind_t::spot_send || kind == kind_t::spot_request
+             ? dispatch_error_surface_t::spot_route
+           : kind == kind_t::node_send || kind == kind_t::node_request
+             ? dispatch_error_surface_t::node
+             : dispatch_error_surface_t::route_mesh_channel;
+}
+}
+
 result_t<std::optional<messaging::envelope_header_t>>
 decode_mesh_record_header (const host::receive_record_t &record,
                            std::vector<zlink::message_t> &parts,
@@ -80,9 +102,7 @@ decode_mesh_record_header (const host::receive_record_t &record,
     if (decoded)
         return header_result_t::success (std::move (decoded.value ()));
 
-    const bool request =
-      record.kind == kind_t::node_request || record.kind == kind_t::channel_request
-      || record.kind == kind_t::spot_request || record.kind == kind_t::actor_request;
+    const bool request = is_application_request (record.kind);
     const bool can_correlate = rejected_header && rejected_header->can_correlate_reply ();
     auto submitted = zlink::submit_result_t::terminated;
     if (request && can_correlate) {
@@ -94,16 +114,9 @@ decode_mesh_record_header (const host::receive_record_t &record,
         submitted = host::reply (record.reply_token, reply.items ());
     }
     detail::dispatch_error_reporter_t (dispatch_options).report_lazy ([&] {
-        const auto surface =
-          record.kind == kind_t::actor_send || record.kind == kind_t::actor_request
-            ? dispatch_error_surface_t::spot_actor
-          : record.kind == kind_t::spot_send || record.kind == kind_t::spot_request
-            ? dispatch_error_surface_t::spot_route
-          : record.kind == kind_t::node_send || record.kind == kind_t::node_request
-            ? dispatch_error_surface_t::node
-            : dispatch_error_surface_t::route_mesh_channel;
         message_dispatch_error_event_t event{
-          surface, request ? dispatch_message_kind_t::request : dispatch_message_kind_t::send,
+          application_dispatch_surface (record.kind),
+          request ? dispatch_message_kind_t::request : dispatch_message_kind_t::send,
           dispatch_error_reason_t::invalid_frame,
           submitted == zlink::submit_result_t::ok ? dispatch_error_action_t::reply_error
                                                   : dispatch_error_action_t::drop};
@@ -635,11 +648,7 @@ void reject_application_request (const host::receive_record_t &record,
                                  framework_error_kind_t error_kind,
                                  std::string message)
 {
-    const bool request = record.kind == host::record_kind_t::node_request
-                         || record.kind == host::record_kind_t::channel_request
-                         || record.kind == host::record_kind_t::spot_request
-                         || record.kind == host::record_kind_t::actor_request;
-    if (!request)
+    if (!is_application_request (record.kind))
         return;
     messaging::message_parts_t encoded (std::move (parts));
     messaging::envelope_codec_t codec;
@@ -3314,15 +3323,19 @@ void mesh_node_host_service_t::dispatch_application (
                 application_completed ([] {});
         }
     }
-    catch (const std::exception &error) {
-        trace_mesh_application ("exception", record, parts.size (), error.what ());
-        if (deferred_terminal)
-            deferred_terminal->settle ();
-        if (application_completed)
-            application_completed ([] {});
-    }
     catch (...) {
-        trace_mesh_application ("exception", record, parts.size (), "unknown");
+        const auto error = std::current_exception ();
+        detail::dispatch_error_reporter_t (dispatch_options).report_lazy ([&] {
+            return message_dispatch_error_event_t{
+              .surface = application_dispatch_surface (record.kind),
+              .message_kind = is_application_request (record.kind)
+                                ? dispatch_message_kind_t::request
+                                : dispatch_message_kind_t::send,
+              .reason = dispatch_error_reason_t::handler_exception,
+              .action = dispatch_error_action_t::drop,
+              .source_rid = record.source_node_rid.to_string (),
+              .exception = error};
+        });
         if (deferred_terminal)
             deferred_terminal->settle ();
         if (application_completed)

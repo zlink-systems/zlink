@@ -7,7 +7,10 @@
 
 #include "runtime/dispatch/application_job_queue.hpp"
 #include "runtime/diagnostics/monitoring_runtime.hpp"
+#include "runtime/diagnostics/dispatch_options_access.hpp"
+#include "runtime/messaging/envelope_codec.hpp"
 #include "runtime/stateful/public_host_runtime.hpp"
+#include "runtime/stateful/raw_stateful_dispatch.hpp"
 
 #include <gtest/gtest.h>
 
@@ -24,6 +27,7 @@
 #include <optional>
 #include <stdexcept>
 #include <thread>
+#include <typeinfo>
 #include <utility>
 #include <vector>
 
@@ -387,6 +391,119 @@ local_admission_host (const std::shared_ptr<queue_t> &queue)
 }
 
 } // namespace
+
+TEST (ZLinkFrameworkStatefulDispatch, DispatchFailureReportsCauseAndFailsOriginalRequest)
+{
+    namespace framework = zlink::framework;
+    namespace host = framework::runtime::host;
+    namespace stateful = framework::runtime::stateful;
+    namespace detail = framework::detail;
+    const std::string flow_id = "01930000-0000-7000-8000-000000001786";
+    for (const unsigned failure_mode : {0u, 1u, 2u}) {
+        const bool invalid_reply = failure_mode != 0;
+        SCOPED_TRACE (failure_mode);
+        std::vector<framework::message_dispatch_error_event_t> errors;
+        host::host_options_t options{
+          .mesh = {.descriptor = {.mesh_name = "stateful-dispatch-errors",
+                                  .node_routing_id =
+                                    zlink::routing_id_t::from ("local-node").to_bytes (),
+                                  .lifecycle_generation = 1,
+                                  .descriptor_revision = 1,
+                                  .advertised_endpoint = "tcp://127.0.0.1:0"},
+                   .runtime_failures =
+                     std::make_shared<framework::runtime::runtime_failure_collector_t> ()},
+          .object_stable_types = {"player"}};
+        options.mesh.dispatch.message_flow (framework::message_flow_log_mode_t::normal);
+        detail::dispatch_options_access_t::set_dispatch_error_observer_for_tests (
+          options.mesh.dispatch, [&errors] (const auto &event) { errors.push_back (event); });
+        auto native = std::make_shared<host::public_host_runtime_t> (std::move (options));
+        native->configure_stateful_dispatch (
+          [] (stateful::accepted_record_authority_query_t query)
+            -> framework::task_t<std::optional<stateful::accepted_record_authority_t>> {
+              co_return stateful::accepted_record_authority_t{
+                {"local-owner", 1, query.source_node_routing_id, query.source_node_generation}, 1};
+          });
+        native->start ();
+        auto actor = native->create_actor ("player", "local-actor");
+        host::pending_operation_t operation;
+        framework::runtime::messaging::envelope_header_t header;
+        header.channel_name = "actor";
+        header.message_name = "stateful-failure";
+        header.correlation_id = flow_id;
+        header.flow_id = flow_id;
+        header.flow_origin = framework::flow_origin_t::application;
+        auto request = framework::runtime::messaging::envelope_codec_t{}.encode_raw_body_parts (
+          header, zlink::message_t::from ("{}"));
+        ASSERT_EQ (zlink::submit_result_t::ok,
+                   actor
+                     .request_to (actor.ref (), request.items (), operation,
+                                  zlink::send_flags_t::none, std::chrono::seconds (30))
+                     .result ()
+                     .value ());
+        unsigned dispatched = 0;
+        host::reply_token_t delayed_reply;
+        (void) native
+          ->dispatch_ready ([&] (const auto &, const auto &record, auto) {
+              ++dispatched;
+              if (invalid_reply) {
+                  ASSERT_TRUE (record.reply_token.local_reply);
+                  if (failure_mode == 2) {
+                      delayed_reply = record.reply_token;
+                      return;
+                  }
+                  (void) record.reply_token.local_reply ({});
+                  return;
+              }
+              throw std::runtime_error ("stateful dispatch failed before handler admission");
+          })
+          .result ()
+          .value ();
+        if (failure_mode == 2) {
+            ASSERT_TRUE (delayed_reply.local_reply);
+            EXPECT_FALSE (delayed_reply.local_reply ({}));
+        }
+        EXPECT_EQ (1u, dispatched);
+        EXPECT_EQ (1u, errors.size ());
+        EXPECT_EQ (0u, native->pending_operation_count ());
+        if (errors.empty ()) {
+            native->close ();
+            continue;
+        }
+        EXPECT_EQ (framework::dispatch_error_surface_t::spot_actor, errors.front ().surface);
+        EXPECT_EQ (framework::dispatch_message_kind_t::actor_request, errors.front ().message_kind);
+        EXPECT_EQ (framework::dispatch_error_action_t::reply_error, errors.front ().action);
+        EXPECT_EQ (flow_id, errors.front ().flow_id);
+        EXPECT_EQ ("local-actor", errors.front ().actor_id);
+        EXPECT_EQ (invalid_reply ? typeid (std::invalid_argument).name ()
+                                 : typeid (std::runtime_error).name (),
+                   errors.front ().error_type);
+        EXPECT_EQ (invalid_reply ? "framework multipart requires at least one part"
+                                 : "stateful dispatch failed before handler admission",
+                   errors.front ().error_message);
+        if (native->pending_operation_count () == 0)
+            EXPECT_FALSE (operation.completion->task ().result ());
+        host::pending_operation_t following;
+        ASSERT_EQ (zlink::submit_result_t::ok,
+                   actor
+                     .request_to (actor.ref (), request.items (), following,
+                                  zlink::send_flags_t::none, std::chrono::seconds (30))
+                     .result ()
+                     .value ());
+        unsigned following_dispatched = 0;
+        (void) native
+          ->dispatch_ready ([&] (const auto &, const auto &record, auto) {
+              ++following_dispatched;
+              EXPECT_TRUE (record.reply_token.local_reply ({zlink::message_t::from ("reply")}));
+          })
+          .result ()
+          .value ();
+        EXPECT_EQ (1u, following_dispatched);
+        EXPECT_EQ (0u, native->pending_operation_count ());
+        if (native->pending_operation_count () == 0)
+            EXPECT_TRUE (following.completion->task ().result ());
+        native->close ();
+    }
+}
 
 TEST (ZLinkFrameworkApplicationJobQueue, LocalRequestsDoNotPublishWithoutSharedPermit)
 {

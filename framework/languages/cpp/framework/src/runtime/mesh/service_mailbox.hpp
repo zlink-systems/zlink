@@ -73,11 +73,11 @@ class service_mailbox_t
     using application_dispatch_t = std::function<void (
       const host::ready_record_t &, const host::receive_record_t &, std::vector<zlink::message_t>)>;
     using stateful_take_t = std::function<bool (const application_dispatch_t &)>;
-    using stateful_ready_t = std::function<bool (const std::string &, stateful_take_t)>;
+    using stateful_ready_t = std::function<task_t<bool> (const std::string &, stateful_take_t)>;
     void bind_application_dispatch (application_prepare_t prepare,
                                     application_ready_t ready,
                                     stateful_ready_t stateful_ready = {});
-    bool notify_stateful_ready (const std::string &owner, stateful_take_t take);
+    task_t<bool> notify_stateful_ready (const std::string &owner, stateful_take_t take);
     bool has_application_dispatch () const;
     void begin_application_receive_turn ();
     void end_application_receive_turn ();

@@ -279,7 +279,7 @@ class raw_relocation_replay_coordinator_t
                             std::uint64_t target_attempt_generation,
                             const protocol::relocation_object_t &object);
     bool register_terminal_source (raw_relocation_terminal_source_registration_t registration);
-    void unregister_terminal_sources (const protocol::relocation_id_t &relocation);
+    task_t<void> unregister_terminal_sources (const protocol::relocation_id_t &relocation);
     bool unregister_terminal_source (const protocol::relocation_id_t &,
                                      const protocol::wire_operation_id_t &);
     bool register_terminal_target (raw_relocation_terminal_target_registration_t registration);

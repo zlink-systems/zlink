@@ -1040,16 +1040,34 @@ void serial_execution_queue_t::accept_application_owned (work_item_t &item)
     } else {
         // The preceding durable payload owner also takes the next accepted
         // application record; ordinary initial supply remains unchanged.
-        const auto tail = std::find_if (
-          _application.queue.rbegin (), _application.queue.rend (), [&item] (const auto &record) {
-              return &record != &item && bool (record.application_record);
-          });
-        if (tail != _application.queue.rend () && tail->application_record->admission.durable ())
+        const auto tail = _application_tail_record.lock ();
+        if (tail && tail->admission.durable ())
             item.application_record->admission.take_over ();
     }
+    _application_tail_record = item.application_record;
     // The private FIFO now owns the accepted body and its position. Its M
     // terminal retains that owner, independently of the receiving native claim.
     item.application_record->release_native_claim ();
+}
+
+void serial_execution_queue_t::refresh_application_tail_locked ()
+{
+    const auto tail =
+      std::find_if (_application.queue.rbegin (), _application.queue.rend (),
+                    [] (const auto &item) { return bool (item.application_record); });
+    _application_tail_record = tail == _application.queue.rend ()
+                                 ? std::weak_ptr<serial_application_record_t>{}
+                                 : tail->application_record;
+}
+
+void serial_execution_queue_t::refresh_application_barriers_locked ()
+{
+    // Only FIFO barrier mutations and their activate/cancel notification rebuild
+    // this derived index; application readiness never traverses lifecycle work.
+    _application_barriers = std::count_if (
+      _lifecycle.queue.begin (), _lifecycle.queue.end (), [this] (const work_item_t &item) {
+          return item.barrier && (_spot_gate || !item.barrier->pending ());
+      });
 }
 
 void serial_execution_queue_t::prepare_application_head_locked ()
@@ -1205,6 +1223,7 @@ task_t<bool> serial_execution_queue_t::adopt_application_prefix (
         }
         for (auto &item : suffix)
             _application.queue.push_back (std::move (item));
+        refresh_application_tail_locked ();
         if (shared_spot_gate ())
             _spot_gate->disconnect_actor_head (shared_from_this ());
         const auto scheduled = schedule_drain_locked ();
@@ -1247,6 +1266,7 @@ serial_execution_queue_t::take_application_suffix (std::function<void ()> seal)
               _application.bytes -= it->byte_cost;
               it = _application.queue.erase (it);
           }
+          _application_tail_record.reset ();
           if (shared_spot_gate ())
               _spot_gate->disconnect_actor_head (shared_from_this ());
           return suffix;
@@ -1402,6 +1422,10 @@ serial_execution_queue_t::cancel_submission_owned (serial_submission_id_t submis
                 lane.bytes = 0;
             cancelled_item.emplace (std::move (*item));
             lane.queue.erase (item);
+            if (cancelled_item->application_record)
+                refresh_application_tail_locked ();
+            if (cancelled_item->barrier)
+                refresh_application_barriers_locked ();
             if (owns_shared_gate ())
                 lane.messages.notify_all ();
             return true;
@@ -1588,6 +1612,7 @@ void serial_execution_queue_t::schedule_after_settle_owned ()
     std::unique_lock lock (_mutex, std::defer_lock);
     if (!owns_shared_gate ())
         lock.lock ();
+    refresh_application_barriers_locked ();
     (void) schedule_drain_locked ();
 }
 
@@ -1942,6 +1967,8 @@ void serial_execution_queue_t::cancel_pending_owned () noexcept
         };
         clear_queued (_application);
         clear_queued (_lifecycle);
+        refresh_application_tail_locked ();
+        refresh_application_barriers_locked ();
         if (_active_turn && _active_turn->turn && _active_turn->cancel
             && !_active_turn->cancel_requested) {
             _active_turn->cancel_requested = true;
@@ -2077,6 +2104,8 @@ void serial_execution_queue_t::import_publications_until (publication_node_t *cu
             lane.queue.push_back (std::move (*next->item));
             next->item.reset ();
             accept_application_owned (lane.queue.back ());
+            if (lane.queue.back ().barrier)
+                refresh_application_barriers_locked ();
         }
         auto control = std::move (next->control);
         delete _publication_cursor;
@@ -2235,9 +2264,17 @@ bool serial_execution_queue_t::enqueue_locked (std::string name,
     ++lane.messages;
     lane.bytes += bytes;
     accept_application_owned (lane.queue.back ());
+    if (lane.queue.back ().barrier)
+        refresh_application_barriers_locked ();
     if (schedule_drain_locked ())
         return true;
+    const bool barrier = bool (lane.queue.back ().barrier);
+    const bool application_record = bool (lane.queue.back ().application_record);
     lane.queue.pop_back ();
+    if (application_record)
+        refresh_application_tail_locked ();
+    if (barrier)
+        refresh_application_barriers_locked ();
     --lane.messages;
     lane.bytes -= bytes;
     return false;
@@ -2289,10 +2326,7 @@ bool serial_execution_queue_t::application_ready_locked () noexcept
            && (!next->application_record || next->application_record->admission.ready ())
            && (!_suspended_lifecycle
                || !_suspended_lifecycle->turn->holds_application_while_waiting ())
-           && std::none_of (_lifecycle.queue.begin (), _lifecycle.queue.end (),
-                            [this] (const work_item_t &item) {
-                                return item.barrier && (_spot_gate || !item.barrier->pending ());
-                            });
+           && _application_barriers == 0;
 }
 
 std::shared_ptr<serial_turn_handle_impl_t>
@@ -2392,6 +2426,10 @@ serial_execution_queue_t::take_next_locked (std::optional<serial_work_lane_t> fo
                             : next_application_locked ();
         item = std::move (*next);
         queue.erase (next);
+        if (item.application_record && _application_tail_record.lock () == item.application_record)
+            refresh_application_tail_locked ();
+        if (item.barrier)
+            refresh_application_barriers_locked ();
     }
     activate_turn_locked (item);
     if (selected_lane == serial_work_lane_t::lifecycle) {
@@ -2547,6 +2585,7 @@ void serial_execution_queue_t::drain_loop ()
         std::lock_guard<std::mutex> lock (_mutex);
         _drain_scheduled = false;
         if (_active != 0) {
+            // complete_one owns the next inline claim or clears _draining and schedules it.
             _draining = true;
             return;
         }

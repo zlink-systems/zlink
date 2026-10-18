@@ -4632,8 +4632,8 @@ void restore_probe (replay_case_t test_case, bool multiple_packets = false)
     std::shared_ptr<detail::deferred_barrier_t> next_barrier;
     bool handler_seen = false;
     std::vector<std::shared_ptr<detail::serial_turn_t>> replay_turns;
-    std::promise<observation_t> observed;
-    auto handler_finished = observed.get_future ().share ();
+    fw::task_completion_source_t<observation_t> observed;
+    auto handler_finished = observed.task ();
     spot->handlers.push_back (fw::spot_handler_descriptor_t{
       fw::spot_handler_kind_t::actor_send, packet_name, "", std::type_index (typeid (int)),
       std::type_index (typeid (void)), std::type_index (typeid (int)),
@@ -4671,12 +4671,12 @@ void restore_probe (replay_case_t test_case, bool multiple_packets = false)
                       next.value ()->cancel ();
                   }
               }
-              observed.set_value (std::move (value));
               handler_seen = true;
+              observed.complete (fw::result_t<observation_t>::success (std::move (value)));
           }
           catch (...) {
-              observed.set_exception (std::current_exception ());
               handler_seen = true;
+              observed.complete (detail::current_exception_result<observation_t> ());
           }
           co_return zlink::message_t{};
       });
@@ -4800,12 +4800,17 @@ void restore_probe (replay_case_t test_case, bool multiple_packets = false)
         detail::spot_node_runtime_t (node).fail_remote_actor_transfer (actor, false, std::nullopt);
     }
     scheduler->run_all ();
-    if (local_target)
+    if (local_target) {
+        scheduler->run_until (handler_finished);
+        scheduler->run_all ();
         EXPECT_TRUE (handler_seen);
+    }
     if (finish_barrier) {
         auto complete = std::exchange (finish_barrier, {});
         complete (fw::result_t<void>::success ());
     }
+    scheduler->run_all ();
+    scheduler->run_until (handler_finished);
     scheduler->run_all ();
     const auto handler_before_cleanup = handler_seen;
     EXPECT_TRUE (handler_before_cleanup);
@@ -4819,7 +4824,7 @@ void restore_probe (replay_case_t test_case, bool multiple_packets = false)
         }
     }
     ASSERT_TRUE (handler_seen);
-    const auto value = handler_finished.get ();
+    const auto &value = handler_finished.result ().value ();
     if (multiple_packets && value.next_reserved) {
         scheduler->run_all ();
         EXPECT_TRUE (sequence_seen);
@@ -4958,6 +4963,7 @@ void capacity_probe (bool handler_failure = false, bool extra_supply = false)
     const auto until = [&] (auto condition) {
         node->lane.run ([] {}).get ();
         scheduler->run_all ();
+        scheduler->run_until (condition);
         return condition ();
     };
     spot->handlers.push_back (fw::spot_handler_descriptor_t{

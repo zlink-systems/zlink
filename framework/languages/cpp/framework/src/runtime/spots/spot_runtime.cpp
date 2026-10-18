@@ -6395,32 +6395,21 @@ task_t<void> spot_node_runtime_t::replay_actor_handoff_batch (actor_ref_t actor_
         const auto failure = result_t<zlink::message_t>::failure (kind, std::move (message));
         if (spot_node_runtime_t (node).actor_transfer_marker_enabled (
               message_flow_result_t::failed)) {
-            spot_node_runtime_t (node).emit_actor_transfer_marker (
+            co_await spot_node_runtime_t (node).emit_actor_transfer_marker_async (
               "handoff_replay_failed", actor_ref, transfer_id, std::nullopt, std::nullopt,
               failure.exception ());
         }
-        try {
-            const auto sent = co_await settle_handoff_packet (
-              node, packet.application_record, packet.is_request, terminal_route, failure);
-            if (!sent) {
-                if (spot_node_runtime_t (node).actor_transfer_marker_enabled (
-                      message_flow_result_t::failed)) {
-                    spot_node_runtime_t (node).emit_actor_transfer_marker (
-                      "handoff_terminal_send_failed", actor_ref, transfer_id, std::nullopt,
-                      std::nullopt,
-                      std::make_exception_ptr (
+        const auto sent = co_await runtime::await_result (settle_handoff_packet (
+          node, packet.application_record, packet.is_request, terminal_route, failure));
+        if ((!sent || !sent.value ())
+            && spot_node_runtime_t (node).actor_transfer_marker_enabled (
+              message_flow_result_t::failed)) {
+            co_await spot_node_runtime_t (node).emit_actor_transfer_marker_async (
+              "handoff_terminal_send_failed", actor_ref, transfer_id, std::nullopt, std::nullopt,
+              !sent ? sent.exception ()
+                    : std::make_exception_ptr (
                         framework_exception_t (framework_error_kind_t::unavailable,
                                                "Actor handoff terminal send was not accepted")));
-                }
-            }
-        }
-        catch (...) {
-            if (spot_node_runtime_t (node).actor_transfer_marker_enabled (
-                  message_flow_result_t::failed)) {
-                spot_node_runtime_t (node).emit_actor_transfer_marker (
-                  "handoff_terminal_send_failed", actor_ref, transfer_id, std::nullopt,
-                  std::nullopt, std::current_exception ());
-            }
         }
     };
     if (!context_state || !location || !context_state->channel_runtime
@@ -6501,30 +6490,17 @@ task_t<void> spot_node_runtime_t::replay_actor_handoff_batch (actor_ref_t actor_
               "handoff_replay_failed", actor_ref, transfer_id, std::nullopt, std::nullopt,
               replay_exception ? replay_exception : result.exception ());
         }
-        {
-            try {
-                const auto sent = co_await settle_handoff_packet (
-                  _state, packet.application_record, packet.is_request, terminal_route, result);
-                if (!sent) {
-                    if (spot_node_runtime_t (_state).actor_transfer_marker_enabled (
-                          message_flow_result_t::failed)) {
-                        spot_node_runtime_t (_state).emit_actor_transfer_marker (
-                          "handoff_terminal_send_failed", actor_ref, transfer_id, std::nullopt,
-                          std::nullopt,
-                          std::make_exception_ptr (framework_exception_t (
-                            framework_error_kind_t::unavailable,
-                            "Actor handoff terminal send was not accepted")));
-                    }
-                }
-            }
-            catch (...) {
-                if (spot_node_runtime_t (_state).actor_transfer_marker_enabled (
-                      message_flow_result_t::failed)) {
-                    spot_node_runtime_t (_state).emit_actor_transfer_marker (
-                      "handoff_terminal_send_failed", actor_ref, transfer_id, std::nullopt,
-                      std::nullopt, std::current_exception ());
-                }
-            }
+        const auto sent = co_await runtime::await_result (settle_handoff_packet (
+          _state, packet.application_record, packet.is_request, terminal_route, result));
+        if ((!sent || !sent.value ())
+            && spot_node_runtime_t (_state).actor_transfer_marker_enabled (
+              message_flow_result_t::failed)) {
+            co_await emit_actor_transfer_marker_async (
+              "handoff_terminal_send_failed", actor_ref, transfer_id, std::nullopt, std::nullopt,
+              !sent ? sent.exception ()
+                    : std::make_exception_ptr (
+                        framework_exception_t (framework_error_kind_t::unavailable,
+                                               "Actor handoff terminal send was not accepted")));
         }
     }
 }
@@ -6542,22 +6518,15 @@ void spot_node_runtime_t::enqueue_actor_handoff_replay (const actor_ref_t &actor
     detail::observe_task_completion (replay, [replay_owner] (const result_t<void> &) {});
 }
 
-void spot_node_runtime_t::replay_actor_handoff_until_move_closed (const actor_ref_t &actor_ref,
-                                                                  std::string transfer_id)
+void spot_node_runtime_t::replay_actor_handoff_until_move_closed (const actor_ref_t &actor_ref)
 {
-    auto root_services = _state->lane.run_checked ([&] { return _state->root_services; }).get ();
-    replay_actor_handoff_core (actor_ref, std::move (transfer_id), std::move (root_services))
-      .result ()
-      .value ();
+    replay_actor_handoff_core (actor_ref).result ().value ();
 }
 
 task_t<void>
-spot_node_runtime_t::replay_actor_handoff_until_move_closed_async (actor_ref_t actor_ref,
-                                                                   std::string transfer_id)
+spot_node_runtime_t::replay_actor_handoff_until_move_closed_async (actor_ref_t actor_ref)
 {
-    auto root_services = co_await _state->lane.run_task ([&] { return _state->root_services; });
-    co_await replay_actor_handoff_core (actor_ref, std::move (transfer_id),
-                                        std::move (root_services));
+    co_await replay_actor_handoff_core (actor_ref);
 }
 
 task_t<std::size_t> spot_node_runtime_t::settle_abandoned_actor_leave_reservations_async (
@@ -6628,13 +6597,8 @@ task_t<std::size_t> spot_node_runtime_t::settle_abandoned_actor_leave_reservatio
     co_return sweep.first;
 }
 
-task_t<void>
-spot_node_runtime_t::replay_actor_handoff_core (const actor_ref_t &actor_ref,
-                                                std::string transfer_id,
-                                                std::optional<service_provider_t> root_services)
+task_t<void> spot_node_runtime_t::replay_actor_handoff_core (const actor_ref_t &actor_ref)
 {
-    (void) transfer_id;
-    (void) root_services;
     auto owner = std::make_shared<spot_node_runtime_t> (_state);
     auto opened = owner->open_local_actor_handoff (actor_ref);
     detail::observe_task_completion (opened,
@@ -6642,6 +6606,7 @@ spot_node_runtime_t::replay_actor_handoff_core (const actor_ref_t &actor_ref,
                                          if (!terminal || !terminal.value ())
                                              owner->cancel_local_actor_handoff (actor_ref);
                                      });
+    return task_t<void> (result_t<void>::success ());
 }
 
 task_t<actor_join_reply_t> spot_node_runtime_t::join_actor_to_spot_erased (
@@ -6764,7 +6729,7 @@ task_t<actor_join_reply_t> spot_node_runtime_t::join_actor_to_spot_erased (
       _state, actor_ref, join_snapshot.source_spot_id, committed, *context._state,
       claimed_location);
     if (!location_claim) {
-        replay_actor_handoff_until_move_closed (actor_ref, key);
+        replay_actor_handoff_until_move_closed (actor_ref);
         co_return result_t<actor_join_reply_t>::failure (
           location_claim.error_kind (), location_claim.error () ? location_claim.error ()->what ()
                                                                 : "actor location claim failed");
@@ -6777,9 +6742,9 @@ task_t<actor_join_reply_t> spot_node_runtime_t::join_actor_to_spot_erased (
         if (authority_committed) {
             _state->actor_transfer_coordinator.mark_reconcile (
               key, join_snapshot.message_follow_duration);
-            replay_actor_handoff_until_move_closed (committed, key);
+            replay_actor_handoff_until_move_closed (committed);
         } else {
-            replay_actor_handoff_until_move_closed (actor_ref, key);
+            replay_actor_handoff_until_move_closed (actor_ref);
         }
     };
     try {
@@ -7238,7 +7203,7 @@ task_t<std::size_t> spot_node_runtime_t::cleanup_expired_actor_admissions_at_asy
             // e.g. a target-local post-authority-commit failure): unchanged
             // prior behavior, not the Location-Store-reconciled outcomes
             // below, which require the captured identity to compare against.
-            co_await replay_actor_handoff_until_move_closed_async (actor_ref, key);
+            co_await replay_actor_handoff_until_move_closed_async (actor_ref);
             ++removed;
             continue;
         }
@@ -9236,7 +9201,7 @@ spot_node_runtime_t::transfer_actor_out (const actor_ref_t &actor_ref,
           });
     }
     catch (const framework_exception_t &error) {
-        replay_actor_handoff_until_move_closed (actor_ref, transfer_id);
+        replay_actor_handoff_until_move_closed (actor_ref);
         co_return detail::result_access_t::failure<remote_actor_transfer_t> (error);
     }
     // Record the source plan's pending requests after the FIFO has sealed
@@ -9263,7 +9228,7 @@ spot_node_runtime_t::transfer_actor_out (const actor_ref_t &actor_ref,
     try {
         auto state = prepared.factory.capture (prepared.actor.get (), {}).result ();
         if (!state) {
-            replay_actor_handoff_until_move_closed (actor_ref, transfer_id);
+            replay_actor_handoff_until_move_closed (actor_ref);
             co_return detail::propagate_failure<remote_actor_transfer_t> (
               state, "actor transfer-out failed");
         }
@@ -9276,16 +9241,16 @@ spot_node_runtime_t::transfer_actor_out (const actor_ref_t &actor_ref,
           std::string (runtime::protocol::actor_join_snapshot_content_type)});
     }
     catch (const framework_exception_t &error) {
-        replay_actor_handoff_until_move_closed (actor_ref, transfer_id);
+        replay_actor_handoff_until_move_closed (actor_ref);
         co_return detail::result_access_t::failure<remote_actor_transfer_t> (error);
     }
     catch (const std::exception &error) {
-        replay_actor_handoff_until_move_closed (actor_ref, transfer_id);
+        replay_actor_handoff_until_move_closed (actor_ref);
         co_return result_t<remote_actor_transfer_t>::failure (
           framework_error_kind_t::internal_failure, error.what ());
     }
     catch (...) {
-        replay_actor_handoff_until_move_closed (actor_ref, transfer_id);
+        replay_actor_handoff_until_move_closed (actor_ref);
         co_return result_t<remote_actor_transfer_t>::failure (
           framework_error_kind_t::internal_failure, "actor transfer-out failed");
     }
@@ -9436,58 +9401,65 @@ task_t<void> spot_node_runtime_t::seal_actor_application_suffix (const actor_ref
                                                               std::move (preserved));
 }
 
-std::shared_ptr<runtime::serial_execution_queue_t>
+task_t<std::shared_ptr<runtime::serial_execution_queue_t>>
 spot_node_runtime_t::actor_application_queue (std::string_view actor_id) const
 {
-    return _state->lane
-      .run ([&] {
-          const auto type = _state->actor_types_by_id.find (std::string (actor_id));
-          if (type == _state->actor_types_by_id.end ())
-              return std::shared_ptr<runtime::serial_execution_queue_t>{};
-          const auto key = type->second + ":" + std::string (actor_id);
-          const auto location = _state->actor_spot_ids.find (key);
-          if (location == _state->actor_spot_ids.end ())
-              return std::shared_ptr<runtime::serial_execution_queue_t>{};
-          const auto context = _state->spot_contexts_by_id.find (std::string (location->second));
-          if (context == _state->spot_contexts_by_id.end () || !context->second._state)
-              return std::shared_ptr<runtime::serial_execution_queue_t>{};
-          const auto executor =
-            context->second._state->ensure_spot_serial_executor ()->actor_executor (key);
-          return executor ? executor->queue ()
-                          : std::shared_ptr<runtime::serial_execution_queue_t>{};
-      })
-      .get ();
+    return _state->lane.run_task ([state = _state, actor_id = std::string (actor_id)] {
+        const auto type = state->actor_types_by_id.find (actor_id);
+        if (type == state->actor_types_by_id.end ())
+            return std::shared_ptr<runtime::serial_execution_queue_t>{};
+        const auto key = type->second + ":" + actor_id;
+        const auto location = state->actor_spot_ids.find (key);
+        if (location == state->actor_spot_ids.end ())
+            return std::shared_ptr<runtime::serial_execution_queue_t>{};
+        const auto context = state->spot_contexts_by_id.find (std::string (location->second));
+        if (context == state->spot_contexts_by_id.end () || !context->second._state)
+            return std::shared_ptr<runtime::serial_execution_queue_t>{};
+        const auto executor =
+          context->second._state->ensure_spot_serial_executor ()->actor_executor (key);
+        return executor ? executor->queue () : std::shared_ptr<runtime::serial_execution_queue_t>{};
+    });
 }
 
-bool spot_node_runtime_t::notify_actor_application_ready (
+task_t<bool> spot_node_runtime_t::notify_actor_application_ready (
   std::string actor_id, std::function<std::optional<runtime::serial_prefix_work_t> ()> take)
 {
-    auto queue = actor_application_queue (actor_id);
-    if (!queue)
-        return false;
     auto owner = std::make_shared<spot_node_runtime_t> (_state);
+    auto queue = co_await owner->actor_application_queue (actor_id);
+    if (!queue)
+        co_return false;
     queue->notify_control (
       "actor-ready", [owner, actor_id = std::move (actor_id), queue, take = std::move (take)] {
-          // Membership can change after notification publication. Resolve the
-          // current private mailbox before the native claim is obtained.
-          if (owner->actor_application_queue (actor_id) != queue) {
-              (void) owner->notify_actor_application_ready (actor_id, take);
-              return;
-          }
-          auto accepted = queue->accept_application_ready (take);
-          detail::observe_task_completion (accepted, [owner] (const result_t<bool> &result) {
-              if (!result)
-                  std::rethrow_exception (result.exception ());
-          });
+          auto accepted = owner->accept_actor_application_ready (actor_id, queue, take);
+          detail::observe_task_completion (
+            accepted,
+            [owner, failures = owner->_state->runtime_failures ()] (const result_t<void> &result) {
+                if (!result)
+                    failures->report (result.exception ());
+            });
       });
-    return true;
+    co_return true;
+}
+
+task_t<void> spot_node_runtime_t::accept_actor_application_ready (
+  std::string actor_id,
+  std::shared_ptr<runtime::serial_execution_queue_t> queue,
+  std::function<std::optional<runtime::serial_prefix_work_t> ()> take)
+{
+    // Resolve membership again before obtaining the native claim: a move may
+    // have replaced the private mailbox after notification publication.
+    if (co_await actor_application_queue (actor_id) != queue) {
+        (void) co_await notify_actor_application_ready (std::move (actor_id), std::move (take));
+        co_return;
+    }
+    (void) co_await queue->accept_application_ready (std::move (take));
 }
 
 task_t<std::vector<std::shared_ptr<runtime::serial_application_record_t>>>
 spot_node_runtime_t::take_actor_application_suffix (const actor_ref_t &actor_ref,
                                                     std::function<void ()> seal) const
 {
-    auto queue = actor_application_queue (actor_ref.actor_id ().value ());
+    auto queue = co_await actor_application_queue (actor_ref.actor_id ().value ());
     if (!queue) {
         if (seal)
             seal ();
@@ -9721,9 +9693,17 @@ void spot_node_runtime_t::deliver_actor_join_completion_async (
                       node->delivered_join_completions.insert (operation);
               })
               .get ();
-            if (const auto native = spot_node_runtime_t (node).native_node ())
-                if (const auto owner = native->resolve_actor (actor_ref))
-                    (void) native->notify_stateful_owner (*owner);
+            if (const auto native = spot_node_runtime_t (node).native_node ()) {
+                if (const auto owner = native->resolve_actor (actor_ref)) {
+                    auto notified = native->notify_stateful_owner (*owner);
+                    detail::observe_task_completion (
+                      notified, [native, failures = node->runtime_failures ()] (
+                                  const result_t<bool> &terminal) {
+                          if (!terminal)
+                              failures->report (terminal.exception ());
+                      });
+                }
+            }
         }
         catch (const framework_exception_t &error) {
             result = detail::result_access_t::failure<void> (error);
@@ -9736,11 +9716,7 @@ void spot_node_runtime_t::deliver_actor_join_completion_async (
             result = result_t<void>::failure (framework_error_kind_t::internal_failure,
                                               "Actor Join completion state settlement failed");
         }
-        try {
-            completed (std::move (result));
-        }
-        catch (...) {
-        }
+        node->runtime_failures ()->capture ([&] { completed (std::move (result)); });
     };
     auto settle_after_delivery = [settle_result = std::move (settle_result),
                                   settle = std::move (settle)] (result_t<void> result) mutable {
@@ -10150,7 +10126,7 @@ void spot_node_runtime_t::fail_remote_actor_transfer (
         _state->actor_transfer_coordinator.mark_reconcile (key, message_follow_duration,
                                                            std::move (reconcile_context));
     } else {
-        replay_actor_handoff_until_move_closed (actor_ref, key);
+        replay_actor_handoff_until_move_closed (actor_ref);
     }
 }
 

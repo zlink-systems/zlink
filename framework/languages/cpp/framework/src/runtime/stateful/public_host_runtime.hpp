@@ -948,10 +948,10 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
       mesh::service_mailbox_claim_t claim,
       const std::function<void (
         const ready_record_t &, const receive_record_t &, std::vector<zlink::message_t>)> dispatch);
-    bool notify_stateful_owner (const stateful::object_ref_t &owner);
+    task_t<bool> notify_stateful_owner (const stateful::object_ref_t &owner);
     bool claim_stateful_owner (const stateful::object_ref_t &object,
                                const mesh::service_mailbox_t::application_dispatch_t &dispatch);
-    bool
+    task_t<bool>
     dispatch_stateful_owner (const stateful::object_ref_t &object,
                              const std::function<void (const ready_record_t &,
                                                        const receive_record_t &,

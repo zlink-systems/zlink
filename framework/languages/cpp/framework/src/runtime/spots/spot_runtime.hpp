@@ -2120,10 +2120,14 @@ class spot_node_runtime_t
     deliver_actor_join_completion (const actor_ref_t &actor_ref,
                                    const actor_join_completion_t &completion,
                                    std::optional<spot_id_t> source_spot_id = std::nullopt);
-    std::shared_ptr<runtime::serial_execution_queue_t>
+    task_t<std::shared_ptr<runtime::serial_execution_queue_t>>
     actor_application_queue (std::string_view actor_id) const;
-    bool notify_actor_application_ready (
+    task_t<bool> notify_actor_application_ready (
       std::string actor_id, std::function<std::optional<runtime::serial_prefix_work_t> ()> take);
+    task_t<void> accept_actor_application_ready (
+      std::string actor_id,
+      std::shared_ptr<runtime::serial_execution_queue_t> queue,
+      std::function<std::optional<runtime::serial_prefix_work_t> ()> take);
     task_t<void> seal_actor_application_suffix (const actor_ref_t &actor_ref,
                                                 std::function<void ()> seal);
     task_t<std::vector<std::shared_ptr<runtime::serial_application_record_t>>>
@@ -2460,13 +2464,9 @@ class spot_node_runtime_t
     // Drains a source-side handoff after a pre-commit failure while the move
     // gate remains closed. Replay is posted before the gate is removed, so a
     // new dispatch cannot overtake the preserved packets.
-    void replay_actor_handoff_until_move_closed (const actor_ref_t &actor_ref,
-                                                 std::string transfer_id);
-    task_t<void> replay_actor_handoff_until_move_closed_async (actor_ref_t actor_ref,
-                                                               std::string transfer_id);
-    task_t<void> replay_actor_handoff_core (const actor_ref_t &actor_ref,
-                                            std::string transfer_id,
-                                            std::optional<service_provider_t> root_services);
+    void replay_actor_handoff_until_move_closed (const actor_ref_t &actor_ref);
+    task_t<void> replay_actor_handoff_until_move_closed_async (actor_ref_t actor_ref);
+    task_t<void> replay_actor_handoff_core (const actor_ref_t &actor_ref);
 
     std::shared_ptr<spot_node_builder_state_t> _state;
 };

@@ -225,12 +225,13 @@ void service_mailbox_t::bind_application_dispatch (application_prepare_t prepare
     _stateful_ready = std::move (stateful_ready);
 }
 
-bool service_mailbox_t::notify_stateful_ready (const std::string &owner, stateful_take_t take)
+task_t<bool> service_mailbox_t::notify_stateful_ready (const std::string &owner,
+                                                       stateful_take_t take)
 {
     std::unique_lock lock (_mutex);
     auto ready = _stateful_ready;
     lock.unlock ();
-    return ready && ready (owner, std::move (take));
+    return ready ? ready (owner, std::move (take)) : task_t<bool> (result_t<bool>::success (false));
 }
 
 bool service_mailbox_t::has_application_dispatch () const

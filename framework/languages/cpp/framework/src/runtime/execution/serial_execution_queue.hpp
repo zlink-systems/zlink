@@ -330,6 +330,8 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
                                  std::function<void ()> work);
     void prepare_application_head_locked ();
     void accept_application_owned (work_item_t &item);
+    void refresh_application_tail_locked ();
+    void refresh_application_barriers_locked ();
     void connect_actor_head (const std::shared_ptr<serial_execution_queue_t> &actor);
     void disconnect_actor_head (const std::shared_ptr<serial_execution_queue_t> &actor);
     void execute_actor_head (work_item_t spot_item);
@@ -387,6 +389,9 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
     std::condition_variable _empty;
     lane_state_t _application;
     lane_state_t _lifecycle;
+    // Derived FIFO indexes; the records/barriers remain the only owners.
+    std::weak_ptr<serial_application_record_t> _application_tail_record;
+    std::size_t _application_barriers = 0;
     // P changes tail; the shared-gate consumer changes cursor. The cursor
     // node is retained while the producer tail can still point to it.
     publication_node_t *_publication_tail = nullptr;

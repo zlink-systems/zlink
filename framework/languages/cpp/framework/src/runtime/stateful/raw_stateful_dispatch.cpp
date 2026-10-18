@@ -737,6 +737,8 @@ raw_stateful_dispatch_t::try_claim (const object_ref_t &owner,
         (void) release_application_claim (owner);
         return {stateful_error_t::conflict, std::nullopt};
     }
+    // Terminal completion still reads the retained operation/source identity.
+    // Claim copies that summary; commit already removed its payload bytes.
     auto frozen = pending->second.frozen;
     if (before_application_handler)
         *before_application_handler =
@@ -1435,16 +1437,14 @@ raw_relocation_replay_coordinator_t::process_data (const mesh::service_mailbox_r
     return raw_relocation_replay_result_t::applied;
 }
 
-void raw_relocation_replay_coordinator_t::unregister_terminal_sources (
+task_t<void> raw_relocation_replay_coordinator_t::unregister_terminal_sources (
   const protocol::relocation_id_t &relocation)
 {
-    _lane
-      .run ([this, &relocation] {
-          std::erase_if (_terminal_sources,
-                         [&] (const auto &entry) { return entry.first.relocation == relocation; });
-          publish_next_due_on_lane ();
-      })
-      .get ();
+    co_await _lane.run_task ([this, &relocation] {
+        std::erase_if (_terminal_sources,
+                       [&] (const auto &entry) { return entry.first.relocation == relocation; });
+        publish_next_due_on_lane ();
+    });
 }
 
 bool raw_relocation_replay_coordinator_t::register_terminal_source (

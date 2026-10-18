@@ -621,7 +621,7 @@ class maintenance_runtime_t
     task_t<source_relocation_settlement_t>
     settle_relocation (std::shared_ptr<relocation_terminal_state_t> state,
                        std::vector<object_ref_t> participants);
-    std::pair<relocation_terminal_t, relocation_reason_t>
+    task_t<std::pair<relocation_terminal_t, relocation_reason_t>>
     apply_relocation_settlement (const std::shared_ptr<relocation_terminal_state_t> &state,
                                  const std::vector<object_ref_t> &participants,
                                  const source_relocation_settlement_t &settled);
@@ -649,7 +649,7 @@ class maintenance_runtime_t
                               const object_ref_t &owner,
                               std::uint64_t participant_id,
                               const turn_record_t &turn) const;
-    stateful_error_t abort_relocation_before_cutover (
+    task_t<stateful_error_t> abort_relocation_before_cutover (
       std::uint64_t token, const eligible_relocation_unit_t::canonical_wire_context_t &context);
     task_t<relocation_reason_t>
     prepare_target (const eligible_relocation_unit_t::canonical_wire_context_t &context,

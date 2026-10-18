@@ -7500,56 +7500,60 @@ bool verify_remote_actor_cutover_completion_is_target_owned (bool cancel_source_
     task_completion_source_t<void> active_drained;
     const auto dispatch_source = [&] {
         while (!stop_dispatch.load (std::memory_order_acquire)) {
-            (void) source.dispatch_ready ([&] (const host::ready_record_t &owner,
-                                               const host::receive_record_t &record,
-                                               std::vector<zlink::message_t> parts) {
-                if (!cancel_source_delay) {
-                    (void) source_spots.dispatch_mesh_record (
-                      owner, record, parts,
-                      runtime::decode_mesh_record_header (record, parts, false).value (),
-                      source_provider, serializers);
-                    return;
-                }
-                // Match the hosted dispatcher admission/terminal ownership. The
-                // early Leave transfers this terminal into its actual reservation.
-                source.application_work_enqueued ();
-                source.application_work_started ();
-                if (record.retain_mailbox_reservation)
-                    record.retain_mailbox_reservation ();
-                auto terminal = std::make_shared<runtime::application_dispatch_terminal_owner_t> (
-                  source_shared, record.complete_stateful_dispatch,
-                  record.release_mailbox_reservation);
-                bool deferred = false;
-                (void) source_spots.dispatch_mesh_record (
-                  owner, record, parts,
-                  runtime::decode_mesh_record_header (record, parts, false).value (),
-                  source_provider, serializers,
-                  [&, terminal] {
+            (void) source
+              .dispatch_ready ([&] (const host::ready_record_t &owner,
+                                    const host::receive_record_t &record,
+                                    std::vector<zlink::message_t> parts) {
+                  if (!cancel_source_delay) {
+                      (void) source_spots.dispatch_mesh_record (
+                        owner, record, parts,
+                        runtime::decode_mesh_record_header (record, parts, false).value (),
+                        source_provider, serializers);
+                      return;
+                  }
+                  // Match the hosted dispatcher admission/terminal ownership. The
+                  // early Leave transfers this terminal into its actual reservation.
+                  source.application_work_enqueued ();
+                  source.application_work_started ();
+                  if (record.retain_mailbox_reservation)
+                      record.retain_mailbox_reservation ();
+                  auto terminal = std::make_shared<runtime::application_dispatch_terminal_owner_t> (
+                    source_shared, record.complete_stateful_dispatch,
+                    record.release_mailbox_reservation);
+                  bool deferred = false;
+                  (void) source_spots.dispatch_mesh_record (
+                    owner, record, parts,
+                    runtime::decode_mesh_record_header (record, parts, false).value (),
+                    source_provider, serializers,
+                    [&, terminal] {
+                        terminal->settle ();
+                        if (source_settlement->leave_accepted.load (std::memory_order_acquire)
+                            && source.active_application_callbacks () == 0)
+                            active_drained.complete (result_t<void>::success ());
+                    },
+                    &deferred, record.before_application_handler);
+                  if (!deferred)
                       terminal->settle ();
-                      if (source_settlement->leave_accepted.load (std::memory_order_acquire)
-                          && source.active_application_callbacks () == 0)
-                          active_drained.complete (result_t<void>::success ());
-                  },
-                  &deferred, record.before_application_handler);
-                if (!deferred)
-                    terminal->settle ();
-                const auto retained =
-                  source_state->spot_state->lane
-                    .run ([&] {
-                        const auto &pending = source_state->spot_state->pending_remote_actor_leaves;
-                        return !pending.empty () && pending.front ().transfer_owner_reservation
-                               && source_state->spot_state->actor_transfer_coordinator.phase (
-                                    "actor.cutover.probe:actor-cutover-probe")
-                                    == actor_move_phase_t::source_remote;
-                    })
-                    .get ();
-                if (retained
-                    && !source_settlement->leave_accepted.exchange (true,
-                                                                    std::memory_order_acq_rel)) {
-                    early_leave.complete (
-                      result_t<bool>::success (source.active_application_callbacks () == 1));
-                }
-            });
+                  const auto retained =
+                    source_state->spot_state->lane
+                      .run ([&] {
+                          const auto &pending =
+                            source_state->spot_state->pending_remote_actor_leaves;
+                          return !pending.empty () && pending.front ().transfer_owner_reservation
+                                 && source_state->spot_state->actor_transfer_coordinator.phase (
+                                      "actor.cutover.probe:actor-cutover-probe")
+                                      == actor_move_phase_t::source_remote;
+                      })
+                      .get ();
+                  if (retained
+                      && !source_settlement->leave_accepted.exchange (true,
+                                                                      std::memory_order_acq_rel)) {
+                      early_leave.complete (
+                        result_t<bool>::success (source.active_application_callbacks () == 1));
+                  }
+              })
+              .result ()
+              .value ();
             if (cancel_source_delay) {
                 // The production receive loop advances this same management
                 // owner after a dispatch turn; it returns abandoned early Leave
@@ -7564,15 +7568,18 @@ bool verify_remote_actor_cutover_completion_is_target_owned (bool cancel_source_
     };
     const auto dispatch_target = [&] {
         while (!stop_dispatch.load (std::memory_order_acquire)) {
-            (void) target.dispatch_ready ([&] (const host::ready_record_t &owner,
-                                               const host::receive_record_t &record,
-                                               std::vector<zlink::message_t> parts) {
-                (void) target_spots.dispatch_mesh_record (
-                  owner, record, parts,
-                  zlink::framework::runtime::decode_mesh_record_header (record, parts, false)
-                    .value (),
-                  target_provider, serializers);
-            });
+            (void) target
+              .dispatch_ready ([&] (const host::ready_record_t &owner,
+                                    const host::receive_record_t &record,
+                                    std::vector<zlink::message_t> parts) {
+                  (void) target_spots.dispatch_mesh_record (
+                    owner, record, parts,
+                    zlink::framework::runtime::decode_mesh_record_header (record, parts, false)
+                      .value (),
+                    target_provider, serializers);
+              })
+              .result ()
+              .value ();
             if (cancel_source_delay) {
                 if (!stop_dispatch.load (std::memory_order_acquire))
                     (void) target.native_node ().wait_for_dispatch_activity (
@@ -9664,6 +9671,7 @@ bool verify_real_join_completion_callback_owner (int policy,
                  && same_actor_suffix == 0;
         actor->ordinary.complete (fw::result_t<void>::success ());
         actor->reply->complete (fw::result_t<int>::success (7));
+        scheduler->run_until (terminal);
         scheduler->run_all ();
         passed = passed && terminal.await_ready ();
         if (terminal.await_ready ())
@@ -9895,8 +9903,187 @@ bool verify_accepted_continuation_survives_shutdown (bool close_before_resume)
     return passed;
 }
 
+bool verify_direct_continuation_after_close (bool shared)
+{
+    namespace fw = zlink::framework;
+    namespace rt = fw::runtime;
+    fw::test::manual_internal_scheduler_t worker;
+    auto queue = std::make_shared<rt::serial_execution_queue_t> (
+      worker, rt::serial_execution_queue_options_t{},
+      rt::serial_execution_queue_t::error_handler_t{},
+      shared ? rt::serial_lane_policy_t::spot_wide ()
+             : rt::serial_lane_policy_t::per_actor_spot ());
+    std::shared_ptr<fw::detail::serial_turn_t> accepted;
+    rt::serial_execution_queue_t::async_completion_t finish;
+    int executions = 0, settlements = 0, fresh = 0;
+    queue->post_async ("accepted-source", [&] (auto complete) {
+        accepted = fw::detail::capture_current_serial_turn ();
+        finish = std::move (complete);
+    });
+    worker.run_all ();
+    queue->close ();
+    const bool continued = accepted
+                           && queue->try_post_continuation (
+                             "accepted-after-close",
+                             [&] (auto complete) {
+                                 ++executions;
+                                 complete ([&] { ++settlements; });
+                             },
+                             accepted);
+    const bool rejected = !queue->try_post ("new-after-close", [&] { ++fresh; });
+    // Shutdown cancellation preserves the already accepted chain item.
+    queue->cancel_pending ();
+    if (finish)
+        finish ([] {});
+    worker.run_all ();
+    const auto pending = queue->pending_count ();
+    const bool passed =
+      continued && rejected && executions == 1 && settlements == 1 && fresh == 0 && pending == 0;
+    finish = {};
+    accepted.reset ();
+    queue->drain ();
+    worker.drain ();
+    std::cout << "direct-continuation-after-close shared=" << shared << " executions=" << executions
+              << " settlements=" << settlements << " pending=" << pending
+              << " fresh_rejected=" << rejected << " passed=" << passed << '\n';
+    return passed;
+}
+
+bool verify_durable_tail_across_controls_and_export ()
+{
+    namespace fw = zlink::framework;
+    namespace rt = fw::runtime;
+    fw::test::manual_internal_scheduler_t worker;
+    auto queue = std::make_shared<rt::serial_execution_queue_t> (worker);
+    rt::serial_execution_queue_t::async_completion_t finish;
+    queue->post_async ("held-before-durable-prefix",
+                       [&] (auto complete) { finish = std::move (complete); });
+    worker.run_all ();
+    int releases = 0, cancelled = 0, controls = 0, handlers = 0;
+    const auto make_record = [&] {
+        auto record = std::make_shared<rt::serial_application_record_t> ();
+        record->admission.retain_initial ([&] { ++releases; });
+        return record;
+    };
+    const auto work = [&] (const auto &record) {
+        return [&, record] (auto complete) {
+            record->admission.enter_handler ();
+            ++handlers;
+            complete ([] {});
+        };
+    };
+    auto a = make_record ();
+    a->admission.take_over ();
+    const bool accepted_a = queue->try_post_async (
+      "durable-prefix", work (a), rt::serial_work_options_t{.application_record = a});
+    constexpr int control_count = 64;
+    for (int index = 0; index != control_count; ++index)
+        queue->post ("recordless-control", [&] { ++controls; });
+    auto b = make_record ();
+    const auto b_submission = queue->try_post_cancellable_async (
+      "cancelled-durable-tail", work (b), [&] { ++cancelled; },
+      rt::serial_work_options_t{.application_record = b});
+    const bool inherited_b = b->admission.durable ();
+    const auto cancellation =
+      b_submission ? queue->cancel_submission (b_submission.value ()).result ().value ()
+                   : rt::serial_cancel_submission_outcome_t::already_terminal;
+    auto c = make_record ();
+    const bool accepted_c = queue->try_post_async (
+      "durable-after-tail-cancel", work (c), rt::serial_work_options_t{.application_record = c});
+    const bool inherited_c = c->admission.durable ();
+    auto exported = queue->take_application_suffix ().result ();
+    const bool exact_export = exported && exported.value ().size () == 2
+                              && exported.value ()[0] == a && exported.value ()[1] == c;
+    auto d = make_record ();
+    const bool accepted_d = queue->try_post_async (
+      "ordinary-after-export", work (d), rt::serial_work_options_t{.application_record = d});
+    const bool ordinary_d = !d->admission.durable ();
+    if (finish)
+        finish ([] {});
+    worker.run_all ();
+    const bool passed = accepted_a && b_submission && inherited_b
+                        && cancellation == rt::serial_cancel_submission_outcome_t::queued_cancelled
+                        && accepted_c && inherited_c && exact_export && accepted_d && ordinary_d
+                        && cancelled == 1 && controls == control_count && handlers == 1
+                        && releases == 4 && queue->pending_count () == 0;
+    queue->close ();
+    queue->drain ();
+    worker.drain ();
+    std::cout << "durable-tail-controls-export inherited_b=" << inherited_b
+              << " inherited_c=" << inherited_c << " exact_export=" << exact_export
+              << " ordinary_d=" << ordinary_d << " releases=" << releases
+              << " handlers=" << handlers << " passed=" << passed << '\n';
+    return passed;
+}
+
+enum class mailbox_shutdown_t
+{
+    none,
+    close,
+    cancel
+};
+
+bool verify_idle_mailbox_terminal (bool shared, mailbox_shutdown_t shutdown)
+{
+    namespace fw = zlink::framework;
+    namespace rt = fw::runtime;
+    fw::test::manual_internal_scheduler_t worker;
+    auto gate = std::make_shared<rt::serial_execution_queue_t> (
+      worker, rt::serial_execution_queue_options_t{},
+      rt::serial_execution_queue_t::error_handler_t{},
+      shared ? rt::serial_lane_policy_t::spot_wide ()
+             : rt::serial_lane_policy_t::per_actor_spot ());
+    auto actor = std::make_shared<rt::serial_execution_queue_t> (worker);
+    actor->attach_spot_gate (gate);
+    fw::task_completion_source_t<void> terminal;
+    int cancelled = 0, next = 0;
+    const auto retained = actor->retain_mailbox_until (terminal.task (), [&] {
+        ++cancelled;
+        terminal.complete (fw::result_t<void>::failure (fw::framework_error_kind_t::shutting_down,
+                                                        "mailbox test cancelled"));
+    });
+    worker.run_all ();
+    actor->post ("after-idle-mailbox-terminal", [&] { ++next; });
+    worker.run_all ();
+    const bool held = next == 0 && actor->pending_count () == 1;
+    if (shutdown == mailbox_shutdown_t::close)
+        actor->close ();
+    else if (shutdown == mailbox_shutdown_t::cancel)
+        actor->cancel_pending ();
+    worker.run_all ();
+    terminal.complete (fw::result_t<void>::success ());
+    worker.run_all ();
+    const auto pending = actor->pending_count ();
+    // An idle fake turn has no lane message to decrement. drain() also waits
+    // for _active==0, proving its sole release_mailbox -> complete_one release.
+    actor->close ();
+    gate->close ();
+    actor->drain ();
+    gate->drain ();
+    worker.drain ();
+    const bool passed = retained && held && pending == 0
+                        && next == (shutdown == mailbox_shutdown_t::cancel ? 0 : 1)
+                        && cancelled == (shutdown == mailbox_shutdown_t::cancel ? 1 : 0);
+    std::cout << "idle-mailbox-terminal shared=" << shared
+              << " shutdown=" << static_cast<int> (shutdown) << " held=" << held << " next=" << next
+              << " cancelled=" << cancelled << " pending=" << pending
+              << " drained_active_zero=true passed=" << passed << '\n';
+    return passed;
+}
+
 int main (int argc, char **argv)
 {
+    bool mailbox_passed = verify_durable_tail_across_controls_and_export ();
+    for (const bool shared : {false, true}) {
+        mailbox_passed = verify_direct_continuation_after_close (shared) && mailbox_passed;
+        for (const auto shutdown :
+             {mailbox_shutdown_t::none, mailbox_shutdown_t::close, mailbox_shutdown_t::cancel})
+            mailbox_passed = verify_idle_mailbox_terminal (shared, shutdown) && mailbox_passed;
+    }
+    if (!mailbox_passed)
+        return EXIT_FAILURE;
+    if (argc == 2 && std::string_view (argv[1]) == "--review-mailbox-terminal")
+        return EXIT_SUCCESS;
     if (!verify_real_join_completion_callback_owner (0, false, true))
         return EXIT_FAILURE;
     if (!verify_accepted_continuation_survives_shutdown (false)
