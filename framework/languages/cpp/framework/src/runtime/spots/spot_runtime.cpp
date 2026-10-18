@@ -14765,35 +14765,55 @@ bool spot_node_runtime_t::relocation_ready () const
       .get ();
 }
 
-spot_node_runtime_t::relocation_units_t spot_node_runtime_t::relocation_units () const
+task_t<spot_node_runtime_t::relocation_units_t> spot_node_runtime_t::relocation_units () const
 {
-    const auto inventory_result = local_actor_inventory_async ().result ();
-    const auto &inventory = inventory_result.value ();
-    return _state->lane
-      .run ([&] {
-          relocation_units_t result;
-          for (const auto &[_, context] : _state->spot_contexts_by_id) {
-              const auto state = context._state;
-              if (!state || state->is_entry_spot () || state->is_instance_spot ()
-                  || state->execution_mode != user_spot_execution_mode_t::spot_wide)
-                  continue;
-              result.spots.push_back ({state->spot_id, state->spot_name, {}});
-          }
-          for (const auto &actor : inventory) {
-              auto ref = ::zlink::framework::detail::actor_ref_access_t::make (
-                node_rid_t::from_string (actor.owner.node_id), actor.stable_type, actor.owner.key,
-                actor.owner.object_generation);
-              const auto spot =
-                std::find_if (result.spots.begin (), result.spots.end (),
-                              [&] (const auto &unit) { return unit.spot_id == actor.membership; });
-              if (spot != result.spots.end ())
-                  spot->actors.push_back (std::move (ref));
-              else
-                  result.standalone_actors.push_back (std::move (ref));
-          }
-          return result;
-      })
-      .get ();
+    const auto state = _state;
+    const spot_node_runtime_t self (state);
+    co_await state->actor_transfer_coordinator.wait_for_source_completions ();
+
+    const auto native =
+      co_await state->lane.run_task ([state] { return state->native_node.lock (); });
+    if (!native)
+        co_return relocation_units_t{};
+    if (!native->objects ().try_begin_maintenance_inventory ())
+        throw framework_exception_t (framework_error_kind_t::shutting_down,
+                                     "Actor maintenance inventory is already sealed");
+    try {
+        // A prior Join can have committed to another owner. Reuse the native
+        // active inventory, including its finalized-source exclusion, only
+        // after the existing source completion has terminalized that Join.
+        auto inventory = co_await self.local_actor_inventory_async ();
+        auto units = co_await state->lane.run_task ([state, inventory = std::move (inventory)] {
+            relocation_units_t result;
+            for (const auto &[_, context] : state->spot_contexts_by_id) {
+                const auto state = context._state;
+                if (!state || state->is_entry_spot () || state->is_instance_spot ()
+                    || state->execution_mode != user_spot_execution_mode_t::spot_wide)
+                    continue;
+                result.spots.push_back ({state->spot_id, state->spot_name, {}});
+            }
+            for (const auto &actor : inventory) {
+                auto ref = ::zlink::framework::detail::actor_ref_access_t::make (
+                  node_rid_t::from_string (actor.owner.node_id), actor.stable_type, actor.owner.key,
+                  actor.owner.object_generation);
+                const auto spot =
+                  std::find_if (result.spots.begin (), result.spots.end (), [&] (const auto &unit) {
+                      return unit.spot_id == actor.membership;
+                  });
+                if (spot != result.spots.end ())
+                    spot->actors.push_back (std::move (ref));
+                else
+                    result.standalone_actors.push_back (std::move (ref));
+            }
+            return result;
+        });
+        native->objects ().end_maintenance_inventory ();
+        co_return units;
+    }
+    catch (...) {
+        native->objects ().end_maintenance_inventory ();
+        throw;
+    }
 }
 
 void spot_node_runtime_t::begin_relocation_readiness ()
