@@ -6680,6 +6680,36 @@ int local_relay_preserves_handoff_request_route (bool has_original_operation)
             || !replay_preserved_route.load (std::memory_order_acquire))
             return 11;
     }
+    if (!has_original_operation) {
+        // The real native registry owns this request's terminal; cancellation
+        // must use that owner without a second Framework reply reservation.
+        const auto native_record = backlog.front ().application_record;
+        if (!native_record || !native_record->native_reply
+            || !node->lane.run ([&] { return node->pending_handoff_requests.empty (); }).get ())
+            return 4;
+        node->actor_transfer_coordinator.prepend_source_suffix (key, std::move (backlog));
+        spots.cancel_local_actor_handoff (actor);
+        const auto terminal = finite_task_result (std::move (native_completion));
+        if (!terminal || !*terminal
+            || terminal->value ().record.operation_id != native_operation.id)
+            return 12;
+        const auto native_header = runtime::messaging::envelope_codec_t{}.decode_header (
+          runtime::messaging::message_parts_t (terminal->value ().parts));
+        if (!native_header
+            || native_header.value ().kind != runtime::messaging::message_kind_t::error
+            || native_header.value ().error_code != "unavailable"
+            || native_header.value ().correlation_id != header.correlation_id)
+            return 13;
+        const auto expired_at =
+          std::chrono::steady_clock::now () + std::chrono::hours (24 * 365 * 100);
+        return !native_record->native_reply && !native_record->complete_native (std::nullopt)
+                   && fixture.probe->calls.load (std::memory_order_acquire) == 0
+                   && spots.cleanup_expired_actor_admissions_at (expired_at) == 0
+                   && node->lane.run ([&] { return node->pending_handoff_requests.empty (); })
+                        .get ()
+                 ? 0
+                 : 8;
+    }
     const auto recorded =
       node->lane
         .run ([&] {
@@ -6706,17 +6736,7 @@ int local_relay_preserves_handoff_request_route (bool has_original_operation)
     auto completed = fixture.reply.get ();
     const auto reply_header = runtime::messaging::envelope_codec_t{}.decode_header (
       runtime::messaging::message_parts_t (completed));
-    if (!has_original_operation) {
-        const auto terminal = finite_task_result (std::move (native_completion));
-        if (!terminal || !*terminal || terminal->value ().parts.size () != completed.size ()
-            || terminal->value ().record.operation_id != native_operation.id)
-            return 12;
-        const auto native_header = runtime::messaging::envelope_codec_t{}.decode_header (
-          runtime::messaging::message_parts_t (terminal->value ().parts));
-        if (!native_header || native_header.value ().error_code != "unavailable"
-            || native_header.value ().correlation_id != header.correlation_id)
-            return 13;
-    }
+
     return reply_header && reply_header.value ().kind == runtime::messaging::message_kind_t::error
                && reply_header.value ().error_code == "unavailable"
                && reply_header.value ().correlation_id == header.correlation_id
