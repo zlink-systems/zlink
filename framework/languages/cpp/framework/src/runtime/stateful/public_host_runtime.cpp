@@ -3882,14 +3882,14 @@ task_t<bool> public_host_runtime_t::restore_relocation_assembly (
                   index + 1);
             restored_state[index].pending_application.clear ();
         }
-        restored =
-          co_await (staging->targets.size () == 1
-                      ? _objects.restore_relocation (
-                          restored_state.front (), staging->targets.front (),
-                          staging->restore_identity, pending->cancellation->get_token (),
-                          std::move (actor_target_spot))
-                      : _objects.restore_relocation_aggregate (restored_state, staging->targets,
-                                                               staging->restore_identity, pending->cancellation->get_token ()));
+        restored = co_await (
+          staging->targets.size () == 1
+            ? _objects.restore_relocation (
+                restored_state.front (), staging->targets.front (), staging->restore_identity,
+                pending->cancellation->get_token (), std::move (actor_target_spot))
+            : _objects.restore_relocation_aggregate (restored_state, staging->targets,
+                                                     staging->restore_identity,
+                                                     pending->cancellation->get_token ()));
         // The Kernel restores Actor state; canonical raw intake installs each
         // saved payload together with its original terminal, before Ready.
         if (restored == stateful::stateful_error_t::none)
@@ -4509,7 +4509,8 @@ void public_host_runtime_t::complete_relocation_assembly (
         std::size_t registered_count = 0;
         for (; registered_count != targets.size (); ++registered_count) {
             if (register_relocation_target_queue (pending.prepare, targets[registered_count],
-                                                  wire_objects[registered_count], registered_count + 1))
+                                                  wire_objects[registered_count],
+                                                  registered_count + 1))
                 continue;
             for (std::size_t index = 0; index != registered_count; ++index) {
                 try {
@@ -6834,7 +6835,8 @@ task_t<std::size_t> public_host_runtime_t::dispatch_application_claim (
                     native_owner =
                       _objects.find (stateful::object_kind_t::actor,
                                      mailbox_record.owner.substr (
-                                       detail::activation_admission_t::actor_key_prefix.size ()));
+                                       detail::activation_admission_t::actor_key_prefix.size ()),
+                                     std::nullopt);
                 else if (mailbox_record.owner.starts_with (
                            detail::activation_admission_t::spot_key_prefix)) {
                     const auto key = mailbox_record.owner.substr (

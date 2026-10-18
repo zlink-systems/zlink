@@ -238,8 +238,10 @@ class test_serial_turn_t final : public zlink::framework::detail::serial_turn_t
     bool belongs_to (const void *owner) const noexcept override { return owner == this; }
     bool is_after_active_phase () const noexcept override { return false; }
     bool allows_yield () const noexcept override { return true; }
-    zlink::framework::result_t<void> defer (std::function<zlink::framework::task_t<void> ()> work,
-                                            std::function<void ()>) override
+    zlink::framework::result_t<void>
+    defer (std::function<zlink::framework::task_t<void> ()> work,
+           std::function<void ()>,
+           std::shared_ptr<zlink::framework::detail::deferred_barrier_t>) override
     {
         auto pending = std::make_shared<zlink::framework::task_t<void>> (work ());
         zlink::framework::detail::observe_task_terminal (

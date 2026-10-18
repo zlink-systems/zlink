@@ -8265,9 +8265,17 @@ bool verify_teardown_observes_actor_handoff_terminal ()
     deferred_barrier_t::async_completion_t finish_source = [&] (result_t<void> result) {
         source_terminal.complete (std::move (result));
     };
-    const auto retained = executor->retain_actor_mailbox_until ("source-terminal-actor",
-                                                                source_terminal.task (), [] {});
+    const auto retained =
+      actor->queue ()->reserve_deferred_barrier_next ("source-handoff-terminal");
     if (!retained)
+        return false;
+    const auto activated = retained.value ()->activate_async ([&] (auto complete) {
+        auto pending = std::make_shared<task_t<void>> (source_terminal.task ());
+        observe_task_terminal (*pending,
+                               [pending, complete = std::move (complete)] (
+                                 const result_t<void> &result) mutable { complete (result); });
+    });
+    if (!activated)
         return false;
     actor->queue ()->notify_control ("source-terminal-published",
                                      [&] { entered.complete (result_t<void>::success ()); });
@@ -8861,9 +8869,6 @@ bool verify_readiness_before_deferred_join ()
     passed = passed && capture == 0;
     handler_turn->resume_scheduler () ([&] {
         const auto turn = fw::detail::capture_current_serial_turn ();
-        auto retained = actor->retain_mailbox_until (joined.task ());
-        if (!retained)
-            throw std::runtime_error ("join retention failed");
         if (!turn->defer (
               [&] {
                   ++join_started;
@@ -9010,14 +9015,16 @@ bool verify_public_local_member_defer (
               << " reply=" << reply << '\n';
     const auto captured_before_first = captured;
     const auto started_b_before_first = started_b;
+    // Each Actor owns its lifecycle FIFO. Waiting for A's transport does not
+    // delay B's Join; each suffix stays behind its own actual terminal.
     passed =
-      passed && started_a == 1 && started_b == 0 && suffix_a == 0 && suffix_b == 0 && reply == 1;
+      passed && started_a == 1 && started_b == 1 && suffix_a == 0 && suffix_b == 0 && reply == 1;
     first.complete (fail_first
                       ? fw::result_t<detail::actor_join_reply_t>::failure (
                           fw::framework_error_kind_t::internal_failure, "first Join failed")
                       : fw::result_t<detail::actor_join_reply_t>::success ({0, ref_a, {}}));
     scheduler->run_all ();
-    passed = passed && started_b == 1 && suffix_a == 0 && suffix_b == 0;
+    passed = passed && started_b == 1 && suffix_a == (other_handler ? 0 : 1) && suffix_b == 0;
     second.complete (fw::result_t<detail::actor_join_reply_t>::success ({0, ref_b, {}}));
     scheduler->run_all ();
     if (late) {
@@ -9160,11 +9167,6 @@ bool verify_deferred_coroutine_gate_terminal (bool flat, bool fail, bool switch_
     int activated = 0, h = 0, suffix = 0, adopted = 0, finished = 0;
     actor->post_async ("coroutine-gate-handler", [&] (auto complete) {
         handler = std::move (complete);
-        if (!actor->retain_mailbox_until (barrier.task (), [&] {
-                barrier.complete (fw::result_t<void>::failure (
-                  fw::framework_error_kind_t::shutting_down, "fixture canceled"));
-            }))
-            throw std::runtime_error ("mailbox retention failed");
         if (!fw::detail::defer_current_serial_turn ([&] {
                 ++activated;
                 join = std::make_shared<fw::task_t<void>> (deferred_owner_task (source.task ()));
@@ -9276,9 +9278,15 @@ bool verify_deferred_terminal_owner (bool flat, bool fail, bool active_applicati
         application_pending = root->pending_count (rt::serial_work_lane_t::application);
         application_claim_retained = !application_turn->released ();
         passed = passed && application_claim_retained && application_terminal == 0
-                 && actor->pending_count () == 2 && suffix == 0
-                 && root->pending_count (rt::serial_work_lane_t::application) == 1
-                 && root->pending_count (rt::serial_work_lane_t::lifecycle) == 1;
+                 && root->pending_count (rt::serial_work_lane_t::application) == 1;
+        // Execution gate §2: PerActor has an independent Actor gate; only
+        // SpotWide completion must wait for this retained Spot application.
+        if (flat)
+            passed = passed && actor->pending_count () == 0 && suffix == 1
+                     && root->pending_count (rt::serial_work_lane_t::lifecycle) == 0;
+        else
+            passed = passed && actor->pending_count () == 2 && suffix == 0
+                     && root->pending_count (rt::serial_work_lane_t::lifecycle) == 1;
     }
     // Keep the failure observation before releasing the other real H.
     if (application)
@@ -9308,10 +9316,429 @@ bool verify_deferred_terminal_owner (bool flat, bool fail, bool active_applicati
     return passed;
 }
 
+bool verify_generic_defer_registered_after_yield ()
+{
+    namespace fw = zlink::framework;
+    namespace rt = fw::runtime;
+    fw::test::manual_internal_scheduler_t worker;
+    auto root = std::make_shared<rt::serial_execution_queue_t> (
+      worker, rt::serial_execution_queue_options_t{},
+      rt::serial_execution_queue_t::error_handler_t{}, rt::serial_lane_policy_t::spot_wide ());
+    const auto make_actor = [&] {
+        auto actor = std::make_shared<rt::serial_execution_queue_t> (
+          worker, rt::serial_execution_queue_options_t{},
+          rt::serial_execution_queue_t::error_handler_t{},
+          rt::serial_lane_policy_t::actor_delivery ());
+        actor->attach_spot_gate (root);
+        return actor;
+    };
+    auto actor = make_actor ();
+    auto other = make_actor ();
+    fw::task_completion_source_t<void> terminal;
+    std::shared_ptr<fw::detail::serial_turn_t> handler_turn;
+    rt::serial_execution_queue_t::async_completion_t handler;
+    bool registered = false, resumed = false, handler_finished = false;
+    int activated = 0, suffix = 0, other_lifecycle = 0;
+    actor->post_async ("after-yield-source", [&] (auto complete) {
+        handler_turn = fw::detail::capture_current_serial_turn ();
+        handler = std::move (complete);
+    });
+    actor->post ("after-yield-suffix", [&] { ++suffix; });
+    worker.run_all ();
+    bool passed = handler_turn && handler && activated == 0 && suffix == 0;
+    const bool released = handler_turn && handler_turn->release ();
+    passed = passed && released;
+    worker.run_all ();
+    if (released) {
+        handler_turn->resume_scheduler () ([&] {
+            resumed = true;
+            // This is the first deferred registration for the handler chain.
+            registered = static_cast<bool> (fw::detail::defer_current_serial_turn ([&] {
+                ++activated;
+                return terminal.task ();
+            }));
+            if (handler) {
+                handler_finished = true;
+                handler ([] {});
+            }
+        });
+        worker.run_all ();
+    }
+    // Release the original handler even if the registration/release path failed.
+    if (handler && !handler_finished) {
+        handler_finished = true;
+        handler ([] {});
+        worker.run_all ();
+    }
+    const auto suffix_before_terminal = suffix;
+    passed = passed && resumed && registered && activated == 1 && suffix == 0;
+    other->post (
+      "other-actor-lifecycle", [&] { ++other_lifecycle; },
+      rt::serial_work_options_t{rt::serial_work_lane_t::lifecycle});
+    worker.run_all ();
+    passed = passed && other_lifecycle == 1 && suffix == 0;
+    terminal.complete (fw::result_t<void>::success ());
+    worker.run_all ();
+    const auto root_pending = root->pending_count ();
+    const auto actor_pending = actor->pending_count ();
+    const auto other_pending = other->pending_count ();
+    passed = passed && suffix == 1 && activated == 1 && root_pending == 0 && actor_pending == 0
+             && other_pending == 0;
+    actor->close ();
+    other->close ();
+    root->close ();
+    worker.run_all ();
+    worker.drain ();
+    std::cout << "generic-defer-after-yield resumed=" << resumed << " registered=" << registered
+              << " activated=" << activated << " suffix_before_terminal=" << suffix_before_terminal
+              << " suffix=" << suffix << " other_lifecycle=" << other_lifecycle
+              << " root_pending=" << root_pending << " actor_pending=" << actor_pending
+              << " other_pending=" << other_pending << " passed=" << passed << '\n';
+    return passed;
+}
+
+bool verify_deferred_settlement_terminal (bool fail_work,
+                                          bool fail_settlement,
+                                          bool cancel_pending = false)
+{
+    namespace fw = zlink::framework;
+    namespace rt = fw::runtime;
+    fw::test::manual_internal_scheduler_t worker;
+    std::vector<std::string> reported_errors;
+    auto queue = std::make_shared<rt::serial_execution_queue_t> (
+      worker, rt::serial_execution_queue_options_t{},
+      [&] (const std::string &, const std::exception_ptr &error) {
+          try {
+              if (error)
+                  std::rethrow_exception (error);
+          }
+          catch (const std::exception &failure) {
+              reported_errors.emplace_back (failure.what ());
+          }
+      });
+    fw::detail::deferred_barrier_t::async_completion_t work_done, settlement_done;
+    int work_started = 0, settlement_started = 0, cancelled = 0, suffix = 0;
+    auto reserved = queue->reserve_deferred_barrier_next (
+      "controlled-settlement", [&] { ++cancelled; },
+      [&] (auto complete) {
+          ++settlement_started;
+          settlement_done = std::move (complete);
+      });
+    bool passed = static_cast<bool> (reserved);
+    if (reserved) {
+        auto barrier = reserved.value ();
+        auto terminal = barrier->terminal ();
+        queue->post ("settlement-suffix", [&] { ++suffix; });
+        if (cancel_pending) {
+            barrier->cancel ();
+            barrier->cancel ();
+            worker.run_all ();
+            passed = passed && terminal.await_ready ();
+            if (terminal.await_ready ())
+                passed =
+                  passed && !terminal.result ()
+                  && terminal.result ().error_kind () == fw::framework_error_kind_t::shutting_down;
+            passed = passed && cancelled == 1 && work_started == 0 && settlement_started == 0
+                     && suffix == 1;
+        } else {
+            const auto activated = barrier->activate_async ([&] (auto complete) {
+                ++work_started;
+                work_done = std::move (complete);
+            });
+            passed = passed && static_cast<bool> (activated);
+            worker.run_all ();
+            passed = passed && work_started == 1 && !terminal.await_ready () && suffix == 0;
+            if (work_done)
+                work_done (fail_work
+                             ? fw::result_t<void>::failure (
+                                 fw::framework_error_kind_t::internal_failure, "work failure")
+                             : fw::result_t<void>::success ());
+            worker.run_all ();
+            const bool pending_at_settlement = !terminal.await_ready ();
+            passed = passed && settlement_started == 1 && settlement_done && pending_at_settlement
+                     && suffix == 0;
+            if (settlement_done)
+                settlement_done (fail_settlement
+                                   ? fw::result_t<void>::failure (
+                                       fw::framework_error_kind_t::rejected, "settlement failure")
+                                   : fw::result_t<void>::success ());
+            worker.run_all ();
+            passed = passed && terminal.await_ready ();
+            if (terminal.await_ready ()) {
+                const auto &result = terminal.result ();
+                if (fail_work || fail_settlement) {
+                    const auto expected_kind = fail_work
+                                                 ? fw::framework_error_kind_t::internal_failure
+                                                 : fw::framework_error_kind_t::rejected;
+                    const std::string_view expected_message =
+                      fail_work ? "work failure" : "settlement failure";
+                    passed = passed && !result && result.error_kind () == expected_kind
+                             && result.error () && result.error ()->what () == expected_message;
+                    passed = passed && reported_errors.size () == 1
+                             && reported_errors.front () == expected_message;
+                } else
+                    passed = passed && result && reported_errors.empty ();
+            }
+            passed = passed && work_started == 1 && settlement_started == 1 && cancelled == 0
+                     && suffix == 1;
+        }
+    }
+    const auto pending = queue->pending_count ();
+    passed = passed && pending == 0;
+    queue->close ();
+    worker.run_all ();
+    worker.drain ();
+    std::cout << "deferred-settlement fail_work=" << fail_work
+              << " fail_settlement=" << fail_settlement << " cancel_pending=" << cancel_pending
+              << " work_started=" << work_started << " settlement_started=" << settlement_started
+              << " cancelled=" << cancelled << " suffix=" << suffix << " pending=" << pending
+              << " passed=" << passed << '\n';
+    return passed;
+}
+
+bool verify_deferred_extra_boundaries ()
+{
+    bool passed = verify_generic_defer_registered_after_yield ();
+    for (const bool fail_work : {false, true})
+        for (const bool fail_settlement : {false, true})
+            passed = verify_deferred_settlement_terminal (fail_work, fail_settlement) && passed;
+    return verify_deferred_settlement_terminal (false, false, true) && passed;
+}
+
+
+// Insert beside the focused execution queue tests. Existing test includes suffice.
+class completion_callback_owner_probe_t final : public zlink::framework::actor_t
+{
+  public:
+    explicit completion_callback_owner_probe_t (zlink::framework::actor_context_t context) :
+        _context (std::move (context))
+    {
+    }
+    zlink::framework::actor_context_t &context () noexcept override { return _context; }
+    const zlink::framework::actor_context_t &context () const noexcept override { return _context; }
+    zlink::framework::task_t<void>
+    on_join_completed (const zlink::framework::actor_join_completion_t &) override
+    {
+        namespace fw = zlink::framework;
+        ++entered;
+        callback_turn = fw::detail::capture_current_serial_turn ();
+        if (yield_callback) {
+            fw::request_call_t<int> call (
+              "CompletionOwnerProbe", [source = reply] (const auto &, auto, const auto &) {
+                  return fw::test::accepted_request_task (source->task ());
+              });
+            const auto value = co_await call.yield ();
+            if (value != 7)
+                throw std::runtime_error ("completion Yield reply mismatch");
+        } else {
+            co_await ordinary.task ();
+        }
+        ++returned;
+    }
+
+    bool yield_callback = false;
+    int entered = 0, returned = 0;
+    std::shared_ptr<zlink::framework::detail::serial_turn_t> callback_turn;
+    zlink::framework::task_completion_source_t<void> ordinary;
+    std::shared_ptr<zlink::framework::task_completion_source_t<int>> reply =
+      std::make_shared<zlink::framework::task_completion_source_t<int>> ();
+
+  private:
+    zlink::framework::actor_context_t _context;
+};
+
+// policy: 0 = SpotWide, 1 = PerActor, 2 = Entry. Yield is tested only where allowed.
+bool verify_real_join_completion_callback_owner (int policy, bool yield_callback)
+{
+    namespace fw = zlink::framework;
+    namespace rt = fw::runtime;
+    namespace detail = fw::detail;
+    auto node = fw::test::runtime_failure_fixture<detail::spot_node_builder_state_t> (
+      "join-completion-owner-node");
+    auto scheduler = std::make_shared<fw::test::manual_internal_scheduler_t> ();
+    node->worker_executor = scheduler;
+    scheduler->publication_fence (
+      fw::test::state_lane_publication_fence (node->lane, node->lane_executor));
+    auto spot = std::make_shared<detail::spot_context_state_t> ();
+    spot->node = node;
+    spot->node_rid = fw::node_rid_t::from_string ("join-completion-owner-node");
+    spot->spot_id = fw::spot_id_t ("join-completion-owner-spot");
+    spot->spot_instance = std::make_shared<int> (1);
+    if (policy == 1)
+        spot->execution_mode = fw::user_spot_execution_mode_t::per_actor;
+    if (policy == 2)
+        spot->lifecycle_domain = detail::spot_lifecycle_domain_t::entry ();
+    node->spot_contexts_by_id.emplace (spot->spot_id, detail::spot_context_access_t::create (spot));
+    auto serial = spot->ensure_spot_serial_executor ();
+    auto root = serial->spot_queue ();
+    spot->serial_queue = root;
+    const std::string key = "probe:completion-owner";
+    auto actor_queue = serial->actor_executor (key)->queue ();
+    auto other_queue = serial->actor_executor ("probe:other-owner")->queue ();
+    const auto actor_ref =
+      detail::actor_ref_access_t::make (spot->node_rid, "probe", "completion-owner", 1);
+    detail::actor_gateway_runtime_t gateway;
+    auto actor =
+      std::make_shared<completion_callback_owner_probe_t> (gateway.actor_context (actor_ref));
+    actor->yield_callback = yield_callback;
+    node->actor_instances.emplace (key, actor);
+    node->actor_generations.emplace (key, actor_ref.object_generation ());
+    node->actor_spot_ids.emplace (key, spot->spot_id);
+    detail::spot_node_builder_state_t::actor_factory_registration_t factory;
+    factory.actor_type = std::type_index (typeid (completion_callback_owner_probe_t));
+    factory.on_join_completed = [] (void *instance, detail::actor_join_completion_outcome_t outcome,
+                                    std::uint64_t high, std::uint64_t low,
+                                    const fw::actor_ref_t *committed,
+                                    const std::optional<fw::message_t> &reply,
+                                    fw::framework_error_kind_t error, bool) {
+        return static_cast<completion_callback_owner_probe_t *> (instance)->on_join_completed (
+          detail::actor_join_completion_from_erased (outcome, high, low, committed, reply, error));
+    };
+    node->actor_factories.emplace ("probe", std::move (factory));
+    auto reserved = actor_queue->reserve_deferred_barrier_next ("real-completion-source-barrier");
+    bool passed = static_cast<bool> (reserved);
+    int other_payload = 0, spot_payload = 0, same_actor_suffix = 0;
+    if (reserved) {
+        auto terminal = reserved.value ()->terminal ();
+        auto activated = reserved.value ()->activate_async ([&] (auto complete) {
+            auto runtime = std::make_shared<detail::spot_node_runtime_t> (node);
+            auto pending = std::make_shared<fw::task_t<fw::result_t<void>>> (
+              runtime->deliver_actor_join_completion (
+                actor_ref, fw::actor_join_accepted_t{11, 12, actor_ref, std::nullopt},
+                spot->spot_id));
+            detail::observe_task_completion (
+              *pending, [runtime, pending, complete = std::move (complete)] (
+                          const fw::result_t<fw::result_t<void>> &result) mutable {
+                  complete (result ? result.value ()
+                                   : detail::propagate_failure<void> (
+                                       result, "completion callback delivery failed"));
+              });
+        });
+        passed = passed && static_cast<bool> (activated);
+        actor_queue->post ("same-actor-after-completion", [&] { ++same_actor_suffix; });
+        scheduler->run_all ();
+        passed = passed && actor->entered == 1 && actor->returned == 0 && !terminal.await_ready ();
+        passed =
+          passed && actor->callback_turn
+          && actor->callback_turn->belongs_to (policy == 0 ? root.get () : actor_queue.get ());
+        other_queue->post ("other-actor-during-completion", [&] { ++other_payload; });
+        root->post ("spot-during-completion", [&] { ++spot_payload; });
+        scheduler->run_all ();
+        const int expected_progress = policy != 0 || yield_callback ? 1 : 0;
+        passed = passed && other_payload == expected_progress && spot_payload == expected_progress
+                 && same_actor_suffix == 0;
+        actor->ordinary.complete (fw::result_t<void>::success ());
+        actor->reply->complete (fw::result_t<int>::success (7));
+        scheduler->run_all ();
+        passed = passed && terminal.await_ready ();
+        if (terminal.await_ready ())
+            passed = passed && static_cast<bool> (terminal.result ());
+        passed = passed && actor->entered == 1 && actor->returned == 1 && other_payload == 1
+                 && spot_payload == 1 && same_actor_suffix == 1;
+    }
+    const auto root_pending = root->pending_count ();
+    const auto actor_pending = actor_queue->pending_count ();
+    const auto other_pending = other_queue->pending_count ();
+    passed = passed && root_pending == 0 && actor_pending == 0 && other_pending == 0;
+    actor->callback_turn.reset ();
+    serial->close ();
+    scheduler->run_all ();
+    actor_queue->drain ();
+    other_queue->drain ();
+    root->drain ();
+    node->actor_factories.clear ();
+    node->actor_instances.clear ();
+    node->spot_contexts_by_id.clear ();
+    spot->node.reset ();
+    scheduler->drain ();
+    std::cout << "real-join-completion-owner policy=" << policy << " yield=" << yield_callback
+              << " entered=" << actor->entered << " returned=" << actor->returned
+              << " other_payload=" << other_payload << " spot_payload=" << spot_payload
+              << " same_actor_suffix=" << same_actor_suffix << " root_pending=" << root_pending
+              << " actor_pending=" << actor_pending << " other_pending=" << other_pending
+              << " passed=" << passed << '\n';
+    return passed;
+}
+
+
+// Insert alongside verify_deferred_actual_terminal. Public queue operations only.
+bool verify_deferred_after_lifecycle_prefix (bool flat)
+{
+    namespace fw = zlink::framework;
+    namespace rt = fw::runtime;
+    fw::test::manual_internal_scheduler_t worker;
+    const rt::serial_execution_queue_options_t options;
+    const auto prefix_count = options.lifecycle_burst_limit + 1;
+    auto root = std::make_shared<rt::serial_execution_queue_t> (
+      worker, options, rt::serial_execution_queue_t::error_handler_t{},
+      flat ? rt::serial_lane_policy_t::per_actor_spot () : rt::serial_lane_policy_t::spot_wide ());
+    auto actor = std::make_shared<rt::serial_execution_queue_t> (worker);
+    actor->attach_spot_gate (root);
+    fw::task_completion_source_t<void> joined;
+    rt::serial_execution_queue_t::async_completion_t handler;
+    std::size_t prefix_finished = 0;
+    int activated = 0, suffix = 0;
+    bool registered = false;
+    actor->post_async ("prefix-source-handler", [&] (auto complete) {
+        handler = std::move (complete);
+        // Infrastructure may accept Actor lifecycle controls while its
+        // application handler is active, before that handler registers Join.
+        for (std::size_t index = 0; index < prefix_count; ++index)
+            actor->post (
+              "earlier-lifecycle-control", [&] { ++prefix_finished; },
+              rt::serial_work_options_t{rt::serial_work_lane_t::lifecycle});
+        registered = static_cast<bool> (fw::detail::defer_current_serial_turn ([&] {
+            ++activated;
+            return joined.task ();
+        }));
+    });
+    actor->post ("payload-after-source-handler", [&] { ++suffix; });
+    worker.run_all ();
+    bool passed = handler && registered && prefix_finished == 0 && activated == 0 && suffix == 0;
+    if (handler)
+        handler ([] {});
+    worker.run_all ();
+    const auto suffix_before_join = suffix;
+    passed = passed && prefix_finished == prefix_count && activated == 1 && suffix == 0;
+    joined.complete (fw::result_t<void>::success ());
+    worker.run_all ();
+    const auto root_pending = root->pending_count ();
+    const auto actor_pending = actor->pending_count ();
+    passed = passed && suffix == 1 && activated == 1 && root_pending == 0 && actor_pending == 0;
+    handler = {};
+    actor->close ();
+    root->close ();
+    worker.run_all ();
+    actor->drain ();
+    root->drain ();
+    worker.drain ();
+    std::cout << "deferred-after-lifecycle-prefix flat=" << flat << " prefix_count=" << prefix_count
+              << " prefix_finished=" << prefix_finished << " activated=" << activated
+              << " suffix_before_join=" << suffix_before_join << " suffix=" << suffix
+              << " root_pending=" << root_pending << " actor_pending=" << actor_pending
+              << " passed=" << passed << '\n';
+    return passed;
+}
+
+
 } // namespace
 
 int main (int argc, char **argv)
 {
+    if (argc == 2 && std::string_view (argv[1]) == "--deferred-lifecycle-prefix") {
+        const bool wide = verify_deferred_after_lifecycle_prefix (false);
+        const bool flat = verify_deferred_after_lifecycle_prefix (true);
+        return wide && flat ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+    if (argc == 2 && std::string_view (argv[1]) == "--join-completion-callback-owner") {
+        bool passed = verify_real_join_completion_callback_owner (0, false);
+        passed = verify_real_join_completion_callback_owner (0, true) && passed;
+        passed = verify_real_join_completion_callback_owner (1, false) && passed;
+        passed = verify_real_join_completion_callback_owner (2, false) && passed;
+        return passed ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+    if (argc == 2 && std::string_view (argv[1]) == "--deferred-extra-boundaries")
+        return verify_deferred_extra_boundaries () ? EXIT_SUCCESS : EXIT_FAILURE;
     if (argc == 2 && std::string_view (argv[1]) == "--cancellable-serial-lifecycle")
         return verify_cancellable_serial_submission_lifecycle () ? EXIT_SUCCESS : EXIT_FAILURE;
     if (argc == 2 && std::string_view (argv[1]) == "--deferred-coroutine-gate") {
@@ -9339,7 +9766,13 @@ int main (int argc, char **argv)
         return passed ? EXIT_SUCCESS : EXIT_FAILURE;
     }
     if (argc == 1) {
-        bool passed = verify_readiness_before_deferred_join ();
+        bool passed = verify_deferred_extra_boundaries ();
+        passed = verify_deferred_after_lifecycle_prefix (false) && passed;
+        passed = verify_deferred_after_lifecycle_prefix (true) && passed;
+        for (const int policy : {0, 1, 2})
+            passed = verify_real_join_completion_callback_owner (policy, false) && passed;
+        passed = verify_real_join_completion_callback_owner (0, true) && passed;
+        passed = verify_readiness_before_deferred_join () && passed;
         for (const bool flat : {false, true})
             for (const bool fail : {false, true})
                 for (const bool active : {false, true})

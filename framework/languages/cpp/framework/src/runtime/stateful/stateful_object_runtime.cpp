@@ -466,13 +466,14 @@ create_result_t stateful_object_runtime_t::activate_instance (
     return result;
 }
 
-std::optional<object_ref_t> stateful_object_runtime_t::find (object_kind_t kind,
-                                                             const std::string &key) const
+std::optional<object_ref_t> stateful_object_runtime_t::find (
+  object_kind_t kind, const std::string &key, std::optional<object_state_t> required_state) const
 {
     return _lane
       .run ([&, this] () -> std::optional<object_ref_t> {
           const auto record = _objects.find ({kind, key});
-          if (record == _objects.end () || record->second.state != object_state_t::ready) {
+          if (record == _objects.end ()
+              || (required_state && record->second.state != *required_state)) {
               return std::nullopt;
           }
           return record->second.reference;

@@ -317,7 +317,12 @@ class stateful_object_runtime_t
     stateful_error_t abort_create (std::uint64_t attempt);
     create_result_t activate_instance (create_request_t request,
                                        const std::function<bool (const object_ref_t &)> &factory);
-    std::optional<object_ref_t> find (object_kind_t kind, const std::string &key) const;
+    // An identity lookup omits the state filter; execution eligibility remains
+    // with the object's claim gate.
+    std::optional<object_ref_t>
+    find (object_kind_t kind,
+          const std::string &key,
+          std::optional<object_state_t> required_state = object_state_t::ready) const;
     // Observes the existing source seal; does not resolve Store authority.
     bool finalized_relocation_source (object_kind_t kind,
                                       const std::string &key,

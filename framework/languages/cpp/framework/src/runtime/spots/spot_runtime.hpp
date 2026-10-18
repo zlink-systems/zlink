@@ -714,17 +714,6 @@ class spot_serial_executor_t
         return actor_queue_identity (actor_id) == identity;
     }
 
-    result_t<void> retain_actor_mailbox_until (const std::string &actor_id,
-                                               task_t<void> terminal,
-                                               std::function<void ()> cancel)
-    {
-        const auto executor = actor_executor (actor_id);
-        if (!executor)
-            return result_t<void>::failure (framework_error_kind_t::shutting_down,
-                                            "Actor mailbox is unavailable");
-        return executor->queue ()->retain_mailbox_until (std::move (terminal), std::move (cancel));
-    }
-
     result_t<actor_queue_submission_t>
     execute_actor_cancellable (const std::string &actor_id,
                                std::string name,

@@ -64,9 +64,16 @@ struct observation_t
     std::optional<zf::timer_t> timer_resource;
     int timer_calls = 0;
     int timer_calls_on_closing = 0;
-    // OnActorJoined holds its lifecycle item briefly, so two opposite Joins
-    // overlap (cross-join scenario).
-    std::atomic_bool cross_join_delay{false};
+    // Both source handlers register their Actor barriers before either ends.
+    std::atomic_bool cross_join_active{false};
+    std::promise<void> cross_a_reserved;
+    std::promise<void> cross_b_reserved;
+    std::promise<void> cross_a_initial;
+    std::promise<void> cross_b_initial;
+    std::promise<void> cross_a_completed;
+    std::promise<void> cross_b_completed;
+    std::promise<void> cross_sources_released;
+    std::shared_future<void> cross_sources_release = cross_sources_released.get_future ().share ();
     std::string handler_mode;
     std::string watched_spot;
     std::shared_ptr<zf::detail::spot_context_state_t> room_state;
@@ -153,8 +160,15 @@ class member_actor_t final : public zf::actor_t
                       static_cast<int> (std::get<zf::actor_join_failed_t> (completion).error_kind));
         std::lock_guard lock (current ().mutex);
         current ().notes.push_back (std::move (note));
-        if (current ().cross_join_delay.load ())
-            current ().order.push_back ("joinReply:" + std::string (_context.actor_id ().value ()));
+        const auto id = _context.actor_id ().value ();
+        if (current ().cross_join_active.load ()) {
+            current ().order.push_back ("joinReply:" + std::string (id));
+            (id == "cross-a" ? current ().cross_a_completed : current ().cross_b_completed)
+              .set_value ();
+        } else if (id == "cross-a" || id == "cross-b") {
+            (id == "cross-a" ? current ().cross_a_initial : current ().cross_b_initial)
+              .set_value ();
+        }
         co_return;
     }
 
@@ -253,8 +267,16 @@ class close_room_spot_t final : public zf::spot_t<member_actor_t>
     // A member asked to join another room moves there (cross-join scenario).
     void member_ping (member_actor_t &actor, zf::message_context_t &, const join_room_t &request)
     {
-        if (request.room != _context.spot_id ())
+        if (request.room != _context.spot_id ()) {
             actor.context ().join_spot (zf::spot_id_t (request.room)).defer ();
+            if (current ().cross_join_active.load ()) {
+                auto &reserved = actor.context ().actor_id ().value () == "cross-a"
+                                   ? current ().cross_a_reserved
+                                   : current ().cross_b_reserved;
+                reserved.set_value ();
+                current ().cross_sources_release.wait ();
+            }
+        }
     }
 
     zf::task_t<zf::spot_actor_join_result_t> on_actor_join (std::string_view,
@@ -270,9 +292,7 @@ class close_room_spot_t final : public zf::spot_t<member_actor_t>
     {
         current ().record ("joinCompleted");
         current ().record ("joinStarted:" + _context.spot_id ());
-        if (current ().cross_join_delay.load ())
-            std::this_thread::sleep_for (300ms);
-        if (current ().cross_join_delay.load ())
+        if (current ().cross_join_active.load ())
             current ().record ("joinedDone:" + std::string (actor.context ().actor_id ().value ()));
         co_return;
     }
@@ -808,13 +828,19 @@ class scenario_client_t final : public zf::hosted_service_t
                 return std::count (current ().notes.begin (), current ().notes.end (),
                                    "actorJoin:accepted");
             };
+            auto initial_a = current ().cross_a_initial.get_future ();
+            auto initial_b = current ().cross_b_initial.get_future ();
             join_member (services, room_a, "cross-a");
-            if (!wait_until ([&] { return joins_completed () >= 1; }))
+            if (initial_a.wait_for (3s) != std::future_status::ready)
                 throw std::runtime_error ("member cross-a did not join room A");
             join_member (services, room_b, "cross-b");
-            if (!wait_until ([&] { return joins_completed () >= 2; }))
+            if (initial_b.wait_for (3s) != std::future_status::ready)
                 throw std::runtime_error ("member cross-b did not join room B");
-            current ().cross_join_delay.store (true);
+            auto completed_a = current ().cross_a_completed.get_future ();
+            auto completed_b = current ().cross_b_completed.get_future ();
+            auto source_a_reserved = current ().cross_a_reserved.get_future ();
+            auto source_b_reserved = current ().cross_b_reserved.get_future ();
+            current ().cross_join_active.store (true);
             auto &client = services.get_required<zf::actor_client_t> ();
             auto to_b = std::async (std::launch::async, [&] {
                 return client.send (zf::actor_id_t ("cross-a"), join_room_t{room_b})
@@ -826,16 +852,28 @@ class scenario_client_t final : public zf::hosted_service_t
                   .async ()
                   .result ();
             });
+            const auto registration_deadline = std::chrono::steady_clock::now () + 8000ms;
+            const bool both_reserved =
+              source_a_reserved.wait_until (registration_deadline) == std::future_status::ready
+              && source_b_reserved.wait_until (registration_deadline) == std::future_status::ready;
+            current ().cross_sources_released.set_value ();
             (void) to_b.get ();
             (void) to_a.get ();
-            const auto completed = wait_until ([&] { return joins_completed () >= 4; },
-                                               std::chrono::milliseconds (8000));
+            if (!both_reserved)
+                throw std::runtime_error ("both source handlers must register their Join barrier");
+            const bool completed =
+              completed_a.wait_until (registration_deadline) == std::future_status::ready
+              && completed_b.wait_until (registration_deadline) == std::future_status::ready
+              && joins_completed () >= 4;
             bool replies_after_joined = true;
             int checked_replies = 0;
+            int checked_leaves = 0;
             {
                 std::lock_guard lock (current ().mutex);
                 std::set<std::string> joined;
                 for (const auto &event : current ().order) {
+                    if (event.starts_with ("leaveCompleted:"))
+                        ++checked_leaves;
                     if (event.starts_with ("joinedDone:")) {
                         joined.insert (event.substr (11));
                     } else if (event.starts_with ("joinReply:")) {
@@ -845,8 +883,10 @@ class scenario_client_t final : public zf::hosted_service_t
                 }
             }
             actual["crossJoins"] =
-              completed && replies_after_joined && checked_replies == 2 ? "completed" : "stalled";
-            current ().cross_join_delay.store (false);
+              completed && replies_after_joined && checked_replies == 2 && checked_leaves == 2
+                ? "completed"
+                : "stalled";
+            current ().cross_join_active.store (false);
             return;
         }
         if (act == "directRequestDuringClose") {

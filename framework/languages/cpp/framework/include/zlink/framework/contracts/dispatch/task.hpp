@@ -105,7 +105,8 @@ class serial_turn_t
     // Execution gate §3: admission belongs to this turn, before submission.
     virtual bool claim_yield () = 0;
     virtual result_t<void> defer (std::function<task_t<void> ()> work,
-                                  std::function<void ()> cancel = {}) = 0;
+                                  std::function<void ()> cancel = {},
+                                  std::shared_ptr<deferred_barrier_t> barrier = {}) = 0;
     virtual void cancel_deferred () noexcept = 0;
     virtual bool finish_handler (std::function<void ()> completion, bool succeeded) = 0;
 };
@@ -174,14 +175,15 @@ inline bool current_serial_turn_allows_yield ()
 }
 
 inline result_t<void> defer_current_serial_turn (std::function<task_t<void> ()> work,
-                                                 std::function<void ()> cancel = {})
+                                                 std::function<void ()> cancel = {},
+                                                 std::shared_ptr<deferred_barrier_t> barrier = {})
 {
     auto turn = capture_current_serial_turn ();
     if (!turn || turn->released ()) {
         return result_t<void>::failure (framework_error_kind_t::not_configured,
                                         "Actor join defer requires an open Framework handler turn");
     }
-    return turn->defer (std::move (work), std::move (cancel));
+    return turn->defer (std::move (work), std::move (cancel), std::move (barrier));
 }
 
 

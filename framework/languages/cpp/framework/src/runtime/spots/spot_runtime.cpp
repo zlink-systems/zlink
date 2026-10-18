@@ -495,94 +495,6 @@ class remote_actor_commit_deadline_t final
     bool _firing = false;
 };
 
-class actor_handoff_barrier_t final : public detail::deferred_barrier_t,
-                                      public std::enable_shared_from_this<actor_handoff_barrier_t>
-{
-  public:
-    actor_handoff_barrier_t (std::function<void ()> cancel_reservation,
-                             std::function<void (async_completion_t)> settle_reservation) :
-        _cancel_reservation (std::move (cancel_reservation)),
-        _settle_reservation (std::move (settle_reservation))
-    {
-    }
-
-    task_t<void> terminal () override { return _terminal.task (); }
-
-    task_t<void> run (std::function<task_t<void> ()> work) override
-    {
-        auto activated = activate_async ([work = std::move (work)] (auto complete) mutable {
-            auto pending = std::make_shared<task_t<void>> (work ());
-            detail::observe_task_terminal (*pending,
-                                           [pending, work, complete = std::move (complete)] (
-                                             const result_t<void> &result) { complete (result); });
-        });
-        return activated ? terminal () : task_t<void> (std::move (activated));
-    }
-
-    result_t<void> activate (std::function<void ()> work) override
-    {
-        return activate_async ([work = std::move (work)] (async_completion_t complete) {
-            work ();
-            complete (result_t<void>::success ());
-        });
-    }
-
-    result_t<void> activate_async (async_work_t work) override
-    {
-        {
-            std::lock_guard lock (_mutex);
-            if (_activated)
-                return result_t<void>::failure (framework_error_kind_t::invalid_operation,
-                                                "Actor handoff barrier is already activated");
-            _activated = true;
-        }
-        auto operation = std::make_shared<async_work_t> (std::move (work));
-        auto finish = [self = shared_from_this (), operation] (result_t<void> result) {
-            auto release = [self, operation, result] (result_t<void> settled) {
-                self->_terminal.complete (result ? std::move (settled) : result);
-            };
-            if (self->_settle_reservation)
-                self->_settle_reservation (std::move (release));
-            else
-                release (result_t<void>::success ());
-        };
-        try {
-            (*operation) (finish);
-        }
-        catch (const framework_exception_t &error) {
-            finish (detail::result_access_t::failure<void> (error));
-        }
-        catch (const std::exception &error) {
-            finish (
-              result_t<void>::failure (framework_error_kind_t::internal_failure, error.what ()));
-        }
-        return result_t<void>::success ();
-    }
-
-    void cancel () noexcept override
-    {
-        bool rollback;
-        {
-            std::lock_guard lock (_mutex);
-            rollback = !_activated;
-            _activated = true;
-        }
-        if (rollback) {
-            if (_cancel_reservation)
-                _cancel_reservation ();
-            _terminal.complete (result_t<void>::failure (framework_error_kind_t::shutting_down,
-                                                         "Deferred Actor join was cancelled"));
-        }
-    }
-
-  private:
-    std::function<void ()> _cancel_reservation;
-    std::function<void (async_completion_t)> _settle_reservation;
-    task_completion_source_t<void> _terminal;
-    std::mutex _mutex;
-    bool _activated = false;
-};
-
 std::string actor_request_dedup_prefix (std::string_view actor_key)
 {
     return std::to_string (actor_key.size ()) + ":" + std::string (actor_key);
@@ -3110,8 +3022,10 @@ void spot_context_state_t::run_serial_task_async (
           }
       },
       std::move (request_cancel),
-      runtime::serial_work_options_t{runtime::serial_work_lane_t::lifecycle,
-                                     transferred_owner_byte_cost, owner_reservation.callback ()});
+      runtime::serial_work_options_t{.lane = runtime::serial_work_lane_t::lifecycle,
+                                     .byte_cost = transferred_owner_byte_cost,
+                                     .transfer_owner_reservation = owner_reservation.callback (),
+                                     .holds_application_while_waiting = true});
     if (submitted)
         owner_reservation.dismiss ();
     if (submitted && submission_callback)
@@ -9418,16 +9332,14 @@ spot_node_runtime_t::reserve_actor_join_barrier (const actor_ref_t &actor_ref)
                                 : detail::result_access_t::failure<void> (*terminal.error ()));
           });
     };
-    auto barrier = std::make_shared<actor_handoff_barrier_t> (std::move (cancel_reservation),
-                                                              std::move (settle_reservation));
-    auto retained = coordinator->retain_actor_mailbox_until (key, barrier->terminal (),
-                                                             [barrier] { barrier->cancel (); });
-    if (!retained) {
-        barrier->cancel ();
+    const auto executor = coordinator->actor_executor (key);
+    if (!executor) {
+        cancel_reservation ();
         return result_t<std::shared_ptr<deferred_barrier_t>>::failure (
-          retained.error_kind (), "Deferred Actor join mailbox is unavailable");
+          framework_error_kind_t::shutting_down, "Deferred Actor join mailbox is unavailable");
     }
-    return result_t<std::shared_ptr<deferred_barrier_t>>::success (std::move (barrier));
+    return executor->queue ()->reserve_deferred_barrier_next (
+      "actor-join", std::move (cancel_reservation), std::move (settle_reservation));
 }
 
 void spot_node_runtime_t::cancel_local_actor_handoff (const actor_ref_t &actor_ref)
@@ -9706,6 +9618,7 @@ void spot_node_runtime_t::deliver_actor_join_completion_async (
     }
 
     actor_join_completion_callback_t callback;
+    std::shared_ptr<spot_context_state_t> callback_context;
     std::shared_ptr<void> actor;
     std::optional<result_t<void>> immediate;
     _state->lane
@@ -9726,6 +9639,13 @@ void spot_node_runtime_t::deliver_actor_join_completion_async (
               } else {
                   callback = factory->second.on_join_completed;
                   actor = instance->second;
+                  const auto membership = _state->actor_spot_ids.find (key);
+                  if (membership != _state->actor_spot_ids.end ()) {
+                      const auto context =
+                        _state->spot_contexts_by_id.find (std::string (membership->second));
+                      if (context != _state->spot_contexts_by_id.end ())
+                          callback_context = context->second._state;
+                  }
                   _state->delivering_join_completions.insert (operation);
               }
           }
@@ -9802,41 +9722,57 @@ void spot_node_runtime_t::deliver_actor_join_completion_async (
         return;
     }
     try {
-        auto callback_task =
-          callback (actor.get (),
-                    std::holds_alternative<actor_join_accepted_t> (*completion_owner)
-                      ? actor_join_completion_outcome_t::accepted
-                      : (std::holds_alternative<actor_join_rejected_t> (*completion_owner)
-                           ? actor_join_completion_outcome_t::rejected
-                           : actor_join_completion_outcome_t::failed),
-                    operation.first, operation.second,
-                    std::get_if<actor_join_accepted_t> (completion_owner.get ())
-                      ? &std::get<actor_join_accepted_t> (*completion_owner).actor
-                      : nullptr,
-                    std::holds_alternative<actor_join_accepted_t> (*completion_owner)
-                      ? std::get<actor_join_accepted_t> (*completion_owner).reply
-                      : (std::holds_alternative<actor_join_rejected_t> (*completion_owner)
-                           ? std::get<actor_join_rejected_t> (*completion_owner).reply
-                           : std::optional<message_t>{}),
-                    std::holds_alternative<actor_join_failed_t> (*completion_owner)
-                      ? std::get<actor_join_failed_t> (*completion_owner).error_kind
-                      : framework_error_kind_t::internal_failure,
-                    std::holds_alternative<actor_join_failed_t> (*completion_owner)
-                      && detail::is_transient_error (
-                        std::get<actor_join_failed_t> (*completion_owner).error_kind));
-        auto observed = std::make_shared<task_t<void>> (std::move (callback_task));
+        auto invoke_callback = [callback, actor, completion_owner, operation, actor_ref,
+                                callback_context] {
+            runtime::actor_execution_scope_t actor_scope (
+              actor_key (actor_ref),
+              callback_context ? std::string (callback_context->spot_id) : std::string{});
+            return callback (actor.get (),
+                             std::holds_alternative<actor_join_accepted_t> (*completion_owner)
+                               ? actor_join_completion_outcome_t::accepted
+                               : (std::holds_alternative<actor_join_rejected_t> (*completion_owner)
+                                    ? actor_join_completion_outcome_t::rejected
+                                    : actor_join_completion_outcome_t::failed),
+                             operation.first, operation.second,
+                             std::get_if<actor_join_accepted_t> (completion_owner.get ())
+                               ? &std::get<actor_join_accepted_t> (*completion_owner).actor
+                               : nullptr,
+                             std::holds_alternative<actor_join_accepted_t> (*completion_owner)
+                               ? std::get<actor_join_accepted_t> (*completion_owner).reply
+                               : (std::holds_alternative<actor_join_rejected_t> (*completion_owner)
+                                    ? std::get<actor_join_rejected_t> (*completion_owner).reply
+                                    : std::optional<message_t>{}),
+                             std::holds_alternative<actor_join_failed_t> (*completion_owner)
+                               ? std::get<actor_join_failed_t> (*completion_owner).error_kind
+                               : framework_error_kind_t::internal_failure,
+                             std::holds_alternative<actor_join_failed_t> (*completion_owner)
+                               && detail::is_transient_error (
+                                 std::get<actor_join_failed_t> (*completion_owner).error_kind));
+        };
+        auto finish_callback = [settle =
+                                  settle_after_delivery] (const result_t<void> &result) mutable {
+            if (result) {
+                settle (result_t<void>::success ());
+                return;
+            }
+            settle (
+              detail::propagate_failure<void> (result, "Actor Join completion callback failed"));
+        };
+        const auto callback_executor =
+          callback_context ? callback_context->ensure_spot_serial_executor () : nullptr;
+        if (callback_executor && callback_executor->uses_spot_execution_gate ()) {
+            callback_context->run_serial_task_async (
+              "actor-join-completion", std::move (invoke_callback), std::move (finish_callback));
+            return;
+        }
+        auto observed = std::make_shared<task_t<void>> (invoke_callback ());
         detail::observe_task_completion (
           *observed,
           [completion_owner, actor = std::move (actor), observed,
-           settle = std::move (settle_after_delivery)] (const result_t<void> &result) mutable {
+           finish_callback = std::move (finish_callback)] (const result_t<void> &result) mutable {
               (void) completion_owner;
               (void) actor;
-              if (result) {
-                  settle (result_t<void>::success ());
-                  return;
-              }
-              settle (
-                detail::propagate_failure<void> (result, "Actor Join completion callback failed"));
+              finish_callback (result);
           });
     }
     catch (const framework_exception_t &error) {

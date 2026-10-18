@@ -4261,9 +4261,8 @@ void test_relocation_ready_boundary (test_context_t &test, ready_boundary_case_t
     target->configure_session_route_owner (
       [] { return std::optional<f::location_owner_token_t>{{"target-owner", 9}}; });
     target->configure_stateful_dispatch (
-      [] (const accepted_record_authority_query_t &) -> std::optional<accepted_record_authority_t> {
-          return std::nullopt;
-      });
+      [] (accepted_record_authority_query_t)
+        -> f::task_t<std::optional<accepted_record_authority_t>> { co_return std::nullopt; });
     f::task_completion_source_t<void> restoring;
     f::task_completion_source_t<bool> restore_release;
     std::atomic<unsigned> aborts{0};

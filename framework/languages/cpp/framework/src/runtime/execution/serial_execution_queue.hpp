@@ -29,7 +29,7 @@ struct serial_application_record_t;
 class serial_handler_participant_t;
 class serial_turn_handle_impl_t;
 struct serial_prefix_work_t;
-struct serial_deferred_slot_t;
+class serial_deferred_barrier_t;
 struct serial_turn_chain_t;
 
 enum class serial_work_lane_t
@@ -192,6 +192,10 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
                           serial_work_options_t options,
                           std::function<bool ()> stop_requested = {});
     bool try_post_deferred (std::string name, std::function<void ()> work);
+    result_t<std::shared_ptr<detail::deferred_barrier_t>> reserve_deferred_barrier_next (
+      std::string name,
+      std::function<void ()> cancel = {},
+      std::function<void (detail::deferred_barrier_t::async_completion_t)> settle = {});
     result_t<std::shared_ptr<detail::deferred_barrier_t>> reserve_barrier_next (
       std::string name,
       bool holds_application_while_waiting = false,
@@ -239,7 +243,7 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
         // The handler this item continues after a Yield; empty otherwise.
         std::shared_ptr<serial_turn_chain_t> chain;
         // The deferred-work position this item holds; empty otherwise.
-        std::shared_ptr<serial_deferred_slot_t> slot;
+        std::shared_ptr<serial_deferred_barrier_t> barrier;
         std::shared_ptr<const void> retained_message;
         std::shared_ptr<serial_application_record_t> application_record;
         std::shared_ptr<serial_execution_queue_t> actor_mailbox;
@@ -255,7 +259,7 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
     struct item_origin_t
     {
         std::shared_ptr<serial_turn_chain_t> chain;
-        std::shared_ptr<serial_deferred_slot_t> slot;
+        std::shared_ptr<serial_deferred_barrier_t> barrier;
     };
 
     struct lane_state_t
@@ -346,11 +350,6 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
                          serial_submission_id_t submission_id = 0,
                          std::function<void ()> cancel = {},
                          item_origin_t origin = {});
-    /* Accepts the FIFO position of work a handler defers to its terminal
-     * (handler turn and execution gate §5, §7). The item is registered in the
-     * lifecycle lane now and stays unrunnable until the handler terminal fills
-     * or discards it. */
-    bool enqueue_deferred_slot (std::string name, std::shared_ptr<serial_deferred_slot_t> slot);
     /* A lifecycle operation that released its turn (Yield) keeps the lifecycle
      * lane until its terminal (§7): only its own continuation runs there. */
     bool try_post_continuation (std::string name,

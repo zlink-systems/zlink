@@ -1098,8 +1098,62 @@ void local_join_backlog (backlog_case_t scenario)
         EXPECT_TRUE (
           std::holds_alternative<fw::actor_join_accepted_t> (evidence.completions.front ()));
         lock.unlock ();
+        state->worker_executor->drain ();
+        // Canonical acceptance owns the later record in the Actor FIFO. The
+        // existing seal boundary transfers that durable suffix to handoff.
+        auto sealed_queue = actor_queue (fw::spot_id_t (local_spot));
+        ASSERT_TRUE (sealed_queue);
+        (void) sealed_queue->pending_messages ().result ().value ();
+        EXPECT_EQ (sealed_queue->pending_count (fw::runtime::serial_work_lane_t::application), 1u);
+        const auto actor = state->lane
+                             .run ([&] {
+                                 return fw::detail::actor_ref_access_t::make (
+                                   fw::node_rid_t::from_string (first_rid), actor_type, actor_id,
+                                   state->actor_generations.at (key));
+                             })
+                             .get ();
+        fw::detail::spot_node_runtime_t runtime (state);
+        runtime.seal_actor_application_suffix (actor, {}).result ().value ();
+        EXPECT_EQ (sealed_queue->pending_count (fw::runtime::serial_work_lane_t::application), 0u);
         auto backlog = state->actor_transfer_coordinator.cancel_move (key);
         EXPECT_EQ (backlog.size (), 3u);
+        std::vector<int> durable_payloads;
+        std::vector<std::pair<std::uint64_t, std::uint64_t>> durable_operations;
+        for (const auto &packet : backlog) {
+            ASSERT_TRUE (packet.application_record);
+            ASSERT_TRUE (packet.application_record->payload);
+            EXPECT_TRUE (packet.application_record->saved_work ());
+            const auto &turn = *packet.application_record->payload;
+            ASSERT_TRUE (turn.application_record || turn.frozen_record);
+            const auto canonical = turn.application_record
+                                     ? fw::runtime::protocol::summarize_frozen_application_record (
+                                         *turn.application_record)
+                                     : *turn.frozen_record;
+            EXPECT_EQ (canonical.kind, fw::runtime::protocol::frozen_record_kind_t::actor_send);
+            EXPECT_EQ (canonical.source.node_routing_id,
+                       zlink::routing_id_t::from (first_rid).to_bytes ());
+            EXPECT_TRUE (canonical.operation.high != 0 || canonical.operation.low != 0);
+            durable_operations.emplace_back (canonical.operation.high, canonical.operation.low);
+            fw::runtime::stateful::with_accepted_application (
+              turn, [&] (auto, const auto &payload) {
+                  fw::runtime::messaging::message_parts_t parts (
+                    fw::runtime::protocol::decode_application_parts (payload));
+                  const auto body = fw::runtime::messaging::envelope_codec_t{}.decode_body (parts);
+                  ASSERT_TRUE (body);
+                  durable_payloads.push_back (
+                    nlohmann::json::parse (body.value ().to_string ()).get<probe_t> ().value);
+              });
+        }
+        std::sort (durable_payloads.begin (), durable_payloads.end ());
+        EXPECT_EQ (durable_payloads, (std::vector<int>{1, 2, 3}));
+        std::sort (durable_operations.begin (), durable_operations.end ());
+        EXPECT_EQ (std::adjacent_find (durable_operations.begin (), durable_operations.end ()),
+                   durable_operations.end ());
+        EXPECT_TRUE (runtime.take_actor_application_suffix (actor, {}).result ().value ().empty ());
+        {
+            std::lock_guard guard (evidence.mutex);
+            EXPECT_TRUE (evidence.handled_payloads.empty ());
+        }
         return;
     }
     if (scenario == backlog_case_t::ordinary_order) {
@@ -4350,15 +4404,12 @@ void restore_probe (replay_case_t test_case, bool multiple_packets = false)
                       next_barrier = next.value ();
                       EXPECT_TRUE (detail::defer_current_serial_turn (
                         [&] {
-                            EXPECT_TRUE (next_barrier->activate_async ([&] (auto complete) {
-                                order.push_back ("next-barrier");
-                                complete (fw::result_t<void>::success ());
-                                sequence_finished.set_value ();
-                                sequence_seen = true;
-                            }));
-                            return next_barrier->terminal ();
+                            order.push_back ("next-barrier");
+                            sequence_finished.set_value ();
+                            sequence_seen = true;
+                            return fw::task_t<void> (fw::result_t<void>::success ());
                         },
-                        [&] { next_barrier->cancel (); }));
+                        [&] { next_barrier->cancel (); }, next_barrier));
                   } else if (local_target) {
                       next_barrier = next.value ();
                   } else {
@@ -4517,6 +4568,10 @@ void restore_probe (replay_case_t test_case, bool multiple_packets = false)
     if (multiple_packets && value.next_reserved) {
         scheduler->run_all ();
         EXPECT_TRUE (sequence_seen);
+        auto terminal = next_barrier->terminal ();
+        EXPECT_TRUE (terminal.await_ready ());
+        if (terminal.await_ready ())
+            EXPECT_TRUE (terminal.result ());
         auto completed = node->actor_transfer_coordinator.wait_for_source_completion (actor_key);
         EXPECT_TRUE (completed.await_ready ());
         if (completed.await_ready ())
@@ -4676,16 +4731,13 @@ void capacity_probe (bool handler_failure = false, bool extra_supply = false)
                   const auto registered = detail::defer_current_serial_turn (
                     [&] {
                         ++join_activated;
-                        auto activated = failed_handler_join->activate ([] {});
-                        if (!activated)
-                            throw fw::framework_exception_t (activated.error_kind (),
-                                                             "test Join activation failed");
-                        return failed_handler_join->terminal ();
+                        return fw::task_t<void> (fw::result_t<void>::success ());
                     },
                     [&] {
                         ++join_cancelled;
                         failed_handler_join->cancel ();
-                    });
+                    },
+                    failed_handler_join);
                   if (!registered)
                       throw fw::framework_exception_t (registered.error_kind (),
                                                        "test Join registration failed");

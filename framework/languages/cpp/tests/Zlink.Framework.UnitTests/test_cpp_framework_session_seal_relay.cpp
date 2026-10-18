@@ -8,7 +8,10 @@
 #include "runtime/dispatch/offload_executor.hpp"
 #include "runtime/mesh/mesh_node_runtime.hpp"
 #include "runtime/mesh/mesh_node_host_service.hpp"
+#include "runtime/locations/actor_authority_payload.hpp"
+#include "runtime/locations/in_memory_location_store.hpp"
 #include "runtime/stateful/accepted_actor_record.hpp"
+#include "runtime/stateful/public_store_adapters.hpp"
 #include "runtime/streams/stream_runtime.hpp"
 #include "runtime/spots/spot_runtime.hpp"
 #include "runtime/stateful/public_host_runtime.hpp"
@@ -448,6 +451,11 @@ TEST (FrameworkSessionSealRelay, different_sessions_do_not_share_replies_for_sam
 {
     namespace host = runtime::host;
     namespace protocol = runtime::protocol;
+    runtime::in_memory_location_repository_t authority_repository;
+    const auto target_owner =
+      std::get<owner_lease_claimed_t> (
+        authority_repository.claim_owner_lease ("seal-dedup-target-owner", 30s).result ().value ())
+        .token;
     logging_builder_t logging;
     logging.use_file ("session-native.flow").set_min_level (log_level_t::debug);
     auto source_state = zlink::framework::test::runtime_failure_fixture<
@@ -511,19 +519,76 @@ TEST (FrameworkSessionSealRelay, different_sessions_do_not_share_replies_for_sam
     node->root_services = services.build_provider ();
     mesh_node_runtime_t source (source_state);
     source.configure_stateful_dispatch (
-      [] (stateful::accepted_record_authority_query_t query)
+      [target_owner] (stateful::accepted_record_authority_query_t query)
         -> task_t<std::optional<stateful::accepted_record_authority_t>> {
-          co_return stateful::accepted_record_authority_t{{"seal-dedup-source-owner", 17,
-                                                           query.source_node_routing_id,
-                                                           query.source_node_generation},
-                                                          37};
+          co_return stateful::accepted_record_authority_t{
+            {"seal-dedup-source-owner", 17, query.source_node_routing_id,
+             query.source_node_generation},
+            static_cast<std::uint64_t> (target_owner.lease_generation)};
       });
     source.start ();
     const auto native_actor = source.create_actor ("player", "seal-dedup-actor", {}, 2s);
     ASSERT_EQ (native_actor.ref ().object_generation (), actor.object_generation ());
-    ASSERT_TRUE (source.native_node ().resolve_actor (native_actor.ref ()));
+    const auto native_object = source.native_node ().resolve_actor (native_actor.ref ());
+    ASSERT_TRUE (native_object);
     spot_node_runtime_t spots (node);
     spots.record_actor_spot (actor, spot->spot_id);
+    const auto status = source.status ();
+    const auto published =
+      authority_repository
+        .update_mesh_node (
+          mesh_node_descriptor_t{
+            .mesh_name = "seal-dedup-mesh",
+            .rid = status.routing_id (),
+            .lifecycle_generation = status.lifecycle_generation (),
+            .descriptor_revision = 1,
+            .endpoint = status.local_endpoint (),
+            .application_version = 1,
+            .object_capabilities = {{.object_kind = placement_object_kind_t::actor,
+                                     .stable_type = "player"}},
+            .object_role = object_role_t::server,
+            .capacity = {.actors = {.limit = 1}},
+            .state = framework_runtime_state_t::serving,
+            .security_identity = "seal-dedup-fixture",
+            .owner_id = target_owner.owner_id,
+            .lease_generation = target_owner.lease_generation},
+          location_write_intent_t::new_claim)
+        .result ()
+        .value ();
+    ASSERT_EQ (published.status, location_write_status_t::stored);
+    const object_creation_key_t authority_key{placement_object_kind_t::actor,
+                                              std::string (actor.actor_id ().value ())};
+    const object_creation_target_t placement{"seal-dedup-mesh", actor.node_rid (),
+                                             status.lifecycle_generation (), target_owner};
+    const auto reserved =
+      std::get<object_reserved_t> (authority_repository
+                                     .reserve ({.key = authority_key,
+                                                .intent = {.stable_type = "player"},
+                                                .target = placement,
+                                                .capacity_bundle = {.actor_slots = 1}})
+                                     .result ()
+                                     .value ());
+    ASSERT_EQ (reserved.fence.object_generation, actor.object_generation ());
+    const auto authority_payload =
+      runtime::encode_actor_authority_payload (runtime::actor_authority_payload_t{
+        .stable_type = "player",
+        .actor_id = authority_key.global_id,
+        .current_spot_id = source.native_node ().entry_spot ().spot_id (),
+        .current_spot_generation = status.lifecycle_generation (),
+        .current_spot_kind = runtime::actor_authority_spot_kind_t::entry,
+        .owner_id = target_owner.owner_id,
+        .owner_lease_generation = static_cast<std::uint64_t> (target_owner.lease_generation),
+        .mesh_name = placement.mesh_name,
+        .node_rid = placement.node_rid,
+        .node_generation = placement.node_lifecycle_generation});
+    const auto committed = std::get<object_committed_t> (
+      authority_repository.commit ({authority_key, reserved.fence, authority_payload})
+        .result ()
+        .value ());
+    ASSERT_EQ (committed.ready.authority_owner_generation,
+               native_object->authority_owner_generation);
+    spots.bind_relocation_authority (
+      std::make_shared<stateful::public_authority_store_adapter_t> (authority_repository));
     std::mutex received_mutex;
     std::optional<protocol::actor_route_fence_t> received_actor_route;
     std::optional<zlink::routing_id_t> received_source;
@@ -637,8 +702,9 @@ TEST (FrameworkSessionSealRelay, different_sessions_do_not_share_replies_for_sam
     }
     ASSERT_TRUE (original_route);
     ASSERT_TRUE (original_source);
-    const auto replay = [&] (runtime::protocol::wire_operation_id_t operation,
-                             std::string payload) -> result_t<std::optional<zlink::message_t>> {
+    const auto replay = [&] (runtime::protocol::wire_operation_id_t operation, std::string payload,
+                             const protocol::actor_route_fence_t *target =
+                               nullptr) -> result_t<std::optional<zlink::message_t>> {
         runtime::messaging::envelope_header_t header;
         header.kind = runtime::messaging::message_kind_t::request;
         header.channel_name = "actor";
@@ -658,11 +724,11 @@ TEST (FrameworkSessionSealRelay, different_sessions_do_not_share_replies_for_sam
         record.source_binding_generation = original_binding_generation;
         record.source_session_sequence = original_session_sequence;
         record.reply_route_id = original_reply_route;
-        record.actor_route = original_route;
+        record.actor_route = target ? std::optional{*target} : original_route;
         runtime::protocol::actor_message_header_t actor_header;
         actor_header.operation = operation;
         actor_header.correlation = original_reply_route;
-        actor_header.target = *original_route;
+        actor_header.target = *record.actor_route;
         if (original_session)
             actor_header.bound_session_source =
               protocol::actor_message_header_t::bound_session_source_t{
@@ -716,6 +782,11 @@ TEST (FrameworkSessionSealRelay, different_sessions_do_not_share_replies_for_sam
         return body ? result_t<std::optional<zlink::message_t>>::success (body.value ())
                     : result_t<std::optional<zlink::message_t>>::success (std::nullopt);
     };
+    auto stale_route = *original_route;
+    ++stale_route.owner_lease_generation;
+    const auto stale = replay (original, "stale-owner-result", &stale_route);
+    EXPECT_FALSE (stale);
+    EXPECT_EQ (executions.load (std::memory_order_relaxed), 2u);
     const auto duplicate = replay (original, "second-session-result");
     ASSERT_TRUE (duplicate);
     ASSERT_TRUE (duplicate.value ());
