@@ -1900,7 +1900,8 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_link_libraries(test_cpp_framework_state_lane PRIVATE
     zlink::framework)
   target_include_directories(test_cpp_framework_state_lane PRIVATE
-    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   zlink_enable_coverage(test_cpp_framework_state_lane)
   zlink_framework_cpp_add_test(
     NAME test_cpp_framework_state_lane
