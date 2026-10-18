@@ -663,7 +663,7 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
                 .handle(
                         (ignored, failure) ->
                                 SpotActivationBase.finishCleanup(
-                                        failure, finishActivationPreparation()))
+                                        failure, serials.discardActivationPreparation()))
                 .thenCompose(stage -> stage);
     }
 
@@ -697,7 +697,7 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
                 .handle(
                         (ignored, failure) ->
                                 SpotActivationBase.finishCleanup(
-                                        failure, finishActivationPreparation()))
+                                        failure, serials.discardActivationPreparation()))
                 .thenCompose(stage -> stage)
                 .handle(
                         (ignored, failure) ->
@@ -948,8 +948,8 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
         return serials.admitIngress(admission);
     }
 
-    boolean tryEnqueueSpot(Supplier<CompletionStage<Void>> operation) {
-        return serials.tryEnqueueSpot(operation);
+    boolean tryEnqueueSpot(Supplier<CompletionStage<Void>> operation, Runnable release) {
+        return serials.tryEnqueueSpot(operation, release);
     }
 
     boolean isCurrentSpotTurn() {
