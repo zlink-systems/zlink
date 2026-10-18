@@ -695,10 +695,12 @@ bool raw_mesh_node_owner_t::connect_peer (const std::string &endpoint)
 }
 
 bool raw_mesh_node_owner_t::connect_peer (const std::string &endpoint,
-                                          service_node_descriptor_t expected_descriptor)
+                                          service_node_descriptor_t expected_descriptor,
+                                          std::shared_ptr<const mesh_node_descriptor_t> discovered)
 {
     return _lane
-      .run ([this, &endpoint, expected_descriptor = std::move (expected_descriptor)] () mutable {
+      .run ([this, &endpoint, expected_descriptor = std::move (expected_descriptor),
+             discovered = std::move (discovered)] () mutable {
           std::lock_guard lifecycle_lock (_lifecycle_mutex);
           if (!_router || endpoint.empty ()) {
               return false;
@@ -706,7 +708,7 @@ bool raw_mesh_node_owner_t::connect_peer (const std::string &endpoint,
           const auto is_stale_same_endpoint = [&endpoint,
                                                &expected_descriptor] (const auto &entry) {
               return entry.first != expected_descriptor.node_routing_id
-                     && entry.second.advertised_endpoint == endpoint;
+                     && entry.second.wire.advertised_endpoint == endpoint;
           };
           const auto endpoint_retargeted =
             std::any_of (_expected_peers.begin (), _expected_peers.end (), is_stale_same_endpoint);
@@ -736,8 +738,9 @@ bool raw_mesh_node_owner_t::connect_peer (const std::string &endpoint,
                       end_peer_operations_if_disconnected_locked (retired_rid);
                   }
               }
-              _expected_peers.insert_or_assign (expected_descriptor.node_routing_id,
-                                                expected_descriptor);
+              _expected_peers.insert_or_assign (
+                expected_descriptor.node_routing_id,
+                expected_peer_t{expected_descriptor, std::move (discovered)});
               return true;
           }
           catch (const zlink::binding_error_t &rejection) {
@@ -844,19 +847,45 @@ bool raw_mesh_node_owner_t::disconnect_peer (const std::vector<std::uint8_t> &ex
     }
 }
 
-void raw_mesh_node_owner_t::expect_peer (service_node_descriptor_t expected_descriptor)
+void raw_mesh_node_owner_t::expect_peer (service_node_descriptor_t expected_descriptor,
+                                         std::shared_ptr<const mesh_node_descriptor_t> discovered)
 {
     if (expected_descriptor.node_routing_id.empty ()
         || expected_descriptor.advertised_endpoint.empty ())
         return;
     _lane
-      .run ([this, &expected_descriptor] {
+      .run ([this, &expected_descriptor, &discovered] {
           std::lock_guard lifecycle_lock (_lifecycle_mutex);
-          _expected_peers.insert_or_assign (expected_descriptor.node_routing_id,
-                                            expected_descriptor);
+          _expected_peers.insert_or_assign (
+            expected_descriptor.node_routing_id,
+            expected_peer_t{expected_descriptor, std::move (discovered)});
       })
       .get ();
-    _topology.project_discovered_peer (expected_descriptor);
+}
+
+task_t<std::optional<request_source_t>> raw_mesh_node_owner_t::source_identity (
+  std::vector<std::uint8_t> rid, std::uint64_t generation, local_request_source_t local) const
+{
+    return _lane.run_task ([this, rid = std::move (rid), generation,
+                            local = std::move (local)] () -> std::optional<request_source_t> {
+        if (local.node && rid == local.node->node_routing_id) {
+            if (generation != local.node->lifecycle_generation || !local.lease
+                || local.lease->owner_id.empty () || local.lease->lease_generation <= 0)
+                return std::nullopt;
+            return request_source_t{std::move (local)};
+        }
+        const auto found = _expected_peers.find (rid);
+        const auto peer = _topology.peer (rid);
+        if (found == _expected_peers.end () || !peer || !peer->ready
+            || peer->descriptor.lifecycle_generation != generation)
+            return std::nullopt;
+        const auto &original = found->second.discovered;
+        if (!original || original->rid != zlink::routing_id_t::from (rid)
+            || original->lifecycle_generation != generation || original->owner_id.empty ()
+            || original->lease_generation <= 0)
+            return std::nullopt;
+        return request_source_t{original};
+    });
 }
 
 void raw_mesh_node_owner_t::forget_peer (const std::vector<std::uint8_t> &node_routing_id,
@@ -866,7 +895,7 @@ void raw_mesh_node_owner_t::forget_peer (const std::vector<std::uint8_t> &node_r
       .run ([this, &node_routing_id, &endpoint] {
           std::lock_guard lifecycle_lock (_lifecycle_mutex);
           const auto found = _expected_peers.find (node_routing_id);
-          if (found != _expected_peers.end () && found->second.advertised_endpoint != endpoint)
+          if (found != _expected_peers.end () && found->second.wire.advertised_endpoint != endpoint)
               return;
           _expected_peers.erase (node_routing_id);
           end_peer_operations_if_disconnected_locked (node_routing_id);
@@ -2785,17 +2814,17 @@ raw_mesh_node_owner_t::receive_next (service_liveness_registry_t::clock_t::time_
                     const auto expected = _expected_peers.find (received->source_routing_id);
                     if (expected == _expected_peers.end ())
                         return value;
-                    value.intent_endpoint = expected->second.advertised_endpoint;
+                    value.intent_endpoint = expected->second.wire.advertised_endpoint;
                     value.expected_descriptor_mismatch =
-                      expected->second.mesh_name != descriptor.mesh_name
-                      || expected->second.node_routing_id != descriptor.node_routing_id
-                      || expected->second.advertised_endpoint != descriptor.advertised_endpoint
-                      || expected->second.security_identity != descriptor.security_identity
-                      || (expected->second.lifecycle_generation != 0
-                          && expected->second.lifecycle_generation
+                      expected->second.wire.mesh_name != descriptor.mesh_name
+                      || expected->second.wire.node_routing_id != descriptor.node_routing_id
+                      || expected->second.wire.advertised_endpoint != descriptor.advertised_endpoint
+                      || expected->second.wire.security_identity != descriptor.security_identity
+                      || (expected->second.wire.lifecycle_generation != 0
+                          && expected->second.wire.lifecycle_generation
                                != descriptor.lifecycle_generation);
-                    if (expected->second.lifecycle_generation != 0)
-                        value.expected_descriptor = expected->second;
+                    if (expected->second.wire.lifecycle_generation != 0)
+                        value.expected_descriptor = expected->second.wire;
                     return value;
                 })
                 .get ();

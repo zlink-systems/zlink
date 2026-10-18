@@ -1028,7 +1028,7 @@ void public_host_runtime_t::configure_stateful_dispatch (
 }
 
 void public_host_runtime_t::configure_stateful_dispatch (
-  std::function<std::optional<location_owner_token_t> ()> owner)
+  std::function<std::shared_ptr<const location_owner_token_t> ()> owner)
 {
     configure_stateful_dispatch (
       [this, owner = std::move (owner)] (stateful::accepted_record_authority_query_t query) {
@@ -1038,34 +1038,39 @@ void public_host_runtime_t::configure_stateful_dispatch (
 
 task_t<std::optional<stateful::accepted_record_authority_t>>
 public_host_runtime_t::accepted_record_authority (
-  const stateful::accepted_record_authority_query_t &query,
-  const std::optional<location_owner_token_t> &owner) const
+  stateful::accepted_record_authority_query_t query,
+  std::shared_ptr<const location_owner_token_t> owner) const
 {
     using authority_t = std::optional<stateful::accepted_record_authority_t>;
     authority_t accepted;
     const auto &local = _options.mesh.descriptor;
     if (owner && !owner->owner_id.empty () && owner->lease_generation > 0
+        && query.requested_authority_owner_generation == query.target.authority_owner_generation
         && query.target_node_routing_id == local.node_routing_id
         && query.target_node_generation == local.lifecycle_generation) {
-        const auto peer = query.source_node_routing_id == local.node_routing_id
-                            ? nullptr
-                            : _transport->topology ().peer (query.source_node_routing_id);
-        const auto local_source = query.source_node_routing_id == local.node_routing_id
-                                  && query.source_node_generation == local.lifecycle_generation;
-        if (local_source
-            || (peer && peer->ready
-                && peer->descriptor.lifecycle_generation == query.source_node_generation
-                && !peer->descriptor.owner_id.empty ()
-                && peer->descriptor.owner_lease_generation > 0)) {
+        auto original = co_await _transport->source_identity (
+          query.source_node_routing_id, query.source_node_generation,
+          {owner,
+           std::shared_ptr<const mesh::service_node_descriptor_t> (shared_from_this (), &local)});
+        if (original) {
+            auto source = std::visit (
+              [&query] (const auto &reference) -> protocol::request_source_fence_t {
+                  using reference_t = std::decay_t<decltype (reference)>;
+                  if constexpr (std::is_same_v<reference_t, mesh::local_request_source_t>)
+                      return {reference.lease->owner_id,
+                              static_cast<std::uint64_t> (reference.lease->lease_generation),
+                              query.source_node_routing_id, query.source_node_generation};
+                  else
+                      return {reference->owner_id,
+                              static_cast<std::uint64_t> (reference->lease_generation),
+                              query.source_node_routing_id, query.source_node_generation};
+              },
+              *original);
             accepted = stateful::accepted_record_authority_t{
-              {local_source ? owner->owner_id : peer->descriptor.owner_id,
-               static_cast<std::uint64_t> (local_source ? owner->lease_generation
-                                                        : peer->descriptor.owner_lease_generation),
-               query.source_node_routing_id, query.source_node_generation},
-              static_cast<std::uint64_t> (owner->lease_generation)};
+              std::move (source), static_cast<std::uint64_t> (owner->lease_generation)};
         }
     }
-    return task_t<authority_t> (result_t<authority_t>::success (std::move (accepted)));
+    co_return accepted;
 }
 
 void public_host_runtime_t::forward_relocation_application (
@@ -1211,7 +1216,7 @@ bool public_host_runtime_t::connect_peer (const std::string &endpoint,
                                           std::uint64_t expected_lifecycle_generation,
                                           std::string security_identity,
                                           bool automatic,
-                                          location_owner_token_t owner)
+                                          std::shared_ptr<const mesh_node_descriptor_t> discovered)
 {
     return _peer_endpoint_lane
       .run ([&] {
@@ -1230,9 +1235,8 @@ bool public_host_runtime_t::connect_peer (const std::string &endpoint,
               descriptor.advertised_endpoint = endpoint;
               descriptor.lifecycle_generation = expected_lifecycle_generation;
               descriptor.security_identity = std::move (security_identity);
-              descriptor.owner_id = std::move (owner.owner_id);
-              descriptor.owner_lease_generation = owner.lease_generation;
-              connected = _transport->connect_peer (endpoint, std::move (descriptor));
+              connected =
+                _transport->connect_peer (endpoint, std::move (descriptor), std::move (discovered));
           } else {
               connected = _transport->connect_peer (endpoint);
           }
@@ -1247,16 +1251,14 @@ void public_host_runtime_t::expect_peer (const std::string &endpoint,
                                          const zlink::routing_id_t &expected,
                                          std::uint64_t expected_lifecycle_generation,
                                          std::string security_identity,
-                                         location_owner_token_t owner)
+                                         std::shared_ptr<const mesh_node_descriptor_t> discovered)
 {
     auto descriptor = _options.mesh.descriptor;
     descriptor.node_routing_id = expected.to_bytes ();
     descriptor.advertised_endpoint = endpoint;
     descriptor.lifecycle_generation = expected_lifecycle_generation;
     descriptor.security_identity = std::move (security_identity);
-    descriptor.owner_id = std::move (owner.owner_id);
-    descriptor.owner_lease_generation = owner.lease_generation;
-    _transport->expect_peer (std::move (descriptor));
+    _transport->expect_peer (std::move (descriptor), std::move (discovered));
 }
 
 void public_host_runtime_t::forget_peer (const std::string &endpoint,

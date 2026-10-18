@@ -599,12 +599,12 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
                        std::uint64_t expected_lifecycle_generation = 0,
                        std::string security_identity = "default",
                        bool automatic = false,
-                       location_owner_token_t owner = {});
+                       std::shared_ptr<const mesh_node_descriptor_t> discovered = {});
     void expect_peer (const std::string &endpoint,
                       const zlink::routing_id_t &expected,
                       std::uint64_t expected_lifecycle_generation,
                       std::string security_identity,
-                      location_owner_token_t owner = {});
+                      std::shared_ptr<const mesh_node_descriptor_t> discovered = {});
     void forget_peer (const std::string &endpoint, const zlink::routing_id_t &expected);
     void disconnect_peer (const std::string &endpoint) noexcept;
     bool disconnect_peer (const std::vector<std::uint8_t> &expected_routing_id,
@@ -700,11 +700,11 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     void configure_session_route_owner (
       std::function<std::optional<location_owner_token_t> ()> owner_resolver);
     void configure_stateful_dispatch (stateful::accepted_record_authority_resolver_t resolver);
-    void
-    configure_stateful_dispatch (std::function<std::optional<location_owner_token_t> ()> owner);
+    void configure_stateful_dispatch (
+      std::function<std::shared_ptr<const location_owner_token_t> ()> owner);
     task_t<std::optional<stateful::accepted_record_authority_t>>
-    accepted_record_authority (const stateful::accepted_record_authority_query_t &query,
-                               const std::optional<location_owner_token_t> &owner) const;
+    accepted_record_authority (stateful::accepted_record_authority_query_t query,
+                               std::shared_ptr<const location_owner_token_t> owner) const;
     void forward_relocation_application (const stateful::object_ref_t &owner,
                                          const stateful::turn_record_t &record,
                                          const std::vector<std::uint8_t> &target_routing_id,

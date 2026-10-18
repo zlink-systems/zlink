@@ -2183,8 +2183,10 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                   return source->native_node ().begin_local_user_spot_close (
                     std::string (spot_id), object_generation, authority_owner_generation);
               };
-            _nodes[index]->configure_stateful_dispatch (
-              [this] { return current_location_owner (); });
+            _nodes[index]->configure_stateful_dispatch ([this] {
+                return _location_runtime ? _location_runtime->current_owner_observation ()
+                                         : std::shared_ptr<const location_owner_token_t>{};
+            });
             _nodes[index]->configure_user_spot_operations (
               store,
               [this, registration, source] (const stateful::object_ref_t &object,

@@ -1933,7 +1933,7 @@ void mesh_node_runtime_t::connect_peer (const zlink::routing_id_t &expected_rout
                                         std::uint64_t expected_lifecycle_generation,
                                         std::string security_identity,
                                         bool automatic,
-                                        location_owner_token_t owner)
+                                        std::shared_ptr<const mesh_node_descriptor_t> discovered)
 {
     if (!_node || endpoint.empty ())
         return;
@@ -1944,7 +1944,7 @@ void mesh_node_runtime_t::connect_peer (const zlink::routing_id_t &expected_rout
               return;
           const auto submitted =
             _node->connect_peer (endpoint, expected_routing_id, expected_lifecycle_generation,
-                                 std::move (security_identity), automatic, std::move (owner));
+                                 std::move (security_identity), automatic, std::move (discovered));
           if (submitted)
               _peer_connection_intents.emplace (endpoint, next_connection_intent_id ());
       })
@@ -1970,12 +1970,12 @@ void mesh_node_runtime_t::expect_peer (const zlink::routing_id_t &expected_routi
                                        const std::string &endpoint,
                                        std::uint64_t expected_lifecycle_generation,
                                        std::string security_identity,
-                                       location_owner_token_t owner)
+                                       std::shared_ptr<const mesh_node_descriptor_t> discovered)
 {
     if (!_node || endpoint.empty ())
         return;
     _node->expect_peer (endpoint, expected_routing_id, expected_lifecycle_generation,
-                        std::move (security_identity), std::move (owner));
+                        std::move (security_identity), std::move (discovered));
 }
 
 void mesh_node_runtime_t::forget_peer (const zlink::routing_id_t &expected_routing_id,

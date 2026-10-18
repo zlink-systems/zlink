@@ -4730,43 +4730,101 @@ void verify_configured_session_seal_timeout_closes_actual_owner ()
 
 void verify_discovery_owner_metadata_preserved ()
 {
+    using namespace zlink::framework;
     mesh::raw_mesh_node_owner_t transport (mesh::raw_mesh_node_options_t{
       .descriptor = descriptor ("metadata-target"),
-      .runtime_failures =
-        std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()});
+      .runtime_failures = std::make_shared<runtime::runtime_failure_collector_t> ()});
     auto &topology = transport.topology ();
     auto source = descriptor ("metadata-source");
     assert (topology.admit (source, {1}) == mesh::peer_admission_result_t::admitted);
-    auto discovered = source;
-    discovered.owner_id = "metadata-owner";
-    discovered.owner_lease_generation = 7;
+    // Wire admission alone cannot invent a source owner while discovery is late.
+    assert (!transport.source_identity (source.node_routing_id, source.lifecycle_generation)
+               .result ()
+               .value ());
+    auto original = std::make_shared<const mesh_node_descriptor_t> (
+      mesh_node_descriptor_t{.mesh_name = source.mesh_name,
+                             .rid = zlink::routing_id_t::from (source.node_routing_id),
+                             .lifecycle_generation = source.lifecycle_generation,
+                             .endpoint = source.advertised_endpoint,
+                             .owner_id = "metadata-owner",
+                             .lease_generation = 7});
     const auto epoch = topology.peer (source.node_routing_id)->admission_epoch;
-    transport.expect_peer (discovered);
-    assert (topology.peer (source.node_routing_id)->descriptor.owner_id == "metadata-owner");
+    std::atomic_int topology_changes{0};
+    topology.set_change_handler ([&] { ++topology_changes; });
+    transport.expect_peer (source, original);
+    assert (topology_changes.load () == 0); // expect does not enter the topology lane.
     assert (topology.peer (source.node_routing_id)->admission_epoch == epoch);
-    assert (topology.admit (source, {1}, discovered)
+    auto retained = transport.source_identity (source.node_routing_id, source.lifecycle_generation)
+                      .result ()
+                      .value ();
+    assert (retained
+            && std::get<std::shared_ptr<const mesh_node_descriptor_t>> (*retained) == original);
+    assert (topology.admit (source, {1}, source)
             == mesh::peer_admission_result_t::duplicate_connection);
     source.descriptor_revision++;
     source.state = mesh::service_node_state_t::draining;
     assert (topology.admit (source, {1}, mesh::service_liveness_registry_t::clock_t::now (),
                             protocol::command::update)
             == mesh::peer_admission_result_t::admitted);
-    const auto updated = topology.peer (source.node_routing_id);
-    assert (updated->descriptor.owner_id == "metadata-owner");
-    assert (updated->descriptor.owner_lease_generation == 7);
+    assert (std::get<std::shared_ptr<const mesh_node_descriptor_t>> (
+              *transport.source_identity (source.node_routing_id, source.lifecycle_generation)
+                 .result ()
+                 .value ())
+            == original);
+    auto replacement_value = *original;
+    replacement_value.lease_generation = 8;
+    auto replacement =
+      std::make_shared<const mesh_node_descriptor_t> (std::move (replacement_value));
+    transport.expect_peer (source, replacement);
+    assert (std::get<std::shared_ptr<const mesh_node_descriptor_t>> (
+              *transport.source_identity (source.node_routing_id, source.lifecycle_generation)
+                 .result ()
+                 .value ())
+            == replacement);
+    assert (std::get<std::shared_ptr<const mesh_node_descriptor_t>> (*retained)->lease_generation
+            == 7);
+    transport.forget_peer (source.node_routing_id, source.advertised_endpoint);
+    assert (!transport.source_identity (source.node_routing_id, source.lifecycle_generation)
+               .result ()
+               .value ());
+    assert (std::get<std::shared_ptr<const mesh_node_descriptor_t>> (*retained)->owner_id
+              == "metadata-owner"
+            && std::get<std::shared_ptr<const mesh_node_descriptor_t>> (*retained)->lease_generation
+                 == 7);
     source.lifecycle_generation++;
     assert (topology.admit (source, {2}, source) == mesh::peer_admission_result_t::admitted);
-    assert (topology.peer (source.node_routing_id)->descriptor.owner_id.empty ());
+    transport.expect_peer (source, original);
+    assert (!transport.source_identity (source.node_routing_id, source.lifecycle_generation)
+               .result ()
+               .value ());
+    topology.set_change_handler ({});
 }
 
 void verify_memory_accepted_record_authority ()
 {
     using namespace zlink::framework;
+    {
+        runtime::in_memory_location_repository_t lease_store;
+        runtime::location_runtime_t leases (lease_store, {}, "observed-owner");
+        leases.start (zlink::routing_id_t::from ("observed-node"));
+        const auto original_lease = leases.current_owner_observation ();
+        assert (original_lease && original_lease->owner_id == leases.owner_id ());
+        const auto generation = original_lease->lease_generation;
+        leases.stop ();
+        assert (!leases.current_owner_observation ());
+        assert (original_lease->owner_id == "observed-owner"
+                && original_lease->lease_generation == generation);
+    }
     auto store = std::make_shared<counting_location_repository_t> ();
     const auto target = descriptor ("memory-target");
     auto source = descriptor ("memory-source");
-    source.owner_id = "remote-memory-owner";
-    source.owner_lease_generation = 7;
+    const auto original = std::make_shared<const mesh_node_descriptor_t> (
+      mesh_node_descriptor_t{.mesh_name = source.mesh_name,
+                             .rid = zlink::routing_id_t::from (source.node_routing_id),
+                             .lifecycle_generation = source.lifecycle_generation,
+                             .endpoint = source.advertised_endpoint,
+                             .owner_id = "remote-memory-owner",
+                             .lease_generation = 7});
     auto native = std::make_shared<host::public_host_runtime_t> (host::host_options_t{
       .mesh = {.descriptor = target,
                .runtime_failures = std::make_shared<runtime::runtime_failure_collector_t> ()}});
@@ -4779,8 +4837,52 @@ void verify_memory_accepted_record_authority ()
     stateful::raw_stateful_dispatch_t dispatch (
       native->objects (), native->transport (),
       [native, local_owner] (stateful::accepted_record_authority_query_t query) {
-          return native->accepted_record_authority (query, local_owner);
+          return native->accepted_record_authority (
+            query, std::make_shared<const location_owner_token_t> (local_owner));
       });
+    {
+        const stateful::object_ref_t object{
+          stateful::object_kind_t::user_spot,
+          "late-discovery",
+          1,
+          1,
+          target.mesh_name,
+          zlink::routing_id_t::from (target.node_routing_id).to_string ()};
+        const auto created = native->objects ().begin_reserved_object (object, "memory", {});
+        assert (created.error == stateful::stateful_error_t::none);
+        assert (native->objects ().commit_create (created.attempt)
+                == stateful::stateful_error_t::none);
+        mesh::service_mailbox_record_t record;
+        record.owner =
+          mesh::service_mailbox_t::application_owner (host::owner_kind_t::spot, object.key);
+        record.domain = mesh::service_mailbox_domain_t::application;
+        record.source_routing_id = source.node_routing_id;
+        record.source_node_generation = source.lifecycle_generation;
+        const protocol::spot_route_fence_t fence{
+          object.key, 1, target.node_routing_id, target.lifecycle_generation, 1, 11};
+        record.parts = detail::backend::materialize_binding_parts (
+          {protocol::encode_spot_message_header (protocol::command::spotSend, "memory-source-spot",
+                                                 fence, {1, 900}),
+           protocol::encode_application_payload ({"Memory", "application/json", {'{', '}'}})});
+        int releases = 0;
+        const auto result =
+          dispatch
+            .ingest_claimed (object, std::move (record),
+                             std::function<void ()> ([&] { ++releases; }),
+                             test::retained_ingress_snapshot (native->objects (), object))
+            .result ()
+            .value ();
+        assert (result == stateful::stateful_error_t::conflict);
+        assert (releases == 1);
+        assert (native->objects ().pending (object, stateful::turn_domain_t::application) == 0);
+        assert (!dispatch.try_claim (object).second);
+        assert (store->authority_reads == 0 && store->mesh_node_reads == 0
+                && store->owner_lease_reads == 0);
+    }
+    native->transport ().expect_peer (source, original);
+    const auto local_observation = std::make_shared<const location_owner_token_t> (local_owner);
+    const mesh::local_request_source_t local_source{
+      local_observation, std::make_shared<const mesh::service_node_descriptor_t> (target)};
     std::uint64_t sequence = 0;
     for (const bool remote : {false, true})
         for (const bool actor : {false, true})
@@ -4818,21 +4920,48 @@ void verify_memory_accepted_record_authority ()
                 record.parts = detail::backend::materialize_binding_parts (
                   {header, protocol::encode_application_payload (
                              {"Memory", "application/json", {'{', '}'}})});
-                assert (
-                  dispatch
-                    .ingest_claimed (object, std::move (record), std::function<void ()> ([] {}))
-                    .result ()
-                    .value ()
-                  == stateful::stateful_error_t::none);
+                assert (dispatch
+                          .ingest_claimed (object, std::move (record),
+                                           std::function<void ()> ([] {}),
+                                           zlink::framework::test::retained_ingress_snapshot (
+                                             native->objects (), object))
+                          .result ()
+                          .value ()
+                        == stateful::stateful_error_t::none);
                 const auto [error, delivery] = dispatch.try_claim (object);
                 assert (error == stateful::stateful_error_t::none && delivery);
                 assert (delivery->frozen.source.owner_id
-                        == (remote ? source.owner_id : local_owner.owner_id));
+                        == (remote ? original->owner_id : local_owner.owner_id));
                 assert (delivery->frozen.source.lease_generation == (remote ? 7u : 11u));
                 assert (store->authority_reads == 0);
                 assert (store->mesh_node_reads == 0);
                 assert (store->owner_lease_reads == 0);
             }
+    const auto read_source = [&] (const auto &rid, std::uint64_t generation) {
+        return native->transport ()
+          .source_identity (rid, generation, local_source)
+          .result ()
+          .value ();
+    };
+    const auto saved_remote = read_source (source.node_routing_id, source.lifecycle_generation);
+    const auto saved_local = read_source (target.node_routing_id, target.lifecycle_generation);
+    assert (saved_remote && saved_local);
+    assert (std::get<std::shared_ptr<const mesh_node_descriptor_t>> (*saved_remote) == original);
+    assert (std::get<mesh::local_request_source_t> (*saved_local).lease == local_observation);
+    assert (!read_source (source.node_routing_id, source.lifecycle_generation + 1));
+    assert (!read_source (target.node_routing_id, target.lifecycle_generation + 1));
+    auto replacement = std::make_shared<mesh_node_descriptor_t> (*original);
+    replacement->lease_generation = 19;
+    native->transport ().expect_peer (source, replacement);
+    assert (std::get<std::shared_ptr<const mesh_node_descriptor_t>> (
+              *read_source (source.node_routing_id, source.lifecycle_generation))
+            == replacement);
+    assert (
+      std::get<std::shared_ptr<const mesh_node_descriptor_t>> (*saved_remote)->lease_generation
+      == 7);
+    native->transport ().forget_peer (source.node_routing_id, source.advertised_endpoint);
+    assert (!read_source (source.node_routing_id, source.lifecycle_generation));
+    assert (std::get<std::shared_ptr<const mesh_node_descriptor_t>> (*saved_remote) == original);
 }
 
 void verify_batched_accepted_record_sources ()

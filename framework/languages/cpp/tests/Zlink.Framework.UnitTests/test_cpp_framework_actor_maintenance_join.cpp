@@ -133,14 +133,6 @@ struct public_host_runtime_test_access_t
         staging->restore_identity.reference = "accepted-source-boundary";
         return host.restore_relocation_assembly (pending, staging);
     }
-    static void use_store_authority (public_host_runtime_t &host, location_repository_t &store)
-    {
-        host._stateful_dispatch = std::make_unique<stateful::raw_stateful_dispatch_t> (
-          host._objects, *host._transport,
-          stateful::make_location_store_authority_resolver (store));
-        host._stateful_dispatch->set_flow_capture_provider (
-          [&host] { return host.capture_flow (); });
-    }
     static task_t<bool> activate_stale_actor_attempt (public_host_runtime_t &host,
                                                       bool replaced,
                                                       bool activation_started,
@@ -1707,14 +1699,7 @@ struct native_intake_fixture_t
 {
     static constexpr auto source_id = "boundary-source";
     std::vector<std::uint8_t> rid = zlink::routing_id_t::from ("intake-boundary").to_bytes ();
-    fw::runtime::stateful::accepted_record_authority_resolver_t resolver =
-      [] (const fw::runtime::stateful::accepted_record_authority_query_t &query)
-      -> fw::task_t<std::optional<fw::runtime::stateful::accepted_record_authority_t>> {
-        if (query.requested_authority_owner_generation != query.target.authority_owner_generation)
-            co_return std::nullopt;
-        co_return fw::runtime::stateful::accepted_record_authority_t{
-          {source_id, 1, query.source_node_routing_id, query.source_node_generation}, 1};
-    };
+    fw::runtime::stateful::accepted_record_authority_resolver_t resolver;
     std::shared_ptr<fw::runtime::host::public_host_runtime_t> host;
     explicit native_intake_fixture_t (fw::dispatch_options_t dispatch = {})
     {
@@ -1731,7 +1716,26 @@ struct native_intake_fixture_t
         options.mesh.dispatch = std::move (dispatch);
         options.object_stable_types = {actor_type, "framework.spot"};
         host = std::make_shared<fw::runtime::host::public_host_runtime_t> (std::move (options));
-        host->configure_stateful_dispatch (resolver);
+        const auto lease = std::make_shared<const fw::location_owner_token_t> (
+          fw::location_owner_token_t{source_id, 1});
+        resolver = [host = host,
+                    lease] (fw::runtime::stateful::accepted_record_authority_query_t query) {
+            return host->accepted_record_authority (std::move (query), lease);
+        };
+        host->configure_stateful_dispatch ([lease] { return lease; });
+        auto peer = host->transport ().topology ().local_descriptor ();
+        peer.node_routing_id = zlink::routing_id_t::from (source_id).to_bytes ();
+        peer.advertised_endpoint = "tcp://127.0.0.1:1";
+        auto original = std::make_shared<const fw::mesh_node_descriptor_t> (
+          fw::mesh_node_descriptor_t{.mesh_name = peer.mesh_name,
+                                     .rid = zlink::routing_id_t::from (peer.node_routing_id),
+                                     .lifecycle_generation = peer.lifecycle_generation,
+                                     .endpoint = peer.advertised_endpoint,
+                                     .owner_id = source_id,
+                                     .lease_generation = 1});
+        host->transport ().expect_peer (peer, original);
+        EXPECT_EQ (host->transport ().topology ().admit (peer, {1}),
+                   fw::runtime::mesh::peer_admission_result_t::admitted);
         host->start ();
     }
     fw::runtime::mesh::service_mailbox_record_t
@@ -2521,8 +2525,7 @@ TEST (NativeIntake, NativeMailboxTransferKeepsActualPrivateMClaim)
     }
 }
 
-// The real Store adapter pauses only the accepted Actor's authority chain.
-// Other Actors use the same host and native pump while each source is pending.
+// Trap an accidental accepted-source Store lookup while using the production resolver.
 class intake_store_t final : public fw::location_store_t
 {
   public:
@@ -2574,13 +2577,7 @@ class intake_store_t final : public fw::location_store_t
     {
         return inner.write (std::move (request));
     }
-    void observe (std::size_t index)
-    {
-        lanes[index] = fw::runtime::state_lane_t::current ();
-        turns[index] = fw::detail::capture_current_serial_turn ();
-        reached[index].store (true);
-        entered[index].complete (fw::result_t<void>::success ());
-    }
+    void observe (std::size_t index) { reached[index].store (true); }
     void release (int index, bool failure)
     {
         stage.store (failure || index == 2 ? 0 : index + 2);
@@ -2609,17 +2606,12 @@ class intake_store_t final : public fw::location_store_t
           fw::framework_error_kind_t::shutting_down, "intake fixture settled"));
         lease_source.complete (fw::result_t<fw::store_read_result_t>::failure (
           fw::framework_error_kind_t::shutting_down, "intake fixture settled"));
-        for (auto &step : entered)
-            step.complete (fw::result_t<void>::success ());
     }
     ~intake_store_t () override { release_all (); }
     std::string authority_store_key;
     std::string *capture_key = nullptr;
     std::atomic<int> stage{0};
-    std::array<fw::task_completion_source_t<void>, 3> entered;
     std::array<std::atomic_bool, 3> reached{};
-    std::array<fw::runtime::state_lane_t *, 3> lanes{};
-    std::array<std::shared_ptr<fw::detail::serial_turn_t>, 3> turns;
     const std::thread::id releaser = std::this_thread::get_id ();
     std::optional<fw::store_read_result_t> authority_value, lease_value;
     std::optional<fw::store_scan_result_t> nodes_value;
@@ -2631,7 +2623,7 @@ class intake_store_t final : public fw::location_store_t
 class NativeIntakePendingStore : public testing::TestWithParam<std::tuple<bool, int>>
 {
 };
-TEST_P (NativeIntakePendingStore, KeepsInfrastructureOutsideAcceptanceTurn)
+TEST_P (NativeIntakePendingStore, ProductionResolverUsesNoStoreDuringAcceptance)
 {
     const auto [remote, failure_stage] = GetParam ();
     observations_t evidence;
@@ -2646,9 +2638,6 @@ TEST_P (NativeIntakePendingStore, KeepsInfrastructureOutsideAcceptanceTurn)
     auto services = host.app.advanced ().services ().build_provider ();
     auto &actors = services.get_required<fw::actor_manager_t> ();
     ASSERT_TRUE (actors.get_or_create (fw::actor_id_t (actor_id), actor_type).async ().result ());
-    constexpr auto independent_actor = "intake-independent";
-    ASSERT_TRUE (
-      actors.get_or_create (fw::actor_id_t (independent_actor), actor_type).async ().result ());
     configure (peer, second_rid, store, relocations);
     peer.start ();
     ASSERT_TRUE (ready (peer));
@@ -2658,11 +2647,8 @@ TEST_P (NativeIntakePendingStore, KeepsInfrastructureOutsideAcceptanceTurn)
     auto &native = peer_services.get_required<fw::actor_client_t> ();
     auto registration =
       fw::detail::mesh_node_runtime_t::registrations (host.app.advanced ().zlink ()).front ();
-    auto test_host = fw::detail::spot_node_runtime_t (registration->spot_state).native_node ();
-    fw::runtime::host::public_host_runtime_test_access_t::use_store_authority (
-      *test_host, services.get_required<fw::location_repository_t> ());
-    std::array<fw::task_t<void>, 3> entered{store->entered[0].task (), store->entered[1].task (),
-                                            store->entered[2].task ()};
+    if (failure_stage >= 0)
+        store->release (failure_stage, true);
     store->stage.store (1);
     auto pending =
       (remote ? native : local).request (fw::actor_id_t (actor_id), probe_t{17}).async<probe_t> ();
@@ -2672,46 +2658,22 @@ TEST_P (NativeIntakePendingStore, KeepsInfrastructureOutsideAcceptanceTurn)
     fw::detail::observe_task_completion (pending, [&] (const auto &) {
         if (++terminals == 1) {
             terminal_seen.set_value ();
-            for (auto &step : store->entered)
-                step.complete (fw::result_t<void>::success ());
         }
     });
-    for (int index = 0; index != 3; ++index) {
-        entered[index].result ().value ();
-        EXPECT_TRUE (store->reached[index].load ()) << "Store step=" << index;
-        if (!store->reached[index].load ())
-            break;
-        EXPECT_FALSE (pending.await_ready ());
-        EXPECT_EQ (terminals.load (), 0);
-        EXPECT_EQ (store->lanes[index], nullptr);
-        EXPECT_FALSE (store->turns[index]);
-        // This remote reply requires receive, dispatch and completion on both
-        // hosts. Its Actor has an independent execution gate and spare supply.
-        auto progress = native.request (fw::actor_id_t (independent_actor), probe_t{91 + index})
-                          .async<probe_t> ()
-                          .result ();
-        EXPECT_TRUE (progress);
-        if (progress)
-            EXPECT_EQ (progress.value ().value, 91 + index);
-        const bool fail = failure_stage == index;
-        store->release (index, fail);
-        if (fail)
-            break;
-    }
-    store->release_all ();
     const auto result = pending.result ();
-    EXPECT_EQ (static_cast<bool> (result), failure_stage == -1);
-    if (!result)
-        EXPECT_NE (result.error_kind (), fw::framework_error_kind_t::deadline_exceeded);
+    EXPECT_TRUE (result) << (result.error () ? result.error ()->what () : "request failed");
     if (result)
         EXPECT_EQ (result.value ().value, 17);
+    for (int index = 0; index != 3; ++index)
+        EXPECT_FALSE (store->reached[index].load ()) << "unexpected Store read=" << index;
+    store->release_all ();
     terminal_ready.get ();
     EXPECT_EQ (terminals.load (), 1);
     {
         std::lock_guard lock (evidence.mutex);
         EXPECT_EQ (std::count (evidence.intake_probe_values.begin (),
                                evidence.intake_probe_values.end (), 17),
-                   failure_stage == -1 ? 1 : 0);
+                   1);
     }
     constexpr int following_payload = 117;
     const auto following = (remote ? native : local)

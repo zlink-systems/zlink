@@ -12,6 +12,8 @@
 #include "runtime/foundation/operation_registry.hpp"
 #include "runtime/mesh/service_liveness_registry.hpp"
 #include "runtime/mesh/service_mailbox.hpp"
+#include "runtime/locations/location_records.hpp"
+#include "runtime/locations/location_repository_values.hpp"
 #include "runtime/mesh/service_topology_registry.hpp"
 #include "runtime/protocol/service_wire_codec.hpp"
 #include <zlink/Contracts/Core/routing_id.hpp>
@@ -113,6 +115,15 @@ struct actor_join_wire_outcome_t
     actor_join_wire_failure_t failure = actor_join_wire_failure_t::unavailable;
 };
 
+struct local_request_source_t
+{
+    std::shared_ptr<const location_owner_token_t> lease;
+    std::shared_ptr<const service_node_descriptor_t> node;
+};
+
+using request_source_t =
+  std::variant<local_request_source_t, std::shared_ptr<const mesh_node_descriptor_t>>;
+
 class raw_mesh_node_owner_t
 {
   public:
@@ -142,11 +153,18 @@ class raw_mesh_node_owner_t
     service_mailbox_t &mailbox () noexcept;
 
     bool connect_peer (const std::string &endpoint);
-    bool connect_peer (const std::string &endpoint, service_node_descriptor_t expected_descriptor);
+    bool connect_peer (const std::string &endpoint,
+                       service_node_descriptor_t expected_descriptor,
+                       std::shared_ptr<const mesh_node_descriptor_t> discovered = {});
     void disconnect_peer (const std::string &endpoint) noexcept;
     bool disconnect_peer (const std::vector<std::uint8_t> &expected_routing_id,
                           const std::string &endpoint) noexcept;
-    void expect_peer (service_node_descriptor_t expected_descriptor);
+    void expect_peer (service_node_descriptor_t expected_descriptor,
+                      std::shared_ptr<const mesh_node_descriptor_t> discovered = {});
+    task_t<std::optional<request_source_t>>
+    source_identity (std::vector<std::uint8_t> rid,
+                     std::uint64_t generation,
+                     local_request_source_t local = {}) const;
     void forget_peer (const std::vector<std::uint8_t> &node_routing_id,
                       const std::string &endpoint);
     peer_admission_result_t admit_peer (service_node_descriptor_t descriptor,
@@ -523,7 +541,12 @@ class raw_mesh_node_owner_t
     static void publish_drop_metrics (opentelemetry::metrics::ObserverResult result, void *state);
     std::atomic_size_t _last_pump_bytes{0};
     std::shared_ptr<foundation::operation_registry_t> _operations;
-    std::map<std::vector<std::uint8_t>, service_node_descriptor_t, raw_mesh_byte_vector_less_t>
+    struct expected_peer_t
+    {
+        service_node_descriptor_t wire;
+        std::shared_ptr<const mesh_node_descriptor_t> discovered;
+    };
+    std::map<std::vector<std::uint8_t>, expected_peer_t, raw_mesh_byte_vector_less_t>
       _expected_peers;
     struct selected_route_t
     {
