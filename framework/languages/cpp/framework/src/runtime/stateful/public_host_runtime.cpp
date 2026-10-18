@@ -1044,8 +1044,14 @@ public_host_runtime_t::accepted_record_authority (
     using authority_t = std::optional<stateful::accepted_record_authority_t>;
     authority_t accepted;
     const auto &local = _options.mesh.descriptor;
-    if (owner && !owner->owner_id.empty () && owner->lease_generation > 0
-        && query.requested_authority_owner_generation == query.target.authority_owner_generation
+    if (owner && !owner->owner_id.empty ()
+        && owner->lease_generation > 0
+        // A Spot mailbox facade can outlive an incarnation. Its execution
+        // owner validates the current fence; Actor admission uses the exact
+        // native object authority here.
+        && (query.target.kind != stateful::object_kind_t::actor
+            || query.requested_authority_owner_generation
+                 == query.target.authority_owner_generation)
         && query.target_node_routing_id == local.node_routing_id
         && query.target_node_generation == local.lifecycle_generation) {
         auto original = co_await _transport->source_identity (
