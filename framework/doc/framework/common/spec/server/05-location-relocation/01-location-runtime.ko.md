@@ -907,7 +907,7 @@ Application이 반환한 `Rejected`와 callback exception은 다른 결과다. P
 |---|---|---|
 | 같은 type의 `Ready` | `AlreadyExists` | 기존 ref |
 | 같은 type의 `Creating` | `AlreadyExists` | 진행 중인 생성 결과를 기다린다. |
-| 같은 type의 `Closing` | `AlreadyExists` | Close가 끝나 `Ready` 또는 `Missing`이 될 때까지 기다린 뒤 위 행대로 처리한다. |
+| 같은 type의 `Closing` | `AlreadyExists` | User Spot은 [Spot 주소 메시징 §3.2](../03-spot-actor/06-spot-address-messaging.ko.md#32-동시-요청의-수렴)의 authority 변경 대기와 후속 절차를 따른다. |
 | 다른 Actor type | `TypeMismatch` | `TypeMismatch` |
 | 다른 Spot 종류 또는 type | `TypeMismatch` | `TypeMismatch` |
 

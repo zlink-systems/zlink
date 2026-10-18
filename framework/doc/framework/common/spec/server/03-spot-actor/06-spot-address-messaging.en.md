@@ -231,8 +231,7 @@ If the same caller Spot ID's kind or stable type differs, it's
 `Existing` when its owner lease is valid, and otherwise follows the release
 result of [Location runtime §6.1](../05-location-relocation/01-location-runtime.en.md#61-read-and-cas). A different operation observing an in-progress Creating attempt
 or a Closing authority doesn't start a new reservation or factory — it waits for the authority
-change. If the authority ends Ready (including a Close that ends `false` and keeps the same
-incarnation), it returns `Existing` and that
+change. When it observes a Ready authority of the same type, it returns `Existing` and that
 incarnation's `SpotRef`. If it becomes Missing via rejection/failure
 cleanup or a completed Close, it competes for a new reservation within the remaining deadline,
 and the winner runs factory and callback with its own creation request. A
@@ -716,7 +715,7 @@ After seal, the source ingress hold is relayed via the committed Message Follow 
 | The target authority of a Spot direct send or request without Instance intent is `Missing` or `Creating` | `NotFound`. |
 | The generation of a control addressed by `ActorRef`/`SpotRef` differs from the current generation (a direct message doesn't compare generations, per [08-routing §2.6](08-routing.en.md#26-where-objectgeneration-is-used-and-where-its-not)) | `InvalidOperation`. |
 | The [owner fence](../00-foundation/02-glossary.en.md#owner-fence) differs | `Unavailable`. |
-| Work reached a `Closing` owner, or the resolver observed `Closing` authority | Work with Instance intent is sent to that owner node and runs on the new generation per §7 step 3. Work without Instance intent gets `NotFound`, the same as `Missing`. |
+| Work reached a `Closing` owner, or the resolver observed `Closing` authority | User Spot `GetOrCreate` follows §3.2. Work with Instance intent is sent to that owner node and runs on the new generation per §7 step 3. All other work gets `NotFound`, the same as `Missing`. |
 | New admission requested on a `Draining` owner | `ShuttingDown`. |
 | Ingress arrives on the source route after a relocation seal | Not rejected — retained in the relocation hold. |
 | A message arrives at a `Relocating` unit not yet sealed | Accepted, keeping existing owner admission. |
