@@ -250,6 +250,12 @@ struct relocation_ingress_batch_t
     std::vector<participant_t> participants;
 };
 
+struct retained_relocation_source_t
+{
+    object_ref_t owner;
+    protocol::request_source_fence_t fence;
+};
+
 class stateful_object_runtime_t
 {
   public:
@@ -308,9 +314,12 @@ class stateful_object_runtime_t
     // with the object's claim gate.
     std::optional<object_ref_t>
     find (object_kind_t kind,
-          const std::string &key,
-          std::optional<object_state_t> required_state = object_state_t::ready) const;
-    std::optional<object_ref_t> resolve_spot (const std::string &key) const;
+          std::string key,
+          std::optional<object_state_t> required_state = object_state_t::ready,
+          std::optional<retained_relocation_source_t> *retained = nullptr) const;
+    std::optional<object_ref_t>
+    resolve_spot (const std::string &key,
+                  std::optional<retained_relocation_source_t> *retained = nullptr) const;
     stateful_error_t set_subscription (const object_ref_t &spot,
                                        const std::string &channel_name,
                                        const std::string &topic);
@@ -324,8 +333,8 @@ class stateful_object_runtime_t
     bool finalized_relocation_source (object_kind_t kind,
                                       const std::string &key,
                                       std::uint64_t object_generation) const;
-    task_t<stateful_error_t> retained_relocation_source (
-      object_ref_t owner, std::uint64_t packet_object_generation) const;
+    task_t<std::optional<retained_relocation_source_t>>
+    retained_relocation_source (object_ref_t owner) const;
 
     std::pair<stateful_error_t, membership_token_t>
     begin_membership_move (const object_ref_t &actor, const object_ref_t &target_spot);
@@ -372,7 +381,8 @@ class stateful_object_runtime_t
     // this method returns; no callback runs while the aggregate mutex is held.
     std::pair<stateful_error_t, relocation_ingress_batch_t> begin_relocation_boundary (
       std::uint64_t token,
-      std::function<void (const object_ref_t &, const turn_record_t &)> deliver = {});
+      std::function<void (const object_ref_t &, const turn_record_t &)> deliver = {},
+      protocol::request_source_fence_t source_fence = {});
     // Only an exact target abort before Cutover may reopen source dispatch.
     stateful_error_t abort_relocation_before_cutover (std::uint64_t token);
     // Makes the source permanently follow-only once Cutover has been queued
@@ -459,8 +469,11 @@ class stateful_object_runtime_t
         relocation_ingress_phase_t ingress_phase = relocation_ingress_phase_t::holding;
         std::vector<std::vector<turn_record_t>> boundary_application;
         std::function<void (const object_ref_t &, const turn_record_t &)> deliver;
+        protocol::request_source_fence_t source_fence;
     };
 
+    std::optional<retained_relocation_source_t>
+    retained_relocation_source_on_lane (const object_record_t &object) const;
     bool finalized_relocation_source_on_lane (const object_record_t &object) const;
     std::optional<std::uint64_t>
     relocation_source_seal_on_lane (const object_record_t &object) const;

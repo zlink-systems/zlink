@@ -966,11 +966,14 @@ task_t<bool> maintenance_runtime_t::relocate_boundary_and_send (
   std::shared_ptr<relocation_terminal_state_t> state)
 {
     const auto boundary = _objects.begin_relocation_boundary (
-      state->seal_attempt.seal.token, [forward = state->context.send_application] (
-                                        const object_ref_t &owner, const turn_record_t &record) {
+      state->seal_attempt.seal.token,
+      [forward = state->context.send_application] (const object_ref_t &owner,
+                                                   const turn_record_t &record) {
           if (forward)
               forward (owner, record, owner.authority_owner_generation);
-      });
+      },
+      {state->context.coordinator.owner_id, state->context.coordinator.lease_generation,
+       state->context.coordinator.node_routing_id, state->context.coordinator.node_generation});
     const auto boundary_error = boundary.first;
     state->batch = boundary.second;
     if (boundary_error != stateful_error_t::none) {
@@ -1217,11 +1220,14 @@ task_t<aggregate_relocation_result_t> maintenance_runtime_t::relocate_aggregate 
     const target_only_cas_t handoff{sources, target_node_id, target_owner, inventory_digest,
                                     state->manifest};
     const auto [boundary_error, batch] = _objects.begin_relocation_boundary (
-      seal.token, [forward = canonical_wire->send_application] (const object_ref_t &owner,
-                                                                const turn_record_t &record) {
+      seal.token,
+      [forward = canonical_wire->send_application] (const object_ref_t &owner,
+                                                    const turn_record_t &record) {
           if (forward)
               forward (owner, record, owner.authority_owner_generation);
-      });
+      },
+      {state->context.coordinator.owner_id, state->context.coordinator.lease_generation,
+       state->context.coordinator.node_routing_id, state->context.coordinator.node_generation});
     auto failure = relocation_reason_t::restore_failed;
     const auto records =
       boundary_error == stateful_error_t::none

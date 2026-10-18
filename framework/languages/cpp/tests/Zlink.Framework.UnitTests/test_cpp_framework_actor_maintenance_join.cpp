@@ -2500,6 +2500,8 @@ TEST_P (NativeIntakePendingStore, KeepsInfrastructureOutsideAcceptanceTurn)
     store->release_all ();
     const auto result = pending.result ();
     EXPECT_EQ (static_cast<bool> (result), failure_stage == -1);
+    if (!result)
+        EXPECT_NE (result.error_kind (), fw::framework_error_kind_t::deadline_exceeded);
     if (result)
         EXPECT_EQ (result.value ().value, 17);
     terminal_ready.get ();
@@ -5626,5 +5628,6 @@ TEST (ActorMaintenanceJoin, CanonicalReplayMaterializesBodyWithoutInvocationCach
     EXPECT_EQ (terminals, 1);
     EXPECT_EQ (evidence.recorded, (std::vector<int>{73}));
 }
+
 
 }

@@ -4860,21 +4860,8 @@ void verify_location_store_accepted_record_authority ()
         .value ();
     assert (std::holds_alternative<authority_stored_t> (moved));
     assert (!resolver (retained_query).result ().value ());
-    const auto retained = stateful::make_location_store_retained_authority_resolver (store);
-    const auto qualified = retained (retained_query).result ().value ();
-    assert (qualified);
-    assert (qualified->source.owner_id == source_owner.owner_id);
-    assert (qualified->source.node_routing_id == bytes ("raw-source"));
-    assert (qualified->target_owner_lease_generation
-            == static_cast<std::uint64_t> (target_owner.lease_generation));
-    auto unknown_peer = retained_query;
-    ++unknown_peer.source_node_generation;
-    assert (!retained (unknown_peer).result ().value ());
-    auto unknown_target = retained_query;
-    ++unknown_target.target_node_generation;
-    assert (!retained (unknown_target).result ().value ());
-    store.release_owner_lease (target_owner).result ().value ();
-    assert (!retained (retained_query).result ().value ());
+    // Retained Follow is qualified by the native source seal (Location §7.3),
+    // not this Ready-only Store resolver.
 }
 
 void verify_raw_spot_and_actor_routing ()

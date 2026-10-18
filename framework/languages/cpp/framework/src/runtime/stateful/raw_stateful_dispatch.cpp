@@ -194,14 +194,13 @@ bool frozen_matches_registration (const protocol::frozen_record_t &frozen,
 
 namespace
 {
-template <bool Retained>
 accepted_record_authority_resolver_t make_store_authority_resolver (location_repository_t &store)
 {
     return [&store] (const accepted_record_authority_query_t &query)
              -> task_t<std::optional<accepted_record_authority_t>> {
         try {
             std::uint64_t target_lease = 0;
-            if constexpr (!Retained) {
+            {
                 const auto authority =
                   co_await store.read_authority (query.target.kind == object_kind_t::actor
                                                    ? actor_authority_key (query.target.key)
@@ -244,23 +243,16 @@ accepted_record_authority_resolver_t make_store_authority_resolver (location_rep
                   });
                 return found == nodes.items.end () ? nullptr : &*found;
             };
-            std::array<const mesh_node_descriptor_t *, Retained ? 2 : 1> identities{};
-            identities[0] = find_node (query.source_node_routing_id, query.source_node_generation);
-            if constexpr (Retained)
-                identities[1] =
-                  find_node (query.target_node_routing_id, query.target_node_generation);
-            for (const auto *identity : identities) {
-                if (!identity || identity->owner_id.empty () || identity->lease_generation <= 0)
-                    co_return std::nullopt;
-                const auto lease = co_await store.read_owner_lease (identity->owner_id);
-                const auto *live = std::get_if<owner_lease_found_t> (&lease);
-                if (!live || live->token.lease_generation != identity->lease_generation
-                    || live->lease_expires_at <= live->store_now)
-                    co_return std::nullopt;
-            }
-            const auto &source = *identities.front ();
-            if constexpr (Retained)
-                target_lease = static_cast<std::uint64_t> (identities.back ()->lease_generation);
+            const auto *identity =
+              find_node (query.source_node_routing_id, query.source_node_generation);
+            if (!identity || identity->owner_id.empty () || identity->lease_generation <= 0)
+                co_return std::nullopt;
+            const auto lease = co_await store.read_owner_lease (identity->owner_id);
+            const auto *live = std::get_if<owner_lease_found_t> (&lease);
+            if (!live || live->token.lease_generation != identity->lease_generation
+                || live->lease_expires_at <= live->store_now)
+                co_return std::nullopt;
+            const auto &source = *identity;
             co_return accepted_record_authority_t{
               {source.owner_id, static_cast<std::uint64_t> (source.lease_generation),
                query.source_node_routing_id, query.source_node_generation},
@@ -276,24 +268,16 @@ accepted_record_authority_resolver_t make_store_authority_resolver (location_rep
 accepted_record_authority_resolver_t
 make_location_store_authority_resolver (location_repository_t &store)
 {
-    return make_store_authority_resolver<false> (store);
-}
-
-accepted_record_authority_resolver_t
-make_location_store_retained_authority_resolver (location_repository_t &store)
-{
-    return make_store_authority_resolver<true> (store);
+    return make_store_authority_resolver (store);
 }
 
 raw_stateful_dispatch_t::raw_stateful_dispatch_t (
   stateful_object_runtime_t &objects,
   mesh::raw_mesh_node_owner_t &transport,
-  accepted_record_authority_resolver_t authority_resolver,
-  accepted_record_authority_resolver_t retained_authority_resolver) :
+  accepted_record_authority_resolver_t authority_resolver) :
     _objects (&objects),
     _transport (&transport),
-    _authority_resolver (std::move (authority_resolver)),
-    _retained_authority_resolver (std::move (retained_authority_resolver))
+    _authority_resolver (std::move (authority_resolver))
 {
 }
 
@@ -560,10 +544,11 @@ task_t<stateful_error_t> raw_stateful_dispatch_t::ingest (object_ref_t owner)
                                        claim_holder);
 }
 
-task_t<stateful_error_t>
-raw_stateful_dispatch_t::ingest_claimed (object_ref_t owner,
-                                         mesh::service_mailbox_record_t record,
-                                         accepted_mailbox_reservation_t reservation)
+task_t<stateful_error_t> raw_stateful_dispatch_t::ingest_claimed (
+  object_ref_t owner,
+  mesh::service_mailbox_record_t record,
+  accepted_mailbox_reservation_t reservation,
+  const std::optional<retained_relocation_source_t> *retained)
 {
     mailbox_claim_release_guard_t claim_guard (*_transport, reservation);
     stateful_error_t validation = stateful_error_t::none;
@@ -597,7 +582,7 @@ raw_stateful_dispatch_t::ingest_claimed (object_ref_t owner,
                   protocol::message_bytes (record.parts.front ()), header.kind);
                 auto [error, authority] = co_await accepted_actor_authority (
                   owner, actor, record.source_routing_id, record.source_node_generation,
-                  record.bound_session_source.has_value ());
+                  record.bound_session_source.has_value (), retained);
                 validation = error;
                 if (validation == stateful_error_t::none) {
                     application_command = header.kind;
@@ -613,7 +598,7 @@ raw_stateful_dispatch_t::ingest_claimed (object_ref_t owner,
                 auto spot = protocol::decode_spot_message_header (
                   protocol::message_bytes (record.parts.front ()), header.kind);
                 auto [error, authority] = co_await accepted_spot_authority (
-                  owner, spot, record.source_routing_id, record.source_node_generation);
+                  owner, spot, record.source_routing_id, record.source_node_generation, retained);
                 validation = error;
                 if (validation == stateful_error_t::none) {
                     application_command = header.kind;
@@ -787,11 +772,13 @@ stateful_error_t raw_stateful_dispatch_t::accept_local (
 }
 
 task_t<std::pair<stateful_error_t, std::optional<accepted_record_authority_t>>>
-raw_stateful_dispatch_t::accepted_actor_authority (object_ref_t owner,
-                                                   protocol::actor_message_header_t actor,
-                                                   std::vector<std::uint8_t> source_node_routing_id,
-                                                   std::uint64_t source_node_generation,
-                                                   bool bound_session_routed) const
+raw_stateful_dispatch_t::accepted_actor_authority (
+  object_ref_t owner,
+  protocol::actor_message_header_t actor,
+  std::vector<std::uint8_t> source_node_routing_id,
+  std::uint64_t source_node_generation,
+  bool bound_session_routed,
+  const std::optional<retained_relocation_source_t> *retained) const
 {
     if (!matches_application_route (owner, actor.target))
         return task_t<authority_result_t> (
@@ -820,14 +807,17 @@ raw_stateful_dispatch_t::accepted_actor_authority (object_ref_t owner,
         query.source_binding_generation = actor.bound_session_source->binding_generation;
         query.source_session_sequence = actor.bound_session_source->session_sequence;
     }
-    return resolve_accepted_authority (std::move (query), actor.target.owner_lease_generation);
+    return resolve_accepted_authority (std::move (query), actor.target.owner_lease_generation,
+                                       retained);
 }
 
 task_t<std::pair<stateful_error_t, std::optional<accepted_record_authority_t>>>
-raw_stateful_dispatch_t::accepted_spot_authority (object_ref_t owner,
-                                                  protocol::spot_message_header_t spot,
-                                                  std::vector<std::uint8_t> source_node_routing_id,
-                                                  std::uint64_t source_node_generation) const
+raw_stateful_dispatch_t::accepted_spot_authority (
+  object_ref_t owner,
+  protocol::spot_message_header_t spot,
+  std::vector<std::uint8_t> source_node_routing_id,
+  std::uint64_t source_node_generation,
+  const std::optional<retained_relocation_source_t> *retained) const
 {
     if (!matches_application_route (owner, spot.target))
         return task_t<authority_result_t> (
@@ -836,38 +826,50 @@ raw_stateful_dispatch_t::accepted_spot_authority (object_ref_t owner,
     query.target = std::move (owner);
     query.requested_authority_owner_generation = spot.target.authority_owner_generation;
     query.requested_object_generation = spot.target.object_generation;
+    query.target.object_generation = spot.target.object_generation;
     query.source_node_routing_id = std::move (source_node_routing_id);
     query.source_node_generation = source_node_generation;
     query.target_node_routing_id = std::move (spot.target.target_node_routing_id);
-    query.target.object_generation = spot.target.object_generation;
     query.target_node_generation = spot.target.target_node_generation;
     query.source_kind = spot.source_spot_id.empty () ? protocol::frozen_source_kind_t::node
                                                      : protocol::frozen_source_kind_t::spot;
     if (!spot.source_spot_id.empty ())
         query.source_spot_id = std::move (spot.source_spot_id);
-    return resolve_accepted_authority (std::move (query), spot.target.owner_lease_generation);
+    return resolve_accepted_authority (std::move (query), spot.target.owner_lease_generation,
+                                       retained);
 }
 
 task_t<std::pair<stateful_error_t, std::optional<accepted_record_authority_t>>>
 raw_stateful_dispatch_t::resolve_accepted_authority (
-  accepted_record_authority_query_t query, std::uint64_t target_owner_lease_generation) const
+  accepted_record_authority_query_t query,
+  std::uint64_t target_owner_lease_generation,
+  const std::optional<retained_relocation_source_t> *retained_snapshot) const
 {
-    if (!_authority_resolver)
-        co_return std::pair{stateful_error_t::invalid, std::nullopt};
-    auto authority = co_await _authority_resolver (query);
-    if (!authority && _retained_authority_resolver) {
-        auto source = query.target;
-        source.authority_owner_generation = query.requested_authority_owner_generation;
-        const auto retained = co_await _objects->retained_relocation_source (
-          std::move (source), query.requested_object_generation);
-        if (retained == stateful_error_t::generation_stale)
-            co_return std::pair{retained, std::nullopt};
-        if (retained == stateful_error_t::none) {
-            // Native ingress owns the exact source fence, hold and Follow; Store qualifies peers.
-            authority = co_await _retained_authority_resolver (query);
-        }
+    std::optional<retained_relocation_source_t> retained;
+    if (retained_snapshot)
+        retained = *retained_snapshot;
+    else
+        retained = co_await _objects->retained_relocation_source (query.target);
+    std::optional<accepted_record_authority_t> authority;
+    if (retained) {
+        // Location §7.3: the native source seal owns Follow; no fresh Store proof.
+        if (query.requested_object_generation != retained->owner.object_generation
+            || query.requested_authority_owner_generation
+                 != retained->owner.authority_owner_generation)
+            co_return std::pair{stateful_error_t::generation_stale, std::nullopt};
+        if (query.target_node_routing_id != retained->fence.node_routing_id
+            || query.target_node_generation != retained->fence.node_generation)
+            co_return std::pair{stateful_error_t::conflict, std::nullopt};
+        const auto target_lease = retained->fence.lease_generation;
+        auto source = std::move (retained->fence);
+        source.node_routing_id = std::move (query.source_node_routing_id);
+        source.node_generation = query.source_node_generation;
+        authority = accepted_record_authority_t{std::move (source), target_lease};
+    } else {
+        if (!_authority_resolver)
+            co_return std::pair{stateful_error_t::invalid, std::nullopt};
+        authority = co_await _authority_resolver (query);
     }
-    // Encoded headers require a nonzero lease. Local headers may leave it to this owner.
     if (!authority
         || (target_owner_lease_generation != 0
             && target_owner_lease_generation != authority->target_owner_lease_generation))

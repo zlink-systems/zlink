@@ -1016,6 +1016,9 @@ TEST (FrameworkRelocationSealContract, source_fenced_relay_survives_target_autho
     }
 }
 
+
+
+
 TEST (FrameworkRelocationSealContract, retained_follow_rejects_previous_object_generation)
 {
     auto host = std::make_shared<host::public_host_runtime_t> (
@@ -1030,109 +1033,128 @@ TEST (FrameworkRelocationSealContract, retained_follow_rejects_previous_object_g
     ASSERT_EQ (objects.commit_create (created.attempt), stateful::stateful_error_t::none);
     const auto sealed = objects.try_seal_relocation_aggregate ({object}).result ().value ();
     ASSERT_EQ (sealed.error, stateful::stateful_error_t::none);
-    ASSERT_EQ (objects.begin_relocation_boundary (
-                 sealed.seal.token, [] (const auto &, const auto &) {}).first,
-               stateful::stateful_error_t::none);
     const protocol::request_source_fence_t fence{"source-owner", 3, {1}, 1};
+    ASSERT_EQ (objects
+                 .begin_relocation_boundary (
+                   sealed.seal.token, [] (const auto &, const auto &) {}, fence)
+                 .first,
+               stateful::stateful_error_t::none);
     stateful::raw_stateful_dispatch_t dispatch (
       objects, host->transport (),
       [] (const auto &) -> task_t<std::optional<stateful::accepted_record_authority_t>> {
+          throw std::runtime_error ("Store is unavailable");
           co_return std::nullopt;
-      },
-      [&] (const auto &) -> task_t<std::optional<stateful::accepted_record_authority_t>> {
-          co_return stateful::accepted_record_authority_t{fence, 3};
       });
     protocol::actor_message_header_t header;
-    header.target.actor_id = object.key;
-    header.target.object_generation = object.object_generation;
-    header.target.authority_owner_generation = object.authority_owner_generation;
-    header.target.owner_lease_generation = 3;
+    header.target = {object.key, object.object_generation, {1}, 1, 1, 3};
     EXPECT_EQ (dispatch.accepted_actor_authority (object, header, {1}, 1).result ().value ().first,
                stateful::stateful_error_t::none);
     --header.target.object_generation;
-    EXPECT_NE (dispatch.accepted_actor_authority (object, header, {1}, 1).result ().value ().first,
-               stateful::stateful_error_t::none);
+    EXPECT_EQ (dispatch.accepted_actor_authority (object, header, {1}, 1).result ().value ().first,
+               stateful::stateful_error_t::generation_stale);
     host->close ();
 }
 
-TEST (FrameworkRelocationSealContract, local_follow_checks_store_before_retained_source)
+TEST (FrameworkRelocationSealContract, retained_spot_rejects_previous_object_generation)
 {
-    auto owner = std::make_shared<host::public_host_runtime_t> (
+    auto host = std::make_shared<host::public_host_runtime_t> (
       host::host_options_t{mesh::raw_mesh_node_options_t{
-        .descriptor = test_descriptor ("authority-order"),
+        .descriptor = test_descriptor ("follow-generation"),
         .runtime_failures = std::make_shared<runtime::runtime_failure_collector_t> ()}});
-    auto &objects = owner->objects ();
+    auto &objects = host->objects ();
     const stateful::object_ref_t object{
-      stateful::object_kind_t::actor, "moving", 1, 1, "mesh", "source"};
+      stateful::object_kind_t::user_spot, "moving", 7, 1, "mesh", "source"};
     const auto created = objects.begin_reserved_object (object, "actor", {});
     ASSERT_EQ (created.error, stateful::stateful_error_t::none);
     ASSERT_EQ (objects.commit_create (created.attempt), stateful::stateful_error_t::none);
     const auto sealed = objects.try_seal_relocation_aggregate ({object}).result ().value ();
     ASSERT_EQ (sealed.error, stateful::stateful_error_t::none);
-    ASSERT_EQ (
-      objects.begin_relocation_boundary (sealed.seal.token, [] (const auto &, const auto &) {})
-        .first,
-      stateful::stateful_error_t::none);
+    const protocol::request_source_fence_t fence{"source-owner", 3, {1}, 1};
+    ASSERT_EQ (objects
+                 .begin_relocation_boundary (
+                   sealed.seal.token, [] (const auto &, const auto &) {}, fence)
+                 .first,
+               stateful::stateful_error_t::none);
+    stateful::raw_stateful_dispatch_t dispatch (
+      objects, host->transport (),
+      [] (const auto &) -> task_t<std::optional<stateful::accepted_record_authority_t>> {
+          throw std::runtime_error ("Store is unavailable");
+          co_return std::nullopt;
+      });
+    protocol::spot_message_header_t header;
+    header.target = {object.key, object.object_generation, {1}, 1, 1, 3};
+    EXPECT_EQ (dispatch.accepted_spot_authority (object, header, {1}, 1).result ().value ().first,
+               stateful::stateful_error_t::none);
+    --header.target.object_generation;
+    EXPECT_EQ (dispatch.accepted_spot_authority (object, header, {1}, 1).result ().value ().first,
+               stateful::stateful_error_t::generation_stale);
+    host->close ();
+}
+
+// Location §7.3 and relocation §10 require native Follow without a fresh Store read.
+TEST (FrameworkRelocationSealContract, local_follow_uses_retained_source_without_store)
+{
+    auto host = std::make_shared<host::public_host_runtime_t> (
+      host::host_options_t{mesh::raw_mesh_node_options_t{
+        .descriptor = test_descriptor ("authority-order"),
+        .runtime_failures = std::make_shared<runtime::runtime_failure_collector_t> ()}});
+    auto &objects = host->objects ();
+    const stateful::object_ref_t object{
+      stateful::object_kind_t::actor, "moving", 7, 1, "mesh", "source"};
+    const auto created = objects.begin_reserved_object (object, "actor", {});
+    ASSERT_EQ (created.error, stateful::stateful_error_t::none);
+    ASSERT_EQ (objects.commit_create (created.attempt), stateful::stateful_error_t::none);
     int reads = 0;
-    int local_reads = 0;
-    bool current = false;
     const protocol::request_source_fence_t fence{"source-owner", 3, {1}, 1};
     stateful::raw_stateful_dispatch_t dispatch (
-      objects, owner->transport (),
-      [&] (const auto &) -> task_t<std::optional<stateful::accepted_record_authority_t>> {
-          ++reads;
-          co_return current ? std::optional{stateful::accepted_record_authority_t{fence, 3}}
-                            : std::nullopt;
-      },
+      objects, host->transport (),
       [&] (const auto &query) -> task_t<std::optional<stateful::accepted_record_authority_t>> {
-          EXPECT_EQ (reads, 1);
-          ++local_reads;
-          auto source = fence;
-          source.node_routing_id = query.source_node_routing_id;
-          co_return stateful::accepted_record_authority_t{std::move (source), 3};
+          ++reads;
+          EXPECT_EQ (query.target.object_generation, object.object_generation);
+          co_return stateful::accepted_record_authority_t{fence, 3};
       });
     protocol::actor_message_header_t header;
-    header.target.actor_id = object.key;
-    header.target.object_generation = 1;
-    header.target.authority_owner_generation = 1;
-    header.target.owner_lease_generation = 3;
-    auto accepted = dispatch.accepted_actor_authority (object, header, {1}, 1).result ().value ();
-    EXPECT_EQ (accepted.first, stateful::stateful_error_t::none);
+    header.target = {object.key, 6, {1}, 1, 1, 3};
+    // Ordinary Ready delivery keeps the existing current-object normalization.
+    std::optional<stateful::retained_relocation_source_t> retained;
+    ASSERT_TRUE (objects.find (object.kind, object.key, std::nullopt, &retained));
+    EXPECT_EQ (dispatch.accepted_actor_authority (object, header, {2}, 1, false, &retained)
+                 .result ()
+                 .value ()
+                 .first,
+               stateful::stateful_error_t::none);
     EXPECT_EQ (reads, 1);
-    EXPECT_EQ (local_reads, 1);
-    current = true;
-    reads = local_reads = 0;
-    accepted = dispatch.accepted_actor_authority (object, header, {1}, 1).result ().value ();
-    EXPECT_EQ (accepted.first, stateful::stateful_error_t::none);
-    EXPECT_EQ (reads, 1);
-    EXPECT_EQ (local_reads, 0);
-    current = false;
-    reads = local_reads = 0;
-    accepted = dispatch.accepted_actor_authority (object, header, {2}, 1).result ().value ();
-    EXPECT_EQ (accepted.first, stateful::stateful_error_t::none);
-    EXPECT_EQ (reads, 1);
-    EXPECT_EQ (local_reads, 1);
+    const auto sealed = objects.try_seal_relocation_aggregate ({object}).result ().value ();
+    ASSERT_EQ (sealed.error, stateful::stateful_error_t::none);
+    ASSERT_EQ (objects
+                 .begin_relocation_boundary (
+                   sealed.seal.token, [] (const auto &, const auto &) {}, fence)
+                 .first,
+               stateful::stateful_error_t::none);
+    ASSERT_TRUE (objects.find (object.kind, object.key, std::nullopt, &retained));
+    ASSERT_TRUE (retained);
+    header.target.object_generation = 7;
+    reads = 0;
+    const auto accept = [&] {
+        return dispatch.accepted_actor_authority (object, header, {2}, 1, false, &retained)
+          .result ()
+          .value ();
+    };
+    const auto accepted = accept ();
+    ASSERT_EQ (accepted.first, stateful::stateful_error_t::none);
     ASSERT_TRUE (accepted.second);
-    EXPECT_EQ (accepted.second->source.node_routing_id, std::vector<std::uint8_t>{2});
-    header.target.authority_owner_generation = 2;
-    reads = local_reads = 0;
-    accepted = dispatch.accepted_actor_authority (object, header, {2}, 1).result ().value ();
-    EXPECT_NE (accepted.first, stateful::stateful_error_t::none);
-    EXPECT_EQ (reads, 1);
-    EXPECT_EQ (local_reads, 0);
-    header.target.authority_owner_generation = 1;
-    auto unsealed = object;
-    unsealed.key = "unsealed";
-    const auto other = objects.begin_reserved_object (unsealed, "actor", {});
-    ASSERT_EQ (other.error, stateful::stateful_error_t::none);
-    ASSERT_EQ (objects.commit_create (other.attempt), stateful::stateful_error_t::none);
-    header.target.actor_id = unsealed.key;
-    reads = local_reads = 0;
-    accepted = dispatch.accepted_actor_authority (unsealed, header, {2}, 1).result ().value ();
-    EXPECT_NE (accepted.first, stateful::stateful_error_t::none);
-    EXPECT_EQ (reads, 1);
-    EXPECT_EQ (local_reads, 0);
-    owner->close ();
+    EXPECT_EQ (accepted.second->source.node_routing_id, (std::vector<std::uint8_t>{2}));
+    EXPECT_EQ (reads, 0);
+    ++header.target.authority_owner_generation;
+    EXPECT_NE (accept ().first, stateful::stateful_error_t::none);
+    --header.target.authority_owner_generation;
+    ++header.target.target_node_generation;
+    EXPECT_NE (accept ().first, stateful::stateful_error_t::none);
+    --header.target.target_node_generation;
+    ++header.target.owner_lease_generation;
+    EXPECT_NE (accept ().first, stateful::stateful_error_t::none);
+    EXPECT_EQ (reads, 0);
+    host->close ();
 }
 
 TEST (FrameworkRelocationSealContract,

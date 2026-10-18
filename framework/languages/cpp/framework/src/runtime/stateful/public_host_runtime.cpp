@@ -970,8 +970,7 @@ public_host_runtime_t::~public_host_runtime_t ()
 }
 
 void public_host_runtime_t::configure_stateful_dispatch (
-  stateful::accepted_record_authority_resolver_t resolver,
-  stateful::accepted_record_authority_resolver_t retained_resolver)
+  stateful::accepted_record_authority_resolver_t resolver)
 {
     if (!resolver)
         throw std::invalid_argument ("stateful dispatch authority resolver must not be empty");
@@ -1020,8 +1019,7 @@ void public_host_runtime_t::configure_stateful_dispatch (
                 if (accepted)
                     co_return accepted;
                 co_return co_await resolver (query);
-            },
-            std::move (retained_resolver));
+            });
           /* flow-correlation §4: the ingest path gates flow capture on the host's
            * provider; the host outlives the dispatch it owns. */
           _stateful_dispatch->set_flow_capture_provider ([this] { return capture_flow (); });
@@ -6948,6 +6946,8 @@ task_t<std::size_t> public_host_runtime_t::dispatch_application_claim (
         const auto release_mailbox_reservation = [release_state, index] {
             release_state->release (index);
         };
+        std::variant<std::monostate, messaging::request_wire_failure_t, std::exception_ptr>
+          rejection;
         try {
             if (mailbox_record.application) {
                 auto application = std::move (*mailbox_record.application);
@@ -7016,26 +7016,29 @@ task_t<std::size_t> public_host_runtime_t::dispatch_application_claim (
             const auto kind = record_kind (wire.kind);
             if (_stateful_dispatch && is_stateful_application (kind)) {
                 std::optional<stateful::object_ref_t> native_owner;
+                std::optional<stateful::retained_relocation_source_t> retained;
                 if (mailbox_record.owner.starts_with (
                       detail::activation_admission_t::actor_key_prefix))
                     native_owner =
                       _objects.find (stateful::object_kind_t::actor,
                                      mailbox_record.owner.substr (
                                        detail::activation_admission_t::actor_key_prefix.size ()),
-                                     std::nullopt);
+                                     std::nullopt, &retained);
                 else if (mailbox_record.owner.starts_with (
                            detail::activation_admission_t::spot_key_prefix)) {
                     const auto key = mailbox_record.owner.substr (
                       detail::activation_admission_t::spot_key_prefix.size ());
-                    native_owner = _objects.find (stateful::object_kind_t::user_spot, key);
+                    native_owner = _objects.find (stateful::object_kind_t::user_spot, key,
+                                                  std::nullopt, &retained);
                     if (!native_owner)
-                        native_owner = _objects.find (stateful::object_kind_t::instance_spot, key);
+                        native_owner = _objects.find (stateful::object_kind_t::instance_spot, key,
+                                                      std::nullopt, &retained);
                 }
                 if (native_owner) {
                     retain_mailbox_reservation ();
                     (void) co_await _stateful_dispatch->ingest_claimed (
                       *native_owner, std::move (mailbox_record),
-                      std::function<void ()> (release_mailbox_reservation));
+                      std::function<void ()> (release_mailbox_reservation), &retained);
                     (void) co_await dispatch_stateful_owner (*native_owner, dispatch);
                     _transport->signal_activity ();
                     ++count;
@@ -7124,21 +7127,30 @@ task_t<std::size_t> public_host_runtime_t::dispatch_application_claim (
             ++count;
         }
         catch (const protocol::service_wire_error_t &) {
-            if (!mailbox_record.source_routing_id.empty () && mailbox_record.correlation) {
-                (void) _transport->reply_failure (
-                  mailbox_record,
-                  static_cast<std::uint32_t> (protocol::request_terminal_result::protocolError),
-                  static_cast<std::uint32_t> (
-                    protocol::framework_error_code::requestProtocolError));
-            }
-            release_mailbox_reservation ();
+            rejection = messaging::request_wire_failure_t{
+              static_cast<std::uint32_t> (protocol::request_terminal_result::protocolError),
+              static_cast<std::uint32_t> (protocol::framework_error_code::requestProtocolError)};
+        }
+        catch (const framework_exception_t &error) {
+            const auto failure = messaging::request_failure_mapper_t{}.target_failure_reply (error);
+            if (failure)
+                rejection = *failure;
+            else
+                rejection = std::current_exception ();
         }
         catch (...) {
+            rejection = std::current_exception ();
+        }
+        if (const auto unhandled = std::get_if<std::exception_ptr> (&rejection)) {
             release_mailbox_reservation ();
             release_state->release_records (claim_holder->records.size () - index - 1);
-            throw;
+            std::rethrow_exception (*unhandled);
         }
-        if (!release_state->retained (index))
+        const auto failure = std::get_if<messaging::request_wire_failure_t> (&rejection);
+        if (failure && !mailbox_record.source_routing_id.empty () && mailbox_record.correlation)
+            (void) _transport->reply_failure (mailbox_record, failure->terminal_result,
+                                              failure->failure_code);
+        if (failure || !release_state->retained (index))
             release_mailbox_reservation ();
     }
     co_return count;
@@ -7642,8 +7654,12 @@ task_t<stateful::object_ref_t>
 public_host_runtime_t::accept_local_application (local_application_dispatch_t dispatch)
 {
     const bool actor = is_actor_application (dispatch.record.kind);
-    const auto owner = actor ? resolve_actor (dispatch.owner.actor->actor_id ().value ())
-                             : resolve_spot (dispatch.owner.spot_id);
+    std::optional<stateful::retained_relocation_source_t> retained;
+    const auto owner = actor
+                         ? _objects.find (stateful::object_kind_t::actor,
+                                          std::string (dispatch.owner.actor->actor_id ().value ()),
+                                          std::nullopt, &retained)
+                         : _objects.resolve_spot (dispatch.owner.spot_id, &retained);
     if (!owner)
         throw protocol::service_wire_error_t ("local accepted owner is unavailable");
     std::variant<protocol::actor_message_header_t, protocol::spot_message_header_t> header;
@@ -7673,16 +7689,18 @@ public_host_runtime_t::accept_local_application (local_application_dispatch_t di
                                        protocol::actor_message_header_t>)
               return _stateful_dispatch->accepted_actor_authority (
                 *owner, value, dispatch.record.source_node_rid.to_bytes (),
-                _options.mesh.descriptor.lifecycle_generation, false);
+                _options.mesh.descriptor.lifecycle_generation, false, &retained);
           else
               return _stateful_dispatch->accepted_spot_authority (
                 *owner, value, dispatch.record.source_node_rid.to_bytes (),
-                _options.mesh.descriptor.lifecycle_generation);
+                _options.mesh.descriptor.lifecycle_generation, &retained);
       },
       header);
     if (validation != stateful::stateful_error_t::none)
-        throw protocol::service_wire_error_t (
-          "local accepted Actor source authority is unavailable");
+        throw framework_exception_t (validation == stateful::stateful_error_t::generation_stale
+                                       ? framework_error_kind_t::invalid_operation
+                                       : framework_error_kind_t::unavailable,
+                                     "local accepted object source authority is unavailable");
     co_await _local_dispatch_completion_lane.run_task (
       [this, owner, header = std::move (header), authority,
        dispatch = std::move (dispatch)] () mutable {

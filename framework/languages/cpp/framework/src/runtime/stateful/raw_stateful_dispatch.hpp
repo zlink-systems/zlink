@@ -59,8 +59,6 @@ using accepted_record_authority_resolver_t =
 
 accepted_record_authority_resolver_t
 make_location_store_authority_resolver (zlink::framework::location_repository_t &store);
-accepted_record_authority_resolver_t
-make_location_store_retained_authority_resolver (zlink::framework::location_repository_t &store);
 
 // A pending record owns either a native claim or one indexed share of an
 // existing generic batch. The mailbox remains the byte-credit owner.
@@ -87,8 +85,7 @@ class raw_stateful_dispatch_t
   public:
     raw_stateful_dispatch_t (stateful_object_runtime_t &objects,
                              mesh::raw_mesh_node_owner_t &transport,
-                             accepted_record_authority_resolver_t authority_resolver = {},
-                             accepted_record_authority_resolver_t retained_authority_resolver = {});
+                             accepted_record_authority_resolver_t authority_resolver = {});
 
     /* Flow-capture provider (flow-correlation §4): gates whether ingest
      * validates/materializes wire flow fields as flow values. Unset keeps
@@ -99,20 +96,26 @@ class raw_stateful_dispatch_t
     }
 
     task_t<stateful_error_t> ingest (object_ref_t owner);
-    task_t<stateful_error_t> ingest_claimed (object_ref_t owner,
-                                             mesh::service_mailbox_record_t record,
-                                             accepted_mailbox_reservation_t reservation);
+    task_t<stateful_error_t>
+    ingest_claimed (object_ref_t owner,
+                    mesh::service_mailbox_record_t record,
+                    accepted_mailbox_reservation_t reservation,
+                    const std::optional<retained_relocation_source_t> *retained = nullptr);
     task_t<std::pair<stateful_error_t, std::optional<accepted_record_authority_t>>>
-    accepted_actor_authority (object_ref_t owner,
-                              protocol::actor_message_header_t header,
-                              std::vector<std::uint8_t> source_node_routing_id,
-                              std::uint64_t source_node_generation,
-                              bool bound_session_routed = false) const;
+    accepted_actor_authority (
+      object_ref_t owner,
+      protocol::actor_message_header_t header,
+      std::vector<std::uint8_t> source_node_routing_id,
+      std::uint64_t source_node_generation,
+      bool bound_session_routed = false,
+      const std::optional<retained_relocation_source_t> *retained = nullptr) const;
     task_t<std::pair<stateful_error_t, std::optional<accepted_record_authority_t>>>
-    accepted_spot_authority (object_ref_t owner,
-                             protocol::spot_message_header_t header,
-                             std::vector<std::uint8_t> source_node_routing_id,
-                             std::uint64_t source_node_generation) const;
+    accepted_spot_authority (
+      object_ref_t owner,
+      protocol::spot_message_header_t header,
+      std::vector<std::uint8_t> source_node_routing_id,
+      std::uint64_t source_node_generation,
+      const std::optional<retained_relocation_source_t> *retained = nullptr) const;
     task_t<bool> forward_accepted (object_ref_t owner,
                                    turn_record_t turn,
                                    std::vector<std::uint8_t> target_routing_id,
@@ -187,7 +190,8 @@ class raw_stateful_dispatch_t
                                           const std::function<stateful_error_t ()> &release_claim);
     task_t<std::pair<stateful_error_t, std::optional<accepted_record_authority_t>>>
     resolve_accepted_authority (accepted_record_authority_query_t query,
-                                std::uint64_t target_owner_lease_generation) const;
+                                std::uint64_t target_owner_lease_generation,
+                                const std::optional<retained_relocation_source_t> *retained) const;
     stateful_error_t discard_owner_pending (const object_ref_t &owner, bool reply_unavailable);
     static std::string mailbox_owner (const object_ref_t &owner);
     static bool matches_application_route (const object_ref_t &owner,
@@ -208,7 +212,6 @@ class raw_stateful_dispatch_t
     mesh::raw_mesh_node_owner_t *_transport;
     std::function<bool ()> _flow_capture;
     accepted_record_authority_resolver_t _authority_resolver;
-    accepted_record_authority_resolver_t _retained_authority_resolver;
     std::mutex _mutex;
     std::map<std::pair<object_kind_t, std::string>, std::uint64_t> _next_sequence;
     std::map<delivery_key_t, pending_delivery_t> _pending;

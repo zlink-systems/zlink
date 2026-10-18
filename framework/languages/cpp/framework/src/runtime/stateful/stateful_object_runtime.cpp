@@ -424,17 +424,28 @@ stateful_object_runtime_t::relocation_source_seal_on_lane (const object_record_t
     return std::nullopt;
 }
 
-task_t<stateful_error_t> stateful_object_runtime_t::retained_relocation_source (
-  object_ref_t owner, std::uint64_t packet_object_generation) const
+std::optional<retained_relocation_source_t>
+stateful_object_runtime_t::retained_relocation_source_on_lane (const object_record_t &object) const
 {
-    co_return co_await _lane.run_task ([this, owner = std::move (owner), packet_object_generation] {
-        const auto object = _objects.find (object_key_t{owner.kind, owner.key});
-        if (object == _objects.end () || !same_exact_ref (object->second.reference, owner)
-            || !relocation_source_seal_on_lane (object->second))
-            return stateful_error_t::not_found;
-        return packet_object_generation == object->second.reference.object_generation
-                 ? stateful_error_t::none : stateful_error_t::generation_stale;
-    });
+    const auto seal = relocation_source_seal_on_lane (object);
+    if (!seal)
+        return std::nullopt;
+    const auto &route = _relocation_seals.at (*seal);
+    if (route.source_fence.owner_id.empty () || route.source_fence.lease_generation == 0)
+        return std::nullopt;
+    return retained_relocation_source_t{object.reference, route.source_fence};
+}
+
+task_t<std::optional<retained_relocation_source_t>>
+stateful_object_runtime_t::retained_relocation_source (object_ref_t owner) const
+{
+    co_return co_await _lane.run_task (
+      [this, owner = std::move (owner)] () -> std::optional<retained_relocation_source_t> {
+          const auto object = _objects.find (object_key_t{owner.kind, owner.key});
+          if (object == _objects.end ())
+              return std::nullopt;
+          return retained_relocation_source_on_lane (object->second);
+      });
 }
 
 stateful_error_t stateful_object_runtime_t::abort_create (std::uint64_t attempt)
@@ -492,29 +503,42 @@ create_result_t stateful_object_runtime_t::activate_instance (
     return result;
 }
 
-std::optional<object_ref_t> stateful_object_runtime_t::find (
-  object_kind_t kind, const std::string &key, std::optional<object_state_t> required_state) const
+std::optional<object_ref_t>
+stateful_object_runtime_t::find (object_kind_t kind,
+                                 std::string key,
+                                 std::optional<object_state_t> required_state,
+                                 std::optional<retained_relocation_source_t> *retained) const
 {
     return _lane
       .run ([&, this] () -> std::optional<object_ref_t> {
-          const auto record = _objects.find ({kind, key});
+          if (retained)
+              retained->reset ();
+          const auto record = _objects.find ({kind, std::move (key)});
           if (record == _objects.end ()
               || (required_state && record->second.state != *required_state)) {
               return std::nullopt;
           }
+          if (retained)
+              *retained = retained_relocation_source_on_lane (record->second);
           return record->second.reference;
       })
       .get ();
 }
 
-std::optional<object_ref_t> stateful_object_runtime_t::resolve_spot (const std::string &key) const
+std::optional<object_ref_t> stateful_object_runtime_t::resolve_spot (
+  const std::string &key, std::optional<retained_relocation_source_t> *retained) const
 {
     return _lane
       .run ([&, this] () -> std::optional<object_ref_t> {
+          if (retained)
+              retained->reset ();
           for (const auto kind : {object_kind_t::user_spot, object_kind_t::instance_spot}) {
               const auto record = _objects.find ({kind, key});
-              if (record != _objects.end ())
+              if (record != _objects.end ()) {
+                  if (retained)
+                      *retained = retained_relocation_source_on_lane (record->second);
                   return record->second.reference;
+              }
           }
           return std::nullopt;
       })
@@ -1485,7 +1509,9 @@ stateful_error_t stateful_object_runtime_t::abort_relocation (std::uint64_t toke
 
 std::pair<stateful_error_t, relocation_ingress_batch_t>
 stateful_object_runtime_t::begin_relocation_boundary (
-  std::uint64_t token, std::function<void (const object_ref_t &, const turn_record_t &)> deliver)
+  std::uint64_t token,
+  std::function<void (const object_ref_t &, const turn_record_t &)> deliver,
+  protocol::request_source_fence_t source_fence)
 {
     return _lane
       .run ([&, this] () -> std::pair<stateful_error_t, relocation_ingress_batch_t> {
@@ -1519,6 +1545,7 @@ stateful_object_runtime_t::begin_relocation_boundary (
           }
 
           seal->second.deliver = std::move (deliver);
+          seal->second.source_fence = std::move (source_fence);
           seal->second.ingress_phase = relocation_ingress_phase_t::post_boundary;
           return {stateful_error_t::none, std::move (batch)};
       })
