@@ -2894,14 +2894,14 @@ int session_disconnect_resolves_context_without_ingress_metadata (bool replay)
         .seal_actor_application_suffix (
           actor,
           [&] {
-              if (!node->actor_transfer_coordinator.try_begin_local ("player:context-player"))
+              if (!node->actor_transfer_coordinator->try_begin_local ("player:context-player"))
                   throw std::runtime_error ("disconnect replay source did not seal");
           })
         .result ();
     if (!sealed) {
         release->complete (result_t<void>::success ());
         barrier->cancel ();
-        node->actor_transfer_coordinator.cancel_move ("player:context-player");
+        node->actor_transfer_coordinator->cancel_move ("player:context-player");
         return 8;
     }
     spot_inbound_message_t metadata;
@@ -2958,7 +2958,7 @@ int session_disconnect_resolves_context_without_ingress_metadata (bool replay)
     return began && !acknowledged_early && completed && completed.value ().is_empty ()
                && callbacks == 1 && terminals == 1
                && preserved_route.load (std::memory_order_acquire)
-               && node->actor_transfer_coordinator.pending_count () == 0
+               && node->actor_transfer_coordinator->pending_count () == 0
              ? 0
              : 7;
 }
@@ -3308,27 +3308,28 @@ int common_session_disconnect_uses_actor_packet_route ()
     spot_node_runtime_t spots (node);
     std::shared_ptr<deferred_barrier_t> barrier;
     bool reserved = false;
-    node->actor_factories.at ("player").configure_instance =
-      [&] (void *, const actor_ref_t &current_actor, void *) {
-          if (reserved)
-              return;
-          reserved = true;
-          auto result = spots.reserve_actor_join_barrier (current_actor);
-          if (result) {
-              barrier = std::move (result.value ());
-              const auto sealed =
-                spots
-                  .seal_actor_application_suffix (
-                    current_actor,
-                    [&] {
-                        if (!node->actor_transfer_coordinator.try_begin_local ("player:player-one"))
-                            throw std::runtime_error ("disconnect wire source did not seal");
-                    })
-                  .result ();
-              if (!sealed)
-                  throw framework_exception_t (sealed.error_kind (), sealed.error ()->what ());
-          }
-      };
+    node->actor_factories.at ("player").configure_instance = [&] (void *,
+                                                                  const actor_ref_t &current_actor,
+                                                                  void *) {
+        if (reserved)
+            return;
+        reserved = true;
+        auto result = spots.reserve_actor_join_barrier (current_actor);
+        if (result) {
+            barrier = std::move (result.value ());
+            const auto sealed =
+              spots
+                .seal_actor_application_suffix (
+                  current_actor,
+                  [&] {
+                      if (!node->actor_transfer_coordinator->try_begin_local ("player:player-one"))
+                          throw std::runtime_error ("disconnect wire source did not seal");
+                  })
+                .result ();
+            if (!sealed)
+                throw framework_exception_t (sealed.error_kind (), sealed.error ()->what ());
+        }
+    };
     auto capture =
       spots.relay_actor_packet (actor, gateway.actor_context (actor), stream_message_kind_t::send,
                                 runtime::protocol::session_disconnected_packet_name,
@@ -3337,19 +3338,19 @@ int common_session_disconnect_uses_actor_packet_route ()
     if (!terminal_before_release) {
         if (barrier)
             barrier->cancel ();
-        node->actor_transfer_coordinator.cancel_move ("player:player-one");
+        node->actor_transfer_coordinator->cancel_move ("player:player-one");
         (void) capture.result ();
         return 10;
     }
     const auto preserved = capture.result ();
-    auto backlog = node->actor_transfer_coordinator.take_backlog ("player:player-one");
+    auto backlog = node->actor_transfer_coordinator->take_backlog ("player:player-one");
     const bool captured =
       preserved && barrier && callbacks == 3 && backlog.size () == 1
       && backlog.front ().packet_name == runtime::protocol::session_disconnected_packet_name
       && backlog.front ().payload == current_body && !backlog.front ().is_request;
     if (barrier)
         barrier->cancel ();
-    node->actor_transfer_coordinator.cancel_move ("player:player-one");
+    node->actor_transfer_coordinator->cancel_move ("player:player-one");
     if (!captured)
         return 10;
     if (!empty_success (deliver (backlog.front ().payload)) || callbacks != 4)
@@ -3574,7 +3575,7 @@ int old_owner_forwards_cold_probe_via_active_message_follow_route (bool disconne
     // the Message Follow route for the old source fence and (via
     // record_actor_route_unlocked) records the remote target's location,
     // which is not a locally registered Spot on this node.
-    node->actor_transfer_coordinator.activate_message_follow (
+    node->actor_transfer_coordinator->activate_message_follow (
       key, source_fence, target_actor, target_route, target_fence,
       std::chrono::steady_clock::now () + std::chrono::seconds (30), "relocation-1");
     record_actor_route_unlocked (*node, key, target_route, target_actor.object_generation ());
@@ -3712,7 +3713,7 @@ int returned_owner_serves_locally_past_retained_message_follow_route ()
       "returned-actor", 21, zlink::routing_id_t::from ("actor-a").to_bytes (), 1, 3, 5};
     const auto old_target_fence = runtime::protocol::actor_route_fence_t{
       "returned-actor", 21, zlink::routing_id_t::from ("actor-b").to_bytes (), 1, 4, 7};
-    node->actor_transfer_coordinator.activate_message_follow (
+    node->actor_transfer_coordinator->activate_message_follow (
       key, old_source_fence, test_actor_ref ("actor-b", "player", "returned-actor", 21),
       spot_route_t{node_rid_t::from_string ("actor-b"), spot_id_t ("actor-b-away"), "away"},
       old_target_fence, std::chrono::steady_clock::now () + std::chrono::seconds (30),
@@ -3841,13 +3842,13 @@ int source_cleanup_waits_for_leave_completion_before_erasing_actor ()
         .leave_submitted = true,
         .leave_completed = true,
         .leave_deadline = now - std::chrono::seconds (1)});
-    if (!node->actor_transfer_coordinator.try_reserve_source (key, "return-admission"))
+    if (!node->actor_transfer_coordinator->try_reserve_source (key, "return-admission"))
         return 7;
     if (spots.cleanup_expired_actor_admissions_at (now) != 0)
         return 8;
     if (!node->actor_instances.contains (key) || node->pending_remote_source_cleanups.size () != 1)
         return 9;
-    node->actor_transfer_coordinator.cancel_move (key);
+    node->actor_transfer_coordinator->cancel_move (key);
     if (spots.cleanup_expired_actor_admissions_at (now) == 0)
         return 10;
     if (node->actor_instances.contains (key) || !node->pending_remote_source_cleanups.empty ())
@@ -3982,7 +3983,7 @@ int reconcile_deadline_adopts_target_when_store_shows_committed ()
     node->relocation_authority = authority;
 
     const auto before_reconcile = std::chrono::steady_clock::now ();
-    node->actor_transfer_coordinator.mark_reconcile (
+    node->actor_transfer_coordinator->mark_reconcile (
       key, std::chrono::milliseconds (20),
       reconcile_target_context_t{target_route, target_actor, source_fence, target_fence,
                                  "transfer-reconcile"});
@@ -4002,7 +4003,7 @@ int reconcile_deadline_adopts_target_when_store_shows_committed ()
           relay_calls.fetch_add (1, std::memory_order_acq_rel);
           co_return result_t<std::optional<zlink::message_t>>::success (std::nullopt);
       });
-    (void) node->actor_transfer_coordinator.try_append_backlog (
+    (void) node->actor_transfer_coordinator->try_append_backlog (
       key, handoff_packet_t{"AdoptedProbe",
                             std::vector<std::uint8_t> ({'p', 'r', 'o', 'b', 'e'}),
                             "text/plain",
@@ -4013,18 +4014,18 @@ int reconcile_deadline_adopts_target_when_store_shows_committed ()
                                                    + std::chrono::milliseconds (19))
           != 0
         || relay_calls.load (std::memory_order_acquire) != 0
-        || !node->actor_transfer_coordinator.blocks_dispatch (key))
+        || !node->actor_transfer_coordinator->blocks_dispatch (key))
         return 6;
     if (spots.cleanup_expired_actor_admissions_at (after_reconcile + std::chrono::milliseconds (20))
         != 1)
         return 7;
 
     const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (2);
-    while (node->actor_transfer_coordinator.phase (key).has_value ()
+    while (node->actor_transfer_coordinator->phase (key).has_value ()
            && std::chrono::steady_clock::now () < deadline) {
         std::this_thread::yield ();
     }
-    if (node->actor_transfer_coordinator.phase (key).has_value ())
+    if (node->actor_transfer_coordinator->phase (key).has_value ())
         return 1;
     const auto route = node->actor_routes.find (key);
     const auto found_target_route = route != node->actor_routes.end ();
@@ -4155,12 +4156,12 @@ int relocation_barrier_fences_late_actor_fifo_admission (bool commit_before_post
         barrier = std::move (reserved.value ());
         barrier_reserved.store (true, std::memory_order_release);
         if (commit_before_post) {
-            node->actor_transfer_coordinator.activate_message_follow (
+            node->actor_transfer_coordinator->activate_message_follow (
               key, source_fence, test_actor_ref ("actor-b", "player", "fence-actor", 1),
               spot_route_t{node_rid_t::from_string ("actor-b"), spot_id_t ("target"), "game"},
               target_fence, std::chrono::steady_clock::now () + std::chrono::seconds (30),
               "commit-before-post");
-            node->actor_transfer_coordinator.cancel_move (key);
+            node->actor_transfer_coordinator->cancel_move (key);
         }
     };
     node->actor_factories.emplace ("player", std::move (factory));
@@ -4216,7 +4217,7 @@ int relocation_barrier_fences_late_actor_fifo_admission (bool commit_before_post
     const auto cleanup = [&] {
         if (barrier)
             barrier->cancel ();
-        node->actor_transfer_coordinator.cancel_move (key);
+        node->actor_transfer_coordinator->cancel_move (key);
         scheduler->run_all ();
         node->worker_executor->drain ();
         node->worker_executor.reset ();
@@ -4224,7 +4225,7 @@ int relocation_barrier_fences_late_actor_fifo_admission (bool commit_before_post
 
     if (!commit_before_post && barrier_reserved.load (std::memory_order_acquire)) {
         auto sealed = spots.seal_actor_application_suffix (actor, [&] {
-            if (!node->actor_transfer_coordinator.try_begin_source_remote (key, "fifo-fence"))
+            if (!node->actor_transfer_coordinator->try_begin_source_remote (key, "fifo-fence"))
                 throw std::runtime_error ("reserved Actor did not enter source handoff");
         });
         scheduler->run_all ();
@@ -4258,16 +4259,16 @@ int relocation_barrier_fences_late_actor_fifo_admission (bool commit_before_post
     }
     if (commit_before_post) {
         const bool forwarded =
-          follow_calls == 1 && node->actor_transfer_coordinator.take_backlog (key).empty ();
+          follow_calls == 1 && node->actor_transfer_coordinator->take_backlog (key).empty ();
         cleanup ();
         return forwarded ? 0 : 9;
     }
-    if (!node->actor_transfer_coordinator.blocks_dispatch (key)) {
+    if (!node->actor_transfer_coordinator->blocks_dispatch (key)) {
         cleanup ();
         return 4;
     }
     // It must be in the capture set that travels with the commit, exactly once.
-    auto backlog = node->actor_transfer_coordinator.take_backlog (key);
+    auto backlog = node->actor_transfer_coordinator->take_backlog (key);
     if (backlog.size () != 1 || backlog.front ().packet_name != "FencedProbe"
         || backlog.front ().is_request || backlog.front ().application_record != late_record
         || transferred_records
@@ -4286,7 +4287,7 @@ int relocation_barrier_fences_late_actor_fifo_admission (bool commit_before_post
     // the same queue rather than staying fenced forever.
     barrier->cancel ();
     barrier.reset ();
-    node->actor_transfer_coordinator.cancel_move (key);
+    node->actor_transfer_coordinator->cancel_move (key);
     spot_inbound_message_t resumed_metadata;
     auto resumed = spots.relay_actor_packet (
       actor, gateway.actor_context (actor), stream_message_kind_t::send, "FencedProbe",
@@ -4420,7 +4421,7 @@ int relocation_barrier_fences_late_actor_request_without_deadlock ()
     const auto cleanup = [&] {
         if (barrier)
             barrier->cancel ();
-        node->actor_transfer_coordinator.cancel_move (key);
+        node->actor_transfer_coordinator->cancel_move (key);
         scheduler->run_all ();
         node->worker_executor->drain ();
         node->worker_executor.reset ();
@@ -4428,7 +4429,7 @@ int relocation_barrier_fences_late_actor_request_without_deadlock ()
 
     if (barrier_reserved.load (std::memory_order_acquire)) {
         auto sealed = spots.seal_actor_application_suffix (actor, [&] {
-            if (!node->actor_transfer_coordinator.try_begin_source_remote (key, "request-fence"))
+            if (!node->actor_transfer_coordinator->try_begin_source_remote (key, "request-fence"))
                 throw std::runtime_error ("reserved request did not enter source handoff");
         });
         scheduler->run_all ();
@@ -4458,7 +4459,7 @@ int relocation_barrier_fences_late_actor_request_without_deadlock ()
         cleanup ();
         return 3;
     }
-    auto backlog = node->actor_transfer_coordinator.take_backlog (key);
+    auto backlog = node->actor_transfer_coordinator->take_backlog (key);
     if (backlog.size () != 1 || !backlog.front ().is_request
         || backlog.front ().packet_name != "FencedAsk"
         || backlog.front ().metadata.at ("__zlink.actorRequestId") != "fence-request-1"
@@ -4547,7 +4548,7 @@ int reconcile_deadline_fast_fails_without_target_commit (
       spot_route_t{node_rid_t::from_string ("actor-b"), spot_id_t ("target-spot"), ""};
     node->relocation_authority = std::move (authority);
     const auto before_reconcile = std::chrono::steady_clock::now ();
-    node->actor_transfer_coordinator.mark_reconcile (
+    node->actor_transfer_coordinator->mark_reconcile (
       key, std::chrono::milliseconds (20),
       reconcile_target_context_t{target_route, target_actor, source_fence, target_fence,
                                  "transfer-reconcile"});
@@ -4637,10 +4638,10 @@ int reconcile_deadline_fast_fails_without_target_commit (
         make_reply_token (second_reply_calls, second_reply_was_unavailable),
         {},
         std::chrono::steady_clock::now () + std::chrono::seconds (30)});
-    (void) node->actor_transfer_coordinator.try_append_backlog (
+    (void) node->actor_transfer_coordinator->try_append_backlog (
       key,
       handoff_packet_t{"FastFailProbe", {}, "application/octet-stream", terminal_metadata, true});
-    (void) node->actor_transfer_coordinator.try_append_backlog (
+    (void) node->actor_transfer_coordinator->try_append_backlog (
       key,
       handoff_packet_t{"FastFailProbe", {}, "application/octet-stream", second_metadata, true});
 
@@ -4673,9 +4674,9 @@ int reconcile_deadline_fast_fails_without_target_commit (
         return 10;
     // No target commit is visible: keep the move sealed, regardless of
     // whether the Store returned source evidence, no record, or no answer.
-    if (!node->actor_transfer_coordinator.phase (key).has_value ())
+    if (!node->actor_transfer_coordinator->phase (key).has_value ())
         return 3;
-    if (*node->actor_transfer_coordinator.phase (key) != actor_move_phase_t::reconcile)
+    if (*node->actor_transfer_coordinator->phase (key) != actor_move_phase_t::reconcile)
         return 4;
     if (terminal_calls.load (std::memory_order_acquire) != 0
         || local_reply_calls.load (std::memory_order_acquire) != 1
@@ -4686,7 +4687,7 @@ int reconcile_deadline_fast_fails_without_target_commit (
         || !second_reply_was_unavailable.load (std::memory_order_acquire))
         return 8;
     if (!node->pending_handoff_requests.empty ()
-        || !node->actor_transfer_coordinator.blocks_dispatch (key)
+        || !node->actor_transfer_coordinator->blocks_dispatch (key)
         || node->actor_routes.contains (key))
         return 11;
 
@@ -4707,7 +4708,7 @@ int reconcile_deadline_fast_fails_without_target_commit (
         return 6;
     if (local_reply_calls.load (std::memory_order_acquire) != 1
         || second_reply_calls.load (std::memory_order_acquire) != 1
-        || !node->actor_transfer_coordinator.blocks_dispatch (key)
+        || !node->actor_transfer_coordinator->blocks_dispatch (key)
         || node->actor_routes.contains (key))
         return 12;
     return 0;
@@ -4895,7 +4896,7 @@ int leave_notification_travels_node_level_and_reaches_source_entry_spot_once ()
         .leave_submitted = false,
         .leave_completed = false,
         .leave_deadline = std::chrono::steady_clock::now () + std::chrono::seconds (30)});
-    source_node->actor_transfer_coordinator.activate_message_follow (
+    source_node->actor_transfer_coordinator->activate_message_follow (
       key, source_fence, test_actor_ref ("actor-b", "player", "leave-notify-actor", 7),
       spot_route_t{node_rid_t::from_string ("actor-b"), spot_id_t ("spot-b-target"), "game"},
       target_fence, std::chrono::steady_clock::now () + std::chrono::seconds (30),
@@ -5036,8 +5037,8 @@ int known_generation_source_leave_claims_transfer ()
     spot_node_builder_state_t::actor_factory_registration_t factory;
     factory.actor_type = std::type_index (typeid (int));
     node->actor_factories.emplace ("player", std::move (factory));
-    if (!node->actor_transfer_coordinator.try_reserve_source (key, transfer_id)
-        || !node->actor_transfer_coordinator.try_begin_source_remote (key, transfer_id)) {
+    if (!node->actor_transfer_coordinator->try_reserve_source (key, transfer_id)
+        || !node->actor_transfer_coordinator->try_begin_source_remote (key, transfer_id)) {
         return 1;
     }
 
@@ -5094,7 +5095,7 @@ int known_generation_source_leave_claims_transfer ()
                .get ())
             return 5;
         const auto follow =
-          node->actor_transfer_coordinator.message_follow_target (key, source_fence);
+          node->actor_transfer_coordinator->message_follow_target (key, source_fence);
         if (!follow || follow->route.node_rid.value () != "actor-b"
             || follow->route.spot_id != spot_id_t ("spot-b-target")
             || follow->target_fence.authority_owner_generation != 28)
@@ -5123,7 +5124,7 @@ int known_generation_source_leave_claims_transfer ()
            })
            .get ())
         return 9;
-    const auto follow = node->actor_transfer_coordinator.message_follow_target (key, source_fence);
+    const auto follow = node->actor_transfer_coordinator->message_follow_target (key, source_fence);
     return follow && follow->route.node_rid.value () == "actor-b"
                && follow->route.spot_id == spot_id_t ("spot-b-target")
                && follow->target_fence.authority_owner_generation == 28
@@ -5263,8 +5264,8 @@ int early_zero_generation_leave_waits_for_source_transfer_completion (bool no_fo
     node->actor_instances.emplace (key, std::make_shared<int> (1));
     node->actor_spot_ids.emplace (key, entry_spot->spot_id);
     node->actor_generations.emplace (key, 7);
-    if (!node->actor_transfer_coordinator.try_reserve_source (key, transfer_id)
-        || !node->actor_transfer_coordinator.try_begin_source_remote (key, transfer_id)) {
+    if (!node->actor_transfer_coordinator->try_reserve_source (key, transfer_id)
+        || !node->actor_transfer_coordinator->try_begin_source_remote (key, transfer_id)) {
         return finish (1);
     }
 
@@ -5485,7 +5486,7 @@ int early_zero_generation_leave_waits_for_source_transfer_completion (bool no_fo
         if (!late || *late
             || (!late->error () || late->error ()->kind () != framework_error_kind_t::unavailable)
             || source_handler_calls.load () != 0
-            || node->actor_transfer_coordinator.phase (key).has_value ())
+            || node->actor_transfer_coordinator->phase (key).has_value ())
             return finish (22);
     }
     const auto admitted_leave_state =
@@ -6201,7 +6202,7 @@ int remote_actor_join_resolves_store_type_and_reports_typed_terminals ()
           "store-resolved-actor", 17);
         if (scenario == scenario_t::reject_while_source_remote
             || scenario == scenario_t::accept_while_source_remote) {
-            if (!node->actor_transfer_coordinator.try_begin_source_remote (
+            if (!node->actor_transfer_coordinator->try_begin_source_remote (
                   "StoreActor:store-resolved-actor", "previous-source-transfer"))
                 return result_t<spot_actor_join_result_t>::failure (
                   framework_error_kind_t::internal_failure, "source transfer setup failed");
@@ -6545,7 +6546,7 @@ int local_relay_preserves_handoff_request_route (bool has_original_operation)
       std::make_shared<runtime::offload_executor_t> (1, "local-relay-route-worker");
     const auto actor = test_actor_ref ("actor-a", "player", "local-relay-actor", 1);
     const auto key = std::string ("player:local-relay-actor");
-    if (!node->actor_transfer_coordinator.try_begin_local (key))
+    if (!node->actor_transfer_coordinator->try_begin_local (key))
         return 1;
 
     runtime::messaging::envelope_header_t header;
@@ -6680,6 +6681,36 @@ int local_relay_preserves_handoff_request_route (bool has_original_operation)
             || !replay_preserved_route.load (std::memory_order_acquire))
             return 11;
     }
+    if (!has_original_operation) {
+        // The real native registry owns this request's terminal; cancellation
+        // must use that owner without a second Framework reply reservation.
+        const auto native_record = backlog.front ().application_record;
+        if (!native_record || !native_record->native_reply
+            || !node->lane.run ([&] { return node->pending_handoff_requests.empty (); }).get ())
+            return 4;
+        node->actor_transfer_coordinator->prepend_source_suffix (key, std::move (backlog));
+        spots.cancel_local_actor_handoff (actor);
+        const auto terminal = finite_task_result (std::move (native_completion));
+        if (!terminal || !*terminal
+            || terminal->value ().record.operation_id != native_operation.id)
+            return 12;
+        const auto native_header = runtime::messaging::envelope_codec_t{}.decode_header (
+          runtime::messaging::message_parts_t (terminal->value ().parts));
+        if (!native_header
+            || native_header.value ().kind != runtime::messaging::message_kind_t::error
+            || native_header.value ().error_code != "unavailable"
+            || native_header.value ().correlation_id != header.correlation_id)
+            return 13;
+        const auto expired_at =
+          std::chrono::steady_clock::now () + std::chrono::hours (24 * 365 * 100);
+        return !native_record->native_reply && !native_record->complete_native (std::nullopt)
+                   && fixture.probe->calls.load (std::memory_order_acquire) == 0
+                   && spots.cleanup_expired_actor_admissions_at (expired_at) == 0
+                   && node->lane.run ([&] { return node->pending_handoff_requests.empty (); })
+                        .get ()
+                 ? 0
+                 : 8;
+    }
     const auto recorded =
       node->lane
         .run ([&] {
@@ -6706,17 +6737,7 @@ int local_relay_preserves_handoff_request_route (bool has_original_operation)
     auto completed = fixture.reply.get ();
     const auto reply_header = runtime::messaging::envelope_codec_t{}.decode_header (
       runtime::messaging::message_parts_t (completed));
-    if (!has_original_operation) {
-        const auto terminal = finite_task_result (std::move (native_completion));
-        if (!terminal || !*terminal || terminal->value ().parts.size () != completed.size ()
-            || terminal->value ().record.operation_id != native_operation.id)
-            return 12;
-        const auto native_header = runtime::messaging::envelope_codec_t{}.decode_header (
-          runtime::messaging::message_parts_t (terminal->value ().parts));
-        if (!native_header || native_header.value ().error_code != "unavailable"
-            || native_header.value ().correlation_id != header.correlation_id)
-            return 13;
-    }
+
     return reply_header && reply_header.value ().kind == runtime::messaging::message_kind_t::error
                && reply_header.value ().error_code == "unavailable"
                && reply_header.value ().correlation_id == header.correlation_id
@@ -6803,7 +6824,7 @@ int parked_request_reply_case (const std::string &requester_rid,
     auto provider = services.build_provider ();
 
     // The transfer is open when the request arrives: it must park.
-    if (!node->actor_transfer_coordinator.try_begin_local (key))
+    if (!node->actor_transfer_coordinator->try_begin_local (key))
         return 1;
     spot_node_runtime_t spots (node);
 
@@ -7052,7 +7073,7 @@ int relayed_request_without_deferred_terminal_receives_follow_reply ()
       5};
     const runtime::protocol::actor_route_fence_t target_fence{
       "moved-actor", 1, zlink::routing_id_t::from (std::string ("actor-b")).to_bytes (), 1, 4, 6};
-    node->actor_transfer_coordinator.activate_message_follow (
+    node->actor_transfer_coordinator->activate_message_follow (
       key, source_fence, test_actor_ref ("actor-b", "player", "moved-actor", 1),
       spot_route_t{node_rid_t::from_string ("actor-b"), spot_id_t ("actor-b-user"), "user"},
       target_fence, std::chrono::steady_clock::now () + std::chrono::seconds (30));

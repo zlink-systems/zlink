@@ -170,6 +170,10 @@ export class ZLinkSerialExecutionQueue {
     return this.admit(operation, { lane: 'lifecycle' }, context, undefined, true);
   }
 
+  get retainsApplicationForLifecycle(): boolean {
+    return this.activeLifecycle?.context !== undefined;
+  }
+
   visitPendingApplication(visitor: (record: ZLinkSerialWorkRecord<unknown>) => void): void {
     for (const record of this.application.records) {
       if (record.mailbox === undefined) visitor(record);

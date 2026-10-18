@@ -4969,8 +4969,8 @@ bool verify_wire_actor_join_admission_is_approval_only_and_later_attempt_wins ()
     const bool approval_only =
       node->actor_instances.empty () && node->actor_spot_ids.empty ()
       && node->core_actor_membership_epochs.empty ()
-      && node->actor_transfer_coordinator.admission (transfer_id_for (4211)).has_value ()
-      && node->actor_transfer_coordinator.phase ("player:actor-1")
+      && node->actor_transfer_coordinator->admission (transfer_id_for (4211)).has_value ()
+      && node->actor_transfer_coordinator->phase ("player:actor-1")
            == actor_move_phase_t::target_pending;
 
     // A duplicate resend of the same attempt parks against the existing
@@ -4997,9 +4997,9 @@ bool verify_wire_actor_join_admission_is_approval_only_and_later_attempt_wins ()
     const bool later_attempt_wins =
       newer.join_result == runtime::protocol::actor_join_result_t::accepted
       && newer.terminal_result == 0 && !newer.application_reply
-      && !node->actor_transfer_coordinator.admission (transfer_id_for (4211)).has_value ()
-      && node->actor_transfer_coordinator.admission (transfer_id_for (4213)).has_value ()
-      && node->actor_transfer_coordinator.is_current ("player:actor-1", transfer_id_for (4213))
+      && !node->actor_transfer_coordinator->admission (transfer_id_for (4211)).has_value ()
+      && node->actor_transfer_coordinator->admission (transfer_id_for (4213)).has_value ()
+      && node->actor_transfer_coordinator->is_current ("player:actor-1", transfer_id_for (4213))
       && node->actor_instances.empty () && node->actor_spot_ids.empty ();
 
     // A missing Authority row is a typed NotFound terminal, not an
@@ -5080,13 +5080,13 @@ bool verify_wire_actor_join_admission_is_approval_only_and_later_attempt_wins ()
           co_return;
       },
       [second_promise] { second_promise->set_value ({}); });
-    node->actor_transfer_coordinator.fail_commit (transfer_id_for (4213), false);
+    node->actor_transfer_coordinator->fail_commit (transfer_id_for (4213), false);
     const bool second_completed =
       second_future.wait_for (std::chrono::seconds (2)) == std::future_status::ready
       && second_future.get ().join_result == runtime::protocol::actor_join_result_t::accepted;
     const auto second_transfer_id =
       canonical_actor_join_handoff_id (source_rid.to_bytes (), "actor-2", 7, 3, 4220);
-    node->actor_transfer_coordinator.fail_commit (second_transfer_id, false);
+    node->actor_transfer_coordinator->fail_commit (second_transfer_id, false);
     store->snapshot = actor_snapshot;
     service_collection_t unavailable_services;
     auto unavailable_provider = unavailable_services.build_provider ();
@@ -5752,12 +5752,12 @@ bool verify_join_commit_does_not_wait_for_joined_callback (bool lifecycle_failur
                                      spot->spot_id, zlink::message_t{}, operation_high,
                                      operation_low, 19, 3, 5, true, 1, 1)
         .result ();
-    const auto pending = node->actor_transfer_coordinator.admission (transfer_id);
+    const auto pending = node->actor_transfer_coordinator->admission (transfer_id);
     if (!admitted || !admitted.value ().accepted || !pending)
         return false;
     std::vector<handoff_packet_t> discarded;
-    if (!node->actor_transfer_coordinator.begin_commit (transfer_id, source_actor, spot->spot_id,
-                                                        discarded)
+    if (!node->actor_transfer_coordinator->begin_commit (transfer_id, source_actor, spot->spot_id,
+                                                         discarded)
         || !discarded.empty ())
         return false;
     const std::string key = "player:joined-actor";
@@ -5796,14 +5796,14 @@ bool verify_join_commit_does_not_wait_for_joined_callback (bool lifecycle_failur
     const bool failure_preserved =
       completions.load () == 1 && completion_identity.load () && commit_failures.load () == 1
       && commit_identity.load () && source_leave_failures.load () == 0
-      && node->actor_transfer_coordinator.phase (key) == actor_move_phase_t::reconcile
-      && node->actor_transfer_coordinator.blocks_dispatch (key)
+      && node->actor_transfer_coordinator->phase (key) == actor_move_phase_t::reconcile
+      && node->actor_transfer_coordinator->blocks_dispatch (key)
       && authority->read (target.kind, target.key)->target == target;
     if (lifecycle_failure && !failure_preserved) {
         std::cerr << "materialized Join failure: callbacks=" << completions.load ()
                   << " identity=" << completion_identity.load ()
                   << " commit-errors=" << commit_failures.load ()
-                  << " dispatch-blocked=" << node->actor_transfer_coordinator.blocks_dispatch (key)
+                  << " dispatch-blocked=" << node->actor_transfer_coordinator->blocks_dispatch (key)
                   << " callback-failure=" << completion_failure << '\n';
     }
     const bool accepted_completed =
@@ -6231,7 +6231,7 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
                                                       .metadata = {{"sequence", "B2"}}}},
       .finalize = true};
     authority->on_publish = [&] {
-        const auto appended = node->actor_transfer_coordinator.try_append_backlog (
+        const auto appended = node->actor_transfer_coordinator->try_append_backlog (
           key, handoff_packet_t{
                  "BacklogPacket", {3}, "application/x-test", {{"sequence", "D1"}}, false});
         if (appended != handoff_append_result_t::appended)
@@ -6265,14 +6265,14 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
         || !joined_bound_delivery_started.load (std::memory_order_acquire)
         || actor_joined_calls.load (std::memory_order_acquire) != 1
         || replayed.load (std::memory_order_acquire) != 0
-        || !node->actor_transfer_coordinator.blocks_dispatch (key)) {
+        || !node->actor_transfer_coordinator->blocks_dispatch (key)) {
         std::cerr << "actor cutover dispatch diagnostic submitted=" << static_cast<bool> (submitted)
                   << " error=" << (submitted.error () ? submitted.error ()->what () : "<none>")
                   << " completion-entered=" << join_completion_entered.load ()
                   << " bound-submitted=" << joined_bound_push_submitted.load ()
                   << " bound-started=" << joined_bound_delivery_started.load ()
                   << " joined=" << actor_joined_calls.load () << " replayed=" << replayed.load ()
-                  << " blocked=" << node->actor_transfer_coordinator.blocks_dispatch (key) << '\n';
+                  << " blocked=" << node->actor_transfer_coordinator->blocks_dispatch (key) << '\n';
         joined_bound_delivery->complete (result_t<void>::success ());
         return false;
     }
@@ -6285,7 +6285,7 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
     }
     const auto completion_waited_for_joined_bound_delivery =
       !first_replay_entered.load (std::memory_order_acquire)
-      && node->actor_transfer_coordinator.blocks_dispatch (key);
+      && node->actor_transfer_coordinator->blocks_dispatch (key);
     joined_bound_delivery->complete (result_t<void>::success ());
     if (!completion_waited_for_joined_bound_delivery)
         return false;
@@ -6308,7 +6308,7 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
         std::lock_guard lock (delivery_order_mutex);
         observed_delivery_order = delivery_order;
     }
-    if (node->actor_transfer_coordinator.blocks_dispatch (key) || replayed.load () != 3
+    if (node->actor_transfer_coordinator->blocks_dispatch (key) || replayed.load () != 3
         || replay_before_joined.load (std::memory_order_acquire)
         || !join_completion_entered.load (std::memory_order_acquire)
         || join_completion_calls.load () != 1
@@ -6320,7 +6320,7 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
         || !successor_join_reserved.load (std::memory_order_acquire)
         || observed_delivery_order != std::vector<std::string>{"B1", "B2", "D1"}) {
         std::cerr << "actor cutover replay diagnostic blocked="
-                  << node->actor_transfer_coordinator.blocks_dispatch (key)
+                  << node->actor_transfer_coordinator->blocks_dispatch (key)
                   << " replayed=" << replayed.load ()
                   << " completion-calls=" << join_completion_calls.load ()
                   << " joined=" << actor_joined_calls.load () << " order=";
@@ -6352,7 +6352,8 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
                              .finalize_remote_actor_to_spot (transfer_id, actor, target->spot_id,
                                                              provider, nullptr, std::nullopt)
                              .result ();
-    if (duplicate || node->actor_transfer_coordinator.blocks_dispatch (key) || replayed.load () != 3
+    if (duplicate || node->actor_transfer_coordinator->blocks_dispatch (key)
+        || replayed.load () != 3
         || !owner.completed_remote_actor_commit (transfer_id, actor, target->spot_id)) {
         return false;
     }
@@ -6500,7 +6501,7 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
     finish_predecessor ([] {});
     queued_actor_queue->drain ();
     if (*cancelled || cancelled->error_kind () != framework_error_kind_t::deadline_exceeded
-        || node->actor_transfer_coordinator.phase (queued_key)
+        || node->actor_transfer_coordinator->phase (queued_key)
              != std::make_optional (actor_move_phase_t::reconcile)
         || owner.completed_remote_actor_commit (queued_transfer_id, queued_actor, target->spot_id)
         || join_completion_calls.load () != completion_calls_before_cancel) {
@@ -6610,7 +6611,7 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
         || lifecycle_cancelled->error_kind () != framework_error_kind_t::deadline_exceeded
         || actor_joined_calls.load (std::memory_order_acquire)
              != joined_calls_before_lifecycle_cancel
-        || node->actor_transfer_coordinator.phase (lifecycle_key)
+        || node->actor_transfer_coordinator->phase (lifecycle_key)
              != std::make_optional (actor_move_phase_t::reconcile)
         || owner.completed_remote_actor_commit (lifecycle_transfer_id, lifecycle_actor,
                                                 target->spot_id)) {
@@ -6702,7 +6703,7 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
     if (*active_lifecycle_result
         || active_lifecycle_result->error_kind () != framework_error_kind_t::deadline_exceeded
         || active_lifecycle_failure_calls.load (std::memory_order_acquire) != 1
-        || node->actor_transfer_coordinator.phase (active_lifecycle_key)
+        || node->actor_transfer_coordinator->phase (active_lifecycle_key)
              != std::make_optional (actor_move_phase_t::reconcile)
         || owner.completed_remote_actor_commit (active_lifecycle_transfer_id,
                                                 active_lifecycle_actor, target->spot_id)) {
@@ -6794,7 +6795,7 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
     if (*shutdown_lifecycle_result
         || shutdown_lifecycle_result->error_kind () != framework_error_kind_t::shutting_down
         || shutdown_lifecycle_failure_calls.load (std::memory_order_acquire) != 1
-        || node->actor_transfer_coordinator.phase (shutdown_lifecycle_key)
+        || node->actor_transfer_coordinator->phase (shutdown_lifecycle_key)
              != std::make_optional (actor_move_phase_t::reconcile)
         || owner.completed_remote_actor_commit (shutdown_lifecycle_transfer_id,
                                                 shutdown_lifecycle_actor, target->spot_id)) {
@@ -6868,7 +6869,7 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
     }
     if (*failed_result || failed_result->error_kind () != framework_error_kind_t::internal_failure
         || failed_join_completion_calls.load (std::memory_order_acquire) != 1
-        || node->actor_transfer_coordinator.phase (failed_key)
+        || node->actor_transfer_coordinator->phase (failed_key)
              != std::make_optional (actor_move_phase_t::reconcile)
         || owner.completed_remote_actor_commit (failed_transfer_id, failed_actor,
                                                 target->spot_id)) {
@@ -6987,7 +6988,7 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
             return application_progressed && later_lifecycle_ran.load ();
         });
     }
-    node->actor_transfer_coordinator.fail_commit (held_transfer_id, false);
+    node->actor_transfer_coordinator->fail_commit (held_transfer_id, false);
     target->serial_queue->drain ();
     if (!progressed_before_cancel || !application_progressed || !later_lifecycle_ran.load ()
         || target->serial_queue->pending_count (runtime::serial_work_lane_t::lifecycle)
@@ -7540,7 +7541,7 @@ bool verify_remote_actor_cutover_completion_is_target_owned (bool cancel_source_
                           const auto &pending =
                             source_state->spot_state->pending_remote_actor_leaves;
                           return !pending.empty () && pending.front ().transfer_owner_reservation
-                                 && source_state->spot_state->actor_transfer_coordinator.phase (
+                                 && source_state->spot_state->actor_transfer_coordinator->phase (
                                       "actor.cutover.probe:actor-cutover-probe")
                                       == actor_move_phase_t::source_remote;
                       })
@@ -7668,7 +7669,7 @@ bool verify_remote_actor_cutover_completion_is_target_owned (bool cancel_source_
         if (!passed) {
             // Failure was recorded in the snapshot above. Release only the failed
             // fixture's reservation so the red process can stop cooperatively.
-            source_state->spot_state->actor_transfer_coordinator.cancel_move (
+            source_state->spot_state->actor_transfer_coordinator->cancel_move (
               "actor.cutover.probe:actor-cutover-probe");
             source_spots.cleanup_expired_actor_admissions_at (std::chrono::steady_clock::now ());
             std::cerr << "Source mesh cancellation red fixture teardown released\n";
@@ -7733,14 +7734,14 @@ bool verify_remote_actor_cutover_completion_is_target_owned (bool cancel_source_
         std::this_thread::sleep_for (1ms);
     }
     const auto unfenced_settlement_deadline = std::chrono::steady_clock::now () + 100ms;
-    while (target_state->spot_state->actor_transfer_coordinator.phase (
+    while (target_state->spot_state->actor_transfer_coordinator->phase (
              "actor.cutover.probe:actor-cutover-probe")
            && std::chrono::steady_clock::now () < unfenced_settlement_deadline) {
         std::this_thread::sleep_for (1ms);
     }
     const auto completion_waited_for_bound_delivery =
       target_state->spot_state->actor_transfer_coordinator
-        .phase ("actor.cutover.probe:actor-cutover-probe")
+        ->phase ("actor.cutover.probe:actor-cutover-probe")
         .has_value ();
     bound_delivery_gate->complete (result_t<void>::success ());
     actor_cutover_probe_t::submit_bound_push_on_join.store (false, std::memory_order_release);
@@ -7758,7 +7759,7 @@ bool verify_remote_actor_cutover_completion_is_target_owned (bool cancel_source_
     bool relocated_actor_local_rejoin_passed = false;
     if (joined_result) {
         const auto move_closed_deadline = std::chrono::steady_clock::now () + 2s;
-        while (target_state->spot_state->actor_transfer_coordinator.phase (
+        while (target_state->spot_state->actor_transfer_coordinator->phase (
                  "actor.cutover.probe:actor-cutover-probe")
                && std::chrono::steady_clock::now () < move_closed_deadline) {
             std::this_thread::sleep_for (1ms);
@@ -9068,8 +9069,8 @@ bool verify_public_local_member_defer (
 
     passed = passed && suffix_a == 1 && suffix_b == 1 && reply == 1 && root->pending_count () == 0
              && a->pending_count () == 0 && b->pending_count () == 0
-             && !node->actor_transfer_coordinator.phase ("probe:a")
-             && !node->actor_transfer_coordinator.phase ("probe:b");
+             && !node->actor_transfer_coordinator->phase ("probe:a")
+             && !node->actor_transfer_coordinator->phase ("probe:b");
     for (const auto &reservation : reservations)
         reservation->cancel ();
     scheduler->run_all ();

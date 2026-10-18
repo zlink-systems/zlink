@@ -3,6 +3,7 @@
 
 #include "runtime/execution/state_lane.hpp"
 #include <atomic>
+#include <cassert>
 #include <limits>
 
 #include <zlink/framework/contracts/actors/actor.hpp>
@@ -211,11 +212,20 @@ struct actor_transfer_packet_admission_t
 class actor_transfer_coordinator_t
 {
   public:
+    runtime::state_lane_t &state_lane () noexcept { return _lane; }
+    bool maintenance_inventory_active_on_lane () const noexcept
+    {
+        assert (_lane.is_on_lane ());
+        return _maintenance_inventory_active;
+    }
+    task_t<bool> try_seal_maintenance_inventory ();
+    task_t<void> end_maintenance_inventory ();
     // The reservation may carry the transfer ID that the deferred join will
     // use, so packets preserved before transfer-out already emit their
     // handoff markers under the final transfer correlation.
     task_t<void> wait_for_source_completion (std::string actor_key);
-    bool try_reserve_source (const std::string &actor_key, std::string transfer_id = {});
+    task_t<void> wait_for_source_completions ();
+    result_t<void> try_reserve_source (const std::string &actor_key, std::string transfer_id = {});
     bool try_begin_local (const std::string &actor_key);
     bool try_begin_source_remote (const std::string &actor_key, std::string transfer_id = {});
     std::vector<handoff_packet_t> cancel_move (const std::string &actor_key,
@@ -464,6 +474,8 @@ class actor_transfer_coordinator_t
     bool matches_source_reservation_on_lane (const std::string &actor_key,
                                              const std::string &transfer_id) const;
 
+    result_t<void> try_claim_source_on_lane (const std::string &actor_key, move_state_t move);
+    bool _maintenance_inventory_active = false;
     runtime::offload_executor_t _lane_executor;
     mutable runtime::state_lane_t _lane{_lane_executor};
     // Earliest due instant, written on the lane. A lane turn that adds a

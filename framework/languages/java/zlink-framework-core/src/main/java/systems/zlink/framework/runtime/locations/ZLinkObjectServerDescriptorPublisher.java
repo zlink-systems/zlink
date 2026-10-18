@@ -80,14 +80,15 @@ public final class ZLinkObjectServerDescriptorPublisher {
                             .thenAccept(
                                     result -> {
                                         if (result.status() != ZLinkLocationWriteStatus.STORED) {
-                                            throw new systems.zlink.framework.errors
-                                                    .ZLinkConfigurationException(
+                                            throw new ZLinkLocationStoreFailureException(
+                                                    ZLinkFrameworkErrorKind.NOT_CONFIGURED,
                                                     "MeshNode descriptor publication failed"
                                                             + " [mesh="
                                                             + descriptor.meshName()
                                                             + ", status="
                                                             + result.status()
-                                                            + "]");
+                                                            + "]",
+                                                    null);
                                         }
                                     }));
         }

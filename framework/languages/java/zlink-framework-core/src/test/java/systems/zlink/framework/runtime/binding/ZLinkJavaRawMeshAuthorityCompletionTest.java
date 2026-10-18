@@ -120,7 +120,11 @@ final class ZLinkJavaRawMeshAuthorityCompletionTest {
                     source.spotNode().rememberActorAuthority(actor, 1, 1);
                     request =
                             source.requestActor(
-                                            actor, List.of(payload), Duration.ofSeconds(5), null)
+                                            new ZLinkServiceM6BWireCodec.ActorRouteFence(
+                                                    actor, target.lifecycleGeneration(), 1, 1),
+                                            List.of(payload),
+                                            Duration.ofSeconds(5),
+                                            null)
                                     .toCompletableFuture();
                 } else {
                     ((ZLinkJavaRawSpotNode) source.spotNode())

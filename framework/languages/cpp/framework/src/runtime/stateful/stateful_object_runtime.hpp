@@ -2,6 +2,7 @@
 #pragma once
 
 #include "runtime/execution/state_lane.hpp"
+#include "runtime/spots/actor_transfer_coordinator.hpp"
 
 #include "runtime/dispatch/dispatch_limits.hpp"
 #include "runtime/protocol/service_wire_codec.hpp"
@@ -288,6 +289,10 @@ class stateful_object_runtime_t
     using relocation_state_abort_t = std::function<void (const std::vector<object_ref_t> &)>;
 
     stateful_object_runtime_t ();
+    const std::shared_ptr<detail::actor_transfer_coordinator_t> &actor_transfers () const noexcept
+    {
+        return _actor_transfers;
+    }
     ~stateful_object_runtime_t ();
 
     void configure_relocation_state (relocation_state_capture_t capture,
@@ -323,6 +328,16 @@ class stateful_object_runtime_t
     find (object_kind_t kind,
           const std::string &key,
           std::optional<object_state_t> required_state = object_state_t::ready) const;
+    std::optional<object_ref_t> resolve_spot (const std::string &key) const;
+    stateful_error_t set_subscription (const object_ref_t &spot,
+                                       const std::string &channel_name,
+                                       const std::string &topic);
+    void unset_subscription (const object_ref_t &spot,
+                             const std::string &channel_name,
+                             const std::string &topic);
+    task_t<std::vector<object_ref_t>> multicast_local_targets (std::string channel_name,
+                                                               std::string topic) const;
+    task_t<bool> contains_async (object_ref_t reference) const;
     // Observes the existing source seal; does not resolve Store authority.
     bool finalized_relocation_source (object_kind_t kind,
                                       const std::string &key,
@@ -361,8 +376,8 @@ class stateful_object_runtime_t
     std::vector<logical_timer_t> timers (const object_ref_t &owner) const;
     std::vector<object_inventory_t> inventory () const;
     task_t<std::vector<object_inventory_t>> actor_inventory () const;
-    std::optional<std::vector<object_inventory_t>> try_begin_maintenance_inventory ();
-    void end_maintenance_inventory () noexcept;
+    task_t<std::optional<std::vector<object_inventory_t>>> try_begin_maintenance_inventory ();
+    task_t<void> end_maintenance_inventory ();
     task_t<aggregate_relocation_seal_attempt_t>
     try_seal_relocation_aggregate (const std::vector<object_ref_t> &participants,
                                    std::stop_token cancellation = {},
@@ -441,6 +456,7 @@ class stateful_object_runtime_t
         std::optional<relocation_restore_identity_t> restore_identity;
         queue_t queue;
         std::map<std::uint64_t, logical_timer_t> timers;
+        std::set<std::pair<std::string, std::string>> subscriptions;
         std::uint64_t barrier_generation = 0;
     };
 
@@ -487,8 +503,9 @@ class stateful_object_runtime_t
     void notify_quiescence () noexcept;
     void wait_for_quiescence_change (std::uint64_t observed);
 
-    runtime::offload_executor_t _lane_executor;
-    mutable runtime::state_lane_t _lane{_lane_executor};
+    std::shared_ptr<detail::actor_transfer_coordinator_t> _actor_transfers =
+      std::make_shared<detail::actor_transfer_coordinator_t> ();
+    runtime::state_lane_t &_lane = _actor_transfers->state_lane ();
     std::mutex _quiescence_mutex;
     std::condition_variable _quiescence;
     std::atomic_uint64_t _quiescence_epoch = 0;
@@ -504,7 +521,6 @@ class stateful_object_runtime_t
     relocation_state_materialize_t _relocation_state_materialize;
     relocation_state_commit_t _relocation_state_commit;
     relocation_state_abort_t _relocation_state_abort;
-    bool _maintenance_inventory_active = false;
     std::uint64_t _next_attempt = 1;
     std::uint64_t _next_membership_token = 1;
     std::uint64_t _next_relocation_token = 1;

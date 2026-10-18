@@ -157,6 +157,13 @@ class raw_mesh_node_owner_t
     task_t<zlink::submit_result_t>
     send_to_node_result (const std::vector<std::uint8_t> &target_routing_id,
                          const protocol::application_payload_t &application_payload);
+    task_t<zlink::submit_result_t>
+    send_logical_multicast (const std::vector<std::uint8_t> &target_routing_id,
+                            const std::string &channel_name,
+                            const std::string &topic,
+                            const std::string &source_spot_id,
+                            const protocol::application_payload_t &application_payload,
+                            const std::vector<std::uint8_t> &metadata);
     task_t<bool> request_to_node (const std::vector<std::uint8_t> &target_routing_id,
                                   const protocol::application_payload_t &application_payload,
                                   std::chrono::milliseconds timeout,

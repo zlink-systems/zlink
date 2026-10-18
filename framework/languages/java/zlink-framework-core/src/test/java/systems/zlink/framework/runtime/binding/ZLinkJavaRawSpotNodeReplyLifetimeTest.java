@@ -33,6 +33,13 @@ final class ZLinkJavaRawSpotNodeReplyLifetimeTest {
             owner.setRoutingId(RoutingId.from("audit-relay-owner"));
             owner.setBind("inproc://audit-relay-owner-" + System.nanoTime());
             owner.start();
+            owner.setPeerAuthorityResolver(
+                    (mesh, rid, generation) ->
+                            CompletableFuture.completedFuture(
+                                    java.util.Optional.of(
+                                            new ZLinkInternalMeshNode.PeerAuthorityFence(
+                                                    rid, generation, "test-owner", 1))));
+            owner.refreshLocalAuthorityFence().toCompletableFuture().join();
             var spots = (ZLinkJavaRawSpotNode) owner.spotNode();
             ZLinkBackendActorRef actor;
             try (var create = Message.from("create")) {
@@ -98,6 +105,13 @@ final class ZLinkJavaRawSpotNodeReplyLifetimeTest {
             owner.setRoutingId(RoutingId.from("audit-drain-owner"));
             owner.setBind("inproc://audit-drain-owner-" + System.nanoTime());
             owner.start();
+            owner.setPeerAuthorityResolver(
+                    (mesh, rid, generation) ->
+                            CompletableFuture.completedFuture(
+                                    java.util.Optional.of(
+                                            new ZLinkInternalMeshNode.PeerAuthorityFence(
+                                                    rid, generation, "test-owner", 1))));
+            owner.refreshLocalAuthorityFence().toCompletableFuture().join();
             var spots = (ZLinkJavaRawSpotNode) owner.spotNode();
             ZLinkBackendActorRef actor;
             try (var create = Message.from("create")) {
@@ -120,7 +134,11 @@ final class ZLinkJavaRawSpotNodeReplyLifetimeTest {
             try (var payload = Message.from("request")) {
                 request =
                         spots.requestToActor(
-                                actor,
+                                new ZLinkServiceM6BWireCodec.ActorRouteFence(
+                                        actor,
+                                        owner.lifecycleGeneration(),
+                                        spots.actorAuthorityOwnerGeneration(actor),
+                                        spots.actorAuthorityOwnerLeaseGeneration(actor)),
                                 List.of(payload),
                                 systems.zlink.contracts.sockets.SendFlags.DONT_WAIT,
                                 Duration.ofSeconds(5),
@@ -150,6 +168,13 @@ final class ZLinkJavaRawSpotNodeReplyLifetimeTest {
             owner.setRoutingId(RoutingId.from("audit-reply-owner"));
             owner.setBind("inproc://audit-reply-owner-" + System.nanoTime());
             owner.start();
+            owner.setPeerAuthorityResolver(
+                    (mesh, rid, generation) ->
+                            CompletableFuture.completedFuture(
+                                    java.util.Optional.of(
+                                            new ZLinkInternalMeshNode.PeerAuthorityFence(
+                                                    rid, generation, "test-owner", 1))));
+            owner.refreshLocalAuthorityFence().toCompletableFuture().join();
             var spots = (ZLinkJavaRawSpotNode) owner.spotNode();
             ZLinkBackendActorRef actor;
             try (var create = Message.from("create")) {

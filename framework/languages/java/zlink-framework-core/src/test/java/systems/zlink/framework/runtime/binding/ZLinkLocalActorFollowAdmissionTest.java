@@ -2,6 +2,7 @@ package systems.zlink.framework.runtime.binding;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 
@@ -30,6 +31,57 @@ final class ZLinkLocalActorFollowAdmissionTest {
         SUCCESS_AFTER_ADMISSION,
         FAILURE_BEFORE_ADMISSION,
         FAILURE_AFTER_ADMISSION
+    }
+
+    @Test
+    void unavailableLocalSourceCannotReportBooleanAdmission() {
+        try (var context = Zlink.createContext();
+                var owner = new ZLinkJavaRawMeshNode(context, "mesh")) {
+            owner.setRoutingId(RoutingId.from("local-unavailable-source"));
+            owner.setBind("inproc://local-unavailable-source");
+            owner.start();
+            var spots = (ZLinkJavaRawSpotNode) owner.spotNode();
+            ZLinkBackendActorRef actor;
+            try (var create = Message.from("create")) {
+                actor = spots.createActor("actor", create);
+            }
+            var route =
+                    new ZLinkServiceM6BWireCodec.ActorRouteFence(
+                            actor,
+                            owner.lifecycleGeneration(),
+                            spots.actorAuthorityOwnerGeneration(actor),
+                            spots.actorAuthorityOwnerLeaseGeneration(actor));
+            var dispatches = new AtomicInteger();
+            spots.entrySpot()
+                    .onDispatchEvent(
+                            info -> {
+                                if (info.event() == ZLinkBackendSpotDispatchEvent.ACTOR_READABLE) {
+                                    dispatches.incrementAndGet();
+                                    info.actorMessages().forEach(ZLinkBackendActorReceived::close);
+                                }
+                            });
+            try (var payload = Message.from("unavailable-source")) {
+                var failure =
+                        assertThrows(
+                                CompletionException.class,
+                                () ->
+                                        spots.sendToActorAsync(route, List.of(payload))
+                                                .toCompletableFuture()
+                                                .join());
+                assertEquals(
+                        systems.zlink.contracts.sockets.SubmitResult.NOT_CONNECTED,
+                        assertInstanceOf(
+                                        systems.zlink.contracts.errors.ZlinkSubmitException.class,
+                                        failure.getCause())
+                                .getResult());
+                assertFalse(
+                        spots.sendToActor(
+                                route,
+                                List.of(payload),
+                                systems.zlink.contracts.sockets.SendFlags.DONT_WAIT));
+            }
+            assertEquals(0, dispatches.get());
+        }
     }
 
     @ParameterizedTest
@@ -123,7 +175,11 @@ final class ZLinkLocalActorFollowAdmissionTest {
             try (var header = Message.from("header");
                     var body = Message.from("body")) {
                 var admitted =
-                        spots.sendToActorAsync(actor, List.of(header, body)).toCompletableFuture();
+                        spots.sendToActorAsync(
+                                        new ZLinkServiceM6BWireCodec.ActorRouteFence(
+                                                actor, owner.lifecycleGeneration(), 11, 3),
+                                        List.of(header, body))
+                                .toCompletableFuture();
                 assertEquals(relay == Relay.ABSENT ? 0 : 1, calls.get());
                 if (relay == Relay.FAILURE_BEFORE_ADMISSION) {
                     assertSame(

@@ -1272,37 +1272,64 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             ZLinkRelocationCancellation cancellation,
             ZLinkBackendActorRef preparedActorRef) {
         requireActorId(actorId);
-        locations.ensureOwnerAdmissionOpen();
         Objects.requireNonNull(applicationState, "applicationState");
         if (restoreSnapshot) {
             Objects.requireNonNull(adapters, "adapters");
         }
         Objects.requireNonNull(cancellation, "cancellation");
         Class<? extends ZLinkActorFactory> factoryType = requireFactory(actorType);
-        if (actorRegistry.contains(actorId)) {
-            return CompletableFuture.failedFuture(
-                    new ZLinkConfigurationException(
-                            "target runtime already owns actor: " + actorId));
-        }
-        ZLinkBackendActorRef actorRef = preparedActorRef;
-        if (actorRef == null) {
-            Message createRequest = Message.from(new byte[0]);
-            try {
-                actorRef = spotNode.createActor(actorId, createRequest);
-            } catch (RuntimeException failure) {
-                createRequest.close();
-                throw failure;
+        ZLinkActorJoinRelocationPort sourceOwner = actorJoinRelocationPort;
+        CompletionStage<Void> sourceCleanup =
+                sourceOwner == null || preparedActorRef == null
+                        ? CompletableFuture.completedFuture(null)
+                        : sourceOwner.awaitSourceCleanup(actorId, preparedActorRef.generation());
+        return sourceCleanup
+                .thenCompose(
+                        ignored ->
+                                dispatches.awaitTeardown(actorId).handle((done, failure) -> null))
+                .thenCompose(
+                        ignored -> {
+                            locations.ensureOwnerAdmissionOpen();
+                            if (actorRegistry.contains(actorId)) {
+                                return CompletableFuture.failedFuture(
+                                        new ZLinkConfigurationException(
+                                                "target runtime already owns actor: " + actorId));
+                            }
+                            ZLinkBackendActorRef actorRef =
+                                    prepareTransferredActorRef(actorId, preparedActorRef);
+                            return attemptPrepareRelocatedActor(
+                                    actorId,
+                                    actorType,
+                                    factoryType,
+                                    applicationState,
+                                    restoreSnapshot,
+                                    adapters,
+                                    cancellation,
+                                    actorRef);
+                        });
+    }
+
+    private ZLinkBackendActorRef prepareTransferredActorRef(
+            String actorId, ZLinkBackendActorRef expected) {
+        ZLinkBackendActorRef existing = spotNode.actorLookup(actorId);
+        if (existing != null) {
+            if (!existing.equals(expected)) {
+                throw new ZLinkConfigurationException(
+                        "target raw Actor identity differs: " + actorId);
             }
+            return existing;
         }
-        return attemptPrepareRelocatedActor(
-                actorId,
-                actorType,
-                factoryType,
-                applicationState,
-                restoreSnapshot,
-                adapters,
-                cancellation,
-                actorRef);
+        Message createRequest = Message.from(new byte[0]);
+        try {
+            // Relocation §4.5: prepare raw identity before the Ready CAS. A returning Actor
+            // keeps its exact raw identity while the existing move gate holds execution.
+            return expected == null
+                    ? spotNode.createActor(actorId, createRequest)
+                    : spotNode.createActor(actorId, expected.generation(), createRequest);
+        } catch (RuntimeException failure) {
+            createRequest.close();
+            throw failure;
+        }
     }
 
     private CompletionStage<PreparedTransferredActor> attemptPrepareRelocatedActor(
@@ -1378,24 +1405,33 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
     }
 
     public ZLinkActor publishPreparedTransferredActor(PreparedTransferredActor prepared) {
-        return publishPreparedTransferredActor(prepared, null, 0);
+        return publishPreparedTransferredActor(prepared, null, 0, null);
     }
 
     public ZLinkActor publishPreparedTransferredActor(
-            PreparedTransferredActor prepared, String targetSpotId, long authorityOwnerGeneration) {
-        PublishPreparedTransfer publish =
-                inStateLane(
-                        () ->
-                                publishPreparedTransferredActorInStateLane(
-                                        prepared, targetSpotId, authorityOwnerGeneration));
-        if (publish.targetSpotId() != null) {
-            spotNode.registerTransferredActor(publish.actorRef(), publish.targetSpotId(), 1L);
-            spotNode.rememberActorAuthority(
-                    publish.actorRef(),
-                    publish.authorityOwnerGeneration(),
-                    spotNode.localAuthorityLeaseGeneration());
-        }
-        return publish.actor();
+            PreparedTransferredActor prepared,
+            String targetSpotId,
+            long authorityOwnerGeneration,
+            ZLinkSpot<?> membershipSpot) {
+        return inStateLane(
+                () -> {
+                    PublishPreparedTransfer publish =
+                            publishPreparedTransferredActorInStateLane(
+                                    prepared, targetSpotId, authorityOwnerGeneration);
+                    if (membershipSpot != null) {
+                        markJoinedState(
+                                prepared.actor, prepared.actorRef, targetSpotId, membershipSpot);
+                    }
+                    if (publish.targetSpotId() != null) {
+                        spotNode.registerTransferredActor(
+                                publish.actorRef(),
+                                publish.targetSpotId(),
+                                1L,
+                                publish.authorityOwnerGeneration(),
+                                spotNode.localAuthorityLeaseGeneration());
+                    }
+                    return publish.actor();
+                });
     }
 
     private PublishPreparedTransfer publishPreparedTransferredActorInStateLane(
@@ -1485,10 +1521,15 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                                     .thenApply(
                                             ignored -> {
                                                 spotNode.closeActorBoundSession(
-                                                        detached.sourceActorRef(),
+                                                        detached.source().sourceActorRef(),
+                                                        detached.context()
+                                                                .boundSessionSourceSessionRid(),
+                                                        detached.source()
+                                                                .sourceRoute()
+                                                                .authorityOwnerGeneration(),
                                                         defaultRequestTimeout);
                                                 detached.context().closeHandlerInstances();
-                                                return detached.sourceActorRef();
+                                                return detached.source().sourceActorRef();
                                             });
                         });
     }
@@ -1505,13 +1546,9 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             return null;
         }
         actorRegistry.remove(actorId, oldActor);
-        ZLinkBackendActorRef sourceActorRef =
-                handoff.takeMessageFollowSource(actorId)
-                        .map(ZLinkActorTransferHandoff.MessageFollowSource::sourceActorRef)
-                        .orElse(null);
-        return sourceActorRef == null
-                ? null
-                : new DetachedMessageFollow(sourceActorRef, oldContext);
+        ZLinkActorTransferHandoff.MessageFollowSource source =
+                handoff.takeMessageFollowSource(actorId).orElse(null);
+        return source == null ? null : new DetachedMessageFollow(source, oldContext);
     }
 
     public CompletionStage<Void> rollbackTransferredActor(ZLinkActor actor) {
@@ -1536,16 +1573,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             ZLinkMessage transferState,
             Class<? extends ZLinkActorFactory> factoryType,
             ZLinkBackendActorRef reentryActorRef) {
-        ZLinkBackendActorRef actorRef = reentryActorRef;
-        if (actorRef == null) {
-            Message nativeCreateRequest = Message.from(new byte[0]);
-            try {
-                actorRef = spotNode.createActor(actorId, nativeCreateRequest);
-            } catch (RuntimeException error) {
-                nativeCreateRequest.close();
-                throw error;
-            }
-        }
+        ZLinkBackendActorRef actorRef = prepareTransferredActorRef(actorId, reentryActorRef);
         DefaultActorContext context = new DefaultActorContext(actorRef);
         ZLinkBackendActorRef finalActorRef = actorRef;
         context.beginMove();
@@ -1964,12 +1992,18 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
     }
 
     private void removeMessageFollowSource(ZLinkActorTransferHandoff.MessageFollowSource source) {
-        cleanupMessageFollowNativeSource(source.sourceActorRef());
+        cleanupMessageFollowNativeSource(source);
     }
 
-    private void cleanupMessageFollowNativeSource(ZLinkBackendActorRef sourceActorRef) {
+    private void cleanupMessageFollowNativeSource(
+            ZLinkActorTransferHandoff.MessageFollowSource source) {
+        ZLinkBackendActorRef sourceActorRef = source.sourceActorRef();
         ZLinkHandlerStages.fromStageSupplier(
-                        () -> spotNode.destroyActor(sourceActorRef, defaultRequestTimeout))
+                        () ->
+                                spotNode.destroyActor(
+                                        sourceActorRef,
+                                        source.sourceRoute().authorityOwnerGeneration(),
+                                        defaultRequestTimeout))
                 .whenComplete(
                         (ignored, failure) -> {
                             if (failure != null
@@ -2298,7 +2332,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                                 throw new IllegalStateException(
                                         "Actor authority changed before Session binding");
                             }
-                            spotNode.rememberActorAuthority(
+                            spotNode.observeActorAuthority(
                                     actor,
                                     route.authorityOwnerGeneration(),
                                     route.ownerLeaseGeneration());
@@ -2307,7 +2341,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
 
     void prepareRelocatedSessionBinding(
             ZLinkBackendActorRef actor, long authorityOwnerGeneration, long ownerLeaseGeneration) {
-        spotNode.rememberActorAuthority(actor, authorityOwnerGeneration, ownerLeaseGeneration);
+        spotNode.observeActorAuthority(actor, authorityOwnerGeneration, ownerLeaseGeneration);
     }
 
     @Override
@@ -3706,7 +3740,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             String actorId,
             long payloadBytes,
             Supplier<CompletionStage<Void>> operation) {
-        return submitActorDispatch(target, actorId, payloadBytes, operation, null);
+        return submitActorDispatch(target, actorId, payloadBytes, operation, null, null, null);
     }
 
     public CompletionStage<Void> submitActorDispatch(
@@ -3714,23 +3748,23 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             String actorId,
             long payloadBytes,
             Supplier<CompletionStage<Void>> operation,
-            CompletableFuture<Void> admission) {
+            CompletableFuture<Void> admission,
+            ZLinkBackendActorReceived header,
+            Message payload) {
         return submitActorDispatch(
                 target,
                 actorId,
                 operation,
                 admission,
-                turn -> dispatches.enqueue(turn, payloadBytes, operation, () -> {}, admission));
-    }
-
-    public CompletionStage<Void> submitActorDispatch(
-            ZLinkActorDispatchTarget target,
-            String actorId,
-            byte[] acceptedJournalRecord,
-            Supplier<CompletionStage<Void>> operation,
-            Runnable relocationRelease) {
-        return submitActorDispatch(
-                target, actorId, acceptedJournalRecord, null, operation, relocationRelease);
+                turn ->
+                        dispatches.enqueue(
+                                turn,
+                                payloadBytes,
+                                operation,
+                                () -> {},
+                                admission,
+                                header,
+                                payload));
     }
 
     public CompletionStage<Void> submitActorDispatchLazyRecord(
@@ -3747,6 +3781,8 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                 acceptedJournalRecordSizeHint,
                 operation,
                 relocationRelease,
+                null,
+                null,
                 null);
     }
 
@@ -3757,7 +3793,9 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             long acceptedJournalRecordSizeHint,
             Supplier<CompletionStage<Void>> operation,
             Runnable relocationRelease,
-            CompletableFuture<Void> admission) {
+            CompletableFuture<Void> admission,
+            ZLinkBackendActorReceived header,
+            Message payload) {
         return submitActorDispatch(
                 target,
                 actorId,
@@ -3770,7 +3808,9 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                                 acceptedJournalRecordSizeHint,
                                 operation,
                                 relocationRelease,
-                                admission));
+                                admission,
+                                header,
+                                payload));
     }
 
     private CompletionStage<Void> submitActorDispatch(
@@ -3811,7 +3851,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             String actorId,
             Supplier<CompletionStage<Void>> operation,
             CompletableFuture<Void> admission,
-            java.util.function.Function<ZLinkActorDispatchSerials.QueuedTurn, CompletionStage<Void>>
+            java.util.function.Function<ZLinkActorDispatchTarget.QueuedTurn, CompletionStage<Void>>
                     enqueue) {
         if (dispatches.isCurrent(actorId)) {
             // The current turn of this Actor runs the dispatch in place: accepting it here is
@@ -3848,7 +3888,33 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                 });
     }
 
-    private CompletionStage<ZLinkActorDispatchSerials.QueuedTurn> prepareManagedActorDispatch(
+    public CompletionStage<ZLinkActorDispatchTarget.QueuedTurn> prepareTransferredActorDispatch(
+            PreparedTransferredActor prepared) {
+        Objects.requireNonNull(prepared, "prepared");
+        prepared.requireOwner(this);
+        return prepareManagedActorDispatch(prepared.actorId, null)
+                .thenApply(
+                        turn -> {
+                            if (turn.incarnation() != prepared.context)
+                                throw new IllegalStateException(
+                                        "prepared Actor dispatch incarnation differs");
+                            return turn;
+                        });
+    }
+
+    public CompletionStage<Void> submitActorDispatchLazyRecord(
+            ZLinkActorDispatchTarget.QueuedTurn turn,
+            Supplier<byte[]> record,
+            long size,
+            Supplier<CompletionStage<Void>> operation,
+            Runnable release,
+            CompletableFuture<Void> admission) {
+        Objects.requireNonNull(turn, "turn");
+        return dispatches.enqueueLazyRecord(
+                turn, record, size, operation, release, admission, null, null);
+    }
+
+    private CompletionStage<ZLinkActorDispatchTarget.QueuedTurn> prepareManagedActorDispatch(
             String actorId, ZLinkActorDispatchTarget target) {
         return actorRegistry
                 .containsAsync(actorId)
@@ -4387,75 +4453,124 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
      * already belongs to the target owner.
      */
     public CompletionStage<Void> completeRelocationSource(String actorId) {
-        Objects.requireNonNull(actorId, "actorId");
-        RelocationSourceCheck check =
-                inStateLane(
-                        () -> {
-                            ZLinkActor actor = actorRegistry.actor(actorId);
-                            if (actor == null) {
-                                return new RelocationSourceCheck(
-                                        null, null, CompletableFuture.completedFuture(null));
-                            }
-                            DefaultActorContext context = actorRegistry.context(actor);
-                            if (context == null) {
-                                return new RelocationSourceCheck(
-                                        null,
-                                        null,
-                                        CompletableFuture.failedFuture(
-                                                new IllegalStateException(
-                                                        "relocation source Actor context is"
-                                                                + " unavailable: "
-                                                                + actorId)));
-                            }
-                            return new RelocationSourceCheck(actor, context, null);
-                        });
-        if (check.result() != null) {
-            return check.result();
-        }
-        ZLinkActor actor = check.actor();
-        DefaultActorContext context = check.context();
-        CompletableFuture<Throwable> cleanupFailure = new CompletableFuture<>();
-        CompletionStage<Void> teardown =
-                dispatches.beginTeardown(
+        RelocationSourceCheck source = relocationSource(actorId);
+        if (source.result() != null) return source.result();
+        DepartedStay departed = departedStay(source.context());
+        return dispatches
+                .registerTeardown(
                         actorId,
+                        () -> CompletableFuture.completedFuture(null),
                         () ->
                                 ZLinkHandlerStages.completeAll(
-                                                List.of(
-                                                        () ->
-                                                                ZLinkHandlerStages.fromRunnable(
-                                                                        () ->
-                                                                                inStateLane(
-                                                                                        () -> {
-                                                                                            actorRegistry
-                                                                                                    .remove(
-                                                                                                            actorId,
-                                                                                                            actor);
-                                                                                            return null;
-                                                                                        })),
-                                                        () ->
-                                                                removeActorSessionRouteForContext(
-                                                                        context),
-                                                        () ->
-                                                                ZLinkHandlerStages.fromRunnable(
-                                                                        context
-                                                                                ::closeHandlerInstances),
-                                                        () ->
-                                                                ZLinkHandlerStages.fromRunnable(
-                                                                        context.state
-                                                                                ::clearAfterDestroy)))
-                                        .handle(
-                                                (ignored, failure) -> {
-                                                    cleanupFailure.complete(failure);
-                                                    return null;
-                                                }));
-        return teardown.thenCompose(
-                ignored ->
-                        cleanupFailure.thenCompose(
-                                failure ->
-                                        failure == null
-                                                ? CompletableFuture.completedFuture(null)
-                                                : CompletableFuture.failedFuture(unwrap(failure))));
+                                        List.of(
+                                                () ->
+                                                        retireRelocationSource(
+                                                                actorId, source, departed),
+                                                () -> disposeRelocationSource(source.context()))))
+                .thenCompose(terminal -> terminal);
     }
+
+    /** Ends membership inside the committed source operation; its queued teardown follows it. */
+    public CompletionStage<Void> retireCommittedRelocationSource(String actorId) {
+        RelocationSourceCheck source = relocationSource(actorId);
+        if (source.result() != null) return source.result();
+        DepartedStay departed = departedStay(source.context());
+        return dispatches
+                .registerTeardown(
+                        actorId,
+                        () -> retireRelocationSource(actorId, source, departed),
+                        () -> disposeRelocationSource(source.context()))
+                .thenCompose(
+                        terminal -> {
+                            terminal.whenComplete(
+                                    (ignored, failure) -> {
+                                        if (failure != null)
+                                            LOGGER.log(
+                                                    java.util.logging.Level.WARNING,
+                                                    "committed Actor source teardown failed",
+                                                    unwrap(failure));
+                                    });
+                            return CompletableFuture.completedFuture(null);
+                        });
+    }
+
+    private RelocationSourceCheck relocationSource(String actorId) {
+        Objects.requireNonNull(actorId, "actorId");
+        return inStateLane(
+                () -> {
+                    ZLinkActor actor = actorRegistry.actor(actorId);
+                    if (actor == null)
+                        return new RelocationSourceCheck(
+                                null, null, CompletableFuture.completedFuture(null));
+                    DefaultActorContext context = actorRegistry.context(actor);
+                    return context == null
+                            ? new RelocationSourceCheck(
+                                    null,
+                                    null,
+                                    CompletableFuture.failedFuture(
+                                            new IllegalStateException(
+                                                    "relocation source Actor context is unavailable: "
+                                                            + actorId)))
+                            : new RelocationSourceCheck(actor, context, null);
+                });
+    }
+
+    private CompletionStage<Void> retireRelocationSource(
+            String actorId, RelocationSourceCheck source, DepartedStay departed) {
+        return ZLinkHandlerStages.completeAll(
+                List.of(
+                        () ->
+                                ZLinkHandlerStages.fromRunnable(
+                                        () ->
+                                                inStateLane(
+                                                        () -> {
+                                                            actorRegistry.remove(
+                                                                    actorId, source.actor());
+                                                            return null;
+                                                        })),
+                        () -> removeActorSessionRouteForContext(source.context()),
+                        () -> retireDepartedActorBinding(departed)));
+    }
+
+    private CompletionStage<Void> disposeRelocationSource(DefaultActorContext context) {
+        return ZLinkHandlerStages.completeAll(
+                List.of(
+                        () -> ZLinkHandlerStages.fromRunnable(context::closeHandlerInstances),
+                        () -> ZLinkHandlerStages.fromRunnable(context.state::clearAfterDestroy)));
+    }
+
+    /**
+     * The committed relocation ended this stay, so the source SpotNode retires exactly the stay's
+     * binding record; a return of the Actor to this node then installs its route without conflict.
+     */
+    private CompletionStage<Void> retireDepartedActorBinding(DepartedStay departed) {
+        return departed == null
+                ? CompletableFuture.completedFuture(null)
+                : spotNode.retireDepartedActorBinding(
+                        departed.actorRef(),
+                        departed.sessionRid(),
+                        departed.authorityOwnerGeneration());
+    }
+
+    private DepartedStay departedStay(DefaultActorContext context) {
+        ZLinkBackendActorRef actorRef = context.actorRef();
+        //  A remote Session binding lives only in the SpotNode record; a same-node one in the
+        //  context.
+        RoutingId sessionRid =
+                actorRef == null
+                        ? null
+                        : spotNode.boundSessionRoute(actorRef)
+                                .map(ZLinkInternalSpotNode.BoundSessionRoute::sessionRid)
+                                .orElse(context.boundSessionSourceSessionRid());
+        return actorRef == null || sessionRid == null
+                ? null
+                : new DepartedStay(
+                        actorRef, sessionRid, spotNode.actorAuthorityOwnerGeneration(actorRef));
+    }
+
+    /** The bound stay a committed relocation ends: ActorRef, Session and authority generation. */
+    private record DepartedStay(
+            ZLinkBackendActorRef actorRef, RoutingId sessionRid, long authorityOwnerGeneration) {}
 
     private CompletionStage<Void> closeActorEntry(ActorEntry entry) {
         ZLinkActor actor = entry.actor();
@@ -4689,7 +4804,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             long authorityOwnerGeneration) {}
 
     private record DetachedMessageFollow(
-            ZLinkBackendActorRef sourceActorRef, DefaultActorContext context) {}
+            ZLinkActorTransferHandoff.MessageFollowSource source, DefaultActorContext context) {}
 
     private record ActorStateSnapshot(
             ZLinkActor actor, DefaultActorContext context, String actorType) {}

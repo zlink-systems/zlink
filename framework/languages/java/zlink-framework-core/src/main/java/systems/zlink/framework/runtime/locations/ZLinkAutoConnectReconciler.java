@@ -60,28 +60,33 @@ final class ZLinkAutoConnectReconciler {
                                 if (!storeFailed) storeFailureStartedNanos = nanoTime.getAsLong();
                                 storeFailed = true;
                                 retryPendingTargetsWithinStoreFailureGrace();
-                            } else {
-                                reconcile(rows);
+                                return CompletableFuture.<Void>completedFuture(null);
                             }
-                            return null;
-                        });
+                            return reconcile(rows);
+                        })
+                .thenCompose(stage -> stage);
     }
 
     CompletionStage<Void> shutdown() {
         active.values().forEach(target -> attemptConnection(() -> executor.disconnect(target)));
         notRequired.values().forEach(executor::clearNotRequired);
-        admissionExpectations.values().forEach(executor::forgetAdmissionExpectation);
-        active.clear();
-        notRequired.clear();
-        admissionExpectations.clear();
-        return CompletableFuture.completedFuture(null);
+        CompletionStage<Void> removed = CompletableFuture.completedFuture(null);
+        for (var target : admissionExpectations.values()) {
+            removed = removed.thenCompose(ignored -> executor.forgetAdmissionExpectation(target));
+        }
+        return removed.thenRun(
+                () -> {
+                    active.clear();
+                    notRequired.clear();
+                    admissionExpectations.clear();
+                });
     }
 
     CompletionStage<Void> markDraining() {
         return CompletableFuture.completedFuture(null);
     }
 
-    private void reconcile(List<ZLinkAutoConnectPeer> rows) {
+    private CompletionStage<Void> reconcile(List<ZLinkAutoConnectPeer> rows) {
         if (storeFailed) {
             storeFailed = false;
             storeFailureStartedNanos = -1;
@@ -102,78 +107,91 @@ final class ZLinkAutoConnectReconciler {
                 nextExpectations.put(target.nodeRid().toHex(), target);
             }
         }
-        admissionExpectations.forEach(
-                (key, target) -> {
-                    if (!nextExpectations.containsKey(key)) {
-                        executor.forgetAdmissionExpectation(target);
-                    }
-                });
-        nextExpectations.forEach(
-                (key, target) -> {
-                    if (!target.equals(admissionExpectations.get(key))) {
-                        executor.observeAdmissionExpectation(target);
-                    }
-                });
-        admissionExpectations.clear();
-        admissionExpectations.putAll(nextExpectations);
-        lastDesired = Map.copyOf(desired);
-        notRequired.keySet().stream()
-                .filter(key -> !nextNotRequired.containsKey(key))
-                .map(notRequired::get)
-                .forEach(executor::clearNotRequired);
-        nextNotRequired.forEach(
-                (key, target) -> {
-                    ZLinkAutoConnectPlanner.Target current = notRequired.get(key);
-                    if (current == null
-                            || !current.endpoint().equals(target.endpoint())
-                            || current.lifecycleGeneration() != target.lifecycleGeneration()) {
-                        if (current != null) {
-                            executor.clearNotRequired(current);
+        CompletionStage<Void> registered = CompletableFuture.completedFuture(null);
+        for (var entry : admissionExpectations.entrySet()) {
+            if (!nextExpectations.containsKey(entry.getKey())) {
+                registered =
+                        registered.thenCompose(
+                                ignored -> executor.forgetAdmissionExpectation(entry.getValue()));
+            }
+        }
+        for (var entry : nextExpectations.entrySet()) {
+            if (!entry.getValue().equals(admissionExpectations.get(entry.getKey()))) {
+                registered =
+                        registered.thenCompose(
+                                ignored -> executor.observeAdmissionExpectation(entry.getValue()));
+            }
+        }
+        return registered.thenRun(
+                () -> {
+                    admissionExpectations.clear();
+                    admissionExpectations.putAll(nextExpectations);
+                    lastDesired = Map.copyOf(desired);
+                    notRequired.keySet().stream()
+                            .filter(key -> !nextNotRequired.containsKey(key))
+                            .map(notRequired::get)
+                            .forEach(executor::clearNotRequired);
+                    nextNotRequired.forEach(
+                            (key, target) -> {
+                                ZLinkAutoConnectPlanner.Target current = notRequired.get(key);
+                                if (current == null
+                                        || !current.endpoint().equals(target.endpoint())
+                                        || current.lifecycleGeneration()
+                                                != target.lifecycleGeneration()) {
+                                    if (current != null) {
+                                        executor.clearNotRequired(current);
+                                    }
+                                    executor.markNotRequired(target);
+                                }
+                            });
+                    notRequired.clear();
+                    notRequired.putAll(nextNotRequired);
+                    Map<String, ZLinkAutoConnectPlanner.Target> manualSnapshot = new HashMap<>();
+                    for (ZLinkAutoConnectPeer row : rows) {
+                        ZLinkAutoConnectPlanner.Target target =
+                                ZLinkAutoConnectPlanner.trackableTarget(local, row);
+                        if (target == null
+                                || !executor.isManual(target)
+                                || desired.containsKey(target.key())) continue;
+                        ZLinkAutoConnectPlanner.Target previous =
+                                observedManual.values().stream()
+                                        .filter(candidate -> samePeerIdentity(candidate, target))
+                                        .findFirst()
+                                        .orElse(null);
+                        if (previous != null
+                                && (!previous.key().equals(target.key())
+                                        || !previous.endpoint().equals(target.endpoint())
+                                        || !Objects.equals(previous.ownerId(), target.ownerId()))) {
+                            if (!attemptConnection(() -> executor.replace(previous, target)))
+                                continue;
+                            observedManual.remove(previous.key());
                         }
-                        executor.markNotRequired(target);
+                        manualSnapshot.put(target.key(), target);
                     }
-                });
-        notRequired.clear();
-        notRequired.putAll(nextNotRequired);
-        Map<String, ZLinkAutoConnectPlanner.Target> manualSnapshot = new HashMap<>();
-        for (ZLinkAutoConnectPeer row : rows) {
-            ZLinkAutoConnectPlanner.Target target =
-                    ZLinkAutoConnectPlanner.trackableTarget(local, row);
-            if (target == null || !executor.isManual(target) || desired.containsKey(target.key()))
-                continue;
-            ZLinkAutoConnectPlanner.Target previous =
-                    observedManual.values().stream()
-                            .filter(candidate -> samePeerIdentity(candidate, target))
-                            .findFirst()
-                            .orElse(null);
-            if (previous != null
-                    && (!previous.key().equals(target.key())
-                            || !previous.endpoint().equals(target.endpoint())
-                            || !Objects.equals(previous.ownerId(), target.ownerId()))) {
-                if (!attemptConnection(() -> executor.replace(previous, target))) continue;
-                observedManual.remove(previous.key());
-            }
-            manualSnapshot.put(target.key(), target);
-        }
-        observedManual.putAll(manualSnapshot);
-        List<String> toRemove = new ArrayList<>();
-        for (Map.Entry<String, ZLinkAutoConnectPlanner.Target> entry : desired.entrySet()) {
-            ZLinkAutoConnectPlanner.Target current = active.get(entry.getKey());
-            ZLinkAutoConnectPlanner.Target target = entry.getValue();
-            if (current == null) {
-                if (attemptConnection(() -> executor.connect(target)))
-                    active.put(entry.getKey(), target);
-            } else if ((!current.endpoint().equals(target.endpoint())
-                            || !Objects.equals(current.ownerId(), target.ownerId()))
-                    && attemptConnection(() -> executor.replace(current, target))) {
-                active.put(entry.getKey(), target);
-            }
-        }
-        active.keySet().stream().filter(key -> !desired.containsKey(key)).forEach(toRemove::add);
-        toRemove.forEach(
-                key -> {
-                    ZLinkAutoConnectPlanner.Target target = active.get(key);
-                    if (attemptConnection(() -> executor.disconnect(target))) active.remove(key);
+                    observedManual.putAll(manualSnapshot);
+                    List<String> toRemove = new ArrayList<>();
+                    for (Map.Entry<String, ZLinkAutoConnectPlanner.Target> entry :
+                            desired.entrySet()) {
+                        ZLinkAutoConnectPlanner.Target current = active.get(entry.getKey());
+                        ZLinkAutoConnectPlanner.Target target = entry.getValue();
+                        if (current == null) {
+                            if (attemptConnection(() -> executor.connect(target)))
+                                active.put(entry.getKey(), target);
+                        } else if ((!current.endpoint().equals(target.endpoint())
+                                        || !Objects.equals(current.ownerId(), target.ownerId()))
+                                && attemptConnection(() -> executor.replace(current, target))) {
+                            active.put(entry.getKey(), target);
+                        }
+                    }
+                    active.keySet().stream()
+                            .filter(key -> !desired.containsKey(key))
+                            .forEach(toRemove::add);
+                    toRemove.forEach(
+                            key -> {
+                                ZLinkAutoConnectPlanner.Target target = active.get(key);
+                                if (attemptConnection(() -> executor.disconnect(target)))
+                                    active.remove(key);
+                            });
                 });
     }
 

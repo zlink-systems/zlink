@@ -447,6 +447,12 @@ export class DefaultZLinkSpotManager {
         this.actorMembership.leaveActor(spotId, actor, signal, meshName),
       requestContextClose: (activation, objectGeneration, signal) =>
         this.closeFromContext(activation, objectGeneration, signal),
+      stageActivation: (activation) => {
+        this.activations.registerPreparing(activation);
+      },
+      discardActivation: (activation) => {
+        this.activations.finishClose(activation.meshName, activation.spotId);
+      },
       registerActivation: async (activation) => {
         const published = this.activations.register(activation);
         this.scheduleIdleSweep();
@@ -1706,7 +1712,7 @@ export class DefaultZLinkSpotManager {
       throw new ZLinkConfigurationException('MeshNode Spot record is missing the owner Spot RID.');
     }
     if (record.kind === ReceiveKind.SpotMulticast) {
-      const activation = this.activations.resolve(meshName, spotId);
+      const activation = this.activations.activationForClose(meshName, spotId);
       if (activation?.actorDispatch === undefined) {
         throw new ZLinkConfigurationException(
           `MeshNode Spot multicast target '${String(spotId)}' is not active.`

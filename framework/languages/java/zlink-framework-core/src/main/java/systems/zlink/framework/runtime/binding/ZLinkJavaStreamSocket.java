@@ -653,7 +653,7 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
                             header.flowOrigin());
             encodedHeader = Message.from(ZLinkStreamHeaderCodec.encode(requestHeader));
             return rawSpotNode()
-                    .requestToActor(
+                    .requestExactActor(
                             actor,
                             prepend(encodedHeader, parts),
                             SendFlags.DONT_WAIT,

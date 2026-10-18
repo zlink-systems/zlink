@@ -153,7 +153,7 @@ export class ZLinkSpotSerialTurnExecutor {
    * this so they never run inline inside another callback's turn.
    */
   post<T>(operation: () => Promise<T> | T, workOptions?: ZLinkSerialWorkOptions): Promise<T> {
-    return this.enqueueApplicationTurn(operation, workOptions);
+    return this.enqueueApplicationTurn(operation, workOptions, undefined, true);
   }
 
   /**
@@ -260,12 +260,25 @@ export class ZLinkSpotSerialTurnExecutor {
   private async enqueueApplicationTurn<T>(
     operation: () => Promise<T> | T,
     workOptions: ZLinkSerialWorkOptions = {},
-    replay?: (failure?: unknown) => Promise<T>
+    replay?: (failure?: unknown) => Promise<T>,
+    retainWhilePreparing = false
   ): Promise<T> {
     this.lastActivityAtMs = performance.now();
     let barrierClaim: ZLinkExecutionBarrierClaim | undefined;
     try {
       const entry = this.executionBarrier?.enter();
+      if (
+        entry instanceof Promise &&
+        retainWhilePreparing &&
+        this.scheduler.retainsApplicationForLifecycle
+      ) {
+        try {
+          return await this.submitQueuedTurn(operation, workOptions, entry);
+        } catch (error) {
+          (await entry).release();
+          throw error;
+        }
+      }
       barrierClaim = entry instanceof Promise ? await entry : entry;
       const refusal = this.applicationAdmissionRefusal(replay !== undefined);
       if (refusal !== undefined) throw refusal;
@@ -300,7 +313,7 @@ export class ZLinkSpotSerialTurnExecutor {
   private submitQueuedTurn<T>(
     operation: () => Promise<T> | T,
     workOptions: ZLinkSerialWorkOptions,
-    barrierClaim?: ZLinkExecutionBarrierClaim
+    barrierClaim?: ZLinkExecutionBarrierClaim | Promise<ZLinkExecutionBarrierClaim>
   ): Promise<T> {
     const options = {
       ...workOptions,
@@ -313,6 +326,12 @@ export class ZLinkSpotSerialTurnExecutor {
   }
 
   private runQueuedRecord(record: ZLinkSerialWorkRecord<unknown>): Promise<void> {
+    if (record.context instanceof Promise) {
+      return record.context.then((claim: ZLinkExecutionBarrierClaim) => {
+        Object.assign(record, { context: claim });
+        return this.runQueuedRecord(record);
+      });
+    }
     const context = record.context as ZLinkSpotApplicationTurnContext | undefined;
     if (context?.replay !== undefined && record.operation === context.replay) {
       context.release();
