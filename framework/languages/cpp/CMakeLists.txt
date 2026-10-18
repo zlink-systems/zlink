@@ -1351,7 +1351,8 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     tests/Zlink.Framework.UnitTests/test_cpp_framework_host_lifecycle.cpp)
   target_compile_features(test_cpp_framework_host_lifecycle PRIVATE cxx_std_20)
   target_include_directories(test_cpp_framework_host_lifecycle PRIVATE
-    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   target_link_libraries(test_cpp_framework_host_lifecycle PRIVATE
     zlink_framework
     Threads::Threads)
@@ -1370,6 +1371,12 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     NAME test_cpp_framework_relocated_aggregate_shutdown
     COMMAND test_cpp_framework_host_lifecycle relocated-aggregate-shutdown
     LABELS "framework-contract;relocation;termination"
+    TIMEOUT 30)
+
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_relocation_missing_source
+    COMMAND test_cpp_framework_host_lifecycle relocation-missing-source
+    LABELS "framework-contract;relocation"
     TIMEOUT 30)
 
   add_executable(test_cpp_framework_host_startup_failure
@@ -1987,7 +1994,8 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     zlink::framework)
   target_include_directories(test_cpp_framework_in_memory_location_store PRIVATE
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/include
-    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   zlink_framework_cpp_add_test(
     NAME test_cpp_framework_in_memory_location_store
     COMMAND test_cpp_framework_in_memory_location_store

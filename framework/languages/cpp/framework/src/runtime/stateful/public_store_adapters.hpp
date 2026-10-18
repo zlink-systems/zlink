@@ -157,14 +157,15 @@ class public_authority_store_adapter_t final : public authority_relocation_port_
                 || projection->actor.object_generation () != target.object_generation)
                 return {authority_publish_status_t::failed, std::nullopt};
         }
-        const auto exchanged = infrastructure_result ([&] {
-                                   return _store->compare_exchange_authority (
-                                     key, cas_version,
-                                     authority_retarget_t{source.kind == object_kind_t::actor
-                                                            ? reference.application_payload
-                                                            : encode (reference),
-                                                          target_placement});
-                               }).value ();
+        const auto exchanged =
+          infrastructure_result ([&] {
+              return _store->compare_exchange_authority (
+                key, cas_version,
+                authority_retarget_t{source.kind == object_kind_t::actor
+                                       ? reference.application_payload
+                                       : authority_relocation_payload_codec_t::encode (reference),
+                                     target_placement});
+          }).value ();
         if (const auto *stored = std::get_if<authority_stored_t> (&exchanged)) {
             if (source.kind == object_kind_t::actor) {
                 reference.application_payload = stored->snapshot.payload;
@@ -178,7 +179,7 @@ class public_authority_store_adapter_t final : public authority_relocation_port_
                   stored->snapshot.authority_owner_generation;
                 return {authority_publish_status_t::published, std::move (reference)};
             }
-            auto current = decode (stored->snapshot);
+            auto current = authority_relocation_payload_codec_t::decode (stored->snapshot);
             if (!current || !same_owner (stored->snapshot.owner, target_owner)) {
                 if (std::getenv ("ZLINK_CPP_AUTO_CONNECT_TRACE") != nullptr) {
                     std::cerr << "zlink authority-publish stage=stored-owner-mismatch key="
@@ -366,7 +367,7 @@ class public_authority_store_adapter_t final : public authority_relocation_port_
         const auto *snapshot = std::get_if<authority_snapshot_t> (&read);
         if (!snapshot || snapshot->object_generation != object_generation)
             return {authority_publish_status_t::conflict, decode_current (read)};
-        if (auto current = decode (*snapshot)) {
+        if (auto current = authority_relocation_payload_codec_t::decode (*snapshot)) {
             return current->relocation_reference == relocation_reference
                        && current->checksum_crc32c == checksum_crc32c
                      ? authority_publish_result_t{authority_publish_status_t::published,
@@ -403,7 +404,8 @@ class public_authority_store_adapter_t final : public authority_relocation_port_
         const auto read =
           infrastructure_result ([&] { return _store->read_authority (authority); }).value ();
         const auto *snapshot = std::get_if<authority_snapshot_t> (&read);
-        auto current = snapshot ? decode (*snapshot) : std::nullopt;
+        auto current =
+          snapshot ? authority_relocation_payload_codec_t::decode (*snapshot) : std::nullopt;
         if (!snapshot || !current || snapshot->object_generation != object_generation
             || current->relocation_reference != expected_reference
             || current->checksum_crc32c != expected_checksum_crc32c)
@@ -423,7 +425,8 @@ class public_authority_store_adapter_t final : public authority_relocation_port_
         const auto read =
           infrastructure_result ([&] { return _store->read_authority (authority); }).value ();
         const auto *snapshot = std::get_if<authority_snapshot_t> (&read);
-        const auto current = snapshot ? decode (*snapshot) : std::nullopt;
+        const auto current =
+          snapshot ? authority_relocation_payload_codec_t::decode (*snapshot) : std::nullopt;
         if (!snapshot || !current || snapshot->object_generation != object_generation
             || current->relocation_reference != expected_reference
             || current->checksum_crc32c != expected_checksum_crc32c)
@@ -447,11 +450,12 @@ class public_authority_store_adapter_t final : public authority_relocation_port_
         const auto expected_checksum = reference.checksum_crc32c;
         const auto exchanged =
           infrastructure_result ([&] {
-              return _store->compare_exchange_authority (key, snapshot.store_version,
-                                                         authority_put_t{encode (reference)});
+              return _store->compare_exchange_authority (
+                key, snapshot.store_version,
+                authority_put_t{authority_relocation_payload_codec_t::encode (reference)});
           }).value ();
         if (const auto *stored = std::get_if<authority_stored_t> (&exchanged)) {
-            auto current = decode (stored->snapshot);
+            auto current = authority_relocation_payload_codec_t::decode (stored->snapshot);
             return current && current->relocation_reference == expected_reference
                        && current->checksum_crc32c == expected_checksum
                      ? authority_publish_result_t{authority_publish_status_t::published,
@@ -548,205 +552,12 @@ class public_authority_store_adapter_t final : public authority_relocation_port_
                                                    : spot_authority_key (object.key);
     }
 
-    static void append_u32 (std::vector<std::byte> &output, std::uint32_t value)
-    {
-        for (int shift = 24; shift >= 0; shift -= 8)
-            output.push_back (static_cast<std::byte> ((value >> shift) & 0xffu));
-    }
-
-    static void append_u64 (std::vector<std::byte> &output, std::uint64_t value)
-    {
-        for (int shift = 56; shift >= 0; shift -= 8)
-            output.push_back (static_cast<std::byte> ((value >> shift) & 0xffu));
-    }
-
-    static void append_text (std::vector<std::byte> &output, std::string_view value)
-    {
-        append_u32 (output, static_cast<std::uint32_t> (value.size ()));
-        for (const auto character : value)
-            output.push_back (static_cast<std::byte> (static_cast<unsigned char> (character)));
-    }
-
-    static constexpr std::string_view authority_relocation_reference_prefix = "ZLRA";
-    static constexpr std::uint8_t authority_relocation_reference_version = 3;
-    static constexpr std::uint8_t authority_relocation_reference_wire_version =
-      static_cast<std::uint8_t> ('0' + authority_relocation_reference_version);
-
-    static std::vector<std::byte> encode (const authority_relocation_reference_t &reference)
-    {
-        std::vector<std::byte> output;
-        for (const auto value : authority_relocation_reference_prefix)
-            output.push_back (static_cast<std::byte> (static_cast<unsigned char> (value)));
-        output.push_back (static_cast<std::byte> (authority_relocation_reference_wire_version));
-        output.push_back (static_cast<std::byte> (reference.source.kind));
-        append_text (output, reference.source.key);
-        append_text (output, reference.source.mesh_name);
-        append_text (output, reference.source.node_id);
-        append_u64 (output, reference.source.object_generation);
-        append_u64 (output, reference.source.authority_owner_generation);
-        append_text (output, reference.target.mesh_name);
-        append_text (output, reference.target.node_id);
-        append_text (output, reference.relocation_reference);
-        append_u32 (output, reference.checksum_crc32c);
-        for (const auto value : reference.inventory_digest)
-            output.push_back (static_cast<std::byte> (value));
-        append_u32 (output, static_cast<std::uint32_t> (reference.application_payload.size ()));
-        output.insert (output.end (), reference.application_payload.begin (),
-                       reference.application_payload.end ());
-        return output;
-    }
-
-    class reader_t
-    {
-      public:
-        explicit reader_t (const std::vector<std::byte> &input) : _input (input) {}
-
-        std::optional<std::uint8_t> consume_version ()
-        {
-            constexpr auto prefix = authority_relocation_reference_prefix;
-            if (_input.size () < prefix.size () + 1)
-                return std::nullopt;
-            for (const auto value : prefix) {
-                if (read_byte () != static_cast<std::uint8_t> (value))
-                    return std::nullopt;
-            }
-            const auto version = read_byte ();
-            return version == authority_relocation_reference_wire_version
-                     ? std::optional<std::uint8_t>{authority_relocation_reference_version}
-                     : std::nullopt;
-        }
-
-        std::optional<std::uint8_t> byte ()
-        {
-            if (_offset >= _input.size ())
-                return std::nullopt;
-            return read_byte ();
-        }
-
-        std::optional<std::uint32_t> u32 ()
-        {
-            std::uint32_t value = 0;
-            for (int index = 0; index != 4; ++index) {
-                const auto next = byte ();
-                if (!next)
-                    return std::nullopt;
-                value = (value << 8) | *next;
-            }
-            return value;
-        }
-
-        std::optional<std::uint64_t> u64 ()
-        {
-            std::uint64_t value = 0;
-            for (int index = 0; index != 8; ++index) {
-                const auto next = byte ();
-                if (!next)
-                    return std::nullopt;
-                value = (value << 8) | *next;
-            }
-            return value;
-        }
-
-        std::optional<std::string> text ()
-        {
-            const auto size = u32 ();
-            if (!size || _offset + *size > _input.size ())
-                return std::nullopt;
-            std::string value;
-            value.reserve (*size);
-            for (std::uint32_t index = 0; index != *size; ++index)
-                value.push_back (static_cast<char> (read_byte ()));
-            return value;
-        }
-
-        bool done () const noexcept { return _offset == _input.size (); }
-
-      private:
-        std::uint8_t read_byte () { return std::to_integer<std::uint8_t> (_input[_offset++]); }
-
-        const std::vector<std::byte> &_input;
-        std::size_t _offset = 0;
-    };
-
-    static std::optional<authority_relocation_reference_t>
-    decode (const authority_snapshot_t &snapshot)
-    {
-        if (const auto projection = runtime::decode_actor_authority_payload (
-              snapshot.payload, snapshot.object_generation)) {
-            object_ref_t target{object_kind_t::actor,
-                                std::string (projection->actor.actor_id ().value ()),
-                                snapshot.object_generation,
-                                snapshot.authority_owner_generation,
-                                std::string (projection->actor.mesh_name ()),
-                                std::string (projection->actor.node_rid ().value ())};
-            auto source = target;
-            if (source.authority_owner_generation != 0)
-                --source.authority_owner_generation;
-            return authority_relocation_reference_t{
-              std::move (source), std::move (target), {}, 0, {}, snapshot.owner, snapshot.payload};
-        }
-        reader_t reader (snapshot.payload);
-        const auto version = reader.consume_version ();
-        if (!version)
-            return std::nullopt;
-        const auto kind = reader.byte ();
-        const auto key = reader.text ();
-        const auto mesh = reader.text ();
-        const auto source_node = reader.text ();
-        const auto object_generation = reader.u64 ();
-        const auto source_owner_generation = reader.u64 ();
-        const auto target_mesh = *version >= 3 ? reader.text () : std::optional<std::string>{mesh};
-        const auto target_node = reader.text ();
-        const auto relocation_reference = reader.text ();
-        const auto checksum = reader.u32 ();
-        if (!kind || !key || !mesh || !source_node || !object_generation || !source_owner_generation
-            || !target_mesh || !target_node || !relocation_reference || !checksum)
-            return std::nullopt;
-        inventory_digest_t digest{};
-        for (auto &value : digest) {
-            const auto next = reader.byte ();
-            if (!next)
-                return std::nullopt;
-            value = *next;
-        }
-        const auto application_payload_size = reader.u32 ();
-        if (!application_payload_size)
-            return std::nullopt;
-        std::vector<std::byte> application_payload;
-        application_payload.reserve (*application_payload_size);
-        for (std::uint32_t index = 0; index != *application_payload_size; ++index) {
-            const auto next = reader.byte ();
-            if (!next)
-                return std::nullopt;
-            application_payload.push_back (static_cast<std::byte> (*next));
-        }
-        if (!reader.done ())
-            return std::nullopt;
-        const auto object_kind = static_cast<object_kind_t> (*kind);
-        if (object_kind != object_kind_t::actor && object_kind != object_kind_t::user_spot
-            && object_kind != object_kind_t::instance_spot)
-            return std::nullopt;
-        object_ref_t source{object_kind,        std::move (*key),
-                            *object_generation, *source_owner_generation,
-                            std::move (*mesh),  std::move (*source_node)};
-        auto target = source;
-        target.mesh_name = std::move (*target_mesh);
-        target.node_id = std::move (*target_node);
-        target.authority_owner_generation = snapshot.authority_owner_generation;
-        return authority_relocation_reference_t{std::move (source),
-                                                std::move (target),
-                                                std::move (*relocation_reference),
-                                                *checksum,
-                                                digest,
-                                                snapshot.owner,
-                                                std::move (application_payload)};
-    }
-
+  private:
     static std::optional<authority_relocation_reference_t>
     decode_current (const authority_read_result_t &current)
     {
         const auto *snapshot = std::get_if<authority_snapshot_t> (&current);
-        return snapshot ? decode (*snapshot) : std::nullopt;
+        return snapshot ? authority_relocation_payload_codec_t::decode (*snapshot) : std::nullopt;
     }
 
     zlink::framework::location_repository_t *_store;

@@ -2,6 +2,7 @@
 #pragma once
 
 #include "runtime/execution/state_lane.hpp"
+#include "runtime/stateful/object_ref.hpp"
 #include "runtime/spots/actor_transfer_coordinator.hpp"
 
 #include "runtime/dispatch/dispatch_limits.hpp"
@@ -33,13 +34,6 @@ struct serial_application_record_t;
 namespace zlink::framework::runtime::stateful
 {
 
-enum class object_kind_t
-{
-    actor,
-    user_spot,
-    instance_spot
-};
-
 enum class object_state_t
 {
     creating,
@@ -60,18 +54,6 @@ enum class stateful_error_t
     conflict,
     backpressured,
     instance_manager_create_forbidden
-};
-
-struct object_ref_t
-{
-    object_kind_t kind = object_kind_t::actor;
-    std::string key;
-    std::uint64_t object_generation = 0;
-    std::uint64_t authority_owner_generation = 0;
-    std::string mesh_name;
-    std::string node_id;
-
-    friend bool operator== (const object_ref_t &, const object_ref_t &) = default;
 };
 
 struct placement_candidate_t

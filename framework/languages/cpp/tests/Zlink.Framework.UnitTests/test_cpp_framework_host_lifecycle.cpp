@@ -8,6 +8,8 @@
 #include "runtime/locations/location_records.hpp"
 #include "runtime/host/relocation_target_eligibility.hpp"
 #include "runtime/diagnostics/dispatch_options_access.hpp"
+#include "runtime/spots/spot_runtime.hpp"
+#include "runtime/stateful/public_host_runtime.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -27,6 +29,17 @@
 #include <thread>
 #include <utility>
 #include <vector>
+
+namespace zlink::framework::runtime::host
+{
+struct public_host_runtime_test_access_t
+{
+    static void erase_actor_reference (public_host_runtime_t &host, const std::string &id)
+    {
+        host._spot_actor_index_lane.run ([&] { host._actors.erase (id); }).get ();
+    }
+};
+}
 
 namespace
 {
@@ -474,6 +487,8 @@ class observing_actor_creation_store_t final : public zlink::framework::location
     zlink::framework::task_t<zlink::framework::store_read_result_t>
     read (zlink::framework::store_key_t key) override
     {
+        if (on_read)
+            on_read (key);
         if (key.value.starts_with (std::string ("creation-terminal") + '\0')) {
             terminal_reads.fetch_add (1, std::memory_order_acq_rel);
             if (hide_terminal_reads.load (std::memory_order_acquire)) {
@@ -539,6 +554,7 @@ class observing_actor_creation_store_t final : public zlink::framework::location
         return inner->scan (std::move (request));
     }
 
+    std::function<void (const zlink::framework::store_key_t &)> on_read;
     std::shared_ptr<zlink::framework::runtime::in_memory_location_store_t> inner;
     std::atomic_bool republish_descriptor{false};
     std::atomic_int descriptor_conflicts{0};
@@ -2568,10 +2584,12 @@ class relocated_member_spot_t final : public zlink::framework::spot_t<configurat
     zlink::framework::spot_context_t _context;
 };
 
-bool verify_relocated_actor_follow_and_shutdown (bool aggregate = false)
+bool verify_relocated_actor_follow_and_shutdown (bool aggregate = false,
+                                                 bool missing_source = false)
 {
     using namespace zlink::framework;
-    auto locations = std::make_shared<runtime::in_memory_location_store_t> ();
+    auto locations = std::make_shared<observing_actor_creation_store_t> (
+      std::make_shared<runtime::in_memory_location_store_t> ());
     auto relocations = std::make_shared<runtime::in_memory_relocation_store_t> ();
     auto configure = [&] (app_t &app, std::string rid) {
         app.add_zlink_framework ([&, rid, host = &app] (zlink_framework_options_t &options) {
@@ -2607,6 +2625,19 @@ bool verify_relocated_actor_follow_and_shutdown (bool aggregate = false)
     };
     auto source = app_t::create ();
     auto target = app_t::create ();
+    std::atomic_bool removed{false};
+    locations->on_read = [&] (const store_key_t &key) {
+        if (!missing_source || source.runtime_state () != framework_runtime_state_t::relocating
+            || key.value.find (std::string ("authority") + '\0' + "actor" + '\0'
+                               + "relocated-actor")
+                 == std::string::npos
+            || removed.exchange (true))
+            return;
+        auto node_runtime = detail::spot_node_runtime_t::from (source.advanced ().zlink (),
+                                                               "relocated-actor-shutdown");
+        runtime::host::public_host_runtime_test_access_t::erase_actor_reference (
+          *node_runtime->native_node (), "relocated-actor");
+    };
     configure (source, "relocated-source");
     configure (target, "relocated-target");
     source.set_message_flow_mode (message_flow_log_mode_t::normal);
@@ -2699,6 +2730,16 @@ bool verify_relocated_actor_follow_and_shutdown (bool aggregate = false)
         if (!reply && reply.error ())
             std::cerr << "Spot Message Follow request failed: " << reply.error ()->what () << '\n';
     }
+    if (missing_source) {
+        source.shutdown (std::chrono::seconds (5)).result ().value ();
+        target.shutdown (std::chrono::seconds (5)).result ().value ();
+        source_thread.join ();
+        target_thread.join ();
+        std::cout << "missing source: removed=" << removed.load ()
+                  << " reason=" << static_cast<int> (moved.reason) << '\n';
+        return removed && moved.outcome == relocation_outcome_t::blocked
+               && moved.reason == relocation_reason_t::state_incompatible;
+    }
     const auto after = client.request (actor_id_t ("relocated-actor"), degraded_object_message_t{2})
                          .timeout (std::chrono::seconds (5))
                          .async<degraded_object_message_t> ()
@@ -2725,6 +2766,9 @@ bool verify_relocated_actor_follow_and_shutdown (bool aggregate = false)
 
 int main (int argc, char **argv)
 {
+    if (argc == 2 && std::string_view (argv[1]) == "relocation-missing-source")
+        return verify_relocated_actor_follow_and_shutdown (false, true) ? EXIT_SUCCESS
+                                                                        : EXIT_FAILURE;
     if (argc == 2 && std::string_view (argv[1]) == "relocated-actor-shutdown")
         return verify_relocated_actor_follow_and_shutdown () ? EXIT_SUCCESS : EXIT_FAILURE;
     if (argc == 2 && std::string_view (argv[1]) == "relocated-aggregate-shutdown")

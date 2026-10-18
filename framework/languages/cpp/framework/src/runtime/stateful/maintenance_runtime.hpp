@@ -5,6 +5,7 @@
 #include "runtime/protocol/service_wire_codec.hpp"
 #include "runtime/execution/state_lane.hpp"
 #include "runtime/stateful/relocation_transfer.hpp"
+#include "runtime/locations/relocation_authority_payload.hpp"
 #include "runtime/stateful/stateful_object_runtime.hpp"
 #include "runtime/stateful/stream_session_registry.hpp"
 
@@ -37,7 +38,6 @@ class delay_owner_t;
 namespace zlink::framework::runtime::stateful
 {
 
-using inventory_digest_t = std::array<std::uint8_t, 32>;
 using relocation_session_binding_t =
   std::pair<protocol::actor_identity_t, protocol::relocation_envelope_session_binding_t>;
 
@@ -94,17 +94,6 @@ class durable_session_journal_store_t
 
   private:
     std::shared_ptr<relocation_store_port_t> _store;
-};
-
-struct authority_relocation_reference_t
-{
-    object_ref_t source;
-    object_ref_t target;
-    std::string relocation_reference;
-    std::uint32_t checksum_crc32c = 0;
-    inventory_digest_t inventory_digest{};
-    location_owner_token_t target_owner;
-    std::vector<std::byte> application_payload;
 };
 
 enum class authority_publish_status_t

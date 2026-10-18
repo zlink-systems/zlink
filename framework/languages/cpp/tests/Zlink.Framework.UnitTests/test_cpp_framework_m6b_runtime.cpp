@@ -4753,14 +4753,16 @@ void verify_location_store_accepted_record_authority ()
 
     const auto resolver = stateful::make_location_store_authority_resolver (store);
     const auto resolved =
-      resolver ({.target = {stateful::object_kind_t::actor, "actor-authority",
-                            committed.ready.object_generation,
-                            committed.ready.authority_owner_generation, "m6b-mesh", "raw-target"},
-                 .source_node_routing_id = bytes ("raw-source"),
-                 .source_node_generation = 1,
-                 .target_node_routing_id = bytes ("raw-target"),
-                 .target_node_generation = 1,
-                 .source_kind = protocol::frozen_source_kind_t::node})
+      resolver (
+        {.target = {stateful::object_kind_t::actor, "actor-authority",
+                    committed.ready.object_generation, committed.ready.authority_owner_generation,
+                    "m6b-mesh", "raw-target"},
+         .source_node_routing_id = bytes ("raw-source"),
+         .source_node_generation = 1,
+         .target_node_routing_id = bytes ("raw-target"),
+         .target_node_generation = 1,
+         .source_kind = protocol::frozen_source_kind_t::node,
+         .requested_authority_owner_generation = committed.ready.authority_owner_generation})
         .result ()
         .value ();
     assert (resolved);
@@ -4773,19 +4775,21 @@ void verify_location_store_accepted_record_authority ()
     // A bound-session query carries the session triple next to the owning
     // Actor identity so resolvers can fence-check the binding.
     const auto resolved_bound =
-      resolver ({.target = {stateful::object_kind_t::actor, "actor-authority",
-                            committed.ready.object_generation,
-                            committed.ready.authority_owner_generation, "m6b-mesh", "raw-target"},
-                 .source_node_routing_id = bytes ("raw-source"),
-                 .source_node_generation = 1,
-                 .target_node_routing_id = bytes ("raw-target"),
-                 .target_node_generation = 1,
-                 .source_kind = protocol::frozen_source_kind_t::bound_session,
-                 .source_actor = std::make_pair (std::string ("actor-authority"),
-                                                 committed.ready.object_generation),
-                 .source_session_routing_id = bytes ("sess-1"),
-                 .source_binding_generation = 5,
-                 .source_session_sequence = 9})
+      resolver (
+        {.target = {stateful::object_kind_t::actor, "actor-authority",
+                    committed.ready.object_generation, committed.ready.authority_owner_generation,
+                    "m6b-mesh", "raw-target"},
+         .source_node_routing_id = bytes ("raw-source"),
+         .source_node_generation = 1,
+         .target_node_routing_id = bytes ("raw-target"),
+         .target_node_generation = 1,
+         .source_kind = protocol::frozen_source_kind_t::bound_session,
+         .source_actor =
+           std::make_pair (std::string ("actor-authority"), committed.ready.object_generation),
+         .source_session_routing_id = bytes ("sess-1"),
+         .source_binding_generation = 5,
+         .source_session_sequence = 9,
+         .requested_authority_owner_generation = committed.ready.authority_owner_generation})
         .result ()
         .value ();
     assert (resolved_bound);
@@ -4801,7 +4805,8 @@ void verify_location_store_accepted_record_authority ()
       .source_node_generation = 2,
       .target_node_routing_id = bytes ("raw-target"),
       .target_node_generation = 1,
-      .source_kind = protocol::frozen_source_kind_t::node};
+      .source_kind = protocol::frozen_source_kind_t::node,
+      .requested_authority_owner_generation = committed.ready.authority_owner_generation};
     assert (!resolver (stale).result ().value ());
 
     for (const auto kind :
@@ -4827,12 +4832,13 @@ void verify_location_store_accepted_record_authority ()
                         "m6b-mesh",
                         "raw-target"};
         query.source_node_generation = 1;
+        query.requested_authority_owner_generation = query.target.authority_owner_generation;
         assert (resolver (query).result ().value ());
         auto wrong_generation = query;
         ++wrong_generation.target.object_generation;
         assert (!resolver (wrong_generation).result ().value ());
         auto wrong_authority = query;
-        ++wrong_authority.target.authority_owner_generation;
+        ++wrong_authority.requested_authority_owner_generation;
         assert (!resolver (wrong_authority).result ().value ());
         auto wrong_node = query;
         ++wrong_node.target_node_generation;
@@ -4841,6 +4847,34 @@ void verify_location_store_accepted_record_authority ()
         wrong_kind.target.kind = stateful::object_kind_t::actor;
         assert (!resolver (wrong_kind).result ().value ());
     }
+    auto retained_query = stale;
+    retained_query.source_node_generation = 1;
+    const object_creation_target_t relocated_target{
+      "m6b-mesh", node_rid_t::from_string ("raw-source"), 1, source_owner};
+    const auto moved =
+      store
+        .compare_exchange_authority (runtime::actor_authority_key ("actor-authority"),
+                                     committed.ready.store_version,
+                                     authority_retarget_t{{std::byte{1}}, relocated_target})
+        .result ()
+        .value ();
+    assert (std::holds_alternative<authority_stored_t> (moved));
+    assert (!resolver (retained_query).result ().value ());
+    const auto retained = stateful::make_location_store_retained_authority_resolver (store);
+    const auto qualified = retained (retained_query).result ().value ();
+    assert (qualified);
+    assert (qualified->source.owner_id == source_owner.owner_id);
+    assert (qualified->source.node_routing_id == bytes ("raw-source"));
+    assert (qualified->target_owner_lease_generation
+            == static_cast<std::uint64_t> (target_owner.lease_generation));
+    auto unknown_peer = retained_query;
+    ++unknown_peer.source_node_generation;
+    assert (!retained (unknown_peer).result ().value ());
+    auto unknown_target = retained_query;
+    ++unknown_target.target_node_generation;
+    assert (!retained (unknown_target).result ().value ());
+    store.release_owner_lease (target_owner).result ().value ();
+    assert (!retained (retained_query).result ().value ());
 }
 
 void verify_raw_spot_and_actor_routing ()

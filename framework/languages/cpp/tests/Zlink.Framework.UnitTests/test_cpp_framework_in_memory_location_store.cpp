@@ -3,6 +3,7 @@
 #include "runtime/locations/in_memory_location_store.hpp"
 #include <runtime/locations/location_repository.hpp>
 #include "runtime/locations/live_location_reader.hpp"
+#include "runtime/stateful/public_store_adapters.hpp"
 
 #include <gtest/gtest.h>
 
@@ -156,6 +157,97 @@ TEST (ZLinkFrameworkInMemoryLocationStore,
     EXPECT_EQ (source->capacity.actors.reserved, 0u);
     EXPECT_EQ (target_node->capacity.actors.active, 1u);
     EXPECT_EQ (target_node->capacity.actors.reserved, 0u);
+}
+
+TEST (ZLinkFrameworkInMemoryLocationStore, ActorCanJoinRelocatedSingleSpot)
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::runtime;
+    using namespace zlink::framework::runtime::stateful;
+    in_memory_location_repository_t store;
+    const auto owner_a = claim_owner (store, "owner-a");
+    const auto owner_b = claim_owner (store, "owner-b");
+    publish_mesh_node (store, "node-a", owner_a);
+    publish_mesh_node (store, "node-b", owner_b);
+    const object_creation_target_t target_a{"play", node_rid_t::from_string ("node-a"), 1, owner_a};
+    const object_creation_target_t target_b{"play", node_rid_t::from_string ("node-b"), 1, owner_b};
+    const auto create = [&] (placement_object_kind_t kind, std::string id, std::string type,
+                             std::vector<std::byte> payload) {
+        object_reserve_request_t request{
+          .key = {kind, std::move (id)},
+          .intent = {.stable_type = std::move (type)},
+          .target = target_a,
+          .creating_payload = payload,
+          .capacity_bundle = {.actor_slots = kind == placement_object_kind_t::actor ? 1u : 0u,
+                              .spot_slots = kind == placement_object_kind_t::user_spot ? 1u : 0u}};
+        if (kind == placement_object_kind_t::user_spot)
+            request.capacity_bundle.spot_type =
+              spot_type_capacity_delta_t{kind, request.intent.stable_type, 1};
+        const auto reservation = store.reserve (request).result ().value ();
+        const auto committed =
+          store
+            .commit (
+              {request.key, std::get<object_reserved_t> (reservation).fence, std::move (payload)})
+            .result ()
+            .value ();
+        return std::get<object_committed_t> (committed).ready;
+    };
+    const auto spot =
+      create (placement_object_kind_t::user_spot, "room-1", "room",
+              encode_user_spot_authority_payload (
+                {.stable_type = "room",
+                 .spot_id = "room-1",
+                 .owner_id = owner_a.owner_id,
+                 .owner_lease_generation = static_cast<std::uint64_t> (owner_a.lease_generation),
+                 .mesh_name = "play",
+                 .node_rid = target_a.node_rid,
+                 .node_generation = 1}));
+    public_authority_store_adapter_t relocation (store);
+    const object_ref_t source{object_kind_t::user_spot,        "room-1", spot.object_generation,
+                              spot.authority_owner_generation, "play",   "node-a"};
+    auto target = source;
+    target.node_id = "node-b";
+    ASSERT_EQ (
+      authority_publish_status_t::published,
+      relocation
+        .publish (source, target, owner_b, target_b, "saved-room", 1, {}, {}, spot.store_version)
+        .status);
+    actor_authority_payload_t actor{.stable_type = "player",
+                                    .actor_id = "fresh",
+                                    .current_spot_id = "entry-a",
+                                    .current_spot_generation = 1,
+                                    .current_spot_kind = actor_authority_spot_kind_t::entry,
+                                    .owner_id = owner_a.owner_id,
+                                    .owner_lease_generation =
+                                      static_cast<std::uint64_t> (owner_a.lease_generation),
+                                    .mesh_name = "play",
+                                    .node_rid = target_a.node_rid,
+                                    .node_generation = 1};
+    const auto fresh = create (placement_object_kind_t::actor, "fresh", "player",
+                               encode_actor_authority_payload (actor));
+    actor.current_spot_id = "room-1";
+    actor.current_spot_generation = spot.object_generation;
+    actor.current_spot_kind = actor_authority_spot_kind_t::user;
+    actor.owner_id = owner_b.owner_id;
+    actor.owner_lease_generation = static_cast<std::uint64_t> (owner_b.lease_generation);
+    actor.node_rid = target_b.node_rid;
+    auto invalid = actor;
+    ++invalid.current_spot_generation;
+    const auto rejected =
+      store
+        .compare_exchange_authority (
+          actor_authority_key ("fresh"), fresh.store_version,
+          authority_retarget_t{encode_actor_authority_payload (invalid), target_b})
+        .result ()
+        .value ();
+    EXPECT_NE (nullptr, std::get_if<authority_conflict_t> (&rejected));
+    const auto joined = store
+                          .compare_exchange_authority (
+                            actor_authority_key ("fresh"), fresh.store_version,
+                            authority_retarget_t{encode_actor_authority_payload (actor), target_b})
+                          .result ()
+                          .value ();
+    ASSERT_NE (nullptr, std::get_if<authority_stored_t> (&joined));
 }
 
 TEST (ZLinkFrameworkInMemoryLocationStore, DescriptorFencesCapabilityProfileAndPendingCapacity)

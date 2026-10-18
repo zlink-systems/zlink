@@ -192,71 +192,108 @@ bool frozen_matches_registration (const protocol::frozen_record_t &frozen,
 
 }
 
-accepted_record_authority_resolver_t
-make_location_store_authority_resolver (zlink::framework::location_repository_t &store)
+namespace
 {
-    return [&store] (accepted_record_authority_query_t query)
+template <bool Retained>
+accepted_record_authority_resolver_t make_store_authority_resolver (location_repository_t &store)
+{
+    return [&store] (const accepted_record_authority_query_t &query)
              -> task_t<std::optional<accepted_record_authority_t>> {
         try {
-            const auto authority = co_await store.read_authority (
-              query.target.kind == object_kind_t::actor ? actor_authority_key (query.target.key)
-                                                        : spot_authority_key (query.target.key));
-            const auto *snapshot = std::get_if<authority_snapshot_t> (&authority);
-            const auto target_rid = node_rid_t::from_string (
-              zlink::routing_id_t::from (query.target_node_routing_id).to_string ());
-            // A Spot wire address covers both User and Instance Spots. The
-            // native facade is a mailbox owner; Store owns the placement kind.
-            const bool matches_kind =
-              snapshot
-              && (query.target.kind == object_kind_t::actor
-                    ? snapshot->allocation.object_kind == placement_object_kind_t::actor
-                    : snapshot->allocation.object_kind == placement_object_kind_t::user_spot
-                        || snapshot->allocation.object_kind
-                             == placement_object_kind_t::instance_spot);
-            if (!matches_kind || snapshot->object_generation != query.target.object_generation
-                || snapshot->authority_owner_generation != query.target.authority_owner_generation
-                || snapshot->allocation.target.mesh_name != query.target.mesh_name
-                || snapshot->allocation.target.node_rid.value () != target_rid.value ()
-                || snapshot->allocation.target.node_lifecycle_generation
-                     != query.target_node_generation) {
-                co_return std::nullopt;
-            }
+            std::uint64_t target_lease = 0;
+            if constexpr (!Retained) {
+                const auto authority =
+                  co_await store.read_authority (query.target.kind == object_kind_t::actor
+                                                   ? actor_authority_key (query.target.key)
+                                                   : spot_authority_key (query.target.key));
+                const auto *snapshot = std::get_if<authority_snapshot_t> (&authority);
+                const auto target_rid = node_rid_t::from_string (
+                  zlink::routing_id_t::from (query.target_node_routing_id).to_string ());
+                // A Spot wire address covers both User and Instance Spots. The
+                // native facade is a mailbox owner; Store owns the placement kind.
+                const bool matches_kind =
+                  snapshot
+                  && (query.target.kind == object_kind_t::actor
+                        ? snapshot->allocation.object_kind == placement_object_kind_t::actor
+                        : snapshot->allocation.object_kind == placement_object_kind_t::user_spot
+                            || snapshot->allocation.object_kind
+                                 == placement_object_kind_t::instance_spot);
+                if (!matches_kind || snapshot->object_generation != query.target.object_generation
+                    || (query.target.kind == object_kind_t::actor
+                        && snapshot->authority_owner_generation
+                             != query.target.authority_owner_generation)
+                    || snapshot->authority_owner_generation
+                         != query.requested_authority_owner_generation
+                    || snapshot->allocation.target.mesh_name != query.target.mesh_name
+                    || snapshot->allocation.target.node_rid.value () != target_rid.value ()
+                    || snapshot->allocation.target.node_lifecycle_generation
+                         != query.target_node_generation) {
+                    co_return std::nullopt;
+                }
 
+                target_lease =
+                  static_cast<std::uint64_t> (snapshot->allocation.target.owner.lease_generation);
+            }
             const auto nodes = co_await store.list_mesh_nodes (query.target.mesh_name);
-            const auto source_rid = zlink::routing_id_t::from (query.source_node_routing_id);
-            const auto source = std::find_if (
-              nodes.items.begin (), nodes.items.end (), [&] (const mesh_node_descriptor_t &node) {
-                  return node.rid == source_rid
-                         && node.lifecycle_generation == query.source_node_generation;
-              });
-            if (source == nodes.items.end () || source->owner_id.empty ()
-                || source->lease_generation <= 0) {
-                co_return std::nullopt;
+            const auto find_node = [&] (const auto &rid, std::uint64_t generation) {
+                const auto routing_id = zlink::routing_id_t::from (rid);
+                const auto found = std::find_if (
+                  nodes.items.begin (), nodes.items.end (),
+                  [&] (const mesh_node_descriptor_t &node) {
+                      return node.rid == routing_id && node.lifecycle_generation == generation;
+                  });
+                return found == nodes.items.end () ? nullptr : &*found;
+            };
+            std::array<const mesh_node_descriptor_t *, Retained ? 2 : 1> identities{};
+            identities[0] = find_node (query.source_node_routing_id, query.source_node_generation);
+            if constexpr (Retained)
+                identities[1] =
+                  find_node (query.target_node_routing_id, query.target_node_generation);
+            for (const auto *identity : identities) {
+                if (!identity || identity->owner_id.empty () || identity->lease_generation <= 0)
+                    co_return std::nullopt;
+                const auto lease = co_await store.read_owner_lease (identity->owner_id);
+                const auto *live = std::get_if<owner_lease_found_t> (&lease);
+                if (!live || live->token.lease_generation != identity->lease_generation
+                    || live->lease_expires_at <= live->store_now)
+                    co_return std::nullopt;
             }
-            const auto lease = co_await store.read_owner_lease (source->owner_id);
-            const auto *live = std::get_if<owner_lease_found_t> (&lease);
-            if (!live || live->token.lease_generation != source->lease_generation
-                || live->lease_expires_at <= live->store_now) {
-                co_return std::nullopt;
-            }
+            const auto &source = *identities.front ();
+            if constexpr (Retained)
+                target_lease = static_cast<std::uint64_t> (identities.back ()->lease_generation);
             co_return accepted_record_authority_t{
-              {source->owner_id, static_cast<std::uint64_t> (source->lease_generation),
+              {source.owner_id, static_cast<std::uint64_t> (source.lease_generation),
                query.source_node_routing_id, query.source_node_generation},
-              static_cast<std::uint64_t> (snapshot->allocation.target.owner.lease_generation)};
+              target_lease};
         }
         catch (...) {
             co_return std::nullopt;
         }
     };
 }
+} // namespace
+
+accepted_record_authority_resolver_t
+make_location_store_authority_resolver (location_repository_t &store)
+{
+    return make_store_authority_resolver<false> (store);
+}
+
+accepted_record_authority_resolver_t
+make_location_store_retained_authority_resolver (location_repository_t &store)
+{
+    return make_store_authority_resolver<true> (store);
+}
 
 raw_stateful_dispatch_t::raw_stateful_dispatch_t (
   stateful_object_runtime_t &objects,
   mesh::raw_mesh_node_owner_t &transport,
-  accepted_record_authority_resolver_t authority_resolver) :
+  accepted_record_authority_resolver_t authority_resolver,
+  accepted_record_authority_resolver_t retained_authority_resolver) :
     _objects (&objects),
     _transport (&transport),
-    _authority_resolver (std::move (authority_resolver))
+    _authority_resolver (std::move (authority_resolver)),
+    _retained_authority_resolver (std::move (retained_authority_resolver))
 {
 }
 
@@ -754,8 +791,7 @@ raw_stateful_dispatch_t::accepted_actor_authority (object_ref_t owner,
                                                    protocol::actor_message_header_t actor,
                                                    std::vector<std::uint8_t> source_node_routing_id,
                                                    std::uint64_t source_node_generation,
-                                                   bool bound_session_routed,
-                                                   local_source_fence_resolver_t local_source) const
+                                                   bool bound_session_routed) const
 {
     if (!matches_application_route (owner, actor.target))
         return task_t<authority_result_t> (
@@ -768,6 +804,7 @@ raw_stateful_dispatch_t::accepted_actor_authority (object_ref_t owner,
           result_t<authority_result_t>::success ({stateful_error_t::moving, std::nullopt}));
     accepted_record_authority_query_t query;
     query.target = std::move (owner);
+    query.requested_authority_owner_generation = actor.target.authority_owner_generation;
     query.source_node_routing_id = std::move (source_node_routing_id);
     query.source_node_generation = source_node_generation;
     query.target_node_routing_id = std::move (actor.target.target_node_routing_id);
@@ -782,56 +819,48 @@ raw_stateful_dispatch_t::accepted_actor_authority (object_ref_t owner,
         query.source_binding_generation = actor.bound_session_source->binding_generation;
         query.source_session_sequence = actor.bound_session_source->session_sequence;
     }
-    return resolve_accepted_authority (std::move (query), actor.target.owner_lease_generation,
-                                       std::move (local_source));
+    return resolve_accepted_authority (std::move (query), actor.target.owner_lease_generation);
 }
 
 task_t<std::pair<stateful_error_t, std::optional<accepted_record_authority_t>>>
 raw_stateful_dispatch_t::accepted_spot_authority (object_ref_t owner,
                                                   protocol::spot_message_header_t spot,
                                                   std::vector<std::uint8_t> source_node_routing_id,
-                                                  std::uint64_t source_node_generation,
-                                                  local_source_fence_resolver_t local_source) const
+                                                  std::uint64_t source_node_generation) const
 {
     if (!matches_application_route (owner, spot.target))
         return task_t<authority_result_t> (
           result_t<authority_result_t>::success ({stateful_error_t::conflict, std::nullopt}));
     accepted_record_authority_query_t query;
     query.target = std::move (owner);
+    query.requested_authority_owner_generation = spot.target.authority_owner_generation;
     query.source_node_routing_id = std::move (source_node_routing_id);
     query.source_node_generation = source_node_generation;
     query.target_node_routing_id = std::move (spot.target.target_node_routing_id);
     query.target.object_generation = spot.target.object_generation;
-    query.target.authority_owner_generation = spot.target.authority_owner_generation;
     query.target_node_generation = spot.target.target_node_generation;
     query.source_kind = spot.source_spot_id.empty () ? protocol::frozen_source_kind_t::node
                                                      : protocol::frozen_source_kind_t::spot;
     if (!spot.source_spot_id.empty ())
         query.source_spot_id = std::move (spot.source_spot_id);
-    return resolve_accepted_authority (std::move (query), spot.target.owner_lease_generation,
-                                       std::move (local_source));
+    return resolve_accepted_authority (std::move (query), spot.target.owner_lease_generation);
 }
 
 task_t<std::pair<stateful_error_t, std::optional<accepted_record_authority_t>>>
 raw_stateful_dispatch_t::resolve_accepted_authority (
-  accepted_record_authority_query_t query,
-  std::uint64_t target_owner_lease_generation,
-  local_source_fence_resolver_t local_source) const
+  accepted_record_authority_query_t query, std::uint64_t target_owner_lease_generation) const
 {
     if (!_authority_resolver)
         co_return std::pair{stateful_error_t::invalid, std::nullopt};
-    std::optional<accepted_record_authority_t> authority;
-    std::optional<protocol::request_source_fence_t> source;
-    if (local_source) {
-        const auto retained_source = co_await _objects->retained_relocation_source (query.target);
-        if (retained_source)
-            source = local_source ();
-    }
-    if (source) {
-        // The local runtime owns this fence; the native gate chooses dispatch, hold or Follow.
-        authority = accepted_record_authority_t{*source, source->lease_generation};
-    } else {
-        authority = co_await _authority_resolver (std::move (query));
+    auto authority = co_await _authority_resolver (query);
+    if (!authority && _retained_authority_resolver) {
+        auto source = query.target;
+        source.authority_owner_generation = query.requested_authority_owner_generation;
+        const auto retained = co_await _objects->retained_relocation_source (std::move (source));
+        if (retained) {
+            // Native ingress owns the exact source fence, hold and Follow; Store qualifies peers.
+            authority = co_await _retained_authority_resolver (query);
+        }
     }
     // Encoded headers require a nonzero lease. Local headers may leave it to this owner.
     if (!authority
@@ -1174,8 +1203,8 @@ std::string raw_stateful_dispatch_t::mailbox_owner (const object_ref_t &owner)
 bool raw_stateful_dispatch_t::matches_application_route (const object_ref_t &owner,
                                                          const protocol::actor_route_fence_t &route)
 {
-    return owner.kind == object_kind_t::actor && owner.key == route.actor_id
-           && owner.authority_owner_generation == route.authority_owner_generation;
+    // The authority resolver owns Ready and exact relocation-source address fences together.
+    return owner.kind == object_kind_t::actor && owner.key == route.actor_id;
 }
 
 bool raw_stateful_dispatch_t::matches_application_route (const object_ref_t &owner,

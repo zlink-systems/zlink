@@ -865,7 +865,8 @@ void mesh_node_runtime_t::start ()
     if (_session_route_owner_resolver)
         node->configure_session_route_owner (_session_route_owner_resolver);
     if (_stateful_dispatch_resolver)
-        node->configure_stateful_dispatch (_stateful_dispatch_resolver);
+        node->configure_stateful_dispatch (_stateful_dispatch_resolver,
+                                           _retained_authority_resolver);
     if (_bound_session_operations)
         node->configure_bound_session_operations (*_bound_session_operations);
     if (_late_session_route_update_reporter)
@@ -1708,13 +1709,15 @@ void mesh_node_runtime_t::configure_session_route_owner (
 }
 
 void mesh_node_runtime_t::configure_stateful_dispatch (
-  runtime::stateful::accepted_record_authority_resolver_t resolver)
+  runtime::stateful::accepted_record_authority_resolver_t resolver,
+  runtime::stateful::accepted_record_authority_resolver_t retained_resolver)
 {
     if (!resolver)
         throw configuration_error ("Stateful dispatch authority resolver is required");
     if (_node)
         throw configuration_error ("Stateful dispatch must be configured before MeshNode start");
     _stateful_dispatch_resolver = std::move (resolver);
+    _retained_authority_resolver = std::move (retained_resolver);
 }
 
 void mesh_node_runtime_t::configure_bound_session_operations (

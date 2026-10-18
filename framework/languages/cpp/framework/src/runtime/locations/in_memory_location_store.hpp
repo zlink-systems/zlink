@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #pragma once
 #include "runtime/locations/actor_authority_payload.hpp"
+#include "runtime/locations/relocation_authority_payload.hpp"
 
 #include "../../../../../../runtime/protocol/generated/cpp/service_wire_constants.hpp"
 
@@ -1343,9 +1344,11 @@ class in_memory_location_repository_t : public location_repository_t
                 || old_member->current_spot_generation != member->current_spot_generation)) {
             const auto spot =
               _authorities.find (spot_authority_key (member->current_spot_id).value);
-            const auto ready = spot == _authorities.end ()
-                                 ? std::optional<user_spot_authority_payload_t>{}
-                                 : decode_ready_user_spot_authority_payload (spot->second.payload);
+            const auto ready =
+              spot == _authorities.end ()
+                ? std::optional<user_spot_authority_payload_t>{}
+                : stateful::authority_relocation_payload_codec_t::decode_ready_user_spot (
+                    spot->second);
             if (!ready || ready->spot_id != member->current_spot_id
                 || spot->second.allocation.object_kind != placement_object_kind_t::user_spot
                 || spot->second.allocation.state != placement_allocation_state_t::active
@@ -1401,7 +1404,8 @@ class in_memory_location_repository_t : public location_repository_t
                 throw framework_exception_t (framework_error_kind_t::unavailable,
                                              "Actor is not steady Ready");
             if (snapshot.allocation.object_kind == placement_object_kind_t::user_spot) {
-                const auto spot = decode_ready_user_spot_authority_payload (snapshot.payload);
+                const auto spot =
+                  stateful::authority_relocation_payload_codec_t::decode_ready_user_spot (snapshot);
                 if (!spot || spot->spot_id != request->key.global_id
                     || spot->stable_type != request->intent.stable_type)
                     throw framework_exception_t (framework_error_kind_t::unavailable,

@@ -40,6 +40,22 @@
 #include <tuple>
 #include <utility>
 
+namespace zlink::framework::detail
+{
+struct spot_node_runtime_test_access_t
+{
+    static task_t<void> replay (spot_node_runtime_t &runtime,
+                                actor_ref_t actor,
+                                std::vector<handoff_packet_t> packets,
+                                service_provider_t services)
+    {
+        return runtime.replay_actor_handoff_batch (std::move (actor), std::move (packets),
+                                                   std::move (services), "canonical-replay", false,
+                                                   {});
+    }
+};
+}
+
 namespace zlink::framework::runtime::host
 {
 // Reproduce a superseded assembly at the activation boundary without timing races.
@@ -1579,8 +1595,10 @@ struct native_intake_fixture_t
     static constexpr auto source_id = "boundary-source";
     std::vector<std::uint8_t> rid = zlink::routing_id_t::from ("intake-boundary").to_bytes ();
     fw::runtime::stateful::accepted_record_authority_resolver_t resolver =
-      [] (fw::runtime::stateful::accepted_record_authority_query_t query)
+      [] (const fw::runtime::stateful::accepted_record_authority_query_t &query)
       -> fw::task_t<std::optional<fw::runtime::stateful::accepted_record_authority_t>> {
+        if (query.requested_authority_owner_generation != query.target.authority_owner_generation)
+            co_return std::nullopt;
         co_return fw::runtime::stateful::accepted_record_authority_t{
           {source_id, 1, query.source_node_routing_id, query.source_node_generation}, 1};
     };
@@ -5541,6 +5559,72 @@ TEST (DeferredJoinReservation, DurablePrefixTakesLateIngressPermitAtCapacityOne)
 TEST (DeferredJoinReservation, DurablePrefixRejectsExtraSupplyAcquisition)
 {
     EXPECT_NONFATAL_FAILURE (capacity_probe (false, true), "supply_acquisitions");
+}
+
+TEST (ActorMaintenanceJoin, CanonicalReplayMaterializesBodyWithoutInvocationCache)
+{
+    observations_t evidence;
+    observations = &evidence;
+    host_t host;
+    release_callbacks_t release{evidence};
+    configure (host, first_rid, std::make_shared<fw::runtime::in_memory_location_store_t> (),
+               std::make_shared<fw::runtime::in_memory_relocation_store_t> ());
+    host.start ();
+    ASSERT_TRUE (ready (host));
+    auto services = host.app.advanced ().services ().build_provider ();
+    ASSERT_TRUE (services.get_required<fw::actor_manager_t> ()
+                   .get_or_create (fw::actor_id_t (actor_id), actor_type)
+                   .async ()
+                   .result ());
+    auto &client = services.get_required<fw::actor_client_t> ();
+    ASSERT_TRUE (client.request (fw::actor_id_t (actor_id), probe_t{instance_probe})
+                   .async<probe_t> ()
+                   .result ());
+    const auto state =
+      fw::detail::mesh_node_runtime_t::registrations (host.app.advanced ().zlink ())
+        .front ()
+        ->spot_state;
+    const auto actor =
+      state->lane
+        .run ([&] {
+            return fw::detail::actor_ref_access_t::make (
+              fw::node_rid_t::from_string (first_rid), actor_type, actor_id,
+              state->actor_generations.at (std::string (actor_type) + ":" + actor_id));
+        })
+        .get ();
+    namespace wire = fw::runtime::protocol;
+    fw::runtime::messaging::envelope_header_t header;
+    header.kind = fw::runtime::messaging::message_kind_t::command;
+    header.channel_name = mesh_name;
+    header.message_name = record_t::packet_name;
+    header.content_type = "application/json";
+    wire::application_payload_t::multipart_t parts;
+    parts.push_back (fw::runtime::messaging::envelope_codec_t{}.encode_header (header));
+    parts.push_back (zlink::message_t::from (nlohmann::json (record_t{73}).dump ()));
+    wire::frozen_application_record_t frozen;
+    frozen.kind = wire::frozen_record_kind_t::actor_send;
+    frozen.body = wire::frozen_actor_application_body_t{
+      {}, wire::application_payload_t::from_parts (std::move (parts))};
+    auto record = std::make_shared<fw::runtime::serial_application_record_t> ();
+    record->payload.emplace ();
+    record->payload->application_record = std::move (frozen);
+    int terminals = 0;
+    record->native_reply = [&] (auto) {
+        ++terminals;
+        return true;
+    };
+    fw::detail::handoff_packet_t packet;
+    packet.packet_name = record_t::packet_name;
+    packet.content_type = header.content_type;
+    packet.application_record = record;
+    ASSERT_FALSE (record->invocation);
+    ASSERT_TRUE (packet.payload.empty ());
+    fw::detail::spot_node_runtime_t runtime (state);
+    ASSERT_TRUE (fw::detail::spot_node_runtime_test_access_t::replay (
+                   runtime, actor, {std::move (packet)}, services)
+                   .result ());
+    EXPECT_EQ (terminals, 1);
+    EXPECT_EQ (evidence.recorded, (std::vector<int>{73}));
 }
 
 }

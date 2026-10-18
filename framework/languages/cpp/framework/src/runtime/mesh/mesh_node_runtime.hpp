@@ -225,8 +225,9 @@ class mesh_node_runtime_t
     void configure_bound_session_relocation_resolver (
       std::function<task_t<std::optional<bound_session_relocation_route_t>> (
         const runtime::stateful::object_ref_t &)> resolver);
-    void
-    configure_stateful_dispatch (runtime::stateful::accepted_record_authority_resolver_t resolver);
+    void configure_stateful_dispatch (
+      runtime::stateful::accepted_record_authority_resolver_t resolver,
+      runtime::stateful::accepted_record_authority_resolver_t retained_resolver = {});
     void configure_bound_session_operations (host::bound_session_operations_t operations);
     void configure_late_session_route_update (
       std::function<void (const runtime::protocol::session_relocation_route_t &)> reporter);
@@ -661,6 +662,7 @@ class mesh_node_runtime_t
       const runtime::stateful::object_ref_t &)>
       _bound_session_relocation_resolver;
     runtime::stateful::accepted_record_authority_resolver_t _stateful_dispatch_resolver;
+    runtime::stateful::accepted_record_authority_resolver_t _retained_authority_resolver;
     std::optional<host::bound_session_operations_t> _bound_session_operations;
     std::function<void (const runtime::protocol::session_relocation_route_t &)>
       _late_session_route_update_reporter;

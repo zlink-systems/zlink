@@ -6251,6 +6251,21 @@ task_t<void> spot_node_runtime_t::replay_actor_handoff_batch (actor_ref_t actor_
             co_await emit_actor_transfer_marker_async ("handoff_replay_enqueued", actor_ref,
                                                        transfer_id, *location);
         }
+        if (packet.application_record && !packet.application_record->invocation) {
+            runtime::stateful::with_accepted_application (
+              *packet.application_record->payload, [&] (auto, const auto &application) {
+                  const runtime::messaging::message_parts_t parts (
+                    runtime::protocol::decode_application_parts (application));
+                  const auto body = runtime::messaging::envelope_codec_t{}.decode_body (parts);
+                  if (!body)
+                      std::rethrow_exception (body.exception ());
+                  spot_inbound_message_t metadata;
+                  metadata.content_type = std::move (packet.content_type);
+                  metadata.values = std::move (packet.metadata);
+                  packet.application_record->invocation.emplace (body.value (),
+                                                                 std::move (metadata));
+              });
+        }
         spot_inbound_message_t metadata;
         if (packet.application_record && packet.application_record->invocation)
             metadata = std::move (packet.application_record->invocation->second);
@@ -8627,6 +8642,8 @@ task_t<void> spot_node_runtime_t::retire_relocation_source_in (
     // Relocation §10: retire application ownership once, retaining native Follow routes.
     // Members leave the local registry before their source Spot scope is closed.
     const auto report_failure = [&self] (const runtime::stateful::object_ref_t &source) {
+        // Target commit remains successful; Host diagnostics retain cleanup errors even at Off.
+        self._state->runtime_failures ()->report (std::current_exception ());
         const bool actor = source.kind == runtime::stateful::object_kind_t::actor;
         report_spot_dispatch_trace (
           self._state, message_flow_outcome_t::completed,
@@ -9418,22 +9435,6 @@ spot_node_runtime_t::open_local_actor_handoff (const actor_ref_t &actor_ref,
                 order_bound_session_handoff (backlog);
                 prefix.reserve (backlog.size ());
                 for (auto &packet : backlog) {
-                    if (packet.application_record && !packet.application_record->invocation) {
-                        runtime::stateful::with_accepted_application (
-                          *packet.application_record->payload, [&] (auto, const auto &application) {
-                              const runtime::messaging::message_parts_t parts (
-                                runtime::protocol::decode_application_parts (application));
-                              const auto body =
-                                runtime::messaging::envelope_codec_t{}.decode_body (parts);
-                              if (!body)
-                                  std::rethrow_exception (body.exception ());
-                              spot_inbound_message_t metadata;
-                              metadata.content_type = std::move (packet.content_type);
-                              metadata.values = std::move (packet.metadata);
-                              packet.application_record->invocation.emplace (body.value (),
-                                                                             std::move (metadata));
-                          });
-                    }
                     runtime::serial_prefix_work_t item;
                     item.name = "actor-handoff-prefix";
                     item.options.application_record = packet.application_record;

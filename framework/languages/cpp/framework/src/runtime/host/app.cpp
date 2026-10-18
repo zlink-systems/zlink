@@ -3868,6 +3868,11 @@ task_t<void> app_t::run_shared_relocation (detail::app_state_t &state)
                 }
 
                 const auto source = node->native_node ().resolve_actor (actor);
+                if (!source) {
+                    terminal.reason = relocation_reason_t::state_incompatible;
+                    complete (terminal);
+                    co_return;
+                }
                 const auto moved = co_await node->relocate_application_actor (
                   actor, *target, *authority, deadline_at);
                 if (moved.terminal != runtime::stateful::relocation_terminal_t::completed) {

@@ -2305,6 +2305,7 @@ class spot_node_runtime_t
     }
 
   private:
+    friend struct spot_node_runtime_test_access_t;
     result_t<bool> release_local_actor_on_lane (const actor_ref_t &actor_ref);
     static task_t<void>
     retire_relocation_source_in (spot_node_runtime_t self,

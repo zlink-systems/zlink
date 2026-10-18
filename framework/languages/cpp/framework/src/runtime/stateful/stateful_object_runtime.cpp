@@ -5,6 +5,7 @@
 #include <zlink/framework/contracts/placement.hpp>
 
 #include <algorithm>
+#include <cassert>
 #include <service_wire_constants.hpp>
 #include <limits>
 #include <stdexcept>
@@ -1634,8 +1635,8 @@ void stateful_object_runtime_t::finalize_relocation_source_on_lane (relocation_s
         for (auto &candidate : _candidates) {
             if (candidate.mesh_name == object.reference.mesh_name
                 && candidate.node_id == object.reference.node_id) {
-                if (candidate.active_count != 0)
-                    --candidate.active_count;
+                assert (candidate.active_count != 0);
+                --candidate.active_count;
                 break;
             }
         }

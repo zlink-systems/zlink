@@ -16,6 +16,7 @@
 #include "runtime/messaging/request_failure_mapper.hpp"
 #include "runtime/locations/actor_authority_payload.hpp"
 #include "runtime/locations/in_memory_location_store.hpp"
+#include "runtime/locations/store_location_resolvers.hpp"
 #include "runtime/spots/spot_runtime.hpp"
 #include "runtime/spots/spot_route_packets.hpp"
 #include "runtime/timers/timer_runtime.hpp"
@@ -3012,6 +3013,64 @@ void test_public_relocation_store_adapter (test_context_t &test)
 
 void test_public_authority_store_adapter (test_context_t &test)
 {
+    {
+        namespace runtime = zlink::framework::runtime;
+        const auto now = std::chrono::system_clock::now ();
+        public_memory_authority_store_t spots;
+        const zlink::framework::location_owner_token_t source_owner{"source-owner", 1};
+        const zlink::framework::location_owner_token_t target_owner{"target-owner", 2};
+        const auto payload = runtime::encode_user_spot_authority_payload (
+          {.state = runtime::user_spot_authority_state_t::ready,
+           .stable_type = "matchmaker",
+           .spot_id = "matchmaking",
+           .owner_id = source_owner.owner_id,
+           .owner_lease_generation = 1,
+           .mesh_name = "mesh",
+           .node_rid = zlink::framework::node_rid_t::from_string ("source"),
+           .node_generation = 1});
+        spots.snapshot =
+          zlink::framework::authority_snapshot_t{"1", payload, 1, 1, source_owner, now};
+        spots.snapshot->allocation.state = zlink::framework::placement_allocation_state_t::active;
+        spots.snapshot->allocation.object_kind =
+          zlink::framework::placement_object_kind_t::user_spot;
+        spots.snapshot->allocation.stable_type = "matchmaker";
+        spots.snapshot->allocation.target = {
+          "mesh", zlink::framework::node_rid_t::from_string ("source"), 1, source_owner};
+        spots.owner_lease_read =
+          zlink::framework::owner_lease_found_t{source_owner, now + std::chrono::minutes (1), now};
+        runtime::store_location_resolvers_t before (spots);
+        test.require (
+          before.resolve_spot_address ("mesh", "matchmaking").result ().value ().has_value (),
+          "Ready Spot must resolve before relocation");
+        public_authority_store_adapter_t adapter (spots);
+        const object_ref_t source{object_kind_t::user_spot, "matchmaking", 1, 1, "mesh", "source"};
+        auto target = source;
+        target.node_id = "target";
+        const zlink::framework::object_creation_target_t placement{
+          "mesh", zlink::framework::node_rid_t::from_string ("target"), 2, target_owner};
+        const auto published = adapter.publish (source, target, target_owner, placement,
+                                                "spot-root", 42, digest_with (9));
+        test.require (published.status == authority_publish_status_t::published,
+                      "single Spot authority must commit to target");
+        // Complete the test repository's placement projection as the real Store does.
+        spots.snapshot->allocation.target = placement;
+        spots.owner_lease_read =
+          zlink::framework::owner_lease_found_t{target_owner, now + std::chrono::minutes (1), now};
+        runtime::store_location_resolvers_t after (spots);
+        const auto located = after.resolve_spot_address ("mesh", "matchmaking").result ().value ();
+        test.require (
+          located && located->node_rid.to_string () == "target" && located->object_generation == 1
+            && located->authority_owner_generation == spots.snapshot->authority_owner_generation,
+          "fresh resolver must locate a committed single Spot before completion cleanup");
+        runtime::store_location_resolvers_t other (spots);
+        test.require (!other.resolve_spot_address ("mesh", "other-spot").result ().value (),
+                      "relocation metadata must not authorize a different Spot ID");
+        spots.snapshot->payload.pop_back ();
+        runtime::store_location_resolvers_t malformed (spots);
+        test.require (!malformed.resolve_spot_address ("mesh", "matchmaking").result ().value (),
+                      "truncated relocation authority must not produce a Spot address");
+    }
+
     public_memory_authority_store_t store;
     const auto source_application_payload =
       zlink::framework::runtime::encode_actor_authority_payload (

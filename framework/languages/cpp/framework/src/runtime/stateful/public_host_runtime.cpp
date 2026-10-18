@@ -970,7 +970,8 @@ public_host_runtime_t::~public_host_runtime_t ()
 }
 
 void public_host_runtime_t::configure_stateful_dispatch (
-  stateful::accepted_record_authority_resolver_t resolver)
+  stateful::accepted_record_authority_resolver_t resolver,
+  stateful::accepted_record_authority_resolver_t retained_resolver)
 {
     if (!resolver)
         throw std::invalid_argument ("stateful dispatch authority resolver must not be empty");
@@ -981,8 +982,8 @@ void public_host_runtime_t::configure_stateful_dispatch (
                 "stateful dispatch must be configured once before host start");
           _stateful_dispatch = std::make_unique<stateful::raw_stateful_dispatch_t> (
             _objects, *_transport,
-            [this,
-             resolver = std::move (resolver)] (stateful::accepted_record_authority_query_t query)
+            [this, resolver = std::move (resolver)] (
+              const stateful::accepted_record_authority_query_t &query)
               -> task_t<std::optional<stateful::accepted_record_authority_t>> {
                 auto accepted = co_await _relocation_session_terminal_lane.run_task (
                   [&] () -> std::optional<stateful::accepted_record_authority_t> {
@@ -993,10 +994,21 @@ void public_host_runtime_t::configure_stateful_dispatch (
                               || prepare.target.target_node_routing_id
                                    != query.target_node_routing_id
                               || prepare.target.target_node_generation
-                                   != query.target_node_generation
-                              || std::find (attempt.targets.begin (), attempt.targets.end (),
-                                            query.target)
-                                   == attempt.targets.end ())
+                                   != query.target_node_generation)
+                              continue;
+                          const auto target = std::find (attempt.targets.begin (),
+                                                         attempt.targets.end (), query.target);
+                          if (target == attempt.targets.end ())
+                              continue;
+                          const auto index = static_cast<std::size_t> (
+                            std::distance (attempt.targets.begin (), target));
+                          // A post-boundary relay can cross target CAS in flight (§4.4).
+                          // Its exact source attempt remains valid alongside the committed fence.
+                          if (query.requested_authority_owner_generation
+                                != target->authority_owner_generation
+                              && (index >= attempt.sources.size ()
+                                  || query.requested_authority_owner_generation
+                                       != attempt.sources[index].authority_owner_generation))
                               continue;
                           return stateful::accepted_record_authority_t{
                             {prepare.coordinator.owner_id, prepare.coordinator.lease_generation,
@@ -1007,8 +1019,9 @@ void public_host_runtime_t::configure_stateful_dispatch (
                   });
                 if (accepted)
                     co_return accepted;
-                co_return co_await resolver (std::move (query));
-            });
+                co_return co_await resolver (query);
+            },
+            std::move (retained_resolver));
           /* flow-correlation §4: the ingest path gates flow capture on the host's
            * provider; the host outlives the dispatch it owns. */
           _stateful_dispatch->set_flow_capture_provider ([this] { return capture_flow (); });
@@ -7654,26 +7667,17 @@ public_host_runtime_t::accept_local_application (local_application_dispatch_t di
             value.correlation = dispatch.record.reply_route_id;
         header = std::move (value);
     }
-    auto local_source = [this] () -> std::optional<protocol::request_source_fence_t> {
-        const auto source =
-          _session_route_owner_resolver ? _session_route_owner_resolver () : std::nullopt;
-        if (!source)
-            return std::nullopt;
-        return protocol::request_source_fence_t{
-          source->owner_id, static_cast<std::uint64_t> (source->lease_generation),
-          _options.mesh.descriptor.node_routing_id, _options.mesh.descriptor.lifecycle_generation};
-    };
     const auto [validation, authority] = co_await std::visit (
       [&] (const auto &value) {
           if constexpr (std::is_same_v<std::decay_t<decltype (value)>,
                                        protocol::actor_message_header_t>)
               return _stateful_dispatch->accepted_actor_authority (
                 *owner, value, dispatch.record.source_node_rid.to_bytes (),
-                _options.mesh.descriptor.lifecycle_generation, false, local_source);
+                _options.mesh.descriptor.lifecycle_generation, false);
           else
               return _stateful_dispatch->accepted_spot_authority (
                 *owner, value, dispatch.record.source_node_rid.to_bytes (),
-                _options.mesh.descriptor.lifecycle_generation, local_source);
+                _options.mesh.descriptor.lifecycle_generation);
       },
       header);
     if (validation != stateful::stateful_error_t::none)

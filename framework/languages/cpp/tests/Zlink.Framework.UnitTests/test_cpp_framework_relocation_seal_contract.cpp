@@ -4,6 +4,7 @@
 
 #include "runtime/actors/actor_gateway_runtime.hpp"
 #include "runtime/diagnostics/dispatch_error_reporter.hpp"
+#include "runtime/diagnostics/monitoring_runtime.hpp"
 #include "runtime/mesh/raw_mesh_node_owner.hpp"
 #include "runtime/protocol/service_wire_codec.hpp"
 #include "runtime/stateful/public_host_runtime.hpp"
@@ -23,7 +24,45 @@
 #include <tuple>
 #include <string>
 #include <utility>
+#include <type_traits>
+#include <variant>
 #include <vector>
+
+namespace zlink::framework::runtime::host
+{
+struct public_host_runtime_test_access_t
+{
+    static void stage_relay (public_host_runtime_t &host,
+                             const protocol::relocation_prepare_t &prepare,
+                             const stateful::object_ref_t &source,
+                             const stateful::object_ref_t &target)
+    {
+        public_host_runtime_t::relocation_target_attempt_t attempt;
+        attempt.prepare = prepare;
+        attempt.sources = {source};
+        attempt.targets = {target};
+        host._relocation_target_attempts[{1, 2, 1}] = std::move (attempt);
+    }
+
+    template <typename Header>
+    static auto accept_relay (public_host_runtime_t &host,
+                              const stateful::object_ref_t &target,
+                              const Header &header,
+                              std::vector<std::uint8_t> source)
+    {
+        if constexpr (std::is_same_v<Header, protocol::actor_message_header_t>)
+            return host._stateful_dispatch
+              ->accepted_actor_authority (target, header, std::move (source), 1, false)
+              .result ()
+              .value ();
+        else
+            return host._stateful_dispatch
+              ->accepted_spot_authority (target, header, std::move (source), 1)
+              .result ()
+              .value ();
+    }
+};
+} // namespace zlink::framework::runtime::host
 
 namespace
 {
@@ -905,3 +944,238 @@ TEST (FrameworkRelocationSealContract, sealed_scheduled_timer_keeps_pending_coun
     EXPECT_EQ (timer->pending_fire_count, 0u);
     EXPECT_TRUE (timer->failure_events.empty ());
 }
+
+TEST (FrameworkRelocationSealContract, source_fenced_relay_survives_target_authority_commit)
+{
+    for (const auto kind : {stateful::object_kind_t::actor, stateful::object_kind_t::user_spot}) {
+        auto target_host = std::make_shared<host::public_host_runtime_t> (
+          host::host_options_t{mesh::raw_mesh_node_options_t{
+            .descriptor = test_descriptor ("relay-target"),
+            .runtime_failures = std::make_shared<runtime::runtime_failure_collector_t> ()}});
+        target_host->configure_stateful_dispatch (
+          [] (const stateful::accepted_record_authority_query_t &)
+            -> task_t<std::optional<stateful::accepted_record_authority_t>> {
+              co_return std::nullopt;
+          });
+        const auto source_rid = zlink::routing_id_t::from ("relay-source").to_bytes ();
+        const auto target_rid = zlink::routing_id_t::from ("relay-target").to_bytes ();
+        const stateful::object_ref_t source{kind, "relay-object",         3,
+                                            4,    "relocation-seal-test", "relay-source"};
+        auto target = source;
+        target.node_id = "relay-target";
+        protocol::relocation_prepare_t prepare{};
+        prepare.source_node_routing_id = source_rid;
+        prepare.source_node_generation = 1;
+        prepare.target = {target_rid, 1, "target-owner", 5};
+        prepare.coordinator = {"source-owner", 7, source_rid, 1, "captured-version"};
+        protocol::actor_message_header_t actor_header;
+        actor_header.target = {source.key, 3, target_rid, 1, 4, 5};
+        protocol::spot_message_header_t spot_header;
+        spot_header.target = {source.key, 3, target_rid, 1, 4, 5};
+        std::variant<protocol::actor_message_header_t, protocol::spot_message_header_t> header =
+          actor_header;
+        if (kind != stateful::object_kind_t::actor)
+            header = spot_header;
+        const auto address = [&] (std::uint64_t authority, std::uint64_t lease) {
+            std::visit (
+              [&] (auto &value) {
+                  value.target.authority_owner_generation = authority;
+                  value.target.owner_lease_generation = lease;
+              },
+              header);
+        };
+        const auto accept = [&] (const auto &rid) {
+            return std::visit (
+              [&] (const auto &value) {
+                  return host::public_host_runtime_test_access_t::accept_relay (*target_host,
+                                                                                target, value, rid)
+                    .first;
+              },
+              header);
+        };
+        host::public_host_runtime_test_access_t::stage_relay (*target_host, prepare, source,
+                                                              target);
+        EXPECT_EQ (accept (source_rid), stateful::stateful_error_t::none);
+        // The Store assigns an unrelated larger generation; the captured source route is unchanged.
+        target.authority_owner_generation = 19;
+        host::public_host_runtime_test_access_t::stage_relay (*target_host, prepare, source,
+                                                              target);
+        EXPECT_EQ (accept (source_rid), stateful::stateful_error_t::none);
+        EXPECT_NE (accept (zlink::routing_id_t::from ("unrelated-source").to_bytes ()),
+                   stateful::stateful_error_t::none);
+        address (8, 5);
+        EXPECT_NE (accept (source_rid), stateful::stateful_error_t::none);
+        address (19, 5);
+        EXPECT_EQ (accept (source_rid), stateful::stateful_error_t::none);
+        address (19, 99);
+        EXPECT_NE (accept (source_rid), stateful::stateful_error_t::none);
+        address (4, 5);
+        target.authority_owner_generation = 23;
+        EXPECT_NE (accept (source_rid), stateful::stateful_error_t::none);
+        target_host->close ();
+    }
+}
+
+TEST (FrameworkRelocationSealContract, local_follow_checks_store_before_retained_source)
+{
+    auto owner = std::make_shared<host::public_host_runtime_t> (
+      host::host_options_t{mesh::raw_mesh_node_options_t{
+        .descriptor = test_descriptor ("authority-order"),
+        .runtime_failures = std::make_shared<runtime::runtime_failure_collector_t> ()}});
+    auto &objects = owner->objects ();
+    const stateful::object_ref_t object{
+      stateful::object_kind_t::actor, "moving", 1, 1, "mesh", "source"};
+    const auto created = objects.begin_reserved_object (object, "actor", {});
+    ASSERT_EQ (created.error, stateful::stateful_error_t::none);
+    ASSERT_EQ (objects.commit_create (created.attempt), stateful::stateful_error_t::none);
+    const auto sealed = objects.try_seal_relocation_aggregate ({object}).result ().value ();
+    ASSERT_EQ (sealed.error, stateful::stateful_error_t::none);
+    ASSERT_EQ (
+      objects.begin_relocation_boundary (sealed.seal.token, [] (const auto &, const auto &) {})
+        .first,
+      stateful::stateful_error_t::none);
+    int reads = 0;
+    int local_reads = 0;
+    bool current = false;
+    const protocol::request_source_fence_t fence{"source-owner", 3, {1}, 1};
+    stateful::raw_stateful_dispatch_t dispatch (
+      objects, owner->transport (),
+      [&] (const auto &) -> task_t<std::optional<stateful::accepted_record_authority_t>> {
+          ++reads;
+          co_return current ? std::optional{stateful::accepted_record_authority_t{fence, 3}}
+                            : std::nullopt;
+      },
+      [&] (const auto &query) -> task_t<std::optional<stateful::accepted_record_authority_t>> {
+          EXPECT_EQ (reads, 1);
+          ++local_reads;
+          auto source = fence;
+          source.node_routing_id = query.source_node_routing_id;
+          co_return stateful::accepted_record_authority_t{std::move (source), 3};
+      });
+    protocol::actor_message_header_t header;
+    header.target.actor_id = object.key;
+    header.target.object_generation = 1;
+    header.target.authority_owner_generation = 1;
+    header.target.owner_lease_generation = 3;
+    auto accepted = dispatch.accepted_actor_authority (object, header, {1}, 1).result ().value ();
+    EXPECT_EQ (accepted.first, stateful::stateful_error_t::none);
+    EXPECT_EQ (reads, 1);
+    EXPECT_EQ (local_reads, 1);
+    current = true;
+    reads = local_reads = 0;
+    accepted = dispatch.accepted_actor_authority (object, header, {1}, 1).result ().value ();
+    EXPECT_EQ (accepted.first, stateful::stateful_error_t::none);
+    EXPECT_EQ (reads, 1);
+    EXPECT_EQ (local_reads, 0);
+    current = false;
+    reads = local_reads = 0;
+    accepted = dispatch.accepted_actor_authority (object, header, {2}, 1).result ().value ();
+    EXPECT_EQ (accepted.first, stateful::stateful_error_t::none);
+    EXPECT_EQ (reads, 1);
+    EXPECT_EQ (local_reads, 1);
+    ASSERT_TRUE (accepted.second);
+    EXPECT_EQ (accepted.second->source.node_routing_id, std::vector<std::uint8_t>{2});
+    header.target.authority_owner_generation = 2;
+    reads = local_reads = 0;
+    accepted = dispatch.accepted_actor_authority (object, header, {2}, 1).result ().value ();
+    EXPECT_NE (accepted.first, stateful::stateful_error_t::none);
+    EXPECT_EQ (reads, 1);
+    EXPECT_EQ (local_reads, 0);
+    header.target.authority_owner_generation = 1;
+    auto unsealed = object;
+    unsealed.key = "unsealed";
+    const auto other = objects.begin_reserved_object (unsealed, "actor", {});
+    ASSERT_EQ (other.error, stateful::stateful_error_t::none);
+    ASSERT_EQ (objects.commit_create (other.attempt), stateful::stateful_error_t::none);
+    header.target.actor_id = unsealed.key;
+    reads = local_reads = 0;
+    accepted = dispatch.accepted_actor_authority (unsealed, header, {2}, 1).result ().value ();
+    EXPECT_NE (accepted.first, stateful::stateful_error_t::none);
+    EXPECT_EQ (reads, 1);
+    EXPECT_EQ (local_reads, 0);
+    owner->close ();
+}
+
+TEST (FrameworkRelocationSealContract,
+      source_cleanup_failure_is_reported_with_flow_off_and_continues)
+{
+    auto state = std::make_shared<spot_node_builder_state_t> ("cleanup-failure");
+    state->snapshot.routing_id = zlink::routing_id_t::from ("source");
+    state->actor_types_by_id["bad"] = "actor";
+    state->actor_generations["actor:bad"] = 2;
+    state->actor_types_by_id["good"] = "actor";
+    state->actor_generations["actor:good"] = 1;
+    state->actor_instances["actor:bad"] = std::make_shared<int> (1);
+    state->actor_instances["actor:good"] = std::make_shared<int> (2);
+    state->dispatch.message_flow (message_flow_log_mode_t::off);
+    state->monitoring = std::make_shared<monitoring_runtime_state_t> ();
+    state->monitoring->runtime_failures = std::make_shared<runtime::runtime_failure_collector_t> ();
+    std::vector<std::exception_ptr> failures;
+    state->monitoring->runtime_failures->bind_runtime_reporter (
+      [&] (auto failure) { failures.push_back (failure); });
+    detail::spot_node_runtime_t runtime (state);
+    const auto source = zlink::routing_id_t::from ("source").to_string ();
+    const std::vector<stateful::object_ref_t> sources{
+      {stateful::object_kind_t::actor, "bad", 1, 1, "mesh", source},
+      {stateful::object_kind_t::actor, "good", 1, 1, "mesh", source}};
+    auto native = std::make_shared<host::public_host_runtime_t> (
+      host::host_options_t{mesh::raw_mesh_node_options_t{
+        .descriptor = test_descriptor ("cleanup-native"),
+        .runtime_failures = std::make_shared<runtime::runtime_failure_collector_t> ()}});
+    auto &objects = native->objects ();
+    const auto created = objects.begin_reserved_object (sources.front (), "actor", {});
+    ASSERT_EQ (created.error, stateful::stateful_error_t::none);
+    ASSERT_EQ (objects.commit_create (created.attempt), stateful::stateful_error_t::none);
+    const auto sealed =
+      objects.try_seal_relocation_aggregate ({sources.front ()}).result ().value ();
+    ASSERT_EQ (sealed.error, stateful::stateful_error_t::none);
+    ASSERT_EQ (
+      objects.begin_relocation_boundary (sealed.seal.token, [] (const auto &, const auto &) {})
+        .first,
+      stateful::stateful_error_t::none);
+    ASSERT_EQ (objects.finalize_relocation_cutover (sealed.seal.token),
+               stateful::stateful_error_t::none);
+    const auto retired = runtime.retire_relocation_source (sources).result ();
+    // Shutdown's ordinary Actor destroy cannot reclaim a retained moving source.
+    EXPECT_EQ (objects.destroy_actor (sources.front ()), stateful::stateful_error_t::moving);
+    native->close ();
+    EXPECT_TRUE (retired);
+    ASSERT_EQ (failures.size (), 1u);
+    EXPECT_NE (
+      diagnostic_event_sink_t::exception_summary (failures.front ()).message.find ("generation"),
+      std::string::npos);
+    EXPECT_TRUE (state->actor_instances.contains ("actor:bad"));
+    EXPECT_FALSE (state->actor_instances.contains ("actor:good"));
+}
+
+// The invariant is asserted by the runtime in Debug builds.
+#ifdef ZLINK_FRAMEWORK_DEBUG_WAIT_GUARD
+TEST (FrameworkRelocationSealContract, source_capacity_underflow_is_an_invariant_failure)
+{
+    EXPECT_DEATH (([] {
+                      stateful::stateful_object_runtime_t objects;
+                      stateful::placement_candidate_t candidate{.mesh_name = "mesh",
+                                                                .node_id = "source",
+                                                                .stable_types = {"actor"},
+                                                                .active_capacity = 1,
+                                                                .pending_capacity = 1};
+                      objects.replace_placement_candidates ({candidate});
+                      const auto created =
+                        objects.begin_create ({.kind = stateful::object_kind_t::actor,
+                                               .key = "underflow",
+                                               .stable_type = "actor",
+                                               .mesh_name = std::string ("mesh"),
+                                               .exclusive = true});
+                      (void) objects.commit_create (created.attempt);
+                      // Fault injection: discard the live object's capacity accounting.
+                      objects.replace_placement_candidates ({candidate});
+                      const auto sealed =
+                        objects.try_seal_relocation_aggregate ({created.object}).result ().value ();
+                      (void) objects.begin_relocation_boundary (sealed.seal.token,
+                                                                [] (const auto &, const auto &) {});
+                      (void) objects.finalize_relocation_cutover (sealed.seal.token);
+                  }()),
+                  "active_count");
+}
+
+#endif

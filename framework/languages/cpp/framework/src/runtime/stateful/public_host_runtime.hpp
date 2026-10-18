@@ -698,8 +698,8 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     void configure_session_route_owner (
       std::function<std::optional<location_owner_token_t> ()> owner_resolver);
     void configure_stateful_dispatch (
-      std::function<task_t<std::optional<stateful::accepted_record_authority_t>> (
-        stateful::accepted_record_authority_query_t)> resolver);
+      stateful::accepted_record_authority_resolver_t resolver,
+      stateful::accepted_record_authority_resolver_t retained_resolver = {});
     void forward_relocation_application (const stateful::object_ref_t &owner,
                                          const stateful::turn_record_t &record,
                                          const std::vector<std::uint8_t> &target_routing_id,
