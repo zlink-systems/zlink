@@ -16,11 +16,18 @@
 #include <functional>
 #include <map>
 #include <mutex>
+#include <memory>
+#include <tuple>
 #include <optional>
 #include <set>
 #include <stop_token>
 #include <string>
 #include <vector>
+
+namespace zlink::framework::runtime
+{
+struct serial_application_record_t;
+}
 
 namespace zlink::framework::runtime::stateful
 {
@@ -139,7 +146,17 @@ struct turn_record_t
     // C++ -> C++ restore.
     std::optional<protocol::frozen_record_t> frozen_record;
 
-    friend bool operator== (const turn_record_t &, const turn_record_t &) = default;
+    // Source-retained rollback carries the same in-memory admission owner.
+    // Codecs and target restore exclude this process-local ownership.
+    std::shared_ptr<runtime::serial_application_record_t> accepted_owner;
+
+    friend bool operator== (const turn_record_t &left, const turn_record_t &right)
+    {
+        return std::tie (left.sequence, left.payload, left.application_payload_bytes,
+                         left.application_record, left.frozen_record)
+               == std::tie (right.sequence, right.payload, right.application_payload_bytes,
+                            right.application_record, right.frozen_record);
+    }
 };
 
 struct logical_timer_t
@@ -253,7 +270,7 @@ struct relocation_ingress_batch_t
 class stateful_object_runtime_t
 {
   public:
-    using relocation_state_capture_t = std::function<std::vector<std::uint8_t> (
+    using relocation_state_capture_t = std::function<frozen_object_state_t (
       const object_ref_t &, const std::string &, std::stop_token)>;
     using relocation_state_restore_t =
       std::function<bool (const frozen_object_state_t &, const object_ref_t &, std::stop_token)>;
@@ -324,8 +341,8 @@ class stateful_object_runtime_t
                               std::function<void ()> *accepted_delivery = nullptr,
                               bool restored = false,
                               bool *relocation_handoff = nullptr);
-    std::pair<stateful_error_t, std::optional<turn_record_t>> try_claim (const object_ref_t &owner,
-                                                                         turn_domain_t domain);
+    std::pair<stateful_error_t, std::optional<turn_record_t>>
+    try_claim (const object_ref_t &owner, turn_domain_t domain, std::string *stable_type = nullptr);
     stateful_error_t complete_claim (const object_ref_t &owner, turn_domain_t domain);
     stateful_error_t yield_claim (const object_ref_t &owner, turn_record_t continuation);
     std::size_t pending (const object_ref_t &owner, turn_domain_t domain) const;

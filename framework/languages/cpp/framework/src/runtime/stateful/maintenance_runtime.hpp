@@ -474,6 +474,7 @@ struct aggregate_relocation_result_t
 };
 
 class raw_relocation_replay_coordinator_t;
+class raw_stateful_dispatch_t;
 
 class maintenance_runtime_t
 {
@@ -522,7 +523,8 @@ class maintenance_runtime_t
       std::stop_token cancellation = {},
       std::uint64_t advertised_receive_chunk_limit_bytes = 0);
 
-    void attach_relocation_wire (raw_relocation_replay_coordinator_t &wire) noexcept;
+    void attach_relocation_wire (raw_relocation_replay_coordinator_t &wire,
+                                 std::function<raw_stateful_dispatch_t *()> dispatch = {}) noexcept;
     void bind_delay_owner (detail::delay_owner_t &owner) noexcept { _delay_owner = &owner; }
     /* Expired-owner terminal (28 §4.4): replies Unavailable once to each
      * pending request of the object and drops its accepted records. */
@@ -567,6 +569,13 @@ class maintenance_runtime_t
     static std::optional<std::vector<frozen_object_state_t>>
     materialize_envelope (const protocol::relocation_envelope_t &envelope,
                           std::vector<relocation_participant_identity_t> inventory) noexcept;
+    // Source registration and target relay use this canonical terminal identity.
+    static protocol::reply_relay_t
+    terminal_identity (const protocol::relocation_id_t &relocation,
+                       std::uint64_t target_attempt_generation,
+                       const protocol::relocation_coordinator_fence_t &coordinator,
+                       std::uint64_t participant_id,
+                       const protocol::frozen_record_t &record);
     /* The derived inventory digest (no wrapper digest exists any more):
      * SHA-256 over the (kind, key)-sorted participants' key bytes and
      * interleaved generation bytes — the same value every source computes
@@ -635,6 +644,13 @@ class maintenance_runtime_t
                             const eligible_relocation_unit_t::canonical_wire_context_t &context,
                             const relocation_ingress_batch_t &batch,
                             relocation_reason_t &failure_reason) const;
+    bool
+    register_terminal_source (const eligible_relocation_unit_t::canonical_wire_context_t &context,
+                              const object_ref_t &owner,
+                              std::uint64_t participant_id,
+                              const turn_record_t &turn) const;
+    stateful_error_t abort_relocation_before_cutover (
+      std::uint64_t token, const eligible_relocation_unit_t::canonical_wire_context_t &context);
     task_t<relocation_reason_t>
     prepare_target (const eligible_relocation_unit_t::canonical_wire_context_t &context,
                     const std::vector<frozen_object_state_t> &participants,
@@ -659,6 +675,7 @@ class maintenance_runtime_t
     mutable std::mutex _gate_mutex;
     relocation_gate_snapshot_t _gate;
     raw_relocation_replay_coordinator_t *_relocation_wire = nullptr;
+    std::function<raw_stateful_dispatch_t *()> _relocation_dispatch;
     std::function<void (const object_ref_t &)> _unavailable_terminal;
     std::function<void (const object_ref_t &)> _committed_terminal;
     /* route_convergence metric + SafeToShutdown obligation count, held

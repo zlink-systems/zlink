@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #include "runtime/mesh/mesh_node_host_service.hpp"
 #include "../support/runtime_failure_fixture.hpp"
+#include "../support/manual_internal_scheduler.hpp"
 #include "../support/request_admission_fixture.hpp"
 
 #include "runtime/actors/actor_gateway_runtime.hpp"
@@ -18,6 +19,7 @@
 #include "runtime/spots/spot_route_packets.hpp"
 #include "runtime/spots/spot_runtime.hpp"
 #include "runtime/stateful/stream_session_registry.hpp"
+#include "runtime/stateful/accepted_actor_record.hpp"
 #include "runtime/streams/stream_runtime.hpp"
 
 #include <zlink/codecs/protobuf.hpp>
@@ -3252,21 +3254,42 @@ int reconcile_deadline_adopts_target_when_store_shows_committed ()
     return 0;
 }
 
+std::shared_ptr<zlink::framework::runtime::serial_application_record_t> accepted_actor_fifo_record (
+  const zlink::framework::runtime::protocol::actor_route_fence_t &source_fence,
+  std::uint64_t sequence,
+  const zlink::framework::runtime::messaging::envelope_header_t &envelope,
+  std::string payload)
+{
+    namespace runtime = zlink::framework::runtime;
+    const bool request = envelope.kind == runtime::messaging::message_kind_t::request;
+    auto parts = runtime::messaging::envelope_codec_t{}.encode_raw_body_parts (
+      envelope, zlink::message_t::from (payload));
+    runtime::protocol::actor_message_header_t header;
+    header.operation = {1, sequence};
+    header.target = source_fence;
+    if (request)
+        header.correlation = sequence;
+    auto record = std::make_shared<runtime::serial_application_record_t> ();
+    record->payload.emplace ();
+    record->payload->sequence = sequence;
+    record->payload->application_payload_bytes = payload.size ();
+    record->payload->application_record = runtime::stateful::accepted_actor_record (
+      header,
+      {"fence-source-owner", 1, source_fence.target_node_routing_id,
+       source_fence.target_node_generation},
+      runtime::protocol::application_payload_t::from_parts (std::move (parts).take_items ()),
+      request);
+    return record;
+}
+
 // Regression pin for the relocation admission TOCTOU (B-2):
 // spot-actor membership :903 ("Defer() 뒤 source seal 전 message는 barrier 뒤
 // Actor queue에 두고 capture 대상") and relocation-flow :108/:155.
 //
-// The interleave: a packet clears the transfer coordinator with `not_moving`,
-// and only afterwards does a Defer() reserve the source and push an
-// application-lane handoff barrier into that Actor's FIFO. Before the fix the
-// packet landed BEHIND the barrier with an old-source closure -- invisible to
-// the coordinator backlog, to the Core held_application set and to Message
-// Follow -- and executed silently on the old owner after capture, so the
-// mutation never reached the authority state.
-//
-// `configure_instance` is invoked after the coordinator admission and before
-// the Actor FIFO post, so reserving the barrier there reproduces the window
-// deterministically instead of relying on timing.
+// Configure injects Deferred Join registration between coordinator admission
+// and the Actor FIFO post. The native accepted record must remain visible in
+// the queue suffix when seal starts; a committed source instead follows it.
+// A manual scheduler fixes these boundaries without a timing race.
 int relocation_barrier_fences_late_actor_fifo_admission (bool commit_before_post = false)
 {
     using namespace zlink::framework;
@@ -3276,8 +3299,10 @@ int relocation_barrier_fences_late_actor_fifo_admission (bool commit_before_post
     serializer_registry_t serializers;
     auto node = zlink::framework::test::runtime_failure_fixture<
       zlink::framework::detail::spot_node_builder_state_t> ("actor-a");
-    node->worker_executor =
-      std::make_shared<runtime::offload_executor_t> (1, "handoff-fence-worker");
+    auto scheduler = std::make_shared<zlink::framework::test::manual_internal_scheduler_t> ();
+    scheduler->publication_fence (
+      zlink::framework::test::state_lane_publication_fence (node->lane, node->lane_executor));
+    node->worker_executor = scheduler;
     node->channel_runtime =
       zlink::framework::test::runtime_failure_fixture<channel_runtime_state_t> ();
     node->channel_runtime->serializers = &serializers;
@@ -3326,8 +3351,8 @@ int relocation_barrier_fences_late_actor_fifo_admission (bool commit_before_post
     factory.configure_instance = [&] (void *, const actor_ref_t &current, void *) {
         if (configure_calls.fetch_add (1, std::memory_order_acq_rel) != 0)
             return;
-        // The relocation starts strictly AFTER this packet was admitted as
-        // not_moving and strictly BEFORE it reaches the Actor FIFO.
+        // Registration retains this Actor mailbox. Until seal, accepted
+        // application records still belong to the Actor FIFO.
         auto reserved = spots.reserve_actor_join_barrier (current);
         if (!reserved)
             return;
@@ -3347,6 +3372,7 @@ int relocation_barrier_fences_late_actor_fifo_admission (bool commit_before_post
     node->actor_instances.emplace (key, std::make_shared<int> (7));
     node->actor_spot_ids.emplace (key, spot->spot_id);
     node->actor_generations.emplace (key, 1);
+    node->actor_types_by_id.emplace ("fence-actor", "player");
 
     std::atomic_int source_handler_runs{0};
     std::atomic_int admission_notifications{0};
@@ -3367,22 +3393,53 @@ int relocation_barrier_fences_late_actor_fifo_admission (bool commit_before_post
     auto provider = services.build_provider ();
     actor_gateway_runtime_t gateway;
 
+    runtime::messaging::envelope_header_t envelope;
+    envelope.kind = runtime::messaging::message_kind_t::command;
+    envelope.channel_name = "actor";
+    envelope.message_name = "FencedProbe";
+    envelope.content_type = "application/json";
+    envelope.metadata.emplace ("sequence", "LATE");
+    auto late_record =
+      commit_before_post ? nullptr : accepted_actor_fifo_record (source_fence, 1, envelope, "late");
+    envelope.metadata.clear ();
+    auto resumed_record = accepted_actor_fifo_record (source_fence, 2, envelope, "resumed");
+    std::vector<const runtime::serial_application_record_t *> transferred_records;
     spot_inbound_message_t metadata;
     metadata.values.emplace ("sequence", "LATE");
     auto sent = spots.relay_actor_packet (
       actor, gateway.actor_context (actor), stream_message_kind_t::send, "FencedProbe",
       zlink::message_t::from (std::string ("late")), provider, serializers, std::move (metadata),
       nullptr, {}, [&] { ++admission_notifications; }, zlink::routing_id_t::from (std::uint32_t{0}),
-      {}, 0, std::nullopt, [&] { ++owner_transfers; });
-    const auto sent_result = finite_task_result (std::move (sent));
+      {}, 0, std::nullopt,
+      [&] {
+          ++owner_transfers;
+          transferred_records.push_back (late_record.get ());
+      },
+      0, {}, late_record);
 
     const auto cleanup = [&] {
         if (barrier)
             barrier->cancel ();
         node->actor_transfer_coordinator.cancel_move (key);
+        scheduler->run_all ();
         node->worker_executor->drain ();
         node->worker_executor.reset ();
     };
+
+    if (!commit_before_post && barrier_reserved.load (std::memory_order_acquire)) {
+        auto sealed = spots.seal_actor_application_suffix (actor, [&] {
+            if (!node->actor_transfer_coordinator.try_begin_source_remote (key, "fifo-fence"))
+                throw std::runtime_error ("reserved Actor did not enter source handoff");
+        });
+        scheduler->run_all ();
+        const auto sealed_result = finite_task_result (std::move (sealed));
+        if (!sealed_result || !*sealed_result) {
+            cleanup ();
+            return 10;
+        }
+    }
+    scheduler->run_all ();
+    const auto sent_result = finite_task_result (std::move (sent));
 
     if (!barrier_reserved.load (std::memory_order_acquire)) {
         cleanup ();
@@ -3395,8 +3452,11 @@ int relocation_barrier_fences_late_actor_fifo_admission (bool commit_before_post
         return 2;
     }
     // The contract, not just the symptom: the old owner must never run it.
-    if (source_handler_runs.load (std::memory_order_acquire) != 0 || admission_notifications != 1
-        || owner_transfers != 0) {
+    if (source_handler_runs.load (std::memory_order_acquire) != 0
+        || admission_notifications != 1
+        // Queue acceptance transfers this exact record once before seal;
+        // a committed-source relay does not submit to the old Actor queue.
+        || owner_transfers != (commit_before_post ? 0 : 1)) {
         cleanup ();
         return 3;
     }
@@ -3413,7 +3473,10 @@ int relocation_barrier_fences_late_actor_fifo_admission (bool commit_before_post
     // It must be in the capture set that travels with the commit, exactly once.
     auto backlog = node->actor_transfer_coordinator.take_backlog (key);
     if (backlog.size () != 1 || backlog.front ().packet_name != "FencedProbe"
-        || backlog.front ().is_request) {
+        || backlog.front ().is_request || backlog.front ().application_record != late_record
+        || transferred_records
+             != std::vector<const runtime::serial_application_record_t *>{late_record.get ()}
+        || !late_record->saved_work ()) {
         cleanup ();
         return 5;
     }
@@ -3434,7 +3497,12 @@ int relocation_barrier_fences_late_actor_fifo_admission (bool commit_before_post
       zlink::message_t::from (std::string ("resumed")), provider, serializers,
       std::move (resumed_metadata), nullptr, {}, [&] { ++admission_notifications; },
       zlink::routing_id_t::from (std::uint32_t{0}), {}, 0, std::nullopt,
-      [&] { ++owner_transfers; });
+      [&] {
+          ++owner_transfers;
+          transferred_records.push_back (resumed_record.get ());
+      },
+      0, {}, resumed_record);
+    scheduler->run_all ();
     const auto resumed_result = finite_task_result (std::move (resumed));
     const auto resumed_deadline = std::chrono::steady_clock::now () + std::chrono::seconds (2);
     while (source_handler_runs.load (std::memory_order_acquire) == 0
@@ -3445,7 +3513,11 @@ int relocation_barrier_fences_late_actor_fifo_admission (bool commit_before_post
     cleanup ();
     if (!resumed_result || !*resumed_result)
         return 7;
-    if (resumed_runs != 1 || admission_notifications != 2 || owner_transfers != 1)
+    // Resumed ingress is a second record with its own single queue transfer.
+    if (resumed_runs != 1 || admission_notifications != 2 || owner_transfers != 2
+        || transferred_records
+             != std::vector<const runtime::serial_application_record_t *>{late_record.get (),
+                                                                          resumed_record.get ()})
         return 8;
     return 0;
 }
@@ -3461,8 +3533,10 @@ int relocation_barrier_fences_late_actor_request_without_deadlock ()
     serializer_registry_t serializers;
     auto node = zlink::framework::test::runtime_failure_fixture<
       zlink::framework::detail::spot_node_builder_state_t> ("actor-a");
-    node->worker_executor =
-      std::make_shared<runtime::offload_executor_t> (1, "handoff-fence-request-worker");
+    auto scheduler = std::make_shared<zlink::framework::test::manual_internal_scheduler_t> ();
+    scheduler->publication_fence (
+      zlink::framework::test::state_lane_publication_fence (node->lane, node->lane_executor));
+    node->worker_executor = scheduler;
     node->channel_runtime =
       zlink::framework::test::runtime_failure_fixture<channel_runtime_state_t> ();
     node->channel_runtime->serializers = &serializers;
@@ -3503,6 +3577,7 @@ int relocation_barrier_fences_late_actor_request_without_deadlock ()
     node->actor_instances.emplace (key, std::make_shared<int> (7));
     node->actor_spot_ids.emplace (key, spot->spot_id);
     node->actor_generations.emplace (key, 1);
+    node->actor_types_by_id.emplace ("fence-request-actor", "player");
 
     std::atomic_int source_handler_runs{0};
     std::atomic_int admission_notifications{0};
@@ -3523,23 +3598,54 @@ int relocation_barrier_fences_late_actor_request_without_deadlock ()
     auto provider = services.build_provider ();
     actor_gateway_runtime_t gateway;
 
+    const runtime::protocol::actor_route_fence_t source_fence{
+      "fence-request-actor", 1, zlink::routing_id_t::from ("actor-a").to_bytes (), 1, 1, 1};
+    runtime::messaging::envelope_header_t envelope;
+    envelope.kind = runtime::messaging::message_kind_t::request;
+    envelope.channel_name = "actor";
+    envelope.message_name = "FencedAsk";
+    envelope.content_type = "application/json";
+    envelope.metadata.emplace ("__zlink.actorRequestId", "fence-request-1");
+    auto request_record = accepted_actor_fifo_record (source_fence, 1, envelope, "ask");
+    const runtime::serial_application_record_t *transferred_record = nullptr;
     spot_inbound_message_t metadata;
-    metadata.values.emplace ("__zlink.actorRequestId", "fence-request-1");
+    metadata.values = envelope.metadata;
     auto asked = spots.relay_actor_packet (
       actor, gateway.actor_context (actor), stream_message_kind_t::request, "FencedAsk",
       zlink::message_t::from (std::string ("ask")), provider, serializers, std::move (metadata),
       nullptr, {}, [&] { ++admission_notifications; }, zlink::routing_id_t::from (std::uint32_t{0}),
-      {}, 0, std::nullopt, [&] { ++owner_transfers; });
-    // A preserved request must terminate here, not block behind the barrier.
-    const auto asked_result = finite_task_result (std::move (asked));
+      {}, 0, std::nullopt,
+      [&] {
+          ++owner_transfers;
+          transferred_record = request_record.get ();
+      },
+      0, {}, request_record);
 
     const auto cleanup = [&] {
         if (barrier)
             barrier->cancel ();
         node->actor_transfer_coordinator.cancel_move (key);
+        scheduler->run_all ();
         node->worker_executor->drain ();
         node->worker_executor.reset ();
     };
+
+    if (barrier_reserved.load (std::memory_order_acquire)) {
+        auto sealed = spots.seal_actor_application_suffix (actor, [&] {
+            if (!node->actor_transfer_coordinator.try_begin_source_remote (key, "request-fence"))
+                throw std::runtime_error ("reserved request did not enter source handoff");
+        });
+        scheduler->run_all ();
+        const auto sealed_result = finite_task_result (std::move (sealed));
+        if (!sealed_result || !*sealed_result) {
+            cleanup ();
+            return 5;
+        }
+    }
+    scheduler->run_all ();
+    // Export ends the old invocation, while the accepted request retains its
+    // original operation and reply capability for replay.
+    const auto asked_result = finite_task_result (std::move (asked));
 
     if (!barrier_reserved.load (std::memory_order_acquire)) {
         cleanup ();
@@ -3552,17 +3658,30 @@ int relocation_barrier_fences_late_actor_request_without_deadlock ()
         return 2;
     }
     if (source_handler_runs.load (std::memory_order_acquire) != 0 || admission_notifications != 1
-        || owner_transfers != 0) {
+        || owner_transfers != 1 || transferred_record != request_record.get ()) {
         cleanup ();
         return 3;
     }
     auto backlog = node->actor_transfer_coordinator.take_backlog (key);
-    if (backlog.size () != 1 || !backlog.front ().is_request) {
+    if (backlog.size () != 1 || !backlog.front ().is_request
+        || backlog.front ().packet_name != "FencedAsk"
+        || backlog.front ().metadata.at ("__zlink.actorRequestId") != "fence-request-1"
+        || backlog.front ().application_record != request_record
+        || !request_record->saved_work ()) {
         cleanup ();
         return 4;
     }
+    bool payload_preserved = false;
+    runtime::stateful::with_accepted_application (
+      *request_record->payload, [&] (auto kind, const auto &application) {
+          const runtime::messaging::message_parts_t parts (
+            runtime::protocol::decode_application_parts (application));
+          const auto body = runtime::messaging::envelope_codec_t{}.decode_body (parts);
+          payload_preserved = kind == runtime::protocol::frozen_record_kind_t::actor_request && body
+                              && body.value ().to_string () == "ask";
+      });
     cleanup ();
-    return 0;
+    return payload_preserved ? 0 : 6;
 }
 
 int reconcile_deadline_fast_fails_without_target_commit (
@@ -3678,19 +3797,24 @@ int reconcile_deadline_fast_fails_without_target_commit (
                               .advertised_endpoint = "tcp://127.0.0.1:0"},
                .runtime_failures =
                  std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()}});
-    host::reply_token_t local_reply;
-    local_reply.host = std::move (reply_host);
-    local_reply.local_reply = [&local_reply_calls, &local_reply_was_unavailable] (
-                                const std::vector<zlink::message_t> &parts) {
-        runtime::messaging::envelope_codec_t codec;
-        const auto header = codec.decode_header (runtime::messaging::message_parts_t (parts));
-        local_reply_was_unavailable.store (
-          header && header.value ().kind == runtime::messaging::message_kind_t::error
-            && header.value ().error_code == "unavailable",
-          std::memory_order_release);
-        local_reply_calls.fetch_add (1, std::memory_order_acq_rel);
-        return true;
+    const auto make_reply_token = [&reply_host] (std::atomic_int &calls,
+                                                 std::atomic_bool &was_unavailable) {
+        host::reply_token_t token;
+        token.host = reply_host;
+        token.local_reply = [&calls,
+                             &was_unavailable] (const std::vector<zlink::message_t> &parts) {
+            runtime::messaging::envelope_codec_t codec;
+            const auto header = codec.decode_header (runtime::messaging::message_parts_t (parts));
+            was_unavailable.store (
+              header && header.value ().kind == runtime::messaging::message_kind_t::error
+                && header.value ().error_code == "unavailable",
+              std::memory_order_release);
+            calls.fetch_add (1, std::memory_order_acq_rel);
+            return true;
+        };
+        return token;
     };
+    auto local_reply = make_reply_token (local_reply_calls, local_reply_was_unavailable);
     node->pending_handoff_requests.emplace (
       spot_node_builder_state_t::pending_handoff_request_key_t{
         zlink::routing_id_t::from ("remote-caller-node").to_hex (), 111, 222, {}},
@@ -3701,12 +3825,12 @@ int reconcile_deadline_fast_fails_without_target_commit (
                                                            {},
                                                            std::chrono::steady_clock::now ()
                                                              + std::chrono::seconds (30)});
-    std::atomic_int sink_calls{0};
-    std::atomic_bool sink_was_unavailable{false};
-    auto sink_metadata = terminal_metadata;
-    sink_metadata[std::string (actor_handoff_operation_high_key)] = "112";
-    sink_metadata[std::string (actor_handoff_operation_low_key)] = "223";
-    sink_metadata[std::string (actor_handoff_reply_route_key)] = "334";
+    std::atomic_int second_reply_calls{0};
+    std::atomic_bool second_reply_was_unavailable{false};
+    auto second_metadata = terminal_metadata;
+    second_metadata[std::string (actor_handoff_operation_high_key)] = "112";
+    second_metadata[std::string (actor_handoff_operation_low_key)] = "223";
+    second_metadata[std::string (actor_handoff_reply_route_key)] = "334";
     node->pending_handoff_requests.emplace (
       spot_node_builder_state_t::pending_handoff_request_key_t{
         zlink::routing_id_t::from ("remote-caller-node").to_hex (), 112, 223, {}},
@@ -3714,20 +3838,15 @@ int reconcile_deadline_fast_fails_without_target_commit (
         actor,
         {},
         334,
-        std::nullopt,
+        make_reply_token (second_reply_calls, second_reply_was_unavailable),
         {},
-        std::chrono::steady_clock::now () + std::chrono::seconds (30),
-        [&sink_calls, &sink_was_unavailable] (const result_t<zlink::message_t> &completed) {
-            sink_was_unavailable.store (
-              !completed && completed.error_kind () == framework_error_kind_t::unavailable,
-              std::memory_order_release);
-            sink_calls.fetch_add (1, std::memory_order_acq_rel);
-        }});
+        std::chrono::steady_clock::now () + std::chrono::seconds (30)});
     (void) node->actor_transfer_coordinator.try_append_backlog (
       key,
       handoff_packet_t{"FastFailProbe", {}, "application/octet-stream", terminal_metadata, true});
     (void) node->actor_transfer_coordinator.try_append_backlog (
-      key, handoff_packet_t{"FastFailProbe", {}, "application/octet-stream", sink_metadata, true});
+      key,
+      handoff_packet_t{"FastFailProbe", {}, "application/octet-stream", second_metadata, true});
 
     service_collection_t services;
     auto provider = services.build_provider ();
@@ -3751,7 +3870,7 @@ int reconcile_deadline_fast_fails_without_target_commit (
                                                    + std::chrono::milliseconds (19))
           != 0
         || local_reply_calls.load (std::memory_order_acquire) != 0
-        || sink_calls.load (std::memory_order_acquire) != 0)
+        || second_reply_calls.load (std::memory_order_acquire) != 0)
         return 9;
     const auto expired = after_reconcile + std::chrono::milliseconds (20);
     if (spots.cleanup_expired_actor_admissions_at (expired) != 1)
@@ -3764,11 +3883,11 @@ int reconcile_deadline_fast_fails_without_target_commit (
         return 4;
     if (terminal_calls.load (std::memory_order_acquire) != 0
         || local_reply_calls.load (std::memory_order_acquire) != 1
-        || sink_calls.load (std::memory_order_acquire) != 1)
+        || second_reply_calls.load (std::memory_order_acquire) != 1)
         return 7;
     if (terminal_was_failure.load (std::memory_order_acquire)
         || !local_reply_was_unavailable.load (std::memory_order_acquire)
-        || !sink_was_unavailable.load (std::memory_order_acquire))
+        || !second_reply_was_unavailable.load (std::memory_order_acquire))
         return 8;
     if (!node->pending_handoff_requests.empty ()
         || !node->actor_transfer_coordinator.blocks_dispatch (key)
@@ -3791,7 +3910,7 @@ int reconcile_deadline_fast_fails_without_target_commit (
     if (handler_ran.load (std::memory_order_acquire))
         return 6;
     if (local_reply_calls.load (std::memory_order_acquire) != 1
-        || sink_calls.load (std::memory_order_acquire) != 1
+        || second_reply_calls.load (std::memory_order_acquire) != 1
         || !node->actor_transfer_coordinator.blocks_dispatch (key)
         || node->actor_routes.contains (key))
         return 12;
@@ -4321,7 +4440,9 @@ int early_zero_generation_leave_waits_for_source_transfer_completion (bool no_fo
         auto &objects = native_source->objects ();
         objects.configure_relocation_state (
           [] (const stateful::object_ref_t &, const std::string &, std::stop_token) {
-              return std::vector<std::uint8_t>{1};
+              stateful::frozen_object_state_t captured;
+              captured.application_state = std::vector<std::uint8_t>{1};
+              return captured;
           },
           [] (const stateful::frozen_object_state_t &, const stateful::object_ref_t &,
               std::stop_token) { return true; });
@@ -5467,36 +5588,151 @@ enum class parked_request_case_t
     former_pending_capacity
 };
 
+// All relay cases enter through the native receive-record path and observe
+// its original reply token. The terminal callback marks parking completion.
+struct native_actor_relay_fixture_t
+{
+    using host_t = zlink::framework::runtime::host::public_host_runtime_t;
+    zlink::framework::logging_builder_t logging;
+    zlink::framework::serializer_registry_t serializers;
+    zlink::framework::service_provider_t provider;
+    std::shared_ptr<host_t> reply_host;
+    zlink::framework::runtime::host::ready_record_t owner;
+    struct reply_probe_t
+    {
+        std::promise<std::vector<zlink::message_t>> replied;
+        std::atomic_int calls{0};
+    };
+    std::shared_ptr<reply_probe_t> probe = std::make_shared<reply_probe_t> ();
+    std::future<std::vector<zlink::message_t>> reply = probe->replied.get_future ();
+
+    native_actor_relay_fixture_t (
+      const std::shared_ptr<zlink::framework::detail::spot_node_builder_state_t> &node,
+      const zlink::framework::actor_ref_t &actor) :
+        owner{.owner_kind = zlink::framework::runtime::host::owner_kind_t::actor,
+              .domain = zlink::framework::runtime::host::ready_domain_t::application,
+              .actor = actor}
+    {
+        logging.use_file ("native-relay.flow").set_min_level (zlink::framework::log_level_t::debug);
+        auto dispatch = node->dispatch;
+        dispatch.message_flow (zlink::framework::message_flow_log_mode_t::detailed);
+        zlink::framework::detail::dispatch_options_access_t::set_logger (
+          dispatch, logging.create_logger ("native-relay"));
+        zlink::framework::runtime::host::host_options_t options{
+          .mesh = {.descriptor = {.mesh_name = "native-relay",
+                                  .node_routing_id =
+                                    zlink::routing_id_t::from ("actor-a").to_bytes (),
+                                  .lifecycle_generation = 2,
+                                  .descriptor_revision = 1,
+                                  .advertised_endpoint = "tcp://127.0.0.1:0"},
+                   .runtime_failures =
+                     std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()},
+          .object_stable_types = {"player"}};
+
+        options.mesh.dispatch = dispatch;
+        reply_host = std::make_shared<host_t> (std::move (options));
+        node->dispatch = dispatch;
+        zlink::framework::service_collection_t services;
+        services.add_singleton<zlink::framework::detail::actor_gateway_runtime_t> ();
+        services.add_singleton<zlink::framework::serializer_registry_t> ();
+        provider = services.build_provider ();
+        node->root_services = provider;
+        node->actor_types_by_id.emplace (std::string (actor.actor_id ().value ()), "player");
+        node->native_node = reply_host;
+    }
+
+    ~native_actor_relay_fixture_t () { reply_host->close (); }
+
+    void observe_reply (zlink::framework::runtime::host::reply_token_t &token)
+    {
+        auto original = std::move (token.local_reply);
+        token.local_reply = [probe = probe, original = std::move (original)] (const auto &parts) {
+            const auto invocation = probe->calls.fetch_add (1, std::memory_order_acq_rel);
+            const auto accepted = !original || original (parts);
+            if (invocation == 0)
+                probe->replied.set_value (parts);
+            return accepted;
+        };
+    }
+
+    zlink::framework::runtime::host::receive_record_t
+    request_record (const zlink::routing_id_t &source,
+                    zlink::framework::runtime::host::call_id_t operation,
+                    std::uint64_t reply_route)
+    {
+        namespace host = zlink::framework::runtime::host;
+        host::receive_record_t record{.kind = host::record_kind_t::actor_request,
+                                      .domain = host::ready_domain_t::application};
+        record.operation_id = operation;
+        record.source_node_rid = source;
+        record.reply_route_id = reply_route;
+        record.reply_token.host = reply_host;
+        observe_reply (record.reply_token);
+        return record;
+    }
+
+    bool dispatch_parts (zlink::framework::detail::spot_node_runtime_t &spots,
+                         const zlink::framework::runtime::host::receive_record_t &record,
+                         std::vector<zlink::message_t> &parts)
+    {
+        auto parked = std::make_shared<std::promise<void>> ();
+        auto parking = parked->get_future ();
+        bool deferred = false;
+        const auto header =
+          zlink::framework::runtime::decode_mesh_record_header (record, parts, false);
+        if (!header
+            || !spots.dispatch_mesh_record (
+              owner, record, parts, header.value (), provider, serializers,
+              [parked] { parked->set_value (); }, &deferred))
+            return false;
+        return !deferred
+               || parking.wait_for (std::chrono::seconds (2)) == std::future_status::ready;
+    }
+
+    bool dispatch (zlink::framework::detail::spot_node_runtime_t &spots,
+                   const zlink::framework::runtime::host::receive_record_t &record,
+                   const zlink::framework::runtime::messaging::envelope_header_t &header,
+                   std::string payload)
+    {
+        auto encoded =
+          zlink::framework::runtime::messaging::envelope_codec_t{}.encode_raw_body_parts (
+            header, zlink::message_t::from (payload));
+        auto parts = std::move (encoded).take_items ();
+        return dispatch_parts (spots, record, parts);
+    }
+};
+
 int local_relay_failure_returns_without_waiting_for_handoff_deadline ()
 {
     using namespace zlink::framework;
     using namespace zlink::framework::detail;
     namespace runtime = zlink::framework::runtime;
-
-    auto node = zlink::framework::test::runtime_failure_fixture<
-      zlink::framework::detail::spot_node_builder_state_t> ("actor-a");
-    service_collection_t services;
-    services.add_singleton<actor_gateway_runtime_t> ();
-    services.add_singleton<serializer_registry_t> ();
-    node->root_services = services.build_provider ();
+    auto node =
+      zlink::framework::test::runtime_failure_fixture<spot_node_builder_state_t> ("actor-a");
+    spot_node_builder_state_t::actor_factory_registration_t factory;
+    factory.actor_type = std::type_index (typeid (int));
+    factory.create_instance = [] (std::string) { return std::make_shared<int> (7); };
+    factory.configure_instance = [] (void *, const actor_ref_t &, void *) {};
+    node->actor_factories.emplace ("player", std::move (factory));
+    const auto actor = test_actor_ref ("actor-a", "player", "missing-actor", 1);
     spot_node_runtime_t spots (node);
-    auto header = runtime::messaging::envelope_header_t{};
+    native_actor_relay_fixture_t fixture (node, actor);
+    runtime::messaging::envelope_header_t header;
     header.kind = runtime::messaging::message_kind_t::request;
     header.message_name = "MissingActorProbe";
-    const auto actor = test_actor_ref ("actor-a", "player", "missing-actor", 1);
-    const auto started = std::chrono::steady_clock::now ();
-    const auto failed = finite_task_result (
-      spots.relay_local_actor_packet (actor, header, zlink::message_t::from (std::string ("ping")),
-                                      zlink::routing_id_t::from ("actor-a"), {}, 0, {}, 0,
-                                      std::chrono::seconds (30)),
-      std::chrono::seconds (2));
-    const auto elapsed = std::chrono::steady_clock::now () - started;
+    auto record = fixture.request_record (zlink::routing_id_t::from ("actor-a"), {41, 43}, 47);
+    if (!fixture.dispatch (spots, record, header, "ping")
+        || fixture.reply.wait_for (std::chrono::seconds (2)) != std::future_status::ready)
+        return 1;
+    const auto failed = runtime::messaging::envelope_codec_t{}.decode_header (
+      runtime::messaging::message_parts_t (fixture.reply.get ()));
     const auto pending_empty =
       node->lane.run ([&] { return node->pending_handoff_requests.empty (); }).get ();
-    return failed && !*failed && (*failed).error_kind () == framework_error_kind_t::not_found
-               && elapsed < std::chrono::seconds (2) && pending_empty
+    return failed && failed.value ().kind == runtime::messaging::message_kind_t::error
+               && failed.value ().error_code == "not_found"
+               && fixture.probe->calls.load (std::memory_order_acquire) == 1 && pending_empty
              ? 0
-             : 1;
+             : 2;
 }
 
 int local_relay_preserves_handoff_request_route (bool has_original_operation)
@@ -5509,10 +5745,6 @@ int local_relay_preserves_handoff_request_route (bool has_original_operation)
       zlink::framework::detail::spot_node_builder_state_t> ("actor-a");
     node->worker_executor =
       std::make_shared<runtime::offload_executor_t> (1, "local-relay-route-worker");
-    service_collection_t services;
-    services.add_singleton<actor_gateway_runtime_t> ();
-    services.add_singleton<serializer_registry_t> ();
-    node->root_services = services.build_provider ();
     const auto actor = test_actor_ref ("actor-a", "player", "local-relay-actor", 1);
     const auto key = std::string ("player:local-relay-actor");
     if (!node->actor_transfer_coordinator.try_begin_local (key))
@@ -5539,26 +5771,49 @@ int local_relay_preserves_handoff_request_route (bool has_original_operation)
                                                  5}
         : runtime::protocol::actor_route_fence_t{};
     spot_node_runtime_t spots (node);
-    auto invalid_header = header;
-    invalid_header.deadline = "invalid";
-    const auto invalid = finite_task_result (spots.relay_local_actor_packet (
-      actor, invalid_header, zlink::message_t::from (std::string ("payload")), source, source_fence,
-      has_original_operation ? 3 : 0, operation, has_original_operation ? 47 : 0,
-      std::chrono::seconds (30)));
-    if (!invalid || *invalid || (*invalid).error_kind () != framework_error_kind_t::protocol_error)
-        return 6;
-    auto expired_header = header;
-    expired_header.deadline = "2000-01-01T00:00:00Z";
-    const auto expired = finite_task_result (spots.relay_local_actor_packet (
-      actor, expired_header, zlink::message_t::from (std::string ("payload")), source, source_fence,
-      has_original_operation ? 3 : 0, operation, has_original_operation ? 47 : 0,
-      std::chrono::seconds (30)));
-    if (!expired || *expired || (*expired).error_kind () != framework_error_kind_t::unavailable)
-        return 7;
-    auto pending = spots.relay_local_actor_packet (
-      actor, header, zlink::message_t::from (std::string ("payload")), source, source_fence,
-      has_original_operation ? 3 : 0, operation, has_original_operation ? 47 : 0,
-      std::chrono::seconds (30));
+    native_actor_relay_fixture_t fixture (node, actor);
+    runtime::host::pending_operation_t native_operation;
+    auto native_completion = native_operation.completion->task ();
+    auto record = fixture.request_record (source, {operation.high, operation.low},
+                                          has_original_operation ? 47 : 0);
+    if (has_original_operation) {
+        record.actor_route = source_fence;
+        record.message_follow_hop_count = 3;
+        if (!fixture.dispatch (spots, record, header, "payload"))
+            return 6;
+    } else {
+        // The caller provides no operation identity. Use the real local host
+        // registry and retain its original completion from before submission.
+        fixture.reply_host->configure_stateful_dispatch (
+          [] (runtime::stateful::accepted_record_authority_query_t query)
+            -> task_t<std::optional<runtime::stateful::accepted_record_authority_t>> {
+              co_return runtime::stateful::accepted_record_authority_t{
+                {"native-relay-source-owner", 17, query.source_node_routing_id,
+                 query.source_node_generation},
+                37};
+          });
+        fixture.reply_host->start ();
+        const auto native_actor = fixture.reply_host->create_actor ("player", "local-relay-actor");
+        auto encoded = runtime::messaging::envelope_codec_t{}.encode_raw_body_parts (
+          header, zlink::message_t::from (std::string ("payload")));
+        const auto submitted = finite_task_result (fixture.reply_host->request_to_actor (
+          native_actor.ref (), encoded.items (), native_operation, std::chrono::seconds (30)));
+        if (!submitted || !*submitted || submitted->value () != zlink::submit_result_t::ok)
+            return 7;
+        bool received = false;
+        const auto dispatched = finite_task_result (
+          fixture.reply_host->dispatch_ready ([&] (const auto &, const auto &incoming, auto parts) {
+              if (incoming.kind != runtime::host::record_kind_t::actor_request)
+                  return;
+              record = incoming;
+              fixture.observe_reply (record.reply_token);
+              received = fixture.dispatch_parts (spots, record, parts);
+          }));
+        if (!dispatched || !*dispatched || !received
+            || native_operation.id == runtime::host::call_id_t{}
+            || record.operation_id != native_operation.id || record.reply_route_id == 0)
+            return 8;
+    }
     auto backlog = spots.take_actor_handoff_backlog (actor);
     if (backlog.size () != 1 || !backlog.front ().is_request
         || backlog.front ().packet_name != "LocalRelayProbe"
@@ -5578,17 +5833,26 @@ int local_relay_preserves_handoff_request_route (bool has_original_operation)
               || metadata.at (std::string (actor_handoff_hop_count_key)) != "3"
           : metadata.at (std::string (actor_handoff_source_node_key))
                 != metadata.at (std::string (actor_handoff_parking_node_key))
-              || (metadata.at (std::string (actor_handoff_operation_high_key)) == "0"
-                  && metadata.at (std::string (actor_handoff_operation_low_key)) == "0"))
+              || metadata.at (std::string (actor_handoff_operation_high_key))
+                   != std::to_string (record.operation_id.high)
+              || metadata.at (std::string (actor_handoff_operation_low_key))
+                   != std::to_string (record.operation_id.low)
+              || metadata.at (std::string (actor_handoff_reply_route_key))
+                   != std::to_string (record.reply_route_id))
         return 3;
+    if (fixture.reply.wait_for (std::chrono::milliseconds::zero ()) == std::future_status::ready
+        || (!has_original_operation && native_completion.await_ready ()))
+        return 10;
     if (has_original_operation) {
         auto send_header = header;
         send_header.kind = runtime::messaging::message_kind_t::command;
         send_header.message_name = "LocalRelaySendProbe";
-        const auto sent = finite_task_result (spots.relay_local_actor_packet (
-          actor, send_header, zlink::message_t::from (std::string ("send-payload")), source,
-          source_fence, 3, {}, 0, std::chrono::seconds (30)));
-        if (!sent || !*sent)
+        auto send_record = record;
+        send_record.kind = runtime::host::record_kind_t::actor_send;
+        send_record.operation_id = {};
+        send_record.reply_route_id = 0;
+        send_record.reply_token = {};
+        if (!fixture.dispatch (spots, send_record, send_header, "send-payload"))
             return 9;
         std::atomic_bool replay_preserved_route{false};
         spots.on_actor_message_follow (
@@ -5618,36 +5882,50 @@ int local_relay_preserves_handoff_request_route (bool has_original_operation)
             || !replay_preserved_route.load (std::memory_order_acquire))
             return 11;
     }
-    std::atomic_int sink_calls{0};
     const auto recorded =
       node->lane
         .run ([&] {
             if (node->pending_handoff_requests.size () != 1)
                 return false;
-            auto found = node->pending_handoff_requests.begin ();
-            if (found->first.source_fence != source_fence || !found->second.local_reply_sink)
-                return false;
-            auto sink = std::move (found->second.local_reply_sink);
-            found->second.local_reply_sink =
-              [sink = std::move (sink), &sink_calls] (const result_t<zlink::message_t> &reply) {
-                  sink_calls.fetch_add (1, std::memory_order_acq_rel);
-                  sink (reply);
-              };
-            return true;
+            const auto &pending = *node->pending_handoff_requests.begin ();
+            return pending.first.source_fence
+                     == record.actor_route.value_or (runtime::protocol::actor_route_fence_t{})
+                   && pending.first.operation_high == record.operation_id.high
+                   && pending.first.operation_low == record.operation_id.low
+                   && pending.second.reply_route_id == record.reply_route_id
+                   && pending.second.reply_token.has_value ();
         })
         .get ();
+    if (fixture.reply.wait_for (std::chrono::milliseconds::zero ()) == std::future_status::ready)
+        return 10;
     if (!recorded)
         return 4;
     const auto expired_at = std::chrono::steady_clock::now () + std::chrono::hours (24 * 365 * 100);
     if (spots.cleanup_expired_actor_admissions_at (expired_at) == 0)
         return 5;
-    const auto completed = finite_task_result (std::move (pending));
-    return completed && !*completed
-               && (*completed).error_kind () == framework_error_kind_t::unavailable
-               && sink_calls.load (std::memory_order_acquire) == 1
+    if (fixture.reply.wait_for (std::chrono::seconds (2)) != std::future_status::ready)
+        return 8;
+    auto completed = fixture.reply.get ();
+    const auto reply_header = runtime::messaging::envelope_codec_t{}.decode_header (
+      runtime::messaging::message_parts_t (completed));
+    if (!has_original_operation) {
+        const auto terminal = finite_task_result (std::move (native_completion));
+        if (!terminal || !*terminal || terminal->value ().parts.size () != completed.size ()
+            || terminal->value ().record.operation_id != native_operation.id)
+            return 12;
+        const auto native_header = runtime::messaging::envelope_codec_t{}.decode_header (
+          runtime::messaging::message_parts_t (terminal->value ().parts));
+        if (!native_header || native_header.value ().error_code != "unavailable"
+            || native_header.value ().correlation_id != header.correlation_id)
+            return 13;
+    }
+    return reply_header && reply_header.value ().kind == runtime::messaging::message_kind_t::error
+               && reply_header.value ().error_code == "unavailable"
+               && reply_header.value ().correlation_id == header.correlation_id
+               && fixture.probe->calls.load (std::memory_order_acquire) == 1
                && spots.cleanup_expired_actor_admissions_at (expired_at) == 0
-               && sink_calls.load (std::memory_order_acquire) == 1
-               && node->pending_handoff_requests.empty ()
+               && fixture.probe->calls.load (std::memory_order_acquire) == 1
+               && node->lane.run ([&] { return node->pending_handoff_requests.empty (); }).get ()
              ? 0
              : 8;
 }
@@ -5731,31 +6009,6 @@ int parked_request_reply_case (const std::string &requester_rid,
         return 1;
     spot_node_runtime_t spots (node);
 
-    if (test_case == parked_request_case_t::direct_replay) {
-        messaging::envelope_header_t header;
-        header.kind = messaging::message_kind_t::request;
-        header.message_name = "ParkedProbe";
-        header.correlation_id = "direct-parked-request";
-        auto pending = spots.relay_local_actor_packet (
-          actor, header, zlink::message_t::from (std::string ("ping")),
-          zlink::routing_id_t::from ("actor-a"), {}, 0, {}, 0, std::chrono::seconds (30));
-        if (pending.result_for (std::chrono::milliseconds::zero ()))
-            return 10;
-        const auto pending_count =
-          node->lane.run ([&] { return node->pending_handoff_requests.size (); }).get ();
-        if (pending_count != 1 || handler_ran.load ())
-            return 11;
-        spots.fail_remote_actor_transfer (actor, false, std::nullopt);
-        const auto replayed = finite_task_result (std::move (pending), std::chrono::seconds (2));
-        const auto pending_empty =
-          node->lane.run ([&] { return node->pending_handoff_requests.empty (); }).get ();
-        return replayed && *replayed && (*replayed).value ()
-                   && (*replayed).value ()->to_string () == "pong" && handler_ran.load ()
-                   && pending_empty
-                 ? 0
-                 : 12;
-    }
-
     constexpr std::size_t pending_handoff_capacity = 1024;
     const auto capacity_sentinel_source =
       zlink::routing_id_t::from ("pending-capacity-holder").to_hex ();
@@ -5823,56 +6076,37 @@ int parked_request_reply_case (const std::string &requester_rid,
       zlink::message_t::from (std::string ("ping")));
     auto request_parts = std::move (encoded).take_items ();
 
-    (void) spots.dispatch_mesh_record (
-      owner, record, request_parts,
-      zlink::framework::runtime::decode_mesh_record_header (record, request_parts, false).value (),
-      provider, serializers);
-
-    // The request must park (not dispatch) and the pending handoff entry
-    // that owns the original reply token must be recorded despite the
-    // missing route fence.
-    const auto park_deadline = std::chrono::steady_clock::now () + std::chrono::seconds (2);
-    bool pending_recorded = false;
-    while (std::chrono::steady_clock::now () < park_deadline) {
-        pending_recorded =
-          node->lane.run_checked ([&] { return !node->pending_handoff_requests.empty (); }).get ();
-        if (pending_recorded)
-            break;
-        std::this_thread::yield ();
-    }
-    if (!pending_recorded)
+    auto parked = std::make_shared<std::promise<void>> ();
+    auto parking = parked->get_future ();
+    std::promise<void> replied;
+    auto reply_ready = replied.get_future ();
+    const auto original_reply = record.reply_token.local_reply;
+    record.reply_token.local_reply = [original_reply, &replied] (const auto &parts) {
+        const auto accepted = original_reply (parts);
+        replied.set_value ();
+        return accepted;
+    };
+    bool terminal_deferred = false;
+    if (!spots.dispatch_mesh_record (
+          owner, record, request_parts,
+          zlink::framework::runtime::decode_mesh_record_header (record, request_parts, false)
+            .value (),
+          provider, serializers, [parked] { parked->set_value (); }, &terminal_deferred)
+        || !terminal_deferred
+        || parking.wait_for (std::chrono::seconds (2)) != std::future_status::ready)
         return 2;
-    if (handler_ran.load (std::memory_order_acquire))
+    const auto pending_count =
+      node->lane.run_checked ([&] { return node->pending_handoff_requests.size (); }).get ();
+    if (pending_count
+          != (test_case == parked_request_case_t::former_pending_capacity
+                ? pending_handoff_capacity + 1
+                : 1)
+        || handler_ran.load (std::memory_order_acquire)
+        || reply_ready.wait_for (std::chrono::milliseconds::zero ()) == std::future_status::ready)
         return 3;
-
-    // Give the relay coroutine time to finish parking the packet, then
-    // close the move the production way: replay drains the backlog and the
-    // handoff terminal must find the pending entry and deliver the reply.
-    std::this_thread::sleep_for (std::chrono::milliseconds (50));
     spots.fail_remote_actor_transfer (actor, false, std::nullopt);
-
-    const auto reply_deadline = std::chrono::steady_clock::now () + std::chrono::seconds (2);
-    for (;;) {
-        {
-            const std::lock_guard lock (reply_mutex);
-            if (!reply_parts.empty ())
-                break;
-        }
-        if (std::chrono::steady_clock::now () >= reply_deadline) {
-            node->lane
-              .run_checked ([&] {
-                  std::cerr << "parked-replay debug: handler_ran=" << handler_ran.load ()
-                            << " pending=" << node->pending_handoff_requests.size () << " phase="
-                            << (node->actor_transfer_coordinator.phase (key)
-                                  ? static_cast<int> (*node->actor_transfer_coordinator.phase (key))
-                                  : -1)
-                            << '\n';
-              })
-              .get ();
-            return 4;
-        }
-        std::this_thread::yield ();
-    }
+    if (reply_ready.wait_for (std::chrono::seconds (2)) != std::future_status::ready)
+        return 4;
     if (!handler_ran.load (std::memory_order_acquire))
         return 5;
     std::vector<zlink::message_t> delivered;
@@ -5892,12 +6126,12 @@ int parked_request_reply_case (const std::string &requester_rid,
     const auto pending_settled =
       node->lane
         .run_checked ([&] {
-            return test_case == parked_request_case_t::replay
+            return test_case != parked_request_case_t::former_pending_capacity
                      ? node->pending_handoff_requests.empty ()
                      : node->pending_handoff_requests.size () == pending_handoff_capacity;
         })
         .get ();
-    if (!pending_settled)
+    if (!pending_settled || reply_calls.load (std::memory_order_acquire) != 1)
         return 8;
     return 0;
 }
@@ -6492,6 +6726,25 @@ int main (int argc, char **argv)
             return reconcile_deadline_fast_fails_when_store_is_indeterminate ();
         if (test == "--infrastructure-store-wait")
             return remote_actor_join_store_read_does_not_wait_for_handler_workers ();
+        if (test == "--fifo-request-suffix") {
+            const auto result = relocation_barrier_fences_late_actor_request_without_deadlock ();
+            std::cerr << test << " result=" << result << '\n';
+            return result;
+        }
+        if (test == "--fifo-reserved-suffix" || test == "--fifo-committed-before-post") {
+            const auto result = relocation_barrier_fences_late_actor_fifo_admission (
+              test == "--fifo-committed-before-post");
+            std::cerr << test << " result=" << result << '\n';
+            return result;
+        }
+        if (test == "--native-relay-route")
+            return local_relay_preserves_handoff_request_route (true);
+        if (test == "--native-relay-operation")
+            return local_relay_preserves_handoff_request_route (false);
+        if (test == "--native-relay-missing")
+            return local_relay_failure_returns_without_waiting_for_handoff_deadline ();
+        if (test == "--native-relay-replay")
+            return parked_request_reply_case ("actor-a", parked_request_case_t::direct_replay);
         return 1;
     }
     if (const auto route = local_relay_preserves_handoff_request_route (true); route != 0)
@@ -6513,6 +6766,7 @@ int main (int argc, char **argv)
     }
     if (const auto handoff_fence = relocation_barrier_fences_late_actor_fifo_admission ();
         handoff_fence != 0) {
+        std::cerr << "--fifo-reserved-suffix result=" << handoff_fence << '\n';
         return 400 + handoff_fence;
     }
     if (const auto completed_commit = relocation_barrier_fences_late_actor_fifo_admission (true);

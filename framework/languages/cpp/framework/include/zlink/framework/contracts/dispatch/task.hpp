@@ -81,6 +81,7 @@ class deferred_barrier_t
     virtual result_t<void> activate_async (async_work_t work) = 0;
     // Run a phase of the reserved lifecycle operation without releasing its turn.
     virtual task_t<void> run (std::function<task_t<void> ()> work) = 0;
+    virtual task_t<void> terminal () = 0;
     virtual void cancel () noexcept = 0;
 };
 
@@ -103,9 +104,10 @@ class serial_turn_t
     virtual bool allows_yield () const noexcept = 0;
     // Execution gate §3: admission belongs to this turn, before submission.
     virtual bool claim_yield () = 0;
-    virtual result_t<void> defer (std::function<void ()> work,
+    virtual result_t<void> defer (std::function<task_t<void> ()> work,
                                   std::function<void ()> cancel = {}) = 0;
     virtual void cancel_deferred () noexcept = 0;
+    virtual bool finish_handler (std::function<void ()> completion, bool succeeded) = 0;
 };
 
 std::shared_ptr<serial_turn_t> capture_current_serial_turn ();
@@ -171,7 +173,7 @@ inline bool current_serial_turn_allows_yield ()
     return turn && !turn->released () && turn->allows_yield ();
 }
 
-inline result_t<void> defer_current_serial_turn (std::function<void ()> work,
+inline result_t<void> defer_current_serial_turn (std::function<task_t<void> ()> work,
                                                  std::function<void ()> cancel = {})
 {
     auto turn = capture_current_serial_turn ();

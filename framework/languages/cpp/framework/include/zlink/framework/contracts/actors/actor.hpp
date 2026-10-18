@@ -497,7 +497,7 @@ class actor_join_call_t
         }
         auto registered = detail::defer_current_serial_turn (
           [deferred = std::move (_deferred), async_deferred = std::move (_async_deferred), deadline,
-           barrier] () mutable {
+           barrier] () mutable -> task_t<void> {
               auto run = [deferred = std::move (deferred), deadline] () mutable {
                   const auto now = std::chrono::steady_clock::now ();
                   if (now >= deadline) {
@@ -546,7 +546,7 @@ class actor_join_call_t
                         activated.error_kind (),
                         error != nullptr ? error->what () : "Actor join barrier activation failed");
                   }
-                  return;
+                  return barrier->terminal ();
               }
               if (barrier) {
                   const auto activated = barrier->activate (std::move (run));
@@ -556,9 +556,10 @@ class actor_join_call_t
                         activated.error_kind (),
                         error != nullptr ? error->what () : "Actor join barrier activation failed");
                   }
-                  return;
+                  return barrier->terminal ();
               }
               run ();
+              return task_t<void> (result_t<void>::success ());
           },
           [barrier] {
               if (barrier)

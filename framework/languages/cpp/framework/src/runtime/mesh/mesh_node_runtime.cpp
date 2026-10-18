@@ -2297,7 +2297,7 @@ mesh_node_runtime_t::join_application_actor_to_entry_spot (actor_ref_t actor,
         co_return detail::propagate_failure<actor_join_reply_t> (
           delivered, "Entry Actor Join completion callback failed");
     if (reply && reply.value ().result_code == 0) {
-        const auto opened = spots.open_local_actor_handoff (reply.value ().actor);
+        const auto opened = co_await spots.open_local_actor_handoff (reply.value ().actor);
         if (!opened)
             co_return detail::propagate_failure<actor_join_reply_t> (
               opened, "Entry Actor handoff prefix could not be opened");
@@ -2312,11 +2312,18 @@ void mesh_node_runtime_t::settle_application_actor_creation (const actor_ref_t &
         spots.cancel_local_actor_handoff (actor);
         return;
     }
-    const auto opened = spots.open_local_actor_handoff (actor);
-    if (!opened) {
-        spots.cancel_local_actor_handoff (actor);
-        _state->spot_state->runtime_failures ()->report (opened.exception ());
-    }
+    auto opened = spots.open_local_actor_handoff (actor);
+    detail::observe_task_completion (
+      opened, [state = _state, actor] (const result_t<result_t<void>> &terminal) {
+          const auto result =
+            terminal
+              ? terminal.value ()
+              : detail::propagate_failure<void> (terminal, "Actor creation handoff prefix failed");
+          if (!result) {
+              spot_node_runtime_t (state->spot_state).cancel_local_actor_handoff (actor);
+              state->spot_state->runtime_failures ()->report (result.exception ());
+          }
+      });
 }
 
 result_t<void>
@@ -2485,7 +2492,8 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::join_application_actor_to_spot (
             co_return detail::propagate_failure<actor_join_reply_t> (
               delivered, "local Actor Join completion callback failed");
         if (joined && joined.value ().result_code == 0) {
-            const auto opened = spot_runtime.open_local_actor_handoff (joined.value ().actor);
+            const auto opened =
+              co_await spot_runtime.open_local_actor_handoff (joined.value ().actor);
             if (!opened)
                 co_return detail::propagate_failure<actor_join_reply_t> (
                   opened, "local Actor Join backlog prefix could not be opened");
@@ -3130,7 +3138,7 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::prepare_remote_application_actor
     /* The canonical relocation unit captures the Actor while sealing its
      * immutable envelope.  Only start the source move here; capturing now
      * would create a stale, unused snapshot and invoke Capture twice. */
-    const auto prepared = spot.transfer_actor_out (s->actor, s->transfer_id, false);
+    const auto prepared = co_await spot.transfer_actor_out (s->actor, s->transfer_id, false);
     if (!prepared) {
         const auto failed =
           detail::propagate_failure<actor_join_reply_t> (prepared, "Actor transfer-out failed");
@@ -3512,9 +3520,6 @@ request_task_t<std::optional<zlink::message_t>> mesh_node_runtime_t::relay_appli
                          + (header.metadata.contains (std::string (message_follow_path_key))
                               ? 1
                               : message_follow_path_key.size ());
-        const bool replays_handoff_packet =
-          header.metadata.contains (std::string (detail::actor_handoff_source_node_key))
-          || header.metadata.contains ("__zlink.actorHandoffLateReplay");
         const bool has_exact_stale_route = stale_route.owner_lease_generation != 0;
         const bool exact_route_targets_local_source =
           has_exact_stale_route
@@ -3662,10 +3667,6 @@ request_task_t<std::optional<zlink::message_t>> mesh_node_runtime_t::relay_appli
               framework_error_kind_t::invalid_operation,
               "bound Session Actor route fence is inconsistent");
         }
-        if (targets_local_node && !replays_handoff_packet)
-            co_return co_await detail::request_submission (spot_runtime.relay_local_actor_packet (
-              actor, header, payload, source_node, stale_route, incoming_hop_count,
-              original_operation, original_reply_route_id, timeout));
         std::uint64_t authority_owner_generation = 0;
         std::uint64_t owner_lease_generation = 0;
         if (targets_local_node && !spot_runtime.actor_route (target_actor)) {

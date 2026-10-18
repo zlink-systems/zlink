@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 
 #include "actor_transfer_coordinator.hpp"
+#include "runtime/execution/serial_application_record.hpp"
 #include "runtime/dispatch/dispatch_limits.hpp"
 
 #include <service_wire_constants.hpp>
@@ -162,18 +163,31 @@ bool actor_transfer_coordinator_t::try_begin_source_remote (const std::string &a
 }
 
 std::vector<handoff_packet_t>
-actor_transfer_coordinator_t::cancel_move (const std::string &actor_key)
+actor_transfer_coordinator_t::cancel_move (const std::string &actor_key,
+                                           std::string expected_source_transfer)
 {
     return _lane
       .run ([&, this] {
           if (_activity_handler)
               _activity_handler ();
+          if (!expected_source_transfer.empty ()
+              && !matches_source_reservation_on_lane (actor_key, expected_source_transfer))
+              return std::vector<handoff_packet_t>{};
           erase_move_on_lane (actor_key);
           auto discarded = _backlogs.extract (actor_key);
           return discarded ? std::move (discarded.mapped ()) : std::vector<handoff_packet_t>{};
       })
       .get ();
 }
+
+bool actor_transfer_coordinator_t::matches_source_reservation_on_lane (
+  const std::string &actor_key, const std::string &transfer_id) const
+{
+    const auto found = _moves.find (actor_key);
+    return found != _moves.end () && found->second.phase == actor_move_phase_t::source_reserved
+           && found->second.transfer_id == transfer_id;
+}
+
 
 void actor_transfer_coordinator_t::mark_reconcile (
   const std::string &actor_key,
@@ -268,13 +282,18 @@ actor_transfer_coordinator_t::complete_move_and_take_backlog (const std::string 
       .get ();
 }
 
-actor_move_completion_t
-actor_transfer_coordinator_t::finish_move_replay (const std::string &actor_key)
+actor_move_completion_t actor_transfer_coordinator_t::finish_move_replay (
+  const std::string &actor_key,
+  std::function<void (std::vector<handoff_packet_t>)> accept_prefix,
+  std::string expected_source_transfer)
 {
     return _lane
       .run ([&, this] {
           if (_activity_handler)
               _activity_handler ();
+          if (!expected_source_transfer.empty ()
+              && !matches_source_reservation_on_lane (actor_key, expected_source_transfer))
+              return actor_move_completion_t{std::nullopt, {}, true};
           const auto found = _moves.find (actor_key);
           if (found == _moves.end ())
               return actor_move_completion_t{std::nullopt, {}, true};
@@ -283,7 +302,9 @@ actor_transfer_coordinator_t::finish_move_replay (const std::string &actor_key)
               backlog = std::move (queued->second);
               _backlogs.erase (queued);
           }
-          if (!backlog.empty ())
+          if (accept_prefix)
+              accept_prefix (std::move (backlog));
+          else if (!backlog.empty ())
               return actor_move_completion_t{std::nullopt, std::move (backlog), false};
           std::optional<std::chrono::steady_clock::duration> elapsed;
           if (found->second.transfer_started_at) {
@@ -306,24 +327,8 @@ handoff_append_result_t
 actor_transfer_coordinator_t::try_append_backlog_unlocked (const std::string &actor_key,
                                                            handoff_packet_t &packet)
 {
-    const auto moving = _moves.find (actor_key);
-    if (moving == _moves.end ()) {
+    if (!blocks_dispatch_on_lane (actor_key))
         return handoff_append_result_t::not_moving;
-    }
-    // The source preserves packets before authority commit. On the target,
-    // an arrival between admission Accepted and PREPARE (target_pending,
-    // spec 15 §4.2 step 2-4) parks here exactly like one that arrives during
-    // target_committing (after PREPARE, before lifecycle open) — both cases
-    // retain packets in the same per-actor backlog until the real Actor
-    // queue exists and can replay them in arrival order.
-    if (moving->second.phase != actor_move_phase_t::source_reserved
-        && moving->second.phase != actor_move_phase_t::local
-        && moving->second.phase != actor_move_phase_t::source_remote
-        && moving->second.phase != actor_move_phase_t::target_pending
-        && moving->second.phase != actor_move_phase_t::target_committing
-        && moving->second.phase != actor_move_phase_t::reconcile) {
-        return handoff_append_result_t::not_moving;
-    }
     const auto backlog_found = _backlogs.find (actor_key);
     const auto backlog_size =
       backlog_found == _backlogs.end () ? std::size_t{0} : backlog_found->second.size ();
@@ -345,7 +350,23 @@ actor_transfer_coordinator_t::try_append_backlog_unlocked (const std::string &ac
     }
     auto &backlog = _backlogs[actor_key];
     backlog.push_back (std::move (packet));
+    if (backlog.back ().application_record)
+        backlog.back ().application_record->take_over ();
     return handoff_append_result_t::appended;
+}
+
+void actor_transfer_coordinator_t::prepend_source_suffix (const std::string &actor_key,
+                                                          std::vector<handoff_packet_t> suffix)
+{
+    if (suffix.empty ())
+        return;
+    _lane
+      .run ([&, this] {
+          auto &backlog = _backlogs[actor_key];
+          backlog.insert (backlog.begin (), std::make_move_iterator (suffix.begin ()),
+                          std::make_move_iterator (suffix.end ()));
+      })
+      .get ();
 }
 
 bool actor_transfer_coordinator_t::stage_commit_backlog (const std::string &transfer_id,
@@ -821,9 +842,15 @@ std::optional<removed_actor_message_follow_t> actor_transfer_coordinator_t::remo
       .get ();
 }
 
+bool actor_transfer_coordinator_t::blocks_dispatch_on_lane (const std::string &actor_key) const
+{
+    const auto found = _moves.find (actor_key);
+    return found != _moves.end () && found->second.phase != actor_move_phase_t::source_reserved;
+}
+
 bool actor_transfer_coordinator_t::blocks_dispatch (const std::string &actor_key) const
 {
-    return _lane.run ([&, this] { return _moves.contains (actor_key); }).get ();
+    return _lane.run ([&, this] { return blocks_dispatch_on_lane (actor_key); }).get ();
 }
 
 std::optional<actor_move_phase_t>

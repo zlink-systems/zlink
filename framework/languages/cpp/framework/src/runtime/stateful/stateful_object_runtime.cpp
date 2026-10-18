@@ -809,8 +809,8 @@ stateful_error_t stateful_object_runtime_t::enqueue_locked (object_record_t &obj
     return stateful_error_t::none;
 }
 
-std::pair<stateful_error_t, std::optional<turn_record_t>>
-stateful_object_runtime_t::try_claim (const object_ref_t &owner, turn_domain_t domain)
+std::pair<stateful_error_t, std::optional<turn_record_t>> stateful_object_runtime_t::try_claim (
+  const object_ref_t &owner, turn_domain_t domain, std::string *stable_type)
 {
     return _lane
       .run ([&, this] () -> std::pair<stateful_error_t, std::optional<turn_record_t>> {
@@ -819,6 +819,8 @@ stateful_object_runtime_t::try_claim (const object_ref_t &owner, turn_domain_t d
           if (object == nullptr) {
               return {error, std::nullopt};
           }
+          if (stable_type)
+              *stable_type = object->stable_type;
           if (domain == turn_domain_t::application && object->queue.application_active
               && object->queue.yielded_continuation) {
               auto continuation = std::move (*object->queue.yielded_continuation);
@@ -1290,7 +1292,7 @@ stateful_object_runtime_t::try_seal_relocation_aggregate (
         wait_for_quiescence_change (observed);
     }
 
-    std::vector<std::vector<std::uint8_t>> application_states (plan.sources.size ());
+    std::vector<frozen_object_state_t> application_states (plan.sources.size ());
     if (plan.capture) {
         for (std::size_t index = 0; index != plan.sources.size (); ++index) {
             try {
@@ -1309,7 +1311,32 @@ stateful_object_runtime_t::try_seal_relocation_aggregate (
                 co_return result_t<aggregate_relocation_seal_attempt_t>::success (
                   {stateful_error_t::conflict, {}});
             }
-            if (application_states[index].size () > max_application_state_bytes) {
+            // The native source queue receives the exported Actor suffix
+            // before seal validation. Abort therefore restores this same owner.
+            _lane
+              .run ([this, &plan, &application_states, index] {
+                  auto &pending = application_states[index].pending_application;
+                  if (pending.empty ())
+                      return;
+                  std::stable_sort (pending.begin (), pending.end (),
+                                    [] (const turn_record_t &left, const turn_record_t &right) {
+                                        return left.sequence < right.sequence;
+                                    });
+                  auto &object = _objects.at (plan.keys[index]);
+                  auto &queue = object.queue.application;
+                  const auto boundary = queue.size ();
+                  for (const auto &turn : pending)
+                      object.queue.application_bytes += retained_bytes (turn);
+                  queue.insert (queue.end (), std::make_move_iterator (pending.begin ()),
+                                std::make_move_iterator (pending.end ()));
+                  std::inplace_merge (queue.begin (), queue.begin () + boundary, queue.end (),
+                                      [] (const turn_record_t &left, const turn_record_t &right) {
+                                          return left.sequence < right.sequence;
+                                      });
+                  pending.clear ();
+              })
+              .get ();
+            if (application_states[index].application_state.size () > max_application_state_bytes) {
                 release ();
                 co_return result_t<aggregate_relocation_seal_attempt_t>::success (
                   {stateful_error_t::conflict, {}});
@@ -1330,12 +1357,12 @@ stateful_object_runtime_t::try_seal_relocation_aggregate (
                         || !same_exact_ref (found->second.reference, plan.sources[index]))
                         throw std::runtime_error ("relocation capture lost ownership");
                     auto &object = found->second;
-                    frozen_object_state_t frozen{.owner = object.reference,
-                                                 .stable_type = object.stable_type,
-                                                 .application_state =
-                                                   std::move (application_states[index]),
-                                                 .pending_application = {},
-                                                 .timers = {}};
+                    frozen_object_state_t frozen{
+                      .owner = object.reference,
+                      .stable_type = object.stable_type,
+                      .application_state = std::move (application_states[index].application_state),
+                      .pending_application = {},
+                      .timers = {}};
                     frozen.timers.reserve (object.timers.size ());
                     for (const auto &[_, timer] : object.timers)
                         frozen.timers.push_back (timer);
@@ -1536,6 +1563,8 @@ stateful_object_runtime_t::restore_relocation (frozen_object_state_t frozen,
                                                std::stop_token cancellation,
                                                std::optional<object_ref_t> target_spot)
 {
+    for (auto &pending : frozen.pending_application)
+        pending.accepted_owner.reset ();
     try {
         struct restore_plan_t
         {
@@ -1959,6 +1988,9 @@ stateful_object_runtime_t::restore_relocation_aggregate (std::vector<frozen_obje
                                                          relocation_restore_identity_t identity,
                                                          std::stop_token cancellation)
 {
+    for (auto &object : frozen)
+        for (auto &pending : object.pending_application)
+            pending.accepted_owner.reset ();
     try {
         std::vector<object_key_t> keys;
         std::vector<std::optional<std::uint64_t>> previous_generations;

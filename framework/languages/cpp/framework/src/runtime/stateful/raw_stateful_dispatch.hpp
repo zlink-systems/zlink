@@ -5,6 +5,7 @@
 #include "runtime/execution/state_lane.hpp"
 #include <runtime/locations/location_repository.hpp>
 #include "runtime/stateful/stateful_object_runtime.hpp"
+#include "runtime/execution/serial_application_record.hpp"
 
 #include <zlink/framework/contracts/locations/stores.hpp>
 
@@ -17,6 +18,8 @@
 #include <limits>
 #include <atomic>
 #include <map>
+#include <variant>
+#include <tuple>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -48,21 +51,30 @@ struct accepted_record_authority_t
 };
 
 using accepted_record_authority_resolver_t =
-  std::function<std::optional<accepted_record_authority_t> (
-    const accepted_record_authority_query_t &)>;
+  std::function<task_t<std::optional<accepted_record_authority_t>> (
+    accepted_record_authority_query_t)>;
 
 accepted_record_authority_resolver_t
 make_location_store_authority_resolver (zlink::framework::location_repository_t &store);
+
+// A pending record owns either a native claim or one indexed share of an
+// existing generic batch. The mailbox remains the byte-credit owner.
+using accepted_mailbox_reservation_t =
+  std::variant<std::shared_ptr<mesh::service_mailbox_claim_t>, std::function<void ()>>;
 
 struct stateful_delivery_t
 {
     object_ref_t owner;
     turn_record_t turn;
     protocol::frozen_record_t frozen;
-    protocol::application_payload_t payload;
     bool request = false;
+    std::shared_ptr<runtime::serial_application_record_t> application_record;
 
-    friend bool operator== (const stateful_delivery_t &, const stateful_delivery_t &) = default;
+    friend bool operator== (const stateful_delivery_t &left, const stateful_delivery_t &right)
+    {
+        return std::tie (left.owner, left.turn, left.frozen, left.request)
+               == std::tie (right.owner, right.turn, right.frozen, right.request);
+    }
 };
 
 class raw_stateful_dispatch_t
@@ -80,7 +92,16 @@ class raw_stateful_dispatch_t
         _flow_capture = std::move (provider);
     }
 
-    stateful_error_t ingest (const object_ref_t &owner);
+    task_t<stateful_error_t> ingest (object_ref_t owner);
+    task_t<stateful_error_t> ingest_claimed (object_ref_t owner,
+                                             mesh::service_mailbox_record_t record,
+                                             accepted_mailbox_reservation_t reservation);
+    task_t<std::pair<stateful_error_t, std::optional<accepted_record_authority_t>>>
+    accepted_actor_authority (object_ref_t owner,
+                              protocol::actor_message_header_t header,
+                              std::vector<std::uint8_t> source_node_routing_id,
+                              std::uint64_t source_node_generation,
+                              bool bound_session_routed = false) const;
     task_t<bool> forward_accepted (object_ref_t owner,
                                    turn_record_t turn,
                                    std::vector<std::uint8_t> target_routing_id,
@@ -89,10 +110,26 @@ class raw_stateful_dispatch_t
                                    std::chrono::milliseconds window,
                                    std::optional<std::uint64_t> target_authority_generation);
     std::pair<stateful_error_t, std::optional<stateful_delivery_t>>
-    try_claim (const object_ref_t &owner);
+    try_claim (const object_ref_t &owner,
+               std::function<void ()> *before_application_handler = nullptr,
+               std::string *stable_type = nullptr);
+    stateful_error_t accept_local (
+      const object_ref_t &owner,
+      std::shared_ptr<runtime::serial_application_record_t> application_record,
+      std::function<void ()> before_application_handler,
+      std::function<bool (const std::optional<protocol::application_payload_t> &)> terminal);
     task_t<stateful_error_t>
     complete_async (const stateful_delivery_t &delivery,
                     std::optional<protocol::application_payload_t> reply = std::nullopt);
+    // Transfer returns the native active claim while its request remains pending.
+    stateful_error_t release_application_claim (const object_ref_t &owner);
+    stateful_error_t transfer_application_claim (const object_ref_t &owner, std::uint64_t sequence);
+    stateful_error_t complete (const stateful_delivery_t &delivery,
+                               std::optional<protocol::application_payload_t> reply = std::nullopt);
+    stateful_error_t
+    complete (const stateful_delivery_t &delivery,
+              std::optional<protocol::application_payload_t> reply,
+              const std::shared_ptr<runtime::serial_application_record_t> &accepted_record);
     stateful_error_t stage_relocated (
       const object_ref_t &owner,
       turn_record_t turn,
@@ -123,18 +160,20 @@ class raw_stateful_dispatch_t
     struct pending_delivery_t
     {
         object_ref_t owner;
-        // The ingress path already decoded and validated this frozen record.
-        // Keep that summary until claim so delivery does not decode the
-        // canonical queue bytes a second time.
+        // Terminal identity only. The native turn retains the accepted body
+        // and canonical bytes; claim reads its dispatch view from that owner.
         protocol::frozen_record_t frozen;
         mesh::service_mailbox_record_t transport;
         bool request = false;
         std::function<bool (const std::optional<protocol::application_payload_t> &)>
           relocated_terminal;
-        std::shared_ptr<mesh::service_mailbox_claim_t> mailbox_claim;
+        accepted_mailbox_reservation_t mailbox_claim;
         bool relocated_completing = false;
     };
 
+    stateful_error_t complete_with_claim (const stateful_delivery_t &delivery,
+                                          std::optional<protocol::application_payload_t> reply,
+                                          const std::function<stateful_error_t ()> &release_claim);
     stateful_error_t discard_owner_pending (const object_ref_t &owner, bool reply_unavailable);
     static std::string mailbox_owner (const object_ref_t &owner);
     static bool matches_application_route (const object_ref_t &owner,
@@ -146,7 +185,8 @@ class raw_stateful_dispatch_t
                                               turn_record_t turn,
                                               pending_delivery_t pending,
                                               bool allocate_sequence,
-                                              stateful_error_t collision_error);
+                                              stateful_error_t collision_error,
+                                              bool restored = false);
 
     bool capture_flow () const { return !_flow_capture || _flow_capture (); }
 
@@ -239,6 +279,7 @@ class raw_relocation_replay_coordinator_t
                             std::uint64_t target_attempt_generation,
                             const protocol::relocation_object_t &object);
     bool register_terminal_source (raw_relocation_terminal_source_registration_t registration);
+    void unregister_terminal_sources (const protocol::relocation_id_t &relocation);
     bool unregister_terminal_source (const protocol::relocation_id_t &,
                                      const protocol::wire_operation_id_t &);
     bool register_terminal_target (raw_relocation_terminal_target_registration_t registration);

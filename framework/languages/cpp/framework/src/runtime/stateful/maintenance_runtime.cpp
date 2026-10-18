@@ -21,6 +21,21 @@ namespace zlink::framework::runtime::stateful
 namespace
 {
 
+bool participant_order_less (const object_ref_t &, const object_ref_t &) noexcept;
+
+std::vector<const frozen_object_state_t *>
+canonical_participants (const std::vector<frozen_object_state_t> &participants)
+{
+    std::vector<const frozen_object_state_t *> ordered;
+    ordered.reserve (participants.size ());
+    for (const auto &participant : participants)
+        ordered.push_back (&participant);
+    std::sort (ordered.begin (), ordered.end (), [] (const auto left, const auto right) {
+        return participant_order_less (left->owner, right->owner);
+    });
+    return ordered;
+}
+
 constexpr std::array<std::uint8_t, 4> session_journal_magic{'Z', 'L', 'S', 'J'};
 constexpr std::chrono::hours relocation_retention{24};
 constexpr std::size_t max_envelope_bytes = 256u * 1024u * 1024u;
@@ -293,9 +308,11 @@ maintenance_runtime_t::maintenance_runtime_t (stateful_object_runtime_t &objects
 }
 
 void maintenance_runtime_t::attach_relocation_wire (
-  raw_relocation_replay_coordinator_t &wire) noexcept
+  raw_relocation_replay_coordinator_t &wire,
+  std::function<raw_stateful_dispatch_t *()> dispatch) noexcept
 {
     _relocation_wire = &wire;
+    _relocation_dispatch = std::move (dispatch);
 }
 
 void maintenance_runtime_t::attach_committed_terminal (
@@ -340,6 +357,7 @@ maintenance_runtime_t::build_boundary_records (
         || !context.send_cutover || !context.abort_target_before_cutover)
         return std::nullopt;
 
+    const auto ordered = canonical_participants (participants);
     std::vector<protocol::relocation_data_t> records;
     try {
         for (const auto &batch_participant : batch.participants) {
@@ -352,8 +370,14 @@ maintenance_runtime_t::build_boundary_records (
             const protocol::relocation_object_t object{
               to_wire_object_kind (frozen->owner.kind), frozen->stable_type, frozen->owner.key,
               frozen->owner.object_generation, frozen->owner.authority_owner_generation};
+            const auto participant_id =
+              static_cast<std::uint64_t> (std::find (ordered.begin (), ordered.end (), &*frozen)
+                                          - ordered.begin ())
+              + 1;
             for (const auto &turn : batch_participant.records) {
                 if (!turn.application_record)
+                    return std::nullopt;
+                if (!register_terminal_source (context, frozen->owner, participant_id, turn))
                     return std::nullopt;
                 auto record = protocol::encode_frozen_application_record (*turn.application_record);
                 records.push_back ({context.relocation, context.target_attempt_generation,
@@ -368,19 +392,80 @@ maintenance_runtime_t::build_boundary_records (
     return records;
 }
 
+protocol::reply_relay_t maintenance_runtime_t::terminal_identity (
+  const protocol::relocation_id_t &relocation,
+  std::uint64_t target_attempt_generation,
+  const protocol::relocation_coordinator_fence_t &coordinator,
+  std::uint64_t participant_id,
+  const protocol::frozen_record_t &record)
+{
+    return {record.operation,
+            record.reply_route_id.value (),
+            relocation,
+            target_attempt_generation,
+            coordinator,
+            participant_id,
+            record.operation.low != 0 ? record.operation.low : record.operation.high,
+            0,
+            protocol::framework_error_code::none};
+}
+
+bool maintenance_runtime_t::register_terminal_source (
+  const eligible_relocation_unit_t::canonical_wire_context_t &context,
+  const object_ref_t &owner,
+  std::uint64_t participant_id,
+  const turn_record_t &turn) const
+{
+    const auto dispatch = _relocation_dispatch ? _relocation_dispatch () : nullptr;
+    if (!_relocation_wire || !dispatch)
+        return true;
+    const auto record = turn.application_record
+                          ? protocol::summarize_frozen_application_record (*turn.application_record)
+                        : turn.frozen_record ? *turn.frozen_record
+                                             : protocol::decode_frozen_record (turn.payload);
+    if (!record.application || !record.reply_route_id)
+        return true;
+    auto terminal = terminal_identity (context.relocation, context.target_attempt_generation,
+                                       context.coordinator, participant_id, record);
+    return _relocation_wire->register_terminal_source (
+      {terminal.relocation, std::move (terminal.coordinator), terminal.operation, record.source,
+       context.target_node_routing_id, context.target_node_generation,
+       terminal.target_attempt_generation, terminal.participant_id, terminal.sequence,
+       terminal.reply_route_id,
+       [dispatch, owner,
+        sequence = turn.sequence] (const protocol::reply_relay_t &relay,
+                                   const std::optional<protocol::application_payload_t> &reply) {
+           return dispatch->complete_relocated_source_async (owner, sequence, relay, reply)
+             .result ()
+             .value ();
+       }});
+}
+
+stateful_error_t maintenance_runtime_t::abort_relocation_before_cutover (
+  std::uint64_t token, const eligible_relocation_unit_t::canonical_wire_context_t &context)
+{
+    const auto aborted = _objects.abort_relocation_before_cutover (token);
+    if (aborted == stateful_error_t::none && _relocation_wire)
+        _relocation_wire->unregister_terminal_sources (context.relocation);
+    return aborted;
+}
+
 task_t<relocation_reason_t> maintenance_runtime_t::prepare_target (
   const eligible_relocation_unit_t::canonical_wire_context_t &context,
   const std::vector<frozen_object_state_t> &participants,
   const relocation_payload_manifest_t &manifest)
 {
-    auto reason = relocation_reason_t::restore_failed;
     try {
-        reason = co_await context.prepare_target (participants, manifest);
+        const auto ordered = canonical_participants (participants);
+        for (std::size_t index = 0; index != ordered.size (); ++index)
+            for (const auto &turn : ordered[index]->pending_application)
+                if (!register_terminal_source (context, ordered[index]->owner, index + 1, turn))
+                    co_return relocation_reason_t::restore_failed;
+        co_return co_await context.prepare_target (participants, manifest);
     }
     catch (...) {
-        reason = relocation_reason_t::restore_failed;
+        co_return relocation_reason_t::restore_failed;
     }
-    co_return reason;
 }
 
 std::uint64_t maintenance_runtime_t::effective_in_flight_budget () const noexcept
@@ -658,7 +743,7 @@ maintenance_runtime_t::apply_relocation_settlement (
             /* The captured queue and timers, then the retained boundary and
              * post-boundary records, return to the source queue in original
              * acceptance order and dispatch reopens. */
-            (void) _objects.abort_relocation_before_cutover (token);
+            (void) abort_relocation_before_cutover (token, state->context);
             return {relocation_terminal_t::blocked, relocation_reason_t::restore_failed};
         default:
             /* Expired-owner terminal: dispatch and Store changes stop for
@@ -759,7 +844,7 @@ maintenance_runtime_t::relocate_terminal (std::shared_ptr<relocation_terminal_st
         /* The target replied ready without every chunk — treat it as an
          * exact target failure before cutover. */
         if (abort_target_before_cutover (state->context))
-            (void) _objects.abort_relocation_before_cutover (state->seal_attempt.seal.token);
+            (void) abort_relocation_before_cutover (state->seal_attempt.seal.token, state->context);
         state->result.emplace (finish (
           {relocation_terminal_t::blocked, relocation_reason_t::restore_failed, std::nullopt}));
         co_return std::move (*state->result);
@@ -870,7 +955,7 @@ maintenance_runtime_t::relocate_prepare_target (std::shared_ptr<relocation_termi
             return;
         }
         if (settled.value () != relocation_reason_t::none) {
-            (void) _objects.abort_relocation_before_cutover (state->seal_attempt.seal.token);
+            (void) abort_relocation_before_cutover (state->seal_attempt.seal.token, state->context);
             state->result.emplace (
               finish ({relocation_terminal_t::blocked, settled.value (), std::nullopt}));
             completion->complete (result_t<bool>::success (false));
@@ -894,7 +979,7 @@ task_t<bool> maintenance_runtime_t::relocate_boundary_and_send (
     state->batch = boundary.second;
     if (boundary_error != stateful_error_t::none) {
         (void) abort_target_before_cutover (state->context);
-        (void) _objects.abort_relocation_before_cutover (state->seal_attempt.seal.token);
+        (void) abort_relocation_before_cutover (state->seal_attempt.seal.token, state->context);
         state->result.emplace (finish (
           {relocation_terminal_t::blocked, relocation_reason_t::restore_failed, std::nullopt}));
         co_return false;
@@ -911,7 +996,7 @@ task_t<bool> maintenance_runtime_t::relocate_boundary_and_send (
           co_await send_boundary_records (state->context, *state->records, state->batch);
     if (!records_sent) {
         if (abort_target_before_cutover (state->context))
-            (void) _objects.abort_relocation_before_cutover (state->seal_attempt.seal.token);
+            (void) abort_relocation_before_cutover (state->seal_attempt.seal.token, state->context);
         state->result.emplace (finish (
           {relocation_terminal_t::recovery_required, state->failure, std::nullopt,
            state->records.value_or (std::vector<protocol::relocation_data_t>{}), state->handoff}));
@@ -1087,7 +1172,7 @@ task_t<aggregate_relocation_result_t> maintenance_runtime_t::relocate_aggregate 
     try {
         if (persisted_context.augment_frozen
             && !persisted_context.augment_frozen (state->seal_attempt.seal.participants)) {
-            (void) _objects.abort_relocation_before_cutover (seal.token);
+            (void) abort_relocation_before_cutover (seal.token, persisted_context);
             co_return aggregate_relocation_result_t{
               relocation_terminal_t::blocked, relocation_reason_t::restore_failed, {}};
         }
@@ -1100,14 +1185,14 @@ task_t<aggregate_relocation_result_t> maintenance_runtime_t::relocate_aggregate 
     }
     if (state->payload.empty () || state->payload.size () > encoded_upper_bound
         || state->manifest.chunk_count > protocol::relocationChunkCount) {
-        (void) _objects.abort_relocation_before_cutover (seal.token);
+        (void) abort_relocation_before_cutover (seal.token, persisted_context);
         co_return aggregate_relocation_result_t{
           relocation_terminal_t::blocked, relocation_reason_t::payload_bound_exceeded, {}};
     }
     state->budget_reserved = std::min (state->effective_chunk_limit, effective_in_flight_budget ());
     co_await acquire_transfer_budget (state->budget_reserved);
     auto prepared = std::make_shared<task_t<relocation_reason_t>> (
-      prepare_target (persisted_context, seal.participants, state->manifest));
+      prepare_target (persisted_context, state->seal_attempt.seal.participants, state->manifest));
     const auto chunks_sent = co_await relocate_send_state_chunks (state, [prepared] {
         if (!prepared->await_ready ())
             return false;
@@ -1124,7 +1209,7 @@ task_t<aggregate_relocation_result_t> maintenance_runtime_t::relocate_aggregate 
         target_prepare_reason = relocation_reason_t::restore_failed;
     }
     if (target_prepare_reason != relocation_reason_t::none || !chunks_sent) {
-        (void) _objects.abort_relocation_before_cutover (seal.token);
+        (void) abort_relocation_before_cutover (seal.token, persisted_context);
         co_return aggregate_relocation_result_t{relocation_terminal_t::blocked,
                                                 target_prepare_reason != relocation_reason_t::none
                                                   ? target_prepare_reason
@@ -1153,7 +1238,7 @@ task_t<aggregate_relocation_result_t> maintenance_runtime_t::relocate_aggregate 
         records_sent = co_await send_boundary_records (*canonical_wire, *records, batch);
     if (!records_sent) {
         if (abort_target_before_cutover (*canonical_wire))
-            (void) _objects.abort_relocation_before_cutover (seal.token);
+            (void) abort_relocation_before_cutover (seal.token, persisted_context);
         co_return aggregate_relocation_result_t{
           relocation_terminal_t::recovery_required,
           failure,
@@ -1282,14 +1367,7 @@ std::vector<std::uint8_t> maintenance_runtime_t::encode_envelope (
 {
     if (participants.empty () || (relocation.high == 0 && relocation.low == 0))
         return {};
-    std::vector<const frozen_object_state_t *> ordered;
-    ordered.reserve (participants.size ());
-    for (const auto &participant : participants)
-        ordered.push_back (&participant);
-    std::sort (ordered.begin (), ordered.end (),
-               [] (const frozen_object_state_t *left, const frozen_object_state_t *right) {
-                   return participant_order_less (left->owner, right->owner);
-               });
+    const auto ordered = canonical_participants (participants);
     for (std::size_t index = 0; index != ordered.size (); ++index) {
         const auto &frozen = *ordered[index];
         if (frozen.owner.key.empty () || frozen.stable_type.empty ()
@@ -1782,7 +1860,8 @@ void public_host_runtime_t::configure_relocation (
       std::move (relocation_observer), std::move (aggregate_authority));
     if (_delay_owner)
         maintenance->bind_delay_owner (*_delay_owner);
-    maintenance->attach_relocation_wire (*_relocation_wire);
+    maintenance->attach_relocation_wire (*_relocation_wire,
+                                         [this] { return _stateful_dispatch.get (); });
     maintenance->attach_committed_terminal ([this] (const stateful::object_ref_t &owner) {
         if (_stateful_dispatch)
             _stateful_dispatch->release_relocated_payloads (owner);
@@ -1830,7 +1909,8 @@ void public_host_runtime_t::configure_maintenance (
       _objects, std::move (providers), limits, std::move (relocation_observer));
     if (_delay_owner)
         maintenance->bind_delay_owner (*_delay_owner);
-    maintenance->attach_relocation_wire (*_relocation_wire);
+    maintenance->attach_relocation_wire (*_relocation_wire,
+                                         [this] { return _stateful_dispatch.get (); });
     maintenance->attach_committed_terminal ([this] (const stateful::object_ref_t &owner) {
         if (_stateful_dispatch)
             _stateful_dispatch->release_relocated_payloads (owner);

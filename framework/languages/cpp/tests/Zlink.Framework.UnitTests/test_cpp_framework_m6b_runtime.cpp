@@ -32,6 +32,7 @@
 #include "runtime/locations/source_creation_cleanup.hpp"
 #include "runtime/locations/store_location_resolvers.hpp"
 #include "runtime/stateful/raw_stateful_dispatch.hpp"
+#include "runtime/stateful/accepted_actor_record.hpp"
 #include "runtime/stateful/public_host_runtime.hpp"
 #include "runtime/stateful/stateful_object_runtime.hpp"
 #include "runtime/timers/async_delay.hpp"
@@ -74,6 +75,47 @@ namespace zlink::framework::runtime::host
 struct public_host_runtime_test_access_t
 {
     using key_t = public_host_runtime_t::relocation_attempt_key_t;
+
+    static bool restore_saved (public_host_runtime_t &host,
+                               const protocol::relocation_prepare_t &prepare,
+                               std::vector<stateful::frozen_object_state_t> frozen,
+                               std::vector<stateful::object_ref_t> targets,
+                               const stateful::relocation_restore_identity_t &identity)
+    {
+        auto pending = std::make_shared<public_host_runtime_t::pending_relocation_assembly_t> (
+          public_host_runtime_t::pending_relocation_assembly_t{
+            prepare,
+            {},
+            stateful::relocation_state_assembly_t{prepare.relocation,
+                                                  prepare.target_attempt_generation,
+                                                  prepare.coordinator,
+                                                  prepare.object,
+                                                  {}}});
+        auto staging = std::make_shared<public_host_runtime_t::relocation_assembly_staging_t> ();
+        staging->frozen = std::move (frozen);
+        staging->targets = std::move (targets);
+        staging->restore_identity = identity;
+        for (const auto &saved : staging->frozen) {
+            staging->sources.push_back (saved.owner);
+            staging->wire_objects.push_back ({saved.owner.kind == stateful::object_kind_t::actor
+                                                ? protocol::relocation_object_kind_t::actor
+                                                : protocol::relocation_object_kind_t::user_spot,
+                                              saved.stable_type, saved.owner.key,
+                                              saved.owner.object_generation,
+                                              saved.owner.authority_owner_generation});
+        }
+        return host.restore_relocation_assembly (pending, staging).result ().value ();
+    }
+
+    static bool complete_saved (public_host_runtime_t &host,
+                                const stateful::object_ref_t &owner,
+                                const protocol::application_payload_t &reply)
+    {
+        auto claim = host._stateful_dispatch->try_claim (owner);
+        return claim.first == stateful::stateful_error_t::none && claim.second
+               && host._stateful_dispatch->complete (*claim.second, reply)
+                    == stateful::stateful_error_t::none;
+    }
 
     static void insert_unscheduled_target_attempt (public_host_runtime_t &host, const key_t &key)
     {
@@ -398,12 +440,12 @@ void verify_actor_calls_keep_selected_route_until_follow_notice ()
           co_return host::route_fence_t{1, 1};
       });
     new_target->configure_stateful_dispatch (
-      [] (const stateful::accepted_record_authority_query_t &query)
-        -> std::optional<stateful::accepted_record_authority_t> {
-          return stateful::accepted_record_authority_t{{"actor-send-source-owner", 1,
-                                                        query.source_node_routing_id,
-                                                        query.source_node_generation},
-                                                       1};
+      [] (stateful::accepted_record_authority_query_t query)
+        -> zlink::framework::task_t<std::optional<stateful::accepted_record_authority_t>> {
+          co_return stateful::accepted_record_authority_t{{"actor-send-source-owner", 1,
+                                                           query.source_node_routing_id,
+                                                           query.source_node_generation},
+                                                          1};
       });
     old_target->start ();
     new_target->start ();
@@ -3395,11 +3437,18 @@ void verify_unbounded_actor_handoff_backlog ()
     const std::string reserved_key = "player:actor-handoff-reserved";
     assert (coordinator.try_reserve_source (reserved_key));
     assert (!coordinator.try_reserve_source (reserved_key));
-    assert (coordinator.try_append_backlog (reserved_key, packet_with_payload (1))
-            == handoff_append_result_t::appended);
-    assert (coordinator.try_append_backlog (reserved_key, packet_with_payload (2))
-            == handoff_append_result_t::appended);
+    assert (!coordinator.blocks_dispatch (reserved_key));
+    std::vector<handoff_packet_t> reserved_queue;
+    for (const auto size : {1u, 2u}) {
+        auto packet = packet_with_payload (size);
+        assert (coordinator.try_append_backlog (reserved_key, packet)
+                == handoff_append_result_t::not_moving);
+        reserved_queue.push_back (std::move (packet));
+    }
+    assert (coordinator.take_backlog (reserved_key).empty ());
     assert (coordinator.try_begin_source_remote (reserved_key, "transfer-reserved"));
+    assert (coordinator.blocks_dispatch (reserved_key));
+    coordinator.prepend_source_suffix (reserved_key, std::move (reserved_queue));
     assert (coordinator.try_append_backlog (reserved_key, packet_with_payload (3))
             == handoff_append_result_t::appended);
     const auto reserved_backlog = coordinator.take_backlog (reserved_key);
@@ -3411,7 +3460,12 @@ void verify_unbounded_actor_handoff_backlog ()
 
     const std::string cancelled_key = "player:actor-handoff-cancelled";
     assert (coordinator.try_reserve_source (cancelled_key));
-    assert (coordinator.try_append_backlog (cancelled_key, packet_with_payload (1))
+    auto cancelled_packet = packet_with_payload (1);
+    assert (coordinator.try_append_backlog (cancelled_key, cancelled_packet)
+            == handoff_append_result_t::not_moving);
+    assert (coordinator.take_backlog (cancelled_key).empty ());
+    assert (coordinator.try_begin_local (cancelled_key));
+    assert (coordinator.try_append_backlog (cancelled_key, cancelled_packet)
             == handoff_append_result_t::appended);
     coordinator.cancel_move (cancelled_key);
     assert (!coordinator.phase (cancelled_key));
@@ -3534,18 +3588,21 @@ void verify_public_host_dispatches_one_owner_claim_as_a_batch ()
     std::vector<std::string> dispatched;
     std::size_t started = 0;
     std::size_t rejected = 0;
-    assert (target->dispatch_application_owner (
-      owner,
-      [&] (const host::ready_record_t &, const host::receive_record_t &record,
-           std::vector<zlink::message_t> parts) {
-          assert (record.retain_mailbox_reservation);
-          assert (record.release_mailbox_reservation);
-          record.retain_mailbox_reservation ();
-          assert (parts.size () == 1);
-          dispatched.push_back (parts.front ().to_string ());
-          record.release_mailbox_reservation ();
-      },
-      [&] { ++started; }, [&] { ++rejected; }));
+    assert (target
+              ->dispatch_application_owner (
+                owner,
+                [&] (const host::ready_record_t &, const host::receive_record_t &record,
+                     std::vector<zlink::message_t> parts) {
+                    assert (record.retain_mailbox_reservation);
+                    assert (record.release_mailbox_reservation);
+                    record.retain_mailbox_reservation ();
+                    assert (parts.size () == 1);
+                    dispatched.push_back (parts.front ().to_string ());
+                    record.release_mailbox_reservation ();
+                },
+                [&] { ++started; }, [&] { ++rejected; })
+              .result ()
+              .value ());
     mailbox.end_application_drain (owner);
 
     assert ((dispatched == std::vector<std::string>{"first", "second", "third"}));
@@ -4444,7 +4501,9 @@ void verify_location_store_accepted_record_authority ()
                  .source_node_generation = 1,
                  .target_node_routing_id = bytes ("raw-target"),
                  .target_node_generation = 1,
-                 .source_kind = protocol::frozen_source_kind_t::node});
+                 .source_kind = protocol::frozen_source_kind_t::node})
+        .result ()
+        .value ();
     assert (resolved);
     assert (resolved->source.owner_id == source_owner.owner_id);
     assert (resolved->source.lease_generation
@@ -4467,7 +4526,9 @@ void verify_location_store_accepted_record_authority ()
                                                  committed.ready.object_generation),
                  .source_session_routing_id = bytes ("sess-1"),
                  .source_binding_generation = 5,
-                 .source_session_sequence = 9});
+                 .source_session_sequence = 9})
+        .result ()
+        .value ();
     assert (resolved_bound);
     assert (resolved_bound->source.owner_id == source_owner.owner_id);
     assert (resolved_bound->target_owner_lease_generation
@@ -4482,7 +4543,7 @@ void verify_location_store_accepted_record_authority ()
       .target_node_routing_id = bytes ("raw-target"),
       .target_node_generation = 1,
       .source_kind = protocol::frozen_source_kind_t::node};
-    assert (!resolver (stale));
+    assert (!resolver (stale).result ().value ());
 }
 
 void verify_raw_spot_and_actor_routing ()
@@ -4594,13 +4655,13 @@ void verify_raw_spot_and_actor_routing ()
     bool authority_live = true;
     stateful::raw_stateful_dispatch_t dispatch (
       objects, target,
-      [&] (const stateful::accepted_record_authority_query_t &query)
-        -> std::optional<stateful::accepted_record_authority_t> {
+      [&] (stateful::accepted_record_authority_query_t query)
+        -> zlink::framework::task_t<std::optional<stateful::accepted_record_authority_t>> {
           assert (query.source_node_routing_id == source_descriptor.node_routing_id);
           assert (query.source_node_generation == source_descriptor.lifecycle_generation);
           if (!authority_live)
-              return std::nullopt;
-          return stateful::accepted_record_authority_t{
+              co_return std::nullopt;
+          co_return stateful::accepted_record_authority_t{
             {"source-owner", 17, source_descriptor.node_routing_id,
              source_descriptor.lifecycle_generation},
             query.target.kind == stateful::object_kind_t::actor ? 37u : 31u};
@@ -4625,10 +4686,13 @@ void verify_raw_spot_and_actor_routing ()
         assert (spot_pump != mesh::raw_mesh_pump_result_t::protocol_error);
     }
     assert (spot_pump == mesh::raw_mesh_pump_result_t::application);
-    assert (dispatch.ingest (spot) == stateful::stateful_error_t::none);
+    assert (dispatch.ingest (spot).result ().value () == stateful::stateful_error_t::none);
     const auto [spot_delivery_error, spot_delivery] = dispatch.try_claim (spot);
     assert (spot_delivery_error == stateful::stateful_error_t::none);
-    assert (spot_delivery && spot_delivery->payload.payload_bytes () == bytes ("spot"));
+    assert (spot_delivery);
+    stateful::with_accepted_application (spot_delivery->turn, [] (auto, const auto &application) {
+        assert (application.payload_bytes () == bytes ("spot"));
+    });
     const auto &frozen_spot = spot_delivery->frozen;
     assert (spot_delivery->turn.payload.empty ());
     assert (spot_delivery->turn.application_record.has_value ());
@@ -4651,11 +4715,14 @@ void verify_raw_spot_and_actor_routing ()
       source_descriptor.node_routing_id, std::nullopt, std::nullopt,
       source_descriptor.lifecycle_generation,
       std::make_pair (relocated_one_way_operation.high, relocated_one_way_operation.low)}));
-    assert (dispatch.ingest (spot) == stateful::stateful_error_t::none);
+    assert (dispatch.ingest (spot).result ().value () == stateful::stateful_error_t::none);
     const auto [relocated_error, relocated_delivery] = dispatch.try_claim (spot);
     assert (relocated_error == stateful::stateful_error_t::none);
     assert (relocated_delivery && !relocated_delivery->request);
-    assert (relocated_delivery->payload.payload_bytes () == bytes ("relocated"));
+    stateful::with_accepted_application (
+      relocated_delivery->turn, [] (auto, const auto &application) {
+          assert (application.payload_bytes () == bytes ("relocated"));
+      });
     assert (dispatch.complete_async (*relocated_delivery).result ().value ()
             == stateful::stateful_error_t::none);
 
@@ -4690,11 +4757,13 @@ void verify_raw_spot_and_actor_routing ()
         assert (actor_pump != mesh::raw_mesh_pump_result_t::protocol_error);
     }
     assert (actor_pump == mesh::raw_mesh_pump_result_t::application);
-    assert (dispatch.ingest (actor) == stateful::stateful_error_t::none);
+    assert (dispatch.ingest (actor).result ().value () == stateful::stateful_error_t::none);
     const auto [actor_delivery_error, actor_delivery] = dispatch.try_claim (actor);
     assert (actor_delivery_error == stateful::stateful_error_t::none);
     assert (actor_delivery && actor_delivery->request);
-    assert (actor_delivery->payload.payload_bytes () == bytes ("request"));
+    stateful::with_accepted_application (actor_delivery->turn, [] (auto, const auto &application) {
+        assert (application.payload_bytes () == bytes ("request"));
+    });
     const auto &frozen_actor = actor_delivery->frozen;
     assert (actor_delivery->turn.payload.empty ());
     assert (actor_delivery->turn.application_record.has_value ());
@@ -4754,7 +4823,7 @@ void verify_raw_spot_and_actor_routing ()
         assert (bound_pump != mesh::raw_mesh_pump_result_t::protocol_error);
     }
     assert (bound_pump == mesh::raw_mesh_pump_result_t::application);
-    assert (dispatch.ingest (actor) == stateful::stateful_error_t::none);
+    assert (dispatch.ingest (actor).result ().value () == stateful::stateful_error_t::none);
     const auto [bound_delivery_error, bound_delivery] = dispatch.try_claim (actor);
     assert (bound_delivery_error == stateful::stateful_error_t::none);
     assert (bound_delivery && bound_delivery->request);
@@ -4818,7 +4887,7 @@ void verify_raw_spot_and_actor_routing ()
       source_descriptor.node_routing_id, std::nullopt, 92, source_descriptor.lifecycle_generation,
       std::make_pair (unfenced_operation.high, unfenced_operation.low),
       mesh::service_bound_session_source_t{bound_session_tail.session_routing_id, 0, 0}}));
-    assert (dispatch.ingest (actor) == stateful::stateful_error_t::moving);
+    assert (dispatch.ingest (actor).result ().value () == stateful::stateful_error_t::moving);
     {
         const auto [unfenced_error, unfenced_delivery] = dispatch.try_claim (actor);
         (void) unfenced_error;
@@ -4840,7 +4909,7 @@ void verify_raw_spot_and_actor_routing ()
       mesh::service_bound_session_source_t{bound_session_tail.session_routing_id,
                                            bound_session_tail.binding_generation,
                                            bound_session_tail.session_sequence}}));
-    assert (dispatch.ingest (actor) == stateful::stateful_error_t::moving);
+    assert (dispatch.ingest (actor).result ().value () == stateful::stateful_error_t::moving);
     {
         const auto [tailless_error, tailless_delivery] = dispatch.try_claim (actor);
         (void) tailless_error;
@@ -4860,7 +4929,7 @@ void verify_raw_spot_and_actor_routing ()
           target.pump_one (mesh::service_liveness_registry_t::clock_t::now ()).result ().value ();
     }
     assert (stale_owner_pump == mesh::raw_mesh_pump_result_t::application);
-    assert (dispatch.ingest (actor) == stateful::stateful_error_t::conflict);
+    assert (dispatch.ingest (actor).result ().value () == stateful::stateful_error_t::conflict);
     authority_live = true;
 
     auto stale_owner_lease_fence = actor_fence;
@@ -4878,7 +4947,7 @@ void verify_raw_spot_and_actor_routing ()
           target.pump_one (mesh::service_liveness_registry_t::clock_t::now ()).result ().value ();
     }
     assert (stale_owner_pump == mesh::raw_mesh_pump_result_t::application);
-    assert (dispatch.ingest (actor) == stateful::stateful_error_t::conflict);
+    assert (dispatch.ingest (actor).result ().value () == stateful::stateful_error_t::conflict);
 
     auto stale_fence = actor_fence;
     ++stale_fence.object_generation;
@@ -4907,7 +4976,7 @@ void verify_raw_spot_and_actor_routing ()
         assert (actor_pump != mesh::raw_mesh_pump_result_t::protocol_error);
     }
     assert (actor_pump == mesh::raw_mesh_pump_result_t::application);
-    assert (dispatch.ingest (actor) == stateful::stateful_error_t::none);
+    assert (dispatch.ingest (actor).result ().value () == stateful::stateful_error_t::none);
     const auto [recreated_delivery_error, recreated_delivery] = dispatch.try_claim (actor);
     assert (recreated_delivery_error == stateful::stateful_error_t::none);
     assert (recreated_delivery && recreated_delivery->request);
@@ -4961,9 +5030,9 @@ void verify_relocated_source_reply_failure_keeps_terminal_record ()
                                                false});
     stateful::raw_stateful_dispatch_t dispatch (
       objects, target,
-      [] (const stateful::accepted_record_authority_query_t &query)
-        -> std::optional<stateful::accepted_record_authority_t> {
-          return stateful::accepted_record_authority_t{
+      [] (stateful::accepted_record_authority_query_t query)
+        -> zlink::framework::task_t<std::optional<stateful::accepted_record_authority_t>> {
+          co_return stateful::accepted_record_authority_t{
             {"source-owner", 1, query.source_node_routing_id, query.source_node_generation}, 1};
       });
     const protocol::actor_route_fence_t actor_fence{
@@ -4980,7 +5049,7 @@ void verify_relocated_source_reply_failure_keeps_terminal_record ()
          protocol::encode_application_payload (
            {"ActorPacket", "application/json", bytes ("request")})}),
       unreachable_source, std::nullopt, 99, 1, std::make_pair (operation.high, operation.low)}));
-    assert (dispatch.ingest (actor) == stateful::stateful_error_t::none);
+    assert (dispatch.ingest (actor).result ().value () == stateful::stateful_error_t::none);
 
     const protocol::reply_relay_t relay{operation,
                                         99,
@@ -4997,7 +5066,9 @@ void verify_relocated_source_reply_failure_keeps_terminal_record ()
 
     const auto [claim_error, delivery] = dispatch.try_claim (actor);
     assert (claim_error == stateful::stateful_error_t::none && delivery);
-    assert (delivery->payload.payload_bytes () == bytes ("request"));
+    stateful::with_accepted_application (delivery->turn, [] (auto, const auto &application) {
+        assert (application.payload_bytes () == bytes ("request"));
+    });
     assert (objects.complete_claim (actor, stateful::turn_domain_t::application)
             == stateful::stateful_error_t::none);
     target.close ();
@@ -5005,6 +5076,9 @@ void verify_relocated_source_reply_failure_keeps_terminal_record ()
 
 void verify_atomic_raw_stateful_ingress_commit ()
 {
+    []<typename Delivery> {
+        static_assert (!requires (Delivery delivery) { delivery.payload; });
+    }.template operator()<stateful::stateful_delivery_t> ();
     mesh::raw_mesh_node_owner_t target (mesh::raw_mesh_node_options_t{
       .descriptor = descriptor ("atomic-ingress-target"),
       .runtime_failures =
@@ -5026,15 +5100,15 @@ void verify_atomic_raw_stateful_ingress_commit ()
     std::size_t authority_queries = 0;
     stateful::raw_stateful_dispatch_t dispatch (
       objects, target,
-      [&] (const stateful::accepted_record_authority_query_t &query)
-        -> std::optional<stateful::accepted_record_authority_t> {
+      [&] (stateful::accepted_record_authority_query_t query)
+        -> zlink::framework::task_t<std::optional<stateful::accepted_record_authority_t>> {
           ++authority_queries;
           assert (query.target == actor);
           assert (query.source_node_routing_id == source_routing_id);
           assert (query.source_node_generation == source_generation);
           if (!authority_live)
-              return std::nullopt;
-          return stateful::accepted_record_authority_t{
+              co_return std::nullopt;
+          co_return stateful::accepted_record_authority_t{
             {"atomic-source-owner", 23, source_routing_id, source_generation},
             owner_lease_generation};
       });
@@ -5064,7 +5138,7 @@ void verify_atomic_raw_stateful_ingress_commit ()
     // Authority rejection is outside the accepted-ingress transaction and
     // cannot allocate sequence 1 or reserve application work.
     enqueue (1, "authority-rejected");
-    assert (dispatch.ingest (actor) == stateful::stateful_error_t::conflict);
+    assert (dispatch.ingest (actor).result ().value () == stateful::stateful_error_t::conflict);
     assert_no_queued_reservation ();
     authority_live = true;
 
@@ -5076,7 +5150,7 @@ void verify_atomic_raw_stateful_ingress_commit ()
     const auto filled_count = objects.pending (actor, stateful::turn_domain_t::application);
     const auto filled_bytes = objects.pending_bytes (actor, stateful::turn_domain_t::application);
     enqueue (2, "accepted-beyond-former-capacity");
-    assert (dispatch.ingest (actor) == stateful::stateful_error_t::none);
+    assert (dispatch.ingest (actor).result ().value () == stateful::stateful_error_t::none);
     assert (objects.pending (actor, stateful::turn_domain_t::application) == filled_count + 1);
     assert (objects.pending_bytes (actor, stateful::turn_domain_t::application) > filled_bytes);
     assert (dispatch.discard_pending (actor, 1) == stateful::stateful_error_t::none);
@@ -5084,7 +5158,7 @@ void verify_atomic_raw_stateful_ingress_commit ()
     assert_no_queued_reservation ();
 
     enqueue (3, "accepted-one");
-    assert (dispatch.ingest (actor) == stateful::stateful_error_t::none);
+    assert (dispatch.ingest (actor).result ().value () == stateful::stateful_error_t::none);
     const auto authority_queries_after_admission = authority_queries;
     authority_live = false;
     const auto [first_error, first] = dispatch.try_claim (actor);
@@ -5107,7 +5181,7 @@ void verify_atomic_raw_stateful_ingress_commit ()
     authority_live = true;
 
     enqueue (4, "accepted-two");
-    assert (dispatch.ingest (actor) == stateful::stateful_error_t::none);
+    assert (dispatch.ingest (actor).result ().value () == stateful::stateful_error_t::none);
     const auto [second_error, second] = dispatch.try_claim (actor);
     assert (second_error == stateful::stateful_error_t::none && second);
     assert (second->turn.sequence == 3);
@@ -5115,12 +5189,42 @@ void verify_atomic_raw_stateful_ingress_commit ()
             == stateful::stateful_error_t::none);
 
     enqueue (6, "accepted-three");
-    assert (dispatch.ingest (actor) == stateful::stateful_error_t::none);
+    assert (dispatch.ingest (actor).result ().value () == stateful::stateful_error_t::none);
     const auto [third_error, third] = dispatch.try_claim (actor);
     assert (third_error == stateful::stateful_error_t::none && third);
     assert (third->turn.sequence == 4);
     assert (dispatch.complete_async (*third).result ().value ()
             == stateful::stateful_error_t::none);
+    assert (authority_queries == 5);
+
+    // A flat accepted payload keeps its allocation through the local native
+    // adapter and claim. The structural check above also rejects a second
+    // delivery payload, which pointer identity of the canonical turn cannot detect.
+    protocol::actor_message_header_t local_header;
+    local_header.operation = {41, 7};
+    local_header.target = fence;
+    protocol::application_payload_t local_payload{"ActorPacket", "application/json",
+                                                  bytes ("accepted-flat")};
+    const auto *accepted_bytes = local_payload.payload_bytes ().data ();
+    auto accepted = std::make_shared<zlink::framework::runtime::serial_application_record_t> ();
+    accepted->payload.emplace ();
+    accepted->payload->application_record = stateful::accepted_actor_record (
+      local_header, {"atomic-source-owner", 23, source_routing_id, source_generation},
+      std::move (local_payload), false);
+    assert (dispatch.accept_local (actor, accepted, {}, {}) == stateful::stateful_error_t::none);
+    assert (!accepted->payload);
+    const auto [flat_error, flat] = dispatch.try_claim (actor);
+    assert (flat_error == stateful::stateful_error_t::none && flat);
+    assert (flat->application_record == accepted);
+    stateful::with_accepted_application (flat->turn, [&] (auto kind, const auto &application) {
+        assert (kind == protocol::frozen_record_kind_t::actor_send);
+        assert (application.payload_bytes () == bytes ("accepted-flat"));
+        assert (application.payload_bytes ().data () == accepted_bytes);
+    });
+    assert (dispatch.complete_async (*flat).result ().value () == stateful::stateful_error_t::none);
+    assert (dispatch.complete_async (*flat).result ().value ()
+            == stateful::stateful_error_t::conflict);
+    assert_no_queued_reservation ();
     assert (authority_queries == 5);
     target.close ();
 }
@@ -5802,6 +5906,94 @@ void verify_durable_reply_relay_single_winner ()
     target.close ();
 }
 
+void verify_aggregate_saved_request_terminal_identity ()
+{
+    auto target = std::make_shared<host::public_host_runtime_t> (
+      host::host_options_t{mesh::raw_mesh_node_options_t{
+        .descriptor = descriptor ("aggregate-terminal-target"),
+        .runtime_failures =
+          std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()}});
+    target->objects ().configure_relocation_state (
+      [] (const auto &, const auto &, std::stop_token) {
+          return stateful::frozen_object_state_t{};
+      },
+      [] (const auto &, const auto &, std::stop_token) { return true; });
+    target->configure_stateful_dispatch (
+      [] (stateful::accepted_record_authority_query_t)
+        -> zlink::framework::task_t<std::optional<stateful::accepted_record_authority_t>> {
+          co_return std::nullopt;
+      });
+    const protocol::relocation_coordinator_fence_t coordinator{"source-owner", 1, {'s'}, 1, "v1"};
+    const protocol::request_source_fence_t source{"source-owner", 1, {'s'}, 1};
+    protocol::relocation_prepare_t prepare;
+    prepare.relocation = {0x1786, 3};
+    prepare.target_attempt_generation = 1;
+    prepare.coordinator = coordinator;
+    std::vector<stateful::frozen_object_state_t> frozen;
+    std::vector<stateful::object_ref_t> targets;
+    std::vector<protocol::frozen_record_t> requests;
+    for (std::uint64_t index = 0; index != 2; ++index) {
+        const stateful::object_ref_t owner{stateful::object_kind_t::actor,
+                                           "aggregate-" + std::to_string (index),
+                                           1,
+                                           1,
+                                           "mesh",
+                                           "source"};
+        auto relocated = owner;
+        relocated.node_id = "aggregate-terminal-target";
+        ++relocated.authority_owner_generation;
+        targets.push_back (relocated);
+        protocol::frozen_application_record_t request;
+        request.kind = protocol::frozen_record_kind_t::actor_request;
+        request.source_kind = protocol::frozen_source_kind_t::node;
+        request.source = source;
+        // Exercise both halves of the existing terminal sequence mapping.
+        request.operation = index == 0 ? protocol::wire_operation_id_t{0x1786, 0}
+                                       : protocol::wire_operation_id_t{0x1786, 0x1771};
+        request.operation_kind = 4;
+        request.reply_route_id = index + 77;
+        request.body = protocol::frozen_actor_application_body_t{
+          {owner.key, 1, {'s'}, 1, 1, 1}, {"Request", "application/json", {0x41}}};
+        requests.push_back (protocol::encode_frozen_application_record (request));
+        frozen.push_back ({owner, "actor", {}, {{index + 1, {}, 0, {}, requests.back ()}}, {}});
+    }
+    const stateful::object_ref_t spot{
+      stateful::object_kind_t::user_spot, "aggregate-spot", 1, 1, "mesh", "source"};
+    auto target_spot = spot;
+    target_spot.node_id = "aggregate-terminal-target";
+    ++target_spot.authority_owner_generation;
+    frozen.push_back ({spot, "spot", {}, {}, {}});
+    targets.push_back (target_spot);
+    const stateful::relocation_restore_identity_t identity{"aggregate-terminal"};
+    assert (host::public_host_runtime_test_access_t::restore_saved (*target, prepare, frozen,
+                                                                    targets, identity));
+    const protocol::application_payload_t reply{"Reply", "application/json", {0x42}};
+    for (std::size_t index = 0; index != requests.size (); ++index) {
+        assert (target->objects ().commit_relocation_restore (targets[index], identity)
+                == stateful::stateful_error_t::none);
+        assert (
+          host::public_host_runtime_test_access_t::complete_saved (*target, targets[index], reply));
+        const auto &request = requests[index];
+        const auto sequence = index == 0 ? 0x1786u : 0x1771u;
+        const protocol::reply_relay_t expected{request.operation,
+                                               *request.reply_route_id,
+                                               prepare.relocation,
+                                               1,
+                                               coordinator,
+                                               index + 1,
+                                               sequence,
+                                               0,
+                                               protocol::framework_error_code::none};
+        const bool same_terminal = target->relocation_wire ().register_terminal_target (
+          {expected, source, reply, [] (protocol::reply_relay_ack_status_t) { return true; },
+           [] { return true; }, coordinator.node_routing_id});
+        std::cerr << "aggregate-terminal participant=" << index + 1
+                  << " expected-sequence=" << sequence << " matches=" << same_terminal << '\n';
+        assert (same_terminal);
+    }
+    assert (target->relocation_wire ().pending_terminal_relays () == 2);
+}
+
 void verify_public_host_dispatches_durable_reply_relay ()
 {
     auto source = std::make_shared<host::public_host_runtime_t> (
@@ -6087,21 +6279,27 @@ void verify_remote_user_spot_create_close_terminal_once ()
     struct recovery_barrier_t final : detail::deferred_barrier_t
     {
         task_t<void> run (std::function<task_t<void> ()> work) override { return work (); }
+        task_t<void> terminal () override { return _terminal.task (); }
         explicit recovery_barrier_t (std::size_t &finishes) : _finishes (finishes) {}
         result_t<void> activate (std::function<void ()> work) override
         {
             ++_finishes;
             work ();
+            _terminal.complete (result_t<void>::success ());
             return result_t<void>::success ();
         }
         result_t<void> activate_async (async_work_t work) override
         {
             ++_finishes;
-            work ([] (result_t<void> result) { assert (result); });
+            work ([this] (result_t<void> result) {
+                assert (result);
+                _terminal.complete (std::move (result));
+            });
             return result_t<void>::success ();
         }
         void cancel () noexcept override { assert (false); }
         std::size_t &_finishes;
+        task_completion_source_t<void> _terminal;
     };
     auto instance_relocations = std::make_shared<memory_relocation_repository_t> ();
     const std::weak_ptr<host::public_host_runtime_t> weak_target = target;
@@ -7539,6 +7737,11 @@ int main (int argc, char **argv)
 {
     // This test drives runtime parts without a host.
     zlink::framework::runtime::install_host_context_hooks ();
+    if (argc == 2 && std::string_view (argv[1]) == "--aggregate-request-identity") {
+        verify_aggregate_saved_request_terminal_identity ();
+        return 0;
+    }
+
     if (argc == 2 && std::string_view (argv[1]) == "--unadmitted-request") {
         verify_unadmitted_request_is_dropped_without_framework_queue ();
         return 0;
@@ -7549,6 +7752,14 @@ int main (int argc, char **argv)
     }
     if (argc == 2 && std::string_view (argv[1]) == "--fifo-liveness") {
         verify_public_host_fifo_drains_before_liveness_probe ();
+        return 0;
+    }
+    if (argc == 2 && std::string_view (argv[1]) == "--handoff-backlog") {
+        verify_unbounded_actor_handoff_backlog ();
+        return 0;
+    }
+    if (argc == 2 && std::string_view (argv[1]) == "--accepted-payload-owner") {
+        verify_atomic_raw_stateful_ingress_commit ();
         return 0;
     }
     if (argc == 2 && std::string_view (argv[1]) == "--session-owner-route") {
@@ -7613,6 +7824,7 @@ int main (int argc, char **argv)
     verify_node_request_requires_remote_admission ();
     verify_unadmitted_request_is_dropped_without_framework_queue ();
     verify_queued_owner_accepts_request_without_blocking_other_owner ();
+    verify_aggregate_saved_request_terminal_identity ();
     verify_raw_terminal_reply_relay ();
     verify_relocation_data_duplicates_are_distinct_arrivals ();
     verify_relocation_ingress_boundary_owns_saved_and_follow_only_work ();

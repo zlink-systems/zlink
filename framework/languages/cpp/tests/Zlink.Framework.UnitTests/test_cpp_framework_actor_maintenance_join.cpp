@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+#include "../support/manual_internal_scheduler.hpp"
 #include <zlink/framework.hpp>
 #include "../support/runtime_failure_fixture.hpp"
 #include "runtime/locations/in_memory_store_providers.hpp"
@@ -7,11 +8,18 @@
 #include "runtime/actors/actor_gateway_runtime.hpp"
 #include "runtime/diagnostics/dispatch_options_access.hpp"
 #include "runtime/locations/authority_key_codec.hpp"
+#include "runtime/locations/provider_location_repository.hpp"
 #include "runtime/execution/serial_execution_queue.hpp"
-#include "runtime/diagnostics/dispatch_options_access.hpp"
+#include "runtime/execution/serial_application_record.hpp"
+#include "runtime/stateful/accepted_actor_record.hpp"
+#include "runtime/stateful/raw_stateful_dispatch.hpp"
+#include "runtime/backend/raw_binding_adapter.hpp"
+#include <array>
+#include "runtime/messaging/envelope_codec.hpp"
 #include "runtime/spots/spot_runtime.hpp"
 #include <zlink/stream_connector.hpp>
 #include <gtest/gtest.h>
+#include <gtest/gtest-spi.h>
 #include <algorithm>
 #include <atomic>
 #include <condition_variable>
@@ -46,6 +54,7 @@ constexpr auto maintenance_spot = "maintenance";
 constexpr auto source_spot = "source";
 constexpr auto local_spot = "local";
 constexpr auto current_spot = "current";
+constexpr auto suffix_spot = "suffix-target";
 constexpr auto failed_spot = "failed";
 constexpr auto factory_failed_spot = "factory-failed";
 constexpr auto framework_failed_spot = "framework-failed";
@@ -59,6 +68,15 @@ enum class creation_case_t
     publication_failed
 };
 constexpr auto entry_target = "entry";
+struct native_handoff_hold_t
+{
+    fw::task_completion_source_t<void> entered;
+    fw::task_completion_source_t<void> preceding_h_finished;
+    fw::task_completion_source_t<void> next_join_started;
+    fw::task_completion_source_t<void> next_join_terminal;
+    fw::task_completion_source_t<void> release;
+    int entries = 0;
+};
 struct observations_t
 {
     std::mutex mutex;
@@ -85,14 +103,23 @@ struct observations_t
     int session_pushes = 0;
     std::vector<int> joined_payloads;
     std::vector<int> handled_payloads;
+    std::vector<int> intake_probe_values;
     std::vector<fw::message_flow_event_t> replay_failures;
     int backlog_appends = 0;
     int ordinary_posts = 0;
     bool fail_completion = false;
+    bool transfer_suffix = false;
+    bool suffix_request = false;
+    std::function<fw::result_t<int> ()> suffix_reply;
+    std::vector<std::string> handled_spots;
+    std::vector<std::string> handled_nodes;
+    std::vector<std::size_t> handled_completion_counts;
     bool hold_replay_prefix = false;
     bool replay_prefix_entered = false;
     bool release_replay_prefix = false;
+    std::shared_ptr<native_handoff_hold_t> native_handoff_hold;
     fw::task_completion_source_t<void> joined_send_captured;
+    std::function<void ()> joined_admission_completion;
     fw::task_completion_source_t<void> release_leave;
     bool probe_admission_observed = false;
     std::optional<std::size_t> completion_to_hold;
@@ -158,13 +185,18 @@ class actor_t final : public fw::actor_t
     fw::task_t<void> on_join_completed (const fw::actor_join_completion_t &completion) override
     {
         bool hold = false;
+        std::shared_ptr<native_handoff_hold_t> held_suffix;
         {
             std::lock_guard lock (observations->mutex);
             observations->completions.push_back (completion);
             observations->completion_owners.push_back (
               std::string (_context.actor_ref ().node_rid ().value ()));
             hold = observations->completion_to_hold == observations->completions.size ();
+            if (observations->completions.size () == 2)
+                held_suffix = observations->native_handoff_hold;
         }
+        if (held_suffix)
+            held_suffix->next_join_terminal.complete (fw::result_t<void>::success ());
         observations->changed.notify_all ();
         if (hold)
             co_await observations->release_completion.task ();
@@ -224,6 +256,11 @@ class entry_t final : public fw::entry_spot_t<actor_t>
     }
     probe_t probe (actor_t &actor, fw::message_context_t &, const probe_t &request)
     {
+        {
+            std::lock_guard lock (observations->mutex);
+            observations->intake_probe_values.push_back (request.value);
+        }
+        observations->changed.notify_all ();
         return request.value == instance_probe ? probe_t{actor.instance} : request;
     }
     void move (actor_t &actor, fw::message_context_t &, const move_t &request)
@@ -350,10 +387,19 @@ class room_t final : public fw::spot_t<actor_t>
             {
                 std::lock_guard lock (observations->mutex);
                 observations->handled_payloads.push_back (message.value);
+                if (observations->transfer_suffix) {
+                    observations->handled_spots.emplace_back (_context.spot_id ());
+                    observations->handled_nodes.emplace_back (
+                      actor.context ().actor_ref ().node_rid ().value ());
+                    observations->handled_completion_counts.push_back (
+                      observations->completions.size ());
+                }
             }
             observations->changed.notify_all ();
             if (message.value < 0)
                 throw std::runtime_error ("replayed payload failed");
+            if (observations->transfer_suffix && message.value == 1)
+                actor.context ().join_spot (fw::spot_id_t (suffix_spot)).defer ();
             co_return;
         }
         co_await actor.context ().bound_session ().send (message).async ();
@@ -363,7 +409,15 @@ class room_t final : public fw::spot_t<actor_t>
         if (!observations->joined_payloads.empty ()) {
             std::lock_guard lock (observations->mutex);
             observations->handled_payloads.push_back (request.value);
+            if (observations->transfer_suffix) {
+                observations->handled_spots.emplace_back (_context.spot_id ());
+                observations->handled_nodes.emplace_back (
+                  actor.context ().actor_ref ().node_rid ().value ());
+                observations->handled_completion_counts.push_back (
+                  observations->completions.size ());
+            }
         }
+        observations->changed.notify_all ();
         return request.value == instance_probe ? probe_t{actor.instance} : request;
     }
     fw::task_t<fw::spot_actor_join_result_t> on_actor_join (std::string_view,
@@ -382,15 +436,37 @@ class room_t final : public fw::spot_t<actor_t>
     fw::task_t<void> on_actor_joined (actor_t &actor) override
     {
         if (observations->joined_sender && _context.spot_id () == local_spot) {
+            {
+                std::lock_guard lock (observations->mutex);
+                auto *source = &observations->joined_send_captured;
+                observations->joined_admission_completion = [source] {
+                    source->complete (fw::result_t<void>::success ());
+                };
+            }
             if (observations->joined_payloads.empty ()) {
                 co_await observations->joined_sender.load ()
                   ->send (actor.context ().actor_id (), move_t{current_spot})
                   .async ();
             } else {
-                for (const auto value : observations->joined_payloads)
-                    co_await observations->joined_sender.load ()
-                      ->send (actor.context ().actor_id (), probe_t{value})
-                      .async ();
+                for (const auto value : observations->joined_payloads) {
+                    if (observations->suffix_request && value == 2) {
+                        auto reply = std::make_shared<fw::task_t<probe_t>> (
+                          observations->joined_sender.load ()
+                            ->request (actor.context ().actor_id (), probe_t{value})
+                            .timeout (wait_budget)
+                            .async<probe_t> ());
+                        observations->suffix_reply = [reply] {
+                            const auto result = reply->result ();
+                            return result ? fw::result_t<int>::success (result.value ().value)
+                                          : fw::result_t<int>::failure (result.error_kind (),
+                                                                        result.error ()->what ());
+                        };
+                    } else {
+                        co_await observations->joined_sender.load ()
+                          ->send (actor.context ().actor_id (), probe_t{value})
+                          .async ();
+                    }
+                }
             }
             co_await observations->joined_send_captured.task ();
         }
@@ -451,6 +527,8 @@ struct release_callbacks_t
         e.joined_send_captured.complete (fw::result_t<void>::success ());
         e.release_leave.complete (fw::result_t<void>::success ());
         e.release_completion.complete (fw::result_t<void>::success ());
+        if (e.native_handoff_hold)
+            e.native_handoff_hold->release.complete (fw::result_t<void>::success ());
     }
 };
 struct host_t
@@ -480,6 +558,27 @@ enum class entry_kind_t
     none,
     other
 };
+void observe_joined_batch_admission (observations_t &evidence,
+                                     const fw::message_flow_event_t &event)
+{
+    if (event.outcome != fw::message_flow_outcome_t::admitted || event.actor_id != actor_id
+        || event.detail_stage != "canonical_application.commit_accepted_ingress"
+        || (event.packet_name != move_t::packet_name && event.packet_name != probe_t::packet_name))
+        return;
+    std::function<void ()> complete;
+    {
+        std::lock_guard lock (evidence.mutex);
+        if (!evidence.joined_admission_completion)
+            return;
+        ++evidence.backlog_appends;
+        if (evidence.backlog_appends
+            >= static_cast<int> (std::max<std::size_t> (1, evidence.joined_payloads.size ())))
+            complete = std::exchange (evidence.joined_admission_completion, {});
+    }
+    if (complete)
+        complete ();
+}
+
 void configure (host_t &host,
                 const std::string &rid,
                 std::shared_ptr<fw::location_store_t> store,
@@ -499,28 +598,47 @@ void configure (host_t &host,
     options.configure_dispatch ().message_flow (fw::message_flow_log_mode_t::detailed);
     fw::detail::dispatch_options_access_t::set_observer_for_tests (
       options.configure_dispatch (), [] (const fw::message_flow_event_t &event) {
-          bool captured = false;
+          observe_joined_batch_admission (*observations, event);
+          const auto hold = observations->native_handoff_hold;
+          if (hold && event.actor_id == actor_id && event.spot_id == suffix_spot
+              && event.outcome == fw::message_flow_outcome_t::sent
+              && event.message_kind == fw::dispatch_message_kind_t::actor_request
+              && !event.packet_name) {
+              hold->next_join_started.complete (fw::result_t<void>::success ());
+              observations->changed.notify_all ();
+          }
+          if (hold && event.actor_id == actor_id && event.packet_name == probe_t::packet_name) {
+              bool entered = false;
+              if (event.detail_stage == "invoke_erased.enter") {
+                  std::lock_guard lock (observations->mutex);
+                  entered = ++hold->entries == 2;
+              }
+              if (event.spot_id == local_spot
+                  && event.detail_stage == "invoke_erased.application_handler"
+                  && event.detail_result == "result=finished success=true") {
+                  hold->preceding_h_finished.complete (fw::result_t<void>::success ());
+                  observations->changed.notify_all ();
+              }
+              if (entered) {
+                  hold->entered.complete (fw::result_t<void>::success ());
+                  observations->changed.notify_all ();
+                  hold->release.task ().result ().value ();
+              }
+          }
           {
               std::lock_guard lock (observations->mutex);
-              if ((event.packet_name == move_t::packet_name
-                   || event.packet_name == probe_t::packet_name)
-                  && event.detail_stage == "relay_actor_packet.try_append_backlog"
-                  && event.detail_result == "result=appended") {
-                  ++observations->backlog_appends;
-                  captured = observations->backlog_appends >= static_cast<int> (
-                               std::max<std::size_t> (1, observations->joined_payloads.size ()));
-              }
-              if (event.packet_name == probe_t::packet_name && event.spot_id == local_spot
+              if (event.packet_name == probe_t::packet_name && event.actor_id == actor_id
                   && event.message_kind == fw::dispatch_message_kind_t::actor_request
-                  && event.detail_stage == "invoke_erased.post_serial")
+                  && event.outcome == fw::message_flow_outcome_t::admitted
+                  && event.detail_stage == "canonical_application.commit_accepted_ingress")
                   ++observations->ordinary_posts;
               if (event.packet_name == "handoff_replay_failed")
                   observations->replay_failures.push_back (event);
           }
           observations->changed.notify_all ();
-          if (captured)
-              observations->joined_send_captured.complete (fw::result_t<void>::success ());
-          if (observations->hold_replay_prefix && event.packet_name == "handoff_replay_enqueued") {
+          if (observations->hold_replay_prefix && event.actor_id == actor_id
+              && event.spot_id == local_spot && event.packet_name == probe_t::packet_name
+              && event.detail_stage == "invoke_erased.enter") {
               std::unique_lock lock (observations->mutex);
               observations->replay_prefix_entered = true;
               observations->changed.notify_all ();
@@ -876,10 +994,20 @@ void local_join_backlog (backlog_case_t scenario)
         state->worker_executor->drain ();
         EXPECT_EQ (state->actor_transfer_coordinator.phase (key),
                    fw::detail::actor_move_phase_t::local);
+        {
+            std::lock_guard lock (evidence.mutex);
+            // This later one-record batch owns its own admission future.
+            evidence.joined_send_captured = fw::task_completion_source_t<void>{};
+            auto *source = &evidence.joined_send_captured;
+            evidence.joined_admission_completion = [source] {
+                source->complete (fw::result_t<void>::success ());
+            };
+        }
         ASSERT_TRUE (client.send (fw::actor_id_t (actor_id), probe_t{3}).async ().result ());
         std::unique_lock lock (evidence.mutex);
         ASSERT_TRUE (evidence.changed.wait_for (lock, wait_budget,
                                                 [&] { return evidence.backlog_appends == 3; }));
+        EXPECT_TRUE (evidence.joined_send_captured.task ().await_ready ());
         EXPECT_TRUE (evidence.handled_payloads.empty ());
         EXPECT_EQ (evidence.completions.size (), 1u);
         EXPECT_TRUE (
@@ -940,6 +1068,922 @@ TEST (ActorMaintenanceJoin, ReplayFailureHasFailedOutcomeAndException)
 {
     local_join_backlog (backlog_case_t::replay_failure);
 }
+
+std::string suffix_failure_snapshot (host_t &host)
+{
+    namespace st = fw::runtime::stateful;
+    const auto registration =
+      fw::detail::mesh_node_runtime_t::registrations (host.app.advanced ().zlink ()).front ();
+    const auto node = fw::detail::spot_node_runtime_t (registration->spot_state).native_node ();
+    std::string result;
+    for (const auto &item : node->objects ().inventory ()) {
+        if (item.owner.kind == st::object_kind_t::actor && item.owner.key == actor_id) {
+            result += " kernel_state=" + std::to_string (static_cast<int> (item.state))
+                      + " kernel_pending="
+                      + std::to_string (
+                        node->objects ().pending (item.owner, st::turn_domain_t::application));
+        }
+    }
+    result += " native_pending="
+              + std::to_string (node->transport ().mailbox ().pending_messages (
+                fw::runtime::mesh::service_mailbox_domain_t::application));
+    return result;
+}
+
+void next_join_suffix (bool remote,
+                       bool request = false,
+                       bool restore_source = false,
+                       bool native_initiator = false,
+                       bool hold_native_suffix = false)
+{
+    observations_t evidence;
+    evidence.joined_payloads = {1, 2};
+    evidence.transfer_suffix = true;
+    evidence.suffix_request = request;
+    evidence.fail_remote_factory = restore_source;
+    if (hold_native_suffix)
+        evidence.native_handoff_hold = std::make_shared<native_handoff_hold_t> ();
+    observations = &evidence;
+    auto store = std::make_shared<fw::runtime::in_memory_location_store_t> ();
+    auto relocations = std::make_shared<fw::runtime::in_memory_relocation_store_t> ();
+    host_t source, target, initiator;
+    release_callbacks_t release{evidence};
+    configure (source, first_rid, store, relocations);
+    source.start ();
+    ASSERT_TRUE (ready (source));
+    auto services = source.app.advanced ().services ().build_provider ();
+    auto &spots = services.get_required<fw::spot_manager_t> ();
+    ASSERT_TRUE (spots.get_or_create (fw::spot_id_t (local_spot), room_type).async ().result ());
+    ASSERT_TRUE (services.get_required<fw::actor_manager_t> ()
+                   .get_or_create (fw::actor_id_t (actor_id), actor_type)
+                   .async ()
+                   .result ());
+    if (remote) {
+        configure (target, second_rid, store, relocations);
+        target.start ();
+        ASSERT_TRUE (ready (target));
+        ASSERT_TRUE (peer_ready (services.get_required<fw::route_mesh_runtime_t> (), second_rid));
+        services.get_required<fw::route_mesh_runtime_options_t> ()
+          .mesh (mesh_name)
+          .placement_weight (0);
+        auto target_services = target.app.advanced ().services ().build_provider ();
+        ASSERT_TRUE (target_services.get_required<fw::spot_manager_t> ()
+                       .get_or_create (fw::spot_id_t (suffix_spot), room_type)
+                       .async ()
+                       .result ());
+    } else {
+        ASSERT_TRUE (
+          spots.get_or_create (fw::spot_id_t (suffix_spot), room_type).async ().result ());
+    }
+    auto &sender = services.get_required<fw::actor_client_t> ();
+    evidence.joined_sender = &sender;
+    fw::actor_client_t *initial_sender = &sender;
+    std::optional<fw::service_provider_t> initiator_services;
+    if (native_initiator) {
+        configure (initiator, third_rid, store, relocations);
+        initiator.start ();
+        ASSERT_TRUE (ready (initiator));
+        ASSERT_TRUE (peer_ready (services.get_required<fw::route_mesh_runtime_t> (), third_rid));
+        initiator_services.emplace (initiator.app.advanced ().services ().build_provider ());
+        initial_sender = &initiator_services->get_required<fw::actor_client_t> ();
+    }
+    ASSERT_TRUE (
+      initial_sender->send (fw::actor_id_t (actor_id), move_t{local_spot}).async ().result ());
+    if (const auto hold = evidence.native_handoff_hold) {
+        std::unique_lock lock (evidence.mutex);
+        ASSERT_TRUE (evidence.changed.wait_for (lock, wait_budget, [&] {
+            return hold->entered.task ().await_ready ()
+                   && hold->preceding_h_finished.task ().await_ready ()
+                   && hold->next_join_started.task ().await_ready ()
+                   && hold->next_join_terminal.task ().await_ready ();
+        }));
+        EXPECT_EQ (evidence.handled_payloads, (std::vector<int>{1}));
+        EXPECT_EQ (evidence.handled_completion_counts, (std::vector<std::size_t>{1}));
+        EXPECT_FALSE (hold->release.task ().await_ready ());
+        const auto registration = fw::detail::mesh_node_runtime_t::registrations (
+                                    (remote ? target : source).app.advanced ().zlink ())
+                                    .front ();
+        const auto node = fw::detail::spot_node_runtime_t (registration->spot_state).native_node ();
+        const auto owner =
+          node->objects ().find (fw::runtime::stateful::object_kind_t::actor, actor_id);
+        EXPECT_TRUE (owner);
+        if (owner)
+            EXPECT_EQ (
+              node->objects ().pending (*owner, fw::runtime::stateful::turn_domain_t::application),
+              0u);
+        const auto *failed = std::get_if<fw::actor_join_failed_t> (&evidence.completions.back ());
+        std::printf ("held-join-terminal-before-release type=%zu error_kind=%d release_ready=%d "
+                     "completions=%zu\n",
+                     evidence.completions.back ().index (),
+                     failed ? static_cast<int> (failed->error_kind) : -1,
+                     hold->release.task ().await_ready (), evidence.completions.size ());
+        if (!remote && owner) {
+            const auto target_spot =
+              node->objects ().find (fw::runtime::stateful::object_kind_t::user_spot, suffix_spot);
+            EXPECT_TRUE (target_spot);
+            if (target_spot) {
+                auto [prepare, token] =
+                  node->objects ().begin_membership_move (*owner, *target_spot);
+                std::printf ("held-kernel-membership-before-release error=%d expected_ready=%d "
+                             "release_ready=%d actor=%s generation=%llu authority=%llu\n",
+                             static_cast<int> (prepare),
+                             static_cast<int> (fw::runtime::stateful::stateful_error_t::none),
+                             hold->release.task ().await_ready (), owner->key.c_str (),
+                             static_cast<unsigned long long> (owner->object_generation),
+                             static_cast<unsigned long long> (owner->authority_owner_generation));
+                EXPECT_EQ (prepare, fw::runtime::stateful::stateful_error_t::none);
+                if (prepare == fw::runtime::stateful::stateful_error_t::none)
+                    EXPECT_EQ (node->objects ().abort_membership_move (token),
+                               fw::runtime::stateful::stateful_error_t::none);
+            }
+        }
+        std::printf (
+          "native-publication-hold entries=%d Hdone=%d next_join_started=%d handlers=%zu%s\n",
+          hold->entries, hold->preceding_h_finished.task ().await_ready (),
+          hold->next_join_started.task ().await_ready (), evidence.handled_payloads.size (),
+          suffix_failure_snapshot (source).c_str ());
+        lock.unlock ();
+        hold->release.complete (fw::result_t<void>::success ());
+    }
+    std::unique_lock lock (evidence.mutex);
+    ASSERT_TRUE (evidence.changed.wait_for (
+      lock, wait_budget,
+      [&] { return evidence.completions.size () >= 2 && evidence.handled_payloads.size () >= 2; }))
+      << "completions=" << evidence.completions.size ()
+      << " handled=" << evidence.handled_payloads.size () << suffix_failure_snapshot (source);
+    EXPECT_EQ (evidence.handled_payloads, (std::vector<int>{1, 2}));
+    EXPECT_EQ (evidence.handled_spots,
+               (std::vector<std::string>{local_spot, restore_source ? local_spot : suffix_spot}));
+    EXPECT_EQ (
+      evidence.handled_nodes,
+      (std::vector<std::string>{first_rid, remote && !restore_source ? second_rid : first_rid}));
+    EXPECT_EQ (evidence.handled_completion_counts, (std::vector<std::size_t>{1, 2}));
+    ASSERT_EQ (evidence.completions.size (), 2u);
+    EXPECT_TRUE (std::holds_alternative<fw::actor_join_accepted_t> (evidence.completions.front ()));
+    if (restore_source) {
+        EXPECT_FALSE (
+          std::holds_alternative<fw::actor_join_accepted_t> (evidence.completions.back ()));
+        EXPECT_EQ (evidence.remote_factory_failure_count, 1);
+    } else
+        EXPECT_TRUE (
+          std::holds_alternative<fw::actor_join_accepted_t> (evidence.completions.back ()));
+    const auto reply = evidence.suffix_reply;
+    lock.unlock ();
+    if (request) {
+        ASSERT_TRUE (reply);
+        const auto result = reply ();
+        ASSERT_TRUE (result) << (result.error () ? result.error ()->what () : "no error");
+        EXPECT_EQ (result.value (), 2);
+    }
+}
+TEST (ActorMaintenanceJoin, NextLocalJoinTakesUnstartedSuffixOnce)
+{
+    next_join_suffix (false);
+}
+TEST (ActorMaintenanceJoin, NextRemoteJoinTakesUnstartedSuffixOnce)
+{
+    next_join_suffix (true);
+}
+
+TEST (ActorMaintenanceJoin, NextLocalJoinPreservesSuffixRequestReply)
+{
+    next_join_suffix (false, true);
+}
+TEST (ActorMaintenanceJoin, NextRemoteJoinPreservesSuffixRequestReply)
+{
+    next_join_suffix (true, true);
+}
+
+TEST (ActorMaintenanceJoin, FailedRemoteJoinRestoresUnstartedSuffixOnce)
+{
+    next_join_suffix (true, false, true);
+}
+
+TEST (ActorMaintenanceJoin, FailedRemoteJoinRestoresUnstartedSuffixRequestReply)
+{
+    next_join_suffix (true, true, true);
+}
+
+TEST (ActorMaintenanceJoin, NativeInitialLocalJoinTakesUnstartedSuffixOnce)
+{
+    next_join_suffix (false, false, false, true);
+}
+TEST (ActorMaintenanceJoin, NativeInitialRemoteJoinTakesUnstartedSuffixOnce)
+{
+    next_join_suffix (true, false, false, true);
+}
+
+struct native_intake_fixture_t
+{
+    static constexpr auto source_id = "boundary-source";
+    std::vector<std::uint8_t> rid = zlink::routing_id_t::from ("intake-boundary").to_bytes ();
+    fw::runtime::stateful::accepted_record_authority_resolver_t resolver =
+      [] (fw::runtime::stateful::accepted_record_authority_query_t query)
+      -> fw::task_t<std::optional<fw::runtime::stateful::accepted_record_authority_t>> {
+        co_return fw::runtime::stateful::accepted_record_authority_t{
+          {source_id, 1, query.source_node_routing_id, query.source_node_generation}, 1};
+    };
+    std::shared_ptr<fw::runtime::host::public_host_runtime_t> host;
+    explicit native_intake_fixture_t (fw::dispatch_options_t dispatch = {})
+    {
+        fw::runtime::host::host_options_t options;
+        options.mesh.descriptor = {mesh_name,
+                                   rid,
+                                   1,
+                                   1,
+                                   "tcp://127.0.0.1:0",
+                                   {},
+                                   fw::runtime::mesh::service_node_state_t::preparing};
+        options.mesh.runtime_failures =
+          std::make_shared<fw::runtime::runtime_failure_collector_t> ();
+        options.mesh.dispatch = std::move (dispatch);
+        options.object_stable_types = {actor_type};
+        host = std::make_shared<fw::runtime::host::public_host_runtime_t> (std::move (options));
+        host->configure_stateful_dispatch (resolver);
+        host->start ();
+    }
+    fw::runtime::mesh::service_mailbox_record_t
+    actor_record (std::uint64_t sequence, std::uint64_t authority_generation = 1) const
+    {
+        namespace wire = fw::runtime::protocol;
+        namespace mesh = fw::runtime::mesh;
+        mesh::service_mailbox_record_t record;
+        record.owner = mesh::service_mailbox_t::application_owner (
+          fw::runtime::host::owner_kind_t::actor, actor_id);
+        record.domain = mesh::service_mailbox_domain_t::application;
+        record.source_routing_id = zlink::routing_id_t::from (source_id).to_bytes ();
+        record.source_node_generation = 1;
+        const wire::actor_route_fence_t fence{actor_id, 1, rid, 1, authority_generation, 1};
+        wire::application_payload_t::multipart_t parts;
+        fw::runtime::messaging::envelope_header_t envelope;
+        envelope.kind = fw::runtime::messaging::message_kind_t::command;
+        envelope.channel_name = mesh_name;
+        envelope.message_name = probe_t::packet_name;
+        parts.push_back (fw::runtime::messaging::envelope_codec_t{}.encode_header (envelope));
+        record.parts = fw::detail::backend::materialize_binding_parts (
+          {wire::encode_actor_message_header (wire::command::actorSend, std::nullopt, fence,
+                                              {1, sequence}),
+           wire::encode_application_payload (
+             wire::application_payload_t::from_parts (std::move (parts)))});
+        return record;
+    }
+};
+
+TEST (ActorMaintenanceJoin, LocalNextJoinPreservesClaimedNativeSuffixBeforePrivateAdmission)
+{
+    next_join_suffix (false, false, false, false, true);
+}
+TEST (ActorMaintenanceJoin, RemoteNextJoinPreservesClaimedNativeSuffixBeforePrivateAdmission)
+{
+    next_join_suffix (true, false, false, false, true);
+}
+
+TEST (NativeIntake, CanonicalAdmissionReportsOnlyActualSuccessWhenEnabled)
+{
+    namespace rt = fw::runtime;
+    namespace st = rt::stateful;
+    for (const auto mode :
+         {fw::message_flow_log_mode_t::off, fw::message_flow_log_mode_t::normal}) {
+        SCOPED_TRACE (mode == fw::message_flow_log_mode_t::off ? "off" : "normal");
+        std::vector<fw::message_flow_event_t> events;
+        fw::dispatch_options_t dispatch;
+        dispatch.message_flow (mode);
+        fw::detail::dispatch_options_access_t::set_observer_for_tests (
+          dispatch, [&] (const auto &event) { events.push_back (event); });
+        native_intake_fixture_t fixture (std::move (dispatch));
+        auto host = fixture.host;
+        const st::object_ref_t object{st::object_kind_t::actor,
+                                      actor_id,
+                                      1,
+                                      1,
+                                      mesh_name,
+                                      zlink::routing_id_t::from (fixture.rid).to_string ()};
+        const auto created = host->objects ().begin_reserved_object (object, actor_type, {});
+        ASSERT_EQ (created.error, st::stateful_error_t::none);
+        ASSERT_EQ (host->objects ().commit_create (created.attempt), st::stateful_error_t::none);
+        st::raw_stateful_dispatch_t raw (host->objects (), host->transport (), fixture.resolver);
+        int releases = 0;
+        const auto ingest = [&] (auto record, const st::object_ref_t &target) {
+            const auto result = raw
+                                  .ingest_claimed (target, std::move (record),
+                                                   std::function<void ()> ([&] { ++releases; }))
+                                  .result ();
+            EXPECT_TRUE (result);
+            return result ? result.value () : st::stateful_error_t::invalid;
+        };
+        EXPECT_NE (ingest (fixture.actor_record (1, 2), object), st::stateful_error_t::none);
+        EXPECT_EQ (releases, 1);
+        EXPECT_TRUE (events.empty ());
+        EXPECT_EQ (host->objects ().pending (object, st::turn_domain_t::application), 0u);
+        EXPECT_EQ (ingest (fixture.actor_record (2), object), st::stateful_error_t::none);
+        EXPECT_EQ (events.size (), mode == fw::message_flow_log_mode_t::normal ? 1u : 0u);
+        if (!events.empty ()) {
+            EXPECT_EQ (events.front ().outcome, fw::message_flow_outcome_t::admitted);
+            EXPECT_EQ (events.front ().actor_id, actor_id);
+            EXPECT_EQ (events.front ().packet_name, probe_t::packet_name);
+            EXPECT_FALSE (events.front ().detail_stage);
+            EXPECT_FALSE (events.front ().detail_result);
+        }
+        auto stale_object = object;
+        ++stale_object.object_generation;
+        // The valid route/body reaches commit; the actual Kernel owner rejects enqueue.
+        EXPECT_EQ (ingest (fixture.actor_record (3), stale_object),
+                   st::stateful_error_t::generation_stale);
+        EXPECT_EQ (releases, 2);
+        EXPECT_EQ (events.size (), mode == fw::message_flow_log_mode_t::normal ? 1u : 0u);
+        EXPECT_EQ (host->objects ().pending (object, st::turn_domain_t::application), 1u);
+        auto [error, delivery] = raw.try_claim (object);
+        EXPECT_EQ (error, st::stateful_error_t::none);
+        EXPECT_TRUE (delivery);
+        if (delivery) {
+            EXPECT_EQ (delivery->turn.sequence, 1u);
+            EXPECT_EQ (delivery->frozen.operation.low, 2u);
+            EXPECT_EQ (raw.complete (*delivery), st::stateful_error_t::none);
+        }
+        EXPECT_EQ (releases, 3);
+        EXPECT_EQ (ingest (fixture.actor_record (4), object), st::stateful_error_t::none);
+        auto [following_error, following] = raw.try_claim (object);
+        EXPECT_EQ (following_error, st::stateful_error_t::none);
+        EXPECT_TRUE (following);
+        if (following) {
+            EXPECT_EQ (following->turn.sequence, 2u);
+            EXPECT_EQ (following->frozen.operation.low, 4u);
+            EXPECT_EQ (raw.complete (*following), st::stateful_error_t::none);
+        }
+        EXPECT_EQ (events.size (), mode == fw::message_flow_log_mode_t::normal ? 2u : 0u);
+        EXPECT_EQ (raw.discard_pending (object), st::stateful_error_t::none);
+        EXPECT_EQ (releases, 4);
+        EXPECT_EQ (host->objects ().pending (object, st::turn_domain_t::application), 0u);
+        host->close ();
+    }
+}
+
+TEST (NativeIntake, JoinedBatchFenceExcludesInitialMoveAndOtherActor)
+{
+    observations_t evidence;
+    evidence.joined_payloads = {1, 2};
+    fw::message_flow_event_t event{};
+    event.outcome = fw::message_flow_outcome_t::admitted;
+    event.actor_id = actor_id;
+    event.packet_name = move_t::packet_name;
+    observe_joined_batch_admission (evidence, event);
+    EXPECT_EQ (evidence.backlog_appends, 0);
+    EXPECT_FALSE (evidence.joined_send_captured.task ().await_ready ());
+    int completions = 0;
+    evidence.joined_admission_completion = [&] {
+        ++completions;
+        evidence.joined_send_captured.complete (fw::result_t<void>::success ());
+    };
+    event.packet_name = probe_t::packet_name;
+    event.actor_id = "other-actor";
+    observe_joined_batch_admission (evidence, event);
+    event.actor_id = actor_id;
+    event.outcome = fw::message_flow_outcome_t::received;
+    observe_joined_batch_admission (evidence, event);
+    EXPECT_EQ (evidence.backlog_appends, 0);
+    event.outcome = fw::message_flow_outcome_t::admitted;
+    event.detail_stage = "invoke_erased.post_serial";
+    observe_joined_batch_admission (evidence, event);
+    EXPECT_EQ (evidence.backlog_appends, 0);
+    event.detail_stage = "canonical_application.commit_accepted_ingress";
+    observe_joined_batch_admission (evidence, event);
+    EXPECT_EQ (evidence.backlog_appends, 1);
+    EXPECT_FALSE (evidence.joined_send_captured.task ().await_ready ());
+    observe_joined_batch_admission (evidence, event);
+    EXPECT_EQ (evidence.backlog_appends, 2);
+    EXPECT_TRUE (evidence.joined_send_captured.task ().await_ready ());
+    observe_joined_batch_admission (evidence, event);
+    EXPECT_EQ (evidence.backlog_appends, 2);
+    EXPECT_EQ (completions, 1);
+    EXPECT_FALSE (evidence.joined_admission_completion);
+}
+
+TEST (NativeIntake, TypedControlMalformedWireAndKernelMetadata)
+{
+    namespace rt = fw::runtime;
+    namespace st = fw::runtime::stateful;
+    namespace mesh = fw::runtime::mesh;
+    namespace wire = fw::runtime::protocol;
+    native_intake_fixture_t fixture;
+    auto host = fixture.host;
+    const auto &rid = fixture.rid;
+    const auto &resolver = fixture.resolver;
+    // Restore only Kernel metadata: the facade Actor map intentionally has no entry.
+    const st::object_ref_t object{st::object_kind_t::actor,
+                                  actor_id,
+                                  1,
+                                  1,
+                                  mesh_name,
+                                  zlink::routing_id_t::from (rid).to_string ()};
+    const auto created = host->objects ().begin_reserved_object (object, actor_type, {});
+    ASSERT_EQ (created.error, st::stateful_error_t::none);
+    ASSERT_EQ (host->objects ().commit_create (created.attempt), st::stateful_error_t::none);
+    auto &mailbox = host->transport ().mailbox ();
+    const auto owner =
+      mesh::service_mailbox_t::application_owner (rt::host::owner_kind_t::actor, actor_id);
+    std::size_t started = 0, rejected = 0, controls = 0, applications = 0;
+    auto callback = [&] (const rt::host::ready_record_t &ready,
+                         const rt::host::receive_record_t &record,
+                         std::vector<zlink::message_t> parts) {
+        if (record.kind == rt::host::record_kind_t::spot_control) {
+            EXPECT_TRUE (parts.empty ());
+            ++controls;
+        } else {
+            ASSERT_TRUE (ready.actor);
+            EXPECT_EQ (fw::detail::actor_ref_access_t::actor_type (*ready.actor), actor_type);
+            EXPECT_EQ (parts.size (), 1u);
+            ++applications;
+            ASSERT_TRUE (record.complete_stateful_dispatch);
+            record.complete_stateful_dispatch ();
+        }
+    };
+    const auto drain = [&] {
+        EXPECT_TRUE (mailbox.begin_application_drain (owner));
+        const auto result =
+          host->dispatch_application_owner (
+                owner, callback, [&] { ++started; }, [&] { ++rejected; })
+            .result ();
+        EXPECT_TRUE (result);
+        if (result)
+            EXPECT_TRUE (result.value ());
+        mailbox.end_application_drain (owner);
+        EXPECT_EQ (mailbox.pending_messages (mesh::service_mailbox_domain_t::application), 0u);
+        EXPECT_EQ (mailbox.pending_bytes (mesh::service_mailbox_domain_t::application), 0u);
+    };
+    mesh::service_mailbox_record_t typed;
+    typed.owner = owner;
+    typed.domain = mesh::service_mailbox_domain_t::application;
+    typed.application = std::make_shared<rt::host::local_application_dispatch_t> ();
+    typed.application->record.kind = rt::host::record_kind_t::spot_control;
+    ASSERT_TRUE (mailbox.try_enqueue (std::move (typed)));
+    drain ();
+    EXPECT_EQ (controls, 1u);
+    EXPECT_EQ (rejected, 0u);
+    mesh::service_mailbox_record_t malformed;
+    malformed.owner = owner;
+    malformed.domain = mesh::service_mailbox_domain_t::application;
+    malformed.parts.push_back (zlink::message_t::from ("invalid"));
+    ASSERT_TRUE (mailbox.try_enqueue (std::move (malformed)));
+    drain ();
+    EXPECT_EQ (controls, 1u);
+    EXPECT_EQ (rejected, 1u);
+    st::raw_stateful_dispatch_t raw (host->objects (), host->transport (), resolver);
+    int releases = 0;
+    EXPECT_EQ (raw.ingest_claimed (object, {}, std::function<void ()> ([&] { ++releases; }))
+                 .result ()
+                 .value (),
+               st::stateful_error_t::invalid);
+    EXPECT_EQ (releases, 1);
+    auto valid = fixture.actor_record (1);
+    ASSERT_TRUE (mailbox.try_enqueue (std::move (valid)));
+    drain ();
+    EXPECT_EQ (applications, 1u);
+    EXPECT_EQ (controls, 1u);
+    EXPECT_EQ (started, 3u);
+    EXPECT_EQ (rejected, 1u);
+    EXPECT_EQ (host->objects ().pending (object, st::turn_domain_t::application), 0u);
+    host->close ();
+}
+
+TEST (NativeIntake, CanonicalPrivateFifoReturnsNativeClaimBeforeTerminal)
+{
+    namespace rt = fw::runtime;
+    namespace wire = rt::protocol;
+    for (const bool restored : {false, true}) {
+        SCOPED_TRACE (restored ? "restored" : "live");
+        fw::test::manual_internal_scheduler_t worker;
+        auto queue = std::make_shared<rt::serial_execution_queue_t> (worker);
+        auto record = std::make_shared<rt::serial_application_record_t> ();
+        record->payload.emplace ();
+        wire::application_payload_t::multipart_t parts;
+        parts.push_back (zlink::message_t::from ("1"));
+        wire::actor_message_header_t header;
+        const auto rid = zlink::routing_id_t::from (first_rid).to_bytes ();
+        header.target = {actor_id, 1, rid, 1, 1, 1};
+        header.operation = {1, 1};
+        record->payload->application_record = rt::stateful::accepted_actor_record (
+          header, {"source", 1, rid, 1},
+          wire::application_payload_t::from_parts (std::move (parts)), false);
+        if (restored) {
+            record->payload->frozen_record =
+              wire::summarize_frozen_application_record (*record->payload->application_record);
+            record->payload->application_record.reset ();
+        }
+        int native_returns = 0, handlers = 0;
+        record->transferred = [&] { ++native_returns; };
+        rt::serial_execution_queue_t::async_completion_t finish;
+        rt::serial_work_options_t options;
+        options.application_record = record;
+        const bool accepted = queue->try_post_async (
+          "native-private-owner",
+          [&, record] (auto terminal) {
+              record->admission.enter_handler ();
+              ++handlers;
+              finish = std::move (terminal);
+          },
+          options);
+        EXPECT_TRUE (accepted);
+        EXPECT_TRUE (queue->try_post ("private-successor", [&] { ++handlers; }));
+        worker.run_all ();
+        EXPECT_EQ (handlers, 1);
+        EXPECT_EQ (native_returns, 1);
+        // Settle the fixture's native source even on the failing input, then
+        // end its actual private terminal and drain the successor normally.
+        record->release_native_claim ();
+        if (finish)
+            finish ([] {});
+        worker.run_all ();
+        EXPECT_EQ (handlers, 2);
+        EXPECT_EQ (native_returns, 1);
+        queue->close ();
+        worker.run_all ();
+        queue->drain ();
+        worker.retire ();
+    }
+}
+
+TEST (NativeIntake, NativeMailboxTransferKeepsActualPrivateMClaim)
+{
+    namespace rt = fw::runtime;
+    namespace st = rt::stateful;
+    namespace mesh = rt::mesh;
+    for (const bool kernel_only_producer : {false, true}) {
+        SCOPED_TRACE (kernel_only_producer ? "Kernel-only negative" : "native handoff");
+        native_intake_fixture_t fixture;
+        auto host = fixture.host;
+        const st::object_ref_t object{st::object_kind_t::actor,
+                                      actor_id,
+                                      1,
+                                      1,
+                                      mesh_name,
+                                      zlink::routing_id_t::from (fixture.rid).to_string ()};
+        const auto created = host->objects ().begin_reserved_object (object, actor_type, {});
+        ASSERT_EQ (created.error, st::stateful_error_t::none);
+        ASSERT_EQ (host->objects ().commit_create (created.attempt), st::stateful_error_t::none);
+        auto &mailbox = host->transport ().mailbox ();
+        const auto owner =
+          mesh::service_mailbox_t::application_owner (rt::host::owner_kind_t::actor, actor_id);
+        fw::test::manual_internal_scheduler_t worker;
+        auto spot = std::make_shared<rt::serial_execution_queue_t> (
+          worker, rt::serial_execution_queue_options_t{},
+          rt::serial_execution_queue_t::error_handler_t{}, rt::serial_lane_policy_t::spot_wide ());
+        auto queue = std::make_shared<rt::serial_execution_queue_t> (worker);
+        queue->attach_spot_gate (spot);
+        fw::task_completion_source_t<void> mailbox_terminal;
+        int delivered = 0, handlers = 0, started = 0, rejected = 0;
+        struct settle_fixture_t
+        {
+            fw::task_completion_source_t<void> &terminal;
+            fw::test::manual_internal_scheduler_t &worker;
+            std::shared_ptr<rt::serial_execution_queue_t> queue;
+            std::shared_ptr<rt::serial_execution_queue_t> spot;
+            std::shared_ptr<rt::host::public_host_runtime_t> host;
+            ~settle_fixture_t ()
+            {
+                terminal.complete (fw::result_t<void>::success ());
+                worker.run_all ();
+                queue->close ();
+                worker.run_all ();
+                queue->drain ();
+                spot->close ();
+                worker.run_all ();
+                spot->drain ();
+                worker.retire ();
+                host->close ();
+            }
+        } cleanup{mailbox_terminal, worker, queue, spot, host};
+        const auto dispatch = [&] (const rt::host::ready_record_t &,
+                                   const rt::host::receive_record_t &record,
+                                   std::vector<zlink::message_t> parts) {
+            EXPECT_EQ (parts.size (), 1u);
+            ++delivered;
+            EXPECT_EQ (record.operation_id.low, static_cast<std::uint64_t> (delivered));
+            auto accepted = record.application_record;
+            EXPECT_TRUE (accepted);
+            if (!accepted) {
+                if (record.complete_stateful_dispatch)
+                    record.complete_stateful_dispatch ();
+                return;
+            }
+            const bool first = delivered == 1;
+            if (first && kernel_only_producer) {
+                // The previous producer returned only the Kernel claim and
+                // kept the actual native mailbox reservation until M.
+                accepted->transferred = [host, object] {
+                    (void) host->objects ().complete_claim (object, st::turn_domain_t::application);
+                };
+            }
+            rt::serial_work_options_t options;
+            options.application_record = accepted;
+            EXPECT_TRUE (queue->try_post_async (
+              "native-private-M",
+              [&, accepted, first, operation = record.operation_id.low,
+               terminal = record.complete_stateful_dispatch] (auto complete) {
+                  ++handlers;
+                  EXPECT_EQ (operation, static_cast<std::uint64_t> (handlers));
+                  accepted->admission.enter_handler ();
+                  if (first) {
+                      auto pending = std::make_shared<fw::task_t<void>> (mailbox_terminal.task ());
+                      fw::detail::observe_task_terminal (*pending,
+                                                         [pending, terminal] (const auto &) {
+                                                             if (terminal)
+                                                                 terminal ();
+                                                         });
+                      auto turn = fw::detail::capture_current_serial_turn ();
+                      EXPECT_TRUE (turn);
+                      if (turn)
+                          EXPECT_TRUE (
+                            turn->defer ([&] { return mailbox_terminal.task (); }, [] {}));
+                      complete ([] {});
+                  } else {
+                      complete ([terminal] {
+                          if (terminal)
+                              terminal ();
+                      });
+                  }
+              },
+              options));
+        };
+        const auto drain = [&] {
+            if (!mailbox.begin_application_drain (owner))
+                return false;
+            const auto result = host
+                                  ->dispatch_application_owner (
+                                    owner, dispatch, [&] { ++started; }, [&] { ++rejected; })
+                                  .result ();
+            mailbox.end_application_drain (owner);
+            EXPECT_TRUE (result);
+            return result && result.value ();
+        };
+        EXPECT_TRUE (mailbox.try_enqueue (fixture.actor_record (1)));
+        EXPECT_TRUE (drain ());
+        worker.run_all ();
+        EXPECT_EQ (handlers, 1);
+        EXPECT_FALSE (mailbox_terminal.task ().await_ready ());
+        EXPECT_TRUE (mailbox.try_enqueue (fixture.actor_record (2)));
+        const bool native_available = drain ();
+        worker.run_all ();
+        const auto require_native_transfer = [&] {
+            EXPECT_TRUE (native_available && delivered == 2)
+              << "native_available=" << native_available << " delivered=" << delivered;
+        };
+        int observed_rejections = 0;
+        if (kernel_only_producer) {
+            testing::TestPartResultArray failures;
+            {
+                testing::ScopedFakeTestPartResultReporter capture (
+                  testing::ScopedFakeTestPartResultReporter::INTERCEPT_ONLY_CURRENT_THREAD,
+                  &failures);
+                require_native_transfer ();
+            }
+            observed_rejections = failures.size ();
+            EXPECT_EQ (failures.size (), 1);
+            if (failures.size () == 1)
+                EXPECT_TRUE (failures.GetTestPartResult (0).nonfatally_failed ());
+        } else {
+            require_native_transfer ();
+        }
+        std::printf ("native-M kernel_only=%d native_available=%d delivered=%d handlers_while_M=%d "
+                     "rejected_checks=%d\n",
+                     kernel_only_producer, native_available, delivered, handlers,
+                     observed_rejections);
+        EXPECT_EQ (handlers, 1);
+        mailbox_terminal.complete (fw::result_t<void>::success ());
+        worker.run_all ();
+        if (!native_available)
+            EXPECT_TRUE (drain ());
+        worker.run_all ();
+        EXPECT_EQ (delivered, 2);
+        EXPECT_EQ (handlers, 2);
+        EXPECT_EQ (started, 2);
+        EXPECT_EQ (rejected, 0);
+        EXPECT_EQ (mailbox.pending_messages (mesh::service_mailbox_domain_t::application), 0u);
+        EXPECT_EQ (mailbox.pending_bytes (mesh::service_mailbox_domain_t::application), 0u);
+        EXPECT_EQ (host->objects ().pending (object, st::turn_domain_t::application), 0u);
+        EXPECT_EQ (host->objects ().complete_claim (object, st::turn_domain_t::application),
+                   st::stateful_error_t::conflict);
+    }
+}
+
+// The real Store adapter pauses only the accepted Actor's authority chain.
+// Other Actors use the same host and native pump while each source is pending.
+class intake_store_t final : public fw::location_store_t
+{
+  public:
+    intake_store_t ()
+    {
+        // Capture the provider's key through its existing authority conversion.
+        capture_key = &authority_store_key;
+        fw::runtime::provider_location_repository_t repository (*this);
+        repository.read_authority (fw::runtime::actor_authority_key (actor_id)).result ().value ();
+        capture_key = nullptr;
+    }
+    fw::task_t<fw::store_read_result_t> read (fw::store_key_t key) override
+    {
+        if (capture_key)
+            *capture_key = key.value;
+        auto actual = inner.read (key).result ().value ();
+        const bool infrastructure = fw::detail::current_infrastructure_wait ();
+        int expected = 1;
+        if (infrastructure && std::this_thread::get_id () != releaser
+            && key.value == authority_store_key && stage.compare_exchange_strong (expected, 0)) {
+            authority_value = std::move (actual);
+            observe (0);
+            return authority_source.task ();
+        }
+        expected = 3;
+        if (std::this_thread::get_id () == releaser
+            && stage.compare_exchange_strong (expected, 0)) {
+            lease_value = std::move (actual);
+            observe (2);
+            return lease_source.task ();
+        }
+        return fw::task_t<fw::store_read_result_t> (
+          fw::result_t<fw::store_read_result_t>::success (std::move (actual)));
+    }
+    fw::task_t<fw::store_scan_result_t> scan (fw::store_scan_request_t request) override
+    {
+        auto actual = inner.scan (std::move (request)).result ().value ();
+        int expected = 2;
+        if (std::this_thread::get_id () == releaser
+            && stage.compare_exchange_strong (expected, 0)) {
+            nodes_value = std::move (actual);
+            observe (1);
+            return nodes_source.task ();
+        }
+        return fw::task_t<fw::store_scan_result_t> (
+          fw::result_t<fw::store_scan_result_t>::success (std::move (actual)));
+    }
+    fw::task_t<fw::store_write_result_t> write (fw::store_write_request_t request) override
+    {
+        return inner.write (std::move (request));
+    }
+    void observe (std::size_t index)
+    {
+        lanes[index] = fw::runtime::state_lane_t::current ();
+        turns[index] = fw::detail::capture_current_serial_turn ();
+        reached[index].store (true);
+        entered[index].complete (fw::result_t<void>::success ());
+    }
+    void release (int index, bool failure)
+    {
+        stage.store (failure || index == 2 ? 0 : index + 2);
+        if (index == 0)
+            authority_source.complete (
+              failure ? fw::result_t<fw::store_read_result_t>::failure (
+                          fw::framework_error_kind_t::internal_failure, "intake authority failure")
+                      : fw::result_t<fw::store_read_result_t>::success (*authority_value));
+        else if (index == 1)
+            nodes_source.complete (
+              failure ? fw::result_t<fw::store_scan_result_t>::failure (
+                          fw::framework_error_kind_t::internal_failure, "intake nodes failure")
+                      : fw::result_t<fw::store_scan_result_t>::success (*nodes_value));
+        else
+            lease_source.complete (
+              failure ? fw::result_t<fw::store_read_result_t>::failure (
+                          fw::framework_error_kind_t::internal_failure, "intake lease failure")
+                      : fw::result_t<fw::store_read_result_t>::success (*lease_value));
+    }
+    void release_all ()
+    {
+        stage.store (0);
+        authority_source.complete (fw::result_t<fw::store_read_result_t>::failure (
+          fw::framework_error_kind_t::shutting_down, "intake fixture settled"));
+        nodes_source.complete (fw::result_t<fw::store_scan_result_t>::failure (
+          fw::framework_error_kind_t::shutting_down, "intake fixture settled"));
+        lease_source.complete (fw::result_t<fw::store_read_result_t>::failure (
+          fw::framework_error_kind_t::shutting_down, "intake fixture settled"));
+        for (auto &step : entered)
+            step.complete (fw::result_t<void>::success ());
+    }
+    ~intake_store_t () override { release_all (); }
+    std::string authority_store_key;
+    std::string *capture_key = nullptr;
+    std::atomic<int> stage{0};
+    std::array<fw::task_completion_source_t<void>, 3> entered;
+    std::array<std::atomic_bool, 3> reached{};
+    std::array<fw::runtime::state_lane_t *, 3> lanes{};
+    std::array<std::shared_ptr<fw::detail::serial_turn_t>, 3> turns;
+    const std::thread::id releaser = std::this_thread::get_id ();
+    std::optional<fw::store_read_result_t> authority_value, lease_value;
+    std::optional<fw::store_scan_result_t> nodes_value;
+    fw::task_completion_source_t<fw::store_read_result_t> authority_source, lease_source;
+    fw::task_completion_source_t<fw::store_scan_result_t> nodes_source;
+    fw::runtime::in_memory_location_store_t inner;
+};
+
+class NativeIntakePendingStore : public testing::TestWithParam<std::tuple<bool, int>>
+{
+};
+TEST_P (NativeIntakePendingStore, KeepsInfrastructureOutsideAcceptanceTurn)
+{
+    const auto [remote, failure_stage] = GetParam ();
+    observations_t evidence;
+    observations = &evidence;
+    auto store = std::make_shared<intake_store_t> ();
+    auto relocations = std::make_shared<fw::runtime::in_memory_relocation_store_t> ();
+    host_t host, peer;
+    release_callbacks_t callbacks{evidence};
+    configure (host, first_rid, store, relocations);
+    host.start ();
+    ASSERT_TRUE (ready (host));
+    auto services = host.app.advanced ().services ().build_provider ();
+    auto &actors = services.get_required<fw::actor_manager_t> ();
+    ASSERT_TRUE (actors.get_or_create (fw::actor_id_t (actor_id), actor_type).async ().result ());
+    constexpr auto independent_actor = "intake-independent";
+    ASSERT_TRUE (
+      actors.get_or_create (fw::actor_id_t (independent_actor), actor_type).async ().result ());
+    configure (peer, second_rid, store, relocations);
+    peer.start ();
+    ASSERT_TRUE (ready (peer));
+    ASSERT_TRUE (peer_ready (services.get_required<fw::route_mesh_runtime_t> (), second_rid));
+    auto peer_services = peer.app.advanced ().services ().build_provider ();
+    auto &local = services.get_required<fw::actor_client_t> ();
+    auto &native = peer_services.get_required<fw::actor_client_t> ();
+    std::array<fw::task_t<void>, 3> entered{store->entered[0].task (), store->entered[1].task (),
+                                            store->entered[2].task ()};
+    store->stage.store (1);
+    auto pending =
+      (remote ? native : local).request (fw::actor_id_t (actor_id), probe_t{17}).async<probe_t> ();
+    std::atomic<int> terminals{0};
+    std::promise<void> terminal_seen;
+    auto terminal_ready = terminal_seen.get_future ();
+    fw::detail::observe_task_completion (pending, [&] (const auto &) {
+        if (++terminals == 1) {
+            terminal_seen.set_value ();
+            for (auto &step : store->entered)
+                step.complete (fw::result_t<void>::success ());
+        }
+    });
+    for (int index = 0; index != 3; ++index) {
+        entered[index].result ().value ();
+        EXPECT_TRUE (store->reached[index].load ()) << "Store step=" << index;
+        if (!store->reached[index].load ())
+            break;
+        EXPECT_FALSE (pending.await_ready ());
+        EXPECT_EQ (terminals.load (), 0);
+        EXPECT_EQ (store->lanes[index], nullptr);
+        EXPECT_FALSE (store->turns[index]);
+        // This remote reply requires receive, dispatch and completion on both
+        // hosts. Its Actor has an independent execution gate and spare supply.
+        auto progress = native.request (fw::actor_id_t (independent_actor), probe_t{91 + index})
+                          .async<probe_t> ()
+                          .result ();
+        EXPECT_TRUE (progress);
+        if (progress)
+            EXPECT_EQ (progress.value ().value, 91 + index);
+        const bool fail = failure_stage == index;
+        store->release (index, fail);
+        if (fail)
+            break;
+    }
+    store->release_all ();
+    const auto result = pending.result ();
+    EXPECT_EQ (static_cast<bool> (result), failure_stage == -1);
+    if (result)
+        EXPECT_EQ (result.value ().value, 17);
+    terminal_ready.get ();
+    EXPECT_EQ (terminals.load (), 1);
+    {
+        std::lock_guard lock (evidence.mutex);
+        EXPECT_EQ (std::count (evidence.intake_probe_values.begin (),
+                               evidence.intake_probe_values.end (), 17),
+                   failure_stage == -1 ? 1 : 0);
+    }
+    constexpr int following_payload = 117;
+    const auto following = (remote ? native : local)
+                             .request (fw::actor_id_t (actor_id), probe_t{following_payload})
+                             .async<probe_t> ()
+                             .result ();
+    EXPECT_TRUE (following);
+    if (following)
+        EXPECT_EQ (following.value ().value, following_payload);
+    {
+        std::lock_guard lock (evidence.mutex);
+        EXPECT_EQ (std::count (evidence.intake_probe_values.begin (),
+                               evidence.intake_probe_values.end (), following_payload),
+                   1);
+    }
+    auto registration =
+      fw::detail::mesh_node_runtime_t::registrations (host.app.advanced ().zlink ()).front ();
+    auto jobs = registration->application_jobs;
+    const auto node = fw::detail::spot_node_runtime_t (registration->spot_state).native_node ();
+    host.app.request_stop ();
+    peer.app.request_stop ();
+    host.thread.join ();
+    peer.thread.join ();
+    EXPECT_EQ (jobs->snapshot ().permits_in_use, 0u);
+    EXPECT_EQ (jobs->snapshot ().capacity_waiters, 0u);
+    EXPECT_EQ (node->transport ().mailbox ().pending_messages (
+                 fw::runtime::mesh::service_mailbox_domain_t::application),
+               0u);
+    EXPECT_EQ (node->transport ().mailbox ().pending_bytes (
+                 fw::runtime::mesh::service_mailbox_domain_t::application),
+               0u);
+}
+INSTANTIATE_TEST_SUITE_P (LocalAndNative,
+                          NativeIntakePendingStore,
+                          testing::Combine (testing::Bool (), testing::Values (-1, 0, 1, 2)));
 
 class creation_store_t final : public fw::location_store_t
 {
@@ -2296,9 +3340,8 @@ TEST_P (ActorDeferredJoinFailure, FailureAndRejectionPreserveSourceActor)
       [&evidence] (const fw::message_flow_event_t &event) {
           if (event.packet_name != probe_t::packet_name)
               return;
-          const bool parked = event.detail_stage == "relay_actor_packet.try_append_backlog"
-                              && event.outcome == fw::message_flow_outcome_t::admitted;
-          if (!parked && event.detail_stage != "invoke_erased.post_serial")
+          if (event.actor_id != actor_id || event.outcome != fw::message_flow_outcome_t::admitted
+              || event.detail_stage != "canonical_application.commit_accepted_ingress")
               return;
           {
               std::lock_guard lock (evidence.mutex);
@@ -3047,3 +4090,650 @@ TEST (ActorMaintenanceJoin, ActiveInventoryExcludesCreatingRecoveringAndFinalize
     EXPECT_TRUE (source_runtime.local_actor_refs ().empty ());
 }
 } // namespace
+
+
+namespace deferred_join_reservation_probe
+{
+namespace fw = zlink::framework;
+namespace rt = fw::runtime;
+namespace detail = fw::detail;
+constexpr auto packet_name = "deferred-join-reservation-probe";
+constexpr auto actor_key = "probe:actor";
+constexpr auto first_transfer = "first-remote-join";
+constexpr std::size_t replay_worker_count = 2;
+
+std::shared_ptr<rt::serial_application_record_t>
+accepted_record (const std::shared_ptr<rt::application_job_queue_t> &jobs, std::uint64_t sequence)
+{
+    rt::messaging::envelope_header_t envelope;
+    envelope.kind = rt::messaging::message_kind_t::command;
+    envelope.channel_name = "actor";
+    envelope.message_name = packet_name;
+    envelope.content_type = "application/json";
+    auto parts = rt::messaging::envelope_codec_t{}.encode_raw_body_parts (
+      envelope, zlink::message_t::from ("{}"));
+    const auto routing_id = zlink::routing_id_t::from ("probe-source").to_bytes ();
+    rt::protocol::actor_message_header_t header;
+    header.operation = {1, sequence};
+    header.target = {"actor", 1, routing_id, 1, 1, 1};
+    auto record = std::make_shared<rt::serial_application_record_t> ();
+    record->payload.emplace ();
+    record->payload->sequence = sequence;
+    record->payload->application_payload_bytes = 2;
+    // This isolated fixture injects the accepted authority and journal input.
+    record->payload->application_record = rt::stateful::accepted_actor_record (
+      header, {"probe-owner", 1, routing_id, 1},
+      rt::protocol::application_payload_t::from_parts (std::move (parts).take_items ()), false);
+    record->admission.jobs = jobs;
+    return record;
+}
+
+enum class replay_case_t
+{
+    remote_without_barrier,
+    remote_with_barrier,
+    local_target,
+    rejected_deferred
+};
+
+void restore_probe (replay_case_t test_case, bool multiple_packets = false)
+{
+    const bool with_source_barrier = test_case != replay_case_t::remote_without_barrier;
+    const bool local_target = test_case == replay_case_t::local_target;
+    const bool rejected_deferred = test_case == replay_case_t::rejected_deferred;
+    auto mesh = fw::test::runtime_failure_fixture<detail::mesh_node_builder_state_t> ("probe-mesh");
+    auto node = mesh->spot_state;
+    node->monitoring = fw::test::runtime_failure_monitoring ();
+    auto scheduler = std::make_shared<fw::test::manual_internal_scheduler_t> ();
+    scheduler->publication_fence (
+      fw::test::state_lane_publication_fence (node->lane, node->lane_executor));
+    node->worker_executor = scheduler;
+    fw::serializer_registry_t serializers;
+    fw::service_collection_t services;
+    node->root_services = services.build_provider ();
+    mesh->application_jobs =
+      std::make_shared<rt::application_job_queue_t> (rt::application_job_queue_configuration_t{
+        fw::application_job_queue_profile_t::balanced, std::uint32_t{1}, 1, 1});
+    auto native = std::make_shared<rt::host::public_host_runtime_t> (rt::host::host_options_t{
+      .mesh = {.descriptor = {.mesh_name = "probe-mesh",
+                              .node_routing_id =
+                                zlink::routing_id_t::from ("probe-source").to_bytes (),
+                              .lifecycle_generation = 1,
+                              .descriptor_revision = 1,
+                              .advertised_endpoint = "tcp://127.0.0.1:0"},
+               .application_jobs = mesh->application_jobs,
+               .runtime_failures = node->runtime_failures ()},
+      .object_stable_types = {"framework.spot", "probe"}});
+    native->start ();
+    node->native_node = native;
+    auto held = mesh->application_jobs->try_reserve_supply ();
+    ASSERT_TRUE (held);
+    held->mark_queued ();
+
+    auto spot = std::make_shared<detail::spot_context_state_t> ();
+    spot->node = node;
+    spot->node_rid = fw::node_rid_t::from_string ("probe-source");
+    spot->spot_id = fw::spot_id_t ("probe-source-spot");
+    spot->spot_instance = std::make_shared<int> (1);
+    spot->channel_runtime = fw::test::runtime_failure_fixture<detail::channel_runtime_state_t> ();
+    spot->channel_runtime->serializers = &serializers;
+    spot->serial_executor = node->worker_executor;
+    node->spot_contexts_by_id.emplace (spot->spot_id, detail::spot_context_access_t::create (spot));
+    detail::spot_node_builder_state_t::actor_factory_registration_t factory;
+    factory.actor_type = std::type_index (typeid (int));
+    factory.configure_instance = [] (void *, const fw::actor_ref_t &, void *) {};
+    node->actor_factories.emplace ("probe", std::move (factory));
+    node->actor_instances.emplace (actor_key, std::make_shared<int> (1));
+    node->actor_spot_ids.emplace (actor_key, spot->spot_id);
+    node->actor_generations.emplace (actor_key, 1);
+    node->actor_types_by_id.emplace ("actor", "probe");
+    const auto actor = detail::actor_ref_access_t::make (
+      fw::node_rid_t::from_string ("probe-source"), "probe", "actor", 1);
+
+    struct observation_t
+    {
+        bool next_reserved;
+        std::string error;
+        std::uint32_t permits;
+        std::string transfer_id;
+    };
+    std::vector<std::string> order;
+    bool sequence_seen = false;
+    std::promise<void> sequence_finished;
+    auto sequence_done = sequence_finished.get_future ();
+    std::shared_ptr<detail::deferred_barrier_t> next_barrier;
+    bool handler_seen = false;
+    std::vector<std::shared_ptr<detail::serial_turn_t>> replay_turns;
+    std::promise<observation_t> observed;
+    auto handler_finished = observed.get_future ().share ();
+    spot->handlers.push_back (fw::spot_handler_descriptor_t{
+      fw::spot_handler_kind_t::actor_send, packet_name, "", std::type_index (typeid (int)),
+      std::type_index (typeid (void)), std::type_index (typeid (int)),
+      std::type_index (typeid (void))});
+    spot->handler_invokers.push_back (
+      [&, node] (void *, void *, fw::service_provider_t &, fw::serializer_registry_t &,
+                 const zlink::message_t &,
+                 const fw::spot_inbound_message_t &metadata) -> fw::task_t<zlink::message_t> {
+          if (multiple_packets && metadata.values.contains ("second")) {
+              order.push_back ("second");
+              co_return zlink::message_t{};
+          }
+          if (multiple_packets)
+              order.push_back ("first");
+          try {
+              auto next = detail::spot_node_runtime_t (node).reserve_actor_join_barrier (actor);
+              observation_t value{
+                static_cast<bool> (next), next ? "" : next.error ()->what (),
+                mesh->application_jobs->snapshot ().permits_in_use,
+                node->actor_transfer_coordinator.transfer_id (actor_key).value_or ("")};
+              if (next) {
+                  if (multiple_packets) {
+                      next_barrier = next.value ();
+                      EXPECT_TRUE (detail::defer_current_serial_turn (
+                        [&] {
+                            EXPECT_TRUE (next_barrier->activate_async ([&] (auto complete) {
+                                order.push_back ("next-barrier");
+                                complete (fw::result_t<void>::success ());
+                                sequence_finished.set_value ();
+                                sequence_seen = true;
+                            }));
+                            return next_barrier->terminal ();
+                        },
+                        [&] { next_barrier->cancel (); }));
+                  } else if (local_target) {
+                      next_barrier = next.value ();
+                  } else {
+                      next.value ()->cancel ();
+                  }
+              }
+              observed.set_value (std::move (value));
+              handler_seen = true;
+          }
+          catch (...) {
+              observed.set_exception (std::current_exception ());
+              handler_seen = true;
+          }
+          co_return zlink::message_t{};
+      });
+    node->dispatch.message_flow (fw::message_flow_log_mode_t::detailed);
+    const auto observe_flow = [&] (const fw::message_flow_event_t &event) {
+        std::fprintf (
+          stderr, "FLOW packet=%s stage=%s result=%s\n", event.packet_name.value_or ("").c_str (),
+          event.detail_stage.value_or ("").c_str (), event.detail_result.value_or ("").c_str ());
+        if (event.packet_name == packet_name && event.detail_stage == "invoke_erased.post_serial") {
+            if (auto turn = detail::capture_current_serial_turn ())
+                replay_turns.push_back (std::move (turn));
+        }
+    };
+    if (!rejected_deferred)
+        detail::dispatch_options_access_t::set_observer_for_tests (node->dispatch, observe_flow);
+    std::shared_ptr<detail::deferred_barrier_t> source_barrier;
+    detail::deferred_barrier_t::async_completion_t finish_barrier;
+    bool source_entered = false;
+    std::promise<void> barrier_entered;
+    auto entered = barrier_entered.get_future ();
+    struct cleanup_t
+    {
+        std::function<void ()> action;
+        ~cleanup_t ()
+        {
+            if (action)
+                action ();
+        }
+    } cleanup{[&] {
+        if (next_barrier)
+            next_barrier->cancel ();
+        if (finish_barrier) {
+            auto complete = std::exchange (finish_barrier, {});
+            complete (fw::result_t<void>::success ());
+        }
+        held.reset ();
+        mesh->application_jobs->stop ();
+        scheduler->run_all ();
+        node->worker_executor->request_stop ();
+        node->worker_executor->drain ();
+        native->close ();
+        node->native_node.reset ();
+        detail::dispatch_options_access_t::set_observer_for_tests (node->dispatch, {});
+        (void) node->actor_transfer_coordinator.cancel_move (actor_key);
+        node->spot_contexts_by_id.clear ();
+        spot->node.reset ();
+    }};
+    if (with_source_barrier) {
+        if (local_target) {
+            auto previous = std::make_shared<detail::spot_context_state_t> ();
+            previous->node = node;
+            previous->spot_id = fw::spot_id_t ("probe-previous-spot");
+            previous->serial_executor = node->worker_executor;
+            node->spot_contexts_by_id.emplace (previous->spot_id,
+                                               detail::spot_context_access_t::create (previous));
+            node->actor_spot_ids[actor_key] = previous->spot_id;
+        }
+        auto reserved = detail::spot_node_runtime_t (node).reserve_actor_join_barrier (actor);
+        ASSERT_TRUE (reserved);
+        source_barrier = std::move (reserved.value ());
+        ASSERT_TRUE (source_barrier->activate_async ([&] (auto complete) {
+            finish_barrier = std::move (complete);
+            barrier_entered.set_value ();
+            source_entered = true;
+        }));
+        scheduler->run_all ();
+        ASSERT_TRUE (source_entered);
+        node->lane.run ([&] { node->actor_spot_ids[actor_key] = spot->spot_id; }).get ();
+    } else {
+        ASSERT_TRUE (
+          node->actor_transfer_coordinator.try_reserve_source (actor_key, first_transfer));
+    }
+    if (!rejected_deferred) {
+        ASSERT_TRUE (local_target ? node->actor_transfer_coordinator.try_begin_local (actor_key)
+                                  : node->actor_transfer_coordinator.try_begin_source_remote (
+                                      actor_key, first_transfer));
+    }
+    std::optional<fw::task_t<std::optional<zlink::message_t>>> rejected_work;
+    if (rejected_deferred) {
+        auto initial = std::make_shared<rt::application_job_queue_t::permit_t> (std::move (*held));
+        held.reset ();
+        rejected_work.emplace (detail::spot_node_runtime_t (node).relay_actor_packet (
+          actor, detail::actor_gateway_runtime_t{}.actor_context (actor),
+          detail::stream_message_kind_t::send, packet_name, zlink::message_t::from ("{}"),
+          *node->root_services, serializers, {}, nullptr,
+          [initial] { initial->release_for_handler_entry (); }, {},
+          zlink::routing_id_t::from ("probe-source"), {1, 1}, 0, std::nullopt, {}, 0, {},
+          accepted_record (mesh->application_jobs, 1)));
+        detail::dispatch_options_access_t::set_observer_for_tests (node->dispatch, observe_flow);
+    } else {
+        held.reset ();
+        ASSERT_EQ (
+          detail::handoff_append_result_t::appended,
+          node->actor_transfer_coordinator.try_append_backlog (
+            actor_key, detail::handoff_packet_t{packet_name,
+                                                {},
+                                                "application/json",
+                                                {},
+                                                false,
+                                                accepted_record (mesh->application_jobs, 1)}));
+    }
+
+    if (multiple_packets) {
+        ASSERT_EQ (
+          detail::handoff_append_result_t::appended,
+          node->actor_transfer_coordinator.try_append_backlog (
+            actor_key, detail::handoff_packet_t{packet_name,
+                                                {},
+                                                "application/json",
+                                                {{"second", "true"}},
+                                                false,
+                                                accepted_record (mesh->application_jobs, 2)}));
+        auto queue = spot->ensure_spot_serial_executor ()->actor_executor (actor_key)->queue ();
+        ASSERT_TRUE (queue->try_post ("ordinary-suffix", [&] { order.push_back ("ordinary"); }));
+    }
+
+    if (rejected_deferred) {
+        auto complete = std::exchange (finish_barrier, {});
+        complete (fw::result_t<void>::success ());
+    } else {
+        detail::spot_node_runtime_t (node).fail_remote_actor_transfer (actor, false, std::nullopt);
+    }
+    scheduler->run_all ();
+    if (local_target)
+        EXPECT_TRUE (handler_seen);
+    if (finish_barrier) {
+        auto complete = std::exchange (finish_barrier, {});
+        complete (fw::result_t<void>::success ());
+    }
+    scheduler->run_all ();
+    const auto handler_before_cleanup = handler_seen;
+    EXPECT_TRUE (handler_before_cleanup);
+    if (!handler_before_cleanup) {
+        // A bad nested post can leave an accepted replay holding its own
+        // execution claim. Release those fixture-owned turns for cleanup.
+        for (std::size_t index = 0; index < replay_turns.size (); ++index) {
+            auto turn = replay_turns[index];
+            (void) turn->release ();
+            scheduler->run_all ();
+        }
+    }
+    ASSERT_TRUE (handler_seen);
+    const auto value = handler_finished.get ();
+    if (multiple_packets && value.next_reserved) {
+        scheduler->run_all ();
+        EXPECT_TRUE (sequence_seen);
+        auto completed = node->actor_transfer_coordinator.wait_for_source_completion (actor_key);
+        EXPECT_TRUE (completed.await_ready ());
+        if (completed.await_ready ())
+            completed.result ().value ();
+        EXPECT_EQ (spot->ensure_spot_serial_executor ()
+                     ->actor_executor (actor_key)
+                     ->queue ()
+                     ->pending_count (),
+                   0u);
+    }
+    if (local_target && value.next_reserved) {
+        EXPECT_FALSE (value.transfer_id.empty ());
+        EXPECT_EQ (value.transfer_id, node->actor_transfer_coordinator.transfer_id (actor_key));
+        EXPECT_EQ (detail::actor_move_phase_t::source_reserved,
+                   node->actor_transfer_coordinator.phase (actor_key));
+        next_barrier->cancel ();
+        next_barrier.reset ();
+    }
+    scheduler->run_all ();
+    EXPECT_EQ (spot->ensure_spot_serial_executor ()->spot_queue ()->pending_count (), 0u);
+    EXPECT_EQ (
+      spot->ensure_spot_serial_executor ()->actor_executor (actor_key)->queue ()->pending_count (),
+      0u);
+    std::fprintf (stdout,
+                  "prefix-terminal handler_before_cleanup=%d sequence=%d replay_turns=%zu\n",
+                  handler_before_cleanup, sequence_seen, replay_turns.size ());
+    const auto phase_after_restore = node->actor_transfer_coordinator.phase (actor_key);
+    auto control = detail::spot_node_runtime_t (node).reserve_actor_join_barrier (actor);
+    const bool after_restore_reserved = static_cast<bool> (control);
+    if (control)
+        control.value ()->cancel ();
+    cleanup.action ();
+    cleanup.action = {};
+    const auto remaining = mesh->application_jobs->snapshot ().permits_in_use;
+    std::fprintf (stderr,
+                  "OBSERVATION source_barrier=%d local_target=%d rejected_deferred=%d "
+                  "next_reserved=%d error=%s "
+                  "permits_during_handler=%u "
+                  "after_restore_reserved=%d final_permits=%u\n",
+                  with_source_barrier, local_target, rejected_deferred, value.next_reserved,
+                  value.error.c_str (), value.permits, after_restore_reserved, remaining);
+    EXPECT_FALSE (phase_after_restore.has_value ());
+    EXPECT_TRUE (after_restore_reserved);
+    EXPECT_EQ (0u, value.permits);
+    EXPECT_EQ (0u, remaining);
+    EXPECT_TRUE (value.next_reserved) << value.error;
+    if (multiple_packets)
+        EXPECT_EQ ((std::vector<std::string>{"first", "next-barrier", "second", "ordinary"}),
+                   order);
+}
+TEST (DeferredJoinReservation, RemoteRestoreWithoutSourceBarrier)
+{
+    restore_probe (replay_case_t::remote_without_barrier);
+}
+TEST (DeferredJoinReservation, RemoteRestoreWithSourceBarrier)
+{
+    restore_probe (replay_case_t::remote_with_barrier);
+}
+TEST (DeferredJoinReservation, LocalTargetWithPreviousSpotBarrier)
+{
+    restore_probe (replay_case_t::local_target);
+}
+TEST (DeferredJoinReservation, PrefixHandlersKeepIndependentJoinBoundary)
+{
+    restore_probe (replay_case_t::remote_with_barrier, true);
+}
+TEST (DeferredJoinReservation, RejectedDeferredBarrierReleasesBeforeReservation)
+{
+    restore_probe (replay_case_t::rejected_deferred);
+}
+void capacity_probe (bool handler_failure = false, bool extra_supply = false)
+{
+    auto mesh = fw::test::runtime_failure_fixture<detail::mesh_node_builder_state_t> ("probe-mesh");
+    auto node = mesh->spot_state;
+    node->monitoring = fw::test::runtime_failure_monitoring ();
+    auto scheduler = std::make_shared<fw::test::manual_internal_scheduler_t> ();
+    node->worker_executor = scheduler;
+    scheduler->publication_fence (
+      fw::test::state_lane_publication_fence (node->lane, node->lane_executor));
+    fw::serializer_registry_t serializers;
+    fw::service_collection_t services;
+    node->root_services = services.build_provider ();
+    mesh->application_jobs =
+      std::make_shared<rt::application_job_queue_t> (rt::application_job_queue_configuration_t{
+        fw::application_job_queue_profile_t::balanced, std::uint32_t{1}, 1, 1});
+    auto native = std::make_shared<rt::host::public_host_runtime_t> (rt::host::host_options_t{
+      .mesh = {.descriptor = {.mesh_name = "probe-mesh",
+                              .node_routing_id =
+                                zlink::routing_id_t::from ("probe-source").to_bytes (),
+                              .lifecycle_generation = 1,
+                              .descriptor_revision = 1,
+                              .advertised_endpoint = "tcp://127.0.0.1:0"},
+               .application_jobs = mesh->application_jobs,
+               .runtime_failures = node->runtime_failures ()},
+      .object_stable_types = {"framework.spot", "probe"}});
+    native->start ();
+    node->native_node = native;
+    auto held = mesh->application_jobs->try_reserve_supply ();
+    ASSERT_TRUE (held);
+    held->mark_queued ();
+
+    auto spot = std::make_shared<detail::spot_context_state_t> ();
+    spot->node = node;
+    spot->node_rid = fw::node_rid_t::from_string ("probe-source");
+    spot->spot_id = fw::spot_id_t ("probe-source-spot");
+    spot->spot_instance = std::make_shared<int> (1);
+    spot->channel_runtime = fw::test::runtime_failure_fixture<detail::channel_runtime_state_t> ();
+    spot->channel_runtime->serializers = &serializers;
+    spot->serial_executor = node->worker_executor;
+    node->spot_contexts_by_id.emplace (spot->spot_id, detail::spot_context_access_t::create (spot));
+    detail::spot_node_builder_state_t::actor_factory_registration_t factory;
+    factory.actor_type = std::type_index (typeid (int));
+    factory.configure_instance = [] (void *, const fw::actor_ref_t &, void *) {};
+    node->actor_factories.emplace ("probe", std::move (factory));
+    node->actor_instances.emplace (actor_key, std::make_shared<int> (1));
+    node->actor_spot_ids.emplace (actor_key, spot->spot_id);
+    node->actor_generations.emplace (actor_key, 1);
+    node->actor_types_by_id.emplace ("actor", "probe");
+    const auto actor = detail::actor_ref_access_t::make (
+      fw::node_rid_t::from_string ("probe-source"), "probe", "actor", 1);
+
+    std::atomic<bool> first_started{false}, second_started{false};
+    fw::task_completion_source_t<void> release_first;
+    int join_activated = 0, join_cancelled = 0;
+    std::shared_ptr<detail::deferred_barrier_t> failed_handler_join;
+    std::mutex order_mutex;
+    std::vector<std::string> order;
+    std::shared_ptr<rt::application_job_queue_t::permit_t> ordinary_permit;
+    const auto until = [&] (auto condition) {
+        node->lane.run ([] {}).get ();
+        scheduler->run_all ();
+        return condition ();
+    };
+    spot->handlers.push_back (fw::spot_handler_descriptor_t{
+      fw::spot_handler_kind_t::actor_send, packet_name, "", std::type_index (typeid (int)),
+      std::type_index (typeid (void)), std::type_index (typeid (int)),
+      std::type_index (typeid (void))});
+    spot->handler_invokers.push_back (
+      [&] (void *, void *, fw::service_provider_t &, fw::serializer_registry_t &,
+           const zlink::message_t &,
+           const fw::spot_inbound_message_t &metadata) -> fw::task_t<zlink::message_t> {
+          const auto name = metadata.values.contains ("ordinary") ? "ordinary"
+                            : metadata.values.contains ("second") ? "second"
+                                                                  : "first";
+          {
+              std::lock_guard lock (order_mutex);
+              order.push_back (name);
+          }
+          if (name == std::string_view ("first")) {
+              if (handler_failure) {
+                  auto reserved =
+                    detail::spot_node_runtime_t (node).reserve_actor_join_barrier (actor);
+                  if (!reserved)
+                      throw fw::framework_exception_t (reserved.error_kind (),
+                                                       "test Join reservation failed");
+                  failed_handler_join = reserved.value ();
+                  const auto registered = detail::defer_current_serial_turn (
+                    [&] {
+                        ++join_activated;
+                        auto activated = failed_handler_join->activate ([] {});
+                        if (!activated)
+                            throw fw::framework_exception_t (activated.error_kind (),
+                                                             "test Join activation failed");
+                        return failed_handler_join->terminal ();
+                    },
+                    [&] {
+                        ++join_cancelled;
+                        failed_handler_join->cancel ();
+                    });
+                  if (!registered)
+                      throw fw::framework_exception_t (registered.error_kind (),
+                                                       "test Join registration failed");
+              }
+              first_started.store (true);
+              co_await release_first.task ();
+              if (handler_failure)
+                  throw fw::framework_exception_t (fw::framework_error_kind_t::internal_failure,
+                                                   "deterministic handler failure");
+          } else if (name == std::string_view ("second")) {
+              second_started.store (true);
+          }
+          co_return zlink::message_t{};
+      });
+    struct cleanup_t
+    {
+        std::function<void ()> action;
+        ~cleanup_t ()
+        {
+            if (action)
+                action ();
+        }
+    } cleanup{[&] {
+        held.reset ();
+        ordinary_permit.reset ();
+        release_first.complete (fw::result_t<void>::success ());
+        mesh->application_jobs->stop ();
+        scheduler->run_all ();
+        node->worker_executor->request_stop ();
+        node->worker_executor->drain ();
+        native->close ();
+        node->native_node.reset ();
+        (void) node->actor_transfer_coordinator.cancel_move (actor_key);
+        node->spot_contexts_by_id.clear ();
+        spot->node.reset ();
+    }};
+    if (handler_failure) {
+        auto initial = std::make_shared<rt::application_job_queue_t::permit_t> (std::move (*held));
+        held.reset ();
+        auto record = accepted_record (mesh->application_jobs, 1);
+        record->admission.retain_initial ([initial] { initial->release_for_handler_entry (); });
+        auto failed = detail::spot_node_runtime_t (node).relay_actor_packet (
+          actor, detail::actor_gateway_runtime_t{}.actor_context (actor),
+          detail::stream_message_kind_t::send, packet_name, zlink::message_t::from ("{}"),
+          *node->root_services, serializers, {}, nullptr, {}, {},
+          zlink::routing_id_t::from ("probe-source"), {1, 1}, 0, std::nullopt, {}, 0, {}, record);
+        scheduler->run_all ();
+        const auto entered = first_started.load ();
+        release_first.complete (fw::result_t<void>::success ());
+        scheduler->run_all ();
+        const auto activated = join_activated;
+        const auto cancelled = join_cancelled;
+        const auto failed_ready = failed.await_ready ();
+        if (failed_handler_join)
+            failed_handler_join->cancel ();
+        scheduler->run_all ();
+        EXPECT_TRUE (entered);
+        EXPECT_EQ (activated, 0);
+        EXPECT_EQ (cancelled, 1);
+        EXPECT_TRUE (failed_ready);
+        if (failed_ready) {
+            EXPECT_FALSE (failed.result ());
+            EXPECT_EQ (failed.result ().error_kind (),
+                       fw::framework_error_kind_t::internal_failure);
+        }
+        EXPECT_EQ (mesh->application_jobs->snapshot ().permits_in_use, 0u);
+        EXPECT_EQ (spot->ensure_spot_serial_executor ()->spot_queue ()->pending_count (), 0u);
+        EXPECT_EQ (spot->ensure_spot_serial_executor ()
+                     ->actor_executor (actor_key)
+                     ->queue ()
+                     ->pending_count (),
+                   0u);
+        std::fprintf (stdout,
+                      "handler-task-failure entered=%d activated=%d cancelled=%d ready=%d\n",
+                      entered, activated, cancelled, failed_ready);
+        return;
+    }
+    ASSERT_TRUE (node->actor_transfer_coordinator.try_reserve_source (actor_key, first_transfer));
+    ASSERT_TRUE (
+      node->actor_transfer_coordinator.try_begin_source_remote (actor_key, first_transfer));
+    for (const auto &metadata : {std::map<std::string, std::string>{},
+                                 std::map<std::string, std::string>{{"second", "true"}}})
+        ASSERT_EQ (
+          detail::handoff_append_result_t::appended,
+          node->actor_transfer_coordinator.try_append_backlog (
+            actor_key, detail::handoff_packet_t{
+                         packet_name,
+                         {},
+                         "application/json",
+                         metadata,
+                         false,
+                         accepted_record (mesh->application_jobs, metadata.empty () ? 1 : 2)}));
+    detail::spot_node_runtime_t (node).fail_remote_actor_transfer (actor, false, std::nullopt);
+    ASSERT_TRUE (until ([&] {
+        return first_started.load () || mesh->application_jobs->snapshot ().capacity_waiters == 1;
+    }));
+    // The held initial reservation must prevent the first replay callback.
+    EXPECT_FALSE (first_started.load ());
+    EXPECT_EQ (mesh->application_jobs->snapshot ().capacity_waiters, 1u);
+    if (first_started.load ())
+        return;
+    held.reset ();
+    ASSERT_TRUE (until ([&] { return first_started.load (); }));
+    auto supply = mesh->application_jobs->try_reserve_supply ();
+    ASSERT_TRUE (supply);
+    ordinary_permit = std::make_shared<rt::application_job_queue_t::permit_t> (std::move (*supply));
+    ordinary_permit->mark_queued ();
+    auto ordinary = detail::spot_node_runtime_t (node).relay_actor_packet (
+      actor, detail::actor_gateway_runtime_t{}.actor_context (actor),
+      detail::stream_message_kind_t::send, packet_name, zlink::message_t::from ("{}"),
+      *node->root_services, serializers,
+      fw::spot_inbound_message_t{.values = {{"ordinary", "true"}}}, nullptr,
+      [ordinary_permit] { ordinary_permit->release_for_handler_entry (); }, {},
+      zlink::routing_id_t::from ("probe-source"), {1, 3}, 0, std::nullopt, {}, 0, {},
+      accepted_record (mesh->application_jobs, 3));
+    ASSERT_TRUE (until ([&] { return mesh->application_jobs->snapshot ().permits_in_use == 0; }));
+    held = mesh->application_jobs->try_reserve_supply ();
+    ASSERT_TRUE (held);
+    held->mark_queued ();
+    release_first.complete (fw::result_t<void>::success ());
+    ASSERT_TRUE (until ([&] {
+        return second_started.load () || mesh->application_jobs->snapshot ().capacity_waiters == 1;
+    }));
+    EXPECT_FALSE (second_started.load ());
+    EXPECT_EQ (mesh->application_jobs->snapshot ().capacity_waiters, 1u);
+    bool lifecycle_ran = false;
+    rt::serial_work_options_t lifecycle{rt::serial_work_lane_t::lifecycle};
+    ASSERT_TRUE (spot->ensure_spot_serial_executor ()->spot_queue ()->try_post (
+      "permit-wait-lifecycle", [&] { lifecycle_ran = true; }, lifecycle));
+    scheduler->run_all ();
+    ASSERT_TRUE (lifecycle_ran);
+    held.reset ();
+    scheduler->run_all ();
+    ASSERT_TRUE (ordinary.result ());
+    spot->ensure_spot_serial_executor ()->actor_executor (actor_key)->queue ()->drain ();
+    if (extra_supply) {
+        auto extra = mesh->application_jobs->try_reserve_supply ();
+        ASSERT_TRUE (extra);
+        extra.reset ();
+    }
+    const auto final = mesh->application_jobs->snapshot ();
+    EXPECT_EQ (final.peak_permits_in_use, 1u);
+    EXPECT_EQ (final.permits_in_use, 0u);
+    EXPECT_EQ (final.capacity_waiters, 0u);
+    EXPECT_EQ (final.capacity_wait_count, 2u);
+    // At capacity one with no cancellations, a supply acquisition either
+    // starts a pause or fulfills a capacity wait without a state transition.
+    const auto supply_acquisitions =
+      mesh->application_jobs->pressure_metrics_snapshot ().paused_transition_count
+      + final.capacity_wait_count;
+    EXPECT_EQ (supply_acquisitions, 6u);
+    std::lock_guard lock (order_mutex);
+    EXPECT_EQ (order, (std::vector<std::string>{"first", "second", "ordinary"}));
+}
+TEST (DeferredJoinReservation, FailedHandlerTaskDiscardsDeferredJoin)
+{
+    capacity_probe (true);
+}
+
+TEST (DeferredJoinReservation, DurablePrefixTakesLateIngressPermitAtCapacityOne)
+{
+    capacity_probe ();
+}
+
+TEST (DeferredJoinReservation, DurablePrefixRejectsExtraSupplyAcquisition)
+{
+    EXPECT_NONFATAL_FAILURE (capacity_probe (false, true), "supply_acquisitions");
+}
+
+}
