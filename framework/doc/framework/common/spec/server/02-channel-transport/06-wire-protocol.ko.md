@@ -208,7 +208,7 @@ dequeue되는 시점에 끝나며, decode된 payload는 Framework의 일반 소�
 
 ## 3. Command space
 
-Wire v1은 다음 ID를 사용한다. `7..15`, `32`, `35`, `41`, `45`와 `54..255`는 reserved이며
+Wire v1은 다음 ID를 사용한다. `7..15`, `32`, `35`, `41`, `45`와 `55..255`는 reserved이며
 다른 의미로 재사용하지 않는다. 괄호 안의 이전 command 이름은 호환 진단용 이름일 뿐 decode하거나
 전송하는 command가 아니다.
 

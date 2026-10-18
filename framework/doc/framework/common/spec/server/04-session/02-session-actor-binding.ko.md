@@ -307,13 +307,18 @@ Bound-session API는 current binding으로 one-way push를 보내거나 connecti
 요청한다. 임의의 session을 지정하는 global proxy는 제공하지 않는다. Disconnect는
 binding을 해제하지만 Actor를 destroy하거나 Spot membership을 바꾸지 않는다.
 
-**Connection close는 Session owner가 수행한다.** Actor가 current binding의 close를 요청하면 Actor owner는
-`boundSessionSend(36)`와 같은 Actor route fence와 binding generation을 담아 Session owner에 `boundSessionClose(54)`를
-보낸다. Session owner가 같은 process에 있어도 같은 판정을 거친다. Session owner는 그 binding generation이 current
-binding과 일치할 때만 그 session의 physical connection close를 시작하고, transport close가 terminal이 된 뒤 reply한다.
-일치하지 않으면 stale fence이므로 `Unavailable`이며 connection을 닫지 않는다. Binding 정리와 Actor 통지는 이 close가
-일으킨 §7의 physical disconnect 절차가 한 번 수행하며, close 요청 경로는 binding을 따로 해제하지 않는다. Close 요청의
-terminal은 이 reply다.
+**Connection close는 Session owner가 수행한다.** Actor가 current binding의 close를 요청하면 Actor owner는 current
+binding이 가리키는 Session owner identity(Node RID·lifecycle generation), SessionRid, binding generation과
+ActorId·ObjectGeneration을 보존해 `boundSessionClose(54)`에 담아 Session owner에 보낸다. Session owner가 같은
+process에 있어도 같은 판정을 거친다. Session owner의 binding aggregate는 §2의 binding 검증을 한 번 수행하고, 요청의
+전체 identity가 current binding과 일치할 때만 그 session의 physical connection close를 시작한다. 불일치는 `Unavailable`로
+끝내며 다른 binding이나 connection으로 대상을 바꾸지 않는다. Actor route의 발신 권한은 기존 transport·authority 경계가
+검증하며, Session owner는 Actor authority를 다시 조회하지 않는다. Relocation seal과 route 적용은 유효한 current binding의
+close를 지연시키지 않는다.
+
+Close reply는 transport close terminal을 전달하며, 이 close가 일으킨 §7의 disconnect callback·tombstone·local cleanup
+완료를 기다리지 않는다. Binding 정리와 Actor 통지는 §7이 한 번 수행하며, close 요청 경로는 binding을 따로 해제하지
+않는다. Command 54의 request/reply는 기존 correlation·deadline·취소·오류 terminal 계약을 따른다.
 
 이 절과 §8.2가 사용하는 control command는 다음과 같다.
 
