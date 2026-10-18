@@ -60,8 +60,11 @@ stream_session_registry_t::stream_session_registry_t (authority_resolver_t resol
     }
 }
 
-stream_connection_t stream_session_registry_t::open (std::string connection_id,
-                                                     std::function<void ()> close_connection)
+stream_connection_t
+stream_session_registry_t::open (std::string connection_id,
+                                 std::function<void ()> close_connection,
+                                 std::optional<zlink::routing_id_t> owner_node_rid,
+                                 std::uint64_t owner_node_generation)
 {
     if (connection_id.empty ()) {
         throw std::invalid_argument ("stream connection id is empty");
@@ -69,10 +72,12 @@ stream_connection_t stream_session_registry_t::open (std::string connection_id,
     auto [connection, displaced] =
       _lane
         .run ([this, connection_id = std::move (connection_id),
-               close_connection = std::move (close_connection)] () mutable {
+               close_connection = std::move (close_connection),
+               owner_node_rid = std::move (owner_node_rid), owner_node_generation] () mutable {
             std::vector<stream_held_relay_t> displaced;
             const auto generation = ++_last_connection_generation[connection_id];
-            stream_connection_t connection{std::move (connection_id), generation};
+            stream_connection_t connection{std::move (connection_id), generation,
+                                           std::move (owner_node_rid), owner_node_generation};
             const auto previous = _connections.find (connection.connection_id);
             if (previous != _connections.end ()) {
                 for (auto &[actor_id, aggregate] : previous->second.bindings) {
@@ -97,16 +102,20 @@ stream_connection_t stream_session_registry_t::open (std::string connection_id,
     return connection;
 }
 
-bool stream_session_registry_t::close (const stream_connection_t &connection)
+stream_close_result_t stream_session_registry_t::close (const stream_connection_t &connection)
 {
-    auto [closed, discarded] =
+    auto [result, discarded] =
       _lane
         .run ([this, &connection] {
             std::vector<stream_held_relay_t> discarded;
+            stream_close_result_t result;
             const auto current = _connections.find (connection.connection_id);
             if (current == _connections.end () || current->second.connection != connection) {
-                return std::make_pair (false, std::move (discarded));
+                return std::make_pair (std::move (result), std::move (discarded));
             }
+            result.bindings.reserve (current->second.bindings.size ());
+            for (const auto &[_, aggregate] : current->second.bindings)
+                result.bindings.push_back (aggregate.binding);
             for (auto &[actor_id, aggregate] : current->second.bindings) {
                 aggregate.ingress_drain->accepts_completion = false;
                 const auto indexed = _actor_bindings.find (actor_id);
@@ -119,11 +128,12 @@ bool stream_session_registry_t::close (const stream_connection_t &connection)
             }
             _connections.erase (current);
             notify_changed ();
-            return std::make_pair (true, std::move (discarded));
+            result.closed = true;
+            return std::make_pair (std::move (result), std::move (discarded));
         })
         .get ();
     settle_held_relays (std::move (discarded), message_flow_reason_t::target_closed);
-    return closed;
+    return result;
 }
 
 std::vector<stream_binding_t>
@@ -302,7 +312,8 @@ stream_session_registry_t::bind_verified (const stream_connection_t &connection,
     return result;
 }
 
-stateful_error_t stream_session_registry_t::unbind (const stream_binding_t &binding)
+std::pair<stateful_error_t, std::optional<stream_binding_t>>
+stream_session_registry_t::unbind (const stream_binding_t &binding)
 {
     auto [result, discarded] =
       _lane
@@ -311,10 +322,16 @@ stateful_error_t stream_session_registry_t::unbind (const stream_binding_t &bind
             const auto current = _connections.find (binding.connection.connection_id);
             if (current == _connections.end () || current->second.connection != binding.connection
                 || !current->second.bindings.contains (binding.actor.key)
-                || current->second.bindings.at (binding.actor.key).binding != binding) {
-                return std::make_pair (stateful_error_t::conflict, std::move (discarded));
+                || current->second.bindings.at (binding.actor.key).binding.binding_generation
+                     != binding.binding_generation
+                || current->second.bindings.at (binding.actor.key).binding.actor.object_generation
+                     != binding.actor.object_generation) {
+                return std::make_pair (
+                  std::make_pair (stateful_error_t::conflict, std::optional<stream_binding_t>{}),
+                  std::move (discarded));
             }
             auto &aggregate = current->second.bindings.at (binding.actor.key);
+            auto removed = aggregate.binding;
             aggregate.ingress_drain->accepts_completion = false;
             for (auto &settle : take_held_relays_unlocked (aggregate))
                 discarded.push_back (std::move (settle));
@@ -325,7 +342,9 @@ stateful_error_t stream_session_registry_t::unbind (const stream_binding_t &bind
                 && indexed->second.binding_generation == binding.binding_generation)
                 _actor_bindings.erase (indexed);
             notify_changed ();
-            return std::make_pair (stateful_error_t::none, std::move (discarded));
+            return std::make_pair (
+              std::make_pair (stateful_error_t::none, std::make_optional (std::move (removed))),
+              std::move (discarded));
         })
         .get ();
     settle_held_relays (std::move (discarded), message_flow_reason_t::target_closed);
@@ -955,28 +974,6 @@ bool stream_session_registry_t::is_current (const stream_binding_t &binding) con
           return current != _connections.end () && current->second.connection == binding.connection
                  && current->second.bindings.contains (binding.actor.key)
                  && current->second.bindings.at (binding.actor.key).binding == binding;
-      })
-      .get ();
-}
-
-bool stream_session_registry_t::is_current_for_connection (const stream_connection_t &connection,
-                                                           const stream_binding_t &binding) const
-{
-    return _lane
-      .run ([this, &connection, &binding] {
-          if (binding.connection != connection)
-              return false;
-          const auto owner = _connections.find (connection.connection_id);
-          if (owner == _connections.end () || owner->second.connection != connection) {
-              return false;
-          }
-          const auto owned = owner->second.bindings.find (binding.actor.key);
-          if (owned == owner->second.bindings.end () || owned->second.binding != binding) {
-              return false;
-          }
-          const auto indexed = _actor_bindings.find (binding.actor.key);
-          return indexed != _actor_bindings.end () && indexed->second.connection == connection
-                 && indexed->second.binding_generation == binding.binding_generation;
       })
       .get ();
 }

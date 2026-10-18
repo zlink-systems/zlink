@@ -2274,7 +2274,10 @@ class spot_node_runtime_t
       std::shared_ptr<runtime::serial_application_record_t> application_record = {},
       spot_handler_registry_t::actor_queue_dispatch_t actor_queue_dispatch =
         spot_handler_registry_t::actor_queue_dispatch_t::acquire);
-    task_t<void> notify_actor_disconnected_erased (const actor_ref_t &actor_ref) const;
+    task_t<zlink::message_t> notify_actor_disconnected_erased (void *instance,
+                                                               std::type_index actor_type,
+                                                               actor_gateway_runtime_t gateway,
+                                                               zlink::message_t body) const;
 
     template <typename TActor>
     std::optional<std::reference_wrapper<TActor>> actor_instance (const actor_ref_t &actor_ref)

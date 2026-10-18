@@ -1058,7 +1058,8 @@ int main ()
      * owned by the coordinator's Actor entrypoints, without a second
      * handler-wide mailbox lock. */
     gate.require (
-      spot_runtime.find ("executor->execute_actor (") != std::string::npos
+      spot_runtime.find ("coordinator->execute_actor (") != std::string::npos
+        && spot_runtime_header.find ("executor->execute_actor (") != std::string::npos
         && spot_runtime.find ("execute_actor_cancellable") != std::string::npos
         && spot_runtime_surface.find ("class spot_serial_executor_t") != std::string::npos
         && actor_serial_executor.find ("class actor_serial_executor_t") != std::string::npos

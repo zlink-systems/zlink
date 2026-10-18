@@ -315,24 +315,34 @@ class stream_session_dispatcher_t
         auto work = [session_executor, callback = std::move (callback),
                      completion = std::move (completion),
                      started = std::move (started)] (auto complete) mutable {
-            auto finish = [session_executor, complete = std::move (complete),
-                           completion =
-                             std::move (completion)] (const result_t<void> &result) mutable {
-                complete (
-                  [session_executor, completion = std::move (completion), result] () mutable {
-                      if (completion) {
-                          completion (result);
-                      }
-                  });
+            struct callback_completion_t
+            {
+                dispatch_callback_t callback;
+                std::shared_ptr<runtime::session_serial_executor_t> session_executor;
+                decltype (complete) complete_turn;
+                stream_runtime_t::async_dispatch_completion_t completion;
+
+                void operator() (const result_t<void> &result)
+                {
+                    // The terminal owns callback captures until the task settles.
+                    // Release them before publishing completion or allowing drain.
+                    callback = {};
+                    complete_turn ([session_executor = std::move (session_executor),
+                                    completion = std::move (completion), result] () mutable {
+                        if (completion) {
+                            completion (result);
+                        }
+                    });
+                }
             };
+            callback_completion_t finish{std::move (callback), session_executor,
+                                         std::move (complete), std::move (completion)};
             try {
                 if (started) {
                     started ();
                 }
-                auto callback_task = callback ();
-                detail::observe_task_completion (
-                  callback_task, [finish = std::move (finish)] (
-                                   const result_t<void> &result) mutable { finish (result); });
+                auto callback_task = finish.callback ();
+                detail::observe_task_completion (callback_task, std::move (finish));
             }
             catch (const framework_exception_t &error) {
                 finish (detail::result_access_t::failure<void> (error));
