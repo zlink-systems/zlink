@@ -219,8 +219,8 @@ static void verify_same_target_activation_order (
     target->configure_instance_spot_operations (
       store, relocations, [owner] { return owner; },
       host::instance_spot_activation_materializer_t{
-        [] (const auto &, const auto &) { return true; },
-        [&] (auto command, auto, auto) -> fw::task_t<host::instance_spot_activation_result_t> {
+        [] (const auto &, const auto &, auto &) { return true; },
+        [&] (auto command, auto) -> fw::task_t<host::instance_spot_activation_result_t> {
             queued.push_back (command->activation.operation.low);
             if (read_after_delete && command->activation.operation.low == 1)
                 co_return co_await first_handler.task ();
@@ -1094,11 +1094,11 @@ void verify_reserve_loser (bool expire_deadline, bool one_way)
     target->configure_instance_spot_operations (
       store, relocations, [] { return fw::location_owner_token_t{"target-owner", 1}; },
       host::instance_spot_activation_materializer_t{
-        [&] (const auto &, const auto &) {
+        [&] (const auto &, const auto &, auto &) {
             ++prepares;
             return true;
         },
-        [&] (auto, auto, auto) -> fw::task_t<host::instance_spot_activation_result_t> {
+        [&] (auto, auto) -> fw::task_t<host::instance_spot_activation_result_t> {
             ++handlers;
             co_return host::instance_spot_activation_result_t{};
         }});
@@ -2077,11 +2077,11 @@ TEST (ZLinkFrameworkInstanceSpotActivation, StoredActivationMismatchPreservesAut
                 target->configure_instance_spot_operations (
                   store, relocations, [owner] { return owner; },
                   host::instance_spot_activation_materializer_t{
-                    [&] (const auto &, const auto &) {
+                    [&] (const auto &, const auto &, auto &) {
                         ++factories;
                         return true;
                     },
-                    [] (auto, auto, auto) -> fw::task_t<host::instance_spot_activation_result_t> {
+                    [] (auto, auto) -> fw::task_t<host::instance_spot_activation_result_t> {
                         co_return host::instance_spot_activation_result_t{};
                     }});
                 target->start ();
@@ -2336,11 +2336,11 @@ TEST (CppFrameworkInstanceSpotActivation, StartupReleasesPreviousLifecycleBefore
     target->configure_instance_spot_operations (
       store, roots, [owner] { return owner; },
       host::instance_spot_activation_materializer_t{
-        [] (const auto &, const auto &) {
+        [] (const auto &, const auto &, auto &) {
             ADD_FAILURE () << "Old lifecycle must not prepare";
             return false;
         },
-        [] (auto, auto, auto) -> fw::task_t<host::instance_spot_activation_result_t> {
+        [] (auto, auto) -> fw::task_t<host::instance_spot_activation_result_t> {
             ADD_FAILURE () << "Old lifecycle must not activate";
             co_return host::instance_spot_activation_result_t{};
         }});
@@ -2454,7 +2454,7 @@ static void verify_ready_recovery_root_deletion (bool local_available)
     target->configure_instance_spot_operations (
       store, relocations, [owner] { return owner; },
       host::instance_spot_activation_materializer_t{
-        [&] (const auto &request, const auto &snapshot) {
+        [&] (const auto &request, const auto &snapshot, auto &) {
             const auto created = local_spots->get_or_create_spot (
               request.target.stable_type, fw::spot_id_t (request.target.spot_id),
               zlink::message_t{}, snapshot.object_generation, request.target.mesh_name,
@@ -2462,7 +2462,7 @@ static void verify_ready_recovery_root_deletion (bool local_available)
             return created.state == fw::spot_create_state_t::created
                    || created.state == fw::spot_create_state_t::existing;
         },
-        [&] (auto command, auto, auto) -> fw::task_t<host::instance_spot_activation_result_t> {
+        [&] (auto command, auto) -> fw::task_t<host::instance_spot_activation_result_t> {
             ++entered;
             if (command->activation.operation.low == 1)
                 co_return co_await first_handler.task ();

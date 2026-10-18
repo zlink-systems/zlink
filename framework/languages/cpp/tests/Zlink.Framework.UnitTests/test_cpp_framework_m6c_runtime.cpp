@@ -2631,10 +2631,27 @@ void test_spot_restore_stages_before_publication (test_context_t &test)
                     && fail_first_restore_spot_t::factory_count == 2
                     && fail_first_restore_spot_t::restore_count == 2
                     && fail_first_restore_spot_t::create_count == 0
-                    && fail_first_restore_spot_t::initialize_count == 1
+                    && fail_first_restore_spot_t::initialize_count == 0
                     && fail_first_restore_spot_t::restored_payload
                          == std::vector<std::byte>{std::byte{0xca}, std::byte{0xfe}},
-                  "restore retry must use a fresh instance and publish only after success");
+                  "restore retry must retain a fresh uninitialized target before authority commit");
+    test.require (runtime.commit_relocation_materialization ({target})
+                    && fail_first_restore_spot_t::initialize_count == 1,
+                  "confirmed target commit must initialize the restored incarnation once");
+    if (runtime.find_spot (zlink::framework::spot_id_t ("staged-spot"))) {
+        const auto owner = runtime.weak_state ().lock ();
+        const auto context = owner->lane
+                               .run ([owner] {
+                                   return zlink::framework::detail::spot_context_access_t::state (
+                                     owner->spot_contexts_by_id.at ("staged-spot"));
+                               })
+                               .get ();
+        context
+          ->run_serial_task ("after-restored-target-commit",
+                             [] () -> zlink::framework::task_t<void> { co_return; })
+          .result ()
+          .value ();
+    }
     runtime.request_stop ();
     runtime.cancel_pending_dispatch ();
     runtime.cancel_pending_work ();
@@ -5959,6 +5976,7 @@ void test_application_user_spot_aggregate_remote_production_path (test_context_t
     namespace detail = zlink::framework::detail;
     namespace framework = zlink::framework;
 
+    framework::serializer_registry_t source_serializers;
     const auto core_context = std::make_shared<zlink::context_t> ();
     const auto make_state = [core_context] (const std::string &rid) {
         auto state = zlink::framework::test::runtime_failure_fixture<
@@ -6077,23 +6095,17 @@ void test_application_user_spot_aggregate_remote_production_path (test_context_t
     detail::spot_node_runtime_t source_spots (source_state->spot_state);
     const auto source_native_node = source_state->spot_state->native_node.lock ();
     source_state->spot_state->native_node.reset ();
-    const frozen_object_state_t source_application_spot{
-      .owner = {.kind = object_kind_t::user_spot,
-                .key = "production-aggregate-spot",
-                .object_generation = 1,
-                .authority_owner_generation = 1,
-                .mesh_name = "production-aggregate-mesh",
-                .node_id = source.status ().routing_id ().to_string ()},
-      .stable_type = "production.aggregate.spot",
-      .application_state = {19},
-      .pending_application = {},
-      .timers = {}};
-    const auto application_spot = source_spots.restore_spot_relocation_state (
-      source_application_spot, source_application_spot.owner);
+    // The source is already Ready; target restore remains staged until commit.
+    source_state->spot_state->channel_runtime =
+      zlink::framework::test::runtime_failure_fixture<detail::channel_runtime_state_t> ();
+    source_state->spot_state->channel_runtime->serializers = &source_serializers;
+    const auto application_spot = source_spots.get_or_create_spot (
+      "production.aggregate.spot", framework::spot_id_t ("production-aggregate-spot"), {}, 1,
+      "production-aggregate-mesh", 1);
     source_state->spot_state->native_node = source_native_node;
-    test.require (application_spot,
+    test.require (application_spot.state == framework::spot_create_state_t::created,
                   "production aggregate source Spot application must be materialized");
-    if (!application_spot) {
+    if (application_spot.state != framework::spot_create_state_t::created) {
         source.stop ();
         target.stop ();
         return;
@@ -7899,6 +7911,14 @@ int main (int argc, char **argv)
         }
     } executor_shutdown;
     test_context_t test;
+    if (argc == 2 && std::string_view (argv[1]) == "--spot-restore-staging") {
+        test_spot_restore_stages_before_publication (test);
+        return test.failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+    if (argc == 2 && std::string_view (argv[1]) == "--aggregate-source") {
+        test_application_user_spot_aggregate_remote_production_path (test);
+        return test.failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
     if (argc == 2 && std::string_view (argv[1]) == "--route-command44-order") {
         test_application_relocation_remote_production_path (test, false, false, false, true);
         return test.failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;

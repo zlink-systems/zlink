@@ -5,7 +5,7 @@ export interface ZLinkLocalSpotCreateResult {
   readonly state: ZLinkSpotCreateState;
   readonly reply?: unknown;
   readonly publication?: {
-    publish(): void;
-    abort(): void;
+    publish(): void | Promise<void>;
+    abort(): void | Promise<void>;
   };
 }

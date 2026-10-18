@@ -247,6 +247,7 @@ export interface ServiceInstanceApplicationLifecycle {
   isIdleEvicting?(target: ServiceInstanceApplicationIdentity): boolean;
   beginIdleEviction?(target: ServiceInstanceApplicationIdentity): boolean;
   materialize(target: ServiceInstanceApplicationIdentity, objectGeneration: bigint): Promise<void>;
+  publish?(target: ServiceInstanceApplicationTarget): void;
   discard(target: ServiceInstanceActivationTarget): Promise<void>;
   beginTerminal(target: ServiceInstanceApplicationTarget): void;
   completeTerminal(target: ServiceInstanceApplicationTarget): Promise<boolean>;
@@ -2581,6 +2582,7 @@ export class ServiceStatefulRuntime {
         latestRoute !== undefined && sameInstanceApplicationOwner(latestRoute, record.route)
           ? { ...record, route: latestRoute }
           : record;
+      this.publishCommittedInstanceRoute(intent.instanceType, refreshedRecord.route);
       const spot = this.requireInstanceActivation(ingress, refreshedRecord);
       const admitted = this.enqueueActivatedInstanceSpot(
         ingress,
@@ -3232,8 +3234,6 @@ export class ServiceStatefulRuntime {
       if (activation.created) this.registry.closeSpot(activation.spot.ref);
       throw new ServiceStaleGenerationError('spot', target.targetSpotId);
     }
-    this.publishCommittedInstanceRoute(target.stableType, route);
-
     const confirmed = await authority.read(target);
     if (confirmed.kind !== 'ready' || !sameInstanceRoute(confirmed.route, route)) {
       if (confirmed.kind === 'ready' && confirmed.route.targetNodeRid !== this.nodeRid) {
@@ -3248,6 +3248,7 @@ export class ServiceStatefulRuntime {
     ) {
       throw new ServiceStaleGenerationError('spot', target.targetSpotId);
     }
+    this.publishCommittedInstanceRoute(target.stableType, confirmed.route);
     return { spot: current, route: confirmed.route };
   }
 
@@ -3265,6 +3266,9 @@ export class ServiceStatefulRuntime {
           : instanceRouteAsDirectRoute(expectedCurrentRoute);
     this.rememberSpotRoute(directRoute, expectedDirectRoute);
     this.registerInstanceIntent(stableType, route, expectedCurrentRoute);
+    const target = this.instanceSpotApplicationTarget(route.targetSpotId);
+    if (target !== undefined)
+      this.instanceApplicationLifecycle?.publish?.({ targetSpotId: route.targetSpotId, ...target });
   }
 
   private replaceCommittedInstanceRoute(
