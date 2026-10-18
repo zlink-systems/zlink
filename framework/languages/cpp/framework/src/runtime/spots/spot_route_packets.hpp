@@ -160,21 +160,6 @@ struct spot_actor_packet_route_reply_t
     std::vector<std::uint8_t> payload;
 };
 
-struct spot_actor_disconnect_route_request_t
-{
-    static constexpr const char *packet_name = "__zlink.spot.actor.disconnect";
-
-    std::string actor_node_rid;
-    std::string actor_type;
-    std::string actor_id;
-    std::uint64_t actor_generation = 0;
-};
-
-struct spot_actor_disconnect_route_reply_t
-{
-    bool accepted = true;
-};
-
 struct actor_bound_session_route_request_t
 {
     static constexpr const char *packet_name = "__zlink.actor.boundSession.send";
@@ -223,10 +208,6 @@ void to_json (nlohmann::json &json, const spot_actor_packet_route_request_t &val
 void from_json (const nlohmann::json &json, spot_actor_packet_route_request_t &value);
 void to_json (nlohmann::json &json, const spot_actor_packet_route_reply_t &value);
 void from_json (const nlohmann::json &json, spot_actor_packet_route_reply_t &value);
-void to_json (nlohmann::json &json, const spot_actor_disconnect_route_request_t &value);
-void from_json (const nlohmann::json &json, spot_actor_disconnect_route_request_t &value);
-void to_json (nlohmann::json &json, const spot_actor_disconnect_route_reply_t &value);
-void from_json (const nlohmann::json &json, spot_actor_disconnect_route_reply_t &value);
 void to_json (nlohmann::json &json, const actor_bound_session_route_request_t &value);
 void from_json (const nlohmann::json &json, actor_bound_session_route_request_t &value);
 void to_json (nlohmann::json &json, const actor_bound_session_bind_route_request_t &value);
@@ -254,11 +235,6 @@ spot_actor_packet_route_request_t make_spot_actor_packet_route_request (
   std::optional<runtime::protocol::actor_route_fence_t> target_fence = std::nullopt);
 
 actor_ref_t actor_ref_from_spot_route (const spot_actor_packet_route_request_t &request);
-
-spot_actor_disconnect_route_request_t
-make_spot_actor_disconnect_route_request (const actor_ref_t &actor_ref);
-
-actor_ref_t actor_ref_from_spot_route (const spot_actor_disconnect_route_request_t &request);
 
 actor_bound_session_route_request_t
 make_actor_bound_session_route_request (const actor_ref_t &actor_ref,

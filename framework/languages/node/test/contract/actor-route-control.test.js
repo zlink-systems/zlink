@@ -12,6 +12,9 @@ const {
 const {
   ZLinkActorPacketRelay
 } = require('../../packages/framework/dist/runtime/host/actor-packet-relay');
+const {
+  ZLinkManagedStream
+} = require('../../packages/framework/dist/runtime/streams/managed-stream');
 
 for (const physical of [false, true]) {
   test(`disconnect uses the committed binding route after replacement (physical=${physical})`, async () => {
@@ -23,9 +26,16 @@ for (const physical of [false, true]) {
       meshName: 'mesh'
     };
     const actor = new DefaultZLinkSessionActor({}, oldRef, 'binding');
+    const binding = {
+      sessionOwnerNodeRid: 'session-owner',
+      sessionOwnerNodeGeneration: 11n,
+      bindingGeneration: 7n
+    };
+    const stream = new ZLinkManagedStream({ async unbindActor() {} }, 'session');
+    stream.actorBinding = () => binding;
     const context = {
       boundActors: [actor],
-      stream: {},
+      stream,
       bindLocal() {},
       unbindLocal() {}
     };
@@ -59,7 +69,12 @@ for (const physical of [false, true]) {
         })
       }),
       spotNodeRuntime: () => ({
-        primaryMeshNode: { status: () => ({ routingId: 'session-owner' }) }
+        primaryMeshNode: {
+          status: () => ({
+            routingId: binding.sessionOwnerNodeRid,
+            lifecycleGeneration: binding.sessionOwnerNodeGeneration
+          })
+        }
       }),
       routeTransport: {
         async request(_channel, node) {
@@ -74,8 +89,8 @@ for (const physical of [false, true]) {
       registry,
       {},
       {
-        notifyDisconnected: (selected, signal) =>
-          relay.notifyBoundActorDisconnected(selected, signal)
+        notifyDisconnected: (selected, signal, snapshot) =>
+          relay.notifyBoundActorDisconnected(selected, signal, snapshot)
       }
     );
     if (physical) {

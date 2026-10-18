@@ -429,7 +429,7 @@ class mesh_node_runtime_t
                                              const runtime::spot_address_t &stale_route,
                                              std::chrono::milliseconds timeout) const;
     task_t<void> notify_application_actor_disconnected (const actor_ref_t &actor,
-                                                        const node_rid_t &target_node,
+                                                        runtime::stateful::stream_binding_t binding,
                                                         std::chrono::milliseconds timeout);
     result_t<operation_completion_t>
     wait_for_completion (const host::pending_operation_t &operation,

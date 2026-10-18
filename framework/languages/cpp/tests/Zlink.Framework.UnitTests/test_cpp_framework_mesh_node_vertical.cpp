@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+#include "../support/session_disconnect_probe_spot.hpp"
 #include "../support/runtime_failure_fixture.hpp"
 
 #include "runtime/mesh/mesh_node_runtime.hpp"
@@ -570,7 +571,6 @@ void verify_route_internal_packets_precede_application_dispatch ()
     context->mesh_name = "vertical-mesh";
     context->spot_id = spot_id_t ("internal-route-spot");
     context->spot_name = "internal-route-spot";
-    context->spot_instance = std::make_shared<int> (1);
     context->serial_executor = worker;
 
     auto application_jobs = std::make_shared<runtime::application_job_queue_t> (
@@ -608,7 +608,8 @@ void verify_route_internal_packets_precede_application_dispatch ()
         disconnect_called.store (true, std::memory_order_release);
         co_return;
     };
-    context->actor_admissions.emplace (std::type_index (typeid (int)), std::move (actor_callbacks));
+    test::register_session_disconnect_probe (context,
+                                             std::move (actor_callbacks.on_disconnect_actor));
     registration->spot_state->spot_contexts_by_id.emplace (context->spot_id,
                                                            spot_context_access_t::create (context));
 
@@ -624,6 +625,9 @@ void verify_route_internal_packets_precede_application_dispatch ()
     registration->spot_state->actor_spot_ids.emplace ("vertical.actor:internal-route-actor",
                                                       context->spot_id);
     registration->spot_state->actor_generations.emplace ("vertical.actor:internal-route-actor", 1);
+    record_actor_instance_index_unlocked (
+      *registration->spot_state, actor,
+      registration->spot_state->actor_instances.at ("vertical.actor:internal-route-actor").get ());
 
     serializer_registry_t serializers;
     service_collection_t services;
@@ -636,6 +640,7 @@ void verify_route_internal_packets_precede_application_dispatch ()
       std::make_unique<runtime::location_runtime_t> (location_store));
     register_mesh_location_resolvers (services);
     auto provider = services.build_provider ();
+    auto &actor_gateway = provider.get_required<actor_gateway_runtime_t> ();
     auto &location_runtime = provider.get_required<runtime::location_runtime_t> ();
     location_runtime.start (*registration->routing_id);
     runtime::mesh_node_host_service_t service (
@@ -688,11 +693,16 @@ void verify_route_internal_packets_precede_application_dispatch ()
     assert (multicast_future.get () == "multicast-through-host");
 
     messaging::client_call_codec_t route_codec;
-    auto disconnect_header =
-      route_codec.create_envelope (messaging::message_kind_t::request, "work",
-                                   spot_actor_disconnect_route_request_t::packet_name);
+    auto disconnect_header = route_codec.create_envelope (
+      messaging::message_kind_t::request, "work", spot_actor_packet_route_request_t::packet_name);
     auto disconnect_parts = route_codec.encode_envelope_parts (
-      disconnect_header, make_spot_actor_disconnect_route_request (actor), serializers);
+      disconnect_header,
+      make_spot_actor_packet_route_request (
+        actor, context->spot_id, runtime::protocol::session_disconnected_packet_name,
+        zlink::message_t::from (runtime::protocol::encode_session_disconnected (
+          {zlink::routing_id_t::from ("session-owner").to_bytes (), 2, 7})),
+        {}),
+      serializers);
     auto disconnect_reply = std::make_shared<std::promise<std::vector<zlink::message_t>>> ();
     auto disconnect_reply_future = disconnect_reply->get_future ();
     host::ready_record_t node_owner;
@@ -706,15 +716,19 @@ void verify_route_internal_packets_precede_application_dispatch ()
           disconnect_reply->set_value (parts);
           return true;
       };
+    const auto binding_before = actor_gateway.bound_session_route_async (actor).result ();
+    assert (binding_before && !binding_before.value ());
     enqueue_application_route (node, std::move (node_owner), std::move (node_record),
                                std::move (disconnect_parts).take_items ());
     assert (disconnect_reply_future.wait_for (1s) == std::future_status::ready);
     auto reply_parts = messaging::message_parts_t (disconnect_reply_future.get ());
-    const auto reply = route_codec.decode_envelope_reply<spot_actor_disconnect_route_reply_t> (
+    const auto reply = route_codec.decode_envelope_reply<spot_actor_packet_route_reply_t> (
       reply_parts, serializers, "disconnect reply is empty", "disconnect reply is invalid",
       "actor disconnect");
-    assert (reply && reply.value ().accepted);
+    assert (reply && reply.value ().has_reply && reply.value ().payload.empty ());
     assert (disconnect_called.load (std::memory_order_acquire));
+    const auto binding_after = actor_gateway.bound_session_route_async (actor).result ();
+    assert (binding_after && !binding_after.value ());
     assert (service.wait_for_accepted_callbacks_until (std::chrono::steady_clock::now () + 1s));
 
     service.stop ();

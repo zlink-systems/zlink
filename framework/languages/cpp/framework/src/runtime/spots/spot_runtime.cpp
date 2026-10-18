@@ -3037,9 +3037,7 @@ void spot_context_state_t::run_serial_task_async (
     const auto current_turn = detail::capture_current_serial_turn ();
     const bool released_current_turn =
       queue && current_turn && current_turn->released () && current_turn->belongs_to (queue.get ());
-    const bool run_inline =
-      !queue
-      || (!released_current_turn && (is_current_callback_thread () || owns_current_serial_turn ()));
+    const bool run_inline = !queue || (!released_current_turn && owns_current_serial_turn ());
     if (run_inline) {
         owner_reservation.settle ();
         try {
@@ -4457,7 +4455,25 @@ spot_handler_registry_t &spot_handler_registry_t::add_handler_erased (spot_handl
 void spot_handler_registry_t::register_actor_admission_erased (
   std::type_index actor_type, detail::spot_actor_admission_callbacks_t callbacks)
 {
+    const bool registered = _state->actor_admissions.contains (actor_type);
     _state->actor_admissions[actor_type] = std::move (callbacks);
+    if (!registered) {
+        const auto owner = std::weak_ptr<detail::spot_node_builder_state_t> (_state->node);
+        for (const auto kind :
+             {spot_handler_kind_t::actor_request, spot_handler_kind_t::actor_send})
+            add_handler_erased (
+              kind, runtime::protocol::session_disconnected_packet_name, {},
+              std::type_index (typeid (void)), std::type_index (typeid (zlink::message_t)),
+              actor_type, std::type_index (typeid (zlink::message_t)),
+              [owner, actor_type] (void *, void *actor, service_provider_t &services,
+                                   serializer_registry_t &, const zlink::message_t &body,
+                                   const spot_inbound_message_t &) {
+                  return detail::spot_node_runtime_t (owner.lock ())
+                    .notify_actor_disconnected_erased (
+                      actor, actor_type, services.get_required<detail::actor_gateway_runtime_t> (),
+                      body);
+              });
+    }
 }
 
 std::vector<spot_handler_descriptor_t> spot_handler_registry_t::descriptors () const
@@ -12816,127 +12832,96 @@ task_t<std::optional<zlink::message_t>> spot_node_runtime_t::relay_actor_packet 
     co_return result_t<std::optional<zlink::message_t>>::success (std::move (reply));
 }
 
-task_t<void>
-spot_node_runtime_t::notify_actor_disconnected_erased (const actor_ref_t &actor_ref) const
+task_t<zlink::message_t>
+spot_node_runtime_t::notify_actor_disconnected_erased (void *instance,
+                                                       std::type_index actor_type,
+                                                       actor_gateway_runtime_t gateway,
+                                                       zlink::message_t body) const
 {
-    if (::zlink::framework::detail::actor_ref_access_t::empty (actor_ref)) {
-        return task_t<void> (
-          result_t<void>::failure (framework_error_kind_t::not_found, "actor ref is empty"));
-    }
-
-    const auto key = actor_key (actor_ref);
+    const auto state_owner = _state;
     struct disconnect_plan_t
     {
+        actor_ref_t actor;
         std::shared_ptr<spot_context_state_t> context_state;
         std::shared_ptr<void> spot_instance;
         std::shared_ptr<void> actor_instance;
         std::function<task_t<void> (void *, void *)> disconnect_callback;
-        std::shared_ptr<spot_serial_executor_t> executor;
     };
+    // Resolve the invoked instance through the existing node index. Ordinary
+    // ingress, saved-work replay and direct handler invocation share this owner.
     auto planned =
-      _state->lane
-        .run ([&] () -> result_t<std::optional<disconnect_plan_t>> {
-            const auto found_generation = _state->actor_generations.find (key);
-            if (found_generation != _state->actor_generations.end ()
-                && found_generation->second != actor_ref.object_generation ()) {
-                return detail::boundary_failure<std::optional<disconnect_plan_t>> (
-                  detail::boundary_error_t::stale_generation, "actor generation is stale");
-            }
-
-            const auto found_location = _state->actor_spot_ids.find (key);
-            if (found_location == _state->actor_spot_ids.end ())
-                return result_t<std::optional<disconnect_plan_t>>::success (std::nullopt);
-            const auto context =
-              _state->spot_contexts_by_id.find (std::string (found_location->second));
-            if (context == _state->spot_contexts_by_id.end () || !context->second._state
-                || !context->second._state->spot_instance) {
-                return result_t<std::optional<disconnect_plan_t>>::success (std::nullopt);
-            }
-
-            const auto actor_type_key =
-              std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (actor_ref));
-            const auto actor_factory = _state->actor_factories.find (actor_type_key);
-            if (actor_factory == _state->actor_factories.end ()) {
-                return result_t<std::optional<disconnect_plan_t>>::failure (
-                  framework_error_kind_t::not_found, "actor factory is not registered");
-            }
-            const auto actor = _state->actor_instances.find (key);
-            if (actor == _state->actor_instances.end () || !actor->second)
-                return result_t<std::optional<disconnect_plan_t>>::success (std::nullopt);
-
-            const auto context_state = context->second._state;
-            const auto admission =
-              context_state->actor_admissions.find (actor_factory->second.actor_type);
-            if (admission == context_state->actor_admissions.end ()
-                || !admission->second.on_disconnect_actor) {
-                return result_t<std::optional<disconnect_plan_t>>::success (std::nullopt);
-            }
-
-            disconnect_plan_t plan;
-            plan.context_state = context_state;
-            plan.spot_instance = context_state->spot_instance;
-            plan.actor_instance = actor->second;
-            plan.disconnect_callback = admission->second.on_disconnect_actor;
-            plan.executor = context_state->ensure_spot_serial_executor ();
-            if (!plan.executor)
-                return result_t<std::optional<disconnect_plan_t>>::success (std::nullopt);
-            return result_t<std::optional<disconnect_plan_t>>::success (
-              std::make_optional (std::move (plan)));
-        })
-        .get ();
-    if (!planned) {
-        return task_t<void> (
-          detail::propagate_failure<void> (planned, "actor disconnect state admission failed"));
-    }
-    if (!planned.value ())
-        return task_t<void> (result_t<void>::success ());
-    auto plan = std::move (*planned.value ());
-
-    // Spec 20: Session cleanup submits the exact disconnect notification to
-    // the Actor FIFO, and that turn enters the current Spot lifecycle lane.
-    // Neither queue is dispatched or waited while the node state lane owns a turn.
-    if (runtime::current_actor_execution.actor_key == key) {
-        return plan.context_state->run_serial_task (
-          "spot-lifecycle-disconnect",
-          [context_state = plan.context_state, spot_instance = plan.spot_instance,
-           actor_instance = plan.actor_instance, disconnect_callback = plan.disconnect_callback] {
-              return disconnect_callback (spot_instance.get (), actor_instance.get ());
-          });
-    }
-    auto completion = std::make_shared<task_completion_source_t<void>> ();
-    auto result = completion->task ();
-    const auto posted = plan.executor->execute_actor (
-      key, "actor-disconnected",
-      [key, context_state = std::move (plan.context_state),
-       spot_instance = std::move (plan.spot_instance),
-       actor_instance = std::move (plan.actor_instance),
-       disconnect_callback = std::move (plan.disconnect_callback),
-       completion] (auto actor_complete) mutable {
-          context_state->run_serial_task_async (
-            "spot-lifecycle-disconnect",
-            [key, context_state, spot_instance, actor_instance, disconnect_callback] {
-                runtime::actor_execution_scope_t actor_execution (
-                  key, std::string (context_state->spot_id));
-                return disconnect_callback (spot_instance.get (), actor_instance.get ());
-            },
-            [actor_complete = std::move (actor_complete),
-             completion] (result_t<void> callback_result) mutable {
-                actor_complete (
-                  [completion, callback_result = std::move (callback_result)] () mutable {
-                      completion->complete (std::move (callback_result));
-                  });
-            });
-      },
-      runtime::serial_work_options_t{runtime::serial_work_lane_t::application}, false,
-      [completion] () mutable {
-          completion->complete (result_t<void>::failure (
-            framework_error_kind_t::shutting_down, "Spot disconnect queue is closed or stopping"));
+      co_await state_owner->lane.run_task ([&] () -> result_t<std::optional<disconnect_plan_t>> {
+          const auto indexed = state_owner->actor_instance_index.find (instance);
+          if (indexed == state_owner->actor_instance_index.end ())
+              return result_t<std::optional<disconnect_plan_t>>::failure (
+                framework_error_kind_t::not_found, "actor instance is not registered");
+          const auto key = indexed->second.first + ":" + indexed->second.second;
+          const auto actor = state_owner->actor_instances.find (key);
+          const auto generation = state_owner->actor_generations.find (key);
+          if (actor == state_owner->actor_instances.end () || actor->second.get () != instance
+              || generation == state_owner->actor_generations.end ())
+              return result_t<std::optional<disconnect_plan_t>>::failure (
+                framework_error_kind_t::not_found, "actor instance is not registered");
+          const auto location = state_owner->actor_spot_ids.find (key);
+          if (location == state_owner->actor_spot_ids.end ())
+              return result_t<std::optional<disconnect_plan_t>>::success (std::nullopt);
+          const auto context =
+            state_owner->spot_contexts_by_id.find (std::string (location->second));
+          if (context == state_owner->spot_contexts_by_id.end () || !context->second._state
+              || !context->second._state->spot_instance)
+              return result_t<std::optional<disconnect_plan_t>>::success (std::nullopt);
+          const auto context_state = context->second._state;
+          const auto admission = context_state->actor_admissions.find (actor_type);
+          if (admission == context_state->actor_admissions.end ()
+              || !admission->second.on_disconnect_actor)
+              return result_t<std::optional<disconnect_plan_t>>::success (std::nullopt);
+          return result_t<std::optional<disconnect_plan_t>>::success (disconnect_plan_t{
+            actor_ref_access_t::make (context_state->node_rid, indexed->second.first,
+                                      indexed->second.second, generation->second),
+            context_state, context_state->spot_instance, actor->second,
+            admission->second.on_disconnect_actor});
       });
-    if (!posted) {
-        return task_t<void> (result_t<void>::failure (
-          framework_error_kind_t::shutting_down, "Actor disconnect queue is closed or stopping"));
+    if (!planned)
+        co_return detail::propagate_failure<zlink::message_t> (
+          planned, "actor disconnect state admission failed");
+    if (!planned.value ())
+        co_return zlink::message_t{};
+    auto plan = std::move (*planned.value ());
+    runtime::protocol::session_disconnected_identity_t identity;
+    try {
+        identity = runtime::protocol::decode_session_disconnected (body.to_bytes ());
     }
-    return result;
+    catch (const runtime::protocol::service_wire_error_t &error) {
+        detail::dispatch_error_reporter_t (state_owner->dispatch).report_lazy ([&] {
+            return message_dispatch_error_event_t{
+              .surface = dispatch_error_surface_t::spot_actor,
+              // This notification is dropped with a successful reply (binding §7).
+              .message_kind = dispatch_message_kind_t::actor_send,
+              .reason = dispatch_error_reason_t::invalid_frame,
+              .action = dispatch_error_action_t::drop,
+              .packet_name = runtime::protocol::session_disconnected_packet_name,
+              .actor_id = std::string (plan.actor.actor_id ().value ()),
+              .exception = std::make_exception_ptr (
+                framework_exception_t (framework_error_kind_t::protocol_error, error.what ()))};
+        });
+        co_return zlink::message_t{};
+    }
+    const auto current = co_await gateway.bound_session_route_async (plan.actor);
+    if (current
+        && (current->node_rid.to_bytes () != identity.session_owner_node_rid
+            || current->node_generation != identity.session_owner_node_generation
+            || current->binding_generation != identity.binding_generation))
+        co_return zlink::message_t{};
+    const auto key = actor_key (plan.actor);
+    co_await plan.context_state->run_serial_task (
+      "spot-lifecycle-disconnect",
+      [key, context_state = plan.context_state, spot_instance = plan.spot_instance,
+       actor_instance = plan.actor_instance, disconnect_callback = plan.disconnect_callback] {
+          runtime::actor_execution_scope_t actor_execution (key,
+                                                            std::string (context_state->spot_id));
+          return disconnect_callback (spot_instance.get (), actor_instance.get ());
+      });
+    co_return zlink::message_t{};
 }
 
 spot_node_runtime_t spot_node_runtime_t::from (const spot_node_builder_t &builder)

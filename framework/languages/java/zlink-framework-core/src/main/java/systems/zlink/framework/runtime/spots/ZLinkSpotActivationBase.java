@@ -245,8 +245,7 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> {
                                     headerPart.actor().actorId(),
                                     new ZLinkConfigurationException(
                                             "SPOT actor is not registered locally: "
-                                                    + headerPart.actor().actorId()),
-                                    "actor missing error reply failed");
+                                                    + headerPart.actor().actorId()));
                         } else {
                             host.closePendingActorHeader(headerPart, pendingHeader);
                         }

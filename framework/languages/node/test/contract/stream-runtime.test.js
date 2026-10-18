@@ -2075,16 +2075,17 @@ test('runtime host bound session disconnect uses routed Session target before na
             remoteBoundSessionTarget: {
               routerChannelId: 'room.route',
               targetNodeRid: sessionNodeRid,
-              spotId: sessionSpotId
+              spotId: sessionSpotId,
+              sessionNodeRid,
+              sessionOwnerNodeGeneration: 2n,
+              bindingGeneration: 7n
             }
           }
         : undefined;
     }
   });
 
-  host.createActorManagerOptions()
-    .boundSessionFactory(actorRef.actorId)
-    .disconnect();
+  await host.createActorManagerOptions().boundSessionFactory(actorRef.actorId).disconnect();
 
   assert.equal(nativeDisconnects.length, 0);
   assert.equal(routeCalls.length, 1);
@@ -2092,7 +2093,9 @@ test('runtime host bound session disconnect uses routed Session target before na
   assert.equal(String(routeCalls[0].targetNodeRid), 'session-node');
   assert.equal(String(routeCalls[0].spotId), 'session-entry');
   assert.equal(routeCalls[0].packetName, '__zlink.actor.packet.relay');
-  const header = streamProtocol.decodeStreamHeader(Buffer.from(routeCalls[0].message.header, 'base64'));
+  const header = streamProtocol.decodeStreamHeader(
+    Buffer.from(routeCalls[0].message.header, 'base64')
+  );
   assert.equal(header.name, 'zlink.framework.actor.session_disconnected');
   assert.equal(header.kind, streamProtocol.ZLinkStreamMessageKind.Send);
   assert.equal(header.codec, streamProtocol.ZLinkStreamCodec.Raw);
@@ -7542,13 +7545,18 @@ test('runtime host awaits routed actor disconnect notification before session cl
   };
 
   let disconnectCompleted = false;
-  const disconnecting = runtime.boundSessionRelay.actorPackets.notifyRemoteActorDisconnected('actor-disconnect-await', {
-    routerChannelId: 'spot.service',
-    targetNodeRid: 'play-node',
-    spotId: 'play-node'
-  }).then(() => {
-    disconnectCompleted = true;
-  });
+  const disconnecting = runtime.boundSessionRelay.actorPackets
+    .notifyRemoteActorDisconnected('actor-disconnect-await', {
+      routerChannelId: 'spot.service',
+      targetNodeRid: 'play-node',
+      spotId: 'play-node',
+      sessionNodeRid: 'node-a',
+      sessionOwnerNodeGeneration: 2n,
+      bindingGeneration: 7n
+    })
+    .then(() => {
+      disconnectCompleted = true;
+    });
   await new Promise((resolve) => setImmediate(resolve));
 
   assert.equal(sendStarted, true);
