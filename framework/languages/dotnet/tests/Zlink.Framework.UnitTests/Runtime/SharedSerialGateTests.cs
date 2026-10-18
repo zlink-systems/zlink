@@ -599,6 +599,65 @@ public sealed class SharedSerialGateTests
         }
     }
 
+    [Fact]
+    public async Task ScheduledStandaloneDrainCannotClaimAfterIngressPromotion()
+    {
+        using var errors = new ZLinkRuntimeErrorSink();
+        var runner = new ZLinkRuntimeTaskRunner(errors, CancellationToken.None);
+        await using var owner = new ZLinkSerialExecutionQueue(
+            runner,
+            errors,
+            CancellationToken.None,
+            ZLinkExecutionLanePolicy.Default,
+            sharedGate: true
+        );
+        await using var mailbox = new ZLinkSerialExecutionQueue(
+            runner,
+            errors,
+            CancellationToken.None
+        );
+        var ownerEntered = Signal();
+        var releaseOwner = Signal();
+        var blocker = owner
+            .RunAsync(
+                async _ =>
+                {
+                    ownerEntered.TrySetResult();
+                    await releaseOwner.Task;
+                },
+                CancellationToken.None
+            )
+            .AsTask();
+        await ownerEntered.Task.WaitAsync(CompletionTimeout);
+        mailbox.BindExecutionOwner(() => owner);
+        var executions = 0;
+        var lifecycle = mailbox
+            .RunLifecycleAsync(
+                _ =>
+                {
+                    Interlocked.Increment(ref executions);
+                    return ValueTask.CompletedTask;
+                },
+                CancellationToken.None,
+                out var scheduledDrain
+            )
+            .AsTask();
+        try
+        {
+            // Retain the standalone callback across promotion, as a previously
+            // scheduled drain does. The shared owner is still occupied.
+            await scheduledDrain!(CancellationToken.None);
+            await scheduledDrain(CancellationToken.None);
+            Assert.Equal(0, Volatile.Read(ref executions));
+        }
+        finally
+        {
+            releaseOwner.TrySetResult();
+            await Task.WhenAll(blocker, lifecycle).WaitAsync(CompletionTimeout);
+        }
+        Assert.Equal(1, Volatile.Read(ref executions));
+    }
+
     private static TaskCompletionSource Signal() =>
         new(TaskCreationOptions.RunContinuationsAsynchronously);
 }

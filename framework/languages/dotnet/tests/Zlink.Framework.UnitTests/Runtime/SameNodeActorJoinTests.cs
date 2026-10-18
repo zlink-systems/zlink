@@ -2,6 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Zlink.Framework.Contracts.Messaging;
 using Zlink.Framework.LocationProvider;
 using Zlink.Framework.Runtime.Actors;
+using Zlink.Framework.Runtime.Diagnostics;
 using Zlink.Framework.Runtime.Dispatch;
 using Zlink.Framework.Runtime.Locations;
 using Zlink.Framework.Runtime.Spots;
@@ -21,9 +22,16 @@ public sealed partial class EntrySpotActorDispatchTests
     )
     {
         var observationTimeout = TimeSpan.FromSeconds(5);
+        using var flowListener = Environment.GetEnvironmentVariable("ZLINK_TEST_FLOW_DIRECTORY")
+            is { } flowDirectory
+            ? new TestHostMessageFlowListener(
+                Path.Combine(flowDirectory, $"deferred-join-{Guid.NewGuid():N}.flow")
+            )
+            : null;
         var node = new CapturingSpotNode();
         var (runtime, actorRef) = await CreateStartedRuntimeAsync(
             node,
+            messageFlowMode: ZLinkDiagnosticsLevel.Normal,
             userSpotType: typeof(DurableJoinSpot),
             userSpotExecutionMode: executionMode
         );

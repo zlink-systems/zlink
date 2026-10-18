@@ -1562,7 +1562,9 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
             var sliceStartedAt = Stopwatch.GetTimestamp();
             while (true)
             {
-                if (RedirectIdleMailbox())
+                // A standalone drain captured before promotion can start after
+                // the shared owner has already taken over this mailbox.
+                if (RedirectIdleMailbox() || _sharedOwner is not null)
                 {
                     GateOperation?.Invoke(ZLinkSerialGateOperation.ConsumerTransfer);
                     break;
