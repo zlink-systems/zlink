@@ -16,6 +16,7 @@
 #include "runtime/backend/raw_binding_adapter.hpp"
 #include <array>
 #include "runtime/messaging/envelope_codec.hpp"
+#include "runtime/execution/task_result.hpp"
 #include "runtime/spots/spot_runtime.hpp"
 #include <zlink/stream_connector.hpp>
 #include <gtest/gtest.h>
@@ -1168,7 +1169,6 @@ void local_join_backlog (backlog_case_t scenario)
     evidence.joined_payloads =
       scenario == backlog_case_t::replay_failure ? std::vector<int>{-1} : std::vector<int>{1, 2};
     evidence.fail_completion = scenario == backlog_case_t::completion_failure;
-    evidence.hold_replay_prefix = scenario == backlog_case_t::ordinary_order;
     observations = &evidence;
     host_t host;
     release_callbacks_t release{evidence};
@@ -1187,6 +1187,11 @@ void local_join_backlog (backlog_case_t scenario)
                    .get_or_create (fw::actor_id_t (actor_id), actor_type)
                    .async ()
                    .result ());
+    const auto ingress_ready = client.request (fw::actor_id_t (actor_id), probe_t{instance_probe})
+                                 .async<probe_t> ()
+                                 .result ();
+    ASSERT_TRUE (ingress_ready);
+    evidence.hold_replay_prefix = scenario == backlog_case_t::ordinary_order;
     const auto state =
       fw::detail::mesh_node_runtime_t::registrations (host.app.advanced ().zlink ())
         .front ()
@@ -2397,14 +2402,19 @@ class observed_location_store_t final : public fw::location_store_t
     }
     fw::task_t<fw::store_write_result_t> write (fw::store_write_request_t request) override
     {
-        std::function<void ()> before_write;
+        std::function<fw::task_t<bool> (const fw::store_write_request_t &)> ready;
         {
             std::lock_guard lock (_mutex);
-            if (_before_write && _before_write_ready (request))
-                before_write = std::exchange (_before_write, {});
+            if (_before_write)
+                ready = _before_write_ready;
+        }
+        std::function<fw::task_t<void> ()> before_write;
+        if (ready && co_await ready (request)) {
+            std::lock_guard lock (_mutex);
+            before_write = std::exchange (_before_write, {});
         }
         if (before_write)
-            before_write ();
+            co_await before_write ();
         auto result = co_await _inner.write (std::move (request));
         if (before_write) {
             std::lock_guard lock (_mutex);
@@ -2412,19 +2422,24 @@ class observed_location_store_t final : public fw::location_store_t
               std::holds_alternative<fw::store_write_conflict_t> (result);
         }
         if (std::holds_alternative<fw::store_write_applied_t> (result)) {
-            std::lock_guard lock (_mutex);
-            if (_after_write)
-                _after_write ();
+            std::function<fw::task_t<void> ()> after_write;
+            {
+                std::lock_guard lock (_mutex);
+                after_write = _after_write;
+            }
+            if (after_write)
+                co_await after_write ();
         }
         co_return result;
     }
-    void observe (std::function<void ()> after_write)
+    void observe (std::function<fw::task_t<void> ()> after_write)
     {
         std::lock_guard lock (_mutex);
         _after_write = std::move (after_write);
     }
-    void before_next_write_when (std::function<bool (const fw::store_write_request_t &)> ready,
-                                 std::function<void ()> action)
+    void before_next_write_when (
+      std::function<fw::task_t<bool> (const fw::store_write_request_t &)> ready,
+      std::function<fw::task_t<void> ()> action)
     {
         std::lock_guard lock (_mutex);
         _before_write_ready = std::move (ready);
@@ -2439,9 +2454,9 @@ class observed_location_store_t final : public fw::location_store_t
   private:
     fw::runtime::in_memory_location_store_t _inner;
     std::mutex _mutex;
-    std::function<void ()> _after_write;
-    std::function<bool (const fw::store_write_request_t &)> _before_write_ready;
-    std::function<void ()> _before_write;
+    std::function<fw::task_t<void> ()> _after_write;
+    std::function<fw::task_t<bool> (const fw::store_write_request_t &)> _before_write_ready;
+    std::function<fw::task_t<void> ()> _before_write;
     bool _intercepted_write_conflicted = false;
 };
 
@@ -2485,6 +2500,8 @@ TEST (ActorMaintenanceJoin, ReadyAuthorityAcceptsLocalSendBeforeStoreWriteReturn
     observations = &evidence;
     auto store = std::make_shared<observed_location_store_t> ();
     auto relocations = std::make_shared<fw::runtime::in_memory_relocation_store_t> ();
+    auto observed = std::make_shared<std::atomic<bool>> (false);
+    auto sent = std::make_shared<fw::task_completion_source_t<void>> ();
     host_t source, target;
     configure (source, first_rid, store, relocations, source_follow_duration);
     source.start ();
@@ -2501,34 +2518,39 @@ TEST (ActorMaintenanceJoin, ReadyAuthorityAcceptsLocalSendBeforeStoreWriteReturn
     ASSERT_TRUE (peer_ready (services.get_required<fw::route_mesh_runtime_t> ()));
     auto target_services = target.app.advanced ().services ().build_provider ();
     auto &client = target_services.get_required<fw::actor_client_t> ();
-    auto &query = target_services.get_required<fw::location_runtime_query_t> ();
-    bool observed = false;
-    std::optional<fw::result_t<void>> sent;
-    store->observe ([&] {
-        if (observed)
-            return;
-        const auto location =
-          query.find_actor_location (fw::actor_id_t (actor_id)).result ().value ();
+    // Callback copies own services/results; evidence outlives both hosts.
+    store->observe ([target_services, observed, sent, &evidence] () mutable -> fw::task_t<void> {
+        const auto location = co_await target_services.get_required<fw::location_runtime_query_t> ()
+                                .find_actor_location (fw::actor_id_t (actor_id));
         if (!location || location->state != fw::location_object_state_t::ready
             || location->node_rid.to_string () != second_rid)
-            return;
-        observed = true;
-        std::fprintf (stderr,
-                      "Store write boundary: Ready ActorId=%s NodeRid=%s ObjectGeneration=%llu\n",
-                      location->global_id.c_str (), location->node_rid.to_string ().c_str (),
-                      static_cast<unsigned long long> (location->object_generation));
-        sent.emplace (client.send (fw::actor_id_t (actor_id), record_t{1}).async ().result ());
-        std::lock_guard lock (evidence.mutex);
-        EXPECT_TRUE (evidence.recorded.empty ());
+            co_return;
+        if (!observed->exchange (true)) {
+            std::fprintf (
+              stderr, "Store write boundary: Ready ActorId=%s NodeRid=%s ObjectGeneration=%llu\n",
+              location->global_id.c_str (), location->node_rid.to_string ().c_str (),
+              static_cast<unsigned long long> (location->object_generation));
+            const auto admitted = co_await fw::runtime::await_result (
+              target_services.get_required<fw::actor_client_t> ()
+                .send (fw::actor_id_t (actor_id), record_t{1})
+                .async ());
+            {
+                std::lock_guard lock (evidence.mutex);
+                EXPECT_TRUE (evidence.recorded.empty ());
+            }
+            sent->complete (admitted);
+        }
+        co_await sent->task ();
     });
     const auto relocated =
       source.app
         .relocate ({.mode = fw::relocation_mode_t::planned_maintenance, .deadline = wait_budget})
         .result ();
     store->observe ({});
-    ASSERT_TRUE (observed);
-    ASSERT_TRUE (sent.has_value ());
-    ASSERT_TRUE (*sent) << (sent->error () ? sent->error ()->what () : "");
+    ASSERT_TRUE (observed->load ());
+    ASSERT_TRUE (sent->task ().await_ready ());
+    const auto admitted = sent->task ().result ();
+    ASSERT_TRUE (admitted) << (admitted.error () ? admitted.error ()->what () : "");
     ASSERT_TRUE (relocated);
     EXPECT_EQ (relocated.value ().outcome, fw::relocation_outcome_t::relocated);
     const auto reply = client.request (fw::actor_id_t (actor_id), probe_t{instance_probe})
@@ -2578,36 +2600,36 @@ TEST (ActorMaintenanceJoin, SourcePreserveDiscardsRawIdentityPreparedBeforeTarge
     auto preserved = std::make_shared<std::promise<bool>> ();
     auto preservation = preserved->get_future ();
     store->before_next_write_when (
-      [&] (const fw::store_write_request_t &request) {
+      [native, candidate, target_services, services,
+       key] (const fw::store_write_request_t &request) mutable -> fw::task_t<bool> {
           // Read-only observation of the raw index; the failure is injected
           // through the Store provider, without a relocation runtime hook.
           if (!native->resolve_actor (candidate))
-              return false;
+              co_return false;
           const auto location =
-            query.find_actor_location (fw::actor_id_t (actor_id)).result ().value ();
+            co_await target_services.get_required<fw::location_runtime_query_t> ()
+              .find_actor_location (fw::actor_id_t (actor_id));
           if (!location || location->node_rid.to_string () != first_rid)
-              return false;
-          const auto current =
-            std::get<fw::authority_snapshot_t> (repository.read_authority (key).result ().value ());
+              co_return false;
+          const auto current = std::get<fw::authority_snapshot_t> (
+            co_await services.get_required<fw::location_repository_t> ().read_authority (key));
           // This in-memory Store issues globally distinct versions. Match
           // the Actor row condition without decoding provider keys/payloads.
-          return std::ranges::any_of (request.conditions, [&] (const auto &condition) {
+          co_return std::ranges::any_of (request.conditions, [&] (const auto &condition) {
               const auto *version = std::get_if<fw::store_version_condition_t> (&condition);
               return version && version->expected.value == current.store_version;
           });
       },
-      [&, preserved] {
-          const auto current =
-            std::get<fw::authority_snapshot_t> (repository.read_authority (key).result ().value ());
+      [services, key, payload = original.payload, preserved] () mutable -> fw::task_t<void> {
+          const auto current = std::get<fw::authority_snapshot_t> (
+            co_await services.get_required<fw::location_repository_t> ().read_authority (key));
           // The existing source Preserve operation is an unchanged-authority
           // CAS. Restore the uncaptured payload so this newer Store fence
           // definitively excludes the pending target CAS (Location §10).
           preserved->set_value (std::holds_alternative<fw::authority_stored_t> (
-            repository
+            co_await services.get_required<fw::location_repository_t> ()
               .compare_exchange_authority (key, current.store_version,
-                                           fw::authority_put_t{original.payload})
-              .result ()
-              .value ()));
+                                           fw::authority_put_t{payload})));
       });
     const auto relocated =
       source.app
@@ -3553,6 +3575,11 @@ TEST (ActorMaintenanceJoin, ReturnAdmissionWaitsOutsideTargetLifecycleForSourceT
                    .get_or_create (fw::actor_id_t (actor_id), actor_type)
                    .async ()
                    .result ());
+    const auto ingress_ready = services.get_required<fw::actor_client_t> ()
+                                 .request (fw::actor_id_t (actor_id), probe_t{instance_probe})
+                                 .async<probe_t> ()
+                                 .result ();
+    ASSERT_TRUE (ingress_ready);
     const auto created = services.get_required<fw::spot_manager_t> ()
                            .get_or_create (fw::spot_id_t (source_spot), room_type)
                            .async ()

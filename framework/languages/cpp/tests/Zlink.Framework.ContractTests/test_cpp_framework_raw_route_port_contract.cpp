@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <cassert>
 #include <atomic>
+#include <future>
 #include <chrono>
 #include <cerrno>
 #include <condition_variable>
@@ -673,11 +674,14 @@ void verify_backpressured_send_waits_for_admission ()
     auto request = source_port.request (request_parts (), raw_request_capacity_timeout);
     assert (scheduler.scheduled_count () == before + 1);
     std::atomic_int terminals{0};
+    std::promise<void> terminal_observed;
+    auto observed = terminal_observed.get_future ();
     zlink::framework::detail::observe_task_completion (request, [&] (const auto &result) {
         assert (!result
                 && result.error_kind ()
                      == zlink::framework::framework_error_kind_t::deadline_exceeded);
         terminals.fetch_add (1, std::memory_order_release);
+        terminal_observed.set_value ();
     });
     const auto held_until = std::chrono::steady_clock::now () + 4 * raw_request_capacity_timeout;
     while (std::chrono::steady_clock::now () < held_until) {
@@ -685,6 +689,7 @@ void verify_backpressured_send_waits_for_admission ()
         (void) source_poller.wait (&event, 1, raw_route_fixture_poll_interval);
     }
     assert (request.await_ready ());
+    observed.get ();
     assert (terminals.load (std::memory_order_acquire) == 1);
     assert (!request.result ()
             && request.result ().error_kind ()

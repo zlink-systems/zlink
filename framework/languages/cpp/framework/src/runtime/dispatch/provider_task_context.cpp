@@ -2,6 +2,9 @@
 
 #include <zlink/framework/contracts/dispatch/task.hpp>
 
+#include <boost/asio/post.hpp>
+#include <boost/asio/system_executor.hpp>
+
 #include <atomic>
 #include <optional>
 #include <utility>
@@ -16,8 +19,48 @@ thread_local std::optional<serial_resume_failure_t> current_serial_resume_failur
 thread_local const void *current_application_job = nullptr;
 thread_local std::stop_token current_wait_owner_token;
 thread_local bool current_infrastructure_wait_flag = false;
+thread_local const void *completion_owner = nullptr;
+const char process_completion_owner = 0;
+
+struct completion_turn_scope_t
+{
+    const void *previous;
+    ~completion_turn_scope_t () { completion_owner = previous; }
+};
 std::atomic<const ambient_context_hooks_t *> ambient_context_hooks{nullptr};
 std::atomic<const runtime_execution_hooks_t *> runtime_execution_hooks{nullptr};
+}
+
+const void *current_completion_owner () noexcept
+{
+    return completion_owner;
+}
+
+bool can_reuse_completion_turn (bool known_runtime_worker,
+                                const void *caller_job,
+                                bool caller_owned_turn) noexcept
+{
+    if ((completion_owner == nullptr && !known_runtime_worker) || current_infrastructure_wait_flag)
+        return false;
+    if (caller_owned_turn)
+        return current_application_job == nullptr || current_application_job == caller_job;
+    return !current_serial_turn_handle && current_application_job == nullptr
+           && !current_wait_owner_token.stop_possible ();
+}
+
+void dispatch_completion (std::function<void ()> work, bool inline_allowed, const void *owner)
+{
+    if (!work)
+        return;
+    if (inline_allowed || (owner == nullptr && can_reuse_completion_turn ())) {
+        work ();
+        return;
+    }
+    boost::asio::post (boost::asio::system_executor{}, [work = std::move (work), owner] {
+        const completion_turn_scope_t scope{
+          std::exchange (completion_owner, owner != nullptr ? owner : &process_completion_owner)};
+        work ();
+    });
 }
 
 task_scheduler_t capture_runtime_native_continuation_scheduler ()

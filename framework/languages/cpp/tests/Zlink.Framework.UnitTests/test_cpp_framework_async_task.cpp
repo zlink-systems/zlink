@@ -10,6 +10,8 @@
 #include "runtime/dispatch/offload_executor.hpp"
 #include "runtime/execution/serial_execution_queue.hpp"
 
+#include <boost/asio/system_executor.hpp>
+
 #include <atomic>
 #include <barrier>
 #include <chrono>
@@ -67,16 +69,15 @@ bool verify_request_admission_stages ()
     if (admitted.await_ready () || first.await_ready () || other_admitted.await_ready ())
         return false;
     first_admission.complete (result_t<void>::success ());
-    if (!admitted.await_ready () || !admitted.result () || first.await_ready ()
-        || other_admitted.await_ready () || second.await_ready ())
+    if (!admitted.result () || first.await_ready () || other_admitted.await_ready ()
+        || second.await_ready ())
         return false;
     first_reply.complete (result_t<int>::success (42));
     if (first.result ().value () != 42 || second.await_ready ())
         return false;
     const auto cancelled = detail::make_cancellation_exception ("admission cancelled");
     second_admission.complete (detail::result_access_t::failure<void> (cancelled));
-    if (!other_admitted.await_ready () || !second.await_ready ()
-        || other_admitted.result ().exception () != second.result ().exception ())
+    if (other_admitted.result ().exception () != second.result ().exception ())
         return false;
     task_completion_source_t<void> expired_admission;
     task_completion_source_t<int> expired_reply;
@@ -84,8 +85,7 @@ bool verify_request_admission_stages ()
     expired_admission.complete (detail::boundary_failure<void> (detail::boundary_error_t::timed_out,
                                                                 "admission deadline expired"));
     auto expired_stage = expired.admitted ();
-    if (!expired_stage.await_ready () || !expired.await_ready ()
-        || expired_stage.result ().exception () != expired.result ().exception ())
+    if (expired_stage.result ().exception () != expired.result ().exception ())
         return false;
 
     // The local owner accepts the call while its handler reply remains pending.
@@ -113,14 +113,20 @@ bool verify_request_admission_stages ()
     if (!rejection.await_ready () || !rejected_stage.await_ready ()
         || rejection.result ().exception () != rejected_stage.result ().exception ())
         return false;
-    auto owner = std::make_shared<int> (1);
+    std::promise<void> owner_released;
+    auto released = owner_released.get_future ();
+    auto owner = std::shared_ptr<int> (new int (1), [&] (int *value) {
+        delete value;
+        owner_released.set_value ();
+    });
     const std::weak_ptr<int> retained = owner;
     auto parent = retain_request_owner (owner, std::move (rejection));
     owner.reset ();
-    if (!parent.await_ready () || parent.result ().exception () != cause || retained.expired ())
-        return false;
+    const bool parent_retained =
+      parent.await_ready () && parent.result ().exception () == cause && !retained.expired ();
     late_reply.complete (result_t<int>::success (99));
-    return retained.expired () && parent.result ().exception () == cause;
+    released.get ();
+    return parent_retained && retained.expired () && parent.result ().exception () == cause;
 }
 
 // A configured request terminal can perform an infrastructure lookup before
@@ -153,8 +159,7 @@ bool verify_lookup_admission_isolation ()
     lookup_reply.complete (result_t<int>::success (1));
     const bool isolated_at_lookup_reply = !admitted.await_ready () && !pending.await_ready ();
     acceptance.complete (result_t<void>::success ());
-    const bool accepted_before_reply =
-      admitted.await_ready () && admitted.result () && !pending.await_ready ();
+    const bool accepted_before_reply = admitted.result () && !pending.await_ready ();
     reply.complete (result_t<int>::success (42));
     if (!isolated_at_lookup_admission || !isolated_at_lookup_reply)
         std::cerr << "infrastructure request completed application admitted before submission\n";
@@ -261,6 +266,172 @@ class test_serial_turn_t final : public zlink::framework::detail::serial_turn_t
     bool yield_claimed = false;
     std::stop_token cancellation;
 };
+
+bool verify_released_turn_wrapper_handoff ()
+{
+    using namespace zlink::framework;
+    static thread_local bool delivering = false;
+    for (const bool selected_completion_turn : {false, true}) {
+        task_completion_source_t<int> source;
+        auto pending = source.task ();
+        std::promise<std::pair<std::thread::id, bool>> resumed;
+        auto done = resumed.get_future ();
+        auto turn = std::make_shared<test_serial_turn_t> ();
+        (void) turn->release ();
+        {
+            const detail::serial_turn_scope_t scope (turn);
+            detail::observe_task_completion (pending, [&] (const auto &result) {
+                resumed.set_value ({std::this_thread::get_id (),
+                                    result.value () == 1770
+                                      && detail::capture_current_serial_turn () == nullptr
+                                      && detail::current_completion_owner () != nullptr
+                                      && delivering == selected_completion_turn});
+            });
+        }
+        std::promise<std::thread::id> delivered;
+        auto completed = delivered.get_future ();
+        auto complete = [&] {
+            delivering = true;
+            source.complete (result_t<int>::success (1770));
+            delivering = false;
+            delivered.set_value (std::this_thread::get_id ());
+        };
+        if (selected_completion_turn)
+            detail::dispatch_completion (complete);
+        else
+            complete ();
+        const auto completion_thread = completed.get ();
+        const auto [resumed_thread, kept_owner] = done.get ();
+        const bool passed =
+          (resumed_thread == completion_thread) == selected_completion_turn && kept_owner;
+        std::cout << "released-turn-wrapper selected-completion=" << selected_completion_turn
+                  << " passed=" << passed << std::endl;
+        if (!passed)
+            return false;
+    }
+    return true;
+}
+
+enum class completion_scope_probe_t
+{
+    serial_turn,
+    application_job,
+    wait_owner,
+    infrastructure
+};
+
+bool verify_completion_scope (bool stopped_host,
+                              completion_scope_probe_t scope_kind,
+                              bool active_host = false)
+{
+    using namespace zlink::framework;
+    static thread_local bool completing_in_scope = false;
+    if (stopped_host || active_host) {
+        runtime::configure_handler_coroutine_executor (1);
+        runtime::install_host_context_hooks ();
+    }
+    task_completion_source_t<int> source;
+    auto pending = source.task ();
+    std::promise<bool> observed;
+    auto result = observed.get_future ();
+    detail::observe_task_completion (pending, [&] (const auto &) {
+        observed.set_value (!completing_in_scope
+                            && detail::capture_current_serial_turn () == nullptr
+                            && detail::application_job_context_t::current () == nullptr
+                            && !detail::current_wait_owner ().stop_possible ()
+                            && !detail::current_infrastructure_wait ());
+    });
+    if (stopped_host)
+        runtime::shutdown_handler_coroutine_executor ();
+    std::promise<void> delivered;
+    auto done = delivered.get_future ();
+    detail::dispatch_completion ([&] {
+        {
+            std::optional<detail::serial_turn_scope_t> turn_scope;
+            const int application_job = 1770;
+            const auto *previous_job = detail::application_job_context_t::current ();
+            std::stop_source wait_owner;
+            const auto previous_owner = detail::current_wait_owner ();
+            const bool previous_infrastructure = detail::current_infrastructure_wait ();
+            if (scope_kind == completion_scope_probe_t::serial_turn) {
+                turn_scope.emplace (std::make_shared<test_serial_turn_t> ());
+            } else if (scope_kind == completion_scope_probe_t::application_job) {
+                detail::application_job_context_t::exchange (&application_job);
+            } else if (scope_kind == completion_scope_probe_t::wait_owner) {
+                detail::exchange_wait_owner (wait_owner.get_token ());
+            } else {
+                detail::exchange_infrastructure_wait (true);
+            }
+            completing_in_scope = true;
+            source.complete (result_t<int>::success (1770));
+            completing_in_scope = false;
+            detail::application_job_context_t::exchange (previous_job);
+            detail::exchange_wait_owner (previous_owner);
+            detail::exchange_infrastructure_wait (previous_infrastructure);
+        }
+        delivered.set_value ();
+    });
+    done.get ();
+    const bool isolated = result.get ();
+    if (active_host)
+        runtime::shutdown_handler_coroutine_executor ();
+    std::cout << "completion-scope active-host=" << active_host << " stopped-host=" << stopped_host
+              << " scope=" << static_cast<int> (scope_kind) << " isolated=" << isolated
+              << std::endl;
+    detail::set_runtime_execution_hooks (nullptr);
+    detail::set_ambient_context_hooks (nullptr);
+    return isolated;
+}
+
+bool verify_owned_completion_turn (bool with_job, bool infrastructure_completer)
+{
+    using namespace zlink::framework;
+    static thread_local bool delivering = false;
+    runtime::configure_handler_coroutine_executor (1);
+    runtime::install_host_context_hooks ();
+    task_completion_source_t<int> source;
+    auto pending = source.task ();
+    std::stop_source wait_owner;
+    auto turn = std::make_shared<test_serial_turn_t> (wait_owner.get_token ());
+    const int job = 1770;
+    const void *caller_job = with_job ? &job : nullptr;
+    std::promise<bool> observed;
+    auto result = observed.get_future ();
+    {
+        const detail::serial_turn_scope_t turn_scope (turn);
+        const detail::ambient_context_scope_t invocation (nullptr, caller_job,
+                                                          wait_owner.get_token ());
+        detail::observe_task_completion (pending, [&] (const auto &value) {
+            observed.set_value (
+              value.value () == 1770 && detail::capture_current_serial_turn () == turn
+              && detail::application_job_context_t::current () == caller_job
+              && detail::current_wait_owner () == wait_owner.get_token ()
+              && !detail::current_infrastructure_wait () && delivering != infrastructure_completer);
+        });
+    }
+    std::promise<void> delivered;
+    auto done = delivered.get_future ();
+    detail::dispatch_completion ([&] {
+        {
+            const detail::serial_turn_scope_t turn_scope (turn);
+            const detail::ambient_context_scope_t invocation (nullptr, caller_job, {}, false,
+                                                              infrastructure_completer);
+            delivering = true;
+            source.complete (result_t<int>::success (1770));
+            delivering = false;
+        }
+        delivered.set_value ();
+    });
+    done.get ();
+    const bool passed = result.get ();
+    runtime::shutdown_handler_coroutine_executor ();
+    detail::set_runtime_execution_hooks (nullptr);
+    detail::set_ambient_context_hooks (nullptr);
+    std::cout << "owned-completion with-job=" << with_job
+              << " infrastructure-completer=" << infrastructure_completer << " passed=" << passed
+              << std::endl;
+    return passed;
+}
 
 class native_async_state_t final : public zlink::detail::async_result_state_t<int>
 {
@@ -418,8 +589,13 @@ bool verify_rejected_delivery_lifetime ()
         const detail::ambient_context_scope_t scope (nullptr, nullptr, owner.get_token ());
         return observe_void_with_lifetime (std::move (view), std::move (marker));
     }();
-    int terminal_calls = 0;
-    detail::observe_task_completion (owned, [&] (const result_t<void> &) { ++terminal_calls; });
+    std::atomic_int terminal_calls{0};
+    std::promise<void> terminal_delivered;
+    auto terminal_ready = terminal_delivered.get_future ();
+    detail::observe_task_completion (owned, [&] (const result_t<void> &) {
+        ++terminal_calls;
+        terminal_delivered.set_value ();
+    });
     bool first = false, duplicate = true;
     std::exception_ptr failure;
     std::thread completion ([&] {
@@ -441,6 +617,7 @@ bool verify_rejected_delivery_lifetime ()
         return false;
     owner.request_stop ();
     const auto cancelled = owned.result ();
+    terminal_ready.get ();
     owner.request_stop ();
     return !cancelled && cancelled.error_kind () == framework_error_kind_t::shutting_down
            && terminal_calls == 1 && lifetime.expired ();
@@ -461,13 +638,19 @@ bool verify_rejected_ready_registration ()
         return observe_registration_boundary (
           std::move (view), [&] { first = source.complete (result_t<void>::success ()); });
     }();
-    int terminal_calls = 0;
-    detail::observe_task_completion (owned, [&] (const result_t<void> &) { ++terminal_calls; });
+    std::atomic_int terminal_calls{0};
+    std::promise<void> terminal_delivered;
+    auto terminal_ready = terminal_delivered.get_future ();
+    detail::observe_task_completion (owned, [&] (const result_t<void> &) {
+        ++terminal_calls;
+        terminal_delivered.set_value ();
+    });
     if (!first || !source.task ().result () || source.complete (result_t<void>::success ())
         || owned.result_for (std::chrono::milliseconds (0)) || terminal_calls != 0)
         return false;
     owner.request_stop ();
     const auto cancelled = owned.result ();
+    terminal_ready.get ();
     return !cancelled && cancelled.error_kind () == framework_error_kind_t::shutting_down
            && terminal_calls == 1;
 }
@@ -502,7 +685,7 @@ bool verify_ownerless_wait_after_context_stop ()
 {
     using namespace zlink::framework;
     task_completion_source_t<int> source;
-    auto view = detail::with_task_resume_scheduler (source.task (), [] (std::function<void ()>) {
+    auto view = detail::with_task_resume_scheduler (source.task (), [] (std::function<void ()> &&) {
         throw framework_exception_t (framework_error_kind_t::shutting_down,
                                      "registered context stopped");
     });
@@ -615,6 +798,8 @@ bool verify_released_observer_owner ()
     auto turn = std::make_shared<test_serial_turn_t> ();
     std::weak_ptr<test_serial_turn_t> released_turn = turn;
     turn->release ();
+    std::promise<void> pending_delivered;
+    auto delivered = pending_delivered.get_future ();
     int calls = 0;
     bool restored_released_turn = false;
     {
@@ -623,12 +808,14 @@ bool verify_released_observer_owner ()
         detail::observe_task_completion (pending, [&] (const result_t<int> &) {
             restored_released_turn = static_cast<bool> (detail::capture_current_serial_turn ());
             ++calls;
+            pending_delivered.set_value ();
         });
     }
     turn.reset ();
     if (!released_turn.expired ())
         return false;
     pending_source.complete (result_t<int>::success (1));
+    delivered.get ();
     return calls == 2 && !restored_released_turn;
 }
 
@@ -642,14 +829,18 @@ bool verify_registration_completion_cancellation_race ()
         std::barrier start (4);
         std::optional<task_t<void>> observed;
         std::atomic_int observer_calls{0};
+        std::promise<void> observer_delivered;
+        auto delivered = observer_delivered.get_future ();
         bool first = false, duplicate = true;
         std::exception_ptr completion_failure;
         std::thread registration ([&] {
             const detail::ambient_context_scope_t scope (nullptr, nullptr, owner.get_token ());
             start.arrive_and_wait ();
             auto task = source.task ();
-            detail::observe_task_completion (task,
-                                             [&] (const result_t<void> &) { ++observer_calls; });
+            detail::observe_task_completion (task, [&] (const result_t<void> &) {
+                ++observer_calls;
+                observer_delivered.set_value ();
+            });
             observed.emplace (observe_void_task (std::move (task)));
         });
         std::thread completion ([&] {
@@ -671,6 +862,7 @@ bool verify_registration_completion_cancellation_race ()
         completion.join ();
         cancellation.join ();
         const auto result = observed->result ();
+        delivered.get ();
         if (completion_failure || !first || duplicate || observer_calls != 1
             || (!result && result.error_kind () != framework_error_kind_t::shutting_down)
             || !source.task ().result ())
@@ -684,6 +876,7 @@ struct nested_cleanup_probe_t
     bool child_finished = false;
     bool child_before_parent = false;
     int parent_observations = 0;
+    std::promise<void> parent_observed;
 };
 
 // The child's destructor writes parent-owned memory, so the parent must
@@ -737,6 +930,7 @@ cleanup_nested_parent (zlink::framework::task_completion_source_t<void> &source,
       child, [&probe] (const zlink::framework::result_t<void> &result) {
           if (result && probe.child_finished)
               ++probe.parent_observations;
+          probe.parent_observed.set_value ();
       });
     co_await child;
     probe.child_before_parent = probe.child_finished && *parent_value == 42;
@@ -748,17 +942,19 @@ bool verify_nested_cancellation_lifetime ()
     std::stop_source owner;
     task_completion_source_t<void> source;
     nested_cleanup_probe_t probe;
+    auto observed = probe.parent_observed.get_future ();
     auto parent = [&] {
         const detail::ambient_context_scope_t scope (nullptr, nullptr, owner.get_token ());
         return cleanup_nested_parent (source, probe);
     }();
     owner.request_stop ();
-    const auto result = parent.result_for (std::chrono::milliseconds::zero ());
+    const auto result = parent.result ();
     const bool original_pending = !source.task ().result_for (std::chrono::milliseconds::zero ());
     const bool first = source.complete (result_t<void>::success ());
     const bool duplicate = source.complete (result_t<void>::success ());
-    return result && *result && probe.child_before_parent && probe.parent_observations == 1
-           && original_pending && first && !duplicate;
+    observed.get ();
+    return result && probe.child_before_parent && probe.parent_observations == 1 && original_pending
+           && first && !duplicate;
 }
 
 // An explicit co_return publishes only after the child's locals are destroyed.
@@ -788,8 +984,8 @@ bool verify_nested_return_lifetime ()
     auto parent = return_nested_parent (void_source, typed_source, probe);
     const bool void_completed = void_source.complete (result_t<void>::success ());
     const bool typed_completed = typed_source.complete (result_t<void>::success ());
-    const auto result = parent.result_for (std::chrono::milliseconds::zero ());
-    return void_completed && typed_completed && result && *result && probe.child_before_parent;
+    const auto result = parent.result ();
+    return void_completed && typed_completed && result && probe.child_before_parent;
 }
 
 bool verify_void_completion_rejection_race (bool cancel_before_rejection)
@@ -803,9 +999,12 @@ bool verify_void_completion_rejection_race (bool cancel_before_rejection)
     std::promise<void> submit_entered, allow_rejection;
     auto entered = submit_entered.get_future ();
     auto reject = allow_rejection.get_future ();
+    std::promise<void> producer_observed;
+    auto observed = producer_observed.get_future ();
     bool producer_succeeded = false;
     detail::observe_task_completion (producer, [&] (const result_t<void> &result) {
         producer_succeeded = static_cast<bool> (result);
+        producer_observed.set_value ();
     });
     auto rejected_view =
       detail::with_task_resume_scheduler (std::move (producer), [&] (std::function<void ()>) {
@@ -841,6 +1040,7 @@ bool verify_void_completion_rejection_race (bool cancel_before_rejection)
         owner.request_stop ();
     }
     const auto cancelled = owned.result ();
+    observed.get ();
     return !failure && first && !duplicate && !cancelled
            && cancelled.error_kind () == framework_error_kind_t::shutting_down && producer_succeeded
            && outside.result ();
@@ -865,7 +1065,12 @@ bool verify_rejection_retain_cancellation_race ()
         }();
         auto outside = observe_void_task (source.task ());
         std::atomic_int terminal_calls{0};
-        detail::observe_task_completion (owned, [&] (const result_t<void> &) { ++terminal_calls; });
+        std::promise<void> terminal_delivered;
+        auto terminal_ready = terminal_delivered.get_future ();
+        detail::observe_task_completion (owned, [&] (const result_t<void> &) {
+            ++terminal_calls;
+            terminal_delivered.set_value ();
+        });
         std::thread cancellation ([&] {
             rejection.arrive_and_wait ();
             owner.request_stop ();
@@ -880,6 +1085,7 @@ bool verify_rejection_retain_cancellation_race ()
         }
         cancellation.join ();
         const auto cancelled = owned.result ();
+        terminal_ready.get ();
         if (failure || !first || source.complete (result_t<void>::success ()) || cancelled
             || cancelled.error_kind () != framework_error_kind_t::shutting_down
             || terminal_calls != 1 || !outside.result () || !source.task ().result ())
@@ -997,7 +1203,9 @@ void run_delivery_defect (delivery_defect_t defect)
           || defect == delivery_defect_t::scheduled_after_delivery
         ? owner.get_token ()
         : std::stop_token{});
-    const auto callback = [] (const result_t<void> &) {
+    const auto callback = [terminate_handler] (const result_t<void> &) {
+        // MSVC keeps the terminate handler per thread.
+        std::set_terminate (terminate_handler);
         throw framework_exception_t (framework_error_kind_t::shutting_down,
                                      "internal observer defect");
     };
@@ -1037,6 +1245,9 @@ void run_delivery_defect (delivery_defect_t defect)
         owner.request_stop ();
     else
         source.complete (result_t<void>::success ());
+    if (defect == delivery_defect_t::pending_observer
+        || defect == delivery_defect_t::owned_observer)
+        boost::asio::system_executor{}.context ().join ();
 }
 
 bool verify_delivery_defects (const char *executable)
@@ -1489,6 +1700,23 @@ bool verify_yield_continuation_owned_by_spot_queue (yield_reply_order_t order)
 
 int main (int argc, char **argv)
 {
+    if (!verify_released_turn_wrapper_handoff ())
+        return 39;
+    for (const bool stopped_host : {false, true})
+        for (const auto scope :
+             {completion_scope_probe_t::serial_turn, completion_scope_probe_t::application_job,
+              completion_scope_probe_t::wait_owner, completion_scope_probe_t::infrastructure})
+            if (!verify_completion_scope (stopped_host, scope))
+                return 40;
+    for (const auto scope :
+         {completion_scope_probe_t::serial_turn, completion_scope_probe_t::application_job,
+          completion_scope_probe_t::wait_owner, completion_scope_probe_t::infrastructure})
+        if (!verify_completion_scope (false, scope, true))
+            return 40;
+    for (const bool with_job : {false, true})
+        for (const bool infrastructure_completer : {false, true})
+            if (!verify_owned_completion_turn (with_job, infrastructure_completer))
+                return 41;
     const bool lookup_isolated = verify_lookup_admission_isolation ();
     const bool reply_admits = verify_reply_success_completes_admission ();
     if (!lookup_isolated || !reply_admits)
@@ -1540,16 +1768,20 @@ int main (int argc, char **argv)
     auto first_complete_wins = completion.task ();
     int callback_count = 0;
     int callback_value = 0;
+    std::promise<void> callback_delivered;
+    auto delivered = callback_delivered.get_future ();
     zlink::framework::detail::observe_task_completion (
-      first_complete_wins,
-      [&callback_count, &callback_value] (const zlink::framework::result_t<int> &result) {
+      first_complete_wins, [&callback_count, &callback_value,
+                            &callback_delivered] (const zlink::framework::result_t<int> &result) {
           ++callback_count;
           callback_value = result.value ();
+          callback_delivered.set_value ();
       });
     const bool first_completion =
       completion.complete (zlink::framework::result_t<int>::success (100));
     const bool duplicate_completion =
       completion.complete (zlink::framework::result_t<int>::success (200));
+    delivered.get ();
     if (!first_completion || duplicate_completion || first_complete_wins.result ().value () != 100
         || callback_count != 1 || callback_value != 100) {
         return 2;

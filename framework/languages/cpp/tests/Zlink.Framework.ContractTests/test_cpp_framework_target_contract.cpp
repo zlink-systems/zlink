@@ -672,8 +672,10 @@ int main ()
      * boundary. */
     gate.require (
       mesh_node_runtime.find ("\"commit_ack\", actor, transfer_id") == std::string::npos
-        && spot_runtime.find ("emit_actor_transfer_marker (\"source_cleanup\"")
-             != std::string::npos,
+        && std::regex_search (
+          spot_runtime,
+          std::regex (
+            R"marker(emit_actor_transfer_marker(?:_async)?\s*\(\s*"source_cleanup")marker")),
       "E2E-CP-51",
       "remote transfer still emits a target commit_ack or lacks source_cleanup evidence");
     const auto target_authority_commit =
