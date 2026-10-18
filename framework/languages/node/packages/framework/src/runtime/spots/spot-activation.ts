@@ -151,6 +151,8 @@ export interface ZLinkSpotActivationLifecycleOptions {
     signal?: AbortSignal
   ) => Promise<boolean>;
   readonly registerActivation: (activation: ZLinkSpotActivation) => void | Promise<void>;
+  readonly stageActivation?: (activation: ZLinkSpotActivation) => void;
+  readonly discardActivation?: (activation: ZLinkSpotActivation) => void;
   readonly routeToActorJoinPrewarm?: ZLinkRouteToActorJoinPrewarm;
   readonly releaseLocation: (
     activation: ZLinkSpotActivation,
@@ -975,6 +977,7 @@ export class ZLinkSpotActivationLifecycle {
   ): Promise<ZLinkLocalSpotCreateResult> {
     try {
       activation.serialExecutor.beginPreparation();
+      this.options.stageActivation?.(activation);
       let createResponse: ZLinkSpotCreateResponse | undefined;
       await activation.serial.postBarrierTurn(async () => {
         throwIfAborted(signal);
@@ -1062,15 +1065,26 @@ export class ZLinkSpotActivationLifecycle {
     if (state.inFlight !== undefined) return await state.inFlight;
     let result: unknown;
     const cleanup = async (ownsLifecycle: boolean) => {
-      result = await this.runCleanup(
-        activation,
-        locationMeshName,
-        notifyClosing,
-        reason,
-        state,
-        deadline,
-        ownsLifecycle
-      );
+      try {
+        result = await this.runCleanup(
+          activation,
+          locationMeshName,
+          notifyClosing,
+          reason,
+          state,
+          deadline,
+          ownsLifecycle
+        );
+      } finally {
+        if (activation.serialExecutor.isPreparing) {
+          activation.serial.closeAdmission();
+          // The receive pump releases retained payloads when these records finish.
+          activation.serial.visitPendingApplication((record) => {
+            record.operation = () => undefined;
+          });
+          this.options.discardActivation?.(activation);
+        }
+      }
     };
     state.inFlight = (
       !owningLifecycle && activation.serialExecutor.isPreparing

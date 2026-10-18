@@ -36,7 +36,7 @@ class tictactoe_entry_spot_t : public entry_spot_t<player_actor_t>
         _context.handlers ().add_actor_request<&tictactoe_entry_spot_t::observe_milestone> ();
         // --8<-- [start:doc-multicast-subscribe]
         _context.handlers ().add_subscribe<&tictactoe_entry_spot_t::on_player_win_milestone> (
-          sample_names_t::player_milestone_topic);
+          sample_names_t::game_spot_node, sample_names_t::player_milestone_topic);
         // --8<-- [end:doc-multicast-subscribe]
     }
 

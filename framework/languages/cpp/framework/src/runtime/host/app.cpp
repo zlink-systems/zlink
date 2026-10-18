@@ -1484,16 +1484,18 @@ void app_t::_apply_zlink_framework ()
         return false;
     };
     auto monitoring_state = _state->monitoring;
-    const auto application_mesh_registration =
+    auto application_mesh_registration =
       std::find_if (mesh_node_registrations.begin (), mesh_node_registrations.end (),
                     [] (const auto &registration) {
                         return registration->spot_state->snapshot.entry_spot_name.has_value ();
                     });
+    if (application_mesh_registration == mesh_node_registrations.end ()
+        && !mesh_node_registrations.empty ())
+        application_mesh_registration = mesh_node_registrations.begin ();
     const auto application_mesh_name =
       application_mesh_registration != mesh_node_registrations.end ()
         ? (*application_mesh_registration)->mesh_name
-        : (mesh_node_registrations.empty () ? std::string{}
-                                            : mesh_node_registrations.front ()->mesh_name);
+        : std::string{};
     *actor_mesh_name = application_mesh_name;
     {
         auto provider = _state->services.build_provider ();
@@ -1542,11 +1544,7 @@ void app_t::_apply_zlink_framework ()
     if (!mesh_node_registrations.empty ()
         && !_state->services.contains (std::type_index (typeid (spot_manager_t)))) {
         _state->services.add_singleton<spot_manager_t> (std::make_unique<spot_manager_t> (
-          detail::spot_node_runtime_t (application_mesh_registration
-                                           != mesh_node_registrations.end ()
-                                         ? (*application_mesh_registration)->spot_state
-                                         : mesh_node_registrations.front ()->spot_state)
-            .manager ()));
+          detail::spot_node_runtime_t ((*application_mesh_registration)->spot_state).manager ()));
     }
     if (!mesh_node_registrations.empty ()
         && !_state->services.contains (std::type_index (typeid (spot_publisher_client_t)))) {
@@ -1561,6 +1559,12 @@ void app_t::_apply_zlink_framework ()
     const auto callback_registrations = mesh_node_registrations;
     runtime::mesh_node_host_service_t *mesh_node_service = nullptr;
     if (!mesh_node_registrations.empty ()) {
+        actor_gateway_runtime.on_membership (
+          [node = std::weak_ptr<detail::spot_node_builder_state_t> (
+             (*application_mesh_registration)->spot_state)] (const actor_ref_t &actor) {
+              const auto owner = node.lock ();
+              return owner ? detail::spot_node_runtime_t (owner).actor_spot (actor) : std::nullopt;
+          });
         auto mesh_service = std::make_unique<runtime::mesh_node_host_service_t> (
           _state->monitoring->runtime_failures, std::move (mesh_node_registrations),
           _state->serializers, _state->handlers, options.dispatch_options (),
@@ -3662,9 +3666,7 @@ task_t<void> app_t::run_shared_relocation (detail::app_state_t &state)
                 readiness_meshes.push_back (node->mesh_name ());
             }
             const auto local_rid = node->routing_id ();
-            auto application_units = spot_runtime->application_relocation_units ();
-            while (std::any_of (application_units.begin (), application_units.end (),
-                                [] (const auto &unit) { return !unit.ready; })) {
+            while (!spot_runtime->relocation_ready ()) {
                 if (shutdown_requested () || std::chrono::steady_clock::now () >= deadline_at) {
                     terminal.reason = shutdown_requested ()
                                         ? relocation_reason_t::shutdown_requested
@@ -3673,7 +3675,6 @@ task_t<void> app_t::run_shared_relocation (detail::app_state_t &state)
                     co_return;
                 }
                 zlink::framework::runtime::wait_poll_interval (std::chrono::milliseconds (1));
-                application_units = spot_runtime->application_relocation_units ();
             }
             // §5.1: with no unit on this Mesh there is no target to narrow.
             if (!has_relocation_units (*node))
@@ -3716,8 +3717,11 @@ task_t<void> app_t::run_shared_relocation (detail::app_state_t &state)
                 source_descriptor = *found;
             }
 
-            std::set<std::string> aggregate_actor_ids;
-            for (const auto &unit : application_units) {
+            // Resolve the source lifecycle fence before acquiring current units;
+            // descriptor I/O must not retain an earlier Actor ownership snapshot.
+            const auto units = co_await spot_runtime->relocation_units ();
+
+            for (const auto &unit : units.spots) {
                 const auto target = co_await wait_for_relocation_target (
                   peers->get (), state.delays, node->mesh_name (), deadline_at,
                   topology_poll_interval, shutdown_requested,
@@ -3771,7 +3775,6 @@ task_t<void> app_t::run_shared_relocation (detail::app_state_t &state)
                     sources.push_back (*source);
                     stable_types.emplace_back (
                       ::zlink::framework::detail::actor_ref_access_t::actor_type (actor));
-                    aggregate_actor_ids.insert (std::string (actor.actor_id ().value ()));
                 }
 
                 std::vector<authority_snapshot_t> authorities;
@@ -3812,12 +3815,7 @@ task_t<void> app_t::run_shared_relocation (detail::app_state_t &state)
                 relocated_ready_spots[node->mesh_name ()].push_back (unit.spot_id);
             }
 
-            const auto actors = spot_runtime->local_actor_refs ();
-            if (actors.empty ())
-                continue;
-            for (const auto &actor : actors) {
-                if (aggregate_actor_ids.contains (std::string (actor.actor_id ().value ())))
-                    continue;
+            for (const auto &actor : units.standalone_actors) {
                 if (shutdown_requested ()) {
                     terminal.reason = relocation_reason_t::shutdown_requested;
                     complete (terminal);

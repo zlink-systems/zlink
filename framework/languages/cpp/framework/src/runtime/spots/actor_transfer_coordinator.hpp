@@ -215,6 +215,7 @@ class actor_transfer_coordinator_t
     // use, so packets preserved before transfer-out already emit their
     // handoff markers under the final transfer correlation.
     task_t<void> wait_for_source_completion (std::string actor_key);
+    task_t<void> wait_for_source_completions ();
     bool try_reserve_source (const std::string &actor_key, std::string transfer_id = {});
     bool try_begin_local (const std::string &actor_key);
     bool try_begin_source_remote (const std::string &actor_key, std::string transfer_id = {});

@@ -27,7 +27,7 @@ dump_logs() {
 }
 
 cleanup() {
-  local status=$?
+  local status=${1:-$?}
   zlink_cpp_sample_stop_processes "${PIDS[@]}"
   [[ -z "$REDIS_CONTAINER_NAME" ]] || zlink_redis_remove_by_id "$REDIS_CONTAINER_NAME" || true
   zlink_sample_close_run_dir "$RUN_DIR" "$status" "ShoppingMall"

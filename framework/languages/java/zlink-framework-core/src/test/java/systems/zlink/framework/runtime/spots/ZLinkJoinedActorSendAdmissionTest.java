@@ -3,6 +3,7 @@ package systems.zlink.framework.runtime.spots;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -21,8 +22,8 @@ import systems.zlink.framework.actors.ZLinkActorFactory;
 import systems.zlink.framework.actors.ZLinkActorJoinCompletion;
 import systems.zlink.framework.actors.ZLinkActorRelocationAdapter;
 import systems.zlink.framework.actors.ZLinkRelocationCancellation;
+import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
 import systems.zlink.framework.configuration.ZLinkUserSpotExecutionMode;
-import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.monitoring.ZLinkListenerKind;
@@ -49,6 +50,10 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.logging.Handler;
+import java.util.logging.Level;
+import java.util.logging.LogRecord;
+import java.util.logging.Logger;
 
 /**
  * Source-local admission of an Actor send ends when the owning Actor queue accepts the message
@@ -327,26 +332,80 @@ final class ZLinkJoinedActorSendAdmissionTest {
     }
 
     @Test
-    void sendWithoutHandlerFailsAdmissionAsNotFound() throws Exception {
-        try (var runtime = start(options("send-missing-handler", null, null, null, true))) {
+    void sendWithoutHandlerIsAdmittedAndReportedWithoutPoisoningActor() throws Exception {
+        var options = options("send-missing-handler", null, null, null, true);
+        options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL);
+        var dropped = new CompletableFuture<String>();
+        var logger =
+                Logger.getLogger(
+                        "systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer");
+        var previousLevel = logger.getLevel();
+        Handler observer =
+                new Handler() {
+                    @Override
+                    public void publish(LogRecord record) {
+                        String line = record.getMessage();
+                        if (line != null
+                                && line.contains(" event_id=zlink.dispatch_error ")
+                                && line.contains(" packet=Unhandled ")
+                                && line.contains(" actor=" + PLAYER + " ")) {
+                            dropped.complete(line);
+                        }
+                    }
+
+                    @Override
+                    public void flush() {}
+
+                    @Override
+                    public void close() {}
+                };
+        observer.setLevel(Level.ALL);
+        logger.addHandler(observer);
+        logger.setLevel(Level.ALL);
+        try (var runtime = start(options)) {
+            TABLE_CLIENT.set(runtime.actorClient());
+            completionRelease.complete(null);
+            runtime.spotManager()
+                    .getOrCreate("table-1", "table")
+                    .submit()
+                    .toCompletableFuture()
+                    .get(WAIT_SECONDS, TimeUnit.SECONDS);
             runtime.actorManager()
                     .create(PLAYER, "player")
                     .submit()
                     .toCompletableFuture()
                     .get(WAIT_SECONDS, TimeUnit.SECONDS);
 
-            var failure =
-                    assertThrows(
-                            ExecutionException.class,
-                            () ->
-                                    runtime.actorClient()
-                                            .sendToActor(PLAYER, new Unhandled())
-                                            .submit()
-                                            .toCompletableFuture()
-                                            .get(WAIT_SECONDS, TimeUnit.SECONDS));
+            assertNull(
+                    runtime.actorClient()
+                            .sendToActor(PLAYER, new Unhandled())
+                            .submit()
+                            .toCompletableFuture()
+                            .get(WAIT_SECONDS, TimeUnit.SECONDS));
+            String diagnostic = dropped.get(WAIT_SECONDS, TimeUnit.SECONDS);
+            assertTrue(diagnostic.contains(" surface=actor "), diagnostic);
+            assertTrue(diagnostic.contains(" kind=send "), diagnostic);
+            assertTrue(diagnostic.contains(" outcome=failed "), diagnostic);
+            assertTrue(diagnostic.contains(" reason=no_handler "), diagnostic);
+            assertTrue(diagnostic.contains(" action=drop"), diagnostic);
+
             assertEquals(
-                    ZLinkFrameworkErrorKind.NOT_FOUND,
-                    assertInstanceOf(ZLinkFrameworkException.class, failure.getCause()).kind());
+                    "scheduled",
+                    runtime.actorClient()
+                            .requestToActor(PLAYER, new JoinRequest("table-1"))
+                            .timeout(Duration.ofSeconds(WAIT_SECONDS))
+                            .submit(String.class)
+                            .toCompletableFuture()
+                            .get(WAIT_SECONDS, TimeUnit.SECONDS));
+            assertInstanceOf(
+                    ZLinkActorJoinCompletion.Accepted.class,
+                    joinCompleted.get(WAIT_SECONDS, TimeUnit.SECONDS));
+            pingHandled.get(WAIT_SECONDS, TimeUnit.SECONDS);
+        } finally {
+            completionRelease.complete(null);
+            logger.removeHandler(observer);
+            logger.setLevel(previousLevel);
+            observer.close();
         }
     }
 
