@@ -42,11 +42,7 @@ import { ZLinkTransferredActorRollbackCoordinator } from './transferred-actor-ro
 const ACTOR_CREATION_RETRY_INTERVAL_MS = 5;
 const LOCAL_DIAGNOSTIC_NODE_RID = 'local';
 
-export {
-  DefaultZLinkActorClient,
-  forwardEncodedActorPacket,
-  type ZLinkActorClientOptions
-} from './actor-client';
+export { DefaultZLinkActorClient, type ZLinkActorClientOptions } from './actor-client';
 export { DefaultZLinkActorContext, ZLINK_ACTOR_JOIN_ENTRY_SPOT_RUNTIME } from './actor-context';
 export { ZLinkActorSerialExecutor } from './actor-mailbox';
 export {

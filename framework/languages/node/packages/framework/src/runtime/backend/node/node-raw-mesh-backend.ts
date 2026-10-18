@@ -1371,32 +1371,40 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
 
   async sendToActor(
     actor: ZLinkBackendActorRef,
-    parts: MessageLike | readonly MessageLike[]
+    parts: MessageLike | readonly MessageLike[],
+    options?: {
+      readonly flags?: number;
+      readonly routeFence?: import('../../foundation/service-stateful-wire-codec').ServiceActorRouteFence;
+    }
   ): Promise<SubmitResultValue> {
     return this.requireStateful().sendToActor(
       actor,
-      this.peerGeneration(String(actor.nodeRid)),
-      actor.generation,
-      encodeMultipart(parts)
+      encodeMultipart(parts),
+      undefined,
+      undefined,
+      options?.routeFence
     ) as Promise<SubmitResultValue>;
   }
 
   requestToActor(
     actor: ZLinkBackendActorRef,
     parts: MessageLike | readonly MessageLike[],
-    options?: { readonly timeoutMs?: number; readonly onAdmitted?: () => void }
+    options?: {
+      readonly timeoutMs?: number;
+      readonly onAdmitted?: () => void;
+      readonly routeFence?: import('../../foundation/service-stateful-wire-codec').ServiceActorRouteFence;
+    }
   ): MeshOperationId {
     return this.observeStateful(
       OperationKind.ActorRequest,
       this.requireStateful().requestToActor(
         actor,
-        this.peerGeneration(String(actor.nodeRid)),
-        actor.generation,
         encodeMultipart(parts),
         options?.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
         undefined,
         undefined,
-        options?.onAdmitted
+        options?.onAdmitted,
+        options?.routeFence
       )
     );
   }
@@ -1408,8 +1416,6 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   ): Promise<SubmitResultValue> {
     return (await this.requireStateful().sendToActor(
       target,
-      this.peerGeneration(String(target.nodeRid)),
-      target.generation,
       encodeMultipart(parts),
       source
     )) as SubmitResultValue;
@@ -1425,8 +1431,6 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       OperationKind.ActorRequest,
       this.requireStateful().requestToActor(
         target,
-        this.peerGeneration(String(target.nodeRid)),
-        target.generation,
         encodeMultipart(parts),
         options?.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
         source,

@@ -291,6 +291,200 @@ function harness(messageFollowDurationMs = 30, requestReply) {
   };
 }
 
+test('Actor ingress lookup does not inspect unrelated actors or departed tenures', async () => {
+  const h = harness(30_000);
+  const reads = new Map();
+  for (let index = 0; index < 128; index++) {
+    const actorId = index < 64 ? `other-${index}` : 'actor-1';
+    const generation = BigInt(index + 1);
+    h.setRequestSource({
+      objectGeneration: generation,
+      ownerId: 'source-owner',
+      ownerLeaseGeneration: 1n,
+      nodeRid: 'source-node',
+      nodeGeneration: 1n,
+      authorityOwnerGeneration: 1n
+    });
+    const ref = {
+      ...targetActorRef('target', generation),
+      get actorId() {
+        reads.set(index, (reads.get(index) ?? 0) + 1);
+        return actorId;
+      }
+    };
+    h.coordinator.begin(actorId, generation);
+    h.coordinator.snapshot(actorId);
+    h.coordinator.complete(actorId, target(), ref, [], ownerFence('target', 2n));
+  }
+  assert.equal(h.coordinator.messageFollowCount(), 128);
+  assert.equal(h.coordinator.messageFollowCount('actor-1'), 64);
+  const parts = frame('indexed-native');
+  const ref = { ...actorRef(128n), nodeRid: 'source-node' };
+  reads.clear();
+  try {
+    await h.coordinator.capture('remote', ref.actorId, parts, false, undefined, ref, undefined, {
+      sourceNodeRid: 'caller',
+      originalOperation: { high: 7n, low: 13n },
+      originalReplyRouteId: 0n,
+      target: {
+        actor: {
+          actorId: ref.actorId,
+          nodeRid: ref.nodeRid,
+          generation: ref.objectGeneration
+        },
+        targetNodeGeneration: 1n,
+        authorityOwnerGeneration: 1n,
+        ownerLeaseGeneration: 1n
+      }
+    });
+    assert.deepEqual(h.followed, ['indexed-native']);
+    assert.deepEqual(
+      [...reads.keys()].filter((index) => index !== 127),
+      []
+    );
+    reads.clear();
+    assert.equal(h.coordinator.hasMessageFollowRouteForStaleRef('missing-actor', ref), false);
+    assert.equal(h.coordinator.hasMessageFollowRouteForStaleRef('actor-1', ref), true);
+    assert.deepEqual(
+      [...reads.keys()].filter((index) => index < 64),
+      []
+    );
+  } finally {
+    parts.forEach((part) => part.close());
+  }
+});
+
+test('native fence lookup preserves contextual owner identity and replacement order', async () => {
+  const h = harness(30_000);
+  const sourceA = sourceOwnerFence();
+  const sourceB = messageFollow.ownerFence({
+    ...sourceA,
+    ownerId: 'other-source-owner'
+  });
+  for (const [source, destination] of [
+    [sourceA, 'first'],
+    [sourceB, 'second'],
+    [sourceA, 'replacement']
+  ]) {
+    h.setRequestSource({ ...source, objectGeneration: 1n });
+    h.coordinator.begin('actor-1', 1n);
+    h.coordinator.snapshot('actor-1');
+    h.coordinator.complete(
+      'actor-1',
+      target(destination),
+      targetActorRef(destination),
+      [],
+      ownerFence(destination, 2n)
+    );
+  }
+  assert.equal(h.coordinator.messageFollowCount('actor-1'), 2);
+  const parts = frame('owner-identity');
+  const ref = { ...actorRef(), nodeRid: 'source-node' };
+  try {
+    await h.coordinator.capture('remote', ref.actorId, parts, false, undefined, ref, undefined, {
+      sourceNodeRid: 'caller',
+      originalOperation: { high: 7n, low: 14n },
+      originalReplyRouteId: 0n,
+      target: {
+        actor: { actorId: ref.actorId, nodeRid: ref.nodeRid, generation: 1n },
+        targetNodeGeneration: 1n,
+        authorityOwnerGeneration: 1n,
+        ownerLeaseGeneration: 1n
+      }
+    });
+    await h.coordinator.capture(
+      'remote',
+      ref.actorId,
+      parts,
+      false,
+      undefined,
+      contextRef(parts, { actorRef: ref, sourceOwner: sourceB })
+    );
+    const contexts = h.messageFollowPayloads.map(
+      (payload) => actorRelayWire.decodeRemoteActorPacketRelayPayload(payload).messageFollowContext
+    );
+    assert.deepEqual(
+      contexts.map((context) => context.targetOwner.ownerId),
+      ['replacement-owner', 'second-owner']
+    );
+    await assert.rejects(
+      h.coordinator.capture(
+        'remote',
+        ref.actorId,
+        parts,
+        false,
+        undefined,
+        contextRef(parts, {
+          actorRef: ref,
+          sourceOwner: { ...sourceA, ownerId: 'missing-owner' }
+        })
+      ),
+      { kind: framework.ZLinkFrameworkErrorKind.Unavailable }
+    );
+  } finally {
+    parts.forEach((part) => part.close());
+  }
+});
+
+test('native Actor ingress retains its exact source fence across a completed Join', async () => {
+  const h = harness(30_000);
+  h.setCurrentGeneration(1n);
+  h.coordinator.begin('actor-1', 1n);
+  h.coordinator.snapshot('actor-1');
+  h.coordinator.complete('actor-1', target(), targetActorRef(), [], ownerFence('target', 2n));
+  const parts = frame('native-after-join');
+  const ref = { ...actorRef(), nodeRid: 'source-node' };
+  const origin = {
+    sourceNodeRid: 'caller', originalOperation: { high: 7n, low: 11n }, originalReplyRouteId: 0n,
+    target: { actor: { actorId: ref.actorId, nodeRid: ref.nodeRid, generation: ref.objectGeneration },
+      targetNodeGeneration: 1n, authorityOwnerGeneration: 1n, ownerLeaseGeneration: 1n }
+  };
+  try {
+    for (const field of ['targetNodeGeneration', 'authorityOwnerGeneration', 'ownerLeaseGeneration']) {
+      await assert.rejects(h.coordinator.capture('remote', ref.actorId, parts, false, undefined, ref,
+        undefined, { ...origin, target: { ...origin.target, [field]: 99n } }),
+      { kind: framework.ZLinkFrameworkErrorKind.Unavailable });
+    }
+    await h.coordinator.capture('remote', ref.actorId, parts, false, undefined, ref, undefined, origin);
+    await h.coordinator.capture('remote', ref.actorId, parts, false, undefined, ref, undefined, origin);
+    assert.deepEqual(h.followed, ['native-after-join']);
+    const context = actorRelayWire.decodeRemoteActorPacketRelayPayload(h.messageFollowPayloads[0]).messageFollowContext;
+    assert.equal(context.operationId, '0000000000000007000000000000000b');
+    assert.equal(context.objectGeneration, '1');
+    assert.equal(context.sourceOwner.authorityOwnerGeneration, '1');
+    assert.equal(context.targetOwner.authorityOwnerGeneration, '2');
+  } finally {
+    parts.forEach(part => part.close());
+  }
+});
+
+test('native ingress for a departed tenure follows that route while a successor Join is active', async () => {
+  const h = harness(30_000);
+  h.setCurrentGeneration(1n);
+  h.coordinator.begin('actor-1', 1n);
+  h.coordinator.snapshot('actor-1');
+  h.coordinator.complete('actor-1', target(), targetActorRef(), [], ownerFence('target', 2n));
+  h.setRequestSource({ meshName: 'mesh', objectGeneration: 1n, ownerId: 'source-owner',
+    ownerLeaseGeneration: 1n, nodeRid: 'source-node', nodeGeneration: 1n, authorityOwnerGeneration: 3n });
+  h.setCurrentNodeRid('source-node');
+  h.setCurrentOwner(sourceOwnerFence(3n));
+  h.coordinator.begin('actor-1', 1n);
+  const parts = frame('departed-tenure');
+  const ref = { ...actorRef(), nodeRid: 'source-node' };
+  try {
+    await h.coordinator.capture('remote', ref.actorId, parts, false, undefined, ref, undefined, {
+      sourceNodeRid: 'caller', originalOperation: { high: 7n, low: 12n }, originalReplyRouteId: 0n,
+      target: { actor: { actorId: ref.actorId, nodeRid: ref.nodeRid, generation: ref.objectGeneration },
+        targetNodeGeneration: 1n, authorityOwnerGeneration: 1n, ownerLeaseGeneration: 1n }
+    });
+    assert.deepEqual(h.followed, ['departed-tenure']);
+    assert.deepEqual(h.coordinator.snapshot(ref.actorId), []);
+  } finally {
+    h.coordinator.cancel(ref.actorId);
+    parts.forEach(part => part.close());
+  }
+});
+
 test('handoff admission requires committed source and target owner fences', () => {
   let sourceLookupCount = 0;
   const invalidGeneration = new framework.ZLinkActorHandoffCoordinator({

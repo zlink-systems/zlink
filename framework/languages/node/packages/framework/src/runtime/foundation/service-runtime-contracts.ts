@@ -246,6 +246,8 @@ export interface ZLinkMessageFollowOrigin {
   readonly sourceNodeRid: RoutingId;
   readonly originalOperation: MeshOperationId;
   readonly originalReplyRouteId: bigint;
+  /** The canonical target accepted with the original native Actor frame. */
+  readonly target?: import('./service-stateful-wire-codec').ServiceActorRouteFence;
 }
 
 export interface ReceiveRecord {
