@@ -203,6 +203,11 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
         participants = {});
     result_t<std::shared_ptr<serial_handler_participant_t>> observe_handler_terminal ();
     result_t<void> retain_mailbox_until (task_t<void> terminal, std::function<void ()> cancel = {});
+    // Continues an already accepted turn, including its shutdown completion.
+    bool try_post_continuation (std::string name,
+                                async_work_t work,
+                                const std::shared_ptr<detail::serial_turn_t> &accepted_turn,
+                                bool holds_application_while_waiting = false);
     void post (std::string name, std::function<void ()> work);
     void post (std::string name, std::function<void ()> work, serial_work_options_t options);
     void post_async (std::string name, async_work_t work);
@@ -354,10 +359,6 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
                          item_origin_t origin = {});
     /* A lifecycle operation that released its turn (Yield) keeps the lifecycle
      * lane until its terminal (§7): only its own continuation runs there. */
-    bool try_post_continuation (std::string name,
-                                async_work_t work,
-                                serial_work_lane_t lane,
-                                std::shared_ptr<serial_turn_chain_t> chain);
     void hold_lifecycle (std::shared_ptr<serial_turn_chain_t> chain);
     void release_lifecycle_hold (std::shared_ptr<serial_turn_chain_t> chain);
     void schedule_after_settle ();

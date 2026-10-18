@@ -519,6 +519,8 @@ class serial_turn_handle_impl_t final
     : public detail::serial_turn_t,
       public std::enable_shared_from_this<serial_turn_handle_impl_t>
 {
+    friend class serial_execution_queue_t;
+
   public:
     serial_turn_handle_impl_t (serial_execution_queue_t &queue,
                                std::string name,
@@ -628,11 +630,23 @@ class serial_turn_handle_impl_t final
                     return;
                 if (self->_queue.try_post_continuation (
                       self->_name + "-await-resume",
-                      [work = continuation] (auto complete) mutable {
-                          work ();
+                      [self, work = continuation] (auto complete) mutable {
+                          // Closing changes the wait result, not its right to run cleanup.
+                          if (self->_queue.closed ())
+                              detail::set_serial_resume_failure (
+                                framework_error_kind_t::shutting_down,
+                                detail::registered_execution_context_shutting_down_message);
+                          try {
+                              work ();
+                          }
+                          catch (...) {
+                              (void) detail::take_serial_resume_failure ();
+                              throw;
+                          }
+                          (void) detail::take_serial_resume_failure ();
                           complete ([] {});
                       },
-                      self->_lane, self->chain ())) {
+                      self, self->_holds_application_while_waiting)) {
                     return;
                 }
                 // The continuation cannot reach the queue: the handler ends here.
@@ -644,13 +658,13 @@ class serial_turn_handle_impl_t final
                           [work = continuation_state] () mutable {
                               detail::set_serial_resume_failure (
                                 framework_error_kind_t::shutting_down,
-                                "serial execution queue executor is stopping");
+                                detail::registered_execution_context_shutting_down_message);
                               (*work) ();
                               (void) detail::take_serial_resume_failure ();
                           })) {
                         detail::set_serial_resume_failure (
                           framework_error_kind_t::shutting_down,
-                          "serial execution queue executor is stopping");
+                          detail::registered_execution_context_shutting_down_message);
                         (*continuation_state) ();
                         (void) detail::take_serial_resume_failure ();
                     }
@@ -1065,9 +1079,18 @@ void serial_execution_queue_t::prepare_application_head_locked ()
                   if (!self->owns_shared_gate ())
                       lock.lock ();
                   const auto record = weak_record.lock ();
+                  if (!record || !record->admission.durable ())
+                      return;
                   const auto next = self->next_application_locked ();
-                  if (!record || next == self->_application.queue.end ()
-                      || next->application_record != record || !record->admission.durable ())
+                  auto owned = next;
+                  if (owned == self->_application.queue.end ()
+                      || owned->application_record != record)
+                      owned = std::find_if (self->_application.queue.begin (),
+                                            self->_application.queue.end (),
+                                            [&record] (const work_item_t &item) {
+                                                return item.application_record == record;
+                                            });
+                  if (owned == self->_application.queue.end ())
                       return;
                   auto &state = std::get<serial_application_admission_t::durable_t> (
                     record->admission.reservation);
@@ -1075,6 +1098,12 @@ void serial_execution_queue_t::prepare_application_head_locked ()
                       if (lock.owns_lock ())
                           lock.unlock ();
                       self->cancel_pending_owned ();
+                      return;
+                  }
+                  if (owned != next) {
+                      state.supply.emplace<serial_application_admission_t::initial_t> ();
+                      grant->reset ();
+                      (void) self->schedule_drain_locked ();
                       return;
                   }
                   state.supply.emplace<application_job_queue_t::permit_t> (std::move (**grant));
@@ -1307,7 +1336,8 @@ result_t<serial_submission_id_t> serial_execution_queue_t::try_post_cancellable_
                              std::move (cancel))) {
             --_next_submission_id;
             return result_t<serial_submission_id_t>::failure (
-              framework_error_kind_t::shutting_down, "serial execution queue executor is stopping");
+              framework_error_kind_t::shutting_down,
+              detail::registered_execution_context_shutting_down_message);
         }
     }
     if (transfer_owner_reservation) {
@@ -1494,20 +1524,23 @@ serial_execution_queue_t::reserve_deferred_barrier_next (
     return result_t<std::shared_ptr<detail::deferred_barrier_t>>::success (std::move (barrier));
 }
 
-bool serial_execution_queue_t::try_post_continuation (std::string name,
-                                                      async_work_t work,
-                                                      serial_work_lane_t lane,
-                                                      std::shared_ptr<serial_turn_chain_t> chain)
+bool serial_execution_queue_t::try_post_continuation (
+  std::string name,
+  async_work_t work,
+  const std::shared_ptr<detail::serial_turn_t> &accepted_turn,
+  bool holds_application_while_waiting)
 {
-    bool accepted;
-    {
-        std::lock_guard<std::mutex> lock (_mutex);
-        if (_closed)
-            return false;
-        accepted = enqueue_locked (std::move (name), std::move (work), serial_work_options_t{lane},
-                                   0, {}, item_origin_t{std::move (chain), {}});
-    }
-    return accepted;
+    const auto turn = std::dynamic_pointer_cast<serial_turn_handle_impl_t> (accepted_turn);
+    assert (turn);
+    // The accepted operation retains its source FIFO while its callback uses
+    // the execution owner selected by the current Spot membership.
+    const auto chain = turn->chain ();
+    std::lock_guard<std::mutex> lock (_mutex);
+    return enqueue_locked (
+      std::move (name), std::move (work),
+      serial_work_options_t{.lane = turn->lane (),
+                            .holds_application_while_waiting = holds_application_while_waiting},
+      0, {}, item_origin_t{chain, {}});
 }
 
 void serial_execution_queue_t::hold_lifecycle (std::shared_ptr<serial_turn_chain_t> chain)
@@ -1891,7 +1924,7 @@ void serial_execution_queue_t::cancel_pending_owned () noexcept
                   // Actor claims still drain through this gate.
                   // Their closed-Spot rejection or lifecycle
                   // terminal is decided by the Actor mailbox.
-                  if (_lane_policy.allows_turn_yield () && item.actor_mailbox)
+                  if (item.chain || (_lane_policy.allows_turn_yield () && item.actor_mailbox))
                       return false;
                   queued_bytes += item.byte_cost;
                   ++removed;
@@ -2711,6 +2744,7 @@ void serial_execution_queue_t::complete_one (std::string name,
         _active_lane.reset ();
         _active_bytes = 0;
         --_active;
+        prepare_application_head_locked ();
         const bool claim_expired =
           _options.owner_time_budget.count () != 0 && _claim_started_at
           && std::chrono::steady_clock::now () - *_claim_started_at >= _options.owner_time_budget;

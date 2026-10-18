@@ -34,8 +34,6 @@ namespace zlink::framework::detail
 
 inline constexpr std::size_t max_pending_handoff_requests = 1024;
 
-class actor_join_lifecycle_reservation_t;
-
 enum class actor_move_phase_t
 {
     source_reserved,
@@ -67,7 +65,6 @@ struct pending_actor_admission_t
     std::uint64_t source_node_generation = 0;
     std::uint64_t source_owner_lease_generation = 0;
     std::optional<message_t> admission_reply;
-    std::shared_ptr<actor_join_lifecycle_reservation_t> lifecycle_reservation;
     std::vector<std::uint8_t> session_relocation_route;
     std::string session_relocation_actor_type;
     std::uint64_t session_relocation_target_owner_lease_generation = 0;

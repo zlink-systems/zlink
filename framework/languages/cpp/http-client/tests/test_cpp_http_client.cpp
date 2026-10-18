@@ -190,8 +190,10 @@ class recording_execution_turn_t final : public zlink::http_client::execution_tu
     bool claim_yield () override { return !_released && !std::exchange (_yield_claimed, true); }
     bool belongs_to (const void *owner) const noexcept override { return owner == this; }
     bool is_after_active_phase () const noexcept override { return false; }
-    zlink::framework::result_t<void> defer (std::function<zlink::framework::task_t<void> ()> work,
-                                            std::function<void ()>) override
+    zlink::framework::result_t<void>
+    defer (std::function<zlink::framework::task_t<void> ()> work,
+           std::function<void ()>,
+           std::shared_ptr<zlink::framework::detail::deferred_barrier_t>) override
     {
         auto pending = std::make_shared<zlink::framework::task_t<void>> (work ());
         zlink::framework::detail::observe_task_terminal (

@@ -1000,62 +1000,6 @@ void configure_spot_execution (
 namespace detail
 {
 
-class actor_join_lifecycle_reservation_t final
-    : public std::enable_shared_from_this<actor_join_lifecycle_reservation_t>
-{
-  public:
-    explicit actor_join_lifecycle_reservation_t (std::shared_ptr<deferred_barrier_t> barrier) :
-        _barrier (std::move (barrier))
-    {
-    }
-
-    ~actor_join_lifecycle_reservation_t () { _barrier->cancel (); }
-
-    result_t<void> activate_async (std::function<void ()> work)
-    {
-        return _barrier->activate_async (
-          [self = shared_from_this (), work = std::move (work)] (auto release) mutable {
-              std::optional<result_t<void>> terminal;
-              {
-                  std::lock_guard lock (self->_mutex);
-                  terminal = std::move (self->_terminal);
-                  if (!terminal)
-                      self->_release = std::move (release);
-              }
-              if (terminal) {
-                  release (std::move (*terminal));
-                  return;
-              }
-              work ();
-          });
-    }
-
-    void settle (result_t<void> result)
-    {
-        deferred_barrier_t::async_completion_t release;
-        {
-            std::lock_guard lock (_mutex);
-            if (_settled)
-                return;
-            _settled = true;
-            release = std::move (_release);
-            if (!release)
-                _terminal = result;
-        }
-        if (release)
-            release (std::move (result));
-        else
-            _barrier->cancel ();
-    }
-
-  private:
-    std::shared_ptr<deferred_barrier_t> _barrier;
-    std::mutex _mutex;
-    deferred_barrier_t::async_completion_t _release;
-    std::optional<result_t<void>> _terminal;
-    bool _settled = false;
-};
-
 thread_local constinit const spot_context_state_t *current_callback_context = nullptr;
 
 namespace
@@ -2946,7 +2890,8 @@ void spot_context_state_t::run_serial_task_async (
   std::function<void ()> activation_callback,
   std::function<void (bool)> cancellation_observed,
   std::function<void ()> transfer_owner_reservation,
-  std::size_t transferred_owner_byte_cost)
+  std::size_t transferred_owner_byte_cost,
+  std::shared_ptr<serial_turn_t> accepted_turn)
 {
     transferred_owner_reservation_guard_t owner_reservation (
       std::move (transfer_owner_reservation));
@@ -2958,7 +2903,7 @@ void spot_context_state_t::run_serial_task_async (
         return;
     }
 
-    if (!admit ()) {
+    if (!accepted_turn && !admit ()) {
         completion (detail::result_access_t::failure<void> (sealed_admission_error ()));
         return;
     }
@@ -3048,9 +2993,8 @@ void spot_context_state_t::run_serial_task_async (
         }
     };
     const std::weak_ptr<spot_context_state_t> weak_owner = weak_from_this ();
-    const auto submitted = queue->try_post_cancellable_async (
-      std::move (name),
-      [weak_owner, work = std::move (work), state, settle,
+    runtime::serial_execution_queue_t::async_work_t execute =
+      [weak_owner, accepted_turn, work = std::move (work), state, settle,
        activation_callback = std::move (activation_callback)] (auto complete) mutable {
           bool cancelled_before_start = false;
           {
@@ -3080,7 +3024,7 @@ void spot_context_state_t::run_serial_task_async (
               callback_context_scope_t callback_scope (owner.get ());
               auto observed = std::make_shared<task_t<void>> (work ());
               detail::observe_task_completion (
-                *observed, [owner, observed, work = std::move (work), settle, turn,
+                *observed, [owner, accepted_turn, observed, work = std::move (work), settle, turn,
                             complete] (const result_t<void> &value) mutable {
                     const auto final_result =
                       value
@@ -3122,8 +3066,17 @@ void spot_context_state_t::run_serial_task_async (
                                                    "spot lifecycle callback failed"));
               });
           }
-      },
-      std::move (request_cancel),
+      };
+    if (accepted_turn) {
+        owner_reservation.settle ();
+        if (!queue->try_post_continuation (std::move (name), std::move (execute), accepted_turn,
+                                           true))
+            settle (result_t<void>::failure (framework_error_kind_t::shutting_down,
+                                             "Spot continuation executor is stopping"));
+        return;
+    }
+    const auto submitted = queue->try_post_cancellable_async (
+      std::move (name), std::move (execute), std::move (request_cancel),
       runtime::serial_work_options_t{.lane = runtime::serial_work_lane_t::lifecycle,
                                      .byte_cost = transferred_owner_byte_cost,
                                      .transfer_owner_reservation = owner_reservation.callback (),
@@ -7950,8 +7903,7 @@ bool spot_node_runtime_t::consume_actor_join_recovery (
                              recovery->handoff_id, spot_id_t (recovery->source_spot_id),
                              admission->target_spot_id, recovery->target_node_generation,
                              recovery->target_spot_generation, admission->source_actor,
-                             recovery->operation.high, recovery->operation.low, recovery->reply,
-                             admission->lifecycle_reservation})
+                             recovery->operation.high, recovery->operation.low, recovery->reply})
                  .second)
               return false;
           frozen.pending_application.erase (recovery_record);
@@ -8487,7 +8439,6 @@ bool spot_node_runtime_t::commit_relocation_materialization (
         std::shared_ptr<spot_context_state_t> target_context;
         std::shared_ptr<void> actor_instance;
         detail::spot_actor_admission_callbacks_t admission;
-        std::shared_ptr<detail::actor_join_lifecycle_reservation_t> lifecycle_reservation;
     };
     std::vector<actor_join_completion_record_t> actor_join_completions;
     std::shared_ptr<runtime::stateful::authority_relocation_port_t> authority_store;
@@ -8530,8 +8481,7 @@ bool spot_node_runtime_t::commit_relocation_materialization (
                            recovery->second.completion_operation_id_high,
                            recovery->second.completion_operation_id_low,
                            recovery->second.admission_reply, context->second._state,
-                           instance->second, admission->second,
-                           recovery->second.lifecycle_reservation});
+                           instance->second, admission->second});
                     }
                     continue;
                 }
@@ -8617,8 +8567,18 @@ bool spot_node_runtime_t::commit_relocation_materialization (
             catch (...) {
                 failed = detail::current_exception_result<void> ();
             }
-            if (completion_record->lifecycle_reservation)
-                completion_record->lifecycle_reservation->settle (std::move (failed));
+            detail::dispatch_error_reporter_t (node->dispatch).report_lazy ([&] {
+                return message_dispatch_error_event_t{
+                  .surface = dispatch_error_surface_t::spot_actor,
+                  .message_kind = dispatch_message_kind_t::actor_request,
+                  .reason = dispatch_error_reason_t::handler_exception,
+                  .action = dispatch_error_action_t::fail_caller,
+                  .packet_name = "JoinSpot",
+                  .spot_id = std::string (completion_record->target_spot_id),
+                  .actor_id = std::string (completion_record->actor.actor_id ().value ()),
+                  .correlation_id = completion_record->handoff_id,
+                  .exception = failed.exception ()};
+            });
         };
         auto complete_join = [node = _state, completion_record, fail_commit] () mutable {
             auto &completion = *completion_record;
@@ -8803,9 +8763,6 @@ bool spot_node_runtime_t::commit_relocation_materialization (
                                       }
                                   }
                               }
-                              if (completion.lifecycle_reservation)
-                                  completion.lifecycle_reservation->settle (
-                                    result_t<void>::success ());
                           }
                           catch (...) {
                               fail_commit (detail::current_exception_result<void> ());
@@ -8824,33 +8781,23 @@ bool spot_node_runtime_t::commit_relocation_materialization (
                 auto context = completion.target_context;
                 auto callback = completion.admission.on_actor_joined;
                 auto actor = completion.actor_instance;
-                auto run_joined = [context, callback, actor, finish_join, fail_join] () mutable {
-                    try {
-                        context->run_serial_task_async (
-                          "spot-relocation-actor-joined",
-                          [context, callback, actor] {
-                              return callback (context->spot_instance.get (), actor.get ());
-                          },
-                          [finish_join, fail_join] (result_t<void> value) mutable {
-                              try {
-                                  finish_join (std::move (value));
-                              }
-                              catch (...) {
-                                  fail_join (detail::current_exception_result<void> ());
-                              }
-                          });
-                    }
-                    catch (...) {
-                        finish_join (detail::current_exception_result<void> ());
-                    }
-                };
-                if (completion.lifecycle_reservation) {
-                    const auto activated =
-                      completion.lifecycle_reservation->activate_async (std::move (run_joined));
-                    if (!activated)
-                        fail_join (activated);
-                } else {
-                    run_joined ();
+                try {
+                    context->run_serial_task_async (
+                      "spot-relocation-actor-joined",
+                      [context, callback, actor] {
+                          return callback (context->spot_instance.get (), actor.get ());
+                      },
+                      [finish_join, fail_join] (result_t<void> value) mutable {
+                          try {
+                              finish_join (std::move (value));
+                          }
+                          catch (...) {
+                              fail_join (detail::current_exception_result<void> ());
+                          }
+                      });
+                }
+                catch (...) {
+                    finish_join (detail::current_exception_result<void> ());
                 }
                 return;
             }
@@ -9108,9 +9055,8 @@ task_t<spot_actor_join_result_t> spot_node_runtime_t::admit_remote_actor_to_spot
     }
 
     auto &target = *target_state;
-    // A resend of an admitted attempt belongs to that attempt. It parks against
-    // the existing preparation and does not queue a second lifecycle item
-    // behind the position the accepted Join still holds.
+    // A resend of an admitted attempt belongs to its existing preparation and
+    // does not invoke the admission callback a second time.
     if (const auto existing = _state->actor_transfer_coordinator.admission (transfer_id)) {
         if (!existing->matches_prepare (store_actor, source_spot_id, target_spot_id,
                                         completion_operation_id_high,
@@ -9122,8 +9068,7 @@ task_t<spot_actor_join_result_t> spot_node_runtime_t::admit_remote_actor_to_spot
         return task_t<spot_actor_join_result_t> (result_t<spot_actor_join_result_t>::success (
           spot_actor_join_result_t{true, existing->admission_reply}));
     }
-    // A newer attempt displaces the older one before its admission queues, so
-    // the older attempt's lifecycle position is released instead of awaited.
+    // Displace an older attempt before submitting the newer admission.
     std::vector<handoff_packet_t> displaced_backlog;
     (void) _state->actor_transfer_coordinator.admit_attempt (actor_key (store_actor), transfer_id,
                                                              displaced_backlog);
@@ -9138,7 +9083,6 @@ task_t<spot_actor_join_result_t> spot_node_runtime_t::admit_remote_actor_to_spot
     {
         spot_actor_join_result_t response;
         bool admission_conflict = false;
-        bool reservation_failed = false;
     };
     auto outcome = std::make_shared<admission_outcome_t> ();
     auto admitted = std::make_shared<task_completion_source_t<spot_actor_join_result_t>> ();
@@ -9156,22 +9100,6 @@ task_t<spot_actor_join_result_t> spot_node_runtime_t::admit_remote_actor_to_spot
           auto &target = *target_state;
           auto &response = outcome->response;
           response = admission.join (target.spot_instance.get (), actor_id, request, *serializers);
-          std::shared_ptr<detail::actor_join_lifecycle_reservation_t> join_reservation;
-          if (response.accepted && actor_type_from_authority_only && !target.is_entry_spot ()
-              && !target.is_instance_spot ()) {
-              if (!target.serial_queue) {
-                  outcome->reservation_failed = true;
-                  return task_t<void> (result_t<void>::success ());
-              }
-              auto reserved =
-                target.serial_queue->reserve_barrier_next ("spot-actor-join-terminal");
-              if (!reserved) {
-                  outcome->reservation_failed = true;
-                  return task_t<void> (result_t<void>::success ());
-              }
-              join_reservation = std::make_shared<detail::actor_join_lifecycle_reservation_t> (
-                std::move (reserved.value ()));
-          }
           if (response.accepted
               && !state->actor_transfer_coordinator.try_add_admission (
                 transfer_id,
@@ -9197,8 +9125,7 @@ task_t<spot_actor_join_result_t> spot_node_runtime_t::admit_remote_actor_to_spot
                   .source_actor_authority_owner_generation = actor_authority_owner_generation,
                   .source_node_generation = actor_node_generation,
                   .source_owner_lease_generation = expected_owner_lease_generation,
-                  .admission_reply = response.reply,
-                  .lifecycle_reservation = join_reservation})) {
+                  .admission_reply = response.reply})) {
               outcome->admission_conflict = true;
           }
           return task_t<void> (result_t<void>::success ());
@@ -9214,12 +9141,6 @@ task_t<spot_actor_join_result_t> spot_node_runtime_t::admit_remote_actor_to_spot
               admitted->complete (result_t<spot_actor_join_result_t>::failure (
                 framework_error_kind_t::unavailable,
                 "remote actor admission conflicts with the current membership"));
-              return;
-          }
-          if (outcome->reservation_failed) {
-              admitted->complete (result_t<spot_actor_join_result_t>::failure (
-                framework_error_kind_t::shutting_down,
-                "target Spot lifecycle queue cannot retain the accepted Join"));
               return;
           }
           if (outcome->response.accepted
@@ -9878,8 +9799,10 @@ void spot_node_runtime_t::deliver_actor_join_completion_async (
         const auto callback_executor =
           callback_context ? callback_context->ensure_spot_serial_executor () : nullptr;
         if (callback_executor && callback_executor->uses_spot_execution_gate ()) {
+            const auto turn = detail::capture_current_serial_turn ();
             callback_context->run_serial_task_async (
-              "actor-join-completion", std::move (invoke_callback), std::move (finish_callback));
+              "actor-join-completion", std::move (invoke_callback), std::move (finish_callback), {},
+              {}, {}, {}, 0, turn);
             return;
         }
         auto observed = std::make_shared<task_t<void>> (invoke_callback ());

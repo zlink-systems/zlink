@@ -350,7 +350,6 @@ class spot_node_builder_state_t
         std::uint64_t completion_operation_id_high = 0;
         std::uint64_t completion_operation_id_low = 0;
         std::vector<std::uint8_t> admission_reply;
-        std::shared_ptr<actor_join_lifecycle_reservation_t> lifecycle_reservation;
     };
     std::map<std::string, actor_join_relocation_recovery_t> actor_join_relocation_recoveries;
     // Message Follow relays messages that reach the committed source route
@@ -1250,7 +1249,8 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
       std::function<void ()> activated = {},
       std::function<void (bool)> cancellation_observed = {},
       std::function<void ()> transfer_owner_reservation = {},
-      std::size_t transferred_owner_byte_cost = 0);
+      std::size_t transferred_owner_byte_cost = 0,
+      std::shared_ptr<serial_turn_t> accepted_turn = {});
     /* The lifecycle item completes the task. A caller that holds this Spot's turn
      * runs the work inline, so its task is already complete. */
     task_t<void> run_serial_task (std::string name, std::function<task_t<void> ()> work);

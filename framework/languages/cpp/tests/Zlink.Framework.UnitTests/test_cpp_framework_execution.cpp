@@ -5631,15 +5631,19 @@ bool verify_join_commit_does_not_wait_for_joined_callback (bool lifecycle_failur
     constexpr std::uint64_t operation_low = 37;
     constexpr std::string_view lifecycle_error = "materialized lifecycle failure";
     constexpr std::string_view completion_error = "materialized completion failure";
-    std::atomic_int reservation_failures{0};
-    std::atomic_bool reservation_identity{false};
-    spot->serial_queue = std::make_shared<runtime::serial_execution_queue_t> (
-      *spot->serial_executor, runtime::serial_execution_queue_options_t{},
-      [&reservation_failures, &reservation_identity, completion_failure, lifecycle_error,
-       completion_error] (const std::string &, const std::exception_ptr &error) {
-          ++reservation_failures;
+    std::atomic_int commit_failures{0};
+    std::atomic_bool commit_identity{false};
+    dispatch_options_access_t::set_dispatch_error_observer_for_tests (
+      node->dispatch,
+      [&commit_failures, &commit_identity, completion_failure, lifecycle_error, completion_error,
+       transfer_id] (const message_dispatch_error_event_t &event) {
+          if (event.packet_name != "JoinSpot" || event.correlation_id != transfer_id)
+              return;
+          ++commit_failures;
+          if (!event.exception)
+              return;
           try {
-              std::rethrow_exception (error);
+              std::rethrow_exception (event.exception);
           }
           catch (const framework_exception_t &failure) {
               if (failure.kind ()
@@ -5647,9 +5651,12 @@ bool verify_join_commit_does_not_wait_for_joined_callback (bool lifecycle_failur
                                            : framework_error_kind_t::unavailable)
                   && std::string_view (failure.what ())
                        == (completion_failure ? completion_error : lifecycle_error))
-                  reservation_identity.store (true);
+                  commit_identity.store (true);
           }
-      },
+      });
+    spot->serial_queue = std::make_shared<runtime::serial_execution_queue_t> (
+      *spot->serial_executor, runtime::serial_execution_queue_options_t{},
+      runtime::serial_execution_queue_t::error_handler_t{},
       runtime::serial_lane_policy_t::spot_wide ());
     node->spot_contexts_by_id.emplace (spot->spot_id, spot_context_access_t::create (spot));
     spot_node_builder_state_t::actor_factory_registration_t factory;
@@ -5732,7 +5739,7 @@ bool verify_join_commit_does_not_wait_for_joined_callback (bool lifecycle_failur
                                      operation_low, 19, 3, 5, true, 1, 1)
         .result ();
     const auto pending = node->actor_transfer_coordinator.admission (transfer_id);
-    if (!admitted || !admitted.value ().accepted || !pending || !pending->lifecycle_reservation)
+    if (!admitted || !admitted.value ().accepted || !pending)
         return false;
     std::vector<handoff_packet_t> discarded;
     if (!node->actor_transfer_coordinator.begin_commit (transfer_id, source_actor, spot->spot_id,
@@ -5752,8 +5759,7 @@ bool verify_join_commit_does_not_wait_for_joined_callback (bool lifecycle_failur
              .target_node_generation = 1,
              .source_actor = source_actor,
              .completion_operation_id_high = operation_high,
-             .completion_operation_id_low = operation_low,
-             .lifecycle_reservation = pending->lifecycle_reservation});
+             .completion_operation_id_low = operation_low});
     std::promise<void> following_frame;
     auto following = following_frame.get_future ();
     std::atomic<bool> committed{false};
@@ -5774,20 +5780,20 @@ bool verify_join_commit_does_not_wait_for_joined_callback (bool lifecycle_failur
     spot->serial_queue->drain ();
     node->worker_executor->drain ();
     const bool failure_preserved =
-      completions.load () == 1 && completion_identity.load () && reservation_failures.load () == 1
-      && reservation_identity.load () && source_leave_failures.load () == 0
+      completions.load () == 1 && completion_identity.load () && commit_failures.load () == 1
+      && commit_identity.load () && source_leave_failures.load () == 0
       && node->actor_transfer_coordinator.phase (key) == actor_move_phase_t::reconcile
       && node->actor_transfer_coordinator.blocks_dispatch (key)
       && authority->read (target.kind, target.key)->target == target;
     if (lifecycle_failure && !failure_preserved) {
         std::cerr << "materialized Join failure: callbacks=" << completions.load ()
                   << " identity=" << completion_identity.load ()
-                  << " reservation-errors=" << reservation_failures.load ()
+                  << " commit-errors=" << commit_failures.load ()
                   << " dispatch-blocked=" << node->actor_transfer_coordinator.blocks_dispatch (key)
                   << " callback-failure=" << completion_failure << '\n';
     }
     const bool accepted_completed =
-      completions.load () == 1 && completion_identity.load () && reservation_failures.load () == 0
+      completions.load () == 1 && completion_identity.load () && commit_failures.load () == 0
       && source_leave_failures.load () == 1 && source_leave_identity.load ();
     if (!lifecycle_failure && !accepted_completed) {
         std::cerr << "materialized Join SourceLeave: observations=" << source_leave_failures.load ()
@@ -6927,8 +6933,8 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
     leave_submit_terminal.complete (result_t<void>::failure (
       framework_error_kind_t::internal_failure, "deterministic source leave submit failure"));
 
-    // Accepted canonical Join keeps its original lifecycle position during
-    // placement. Cancelling that admission releases the position exactly once.
+    // The actual Actor FIFO owns an accepted Join's terminal. Unrelated
+    // target Spot lifecycle and application work progress before it settles.
     const auto held_actor =
       actor_ref_access_t::make (node_rid_t::from_string ("source-node"), "player", "actor-c7", 7);
     const std::string held_transfer_id = "transfer-c7";
@@ -6943,27 +6949,33 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
         .result ();
     if (!held_admitted || !held_admitted.value ().accepted)
         return false;
-    std::atomic_bool later_lifecycle_ran{false};
-    target->serial_queue->post (
-      "later-lifecycle-after-accepted-join", [&] { later_lifecycle_ran.store (true); },
-      runtime::serial_work_options_t{runtime::serial_work_lane_t::lifecycle});
     std::mutex held_gate;
     std::condition_variable held_changed;
     bool application_progressed = false;
+    std::atomic_bool later_lifecycle_ran{false};
+    target->serial_queue->post (
+      "later-lifecycle-after-accepted-join",
+      [&] {
+          std::lock_guard lock (held_gate);
+          later_lifecycle_ran.store (true);
+          held_changed.notify_all ();
+      },
+      runtime::serial_work_options_t{runtime::serial_work_lane_t::lifecycle});
     target->serial_queue->post ("application-during-join-placement", [&] {
         std::lock_guard lock (held_gate);
         application_progressed = true;
         held_changed.notify_all ();
     });
+    bool progressed_before_cancel = false;
     {
         std::unique_lock lock (held_gate);
-        (void) held_changed.wait_for (lock, std::chrono::seconds (1),
-                                      [&] { return application_progressed; });
+        progressed_before_cancel = held_changed.wait_for (lock, std::chrono::seconds (1), [&] {
+            return application_progressed && later_lifecycle_ran.load ();
+        });
     }
-    const bool later_waited = !later_lifecycle_ran.load ();
     node->actor_transfer_coordinator.fail_commit (held_transfer_id, false);
     target->serial_queue->drain ();
-    if (!application_progressed || !later_waited || !later_lifecycle_ran.load ()
+    if (!progressed_before_cancel || !application_progressed || !later_lifecycle_ran.load ()
         || target->serial_queue->pending_count (runtime::serial_work_lane_t::lifecycle)
              != lifecycle_before)
         return false;
@@ -9506,7 +9518,6 @@ bool verify_deferred_extra_boundaries ()
 }
 
 
-// Insert beside the focused execution queue tests. Existing test includes suffice.
 class completion_callback_owner_probe_t final : public zlink::framework::actor_t
 {
   public:
@@ -9548,7 +9559,9 @@ class completion_callback_owner_probe_t final : public zlink::framework::actor_t
 };
 
 // policy: 0 = SpotWide, 1 = PerActor, 2 = Entry. Yield is tested only where allowed.
-bool verify_real_join_completion_callback_owner (int policy, bool yield_callback)
+bool verify_real_join_completion_callback_owner (int policy,
+                                                 bool yield_callback,
+                                                 bool close_before_callback = false)
 {
     namespace fw = zlink::framework;
     namespace rt = fw::runtime;
@@ -9601,6 +9614,8 @@ bool verify_real_join_completion_callback_owner (int policy, bool yield_callback
     if (reserved) {
         auto terminal = reserved.value ()->terminal ();
         auto activated = reserved.value ()->activate_async ([&] (auto complete) {
+            if (close_before_callback)
+                root->cancel_pending ();
             auto runtime = std::make_shared<detail::spot_node_runtime_t> (node);
             auto pending = std::make_shared<fw::task_t<fw::result_t<void>>> (
               runtime->deliver_actor_join_completion (
@@ -9615,16 +9630,22 @@ bool verify_real_join_completion_callback_owner (int policy, bool yield_callback
               });
         });
         passed = passed && static_cast<bool> (activated);
-        actor_queue->post ("same-actor-after-completion", [&] { ++same_actor_suffix; });
+        if (!close_before_callback)
+            actor_queue->post ("same-actor-after-completion", [&] { ++same_actor_suffix; });
         scheduler->run_all ();
         passed = passed && actor->entered == 1 && actor->returned == 0 && !terminal.await_ready ();
         passed =
           passed && actor->callback_turn
           && actor->callback_turn->belongs_to (policy == 0 ? root.get () : actor_queue.get ());
-        other_queue->post ("other-actor-during-completion", [&] { ++other_payload; });
-        root->post ("spot-during-completion", [&] { ++spot_payload; });
+        if (close_before_callback) {
+            passed = passed && !root->try_post ("fresh-after-close", [&] { ++spot_payload; });
+        } else {
+            other_queue->post ("other-actor-during-completion", [&] { ++other_payload; });
+            root->post ("spot-during-completion", [&] { ++spot_payload; });
+        }
         scheduler->run_all ();
-        const int expected_progress = policy != 0 || yield_callback ? 1 : 0;
+        const int expected_progress =
+          !close_before_callback && (policy != 0 || yield_callback) ? 1 : 0;
         passed = passed && other_payload == expected_progress && spot_payload == expected_progress
                  && same_actor_suffix == 0;
         actor->ordinary.complete (fw::result_t<void>::success ());
@@ -9633,8 +9654,10 @@ bool verify_real_join_completion_callback_owner (int policy, bool yield_callback
         passed = passed && terminal.await_ready ();
         if (terminal.await_ready ())
             passed = passed && static_cast<bool> (terminal.result ());
-        passed = passed && actor->entered == 1 && actor->returned == 1 && other_payload == 1
-                 && spot_payload == 1 && same_actor_suffix == 1;
+        const int expected_payload = close_before_callback ? 0 : 1;
+        passed = passed && actor->entered == 1 && actor->returned == 1
+                 && other_payload == expected_payload && spot_payload == expected_payload
+                 && same_actor_suffix == expected_payload;
     }
     const auto root_pending = root->pending_count ();
     const auto actor_pending = actor_queue->pending_count ();
@@ -9652,16 +9675,15 @@ bool verify_real_join_completion_callback_owner (int policy, bool yield_callback
     spot->node.reset ();
     scheduler->drain ();
     std::cout << "real-join-completion-owner policy=" << policy << " yield=" << yield_callback
-              << " entered=" << actor->entered << " returned=" << actor->returned
-              << " other_payload=" << other_payload << " spot_payload=" << spot_payload
-              << " same_actor_suffix=" << same_actor_suffix << " root_pending=" << root_pending
-              << " actor_pending=" << actor_pending << " other_pending=" << other_pending
-              << " passed=" << passed << '\n';
+              << " close_before_callback=" << close_before_callback << " entered=" << actor->entered
+              << " returned=" << actor->returned << " other_payload=" << other_payload
+              << " spot_payload=" << spot_payload << " same_actor_suffix=" << same_actor_suffix
+              << " root_pending=" << root_pending << " actor_pending=" << actor_pending
+              << " other_pending=" << other_pending << " passed=" << passed << '\n';
     return passed;
 }
 
 
-// Insert alongside verify_deferred_actual_terminal. Public queue operations only.
 bool verify_deferred_after_lifecycle_prefix (bool flat)
 {
     namespace fw = zlink::framework;
@@ -9721,10 +9743,161 @@ bool verify_deferred_after_lifecycle_prefix (bool flat)
 }
 
 
+bool verify_durable_policy_late_grant (bool transfer)
+{
+    namespace fw = zlink::framework;
+    namespace rt = fw::runtime;
+    const auto jobs =
+      std::make_shared<rt::application_job_queue_t> (rt::application_job_queue_configuration_t{
+        fw::application_job_queue_profile_t::balanced, 1u, 1, 1});
+    fw::test::manual_internal_scheduler_t worker;
+    auto source = std::make_shared<rt::serial_execution_queue_t> (worker);
+    auto target = std::make_shared<rt::serial_execution_queue_t> (worker);
+    auto held = jobs->try_reserve_supply ();
+    if (!held)
+        return false;
+    held->mark_queued ();
+    const auto make_record = [&] {
+        auto record = std::make_shared<rt::serial_application_record_t> ();
+        record->payload.emplace ();
+        record->admission.jobs = jobs;
+        return record;
+    };
+    auto a = make_record ();
+    auto b = make_record ();
+    int started_a = 0, started_b = 0, cancelled = 0;
+    const auto work = [&] (const std::shared_ptr<rt::serial_application_record_t> &record,
+                           int &started) {
+        rt::serial_prefix_work_t item;
+        item.name = "durable-dynamic-policy";
+        item.options.application_record = record;
+        item.options.retained_message = record;
+        item.work = [record, &started] (auto complete) {
+            record->admission.enter_handler ();
+            ++started;
+            complete ([] {});
+        };
+        item.cancel = [&] { ++cancelled; };
+        return item;
+    };
+    source->set_application_start_policy (
+      [b] (const std::shared_ptr<const void> &message) { return message == b; });
+    const auto accepted = source
+                            ->adopt_application_prefix ([&] {
+                                std::vector<rt::serial_prefix_work_t> prefix;
+                                if (!transfer)
+                                    prefix.push_back (work (a, started_a));
+                                prefix.push_back (work (b, started_b));
+                                return prefix;
+                            })
+                            .result ();
+    bool passed = accepted && accepted.value () && started_a == 0 && started_b == 0
+                  && jobs->snapshot ().capacity_waiters == 1;
+    // The grant is delivered on the manual scheduler; keep it queued while
+    // changing the selected record or transferring its actual accepted body.
+    held.reset ();
+    if (transfer) {
+        auto exported = source->take_application_suffix ().result ();
+        passed =
+          passed && exported && exported.value ().size () == 1 && exported.value ().front () == b;
+        auto adopted = target
+                         ->adopt_application_prefix ([&] {
+                             std::vector<rt::serial_prefix_work_t> prefix;
+                             prefix.push_back (work (b, started_b));
+                             return prefix;
+                         })
+                         .result ();
+        passed = passed && adopted && adopted.value ();
+    } else {
+        // Opening preparation makes the earlier physical record A eligible.
+        // B's pending grant must not strand B or consume A's only supply.
+        source->set_application_start_policy ({});
+    }
+    worker.run_all ();
+    const auto source_pending = source->pending_count ();
+    const auto target_pending = target->pending_count ();
+    const auto waiters = jobs->snapshot ().capacity_waiters;
+    const auto permits = jobs->snapshot ().permits_in_use;
+    passed = passed && started_a == (transfer ? 0 : 1) && started_b == 1 && cancelled == 0
+             && source_pending == 0 && target_pending == 0 && waiters == 0 && permits == 0;
+    // A red result can leave the stale durable waiter in source. Discarding
+    // queued records is the normal owner cleanup and makes this test terminate.
+    source->cancel_pending ();
+    target->cancel_pending ();
+    jobs->stop ();
+    worker.run_all ();
+    source->drain ();
+    target->drain ();
+    worker.drain ();
+    std::cout << "durable-policy-late-grant transfer=" << transfer << " started_a=" << started_a
+              << " started_b=" << started_b << " source_pending=" << source_pending
+              << " target_pending=" << target_pending << " waiters=" << waiters
+              << " permits=" << permits << " passed=" << passed << '\n';
+    return passed;
+}
+
+
 } // namespace
+
+bool verify_accepted_continuation_survives_shutdown (bool close_before_resume)
+{
+    namespace fw = zlink::framework;
+    namespace rt = fw::runtime;
+    fw::test::manual_internal_scheduler_t worker;
+    auto queue = std::make_shared<rt::serial_execution_queue_t> (
+      worker, rt::serial_execution_queue_options_t{},
+      rt::serial_execution_queue_t::error_handler_t{}, rt::serial_lane_policy_t::spot_wide ());
+    std::shared_ptr<fw::detail::serial_turn_t> accepted;
+    bool released = false, owned = false;
+    int callbacks = 0, fresh_callbacks = 0;
+    queue->post_async (
+      "accepted-before-shutdown",
+      [&] (auto) {
+          accepted = fw::detail::capture_current_serial_turn ();
+          released = accepted && accepted->release ();
+      },
+      rt::serial_work_options_t{rt::serial_work_lane_t::lifecycle});
+    worker.run_all ();
+    if (close_before_resume)
+        queue->close ();
+    if (accepted) {
+        accepted->resume_scheduler () ([&] {
+            ++callbacks;
+            const auto turn = fw::detail::capture_current_serial_turn ();
+            owned = turn && !turn->released () && turn->belongs_to (queue.get ());
+        });
+    }
+    queue->cancel_pending ();
+    const bool fresh_rejected = !queue->try_post ("fresh-after-close", [&] { ++fresh_callbacks; });
+    worker.run_all ();
+    const bool passed = released && owned && callbacks == 1 && fresh_rejected
+                        && fresh_callbacks == 0 && queue->pending_count () == 0;
+    accepted.reset ();
+    queue->drain ();
+    worker.drain ();
+    std::cout << "accepted-continuation-shutdown close_before_resume=" << close_before_resume
+              << " callbacks=" << callbacks << " owned=" << owned
+              << " fresh_rejected=" << fresh_rejected << " passed=" << passed << '\n';
+    return passed;
+}
 
 int main (int argc, char **argv)
 {
+    if (!verify_real_join_completion_callback_owner (0, false, true))
+        return EXIT_FAILURE;
+    if (!verify_accepted_continuation_survives_shutdown (false)
+        || !verify_accepted_continuation_survives_shutdown (true))
+        return EXIT_FAILURE;
+    if (argc == 2 && std::string_view (argv[1]) == "--accepted-continuation-shutdown")
+        return EXIT_SUCCESS;
+    if (argc == 2 && std::string_view (argv[1]) == "--actor-finalize-cutover")
+        return verify_actor_join_finalize_replies_after_target_activation () ? EXIT_SUCCESS
+                                                                             : EXIT_FAILURE;
+    if (argc == 2 && std::string_view (argv[1]) == "--durable-policy-late-grant") {
+        const bool policy = verify_durable_policy_late_grant (false);
+        const bool transfer = verify_durable_policy_late_grant (true);
+        return policy && transfer ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
     if (argc == 2 && std::string_view (argv[1]) == "--deferred-lifecycle-prefix") {
         const bool wide = verify_deferred_after_lifecycle_prefix (false);
         const bool flat = verify_deferred_after_lifecycle_prefix (true);
@@ -9767,6 +9940,8 @@ int main (int argc, char **argv)
     }
     if (argc == 1) {
         bool passed = verify_deferred_extra_boundaries ();
+        passed = verify_durable_policy_late_grant (false) && passed;
+        passed = verify_durable_policy_late_grant (true) && passed;
         passed = verify_deferred_after_lifecycle_prefix (false) && passed;
         passed = verify_deferred_after_lifecycle_prefix (true) && passed;
         for (const int policy : {0, 1, 2})
@@ -11021,9 +11196,12 @@ int main (int argc, char **argv)
         }
 
         target_queue.run ("handoff-barrier-source-turn", [&] {
-            if (!target_queue.try_post ("accepted-before-handoff", [&] {
-                    record_barrier_event ("accepted-before-handoff");
-                })) {
+            // The predecessor and barrier share the lifecycle FIFO (§7).
+            if (!target_queue.try_post (
+                  "accepted-before-handoff",
+                  [&] { record_barrier_event ("accepted-before-handoff"); },
+                  zlink::framework::runtime::serial_work_options_t{
+                    zlink::framework::runtime::serial_work_lane_t::lifecycle})) {
                 throw std::runtime_error ("Actor turn before handoff was not queued");
             }
             auto reserved =
