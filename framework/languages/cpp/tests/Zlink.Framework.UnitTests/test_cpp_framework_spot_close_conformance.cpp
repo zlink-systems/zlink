@@ -476,6 +476,8 @@ struct observation_t
     std::promise<void> cross_b_initial;
     std::promise<void> cross_a_completed;
     std::promise<void> cross_b_completed;
+    std::promise<void> cross_a_left;
+    std::promise<void> cross_b_left;
     std::promise<void> cross_sources_released;
     std::shared_future<void> cross_sources_release = cross_sources_released.get_future ().share ();
     std::string handler_mode;
@@ -745,9 +747,16 @@ class close_room_spot_t final : public zf::spot_t<member_actor_t>
             current ().record ("joinedDone:" + std::string (actor.context ().actor_id ().value ()));
         co_return;
     }
-    zf::task_t<void> on_leave_actor (member_actor_t &) override
+    zf::task_t<void> on_leave_actor (member_actor_t &actor) override
     {
         current ().record ("leaveCompleted:" + _context.spot_id ());
+        if (current ().cross_join_active.load ()) {
+            const auto id = actor.context ().actor_id ().value ();
+            if (id == "cross-a")
+                current ().cross_a_left.set_value ();
+            else if (id == "cross-b")
+                current ().cross_b_left.set_value ();
+        }
         co_return;
     }
 
@@ -1347,8 +1356,8 @@ class scenario_client_t final : public zf::hosted_service_t
             const auto room_a = spot_id;
             const auto room_b = spot_id + "-b";
             (void) create_room (services, room_b);
-            // A member learns its Join result after the whole Join, including
-            // the leave from its previous room, completes.
+            // Membership §7: completion follows target OnJoinedActor; source
+            // OnLeaveActor is a one-way notification with its own terminal.
             const auto joins_completed = [&] {
                 std::lock_guard lock (current ().mutex);
                 return std::count (current ().notes.begin (), current ().notes.end (),
@@ -1364,6 +1373,8 @@ class scenario_client_t final : public zf::hosted_service_t
                 throw std::runtime_error ("member cross-b did not join room B");
             auto completed_a = current ().cross_a_completed.get_future ();
             auto completed_b = current ().cross_b_completed.get_future ();
+            auto left_a = current ().cross_a_left.get_future ();
+            auto left_b = current ().cross_b_left.get_future ();
             auto source_a_reserved = current ().cross_a_reserved.get_future ();
             auto source_b_reserved = current ().cross_b_reserved.get_future ();
             current ().cross_join_active.store (true);
@@ -1391,6 +1402,9 @@ class scenario_client_t final : public zf::hosted_service_t
               completed_a.wait_until (registration_deadline) == std::future_status::ready
               && completed_b.wait_until (registration_deadline) == std::future_status::ready
               && joins_completed () >= 4;
+            const bool sources_left =
+              left_a.wait_until (registration_deadline) == std::future_status::ready
+              && left_b.wait_until (registration_deadline) == std::future_status::ready;
             bool replies_after_joined = true;
             int checked_replies = 0;
             int checked_leaves = 0;
@@ -1408,10 +1422,10 @@ class scenario_client_t final : public zf::hosted_service_t
                     }
                 }
             }
-            actual["crossJoins"] =
-              completed && replies_after_joined && checked_replies == 2 && checked_leaves == 2
-                ? "completed"
-                : "stalled";
+            actual["crossJoins"] = completed && sources_left && replies_after_joined
+                                       && checked_replies == 2 && checked_leaves == 2
+                                     ? "completed"
+                                     : "stalled";
             current ().cross_join_active.store (false);
             return;
         }
