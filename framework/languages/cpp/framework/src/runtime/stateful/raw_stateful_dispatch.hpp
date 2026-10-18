@@ -87,6 +87,8 @@ struct stateful_delivery_t
 
 class raw_stateful_dispatch_t
 {
+    friend struct raw_stateful_dispatch_test_access_t;
+
   public:
     raw_stateful_dispatch_t (stateful_object_runtime_t &objects,
                              mesh::raw_mesh_node_owner_t &transport,

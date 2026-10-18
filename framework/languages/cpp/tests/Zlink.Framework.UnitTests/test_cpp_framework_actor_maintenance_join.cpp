@@ -58,11 +58,38 @@ struct spot_node_runtime_test_access_t
 };
 }
 
+namespace zlink::framework::runtime::stateful
+{
+struct raw_stateful_dispatch_test_access_t
+{
+    static std::array<std::size_t, 3> spot_records (raw_stateful_dispatch_t &raw)
+    {
+        std::lock_guard lock (raw._mutex);
+        std::array<std::size_t, 3> counts{};
+        for (const auto &[key, pending] : raw._pending) {
+            if (key.kind == object_kind_t::actor)
+                continue;
+            ++counts[0]; // A committed pending entry has an accepted frozen body.
+            ++counts[1]; // The same entry stores its frozen summary.
+        }
+        for (const auto &[key, next] : raw._next_sequence)
+            if (key.first != object_kind_t::actor)
+                counts[2] += next - 1;
+        return counts;
+    }
+};
+}
+
 namespace zlink::framework::runtime::host
 {
 // Reproduce a superseded assembly at the activation boundary without timing races.
 struct public_host_runtime_test_access_t
 {
+    static std::array<std::size_t, 3> spot_records (public_host_runtime_t &host)
+    {
+        return stateful::raw_stateful_dispatch_test_access_t::spot_records (
+          *host._stateful_dispatch);
+    }
     static task_t<bool> restore_accepted_spot (public_host_runtime_t &host,
                                                std::shared_ptr<location_repository_t> store,
                                                const protocol::request_source_fence_t &source,
@@ -240,8 +267,16 @@ struct native_handoff_hold_t
     fw::task_completion_source_t<void> release;
     int entries = 0;
 };
+struct ordinary_spot_observation_t
+{
+    fw::task_completion_source_t<void> entered;
+    fw::task_completion_source_t<void> release;
+    std::vector<int> handled;
+};
 struct observations_t
 {
+    std::shared_ptr<ordinary_spot_observation_t> ordinary_spot;
+
     std::mutex mutex;
     std::condition_variable changed;
     std::vector<fw::actor_join_completion_t> completions;
@@ -523,10 +558,23 @@ class room_t final : public fw::spot_t<actor_t>
         _context.handlers ().add_actor_send<&room_t::push> ();
         _context.handlers ().add_actor_send<&room_t::view> ();
         _context.handlers ().add_handler<&room_t::ready> ();
+        _context.handlers ().add_handler<&room_t::ordinary_probe> ();
     }
     fw::task_t<void> view (actor_t &actor, fw::message_context_t &, const view_request_t &)
     {
         co_await actor.context ().bound_session ().send (view_t{actor.instance}).async ();
+    }
+    fw::task_t<probe_t> ordinary_probe (const probe_t &request)
+    {
+        const auto observation = observations->ordinary_spot;
+        if (observation) {
+            if (request.value == 1) {
+                observation->entered.complete (fw::result_t<void>::success ());
+                co_await observation->release.task ();
+            }
+            observation->handled.push_back (request.value);
+        }
+        co_return request;
     }
     fw::task_t<void> ready (const ready_t &)
     {
@@ -1936,6 +1984,55 @@ TEST (ActorMaintenanceJoin, LocalNextJoinPreservesClaimedNativeSuffixBeforePriva
 TEST (ActorMaintenanceJoin, RemoteNextJoinPreservesClaimedNativeSuffixBeforePrivateAdmission)
 {
     next_join_suffix (true, false, false, false, true);
+}
+
+TEST (NativeIntake, OrdinarySpotDoesNotMaterializeRelocationRecord)
+{
+    observations_t evidence;
+    observations = &evidence;
+    evidence.ordinary_spot = std::make_shared<ordinary_spot_observation_t> ();
+    const auto observation = evidence.ordinary_spot;
+    struct release_t
+    {
+        std::shared_ptr<ordinary_spot_observation_t> observation;
+        ~release_t () { observation->release.complete (fw::result_t<void>::success ()); }
+    };
+    auto store = std::make_shared<fw::runtime::in_memory_location_store_t> ();
+    auto relocations = std::make_shared<fw::runtime::in_memory_relocation_store_t> ();
+    host_t host;
+    release_t release{observation};
+    configure (host, first_rid, store, relocations);
+    host.start ();
+    ASSERT_TRUE (ready (host));
+    auto services = host.app.advanced ().services ().build_provider ();
+    ASSERT_TRUE (services.get_required<fw::spot_manager_t> ()
+                   .get_or_create (fw::spot_id_t (local_spot), room_type)
+                   .async ()
+                   .result ());
+    auto route = host.app.advanced ().zlink ().route_client (
+      services.get_required<fw::serializer_registry_t> ());
+    auto first = route.request_to_spot (fw::spot_id_t (local_spot), probe_t{1}).async<probe_t> ();
+    observation->entered.task ().result ().value ();
+    const auto registration =
+      fw::detail::mesh_node_runtime_t::registrations (host.app.advanced ().zlink ()).front ();
+    auto node = fw::detail::spot_node_runtime_t (registration->spot_state).native_node ();
+    const auto counts = fw::runtime::host::public_host_runtime_test_access_t::spot_records (*node);
+    EXPECT_EQ (counts[0], 0u) << "frozen record before seal";
+    EXPECT_EQ (counts[1], 0u) << "summary before seal";
+    EXPECT_EQ (counts[2], 0u) << "raw pending registrations before seal";
+    observation->release.complete (fw::result_t<void>::success ());
+    const auto reply = first.result ();
+    ASSERT_TRUE (reply);
+    EXPECT_EQ (reply.value ().value, 1);
+    ASSERT_TRUE (route.send_to_spot (fw::spot_id_t (local_spot), probe_t{2}).async ().result ());
+    const auto barrier =
+      route.request_to_spot (fw::spot_id_t (local_spot), probe_t{3}).async<probe_t> ().result ();
+    ASSERT_TRUE (barrier);
+    EXPECT_EQ (barrier.value ().value, 3);
+    EXPECT_EQ (observation->handled, (std::vector<int>{1, 2, 3}));
+    const auto completed =
+      fw::runtime::host::public_host_runtime_test_access_t::spot_records (*node);
+    EXPECT_EQ (completed[2], 0u) << "raw pending registrations on ordinary terminal";
 }
 
 TEST (NativeIntake, LocalAcceptedRecordReleasesAfterNativeTerminal)
