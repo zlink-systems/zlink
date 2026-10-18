@@ -7,6 +7,25 @@ namespace MyGame.Shared;
 
 public static class NodeControl
 {
+    private static async Task WaitForServingAsync(
+        IZLinkFrameworkRuntime runtime,
+        CancellationToken cancellationToken
+    )
+    {
+        await foreach (var observed in runtime.ObserveAsync(cancellationToken))
+        {
+            if (observed.Loss.DiscardedTerminalCount != 0)
+                throw new InvalidOperationException("Startup observation lost.");
+            if (observed.Status.State == ZLinkFrameworkRuntimeState.Serving)
+                return;
+            if (observed.Status.State != ZLinkFrameworkRuntimeState.Preparing)
+                throw new InvalidOperationException(
+                    $"Runtime startup failed: {observed.Status.State}"
+                );
+        }
+        throw new InvalidOperationException("Runtime observation ended before Serving.");
+    }
+
     public static async Task RunAsync(
         IHost host,
         NodeSettings settings,
@@ -15,6 +34,7 @@ public static class NodeControl
     {
         await host.StartAsync();
         var runtime = host.Services.GetRequiredService<IZLinkFrameworkRuntime>();
+        await WaitForServingAsync(runtime, CancellationToken.None);
         if (initialize is not null)
             await initialize(CancellationToken.None);
         var mesh = runtime.GetListenerStatus(ZLinkListenerKind.RouteMesh, settings.MeshName);
@@ -27,11 +47,9 @@ public static class NodeControl
     public static async Task RunAccountsAsync(IHost host, Func<NodeReady> readiness)
     {
         await host.StartAsync();
-        await CommandsAsync(
-            host,
-            readiness(),
-            host.Services.GetRequiredService<IZLinkFrameworkRuntime>()
-        );
+        var runtime = host.Services.GetRequiredService<IZLinkFrameworkRuntime>();
+        await WaitForServingAsync(runtime);
+        await CommandsAsync(host, readiness(), runtime);
     }
 
     private static async Task CommandsAsync(

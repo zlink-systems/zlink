@@ -7,11 +7,31 @@ namespace MyGame.Shared;
 
 public static class NodeControl
 {
+    private static async Task WaitForServingAsync(
+        IZLinkFrameworkRuntime runtime,
+        CancellationToken cancellationToken = default
+    )
+    {
+        await foreach (var observed in runtime.ObserveAsync(cancellationToken))
+        {
+            if (observed.Loss.DiscardedTerminalCount != 0)
+                throw new InvalidOperationException("Startup observation lost.");
+            if (observed.Status.State == ZLinkFrameworkRuntimeState.Serving)
+                return;
+            if (observed.Status.State != ZLinkFrameworkRuntimeState.Preparing)
+                throw new InvalidOperationException(
+                    $"Runtime startup failed: {observed.Status.State}"
+                );
+        }
+        throw new InvalidOperationException("Runtime observation ended before Serving.");
+    }
+
     public static async Task RunAsync(IHost host, NodeSettings settings)
     {
         using var lifetime = new CancellationTokenSource();
         await host.StartAsync(lifetime.Token);
         var runtime = host.Services.GetRequiredService<IZLinkFrameworkRuntime>();
+        await WaitForServingAsync(runtime, lifetime.Token);
         var mesh = runtime.GetListenerStatus(ZLinkListenerKind.RouteMesh, GameNames.WorldMesh);
         var stream = settings.StreamEndpoint is null
             ? null
