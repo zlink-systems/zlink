@@ -11,6 +11,7 @@ import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.locationprovider.ZLinkRelocationStore;
 import systems.zlink.framework.locations.*;
 import systems.zlink.framework.runtime.InMemoryRelocationStore;
+import systems.zlink.framework.runtime.actors.ZLinkActorDispatchTarget.QueuedTurn;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
@@ -675,6 +676,27 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
     private static ZLinkUserSpotAggregateStagingOwner unusedSpotStaging() {
         return new ZLinkUserSpotAggregateStagingOwner(
                 new ZLinkUserSpotAggregateStagingOwner.StagingBackend() {
+                    @Override
+                    public CompletionStage<QueuedTurn> prepareIngress(Object actor) {
+                        return CompletableFuture.failedFuture(
+                                new AssertionError("unused aggregate Actor dispatch"));
+                    }
+
+                    @Override
+                    public CompletionStage<Void> enqueueIngress(
+                            Object spot,
+                            List<QueuedTurn> dispatches,
+                            String lane,
+                            byte[] record,
+                            java.util.function.Supplier<CompletionStage<Void>> turn,
+                            CompletableFuture<Void> admission) {
+                        var failure =
+                                new AssertionError(
+                                        "Actor-only fixture must not dispatch aggregate backlog");
+                        admission.completeExceptionally(failure);
+                        return CompletableFuture.failedFuture(failure);
+                    }
+
                     private AssertionError unused() {
                         return new AssertionError(
                                 "User Spot staging must not handle an Actor root");
@@ -707,7 +729,11 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
                     }
 
                     @Override
-                    public void publishActor(Object actor) {
+                    public void publishActor(
+                            Object preparedSpot,
+                            Object actor,
+                            String targetSpotId,
+                            Long targetOwnerGeneration) {
                         throw unused();
                     }
 
@@ -762,9 +788,15 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
                             return switch (method.getName()) {
                                 case "observePeerRoute" ->
                                         new ZLinkInternalMeshNode.PeerRouteObservation(1, true);
-                                case "targetLifecycleEnded" -> false;
-                                case "onStateChanged" -> {
-                                    ((Runnable) arguments[0]).run();
+                                case "onStateChanged", "onPeerStateChanged" -> {
+                                    ((Runnable)
+                                                    arguments[
+                                                            method.getName()
+                                                                            .equals(
+                                                                                    "onStateChanged")
+                                                                    ? 0
+                                                                    : 1])
+                                            .run();
                                     yield (AutoCloseable) () -> {};
                                 }
                                 case "status" -> status;
@@ -814,14 +846,6 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
         private final AtomicInteger admittedTurns = new AtomicInteger();
         private final AtomicInteger activeTurns = new AtomicInteger();
         private final AtomicInteger maxActiveTurns = new AtomicInteger();
-
-        @Override
-        public CompletionStage<Void> enqueueIngress(
-                ZLinkStandaloneActorRelocationStagingOwner.Request request,
-                byte[] acceptedJournalRecord,
-                java.util.function.Supplier<CompletionStage<Void>> turn) {
-            return turn.get();
-        }
 
         @Override
         public CompletionStage<Object> prepare(

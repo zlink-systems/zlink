@@ -1,12 +1,16 @@
 package systems.zlink.framework.runtime.spots;
 
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
+import systems.zlink.framework.runtime.handlers.ZLinkHandlerStages;
 
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
+import java.util.function.BiFunction;
+import java.util.function.Supplier;
 
 /**
  * Decodes Framework-owned accepted records and dispatches them through the target runtime before
@@ -33,10 +37,10 @@ final class ZLinkAcceptedJournalReplayer
         if (laneId.equals("spot") || laneId.startsWith("timer:")) {
             ZLinkSpotAcceptedJournal.Record record =
                     ZLinkSpotAcceptedJournal.decode(queued.payload());
-            return spotDispatch
-                    .dispatch(record)
-                    .thenCompose(
-                            reply -> replyRelay.completeSpot(record, queued.sequence(), reply));
+            return complete(
+                    () -> spotDispatch.dispatch(record),
+                    (reply, failure) ->
+                            replyRelay.completeSpot(record, queued.sequence(), reply, failure));
         }
         if (laneId.startsWith("actor:")) {
             ZLinkActorAcceptedJournal.Record record =
@@ -46,10 +50,38 @@ final class ZLinkAcceptedJournalReplayer
             } catch (IllegalArgumentException failure) {
                 return CompletableFuture.failedFuture(failure);
             }
-            return relayActorOutcome(record, queued.sequence(), actorDispatch.dispatch(record));
+            return relayActorOutcome(
+                    record,
+                    queued.sequence(),
+                    ZLinkHandlerStages.fromStageSupplier(() -> actorDispatch.dispatch(record)));
         }
         return CompletableFuture.failedFuture(
                 new IllegalArgumentException("unknown accepted journal lane: " + laneId));
+    }
+
+    private static <T> CompletionStage<Void> complete(
+            Supplier<CompletionStage<T>> dispatch,
+            BiFunction<T, Throwable, CompletionStage<Void>> terminal) {
+        return ZLinkHandlerStages.fromStageSupplier(dispatch)
+                .handle(
+                        (reply, failure) -> {
+                            Throwable original = unwrap(failure);
+                            return ZLinkHandlerStages.fromStageSupplier(
+                                            () -> terminal.apply(reply, original))
+                                    .handle(
+                                            (ignored, relayFailure) -> {
+                                                Throwable relay = unwrap(relayFailure);
+                                                if (original != null) {
+                                                    if (relay != null && relay != original)
+                                                        original.addSuppressed(relay);
+                                                    throw new CompletionException(original);
+                                                }
+                                                if (relay != null)
+                                                    throw new CompletionException(relay);
+                                                return (Void) null;
+                                            });
+                        })
+                .thenCompose(stage -> stage);
     }
 
     @Override
@@ -82,7 +114,8 @@ final class ZLinkAcceptedJournalReplayer
                                 })
                         .thenCompose(result -> result));
         return () -> {
-            var execution = actorDispatch.dispatch(record);
+            var execution =
+                    ZLinkHandlerStages.fromStageSupplier(() -> actorDispatch.dispatch(record));
             return execution
                     .whenComplete(
                             (reply, failure) -> {
@@ -103,19 +136,9 @@ final class ZLinkAcceptedJournalReplayer
             ZLinkActorAcceptedJournal.Record record,
             long sequence,
             CompletionStage<Optional<byte[]>> dispatched) {
-        return dispatched
-                .handle(
-                        (reply, failure) -> {
-                            if (failure == null)
-                                return replyRelay.completeActor(record, sequence, reply);
-                            Throwable original = unwrap(failure);
-                            return replyRelay
-                                    .failActor(record, sequence, original)
-                                    .thenCompose(
-                                            ignored ->
-                                                    CompletableFuture.<Void>failedFuture(original));
-                        })
-                .thenCompose(result -> result);
+        return complete(
+                () -> dispatched,
+                (reply, failure) -> replyRelay.completeActor(record, sequence, reply, failure));
     }
 
     private static Throwable unwrap(Throwable failure) {
@@ -136,18 +159,15 @@ final class ZLinkAcceptedJournalReplayer
 
     interface ReplyRelay {
         CompletionStage<Void> completeSpot(
-                ZLinkSpotAcceptedJournal.Record request, long acceptedSequence, List<byte[]> reply);
-
-        default CompletionStage<Void> failActor(
-                ZLinkActorAcceptedJournal.Record request,
+                ZLinkSpotAcceptedJournal.Record request,
                 long acceptedSequence,
-                Throwable failure) {
-            return CompletableFuture.failedFuture(failure);
-        }
+                List<byte[]> reply,
+                Throwable failure);
 
         CompletionStage<Void> completeActor(
                 ZLinkActorAcceptedJournal.Record request,
                 long acceptedSequence,
-                Optional<byte[]> reply);
+                Optional<byte[]> reply,
+                Throwable failure);
     }
 }

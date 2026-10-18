@@ -1065,34 +1065,6 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
             return owned.snapshot().authorityOwnerGeneration();
         }
 
-        CompletionStage<Optional<Long>> committedTargetAuthorityOwnerGeneration() {
-            return locations
-                    .read(owned.authorityKey(), () -> false)
-                    .thenApply(
-                            read -> {
-                                if (!(read instanceof ZLinkAuthoritySnapshot snapshot)
-                                        || !isTargetOwner(snapshot)) {
-                                    return Optional.empty();
-                                }
-                                boolean targetPayload =
-                                        new ZLinkActorAuthorityPayloadCodec()
-                                                .decode(snapshot.payload())
-                                                .filter(
-                                                        value ->
-                                                                value.nodeRid().equals(target.rid())
-                                                                        && value.nodeGeneration()
-                                                                                == target
-                                                                                        .lifecycleGeneration()
-                                                                        && value.currentSpotId()
-                                                                                .equals(
-                                                                                        targetSpotId))
-                                                .isPresent();
-                                return targetPayload
-                                        ? Optional.of(snapshot.authorityOwnerGeneration())
-                                        : Optional.empty();
-                            });
-        }
-
         private boolean isTargetOwner(ZLinkAuthoritySnapshot snapshot) {
             return snapshot.authorityOwnerGeneration() > sourceAuthorityOwnerGeneration()
                     && snapshot.allocation()
@@ -1433,7 +1405,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                                                     relocationReplies
                                                             .closeActorTimersAfterRelocation(
                                                                     owned.actorId())),
-                            () -> actors.completeRelocationSource(List.of(owned.actorId()))));
+                            () -> actors.retireCommittedRelocationSource(owned.actorId())));
         }
 
         /**

@@ -2281,8 +2281,11 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
     }
 
     CompletionStage<ZLinkSpotRelocationReplyRoutes.Ack> deliverCanonicalRelocationReply(
-            ZLinkSpotRelocationReplyRoutes.CanonicalRoute route, List<byte[]> parts) {
-        return relocationReplyRoutes.deliverCanonical(route, parts);
+            ZLinkSpotRelocationReplyRoutes.CanonicalRoute route,
+            List<byte[]> parts,
+            int terminalResult,
+            int failureCode) {
+        return relocationReplyRoutes.deliverCanonical(route, parts, terminalResult, failureCode);
     }
 
     public String userSpotMeshName(String spotId) {
@@ -4637,7 +4640,14 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
     }
 
     CompletionStage<Void> notifySourceActorLeftForRemoteMove(ZLinkActor actor) {
-        Object spotSurface = localActorSpotSurface(actor);
+        return notifySourceActorLeft(localActorSpotSurface(actor), actor);
+    }
+
+    /**
+     * Delivers the source Spot OnLeaveActor to the surface resolved while the Actor was still its
+     * member; a committed cross-node Join leaves the membership before the one-way notice.
+     */
+    CompletionStage<Void> notifySourceActorLeft(Object spotSurface, ZLinkActor actor) {
         if (spotSurface == null) {
             return CompletableFuture.completedFuture(null);
         }
@@ -4831,8 +4841,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                 };
         CompletionStage<ZLinkSpotActorJoinResult> targetStage;
         if (targetSurface instanceof ZLinkSpot<?>) {
-            targetStage =
-                    spotLifecycle.spotActivationFor(targetSpotId).admitLocalActorJoin(operation);
+            targetStage = spotLifecycle.spotActivationFor(targetSpotId).admitActorJoin(operation);
         } else {
             CompletableFuture<ZLinkSpotActorJoinResult> response = new CompletableFuture<>();
             targetStage =
@@ -5278,6 +5287,14 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
 
     <T> CompletionStage<T> admitNewApplicationJob(
             SpotDispatchLine destination, Supplier<CompletionStage<T>> operation) {
+        return admitNewApplicationJob(
+                destination, ZLinkApplicationJobQueue.Origin.LOCAL, operation);
+    }
+
+    <T> CompletionStage<T> admitNewApplicationJob(
+            SpotDispatchLine destination,
+            ZLinkApplicationJobQueue.Origin origin,
+            Supplier<CompletionStage<T>> operation) {
         Objects.requireNonNull(operation, "operation");
         try {
             ensureOwnerAdmissionOpen();
@@ -5285,7 +5302,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             return CompletableFuture.failedFuture(rejected);
         }
         return applicationJobQueue.acquireAndPublish(
-                ZLinkApplicationJobQueue.Origin.LOCAL,
+                origin,
                 task ->
                         destination.enqueueInfrastructureDispatch(
                                 () -> {
@@ -6492,37 +6509,17 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
 
     @Override
     CompletionStage<Void> enqueueActorDispatch(
-            String actorId, long payloadBytes, Supplier<CompletionStage<Void>> operation) {
-        return actorSessions.runtime().submitActorDispatch(actorId, payloadBytes, operation);
-    }
-
-    @Override
-    CompletionStage<Void> enqueueActorDispatch(
             ZLinkActorDispatchTarget target,
             String actorId,
             long payloadBytes,
             Supplier<CompletionStage<Void>> operation,
-            CompletableFuture<Void> admission) {
+            CompletableFuture<Void> admission,
+            ZLinkBackendActorReceived header,
+            Message payload) {
         return actorSessions
                 .runtime()
-                .submitActorDispatch(target, actorId, payloadBytes, operation, admission);
-    }
-
-    @Override
-    CompletionStage<Void> enqueueActorDispatch(
-            String actorId,
-            Supplier<byte[]> acceptedJournalRecord,
-            long acceptedJournalRecordSizeHint,
-            Supplier<CompletionStage<Void>> operation,
-            Runnable relocationRelease) {
-        return actorSessions
-                .runtime()
-                .submitActorDispatchLazyRecord(
-                        actorId,
-                        acceptedJournalRecord,
-                        acceptedJournalRecordSizeHint,
-                        operation,
-                        relocationRelease);
+                .submitActorDispatch(
+                        target, actorId, payloadBytes, operation, admission, header, payload);
     }
 
     @Override
@@ -6533,7 +6530,9 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             long acceptedJournalRecordSizeHint,
             Supplier<CompletionStage<Void>> operation,
             Runnable relocationRelease,
-            CompletableFuture<Void> admission) {
+            CompletableFuture<Void> admission,
+            ZLinkBackendActorReceived header,
+            Message payload) {
         return actorSessions
                 .runtime()
                 .submitActorDispatchLazyRecord(
@@ -6543,7 +6542,9 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                         acceptedJournalRecordSizeHint,
                         operation,
                         relocationRelease,
-                        admission);
+                        admission,
+                        header,
+                        payload);
     }
 
     private DefaultSpotOutbound createSpotOutbound(
@@ -6695,53 +6696,12 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
 
     CompletionStage<Void> dispatchLocalActorPacket(
             SpotDispatchLine dispatchLine,
-            Object spotSurface,
             ZLinkActor actor,
             ActorPacketFrames.Header packetHeader,
             ZLinkBackendActorReceived headerPart,
             ZLinkBackendActorReceived bodyPart,
             boolean pendingHeader,
             CompletableFuture<Void> requestAdmission) {
-        SpotActorPacketHandlerRegistration handler =
-                resolveActorPacketHandler(
-                        packetHeader.packetName(),
-                        spotSurface,
-                        packetHeader.requestSeq().isPresent()
-                                ? ZLinkScannedHandlerKind.ACTOR_REQUEST
-                                : ZLinkScannedHandlerKind.ACTOR_SEND);
-        if (handler == null) {
-            boolean request = packetHeader.requestSeq().isPresent();
-            reportSpotActorHandlerMissing(
-                    packetHeader,
-                    dispatchLine.spotId(),
-                    actor.context().actorId(),
-                    headerPart.sourceNodeRid());
-            if (request) {
-                ZLinkBackendActorReceived headerCopy =
-                        pendingHeader ? headerPart : copyActorReceived(headerPart);
-                replyActorDispatchError(
-                        dispatchLine,
-                        packetHeader,
-                        headerCopy,
-                        actor.context().actorId(),
-                        new ZLinkConfigurationException(
-                                "No SPOT actor request handler is registered for '"
-                                        + packetHeader.packetName()
-                                        + "'."));
-            } else {
-                closePendingActorHeader(headerPart, pendingHeader);
-            }
-            return CompletableFuture.completedFuture(null);
-        }
-        if (packetHeader.requestSeq().isPresent()
-                != (handler.kind() == ZLinkScannedHandlerKind.ACTOR_REQUEST)) {
-            closePendingActorHeader(headerPart, pendingHeader);
-            return CompletableFuture.completedFuture(null);
-        }
-        if (!handler.actorType().isInstance(actor)) {
-            closePendingActorHeader(headerPart, pendingHeader);
-            return CompletableFuture.completedFuture(null);
-        }
         ZLinkBackendActorReceived headerCopy =
                 pendingHeader ? headerPart : copyActorReceived(headerPart);
         Message payloadCopy =
@@ -6749,10 +6709,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         CompletionStage<Void> queued =
                 enqueueLocalActorPacket(
                         dispatchLine,
-                        spotSurface,
                         actor,
                         packetHeader,
-                        handler,
                         headerCopy,
                         payloadCopy,
                         requestAdmission);
@@ -6792,14 +6750,11 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
 
     private CompletionStage<Void> enqueueLocalActorPacket(
             SpotDispatchLine dispatchLine,
-            Object spotSurface,
             ZLinkActor actor,
             ActorPacketFrames.Header packetHeader,
-            SpotActorPacketHandlerRegistration handler,
             ZLinkBackendActorReceived headerCopy,
             Message payloadCopy,
             CompletableFuture<Void> requestAdmission) {
-        CompletionStage<Void> queued;
         ZLinkSpotRelocationReplyRoutes.LazyRegistration relocationReply = null;
         try {
             boolean noBindRequest = isNoBindActorRequest(packetHeader, headerCopy);
@@ -6846,10 +6801,53 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                         packetHeader,
                                                         headerCopy.sourceSessionRid()))
                                         : ZLinkFlowContext.suppress()) {
+                            Object currentSurface = localActorSpotSurface(actor);
+                            SpotDispatchLine currentDispatchLine =
+                                    (SpotDispatchLine)
+                                            (currentSurface instanceof ZLinkSpot<?> spot
+                                                    ? spot.context()
+                                                    : ((ZLinkEntrySpot<?>) currentSurface)
+                                                            .context());
+                            SpotActorPacketHandlerRegistration handler =
+                                    resolveActorPacketHandler(
+                                            packetHeader.packetName(),
+                                            currentSurface,
+                                            packetHeader.requestSeq().isPresent()
+                                                    ? ZLinkScannedHandlerKind.ACTOR_REQUEST
+                                                    : ZLinkScannedHandlerKind.ACTOR_SEND);
+                            if (handler == null) {
+                                boolean request = packetHeader.requestSeq().isPresent();
+                                reportSpotActorHandlerMissing(
+                                        packetHeader,
+                                        currentDispatchLine.spotId(),
+                                        actor.context().actorId(),
+                                        headerCopy.sourceNodeRid());
+                                if (request) {
+                                    replyActorDispatchError(
+                                            currentDispatchLine,
+                                            packetHeader,
+                                            copyActorReceived(headerCopy),
+                                            actor.context().actorId(),
+                                            new ZLinkConfigurationException(
+                                                    "No SPOT actor request handler is registered for '"
+                                                            + packetHeader.packetName()
+                                                            + "'."));
+                                }
+                                if (registered != null) {
+                                    registered.completeLocal();
+                                }
+                                return CompletableFuture.completedFuture(null);
+                            }
+                            if (!handler.actorType().isInstance(actor)) {
+                                if (registered != null) {
+                                    registered.completeLocal();
+                                }
+                                return CompletableFuture.completedFuture(null);
+                            }
                             return dispatchActorPacketToHandler(
-                                    dispatchLine.dispatchOutbound(),
+                                    currentDispatchLine.dispatchOutbound(),
                                     handler,
-                                    spotSurface,
+                                    currentSurface,
                                     actor,
                                     packetHeader,
                                     headerCopy,
@@ -6857,68 +6855,26 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                     registered);
                         }
                     };
-            queued =
-                    relocationReply == null
-                            ? dispatchLine.enqueueActorDispatch(
-                                    actor.context().actorId(),
-                                    payloadCopy.size(),
-                                    operation,
-                                    requestAdmission)
-                            : dispatchLine.enqueueActorDispatch(
-                                    actor.context().actorId(),
-                                    relocationReply::record,
-                                    headerCopy.message().size()
-                                            + ACTOR_JOURNAL_SIZE_HINT_OVERHEAD_BYTES,
-                                    operation,
-                                    relocationReply::releaseForRelocation,
-                                    requestAdmission);
+            return relocationReply == null
+                    ? dispatchLine.enqueueActorDispatch(
+                            actor.context().actorId(),
+                            payloadCopy.size(),
+                            operation,
+                            requestAdmission,
+                            headerCopy,
+                            payloadCopy)
+                    : dispatchLine.enqueueActorDispatch(
+                            actor.context().actorId(),
+                            relocationReply::record,
+                            headerCopy.message().size() + ACTOR_JOURNAL_SIZE_HINT_OVERHEAD_BYTES,
+                            operation,
+                            relocationReply::releaseForRelocation,
+                            requestAdmission,
+                            headerCopy,
+                            payloadCopy);
         } catch (RuntimeException failure) {
             return CompletableFuture.failedFuture(failure);
         }
-        return recoverRelocatedActorDispatch(queued, headerCopy, payloadCopy);
-    }
-
-    /**
-     * Hands a turn that the Actor queue rejected after its relocation cut back to the mesh ingress
-     * so the relocation forward delivers it to the new owner (spec
-     * server/03-spot-actor/08-routing.ko.md:222,240). The turn never ran, so this is a re-route of
-     * an unaccepted arrival, not a re-submission of a failed operation (:244). When no forward is
-     * available the rejection stays on the stage as the stale terminal.
-     */
-    private static CompletionStage<Void> recoverRelocatedActorDispatch(
-            CompletionStage<Void> queued,
-            ZLinkBackendActorReceived headerCopy,
-            Message payloadCopy) {
-        ZLinkBackendActorReceived.RelocationRedirect redirect = headerCopy.relocationRedirect();
-        if (redirect == null) {
-            return queued;
-        }
-        return queued.handle(
-                        (ignored, error) -> {
-                            if (error == null) {
-                                return CompletableFuture.<Void>completedFuture(null);
-                            }
-                            Throwable cause = unwrapCompletion(error);
-                            if (!(cause
-                                    instanceof ZLinkSerialExecutionQueue.RelocatedOwnerException)) {
-                                return CompletableFuture.<Void>failedFuture(cause);
-                            }
-                            //  The lazy relocation-reply registration is never materialized
-                            //  for a rejected admission - its record supplier only runs when a
-                            //  seal captures the queued turn - so there is nothing to release
-                            //  here; the forward target registers its own reply route.
-                            boolean accepted;
-                            try {
-                                accepted = redirect.redirect(headerCopy.message(), payloadCopy);
-                            } catch (RuntimeException redirectFailure) {
-                                cause.addSuppressed(redirectFailure);
-                                return CompletableFuture.<Void>failedFuture(cause);
-                            }
-                            return accepted
-                                    ? CompletableFuture.<Void>completedFuture(null)
-                                    : CompletableFuture.<Void>failedFuture(cause);
-                        })
-                .thenCompose(stage -> stage);
     }
 
     static void closePendingActorHeader(
@@ -7025,7 +6981,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                         null));
     }
 
-    private void reportDispatchError(DispatchFailureReport failure) {
+    void reportDispatchError(DispatchFailureReport failure) {
         dispatchErrors.report(
                 failure.surface,
                 failure.messageKind,

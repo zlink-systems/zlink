@@ -22,6 +22,7 @@ import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
 import systems.zlink.framework.runtime.internal.calls.ZLinkRequestStages;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkRequestMetrics;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.locations.ZLinkStoreLocationResolvers;
 import systems.zlink.framework.runtime.locations.ZLinkStoreLocationResolvers.ActorRoute;
 import systems.zlink.framework.runtime.messaging.ZLinkMessagePayloads;
@@ -167,7 +168,7 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
                                                 operationFlow,
                                                 () ->
                                                         submitRequest(
-                                                                rememberAuthority(row, actorId),
+                                                                actorRouteFence(row, actorId),
                                                                 packetName,
                                                                 request,
                                                                 metadata,
@@ -199,22 +200,18 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
                 .thenCompose(ignored -> locations.resolveActor(actorId));
     }
 
-    private ZLinkBackendActorRef rememberAuthority(ActorRoute row, String actorId) {
+    private ZLinkServiceM6BWireCodec.ActorRouteFence actorRouteFence(
+            ActorRoute row, String actorId) {
         if (row == null || row.actorRef() == null) {
             throw new ZLinkFrameworkException(
                     ZLinkFrameworkErrorKind.NOT_FOUND,
                     "Actor route '" + actorId + "' was not found.");
         }
-        ZLinkBackendActorRef actor = toBackendActorRef(row);
-        ZLinkInternalSpotNode node = spotNode.get();
-        // A positive route cache can overlap a completed relocation.  The
-        // provider-issued owner generation is monotonic, so an older cached
-        // observation must not replace a newer local publication fence.
-        if (node.actorAuthorityOwnerGeneration(actor) < row.authorityOwnerGeneration()) {
-            node.rememberActorAuthority(
-                    actor, row.authorityOwnerGeneration(), row.ownerLeaseGeneration());
-        }
-        return actor;
+        return new ZLinkServiceM6BWireCodec.ActorRouteFence(
+                toBackendActorRef(row),
+                row.targetNodeGeneration(),
+                row.authorityOwnerGeneration(),
+                row.ownerLeaseGeneration());
     }
 
     private CompletionStage<Void> submitSendResult(
@@ -226,8 +223,8 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
                                 ZLinkFlowContext.call(
                                         operationFlow,
                                         () -> {
-                                            ZLinkBackendActorRef actor =
-                                                    rememberAuthority(row, actorId);
+                                            ZLinkServiceM6BWireCodec.ActorRouteFence actor =
+                                                    actorRouteFence(row, actorId);
                                             List<Message> parts =
                                                     createPacketParts(
                                                             ZLinkStreamMessageKind.SEND,
@@ -299,7 +296,7 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
     }
 
     private <TReply> CompletionStage<TReply> submitRequest(
-            ZLinkBackendActorRef actor,
+            ZLinkServiceM6BWireCodec.ActorRouteFence actor,
             String packetName,
             Object request,
             Map<String, String> metadata,
