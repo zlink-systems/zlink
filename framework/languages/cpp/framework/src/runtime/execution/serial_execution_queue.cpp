@@ -587,7 +587,19 @@ class serial_turn_handle_impl_t final
     bool released () const override
     {
         std::lock_guard lock (_mutex);
-        return _phase == phase_t::released;
+        return _phase == phase_t::yielded || _phase == phase_t::finished;
+    }
+
+    bool handler_finished () const
+    {
+        std::lock_guard lock (_mutex);
+        return _phase == phase_t::finished;
+    }
+
+    bool continues (const std::shared_ptr<serial_turn_chain_t> &chain) const
+    {
+        std::lock_guard lock (_mutex);
+        return _chain == chain;
     }
 
     bool claim_yield () override
@@ -842,10 +854,10 @@ class serial_turn_handle_impl_t final
         serial_execution_queue_t::async_completion_t complete;
         {
             std::lock_guard lock (_mutex);
-            if (_phase == phase_t::released) {
+            if (_phase == phase_t::yielded || _phase == phase_t::finished) {
                 return false;
             }
-            _phase = phase_t::released;
+            _phase = handler_terminal ? phase_t::finished : phase_t::yielded;
             complete = std::move (_complete);
         }
         if (!complete) {
@@ -884,13 +896,35 @@ class serial_turn_handle_impl_t final
 
     void end_chain_owned (bool succeeded) noexcept
     {
+        bool was_yielded = false;
+        {
+            std::lock_guard lock (_mutex);
+            was_yielded = _phase == phase_t::yielded;
+            if (was_yielded)
+                _phase = phase_t::finished;
+        }
+        // The current gate slot is retired by complete_one. Earlier Yield
+        // slots are the handler's terminal ownership, not another active count.
+        const auto retire = [this, was_yielded] {
+            if (!was_yielded)
+                return;
+            std::unique_lock lock (_queue._mutex, std::defer_lock);
+            if (!_queue.owns_shared_gate ())
+                lock.lock ();
+            auto current = _queue.current_turn_locked ();
+            std::erase_if (_queue._handler_turns, [this, current] (const auto &entry) {
+                return &entry != current && entry.turn.get () == this;
+            });
+        };
         std::shared_ptr<serial_turn_chain_t> owner;
         {
             std::lock_guard lock (_mutex);
             owner = _chain;
         }
-        if (!owner)
+        if (!owner) {
+            retire ();
             return;
+        }
         settle_owned (succeeded);
         std::shared_ptr<serial_turn_completion_t> completion;
         {
@@ -900,6 +934,7 @@ class serial_turn_handle_impl_t final
         if (completion)
             completion->handler_terminal.complete (result_t<void>::success ());
         _queue.release_lifecycle_hold (std::move (owner));
+        retire ();
     }
 
     /* The Actor FIFO barrier owns activation and terminal completion.
@@ -964,7 +999,8 @@ class serial_turn_handle_impl_t final
     {
         open,
         yield_admitted,
-        released
+        yielded,
+        finished
     };
     phase_t _phase = phase_t::open;
 };
@@ -1468,12 +1504,14 @@ serial_execution_queue_t::cancel_submission_owned (serial_submission_id_t submis
                 _empty.notify_all ();
             }
         } else {
-            if (_active_turn && _active_turn->submission_id == submission_id
-                && _active_turn->turn) {
+            auto found = std::find_if (
+              _handler_turns.begin (), _handler_turns.end (),
+              [submission_id] (const auto &entry) { return entry.submission_id == submission_id; });
+            if (found != _handler_turns.end ()) {
                 outcome = serial_cancel_submission_outcome_t::active_cancel_requested;
-                if (!_active_turn->cancel_requested) {
-                    _active_turn->cancel_requested = true;
-                    active_cancel = std::move (_active_turn->cancel);
+                if (!found->cancel_requested) {
+                    found->cancel_requested = true;
+                    active_cancel = std::move (found->cancel);
                 }
             }
             if (outcome == serial_cancel_submission_outcome_t::already_terminal
@@ -1709,12 +1747,12 @@ result_t<void> serial_execution_queue_t::retain_mailbox_until (task_t<void> term
                     cancel ();
                 return;
             }
-            if (_active_turn && _active_turn->turn) {
-                _active_turn->turn->retain_until (std::move (*pending));
+            if (current_turn_locked () && current_turn_locked ()->turn) {
+                current_turn_locked ()->turn->retain_until (std::move (*pending));
                 if (cancel) {
-                    auto previous = std::move (_active_turn->cancel);
-                    _active_turn->cancel = [previous = std::move (previous),
-                                            cancel = std::move (cancel)] {
+                    auto previous = std::move (current_turn_locked ()->cancel);
+                    current_turn_locked ()->cancel = [previous = std::move (previous),
+                                                      cancel = std::move (cancel)] {
                         if (previous)
                             previous ();
                         cancel ();
@@ -1724,10 +1762,10 @@ result_t<void> serial_execution_queue_t::retain_mailbox_until (task_t<void> term
             }
             auto turn =
               create_turn ("actor-mailbox-terminal", serial_work_lane_t::application, {}, true);
+            _handler_turns.emplace_back ();
             ++_active;
-            _active_turn.emplace ();
-            _active_turn->turn = turn;
-            _active_turn->cancel = std::move (cancel);
+            current_turn_locked ()->turn = turn;
+            current_turn_locked ()->cancel = std::move (cancel);
             turn->retain_until (std::move (*pending));
             if (shared_spot_gate ())
                 _spot_gate->disconnect_actor_head (shared_from_this ());
@@ -1741,6 +1779,15 @@ result_t<void> serial_execution_queue_t::retain_mailbox_until (task_t<void> term
     return result_t<void>::success ();
 }
 
+namespace
+{
+task_t<void> wait_handler_terminals (std::vector<task_t<void>> terminals)
+{
+    for (auto &terminal : terminals)
+        co_await terminal;
+}
+} // namespace
+
 result_t<std::shared_ptr<serial_handler_participant_t>>
 serial_execution_queue_t::observe_handler_terminal ()
 {
@@ -1749,33 +1796,43 @@ serial_execution_queue_t::observe_handler_terminal ()
           framework_error_kind_t::shutting_down, "Actor mailbox is closed");
     auto handler = std::make_shared<task_completion_source_t<void>> ();
     auto observer = std::make_shared<serial_handler_observer_t> (handler);
-    auto retained =
-      retain_mailbox_until (observer->terminal (), [observer] { observer->cancel (); });
-    if (!retained) {
-        observer->cancel ();
-        return result_t<std::shared_ptr<serial_handler_participant_t>>::failure (
-          retained.error_kind (), "Actor mailbox executor is stopping");
+    if (!_lane_policy.allows_turn_yield ()) {
+        auto retained =
+          retain_mailbox_until (observer->terminal (), [observer] { observer->cancel (); });
+        if (!retained) {
+            observer->cancel ();
+            return result_t<std::shared_ptr<serial_handler_participant_t>>::failure (
+              retained.error_kind (), "Actor mailbox executor is stopping");
+        }
     }
-    // Retention is published first. H may finish between the publications,
-    // while its existing M still owns the observer's release continuation.
+    // Actor retention precedes observation of its current handler. A Spot
+    // observes all started handlers and leaves accepted Yield continuations
+    // free to reacquire the gate until their final terminals.
     const auto accepted =
       submit_control ([this, retained = weak_from_this ().lock (), handler, observer] {
-          std::shared_ptr<task_t<void>> pending;
+          std::vector<task_t<void>> terminals;
           {
               std::unique_lock lock (_mutex, std::defer_lock);
               if (!owns_shared_gate ())
                   lock.lock ();
-              if (!_closed && _active_turn && _active_turn->turn)
-                  pending = std::make_shared<task_t<void>> (_active_turn->turn->observe_handler ());
+              if (!_closed) {
+                  const auto current = current_turn_locked ();
+                  for (const auto &entry : _handler_turns)
+                      if (_lane_policy.allows_turn_yield () || &entry == current)
+                          terminals.push_back (entry.turn->observe_handler ());
+                  if (_lane_policy.allows_turn_yield () && _suspended_lifecycle
+                      && _suspended_lifecycle->turn)
+                      terminals.push_back (_suspended_lifecycle->turn->observe_handler ());
+              }
           }
           if (_closed) {
               observer->cancel ();
-          } else if (pending) {
+          } else {
+              auto pending =
+                std::make_shared<task_t<void>> (wait_handler_terminals (std::move (terminals)));
               detail::observe_task_terminal (
                 *pending,
                 [handler, pending] (const result_t<void> &result) { handler->complete (result); });
-          } else {
-              handler->complete (result_t<void>::success ());
           }
       });
     if (!accepted) {
@@ -1940,8 +1997,8 @@ void serial_execution_queue_t::cancel_waits_owned () noexcept
         std::unique_lock lock (_mutex, std::defer_lock);
         if (!owns_shared_gate ())
             lock.lock ();
-        if (_active_turn && _active_turn->turn && !_active_turn->turn->released ())
-            turns.push_back (_active_turn->turn);
+        for (const auto &entry : _handler_turns)
+            turns.push_back (entry.turn);
         if (_suspended_lifecycle && _suspended_lifecycle->turn
             && !_suspended_lifecycle->turn->released ())
             turns.push_back (_suspended_lifecycle->turn);
@@ -1999,10 +2056,11 @@ void serial_execution_queue_t::cancel_pending_owned () noexcept
         };
         clear_queued (_application);
         clear_queued (_lifecycle);
-        if (_active_turn && _active_turn->turn && _active_turn->cancel
-            && !_active_turn->cancel_requested) {
-            _active_turn->cancel_requested = true;
-            active_cancellations.push_back (std::move (_active_turn->cancel));
+        for (auto &entry : _handler_turns) {
+            if (entry.cancel && !entry.cancel_requested) {
+                entry.cancel_requested = true;
+                active_cancellations.push_back (std::move (entry.cancel));
+            }
         }
         if (_suspended_lifecycle && _suspended_lifecycle->submission_id != 0
             && !_suspended_lifecycle->cancel_requested
@@ -2405,15 +2463,31 @@ serial_execution_queue_t::create_turn (const std::string &name,
     return turn;
 }
 
+serial_execution_queue_t::active_turn_t *serial_execution_queue_t::current_turn_locked () noexcept
+{
+    return _active > 0 && !_handler_turns.empty () ? &_handler_turns.back () : nullptr;
+}
+
 void serial_execution_queue_t::activate_turn_locked (work_item_t &item) noexcept
 {
-    assert (!_active_turn.has_value ());
+    assert (!current_turn_locked ());
     assert (item.turn);
-    _active_turn.emplace ();
-    _active_turn->submission_id = item.submission_id;
-    _active_turn->turn = item.turn;
-    _active_turn->cancel = std::move (item.cancel);
-    _active_turn->cancel_requested = item.cancel_requested;
+    if (item.chain) {
+        const auto previous =
+          std::find_if (_handler_turns.begin (), _handler_turns.end (),
+                        [&item] (const auto &entry) { return entry.turn->continues (item.chain); });
+        if (previous != _handler_turns.end ()) {
+            item.submission_id = previous->submission_id;
+            item.cancel = std::move (previous->cancel);
+            item.cancel_requested = previous->cancel_requested;
+            _handler_turns.erase (previous);
+        }
+    }
+    auto &entry = _handler_turns.emplace_back ();
+    entry.submission_id = item.submission_id;
+    entry.turn = item.turn;
+    entry.cancel = std::move (item.cancel);
+    entry.cancel_requested = item.cancel_requested;
     item.cancel = {};
 }
 
@@ -2666,9 +2740,9 @@ void serial_execution_queue_t::execute_item (work_item_t item)
     }
     catch (...) {
         const auto error = std::current_exception ();
-        if (item.actor_mailbox && item.actor_mailbox->_active_turn
-            && item.actor_mailbox->_active_turn->turn)
-            (void) item.actor_mailbox->_active_turn->turn->complete (
+        if (item.actor_mailbox && item.actor_mailbox->current_turn_locked ()
+            && item.actor_mailbox->current_turn_locked ()->turn)
+            (void) item.actor_mailbox->current_turn_locked ()->turn->complete (
               [error] { std::rethrow_exception (error); });
         if (!turn->complete ([error] { std::rethrow_exception (error); }))
             report_deferred_error (name, error);
@@ -2684,13 +2758,13 @@ void serial_execution_queue_t::suspend_lifecycle (work_item_t item)
         return;
     assert (!_suspended_lifecycle && _active_lane == serial_work_lane_t::lifecycle);
     item.work = {};
-    if (_active_turn) {
-        item.work = std::move (_active_turn->ready_continuation);
-        item.cancel = std::move (_active_turn->cancel);
-        item.cancel_requested = _active_turn->cancel_requested;
+    if (current_turn_locked ()) {
+        item.work = std::move (current_turn_locked ()->ready_continuation);
+        item.cancel = std::move (current_turn_locked ()->cancel);
+        item.cancel_requested = current_turn_locked ()->cancel_requested;
     }
     _suspended_lifecycle = std::move (item);
-    _active_turn.reset ();
+    _handler_turns.pop_back ();
     _active_lane.reset ();
     _active_bytes = 0;
     --_active;
@@ -2718,9 +2792,11 @@ bool serial_execution_queue_t::resume_suspended_owned (
         (void) schedule_drain_locked ();
         return true;
     }
-    if (_active_lane == serial_work_lane_t::lifecycle && _active_turn && _active_turn->turn == turn
-        && !turn->released ()) {
-        _active_turn->ready_continuation = [work = std::move (work)] (auto) mutable { work (); };
+    if (_active_lane == serial_work_lane_t::lifecycle && current_turn_locked ()
+        && current_turn_locked ()->turn == turn && !turn->released ()) {
+        current_turn_locked ()->ready_continuation = [work = std::move (work)] (auto) mutable {
+            work ();
+        };
         return true;
     }
     return false;
@@ -2775,8 +2851,8 @@ void serial_execution_queue_t::complete_one (std::string name,
     }
     if (owns_shared_gate ()) {
         assert (current_shared_gate == (shared_spot_gate () ? _spot_gate.get () : this));
-        if (_active_turn && (!_active_turn->turn || _active_turn->turn->released ()))
-            _active_turn.reset ();
+        if (current_turn_locked () && current_turn_locked ()->turn->handler_finished ())
+            _handler_turns.pop_back ();
         if (_active_lane) {
             auto &lane = lane_locked (*_active_lane);
             if (lane.messages > 0)
@@ -2799,8 +2875,8 @@ void serial_execution_queue_t::complete_one (std::string name,
             claim = std::unique_lock<std::mutex> (_mutex, std::defer_lock);
         if (!claim.owns_lock ())
             claim.lock ();
-        if (_active_turn && (!_active_turn->turn || _active_turn->turn->released ())) {
-            _active_turn.reset ();
+        if (current_turn_locked () && current_turn_locked ()->turn->handler_finished ()) {
+            _handler_turns.pop_back ();
         }
         if (_active_lane) {
             auto &lane = lane_locked (*_active_lane);

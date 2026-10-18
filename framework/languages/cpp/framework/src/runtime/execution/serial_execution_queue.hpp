@@ -284,6 +284,7 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
         async_work_t ready_continuation;
         bool cancel_requested = false;
     };
+    active_turn_t *current_turn_locked () noexcept;
     bool schedule_drain_locked ();
     bool publish_locked (std::unique_ptr<publication_node_t> node);
     void import_publications ();
@@ -410,7 +411,7 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
     // idle -> scheduled is the single uncontended successful gate CAS.
     std::atomic<gate_state_t> _gate_state{gate_state_t::idle};
     std::shared_ptr<serial_turn_chain_t> _lifecycle_hold;
-    std::optional<active_turn_t> _active_turn;
+    std::vector<active_turn_t> _handler_turns;
     std::optional<work_item_t> _suspended_lifecycle;
     std::optional<serial_work_lane_t> _active_lane;
     std::size_t _active_bytes = 0;

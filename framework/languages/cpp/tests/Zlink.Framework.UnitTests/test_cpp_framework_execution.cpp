@@ -10222,8 +10222,63 @@ bool verify_idle_mailbox_terminal (bool shared, mailbox_shutdown_t shutdown)
     return passed;
 }
 
+// Execution gate §7 and relocation flow §4.2 include the final terminal of
+// handlers that have yielded the Spot gate before the seal publication.
+bool verify_seal_waits_for_yielded_handler_terminal ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::runtime;
+    test::manual_internal_scheduler_t worker;
+    auto queue = std::make_shared<serial_execution_queue_t> (
+      worker, serial_execution_queue_options_t{}, serial_execution_queue_t::error_handler_t{},
+      serial_lane_policy_t::spot_wide ());
+    std::shared_ptr<detail::serial_turn_t> handler;
+    bool finished = false;
+    queue->post_async ("before-seal",
+                       [&] (auto) { handler = detail::capture_current_serial_turn (); });
+    worker.run_all ();
+    auto early = queue->observe_handler_terminal ();
+    worker.run_all ();
+    auto early_terminal = early.value ()->run ();
+    const bool waited_before_yield = !early_terminal.await_ready ();
+    early.value ()->cancel ();
+    worker.run_all ();
+    const bool released = handler->release ();
+    worker.run_all ();
+    auto observed = queue->observe_handler_terminal ();
+    worker.run_all ();
+    auto terminal = observed.value ()->run ();
+    const bool waited_after_yield = !terminal.await_ready ();
+    // Keep observation pending while the accepted continuation runs.
+    handler->resume_scheduler () ([&] {
+        finished = true;
+        handler->finish_handler ([] {}, true);
+    });
+    worker.run_all ();
+    if (finished)
+        worker.run_until (terminal);
+    const bool waited_through_terminal = finished && terminal.await_ready ();
+    observed.value ()->cancel ();
+    worker.run_all ();
+    handler.reset ();
+    queue->close ();
+    worker.run_all ();
+    queue->drain ();
+    worker.drain ();
+    const bool passed =
+      waited_before_yield && released && waited_after_yield && waited_through_terminal;
+    std::cout << "seal-yield before=" << waited_before_yield << " released=" << released
+              << " after=" << waited_after_yield << " terminal=" << waited_through_terminal
+              << " finished=" << finished << " passed=" << passed << '\n';
+    return passed;
+}
+
 int main (int argc, char **argv)
 {
+    if (argc == 2 && std::string_view (argv[1]) == "--seal-yield-terminal")
+        return verify_seal_waits_for_yielded_handler_terminal () ? EXIT_SUCCESS : EXIT_FAILURE;
+    if (argc == 1 && !verify_seal_waits_for_yielded_handler_terminal ())
+        return EXIT_FAILURE;
     bool mailbox_passed = verify_inactive_barrier_and_cancel_reentry (false);
     mailbox_passed = verify_inactive_barrier_and_cancel_reentry (true) && mailbox_passed;
     mailbox_passed = verify_fifo_indexes_across_shutdown (false) && mailbox_passed;
