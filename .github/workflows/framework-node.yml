@@ -47,6 +47,9 @@ on:
 #       - "framework/languages/dotnet/cross-language/**"
   workflow_dispatch:
 
+env:
+  PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/framework/languages/node/.cache/ms-playwright
+
 # The framework consumes a checkout-built @zlink-systems/zlink package with a
 # platform prebuild and its verified Core release runtime. Package construction
 # is owned by .github/actions/node-binding-package.
@@ -201,7 +204,7 @@ jobs:
         if: matrix.node-version == 22 && (matrix.target.name == 'linux-x64' || matrix.target.name == 'win-x64')
         uses: actions/cache@v5
         with:
-          path: framework/languages/node/.cache/ms-playwright
+          path: ${{ env.PLAYWRIGHT_BROWSERS_PATH }}
           key: playwright-${{ runner.os }}-${{ hashFiles('framework/languages/node/package-lock.json') }}
 
       - name: Install Chromium and Linux dependencies
@@ -358,7 +361,7 @@ jobs:
       - name: Cache Chromium for browser connector E2E
         uses: actions/cache@v5
         with:
-          path: framework/languages/node/.cache/ms-playwright
+          path: ${{ env.PLAYWRIGHT_BROWSERS_PATH }}
           key: playwright-${{ runner.os }}-${{ hashFiles('framework/languages/node/package-lock.json') }}
 
       - name: Install Chromium and Linux dependencies

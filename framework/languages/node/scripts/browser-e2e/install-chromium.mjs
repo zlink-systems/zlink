@@ -2,6 +2,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { browserCachePath } from './browser-cache-path.mjs';
 
 const workspaceRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const executable = process.execPath;
@@ -13,8 +14,7 @@ const result = spawnSync(executable, args, {
   stdio: 'inherit',
   env: {
     ...process.env,
-    PLAYWRIGHT_BROWSERS_PATH:
-      process.env.PLAYWRIGHT_BROWSERS_PATH ?? path.join(workspaceRoot, '.cache/ms-playwright')
+    PLAYWRIGHT_BROWSERS_PATH: browserCachePath()
   }
 });
 process.exitCode = result.status ?? 1;
