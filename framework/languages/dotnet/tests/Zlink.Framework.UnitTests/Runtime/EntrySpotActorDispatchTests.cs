@@ -6454,7 +6454,8 @@ public sealed partial class EntrySpotActorDispatchTests
             TimeSpan.FromSeconds(1),
             ZLinkUserSpotExecutionMode.PerActor
         );
-        activation.AttachSpot(new EmptyUserSpot(activation));
+        activation.AttachSpot(new SerializedJoinSpot(activation));
+        await activation.BindDescriptorsAsync(CancellationToken.None);
         var memberRef = new ZLinkBackendActorRef(
             RoutingId.From("source-node"),
             "existing-member",
@@ -6481,7 +6482,7 @@ public sealed partial class EntrySpotActorDispatchTests
         var candidate = RegisterProbeActor(runtime, candidateRef);
 
         var commit = Task.Run(async () =>
-            await activation.CommitActorJoinFromCallerTurnAsync(candidate, CancellationToken.None)
+            await activation.JoinActorAsync(candidate, ZLinkMessage.Empty, CancellationToken.None)
         );
         var detach = Task.Run(() => activation.DetachRelocatedPerActorMember(member, memberState));
 
