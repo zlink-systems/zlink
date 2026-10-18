@@ -2824,6 +2824,7 @@ int session_disconnect_resolves_context_without_ingress_metadata (bool replay)
     node->actor_instances.emplace ("player:context-player", instance);
     node->actor_spot_ids.emplace ("player:context-player", spot->spot_id);
     node->actor_generations.emplace ("player:context-player", 1);
+    node->actor_types_by_id.emplace ("context-player", "player");
     record_actor_instance_index_unlocked (*node, actor, instance.get ());
     (void) gateway.actor_context (actor);
     if (!gateway.record_bound_session_route (actor, zlink::routing_id_t::from ("session-owner"),
@@ -2886,6 +2887,23 @@ int session_disconnect_resolves_context_without_ingress_metadata (bool replay)
         return 3;
     }
     const auto barrier = reserved.value ();
+    // Reservation retains the Actor FIFO; only the actual source seal moves
+    // later ingress into the handoff hold.
+    const auto sealed =
+      spots
+        .seal_actor_application_suffix (
+          actor,
+          [&] {
+              if (!node->actor_transfer_coordinator.try_begin_local ("player:context-player"))
+                  throw std::runtime_error ("disconnect replay source did not seal");
+          })
+        .result ();
+    if (!sealed) {
+        release->complete (result_t<void>::success ());
+        barrier->cancel ();
+        node->actor_transfer_coordinator.cancel_move ("player:context-player");
+        return 8;
+    }
     spot_inbound_message_t metadata;
     metadata.values.emplace (std::string (actor_handoff_source_node_key),
                              zlink::routing_id_t::from ("request-owner").to_hex ());
@@ -2914,7 +2932,16 @@ int session_disconnect_resolves_context_without_ingress_metadata (bool replay)
     }
     std::cerr << "Session disconnect actual handoff replay without ingress metadata starts"
               << std::endl;
-    const auto activated = barrier->activate ([] {});
+    const auto activated =
+      barrier->activate_async ([&spots, actor] (deferred_barrier_t::async_completion_t complete) {
+          auto opened = spots.open_local_actor_handoff (actor);
+          observe_task_completion (opened, [complete = std::move (complete)] (
+                                             const result_t<result_t<void>> &outcome) mutable {
+              complete (outcome ? outcome.value ()
+                                : result_t<void>::failure (outcome.error_kind (),
+                                                           outcome.error ()->what ()));
+          });
+      });
     if (!activated) {
         release->complete (result_t<void>::success ());
         barrier->cancel ();
@@ -3128,6 +3155,7 @@ int common_session_disconnect_uses_actor_packet_route ()
     node->actor_instances.emplace ("player:player-one", std::make_shared<int> (7));
     node->actor_spot_ids.emplace ("player:player-one", spot->spot_id);
     node->actor_generations.emplace ("player:player-one", 1);
+    node->actor_types_by_id.emplace ("player-one", "player");
     record_actor_instance_index_unlocked (*node, actor,
                                           node->actor_instances.at ("player:player-one").get ());
     service_collection_t services;
@@ -3275,8 +3303,8 @@ int common_session_disconnect_uses_actor_packet_route ()
     current_body[22] = 8;
     if (!empty_success (deliver (current_body)) || callbacks != 3)
         return 9;
-    // Reserve capture strictly after transfer admission and before Actor FIFO
-    // submission. The ordinary queue must save the untouched body for replay.
+    // Seal strictly after transfer admission and before Actor FIFO submission.
+    // The final admission recheck must preserve the untouched body for replay.
     spot_node_runtime_t spots (node);
     std::shared_ptr<deferred_barrier_t> barrier;
     bool reserved = false;
@@ -3286,8 +3314,20 @@ int common_session_disconnect_uses_actor_packet_route ()
               return;
           reserved = true;
           auto result = spots.reserve_actor_join_barrier (current_actor);
-          if (result)
+          if (result) {
               barrier = std::move (result.value ());
+              const auto sealed =
+                spots
+                  .seal_actor_application_suffix (
+                    current_actor,
+                    [&] {
+                        if (!node->actor_transfer_coordinator.try_begin_local ("player:player-one"))
+                            throw std::runtime_error ("disconnect wire source did not seal");
+                    })
+                  .result ();
+              if (!sealed)
+                  throw framework_exception_t (sealed.error_kind (), sealed.error ()->what ());
+          }
       };
     auto capture =
       spots.relay_actor_packet (actor, gateway.actor_context (actor), stream_message_kind_t::send,

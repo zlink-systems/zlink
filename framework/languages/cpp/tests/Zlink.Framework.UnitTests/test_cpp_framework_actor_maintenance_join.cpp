@@ -3448,6 +3448,96 @@ TEST (ActorMaintenanceJoin, RemoteJoinReturnsToPreviousSourceNode)
     EXPECT_EQ (evidence.completion_owners.at (2), first_rid);
 }
 
+// Session–Actor binding §6/§8: a returning Actor carries its current binding,
+// even when this node last hosted it on a different physical Session.
+TEST (ActorMaintenanceJoin, ReboundActorReturnsWithCurrentSession)
+{
+    observations_t evidence;
+    observations = &evidence;
+    auto store = std::make_shared<fw::runtime::in_memory_location_store_t> ();
+    auto relocations = std::make_shared<fw::runtime::in_memory_relocation_store_t> ();
+    host_t first, second, session;
+    release_callbacks_t release{evidence};
+    const auto configure_public = [&] (host_t &host, const char *rid) {
+        auto &options = host.app.add_zlink_framework ();
+        options.add_location_store (store);
+        options.add_relocation_store (relocations);
+        host.app.logging ().use_file (std::string (rid) + ".flow");
+        options.configure_dispatch ().message_flow (fw::message_flow_log_mode_t::detailed);
+        auto mesh = options.add_route_mesh (mesh_name);
+        mesh.set_object_role (fw::object_role_t::server)
+          .set_routing_id (zlink::routing_id_t::from (rid))
+          .listen ("tcp://127.0.0.1:0");
+        mesh.add_entry_spot<entry_t> ([] (fw::entry_spot_context_t context) {
+            return std::make_shared<entry_t> (std::move (context));
+        });
+        mesh
+          .add_spot_factory<room_t> (
+            room_type,
+            [] (fw::spot_context_t context) {
+                return std::make_shared<room_t> (std::move (context));
+            },
+            [] (auto &factory) { factory.disable_relocation (); })
+          .add_actor_factory<actor_t, factory_t> (
+            actor_type, std::make_shared<factory_t> (),
+            [] (auto &factory) { factory.recreate_on_relocation (); });
+    };
+    configure_public (first, first_rid);
+    first.start ();
+    ASSERT_TRUE (ready (first));
+    auto first_services = first.app.advanced ().services ().build_provider ();
+    ASSERT_TRUE (first_services.get_required<fw::actor_manager_t> ()
+                   .get_or_create (fw::actor_id_t (actor_id), actor_type)
+                   .async ()
+                   .result ());
+    ASSERT_TRUE (first_services.get_required<fw::spot_manager_t> ()
+                   .get_or_create (fw::spot_id_t (source_spot), room_type)
+                   .async ()
+                   .result ());
+    first_services.get_required<fw::route_mesh_runtime_options_t> ()
+      .mesh (mesh_name)
+      .placement_weight (0);
+    configure_public (second, second_rid);
+    second.start ();
+    ASSERT_TRUE (ready (second));
+    auto second_services = second.app.advanced ().services ().build_provider ();
+    ASSERT_TRUE (second_services.get_required<fw::spot_manager_t> ()
+                   .get_or_create (fw::spot_id_t (current_spot), room_type)
+                   .async ()
+                   .result ());
+    configure_session (session, store, relocations);
+    session.start ();
+    ASSERT_TRUE (ready (session));
+    auto session_services = session.app.advanced ().services ().build_provider ();
+    auto &routes = session_services.get_required<fw::route_mesh_runtime_t> ();
+    ASSERT_TRUE (peer_ready (routes, first_rid));
+    ASSERT_TRUE (peer_ready (routes, second_rid));
+    ASSERT_TRUE (
+      peer_ready (first_services.get_required<fw::route_mesh_runtime_t> (), session_rid));
+    ASSERT_TRUE (
+      peer_ready (second_services.get_required<fw::route_mesh_runtime_t> (), session_rid));
+    const auto endpoint = session_services.get_required<fw::framework_runtime_t> ()
+                            .listener_status (fw::listener_kind_t::stream, stream_name)
+                            .endpoint;
+    view_client_t previous (endpoint);
+    ASSERT_TRUE (previous.connect ());
+    ASSERT_EQ (previous.view (), std::optional<int>{1});
+    ASSERT_TRUE (
+      move_to (first_services.get_required<fw::actor_client_t> (), evidence, current_spot, 1));
+    ASSERT_TRUE (std::holds_alternative<fw::actor_join_accepted_t> (evidence.completions.at (0)));
+    ASSERT_EQ (previous.view (), std::optional<int>{2});
+    // A reply on the new connection proves its bind terminal and Actor handler
+    // finished before the return Join. No timer or private scheduling hook is used.
+    view_client_t current (endpoint);
+    ASSERT_TRUE (current.connect ());
+    ASSERT_EQ (current.view (), std::optional<int>{2});
+    ASSERT_TRUE (
+      move_to (second_services.get_required<fw::actor_client_t> (), evidence, source_spot, 2));
+    ASSERT_TRUE (std::holds_alternative<fw::actor_join_accepted_t> (evidence.completions.at (1)));
+    EXPECT_EQ (evidence.completion_owners.at (1), first_rid);
+    EXPECT_EQ (current.view (), std::optional<int>{3});
+}
+
 TEST (ActorMaintenanceJoin, ReturnAdmissionWaitsOutsideTargetLifecycleForSourceTerminal)
 {
     observations_t evidence;
