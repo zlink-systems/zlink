@@ -7,10 +7,9 @@ namespace Zlink.Framework.UnitTests.Runtime;
 // The test never decodes Core frames or chooses a route.
 internal sealed class RouteChangeProxy : IAsyncDisposable
 {
-    internal const string AdvertiseHost = "127.0.0.2";
     private const int CopyBufferSize = 16 * 1024;
     private readonly TcpListener _listener;
-    private readonly Uri _upstream;
+    private Uri _upstream = null!;
     private readonly CancellationTokenSource _stop = new();
     private readonly TaskCompletionSource _resume = new(
         TaskCreationOptions.RunContinuationsAsynchronously
@@ -19,16 +18,17 @@ internal sealed class RouteChangeProxy : IAsyncDisposable
     private readonly Task _relay;
     private readonly List<Task> _connections = [];
 
-    internal RouteChangeProxy(string upstream)
+    internal RouteChangeProxy()
     {
-        _upstream = new Uri(upstream);
-        _listener = new TcpListener(IPAddress.Parse(AdvertiseHost), _upstream.Port);
+        _listener = new TcpListener(IPAddress.Loopback, 0);
         _listener.Start();
-        Endpoint = $"tcp://{AdvertiseHost}:{_upstream.Port}";
+        Endpoint = $"tcp://{_listener.LocalEndpoint}";
         _relay = AcceptAsync();
     }
 
     internal string Endpoint { get; }
+
+    internal void ForwardTo(string upstream) => _upstream = new Uri(upstream);
 
     internal void Pause() => Volatile.Write(ref _forward, _resume.Task);
 
