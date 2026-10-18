@@ -375,6 +375,7 @@ final class ZLinkJavaRawMeshNodeMetricsTest {
                                                     java.util.concurrent.CompletableFuture<Void>
                                                             requestAdmission) {
                                                 assertTrue(received.isRequest());
+                                                requestAdmission.complete(null);
                                                 try (Message reply = Message.from("recovered")) {
                                                     received.reply().accept(List.of(reply));
                                                 }

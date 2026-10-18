@@ -155,7 +155,7 @@ export class ZLinkSpotActivationRegistry {
     });
   }
 
-  register(activation: ZLinkSpotActivation): void {
+  register(activation: ZLinkSpotActivation): ZLinkSpotActivation | undefined {
     const key = spotActivationKey(activation.meshName, activation.spotId);
     if (this.activations.has(key)) {
       throw createInternalFrameworkException(
@@ -165,14 +165,17 @@ export class ZLinkSpotActivationRegistry {
     }
     this.activations.set(key, activation);
     this.lifecycleMetrics.opened('user');
+    return this.staged.has(key) ? undefined : activation;
   }
 
   stage(meshName: string, spotId: RoutingId): void {
     this.staged.add(spotActivationKey(meshName, spotId));
   }
 
-  publish(meshName: string, spotId: RoutingId): void {
-    this.staged.delete(spotActivationKey(meshName, spotId));
+  publish(meshName: string, spotId: RoutingId): ZLinkSpotActivation | undefined {
+    const key = spotActivationKey(meshName, spotId);
+    this.staged.delete(key);
+    return this.activations.get(key);
   }
 
   detachRelocated(meshName: string, spotId: RoutingId): ZLinkSpotActivation | undefined {

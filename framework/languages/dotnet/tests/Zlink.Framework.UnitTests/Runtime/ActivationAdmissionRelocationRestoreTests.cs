@@ -58,6 +58,7 @@ public sealed class ActivationAdmissionRelocationRestoreTests
                 CancellationToken.None,
                 invokeCreate: false
             );
+            var published = false;
             try
             {
                 var activation = Assert.IsType<ZLinkUserSpotActivation>(prepared.Activation);
@@ -122,6 +123,7 @@ public sealed class ActivationAdmissionRelocationRestoreTests
                 await activation.InitializeRelocatedUserSpotAsync(seal, CancellationToken.None);
                 var spot = (InitializingTimerSpot)activation.Spot;
                 Assert.True(spot.Initialized);
+                Assert.False(spot.FirstTick.Task.IsCompleted);
                 var timer = Assert.IsType<ZLinkTimer>(spot.Timer);
                 if (restoreSourceTimer)
                     Assert.Equal(expected, timer.Snapshot());
@@ -131,10 +133,18 @@ public sealed class ActivationAdmissionRelocationRestoreTests
                         TimeSpan.FromHours(1)
                     )
                 );
+                await catalog.PublishRelocatedReservedAsync(prepared);
+                published = true;
+                Assert.True(await activation.AbortRelocationAsync(seal));
+                if (!restoreSourceTimer)
+                    await timer.NotifyDueAsync(1);
+                var delivered = await spot.FirstTick.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                Assert.Equal(restoreSourceTimer ? 6UL : 1UL, delivered.DeliveryIndex);
             }
             finally
             {
-                await catalog.DiscardReservedAsync(prepared);
+                if (!published)
+                    await catalog.DiscardReservedAsync(prepared);
             }
         }
         finally
@@ -178,9 +188,11 @@ public sealed class ActivationAdmissionRelocationRestoreTests
                 ZLinkMessage.Empty,
                 CancellationToken.None
             );
+            ZLinkSpotRelocationSeal? sourceSeal = null;
             try
             {
-                var sourceSeal = await source.Activation.TrySealRelocationAsync();
+                await catalog.PublishRelocatedReservedAsync(source);
+                sourceSeal = await source.Activation.TrySealRelocationAsync();
                 Assert.NotNull(sourceSeal);
                 Assert.Single(sourceSeal.LogicalTimers);
                 var target = await catalog.PrepareReservedAsync(
@@ -210,7 +222,8 @@ public sealed class ActivationAdmissionRelocationRestoreTests
             }
             finally
             {
-                await catalog.DiscardReservedAsync(source);
+                if (sourceSeal is not null)
+                    await source.Activation.AbortRelocationAsync(sourceSeal);
             }
         }
         finally
@@ -243,6 +256,8 @@ public sealed class ActivationAdmissionRelocationRestoreTests
         public IZLinkSpotContext Context { get; } = context;
         public bool Initialized { get; private set; }
         public IZLinkTimer? Timer { get; private set; }
+        internal TaskCompletionSource<ZLinkTimerTick> FirstTick { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public void Configure() { }
 
@@ -273,7 +288,11 @@ public sealed class ActivationAdmissionRelocationRestoreTests
             InitializingTimerSpot spot,
             ZLinkTimerTick tick,
             CancellationToken cancellationToken
-        ) => ValueTask.CompletedTask;
+        )
+        {
+            spot.FirstTick.TrySetResult(tick);
+            return ValueTask.CompletedTask;
+        }
     }
 
     [Fact]

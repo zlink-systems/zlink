@@ -2202,11 +2202,12 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                     .get ();
                   detail::spot_node_runtime_t spots (registration->spot_state);
                   std::optional<detail::local_spot_create_result_t> created;
+                  std::function<task_t<void> (bool)> preparation_terminal;
                   try {
                       created.emplace (spots.get_or_create_spot (
                         stable_type, std::move (spot_id), zlink::message_t::from (request_bytes),
                         object.object_generation, object.mesh_name,
-                        object.authority_owner_generation));
+                        object.authority_owner_generation, &preparation_terminal));
                   }
                   catch (...) {
                       registration->spot_state->lane
@@ -2229,7 +2230,7 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                   return host::user_spot_materialize_result_t{
                     created->state == spot_create_state_t::created
                       || created->state == spot_create_state_t::existing,
-                    std::move (application_reply)};
+                    std::move (application_reply), std::move (preparation_terminal)};
               },
               [registration] (const std::string &spot_id, host::spot_close_begin_t begin,
                               host::spot_close_done_t done) {
@@ -2269,7 +2270,8 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                   store, instance_relocations, [this] { return current_location_owner (); },
                   host::instance_spot_activation_materializer_t{
                     [registration] (const protocol::instance_spot_activation_header_t &request,
-                                    const authority_snapshot_t &snapshot) {
+                                    const authority_snapshot_t &snapshot,
+                                    std::function<task_t<void> (bool)> &preparation_terminal) {
                         if (snapshot.allocation.object_kind
                               != placement_object_kind_t::instance_spot
                             || snapshot.allocation.stable_type != request.target.stable_type
@@ -2286,15 +2288,15 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                             .get_or_create_spot (
                               request.target.stable_type, spot_id_t (request.target.spot_id),
                               zlink::message_t{}, snapshot.object_generation,
-                              request.target.mesh_name, snapshot.authority_owner_generation);
+                              request.target.mesh_name, snapshot.authority_owner_generation,
+                              &preparation_terminal);
                         return created.state == spot_create_state_t::created
                                || created.state == spot_create_state_t::existing;
                     },
                     [this, registration, &services] (
                       std::shared_ptr<const protocol::instance_activation_recovery_t>
                         original_command,
-                      std::function<task_t<zlink::message_t> (std::function<void ()> &)> missing,
-                      std::shared_ptr<detail::deferred_barrier_t> *activation_terminal) {
+                      std::function<task_t<zlink::message_t> (std::function<void ()> &)> missing) {
                         const auto &request = original_command->activation;
                         const auto &metadata = original_command->metadata;
                         const auto &application = original_command->application_payload;
@@ -2334,7 +2336,7 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                               std::to_string (request.operation.high) + ":"
                                 + std::to_string (request.operation.low),
                               services, *_serializers, application.flow_id, application.flow_origin,
-                              terminal.get (), original, activation_terminal));
+                              terminal.get (), original));
                         detail::observe_task_completion (
                           *running, [this, running, original_command, terminal,
                                      done] (const result_t<zlink::message_t> &reply) {

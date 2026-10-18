@@ -199,8 +199,16 @@ final class ZLinkStatefulAuthorityRouteRuntimeTest {
         }
     }
 
-    @Test
-    void readyRecoveryReplaysBeforeCursorAndPointerCas() throws Exception {
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource({
+        "0,none",
+        "1,none",
+        "0,cursor",
+        "0,release",
+        "1,release"
+    })
+    void readyRecoveryReplaysBeforeCursorAndPointerCas(int replayCursor, String failedTransition)
+            throws Exception {
         byte[] envelope = recoveryEnvelope();
         byte[] digest = MessageDigest.getInstance("SHA-256").digest(envelope);
         var codec = new ZLinkServiceAuthorityPayloadCodec();
@@ -226,10 +234,12 @@ final class ZLinkStatefulAuthorityRouteRuntimeTest {
                                                                 digest,
                                                                 envelope.length,
                                                                 1,
-                                                                0))))));
+                                                                replayCursor))))));
         var versions = new AtomicInteger(1);
         var events = new CopyOnWriteArrayList<String>();
-        ZLinkLocationRepository store = authorityStore(entries, versions, events);
+        var recoveryFailure = new IllegalStateException("recovery " + failedTransition + " failed");
+        ZLinkLocationRepository store =
+                authorityStore(entries, versions, events, failedTransition, recoveryFailure);
         ZLinkRelocationStore relocation = relocationStore(envelope, events);
         var recorded = new RecordedNode(events);
 
@@ -242,13 +252,34 @@ final class ZLinkStatefulAuthorityRouteRuntimeTest {
                         failure -> {
                             throw new AssertionError(failure);
                         })) {
-            runtime.start().toCompletableFuture().join();
+            if (failedTransition.equals("none")) runtime.start().toCompletableFuture().join();
+            else
+                org.junit.jupiter.api.Assertions.assertSame(
+                        recoveryFailure,
+                        org.junit.jupiter.api.Assertions.assertThrows(
+                                        java.util.concurrent.CompletionException.class,
+                                        () -> runtime.start().toCompletableFuture().join())
+                                .getCause());
         }
 
-        assertEquals(List.of("replay", "cursor", "release", "delete"), events);
+        var expected = new java.util.ArrayList<String>();
+        if (replayCursor == 0) expected.add("replay");
+        if (replayCursor == 0)
+            expected.add(failedTransition.equals("cursor") ? "cursor:failed" : "cursor");
+        if (!failedTransition.equals("cursor"))
+            expected.add(failedTransition.equals("release") ? "release:failed" : "release");
+        if (failedTransition.equals("none")) expected.add("delete");
+        expected.add("recovered");
+        assertEquals(expected, events);
+        assertEquals(1, recorded.recovered.size());
+        assertFence(recorded.recovered.getFirst());
+        assertEquals(
+                failedTransition.equals("none") ? null : recoveryFailure,
+                recorded.recoveryFailures.getFirst());
         var recovered = codec.decode(entries.get().getFirst().snapshot().payload()).orElseThrow();
-        assertTrue(recovered.activationRecoveryState().isEmpty());
-        assertEquals(1, recorded.registered.size());
+        assertEquals(
+                failedTransition.equals("none"), recovered.activationRecoveryState().isEmpty());
+        if (failedTransition.equals("none")) assertEquals(1, recorded.registered.size());
     }
 
     private static ZLinkAuthorityEntry entry(
@@ -298,7 +329,9 @@ final class ZLinkStatefulAuthorityRouteRuntimeTest {
     private static ZLinkLocationRepository authorityStore(
             AtomicReference<List<ZLinkAuthorityEntry>> entries,
             AtomicInteger versions,
-            List<String> events) {
+            List<String> events,
+            String failedTransition,
+            Throwable recoveryFailure) {
         return (ZLinkLocationRepository)
                 Proxy.newProxyInstance(
                         ZLinkLocationRepository.class.getClassLoader(),
@@ -319,6 +352,18 @@ final class ZLinkStatefulAuthorityRouteRuntimeTest {
                                 assertEquals(
                                         current.snapshot().storeVersion(), expected.storeVersion());
                                 ZLinkAuthorityPut put = (ZLinkAuthorityPut) arguments[2];
+                                var requested =
+                                        new ZLinkServiceAuthorityPayloadCodec()
+                                                .decode(put.payload())
+                                                .orElseThrow();
+                                String transition =
+                                        requested.activationRecoveryState().isPresent()
+                                                ? "cursor"
+                                                : "release";
+                                if (transition.equals(failedTransition)) {
+                                    events.add(transition + ":failed");
+                                    return CompletableFuture.failedFuture(recoveryFailure);
+                                }
                                 String version = "v" + versions.incrementAndGet();
                                 var snapshot = current.snapshot();
                                 var stored =
@@ -464,6 +509,10 @@ final class ZLinkStatefulAuthorityRouteRuntimeTest {
         private final List<ZLinkServiceM6BWireCodec.InstanceRouteFence> forgottenIntents =
                 new CopyOnWriteArrayList<>();
 
+        private final List<ZLinkServiceM6BWireCodec.InstanceRouteFence> recovered =
+                new CopyOnWriteArrayList<>();
+        private final List<Throwable> recoveryFailures = new CopyOnWriteArrayList<>();
+
         RecordedNode() {
             this(new CopyOnWriteArrayList<>());
         }
@@ -497,6 +546,14 @@ final class ZLinkStatefulAuthorityRouteRuntimeTest {
                                                             arguments[0]);
                                     case "recoverInstanceActivation" -> {
                                         events.add("replay");
+                                        return CompletableFuture.completedFuture(null);
+                                    }
+                                    case "instanceActivationRecoveryCompleted" -> {
+                                        events.add("recovered");
+                                        recovered.add(
+                                                (ZLinkServiceM6BWireCodec.InstanceRouteFence)
+                                                        arguments[0]);
+                                        recoveryFailures.add((Throwable) arguments[1]);
                                         return CompletableFuture.completedFuture(null);
                                     }
                                     case "routingId" -> {

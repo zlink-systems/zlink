@@ -596,7 +596,7 @@ final class ZLinkUserSpotOperationHandler
                                                                                                             }))),
                                                             failure ->
                                                                     activation.host
-                                                                            .reportSpotClosingFailure(
+                                                                            .reportSpotLifecycleFailure(
                                                                                     fence.spotId(),
                                                                                     failure)));
                             coordinatorOwner.set(coordinator);

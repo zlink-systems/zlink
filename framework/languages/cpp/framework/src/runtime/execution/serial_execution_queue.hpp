@@ -223,6 +223,8 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
     task_t<std::shared_ptr<const void>> first_pending_message_or_close ();
     task_t<std::vector<std::shared_ptr<const void>>> pending_messages () const;
     bool allows_yield () const noexcept { return _lane_policy.allows_turn_yield (); }
+    using application_start_policy_t = std::function<bool (const std::shared_ptr<const void> &)>;
+    void set_application_start_policy (application_start_policy_t policy);
     // Installs the SpotWide owner before an Actor mailbox accepts work.
     void attach_spot_gate (std::shared_ptr<serial_execution_queue_t> gate);
 
@@ -368,7 +370,8 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
     std::deque<work_item_t>::iterator next_lifecycle_locked () noexcept;
     bool has_queued_locked () const noexcept;
     bool has_ready_locked () noexcept;
-    bool application_ready_locked () const noexcept;
+    std::deque<work_item_t>::iterator next_application_locked () noexcept;
+    bool application_ready_locked () noexcept;
     work_item_t take_next_locked (std::optional<serial_work_lane_t> forced_lane = {});
     serial_work_lane_t select_next_lane_locked () noexcept;
     void report_deferred_error (const std::string &name,
@@ -378,6 +381,7 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
     const serial_execution_queue_options_t _options;
     const serial_lane_policy_t _lane_policy;
     error_handler_t _error_handler;
+    application_start_policy_t _application_start_policy;
     mutable std::mutex _mutex;
     std::condition_variable _empty;
     lane_state_t _application;
