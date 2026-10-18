@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Rewrite a just-built libzlink.a so only the public zlink_* C ABI stays
-# visible to a consumer's link.
+# Rewrite a just-built static archive (libzlink.a, and the C++ Framework
+# archives, which pass their own version script) so only the public surface
+# the shared library exports stays visible to a consumer's link.
 #
 # Usage: hide_static_archive_internals.sh <archive> <version-script>
 # Environment: AR, RANLIB, LD, NM, OBJCOPY (each defaults to the bare tool name)
@@ -80,7 +81,7 @@ Darwin)
     # surface instead and let everything outside it become non-external, from
     # the same version script the ELF path and the shared library use. Mach-O
     # prefixes C symbols with an underscore, hence the prefix argument.
-    "$here/static_archive_public_symbols.sh" "$version_script" _ > "$work/keep"
+    "$here/static_archive_public_symbols.sh" "$version_script" _ "$archive" > "$work/keep"
     "$ld_tool" -r -exported_symbols_list "$work/keep" \
         -o "$work/$merged_name" "${objects[@]}"
     ;;
@@ -96,7 +97,7 @@ Darwin)
     # discarded section.
     "$ld_tool" -r --force-group-allocation -o "$work/$merged_name" "${objects[@]}"
 
-    "$here/static_archive_public_symbols.sh" "$version_script" > "$work/keep"
+    "$here/static_archive_public_symbols.sh" "$version_script" "" "$archive" > "$work/keep"
 
     localize() {
         "$objcopy_tool" --keep-global-symbols="$work/keep" \
