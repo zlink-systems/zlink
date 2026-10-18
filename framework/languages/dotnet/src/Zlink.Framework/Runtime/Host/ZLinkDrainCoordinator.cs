@@ -542,23 +542,26 @@ internal sealed class ZLinkDrainCoordinator : IDisposable
         Zlink.Framework.Runtime.Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
             $"force_stop_begin reason={reason} deadline={deadline} budget={teardownBudget}"
         );
-        using var teardownBound = new CancellationTokenSource(teardownBudget);
+        var shutdownToken = ShutdownCancellationToken;
+        using var teardownBound =
+            shutdownToken.CanBeCanceled && !shutdownToken.IsCancellationRequested
+                ? null
+                : new CancellationTokenSource(teardownBudget);
+        var teardownToken = teardownBound?.Token ?? shutdownToken;
         try
         {
-            await _executor.ForceStopAsync(reason, teardownBound.Token).ConfigureAwait(false);
+            await _executor.ForceStopAsync(reason, teardownToken).ConfigureAwait(false);
         }
         catch (ZLinkDrainForceException failure)
         {
             reason = failure.Reason;
         }
-        catch (OperationCanceledException) when (teardownBound.IsCancellationRequested)
-        {
-            reason = ZLinkDrainForceReason.DeadlineExceeded;
-        }
         catch (Exception error)
         {
             _logger?.LogError(error, "ZLink forced drain teardown failed.");
-            reason = ZLinkDrainForceReason.TeardownFailed;
+            reason = teardownToken.IsCancellationRequested
+                ? ZLinkDrainForceReason.DeadlineExceeded
+                : ZLinkDrainForceReason.TeardownFailed;
         }
         return new ForceStopped(reason, hasCommitted, committedUnitCount);
     }

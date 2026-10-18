@@ -524,9 +524,6 @@ internal sealed class ZLinkFrameworkDrainExecutor : IZLinkDrainExecutor
                 failures
             )
             .ConfigureAwait(false);
-        var ownerCleanupToken = _shutdownDeadline.IsCancellationRequested
-            ? cancellationToken
-            : _shutdownDeadline.Token;
         var ownerCleanupFailed = false;
         if (_operations.HasLocationRuntime)
         {
@@ -536,10 +533,10 @@ internal sealed class ZLinkFrameworkDrainExecutor : IZLinkDrainExecutor
             {
                 try
                 {
-                    await _operations.CleanupOwner(ownerCleanupToken).ConfigureAwait(false);
+                    await _operations.CleanupOwner(cancellationToken).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException error)
-                    when (ownerCleanupToken.IsCancellationRequested)
+                    when (cancellationToken.IsCancellationRequested)
                 {
                     failures.Add(error);
                 }
@@ -552,25 +549,13 @@ internal sealed class ZLinkFrameworkDrainExecutor : IZLinkDrainExecutor
             }
             await CaptureAsync(
                     "stop_location",
-                    () => _operations.StopLocation(ownerCleanupToken),
+                    () => _operations.StopLocation(cancellationToken),
                     failures
                 )
                 .ConfigureAwait(false);
         }
         if (ownerCleanupFailed)
             throw new ZLinkDrainForceException(ZLinkDrainForceReason.OwnerCleanupFailed, failures);
-        if (
-            ownerCleanupToken.IsCancellationRequested
-            && failures.Count > 0
-            && failures.All(error =>
-                error is OperationCanceledException
-                || error is AggregateException aggregate
-                    && aggregate
-                        .Flatten()
-                        .InnerExceptions.All(inner => inner is OperationCanceledException)
-            )
-        )
-            throw new OperationCanceledException(ownerCleanupToken);
         if (failures.Count == 1)
             throw failures[0];
         if (failures.Count > 1)
