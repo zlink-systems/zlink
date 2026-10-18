@@ -59,7 +59,7 @@ internal sealed class ZLinkSpotTimerRegistry(
         );
     }
 
-    public ValueTask<IZLinkTimer> AddAsync(
+    public async ValueTask<IZLinkTimer> AddAsync(
         string name,
         TimeSpan period,
         ZLinkTimerOptions? options,
@@ -83,68 +83,85 @@ internal sealed class ZLinkSpotTimerRegistry(
         CancellationToken cancellationToken
     )
     {
-        return _lane.RunAsync(() =>
-        {
-            ObjectDisposedException.ThrowIf(_closed, this);
-            cancellationToken.ThrowIfCancellationRequested();
-            var initializingTarget =
-                _relocationInitialization == RelocationInitialization.Initializing;
-            if (
-                _frozen
-                && _relocationInitialization != RelocationInitialization.AwaitingSnapshot
-                && !initializingTarget
-            )
-                throw new ZLinkConfigurationException(
-                    "SPOT timer registration is sealed for relocation."
-                );
-
-            var timerOptions = ValidateRegistration(name, period, options);
-
-            if (initializingTarget)
+        var registration = await _lane
+            .RunAsync(() =>
             {
-                var restored = _timers.Find(registration =>
-                    registration.Restored
-                    && !registration.Timer.IsDisposed
-                    && registration.Timer.Snapshot().Name == name
-                );
-                if (restored is not null)
-                {
-                    restored.ValidateHandlerType(handlerType, spotType);
-                    // Restored callbacks already dispatch through this target activation.
-                    // Returning its handle preserves the logical cursor and pending tick.
-                    return (IZLinkTimer)restored.Timer;
-                }
-            }
+                ObjectDisposedException.ThrowIf(_closed, this);
+                cancellationToken.ThrowIfCancellationRequested();
+                var initializingTarget =
+                    _relocationInitialization == RelocationInitialization.Initializing;
+                if (
+                    _frozen
+                    && _relocationInitialization != RelocationInitialization.AwaitingSnapshot
+                    && !initializingTarget
+                )
+                    throw new ZLinkConfigurationException(
+                        "SPOT timer registration is sealed for relocation."
+                    );
 
-            var descriptor = ZLinkSpotDescriptorFactory.CreateTimerDescriptor(
-                name,
-                period,
-                handlerType,
-                spotType
-            );
-            var timer = new ZLinkTimer(
-                new ZLinkTimerLogicalSnapshot(
+                var timerOptions = ValidateRegistration(name, period, options);
+                var replaced = _timers
+                    .Where(registration =>
+                        !registration.Timer.IsDisposed && registration.Timer.Snapshot().Name == name
+                    )
+                    .ToArray();
+
+                if (initializingTarget)
+                {
+                    var restored = replaced.FirstOrDefault(registration => registration.Restored);
+                    if (restored is not null)
+                    {
+                        restored.ValidateHandlerType(handlerType, spotType);
+                        // Restored callbacks already dispatch through this target activation.
+                        // Returning its handle preserves the logical cursor and pending tick.
+                        return (
+                            Timer: (IZLinkTimer)restored.Timer,
+                            Replaced: Array.Empty<ZLinkSpotTimerRegistration>()
+                        );
+                    }
+                }
+
+                var descriptor = ZLinkSpotDescriptorFactory.CreateTimerDescriptor(
                     name,
                     period,
-                    timerOptions,
-                    DateTimeOffset.UtcNow,
-                    0,
-                    0,
-                    null,
-                    null
-                ),
-                stopToken,
-                (tick, ct) => dispatchAsync(descriptor, tick, ct),
-                (tick, error, stopped, ct) =>
-                    reportFailureAsync(descriptor, tick, error, stopped, ct),
-                () =>
-                    ZLinkFlowContext.Enter(null, null, flowCaptureEnabled(), ZLinkFlowOrigin.Timer),
-                startFrozen: _frozen,
-                scheduler: _scheduler
-            );
-            _timers.Add(new ZLinkSpotTimerRegistration(timer, handlerType, spotType));
-            return (IZLinkTimer)timer;
-        });
+                    handlerType,
+                    spotType
+                );
+                var timer = new ZLinkTimer(
+                    new ZLinkTimerLogicalSnapshot(
+                        name,
+                        period,
+                        timerOptions,
+                        DateTimeOffset.UtcNow,
+                        0,
+                        0,
+                        null,
+                        null
+                    ),
+                    stopToken,
+                    (tick, ct) => dispatchAsync(descriptor, tick, ct),
+                    (tick, error, stopped, ct) =>
+                        reportFailureAsync(descriptor, tick, error, stopped, ct),
+                    () =>
+                        ZLinkFlowContext.Enter(
+                            null,
+                            null,
+                            flowCaptureEnabled(),
+                            ZLinkFlowOrigin.Timer
+                        ),
+                    startFrozen: _frozen,
+                    scheduler: _scheduler
+                );
+                _timers.Add(new ZLinkSpotTimerRegistration(timer, handlerType, spotType));
+                return (Timer: (IZLinkTimer)timer, Replaced: replaced);
+            })
+            .ConfigureAwait(false);
+        foreach (var previous in registration.Replaced)
+            // Registration retires the previous generation without waiting for
+            // a callback that may itself be registering its replacement. The
+            // registry retains it and owns its existing finalization terminal.
+            _ = await previous.Timer.BeginCancellationAsync().ConfigureAwait(false);
+        return registration.Timer;
     }
 
     internal IReadOnlyList<ZLinkSpotLogicalTimerSnapshot> Freeze() =>

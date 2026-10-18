@@ -1078,6 +1078,66 @@ final class ZLinkActorDurablePrefixPermitTest {
         }
     }
 
+    @ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+    void activationPreparationDoesNotAcquireCapacityForBlockedApplication(boolean shared) {
+        var executor = new ManualExecutor();
+        var spot = new ZLinkSerialExecutionQueue(executor, ZLinkExecutionLanePolicy.spot());
+        if (shared) new ZLinkSerialExecutionQueue.SharedSpotGate(spot);
+        var prepared = spot.prepareActivation(() -> CompletableFuture.completedFuture(null));
+        executor.drain();
+        assertTrue(prepared.toCompletableFuture().isDone());
+        var calls = new ArrayList<Long>();
+        try (var jobs =
+                new ZLinkApplicationJobQueue(
+                        ZLinkApplicationJobQueueProfile.BALANCED,
+                        OptionalLong.of(1),
+                        new ZLinkApplicationJobQueue.ProcessorCandidates(1, null, null, null))) {
+            var foreign =
+                    jobs.acquire(ZLinkApplicationJobQueue.Origin.REMOTE)
+                            .toCompletableFuture()
+                            .join();
+            var admitted =
+                    spot.admitDurablePrefix(
+                                    List.of(
+                                            new ZLinkSerialExecutionQueue.QueuedRecord(
+                                                    1, new byte[] {1})),
+                                    (record, terminal) ->
+                                            () -> {
+                                                ZLinkApplicationJobContext
+                                                        .beforeFirstApplicationInstruction();
+                                                calls.add(record.sequence());
+                                                return CompletableFuture.completedFuture(null);
+                                            },
+                                    jobs)
+                            .toCompletableFuture();
+            try {
+                executor.drain();
+                assertTrue(admitted.isDone());
+                assertEquals(
+                        0,
+                        jobs.snapshot().capacityWaiters(),
+                        "capacity preparation must not select application work before activation admission");
+                assertTrue(calls.isEmpty());
+                var finished = spot.finishActivationPreparation().toCompletableFuture();
+                executor.drain();
+                assertTrue(finished.isDone());
+                assertEquals(1, jobs.snapshot().capacityWaiters());
+                foreign.close();
+                executor.drain();
+                assertEquals(List.of(1L), calls);
+                admitted.join().forEach(terminal -> terminal.join());
+                assertEquals(0, jobs.snapshot().permitsInUse());
+                assertEquals(0, jobs.snapshot().capacityWaiters());
+            } finally {
+                spot.finishActivationPreparation();
+                foreign.close();
+                executor.drain();
+                spot.close();
+            }
+        }
+    }
+
     private static java.util.stream.Stream<Boolean> booleanCases() {
         return java.util.stream.IntStream.range(0, 20)
                 .boxed()

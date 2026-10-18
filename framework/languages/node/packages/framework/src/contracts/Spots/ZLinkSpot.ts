@@ -61,8 +61,8 @@ export interface ZLinkSpot<
 > extends ZLinkUserSpotActorLifecycle<TActor> {
   readonly context: ZLinkSpotContext<TActor>;
   configure?(): void;
-  onCreate?(request: ZLinkMessage): Promise<ZLinkSpotCreateResponse>;
-  onInitialize?(): Promise<void>;
+  onCreate?(request: ZLinkMessage, signal?: AbortSignal): Promise<ZLinkSpotCreateResponse>;
+  onInitialize?(signal?: AbortSignal): Promise<void>;
   onClosing?(context: ZLinkSpotClosingContext, cleanupSignal: AbortSignal): Promise<void>;
   onRelocationReadyCompleted?(completion: ZLinkSpotRelocationReadyCompletion): Promise<void>;
 }
@@ -70,7 +70,7 @@ export interface ZLinkSpot<
 export interface ZLinkInstanceSpot {
   readonly context: ZLinkInstanceSpotContext;
   configure?(): void;
-  onInitialize?(): Promise<void>;
+  onInitialize?(signal?: AbortSignal): Promise<void>;
   onClosing?(context: ZLinkSpotClosingContext, cleanupSignal: AbortSignal): Promise<void>;
 }
 

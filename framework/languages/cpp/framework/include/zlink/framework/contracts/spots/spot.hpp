@@ -1851,7 +1851,7 @@ struct spot_lifecycle_callbacks_t
     std::function<task_t<spot_create_response_t> (
       void *, const zlink::message_t &, serializer_registry_t &)>
       on_create;
-    std::function<void (void *)> on_initialize;
+    std::function<task_t<void> (void *)> on_initialize;
     std::function<task_t<void> (void *, const spot_closing_context_t &, std::stop_token)>
       on_closing;
     std::function<void (void *, const spot_relocation_ready_completion_t &)>
@@ -2162,7 +2162,7 @@ class spot_node_builder_t
             };
         }
         callbacks.on_initialize = [] (void *spot) {
-            static_cast<TSpot *> (spot)->on_initialize ().result ().value ();
+            return static_cast<TSpot *> (spot)->on_initialize ();
         };
         callbacks.on_closing = [] (void *spot, const spot_closing_context_t &context,
                                    std::stop_token cleanup_cancellation) {

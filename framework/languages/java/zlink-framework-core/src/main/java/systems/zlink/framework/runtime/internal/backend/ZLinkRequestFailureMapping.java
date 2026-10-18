@@ -64,6 +64,21 @@ public final class ZLinkRequestFailureMapping {
 
     private ZLinkRequestFailureMapping() {}
 
+    /** Classifies a User Spot terminal the same way for a remote reply and a local owner. */
+    public static systems.zlink.framework.errors.ZLinkFrameworkException userSpotFailure(
+            int terminalResult, int failureCode, Throwable cause) {
+        return receivedFailure(
+                ZLinkBackendRequestResult.fromWireTerminal(terminalResult)
+                        .toFrameworkErrorKind(failureCode),
+                "User Spot operation failed: terminal="
+                        + terminalResult
+                        + " failureCode="
+                        + failureCode,
+                failureCode,
+                java.util.Map.of(),
+                cause);
+    }
+
     private static final class ReceivedFailure
             extends systems.zlink.framework.errors.ZLinkFrameworkException {
         private final int failureCode;
