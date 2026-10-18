@@ -428,14 +428,23 @@ public final class ZLinkSerialExecutionQueue {
      * the queue accepts. A relocation seal is not a rejection; the caller holds the work.
      */
     private CompletionStage<Void> admissionFailureLocked() {
+        return admissionFailureLocked(null, ignored -> false, ZLinkFrameworkErrorKind.REJECTED);
+    }
+
+    private CompletionStage<Void> admissionFailureLocked(
+            Object message, Predicate<Object> retains, ZLinkFrameworkErrorKind sealedKind) {
         LifecycleTransition transition = lifecycleTransitionLocked();
         boolean closing = transition != null && transition.committed.getAsBoolean();
-        if (closingAdmissionSealed || closing) {
+        boolean retainedMessage = (closingAdmissionSealed || closing) && retains.test(message);
+        if (closingAdmissionSealed || closing && !retainedMessage) {
+            if (retainedMessage) {
+                return CompletableFuture.failedFuture(
+                        ZLinkFrameworkErrorOrigin.ownerFenceRefusal(
+                                "Spot incarnation released its authority"));
+            }
             return CompletableFuture.failedFuture(
                     ZLinkFrameworkErrorOrigin.framework(
-                            closing
-                                    ? ZLinkFrameworkErrorKind.NOT_FOUND
-                                    : ZLinkFrameworkErrorKind.REJECTED,
+                            closing ? ZLinkFrameworkErrorKind.NOT_FOUND : sealedKind,
                             "Spot incarnation is closing"));
         }
         return relocated ? CompletableFuture.failedFuture(new RelocatedOwnerException()) : null;
@@ -461,9 +470,13 @@ public final class ZLinkSerialExecutionQueue {
                 new LifecycleTransition(operation, dispatch, committed, retains), null);
     }
 
-    /** The original message is retained; its old handler closure is never replayed. */
+    /**
+     * The original message is retained; its old handler closure is never replayed. The message's
+     * retention intent remains available for admission after the Close transition has ended.
+     */
     public CompletionStage<Void> enqueueMessage(
             Object message,
+            Predicate<Object> retains,
             long payloadBytes,
             Supplier<CompletionStage<Void>> operation,
             Runnable release,
@@ -471,19 +484,9 @@ public final class ZLinkSerialExecutionQueue {
         EnqueueResult result;
         synchronized (this) {
             Objects.requireNonNull(message, "message");
-            LifecycleTransition transition = lifecycleTransitionLocked();
-            boolean retained = transition != null && transition.retains.test(message);
-            if (transition != null
-                    && transition.committed.getAsBoolean()
-                    && (!retained || closingAdmissionSealed)) {
-                //  A retained message after the Closing seal has no next incarnation here: it
-                //  is refused before admission, as a released owner fence.
-                CompletionStage<Void> rejected =
-                        retained
-                                ? CompletableFuture.failedFuture(
-                                        ZLinkFrameworkErrorOrigin.ownerFenceRefusal(
-                                                "Spot incarnation released its authority"))
-                                : admissionFailureLocked();
+            CompletionStage<Void> rejected =
+                    admissionFailureLocked(message, retains, ZLinkFrameworkErrorKind.NOT_FOUND);
+            if (rejected != null) {
                 if (admission != null)
                     rejected.whenComplete(
                             (ignored, failure) -> admission.completeExceptionally(failure));

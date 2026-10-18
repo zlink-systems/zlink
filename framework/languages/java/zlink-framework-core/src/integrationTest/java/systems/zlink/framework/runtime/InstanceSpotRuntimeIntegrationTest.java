@@ -225,6 +225,21 @@ final class InstanceSpotRuntimeIntegrationTest {
     }
 
     @Test
+    void intentAfterCloseCompletionIsRefusedBeforeAdmission() throws Exception {
+        verifyCloseFailure(CloseScenario.CREATING_RELEASED);
+    }
+
+    @Test
+    void lateIntentUsingPreviousActivationRunsOnSuccessor() throws Exception {
+        verifyCloseFailure(CloseScenario.CREATING_REPLACED);
+    }
+
+    @Test
+    void lateRequestWithoutIntentUsingPreviousActivationRunsOnSuccessor() throws Exception {
+        verifyCloseFailure(CloseScenario.CREATING_REPLACED, false);
+    }
+
+    @Test
     void creatingIntentCrossingClosePendingCutRetainsPayloadUntilSuccessorCompletes()
             throws Exception {
         verifyCloseFailure(CloseScenario.CREATING_RETAINED);
@@ -255,6 +270,8 @@ final class InstanceSpotRuntimeIntegrationTest {
         MISSING,
         CREATING,
         CREATING_SEALED,
+        CREATING_RELEASED,
+        CREATING_REPLACED,
         CREATING_RETAINED,
         DOUBLE_RELEASE,
         COMMIT_APPLIED_FAILURE,
@@ -262,12 +279,21 @@ final class InstanceSpotRuntimeIntegrationTest {
     }
 
     private void verifyCloseFailure(CloseScenario failureStage) throws Exception {
+        verifyCloseFailure(failureStage, true);
+    }
+
+    private void verifyCloseFailure(CloseScenario failureStage, boolean lateInstanceIntent)
+            throws Exception {
         boolean creating =
                 failureStage == CloseScenario.CREATING
                         || failureStage == CloseScenario.CREATING_RETAINED
-                        || failureStage == CloseScenario.CREATING_SEALED;
+                        || failureStage == CloseScenario.CREATING_SEALED
+                        || failureStage == CloseScenario.CREATING_RELEASED
+                        || failureStage == CloseScenario.CREATING_REPLACED;
         boolean retainedBoundary = failureStage == CloseScenario.CREATING_RETAINED;
-        boolean sealedBoundary = failureStage == CloseScenario.CREATING_SEALED;
+        boolean replacedBoundary = failureStage == CloseScenario.CREATING_REPLACED;
+        boolean releasedBoundary = failureStage == CloseScenario.CREATING_RELEASED;
+        boolean sealedBoundary = failureStage == CloseScenario.CREATING_SEALED || releasedBoundary;
         boolean failRelease =
                 failureStage == CloseScenario.RELEASE
                         || failureStage == CloseScenario.DOUBLE_RELEASE;
@@ -311,7 +337,7 @@ final class InstanceSpotRuntimeIntegrationTest {
         if (failureStage != CloseScenario.WINDOW && !sealedBoundary) {
             store.releaseDelete.complete(null);
         }
-        if (retainedBoundary || sealedBoundary) {
+        if (retainedBoundary || sealedBoundary || replacedBoundary) {
             EchoInstanceSpot.retainedCalls.clear();
         }
         CompletableFuture<String> diagnostic = new CompletableFuture<>();
@@ -405,6 +431,46 @@ final class InstanceSpotRuntimeIntegrationTest {
                                     : ZLinkFrameworkErrorKind.UNAVAILABLE,
                             probe);
                     store.releaseReady.complete(null);
+                    if (replacedBoundary) {
+                        SourceEntrySpot.beforeClose.get(5, TimeUnit.SECONDS);
+                        try (var seed = new RetainedAdmissionBoundary(target, spotId);
+                                var late =
+                                        new RetainedAdmissionBoundary(
+                                                target, spotId, lateInstanceIntent)) {
+                            seed.resumeClose.complete(null);
+                            late.start.complete(null);
+                            late.beforeAdmission.get(5, TimeUnit.SECONDS);
+                            SourceEntrySpot.closeStart.complete(null);
+                            late.afterPendingCut.get(5, TimeUnit.SECONDS);
+                            seed.start.complete(null);
+                            seed.beforeAdmission.get(5, TimeUnit.SECONDS);
+                            seed.resumeAdmission.complete(null);
+                            seed.admitted.get(5, TimeUnit.SECONDS);
+                            late.resumeClose.complete(null);
+                            assertTrue(EchoInstanceSpot.closeCompleted.get(5, TimeUnit.SECONDS));
+                            assertEquals("echo:retained", seed.reply.get(5, TimeUnit.SECONDS));
+                            late.resumeAdmission.complete(null);
+                            late.admitted.get(5, TimeUnit.SECONDS);
+                            assertEquals("echo:retained", late.reply.get(5, TimeUnit.SECONDS));
+                            assertEquals(
+                                    List.of(
+                                            EchoInstanceSpot.generations.getLast(),
+                                            EchoInstanceSpot.generations.getLast()),
+                                    EchoInstanceSpot.retainedCalls);
+                            assertNotEquals(
+                                    EchoInstanceSpot.generations.getFirst(),
+                                    EchoInstanceSpot.generations.getLast());
+                            seed.released.get(5, TimeUnit.SECONDS);
+                            late.released.get(5, TimeUnit.SECONDS);
+                            assertEquals(1, seed.releases.get());
+                            assertEquals(1, late.releases.get());
+                            SourceEntrySpot.afterCloseStart.complete(null);
+                            assertEquals(
+                                    "echo:hello|echo:again|echo:after-close",
+                                    SourceEntrySpot.reply.get(5, TimeUnit.SECONDS));
+                        }
+                        return;
+                    }
                     if (retainedBoundary || sealedBoundary) {
                         if (retainedBoundary) SourceEntrySpot.afterCloseStart.complete(null);
                         SourceEntrySpot.beforeClose.get(5, TimeUnit.SECONDS);
@@ -421,9 +487,18 @@ final class InstanceSpotRuntimeIntegrationTest {
                                 store.deleteAttempted.get(5, TimeUnit.SECONDS);
                                 boundary.start.complete(null);
                                 boundary.beforeAdmission.get(5, TimeUnit.SECONDS);
+                                if (releasedBoundary) {
+                                    store.releaseDelete.complete(null);
+                                    assertTrue(
+                                            EchoInstanceSpot.closeCompleted.get(
+                                                    5, TimeUnit.SECONDS));
+                                }
                                 boundary.resumeAdmission.complete(null);
                                 // §7 step 3 ends admission together with the release decision.
                                 // This message reaches that old owner only after the decision.
+                                assertThrows(
+                                        java.util.concurrent.ExecutionException.class,
+                                        () -> boundary.admitted.get(5, TimeUnit.SECONDS));
                                 var refused =
                                         assertThrows(
                                                         java.util.concurrent.ExecutionException
@@ -438,9 +513,6 @@ final class InstanceSpotRuntimeIntegrationTest {
                                                 .ServiceWireConstants.FRAMEWORK_ERROR_SPOT_MOVING,
                                         systems.zlink.framework.runtime.internal.backend
                                                 .ZLinkRequestFailureMapping.causeCode(refused));
-                                assertThrows(
-                                        java.util.concurrent.ExecutionException.class,
-                                        () -> boundary.admitted.get(5, TimeUnit.SECONDS));
                                 boundary.released.get(5, TimeUnit.SECONDS);
                                 assertEquals(1, boundary.releases.get());
                                 assertTrue(EchoInstanceSpot.retainedCalls.isEmpty());
@@ -655,6 +727,12 @@ final class InstanceSpotRuntimeIntegrationTest {
                 java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor();
 
         RetainedAdmissionBoundary(ZLinkFrameworkRuntime runtime, String spotId) throws Exception {
+            this(runtime, spotId, true);
+        }
+
+        RetainedAdmissionBoundary(
+                ZLinkFrameworkRuntime runtime, String spotId, boolean instanceIntent)
+                throws Exception {
             var spotsField = ZLinkFrameworkRuntime.class.getDeclaredField("spots");
             spotsField.setAccessible(true);
             Object spots = spotsField.get(runtime);
@@ -726,19 +804,20 @@ final class InstanceSpotRuntimeIntegrationTest {
                                 released.complete(null);
                             },
                             "application/json");
-            received.retainActivationMessage(
-                    new systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
-                            .InstanceSpotMessage(
-                            0,
-                            route,
-                            true,
-                            route.targetNodeGeneration(),
-                            route.targetNodeRid(),
-                            "source",
-                            true,
-                            1,
-                            1,
-                            null));
+            if (instanceIntent)
+                received.retainActivationMessage(
+                        new systems.zlink.framework.runtime.internal.service
+                                .ZLinkServiceM6BWireCodec.InstanceSpotMessage(
+                                0,
+                                route,
+                                true,
+                                route.targetNodeGeneration(),
+                                route.targetNodeRid(),
+                                "source",
+                                true,
+                                1,
+                                1,
+                                null));
             var admit =
                     activation
                             .getClass()

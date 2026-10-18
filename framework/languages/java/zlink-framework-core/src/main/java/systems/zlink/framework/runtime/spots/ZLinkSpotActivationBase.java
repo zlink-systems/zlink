@@ -132,10 +132,6 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> {
         activeRouteReceives.add(received);
     }
 
-    final void transferRouteReceived(ZLinkBackendReceived received) {
-        activeRouteReceives.remove(received);
-    }
-
     /**
      * Spec 27 §3: malformed flow information on a SPOT route envelope completes the request as
      * ProtocolError and drops a one-way message.
