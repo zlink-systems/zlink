@@ -1154,30 +1154,28 @@ task_t<std::vector<object_inventory_t>> stateful_object_runtime_t::actor_invento
     });
 }
 
-std::optional<std::vector<object_inventory_t>>
+task_t<std::optional<std::vector<object_inventory_t>>>
 stateful_object_runtime_t::try_begin_maintenance_inventory ()
 {
-    return _lane
-      .run ([&, this] () -> std::optional<std::vector<object_inventory_t>> {
-          if (_maintenance_inventory_active)
-              return std::nullopt;
-          _maintenance_inventory_active = true;
-          std::vector<object_inventory_t> result;
-          result.reserve (_objects.size ());
-          for (const auto &[_, object] : _objects) {
-              result.push_back ({.owner = object.reference,
-                                 .stable_type = object.stable_type,
-                                 .state = object.state,
-                                 .membership = object.membership});
-          }
-          return result;
-      })
-      .get ();
+    return _lane.run_task ([this] () -> std::optional<std::vector<object_inventory_t>> {
+        if (_maintenance_inventory_active)
+            return std::nullopt;
+        _maintenance_inventory_active = true;
+        std::vector<object_inventory_t> result;
+        result.reserve (_objects.size ());
+        for (const auto &[_, object] : _objects) {
+            result.push_back ({.owner = object.reference,
+                               .stable_type = object.stable_type,
+                               .state = object.state,
+                               .membership = object.membership});
+        }
+        return result;
+    });
 }
 
-void stateful_object_runtime_t::end_maintenance_inventory () noexcept
+task_t<void> stateful_object_runtime_t::end_maintenance_inventory ()
 {
-    return _lane.run ([&, this] () -> void { _maintenance_inventory_active = false; }).get ();
+    return _lane.run_task ([this] { _maintenance_inventory_active = false; });
 }
 
 task_t<aggregate_relocation_seal_attempt_t>

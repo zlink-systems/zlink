@@ -339,8 +339,8 @@ class stateful_object_runtime_t
     std::vector<logical_timer_t> timers (const object_ref_t &owner) const;
     std::vector<object_inventory_t> inventory () const;
     task_t<std::vector<object_inventory_t>> actor_inventory () const;
-    std::optional<std::vector<object_inventory_t>> try_begin_maintenance_inventory ();
-    void end_maintenance_inventory () noexcept;
+    task_t<std::optional<std::vector<object_inventory_t>>> try_begin_maintenance_inventory ();
+    task_t<void> end_maintenance_inventory ();
     task_t<aggregate_relocation_seal_attempt_t>
     try_seal_relocation_aggregate (const std::vector<object_ref_t> &participants,
                                    std::stop_token cancellation = {},

@@ -6951,14 +6951,15 @@ bool verify_remote_user_spot_create_close_terminal_once (bool cleanup_only = fal
       static_cast<std::uint64_t> (std::chrono::duration_cast<std::chrono::milliseconds> (
                                     std::chrono::system_clock::now ().time_since_epoch () + 5s)
                                     .count ());
-    const auto moving_inventory = target->objects ().try_begin_maintenance_inventory ();
+    const auto moving_inventory =
+      target->objects ().try_begin_maintenance_inventory ().result ().value ();
     assert (moving_inventory);
     const auto moving_reply = send_create_and_wait (moving_create);
     assert (moving_reply.header.terminal_result
             == static_cast<std::uint32_t> (protocol::request_terminal_result::conflict));
     assert (moving_reply.header.failure_code
             == static_cast<std::uint32_t> (protocol::framework_error_code::spotMoving));
-    target->objects ().end_maintenance_inventory ();
+    target->objects ().end_maintenance_inventory ().result ().value ();
 
     const stateful::object_ref_t reserved_ref{
       stateful::object_kind_t::user_spot,

@@ -14775,15 +14775,17 @@ task_t<spot_node_runtime_t::relocation_units_t> spot_node_runtime_t::relocation_
       co_await state->lane.run_task ([state] { return state->native_node.lock (); });
     if (!native)
         co_return relocation_units_t{};
-    if (!native->objects ().try_begin_maintenance_inventory ())
+    if (!(co_await native->objects ().try_begin_maintenance_inventory ()))
         throw framework_exception_t (framework_error_kind_t::shutting_down,
                                      "Actor maintenance inventory is already sealed");
+    relocation_units_t units;
+    std::exception_ptr error;
     try {
         // A prior Join can have committed to another owner. Reuse the native
         // active inventory, including its finalized-source exclusion, only
         // after the existing source completion has terminalized that Join.
         auto inventory = co_await self.local_actor_inventory_async ();
-        auto units = co_await state->lane.run_task ([state, inventory = std::move (inventory)] {
+        units = co_await state->lane.run_task ([state, inventory = std::move (inventory)] {
             relocation_units_t result;
             for (const auto &[_, context] : state->spot_contexts_by_id) {
                 const auto state = context._state;
@@ -14807,13 +14809,14 @@ task_t<spot_node_runtime_t::relocation_units_t> spot_node_runtime_t::relocation_
             }
             return result;
         });
-        native->objects ().end_maintenance_inventory ();
-        co_return units;
     }
     catch (...) {
-        native->objects ().end_maintenance_inventory ();
-        throw;
+        error = std::current_exception ();
     }
+    co_await native->objects ().end_maintenance_inventory ();
+    if (error)
+        std::rethrow_exception (error);
+    co_return units;
 }
 
 void spot_node_runtime_t::begin_relocation_readiness ()
