@@ -52,6 +52,7 @@ import {
 } from '../../packages/framework/src/runtime/foundation/service-relocation-runtime';
 import { encodeAuthorityKey } from '../../packages/framework/src/runtime/locations/authority-key-codec';
 import { ZLinkActorTransferRuntime } from '../../packages/framework/src/runtime/host/actor-transfer-runtime';
+import { ZLinkActorSerialExecutor } from '../../packages/framework/src/runtime/actors/actor-mailbox';
 import { ZLinkActorSessionBindingRegistry } from '../../packages/framework/src/runtime/streams/actor-session-binding-registry';
 import { ZLinkBoundSessionService } from '../../packages/framework/src/runtime/streams/bound-session-service';
 import { encodeActorAuthorityIdentity } from '../../packages/framework/src/runtime/actors/actor-authority-publication';
@@ -358,7 +359,8 @@ test('pre-cutover rollback restores the source queue and state before one-way Se
     state as never,
     undefined,
     false,
-    { high: 7n, low: 9n }
+    { high: 7n, low: 9n },
+    { rid: 'target', lifecycleGeneration: 4n }
   );
   await prepared.rollback();
   await Promise.resolve();
@@ -375,6 +377,8 @@ test('pre-cutover rollback restores the source queue and state before one-way Se
 
 test('Session relocation is exact 42-to-43 and command 44 is one-way', async () => {
   const seal: ServiceSessionRelocationSeal = {
+    targetNodeRid: 'target',
+    targetNodeGeneration: 4n,
     relocation: { high: 7n, low: 9n },
     coordinator,
     senderRole: 'source',
@@ -462,7 +466,12 @@ test('Session relocation is exact 42-to-43 and command 44 is one-way', async () 
       }
     }),
     boundSessionRelocation: {
-      receiveSeal: async (value: ServiceSessionRelocationSeal) => {
+      receiveSeal: async (
+        value: ServiceSessionRelocationSeal,
+        _signal?: AbortSignal,
+        onInstalled?: () => void
+      ) => {
+        onInstalled?.();
         received.push('seal');
         if (received.filter((entry) => entry === 'seal').length === 1) {
           assert.deepEqual(value, seal);
@@ -543,6 +552,7 @@ test('Session relocation is exact 42-to-43 and command 44 is one-way', async () 
 test('exact duplicate Prepare shares restore while Data and Cutover stay one-way', async () => {
   const prepare: ServiceMaintenanceRelocationPrepare = {
     kind: 'prepare',
+    deadlineUnixMs: 1700000000000n,
     relocation: { high: 17n, low: 19n },
     targetAttemptGeneration: 1n,
     coordinator,
@@ -677,6 +687,7 @@ for (const restoreOutcome of ['ready', 'failed'] as const) {
   test(`Prepare manifest conflict preserves the original ${restoreOutcome} replay`, async () => {
     const prepare: ServiceMaintenanceRelocationPrepare = {
       kind: 'prepare',
+      deadlineUnixMs: 1700000000000n,
       relocation: { high: 107n, low: 109n },
       targetAttemptGeneration: 1n,
       coordinator,
@@ -766,6 +777,7 @@ for (const restoreOutcome of ['ready', 'failed'] as const) {
 test('the integrity fault gate fails the original Prepare with replayable DataLost', async () => {
   const prepare: ServiceMaintenanceRelocationPrepare = {
     kind: 'prepare',
+    deadlineUnixMs: 1700000000000n,
     relocation: { high: 127n, low: 131n },
     targetAttemptGeneration: 1n,
     coordinator,
@@ -832,6 +844,7 @@ test('an explicit Failed(53) on the Prepare reply leg rejects promptly with its 
     low: bigint;
   }): ServiceMaintenanceRelocationPrepare => ({
     kind: 'prepare',
+    deadlineUnixMs: 1700000000000n,
     relocation,
     targetAttemptGeneration: 1n,
     coordinator,
@@ -1056,6 +1069,7 @@ function targetCasFixture() {
   };
   const prepare: ServiceMaintenanceRelocationPrepare = {
     kind: 'prepare',
+    deadlineUnixMs: 1700000000000n,
     relocation: { high: 0n, low: 17n },
     targetAttemptGeneration: 1n,
     coordinator,
@@ -1518,21 +1532,18 @@ test('ActorJoin target invalidates a previous-owner Actor route before lifecycle
   } as never);
   const internals = runtime as unknown as {
     commitTargetReservation: () => Promise<ZLinkAuthoritySnapshot>;
-    relayTerminalReplies: () => Promise<void>;
     targetReplyRelayCoordinator: () => unknown;
-    clearTargetRelocationPublication: () => Promise<void>;
+    clearTargetRelocationPublication: () => Promise<ZLinkAuthoritySnapshot>;
     finalizeTargetStage: (meshName: string, stagingId: string, stage: unknown) => Promise<void>;
   };
   internals.commitTargetReservation = async () => {
     events.push('cas');
     return authority;
   };
-  internals.relayTerminalReplies = async () => {
-    events.push('replies:relay');
-  };
   internals.targetReplyRelayCoordinator = () => ({});
   internals.clearTargetRelocationPublication = async () => {
     events.push('publication:clear');
+    return authority;
   };
   const envelope = {
     aggregateId: '00000000-0000-0000-0000-000000000021',
@@ -1579,17 +1590,16 @@ test('ActorJoin target invalidates a previous-owner Actor route before lifecycle
 
   assert.deepEqual(events, [
     'cas',
-    'queue:merged',
     'route:closed',
+    'publication:clear',
+    'queue:merged',
     'actorRoute:invalidated',
     'onJoined',
     'sourceLeave:submit',
     'sourceLeave:warning',
     'accepted',
-    'publication:clear',
-    'dispatch:open',
     'command44',
-    'replies:relay'
+    'dispatch:open'
   ]);
 });
 
@@ -1660,7 +1670,6 @@ test('target admission opens after one publication-clear conflict and a later cl
   } as never);
   const internals = runtime as unknown as {
     commitTargetReservation: () => Promise<ZLinkAuthoritySnapshot>;
-    relayTerminalReplies: () => Promise<void>;
     targetReplyRelayCoordinator: () => unknown;
     clearTargetRelocationPublication: (
       stage: unknown,
@@ -1669,7 +1678,6 @@ test('target admission opens after one publication-clear conflict and a later cl
     finalizeTargetStage: (meshName: string, stagingId: string, stage: unknown) => Promise<void>;
   };
   internals.commitTargetReservation = async () => current;
-  internals.relayTerminalReplies = async () => {};
   internals.targetReplyRelayCoordinator = () => ({});
   const envelope = {
     aggregateId: publication.aggregateId,
@@ -1773,11 +1781,11 @@ test('public ActorJoin profile crosses the Host Prepare READY DATA CUTOVER owner
         'onJoined',
         'sourceLeave:submit',
         'accepted:completed',
+        'command44',
         'dispatch:open',
         'replay:B1',
         'replay:B2',
-        'replay:D1',
-        'command44'
+        'replay:D1'
       ]
     );
     assert.equal(
@@ -2700,6 +2708,9 @@ interface NativeRouteChangePeers {
 }
 
 interface ActorJoinHarnessOptions {
+  readonly sessionOwnerRouteReady?: () => boolean;
+  readonly waitSessionOwnerRoute?: (signal?: AbortSignal) => Promise<void>;
+  readonly requestPeerReconcile?: () => Promise<void>;
   readonly transport?: NativeRouteChangePeers;
   readonly beforeControlSubmit?: (kind: string) => void;
   readonly missingAfterTargetCommit?: boolean;
@@ -2819,8 +2830,11 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
   const sourceCleanupRefs: unknown[] = [];
   const sourceLeaveSpotIds: unknown[] = [];
   const sourceActorManager = {
-    async completeRelocationSource(_actorId: string, sourceRef: unknown) {
-      sourceCleanupRefs.push(sourceRef);
+    detachRelocationSource(state: typeof sourceState) {
+      sourceCleanupRefs.push(state.nativeActorRef);
+    },
+    async completeCoreRelocationSource(_actorId: string, state: typeof sourceState) {
+      assert.equal(state, sourceState);
       events.push('source:removed');
       sourceLeaveDone();
       if (options.sourceRetirementFailure !== undefined) throw options.sourceRetirementFailure;
@@ -3166,6 +3180,22 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
     }
   };
   const targetNode = {
+    isPeerRouteReady(peerRid: string, generation: bigint) {
+      return (
+        peerRid === 'session-owner' &&
+        generation === 7n &&
+        (options.sessionOwnerRouteReady?.() ?? true)
+      );
+    },
+    waitForPeerRoute(
+      _peerRid: string,
+      _generation: bigint,
+      _deadline: bigint,
+      signal?: AbortSignal
+    ) {
+      assert.notEqual(options.waitSessionOwnerRoute, undefined);
+      return options.waitSessionOwnerRoute!(signal);
+    },
     status: () => ({ routingId: 'target', lifecycleGeneration: 6n }),
     peers: () => [{ routingId: 'source', lifecycleGeneration: 2n, state: 3 }],
     actorLookup(lookupActorId: string) {
@@ -3224,6 +3254,21 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
     }
   };
   const targetSpotManager = {
+    admitSourceActorPacketPrefix(_actorId: string, records: readonly any[]) {
+      const terminals = targetMailbox.admitDurablePrefix(
+        records.map((record) => ({
+          operation: (executeChild: any) =>
+            record.drain((parts: readonly Message[]) =>
+              executeChild(() => {
+                events.push(`replay:${Buffer.from(parts[1]!.data()).toString()}`);
+              })
+            ),
+          preparation: record.preparation,
+          workOptions: { onWithdrawable: record.onWithdrawable }
+        }))
+      );
+      return { terminal: Promise.all(terminals).then(() => undefined) };
+    },
     beginActorJoinRelocation: DefaultZLinkSpotManager.prototype.beginActorJoinRelocation,
     formalRemoteActorAdmissions: admissions,
     formalRemoteTransfers: { delete() {} },
@@ -3265,7 +3310,8 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
         signal
       );
     },
-    finalizeActorJoinRelocation: DefaultZLinkSpotManager.prototype.finalizeActorJoinRelocation
+    finalizeActorJoinRelocation: DefaultZLinkSpotManager.prototype.finalizeActorJoinRelocation,
+    openActorJoinRelocation: DefaultZLinkSpotManager.prototype.openActorJoinRelocation
   };
   let canonicalIngress:
     | ((record: {
@@ -3461,24 +3507,35 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
     actorManager: () => sourceActorManager,
     actorTransfer: sourceActorTransfer
   } as never);
+  const targetMailbox = new ZLinkActorSerialExecutor(actorId, 'entry-target');
+  const targetTransfer = new ZLinkActorTransferRuntime({
+    actorHandoff: new ZLinkActorHandoffCoordinator({
+      routedTransport: {} as never,
+      requestSource: () => ({
+        meshName: 'mesh-a',
+        objectGeneration: 5n,
+        ownerId: 'target-owner',
+        ownerLeaseGeneration: 14n,
+        nodeRid: 'target',
+        nodeGeneration: 6n,
+        authorityOwnerGeneration: 12n
+      }),
+      validateReplySource: () => true
+    }),
+    spotManager: () => targetSpotManager,
+    reportPostCommitError: (error: unknown) => deliveryErrors.push(error)
+  } as never);
   targetRuntime = new ZLinkHostServiceRelocationRuntime({
     ...common,
+    requestPeerReconcile: options.requestPeerReconcile,
     activationAdmission: options.activationAdmission,
     currentOwner: () => ({ ownerId: 'target-owner', leaseGeneration: 14n }),
     localDescriptor: () => targetDescriptor,
     meshNode: () => targetNode,
     spotManager: () => targetSpotManager,
-    spotNodeRuntime: () => ({
-      async dispatchEntryActorPacket(
-        _origin: 'local' | 'remote',
-        _actorId: string,
-        parts: readonly Message[]
-      ) {
-        events.push(`replay:${Buffer.from(parts[1]!.data()).toString()}`);
-      }
-    }),
     actorManager: () => targetActorManager,
     actorTransfer: {
+      admitRelocationPrefix: targetTransfer.admitRelocationPrefix.bind(targetTransfer),
       async publishRoutedActorOwnership() {
         assert.notEqual(targetState?.boundSession, undefined);
         events.push('command44');
@@ -3622,7 +3679,10 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
     relocate,
     releaseAccepted,
     releaseSourceLeave,
-    sourceLeaveIdle: () => sourceLeaveIdle,
+    sourceLeaveIdle: async () => {
+      await sourceLeaveIdle;
+      await sourceRuntime.drainActorJoinSources();
+    },
     sourceCleanupRefs,
     sourceCommits,
     sourceHandoff,
@@ -3718,6 +3778,7 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
     async targetIdle() {
       await waitUntil(() => (targetRuntime as any).targetStages.size === 0);
       await Promise.all(targetDeliveries);
+      await targetMailbox.execute(() => undefined);
       assert.deepEqual(deliveryErrors, []);
     },
     async deliverCutoverAgain() {
@@ -3777,6 +3838,7 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
       admissions.delete(relocationId);
       if (canonicalHandoffId !== undefined) admissions.delete(canonicalHandoffId);
       await Promise.all([...targetDeliveries, ...sourceDeliveries]);
+      await targetMailbox.close();
       sourceCanonicalRuntime.close();
       targetCanonicalRuntime.close();
       await sourceRuntime.dispose();
@@ -4091,3 +4153,65 @@ for (const phase of ['Prepare', 'cutover'] as const) {
     }
   });
 }
+
+test('cross-node deferred Join waits for the Session owner route before committing', async () => {
+  let routeReady = false;
+  let release!: () => void;
+  let requested!: () => void;
+  const route = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const reconcile = new Promise<void>((resolve) => {
+    requested = resolve;
+  });
+  const harness = createActorJoinHostHarness({
+    canonicalRecovery: true,
+    sessionOwnerRouteReady: () => routeReady,
+    waitSessionOwnerRoute: () => route,
+    requestPeerReconcile: async () => {
+      requested();
+    }
+  });
+  try {
+    const relocation = harness.relocate();
+    await reconcile;
+    assert.equal(harness.location.commits, 0);
+    assert.equal(harness.events.includes('ready:submit'), false);
+    routeReady = true;
+    release();
+    assert.equal(String((await relocation).actorRef.nodeRid), 'target');
+    await harness.targetIdle();
+    assert.equal(harness.location.commits, 1);
+    assert.equal(harness.events.includes('command44'), true);
+  } finally {
+    release();
+    await harness.dispose();
+  }
+});
+
+test('Session owner route deadline failure replies explicitly and restores the source', async () => {
+  const { OperationTimeoutError } =
+    await import('../../packages/framework/src/runtime/foundation/operation-registry');
+  const harness = createActorJoinHostHarness({
+    canonicalRecovery: true,
+    sessionOwnerRouteReady: () => false,
+    waitSessionOwnerRoute: async () => {
+      throw new OperationTimeoutError(1n);
+    },
+    requestPeerReconcile: async () => {}
+  });
+  try {
+    await assert.rejects(
+      harness.relocate(),
+      (error: unknown) =>
+        error instanceof ZLinkFrameworkException &&
+        error.kind === ZLinkFrameworkErrorKind.DeadlineExceeded
+    );
+    await harness.targetIdle();
+    assert.equal(harness.location.commits, 0);
+    assert.equal(harness.events.includes('source:rolled-back'), true);
+    assert.equal(harness.controlKinds.includes('cutover'), false);
+  } finally {
+    await harness.dispose();
+  }
+});

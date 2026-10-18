@@ -74,6 +74,37 @@ final class ZLinkCanonicalRelocationControlCodecTest {
                 HexFormat.of().parseHex(fixture.path("canonical").get(0).path("hex").asText());
         ready[ready.length - 1] = 1;
         assertThrows(IllegalArgumentException.class, () -> codec.decode(ready));
+
+        var context = ZLinkServiceM6BWireCodec.generatedContext();
+        var prepare =
+                (ServiceWireCodec.RelocationPrepareCommand)
+                        ServiceWireCodec.decodeCommand(
+                                java.util.List.of(
+                                        java.util.HexFormat.of()
+                                                .parseHex(
+                                                        byName(fixture, "relocationPrepareRestore")
+                                                                .path("hex")
+                                                                .asText())),
+                                context);
+        byte[] wrongInitiator =
+                ServiceWireCodec.encodeCommand(
+                        new ServiceWireCodec.RelocationPrepareCommand(
+                                prepare.flags(),
+                                prepare.relocation(),
+                                prepare.targetAttemptGeneration(),
+                                prepare.coordinator(),
+                                prepare.target(),
+                                ServiceWireCodec.RelocationRole.TARGET,
+                                prepare.object(),
+                                prepare.sourceNodeRid(),
+                                prepare.sourceNodeGeneration(),
+                                prepare.payloadTotalLength(),
+                                prepare.payloadChunkCount(),
+                                prepare.payloadChecksumCrc32c(),
+                                prepare.applicationVersion(),
+                                prepare.deadlineUnixMs()),
+                        context);
+        assertThrows(IllegalArgumentException.class, () -> codec.decode(wrongInitiator));
     }
 
     private static JsonNode byName(JsonNode fixture, String name) {

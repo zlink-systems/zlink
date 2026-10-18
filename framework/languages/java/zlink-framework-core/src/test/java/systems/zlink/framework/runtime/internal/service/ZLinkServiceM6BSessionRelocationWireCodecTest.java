@@ -177,12 +177,20 @@ final class ZLinkServiceM6BSessionRelocationWireCodecTest {
                                 coordinator(),
                                 RelocationRole.TARGET,
                                 actorRoute(),
-                                session()));
+                                session(),
+                                TARGET,
+                                4));
     }
 
     private static SessionRelocationSeal seal() {
         return new SessionRelocationSeal(
-                relocation(), coordinator(), RelocationRole.SOURCE, actorRoute(), session());
+                relocation(),
+                coordinator(),
+                RelocationRole.SOURCE,
+                actorRoute(),
+                session(),
+                TARGET,
+                4);
     }
 
     private static ActorRouteFence actorRoute() {

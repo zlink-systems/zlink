@@ -150,7 +150,7 @@ final class ZLinkActorDispatchSerials {
                                                 snapshot.incarnation())));
     }
 
-    private CompletionStage<QueuedTurn> prepareAsync(
+    CompletionStage<QueuedTurn> prepareAsync(
             String actorId, ZLinkActorDispatchTarget.ActivationSnapshot snapshot) {
         return onRegistry(() -> prepareOnRegistry(actorId, snapshot, null))
                 .thenCompose(

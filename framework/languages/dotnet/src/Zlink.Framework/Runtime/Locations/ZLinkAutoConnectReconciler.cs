@@ -306,12 +306,18 @@ internal sealed class ZLinkAutoConnectReconciler
         _reconcileGate.Release();
     }
 
-    internal async ValueTask TickAsync(CancellationToken cancellationToken = default)
+    internal ValueTask TickAsync(CancellationToken cancellationToken = default) =>
+        ReconcileAsync(null, cancellationToken);
+
+    internal ValueTask ReconcilePeerAsync(RoutingId peer, CancellationToken cancellationToken) =>
+        ReconcileAsync(peer, cancellationToken);
+
+    private async ValueTask ReconcileAsync(RoutingId? peer, CancellationToken cancellationToken)
     {
         await _reconcileGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            await TickCoreAsync(cancellationToken).ConfigureAwait(false);
+            await TickCoreAsync(peer, cancellationToken).ConfigureAwait(false);
         }
         finally
         {
@@ -332,7 +338,7 @@ internal sealed class ZLinkAutoConnectReconciler
         }
     }
 
-    private async ValueTask TickCoreAsync(CancellationToken cancellationToken)
+    private async ValueTask TickCoreAsync(RoutingId? peer, CancellationToken cancellationToken)
     {
         if (Volatile.Read(ref _ownerCleanupStarted) != 0)
             return;
@@ -549,15 +555,18 @@ internal sealed class ZLinkAutoConnectReconciler
                 return selected;
             })
             .ConfigureAwait(false);
-        await ReconcileConnectionsAsync(connectableDesired).ConfigureAwait(false);
+        await ReconcileConnectionsAsync(connectableDesired, peer).ConfigureAwait(false);
     }
 
     private async ValueTask ReconcileConnectionsAsync(
-        IReadOnlyDictionary<RoutingId, ZLinkAutoConnectTarget> connectableDesired
+        IReadOnlyDictionary<RoutingId, ZLinkAutoConnectTarget> connectableDesired,
+        RoutingId? peer
     )
     {
         foreach (var (key, target) in connectableDesired)
         {
+            if (peer is { } requested && key != requested)
+                continue;
             if (Volatile.Read(ref _ownerCleanupStarted) != 0)
                 return;
             var current = await _lane
@@ -618,7 +627,12 @@ internal sealed class ZLinkAutoConnectReconciler
 
         var toRemove = await _lane
             .RunAsync(() =>
-                _active.Where(entry => !connectableDesired.ContainsKey(entry.Key)).ToArray()
+                _active
+                    .Where(entry =>
+                        (peer is null || entry.Key == peer.Value)
+                        && !connectableDesired.ContainsKey(entry.Key)
+                    )
+                    .ToArray()
             )
             .ConfigureAwait(false);
         foreach (var (key, target) in toRemove)

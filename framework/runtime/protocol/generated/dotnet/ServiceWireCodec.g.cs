@@ -743,9 +743,9 @@ internal static class ServiceWireCodec
 
     internal sealed record InstanceSpot39(byte Flags,InstanceRouteV1 Route,NonzeroU64 SourceNodeGeneration,Rid SourceNodeRid,OptionalText8 SourceSpotId,InstanceOperationKind OperationKind,OperationIdOrZero Operation,InstanceReplyRoute ReplyRoute,MetadataFrame? Metadata,ApplicationPayloadEnvelopeV1 Payload);
 
-    internal sealed record RelocationPrepare40(byte Flags,RelocationId Relocation,NonzeroU64 TargetAttemptGeneration,RelocationCoordinatorFence Coordinator,RelocationTargetFence Target,RelocationRole InitiatorRole,RelocationObjectIdentity Object,Rid SourceNodeRid,NonzeroU64 SourceNodeGeneration,RelocationLogicalLength PayloadTotalLength,RelocationChunkCount PayloadChunkCount,U32 PayloadChecksumCrc32c,ApplicationVersion ApplicationVersion);
+    internal sealed record RelocationPrepare40(byte Flags,RelocationId Relocation,NonzeroU64 TargetAttemptGeneration,RelocationCoordinatorFence Coordinator,RelocationTargetFence Target,RelocationRole InitiatorRole,RelocationObjectIdentity Object,Rid SourceNodeRid,NonzeroU64 SourceNodeGeneration,RelocationLogicalLength PayloadTotalLength,RelocationChunkCount PayloadChunkCount,U32 PayloadChecksumCrc32c,ApplicationVersion ApplicationVersion,NonzeroU64 DeadlineUnixMs);
 
-    internal sealed record SessionRelocationSeal42(byte Flags,RelocationId Relocation,RelocationCoordinatorFence Coordinator,RelocationRole SenderRole,ActorRouteFence Actor,Rid SessionOwnerNodeRid,NonzeroU64 SessionOwnerNodeGeneration,Text8 SessionOwnerId,NonzeroU64 SessionOwnerLeaseGeneration,Rid SessionRid,NonzeroU64 BindingGeneration);
+    internal sealed record SessionRelocationSeal42(byte Flags,RelocationId Relocation,RelocationCoordinatorFence Coordinator,RelocationRole SenderRole,ActorRouteFence Actor,Rid SessionOwnerNodeRid,NonzeroU64 SessionOwnerNodeGeneration,Text8 SessionOwnerId,NonzeroU64 SessionOwnerLeaseGeneration,Rid SessionRid,NonzeroU64 BindingGeneration,Rid TargetNodeRid,NonzeroU64 TargetNodeGeneration);
 
     internal sealed record SessionRelocationSealed43(byte Flags,RelocationId Relocation,RelocationCoordinatorFence Coordinator,ActorRouteFence Actor,Rid SessionOwnerNodeRid,NonzeroU64 SessionOwnerNodeGeneration,Text8 SessionOwnerId,NonzeroU64 SessionOwnerLeaseGeneration,Rid SessionRid,NonzeroU64 BindingGeneration,SessionSealResult SealResult);
 
@@ -6860,10 +6860,11 @@ internal static class ServiceWireCodec
         var PayloadChunkCount = ReadRelocationChunkCount(body, context);
         var PayloadChecksumCrc32c = ReadU32(body, context);
         var ApplicationVersion = ReadApplicationVersion(body, context);
+        var DeadlineUnixMs = ReadNonzeroU64(body, context);
         body.End("body");
         var index=1;
         if(index!=frames.Count)throw Error("extra frame");
-        var value=new RelocationPrepare40(flags,Relocation,TargetAttemptGeneration,Coordinator,Target,InitiatorRole,Object,SourceNodeRid,SourceNodeGeneration,PayloadTotalLength,PayloadChunkCount,PayloadChecksumCrc32c,ApplicationVersion);
+        var value=new RelocationPrepare40(flags,Relocation,TargetAttemptGeneration,Coordinator,Target,InitiatorRole,Object,SourceNodeRid,SourceNodeGeneration,PayloadTotalLength,PayloadChunkCount,PayloadChecksumCrc32c,ApplicationVersion,DeadlineUnixMs);
         return value;
     }
     internal static RelocationPrepare40 DecodeRelocationPrepare40(byte[] frame,DecodeContext context)=>DecodeRelocationPrepare40(new[]{frame},context);
@@ -6886,6 +6887,7 @@ internal static class ServiceWireCodec
         WriteRelocationChunkCount(body, value.PayloadChunkCount, context);
         WriteU32(body, value.PayloadChecksumCrc32c, context);
         WriteApplicationVersion(body, value.ApplicationVersion, context);
+        WriteNonzeroU64(body, value.DeadlineUnixMs, context);
         var frames=new List<byte[]>{body.ToArray()};
         return frames.ToArray();
     }
@@ -6908,10 +6910,12 @@ internal static class ServiceWireCodec
         var SessionOwnerLeaseGeneration = ReadNonzeroU64(body, context);
         var SessionRid = ReadRid(body, context);
         var BindingGeneration = ReadNonzeroU64(body, context);
+        var TargetNodeRid = ReadRid(body, context);
+        var TargetNodeGeneration = ReadNonzeroU64(body, context);
         body.End("body");
         var index=1;
         if(index!=frames.Count)throw Error("extra frame");
-        var value=new SessionRelocationSeal42(flags,Relocation,Coordinator,SenderRole,Actor,SessionOwnerNodeRid,SessionOwnerNodeGeneration,SessionOwnerId,SessionOwnerLeaseGeneration,SessionRid,BindingGeneration);
+        var value=new SessionRelocationSeal42(flags,Relocation,Coordinator,SenderRole,Actor,SessionOwnerNodeRid,SessionOwnerNodeGeneration,SessionOwnerId,SessionOwnerLeaseGeneration,SessionRid,BindingGeneration,TargetNodeRid,TargetNodeGeneration);
         return value;
     }
     internal static SessionRelocationSeal42 DecodeSessionRelocationSeal42(byte[] frame,DecodeContext context)=>DecodeSessionRelocationSeal42(new[]{frame},context);
@@ -6932,6 +6936,8 @@ internal static class ServiceWireCodec
         WriteNonzeroU64(body, value.SessionOwnerLeaseGeneration, context);
         WriteRid(body, value.SessionRid, context);
         WriteNonzeroU64(body, value.BindingGeneration, context);
+        WriteRid(body, value.TargetNodeRid, context);
+        WriteNonzeroU64(body, value.TargetNodeGeneration, context);
         var frames=new List<byte[]>{body.ToArray()};
         return frames.ToArray();
     }

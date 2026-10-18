@@ -3773,7 +3773,9 @@ public sealed partial class EntrySpotActorDispatchTests
                     binding.SessionOwnerLeaseGeneration,
                     binding.ActorRef.SessionRid,
                     binding.BindingGeneration
-                )
+                ),
+                RoutingId.From("target"),
+                3
             );
 
         static ZLinkServiceWireCodec.SessionRelocationRouteRecord SessionCommit(
@@ -3891,7 +3893,9 @@ public sealed partial class EntrySpotActorDispatchTests
                     sourceBinding.SessionOwnerLeaseGeneration,
                     sourceBinding.ActorRef.SessionRid,
                     sourceBinding.BindingGeneration
-                )
+                ),
+                RoutingId.From("target"),
+                3
             );
             _ = await runtime.SealCanonicalSessionActorRouteAsync(seal, CancellationToken.None);
 
@@ -12161,6 +12165,7 @@ public sealed partial class EntrySpotActorDispatchTests
         public ValueTask StageAsync(
             ZLinkSpotRetireReservation reservation,
             ZLinkPreparedSpotRetireStaging relocation,
+            DateTimeOffset deadline,
             CancellationToken cancellationToken
         )
         {
@@ -13556,8 +13561,10 @@ public sealed partial class EntrySpotActorDispatchTests
         private static readonly Task NoRouteChange = new TaskCompletionSource().Task;
         private const ulong StableRouteGeneration = 1;
 
-        public ZLinkPeerRouteObservation ObservePeerRoute(RoutingId target) =>
-            new(StableRouteGeneration, StableRouteGeneration, NoRouteChange);
+        public ZLinkPeerRouteObservation ObservePeerRoute(
+            RoutingId target,
+            ulong lifecycleGeneration = 0
+        ) => new(StableRouteGeneration, StableRouteGeneration, NoRouteChange);
 
         public CapturingSpotNode()
         {

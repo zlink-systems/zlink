@@ -240,6 +240,9 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
         if (!_loops.empty ())
             detail::channel_runtime_t::from (_bus).mark_auto_connect_active ();
         for (auto &loop : _loops) {
+            for (const auto &mesh_node : _mesh_nodes)
+                if (mesh_node && mesh_node->mesh_name () == loop.mesh_name)
+                    mesh_node->configure_peer_reconcile (_runtime->peer_reconcile_requester ());
             loop.recovering_from_store_failure = !_runtime->owner_lease_usable ();
         }
         const auto observed = _runtime->owner_lease_observation ();

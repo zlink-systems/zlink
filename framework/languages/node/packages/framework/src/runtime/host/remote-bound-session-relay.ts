@@ -234,7 +234,8 @@ export class ZLinkRemoteBoundSessionRelay {
 
   async receiveServiceWireSessionRelocationSeal(
     value: ServiceSessionRelocationSeal,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    onInstalled?: () => void
   ): Promise<ServiceSessionRelocationSealed | undefined> {
     const runtime = this.options.streamBindingRuntime();
     const owner = actorSessionBindingRuntimeOwner(runtime);
@@ -255,6 +256,7 @@ export class ZLinkRemoteBoundSessionRelay {
       sealPromise: prepared.ready.then(() => prepared.response)
     };
     this.activeServiceWireRelocations.set(key, state);
+    onInstalled?.();
     const expire = async (error: unknown): Promise<void> => {
       if (state.terminal === true || state.routePromise !== undefined) return;
       state.terminal = true;
@@ -419,7 +421,6 @@ export class ZLinkRemoteBoundSessionRelay {
       } as ActorRef;
       await owner.applyRelocation(value.actor.actorId, key, fingerprint, async () => {
         await runtime.commitActorRoute(targetActorRef, undefined, {
-          confirmRemoteSessionBinding: 'send',
           releaseSeal: { sealId: key }
         });
         const currentGeneration = this.actorOwnershipGenerations.get(value.actor.actorId);

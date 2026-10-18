@@ -177,6 +177,7 @@ interface ServiceWireRelocationBase {
 
 export interface ServiceMaintenanceRelocationPrepare extends ServiceWireRelocationBase {
   readonly kind: 'prepare';
+  readonly deadlineUnixMs: bigint;
   readonly target: ServiceWireRelocationTarget;
   readonly initiatorRole: ServiceWireRelocationRole;
   readonly object: ServiceWireRelocationObject;
@@ -324,6 +325,8 @@ export interface ServiceSessionRelocationOwnerFence {
 }
 
 export interface ServiceSessionRelocationSeal {
+  readonly targetNodeRid: string;
+  readonly targetNodeGeneration: bigint;
   readonly relocation: ServiceWireOperationId;
   readonly coordinator: ServiceWireRelocationCoordinatorFence;
   readonly senderRole: 'source' | 'coordinator';
@@ -660,6 +663,8 @@ function toGeneratedSessionRelocationSeal(
   value: ServiceSessionRelocationSeal
 ): GeneratedSessionRelocationSeal42 {
   return {
+    targetNodeRid: toGeneratedRoutingId(value.targetNodeRid, 'targetNodeRid'),
+    targetNodeGeneration: value.targetNodeGeneration,
     relocation: value.relocation,
     coordinator: toGeneratedCoordinatorFence(value.coordinator),
     senderRole: value.senderRole,
@@ -672,6 +677,8 @@ function fromGeneratedSessionRelocationSeal(
   value: GeneratedSessionRelocationSeal42
 ): ServiceSessionRelocationSeal {
   return {
+    targetNodeRid: fromGeneratedRoutingId(value.targetNodeRid, 'targetNodeRid'),
+    targetNodeGeneration: value.targetNodeGeneration,
     relocation: value.relocation,
     coordinator: fromGeneratedCoordinatorFence(value.coordinator),
     senderRole: value.senderRole as ServiceSessionRelocationSeal['senderRole'],
@@ -777,6 +784,7 @@ function fromGeneratedRelocationPrepare(
 ): ServiceMaintenanceRelocationPrepare {
   return {
     kind: 'prepare',
+    deadlineUnixMs: value.deadlineUnixMs,
     ...fromGeneratedRelocationBase(value),
     target: fromGeneratedTargetFence(value.target),
     initiatorRole: value.initiatorRole,
@@ -1881,7 +1889,8 @@ export function encodeMaintenanceRelocationControl(
           payloadTotalLength: value.payloadTotalLength,
           payloadChunkCount: value.payloadChunkCount,
           payloadChecksumCrc32c: value.payloadChecksumCrc32c,
-          applicationVersion: value.applicationVersion
+          applicationVersion: value.applicationVersion,
+          deadlineUnixMs: value.deadlineUnixMs
         })
       );
     case 'ready':

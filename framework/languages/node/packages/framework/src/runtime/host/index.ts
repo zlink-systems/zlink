@@ -786,6 +786,8 @@ export class ZLinkFrameworkRuntimeHost
     this.serviceRelocation = new ZLinkHostServiceRelocationRuntime({
       registration: options.registration,
       targetAdmissionSealed: () => this.shutdownOperationStartedAt !== undefined,
+      requestPeerReconcile: (meshName, peerRid) =>
+        this.spotNodeRuntime?.requestPeerReconcile(meshName, peerRid) ?? Promise.resolve(),
       sourceQuiescenceChanged: () => this.publishCurrentRuntimeStatus(),
       providerResolver: options.providerResolver,
       locationStore: () => this.locationOwner.currentStores?.locationStore,
@@ -797,14 +799,14 @@ export class ZLinkFrameworkRuntimeHost
       meshNode: (meshName) => this.spotNodeRuntime?.meshNode(meshName),
       completions: (meshName) => this.spotNodeRuntime?.meshCompletionTable(meshName),
       spotManager: () => this.spotManager,
-      spotNodeRuntime: () => this.spotNodeRuntime,
       actorManager: () => this.actorManager,
       actorTransfer: this.actorTransferRuntime,
       boundSessionRelocation: {
-        receiveSeal: (value, signal) =>
+        receiveSeal: (value, signal, onInstalled) =>
           this.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationSeal(
             value,
-            signal
+            signal,
+            onInstalled
           ),
         receiveRoute: (value) =>
           this.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationRoute(value),
@@ -1879,6 +1881,7 @@ export class ZLinkFrameworkRuntimeHost
   }
 
   private async performMeshShutdown(meshName: string, signal: AbortSignal): Promise<void> {
+    await awaitWithDrainSignal(this.serviceRelocation.drainActorJoinSources(meshName), signal);
     await this.spotManager?.drainForShutdown(meshName, signal, this.runtimeDeadline);
     await awaitWithDrainSignal(this.streamRuntime?.notifyServerDrain(meshName), signal);
   }

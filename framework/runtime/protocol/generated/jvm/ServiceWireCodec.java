@@ -296,8 +296,8 @@ final class ServiceWireCodec {
   record ActorJoinedCommand(int flags, ActorRef actor, OptionalSpotMembership previousMembership, SpotMembership currentMembership, NonzeroU64 currentAuthorityOwnerGeneration) implements ServiceWireCommand { public int id(){return 37;} }
   record BoundSessionBindCommand(int flags, NonzeroU64 correlation, ActorRouteFence actor, Rid sessionRid, BoundSessionBindingTransition binding) implements ServiceWireCommand { public int id(){return 38;} }
   record InstanceSpotCommand(int flags, InstanceRouteV1 route, NonzeroU64 sourceNodeGeneration, Rid sourceNodeRid, OptionalText8 sourceSpotId, InstanceOperationKind operationKind, OperationIdOrZero operation, InstanceReplyRoute replyRoute, MetadataFrame metadata, ApplicationPayloadEnvelopeV1 payload) implements ServiceWireCommand { public int id(){return 39;} }
-  record RelocationPrepareCommand(int flags, RelocationId relocation, NonzeroU64 targetAttemptGeneration, RelocationCoordinatorFence coordinator, RelocationTargetFence target, RelocationRole initiatorRole, RelocationObjectIdentity object, Rid sourceNodeRid, NonzeroU64 sourceNodeGeneration, RelocationLogicalLength payloadTotalLength, RelocationChunkCount payloadChunkCount, U32 payloadChecksumCrc32c, ApplicationVersion applicationVersion) implements ServiceWireCommand { public int id(){return 40;} }
-  record SessionRelocationSealCommand(int flags, RelocationId relocation, RelocationCoordinatorFence coordinator, RelocationRole senderRole, ActorRouteFence actor, Rid sessionOwnerNodeRid, NonzeroU64 sessionOwnerNodeGeneration, Text8 sessionOwnerId, NonzeroU64 sessionOwnerLeaseGeneration, Rid sessionRid, NonzeroU64 bindingGeneration) implements ServiceWireCommand { public int id(){return 42;} }
+  record RelocationPrepareCommand(int flags, RelocationId relocation, NonzeroU64 targetAttemptGeneration, RelocationCoordinatorFence coordinator, RelocationTargetFence target, RelocationRole initiatorRole, RelocationObjectIdentity object, Rid sourceNodeRid, NonzeroU64 sourceNodeGeneration, RelocationLogicalLength payloadTotalLength, RelocationChunkCount payloadChunkCount, U32 payloadChecksumCrc32c, ApplicationVersion applicationVersion, NonzeroU64 deadlineUnixMs) implements ServiceWireCommand { public int id(){return 40;} }
+  record SessionRelocationSealCommand(int flags, RelocationId relocation, RelocationCoordinatorFence coordinator, RelocationRole senderRole, ActorRouteFence actor, Rid sessionOwnerNodeRid, NonzeroU64 sessionOwnerNodeGeneration, Text8 sessionOwnerId, NonzeroU64 sessionOwnerLeaseGeneration, Rid sessionRid, NonzeroU64 bindingGeneration, Rid targetNodeRid, NonzeroU64 targetNodeGeneration) implements ServiceWireCommand { public int id(){return 42;} }
   record SessionRelocationSealedCommand(int flags, RelocationId relocation, RelocationCoordinatorFence coordinator, ActorRouteFence actor, Rid sessionOwnerNodeRid, NonzeroU64 sessionOwnerNodeGeneration, Text8 sessionOwnerId, NonzeroU64 sessionOwnerLeaseGeneration, Rid sessionRid, NonzeroU64 bindingGeneration, SessionSealResult sealResult) implements ServiceWireCommand { public int id(){return 43;} }
   record SessionRelocationRouteCommand(int flags, RelocationId relocation, RelocationCoordinatorFence coordinator, RelocationRole senderRole, ActorRef actor, Rid sessionOwnerNodeRid, NonzeroU64 sessionOwnerNodeGeneration, Text8 sessionOwnerId, NonzeroU64 sessionOwnerLeaseGeneration, Rid sessionRid, NonzeroU64 bindingGeneration, SessionRelocationRouteUpdate route) implements ServiceWireCommand { public int id(){return 44;} }
   record ReplyRelayAckCommand(int flags, RelocationId relocation, RelocationCoordinatorFence coordinator, OperationId operation, NonzeroU64 replyRouteId, RequestSourceFence requestSource, ReplyRelayAckStatus status) implements ServiceWireCommand { public int id(){return 46;} }
@@ -3199,7 +3199,8 @@ r.end("instanceSpot");return new InstanceSpotCommand(flags, route, sourceNodeGen
         RelocationChunkCount payloadChunkCount = decodeRelocationChunkCount(r, c, flags);
         U32 payloadChecksumCrc32c = decodeU32(r, c, flags);
         ApplicationVersion applicationVersion = decodeApplicationVersion(r, c, flags);
-r.end("relocationPrepare");return new RelocationPrepareCommand(flags, relocation, targetAttemptGeneration, coordinator, target, initiatorRole, object, sourceNodeRid, sourceNodeGeneration, payloadTotalLength, payloadChunkCount, payloadChecksumCrc32c, applicationVersion);}
+        NonzeroU64 deadlineUnixMs = decodeNonzeroU64(r, c, flags);
+r.end("relocationPrepare");return new RelocationPrepareCommand(flags, relocation, targetAttemptGeneration, coordinator, target, initiatorRole, object, sourceNodeRid, sourceNodeGeneration, payloadTotalLength, payloadChunkCount, payloadChecksumCrc32c, applicationVersion, deadlineUnixMs);}
   private static SessionRelocationSealCommand decodeSessionRelocationSealCommand(List<byte[]> frames,DecoderContext c,Reader r,int flags)throws IOException{require((flags&~0)==0&&(flags&0)==0,"sessionRelocationSeal flags");int next=1;require(frames.size()==next,"sessionRelocationSeal payload");require(frames.size()==next,"sessionRelocationSeal frames");
         RelocationId relocation = decodeRelocationId(r, c, flags);
         RelocationCoordinatorFence coordinator = decodeRelocationCoordinatorFence(r, c, flags);
@@ -3211,7 +3212,9 @@ r.end("relocationPrepare");return new RelocationPrepareCommand(flags, relocation
         NonzeroU64 sessionOwnerLeaseGeneration = decodeNonzeroU64(r, c, flags);
         Rid sessionRid = decodeRid(r, c, flags);
         NonzeroU64 bindingGeneration = decodeNonzeroU64(r, c, flags);
-r.end("sessionRelocationSeal");return new SessionRelocationSealCommand(flags, relocation, coordinator, senderRole, actor, sessionOwnerNodeRid, sessionOwnerNodeGeneration, sessionOwnerId, sessionOwnerLeaseGeneration, sessionRid, bindingGeneration);}
+        Rid targetNodeRid = decodeRid(r, c, flags);
+        NonzeroU64 targetNodeGeneration = decodeNonzeroU64(r, c, flags);
+r.end("sessionRelocationSeal");return new SessionRelocationSealCommand(flags, relocation, coordinator, senderRole, actor, sessionOwnerNodeRid, sessionOwnerNodeGeneration, sessionOwnerId, sessionOwnerLeaseGeneration, sessionRid, bindingGeneration, targetNodeRid, targetNodeGeneration);}
   private static SessionRelocationSealedCommand decodeSessionRelocationSealedCommand(List<byte[]> frames,DecoderContext c,Reader r,int flags)throws IOException{require((flags&~0)==0&&(flags&0)==0,"sessionRelocationSealed flags");int next=1;require(frames.size()==next,"sessionRelocationSealed payload");require(frames.size()==next,"sessionRelocationSealed frames");
         RelocationId relocation = decodeRelocationId(r, c, flags);
         RelocationCoordinatorFence coordinator = decodeRelocationCoordinatorFence(r, c, flags);
@@ -3461,6 +3464,7 @@ List<byte[]> frames=new ArrayList<>();frames.add(w.result());if((item.flags()&1)
         encodeRelocationChunkCount(item.payloadChunkCount(), w, c, item.flags());
         encodeU32(item.payloadChecksumCrc32c(), w, c, item.flags());
         encodeApplicationVersion(item.applicationVersion(), w, c, item.flags());
+        encodeNonzeroU64(item.deadlineUnixMs(), w, c, item.flags());
 List<byte[]> frames=new ArrayList<>();frames.add(w.result());return frames;}
   private static List<byte[]> encodeSessionRelocationSealCommand(SessionRelocationSealCommand item,DecoderContext c,Writer w)throws IOException{require((item.flags()&~0)==0&&(item.flags()&0)==0,"sessionRelocationSeal flags");
         encodeRelocationId(item.relocation(), w, c, item.flags());
@@ -3473,6 +3477,8 @@ List<byte[]> frames=new ArrayList<>();frames.add(w.result());return frames;}
         encodeNonzeroU64(item.sessionOwnerLeaseGeneration(), w, c, item.flags());
         encodeRid(item.sessionRid(), w, c, item.flags());
         encodeNonzeroU64(item.bindingGeneration(), w, c, item.flags());
+        encodeRid(item.targetNodeRid(), w, c, item.flags());
+        encodeNonzeroU64(item.targetNodeGeneration(), w, c, item.flags());
 List<byte[]> frames=new ArrayList<>();frames.add(w.result());return frames;}
   private static List<byte[]> encodeSessionRelocationSealedCommand(SessionRelocationSealedCommand item,DecoderContext c,Writer w)throws IOException{require((item.flags()&~0)==0&&(item.flags()&0)==0,"sessionRelocationSealed flags");
         encodeRelocationId(item.relocation(), w, c, item.flags());

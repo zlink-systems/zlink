@@ -109,7 +109,7 @@ internal sealed class ZLinkStandaloneActorRelocationProgressCoordinator(
         throw Moving("canonical phase advance conflicted after the bounded retry limit");
     }
 
-    internal async ValueTask NormalizeSteadyAsync(
+    internal async ValueTask<ZLinkAuthoritySnapshot> NormalizeSteadyAsync(
         ZLinkRelocationEnvelope identity,
         ZLinkLocationOwnerToken targetOwner,
         CancellationToken cancellationToken
@@ -158,8 +158,8 @@ internal sealed class ZLinkStandaloneActorRelocationProgressCoordinator(
                         cancellationToken
                     )
                     .ConfigureAwait(false);
-                if (direct is ZLinkAuthorityCompareExchangeResult.Stored)
-                    return;
+                if (direct is ZLinkAuthorityCompareExchangeResult.Stored directStored)
+                    return directStored.Snapshot;
                 if (direct is ZLinkAuthorityCompareExchangeResult.Conflict)
                     continue;
                 throw new InvalidOperationException(
@@ -190,7 +190,7 @@ internal sealed class ZLinkStandaloneActorRelocationProgressCoordinator(
                     cancellationToken
                 )
                 .ConfigureAwait(false);
-            if (exchanged is ZLinkAuthorityCompareExchangeResult.Stored)
+            if (exchanged is ZLinkAuthorityCompareExchangeResult.Stored stored)
             {
                 try
                 {
@@ -207,7 +207,7 @@ internal sealed class ZLinkStandaloneActorRelocationProgressCoordinator(
                     // Authority no longer references the immutable root. Its
                     // retention policy can finish cleanup after a store error.
                 }
-                return;
+                return stored.Snapshot;
             }
             if (exchanged is not ZLinkAuthorityCompareExchangeResult.Conflict)
                 throw new InvalidOperationException(

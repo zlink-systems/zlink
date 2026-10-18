@@ -143,7 +143,7 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
         Objects.requireNonNull(backlog, "backlog");
         Staged staged = backlog.staged;
         requireActive(staged);
-        if (staged.durableBacklog != backlog || !staged.replaySealed || backlog.consumed) {
+        if (staged.durableBacklog != backlog || !staged.replaySealed || staged.published) {
             throw new IllegalStateException("Actor durable backlog publication fence is invalid");
         }
         if (targetOwnerGeneration < 0) {
@@ -244,14 +244,10 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
         return CompletableFuture.completedFuture(null);
     }
 
-    CompletionStage<Void> drainDurableBacklog(DurableBacklog backlog) {
+    CompletionStage<CompletionStage<Void>> drainDurableBacklog(DurableBacklog backlog) {
         Objects.requireNonNull(backlog, "backlog");
         Staged staged = backlog.staged;
         requireActive(staged);
-        if (!staged.published || !staged.lifecycleOpen) {
-            return CompletableFuture.failedFuture(
-                    new IllegalStateException("standalone Actor durable backlog is not runnable"));
-        }
         IllegalStateException consumed =
                 inStateLane(
                         staged,
@@ -273,86 +269,131 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
                         backlog.temporary,
                         backlog.replayer,
                         backlog.debugProbe)
-                .whenComplete(
-                        (ignored, failure) -> {
+                .thenApply(
+                        terminal -> {
                             inStateLane(
                                     staged,
                                     () -> {
-                                        staged.replayed = true;
-                                        staged.durableBacklog = null;
-                                        staged.terminal = true;
+                                        staged.decoded = null;
                                         return null;
                                     });
-                            assert backlog.debugProbe.assertDrainedResult();
+                            return terminal.whenComplete(
+                                    (ignored, failure) -> {
+                                        inStateLane(
+                                                staged,
+                                                () -> {
+                                                    completeReplay(staged);
+                                                    return null;
+                                                });
+                                        assert backlog.debugProbe.assertDrainedResult();
+                                    });
+                        })
+                .thenApply(
+                        terminal -> {
+                            backlog.saved = List.of();
+                            backlog.relayed = List.of();
+                            backlog.temporary = List.of();
+                            return terminal;
                         });
     }
 
-    private CompletionStage<Void> replayBacklog(
+    private CompletionStage<CompletionStage<Void>> replayBacklog(
             Staged staged,
             List<ZLinkSerialExecutionQueue.QueuedRecord> saved,
             List<PendingIngress> relayed,
             List<PendingIngress> temporary,
             ZLinkUserSpotAggregateStagingOwner.JournalReplayer replayer,
             AsyncDrainProbe probe) {
-        List<CompletableFuture<Void>> completions = new ArrayList<>();
+        List<ZLinkSerialExecutionQueue.QueuedRecord> records =
+                new ArrayList<>(saved.size() + relayed.size() + temporary.size());
+        List<Supplier<CompletionStage<Void>>> turns = new ArrayList<>(records.size());
+        String lane = "actor:" + staged.request().actorId();
         for (var queued : saved) {
-            CompletionStage<Void> admitted =
-                    admitBacklogTurn(
-                            () -> replayer.replay("actor:" + staged.request().actorId(), queued));
-            CompletionStage<Void> observed = admitted;
-            assert (observed =
-                            probe.completeOn(
-                                    admitted,
-                                    "journal:actor:"
-                                            + staged.request().actorId()
-                                            + ":"
-                                            + queued.sequence()))
-                    != null;
-            completions.add(observed.toCompletableFuture());
+            records.add(
+                    new ZLinkSerialExecutionQueue.QueuedRecord(
+                            records.size() + 1L, queued.payload()));
+            turns.add(null);
         }
-        int relayedIndex = 0;
         for (PendingIngress ingress : relayed) {
-            CompletionStage<Void> admitted =
-                    admitBacklogTurn(
-                            () ->
-                                    replayer.replayFrozen(
-                                            "actor:" + staged.request().actorId(),
-                                            ingress.record()));
-            CompletionStage<Void> observed = admitted;
-            assert (observed =
-                            probe.completeOn(
-                                    admitted,
-                                    "relayed:actor:"
-                                            + staged.request().actorId()
-                                            + ":"
-                                            + relayedIndex))
-                    != null;
-            relayedIndex++;
-            completions.add(observed.toCompletableFuture());
+            records.add(
+                    new ZLinkSerialExecutionQueue.QueuedRecord(
+                            records.size() + 1L, ingress.record()));
+            turns.add(null);
         }
-        int temporaryIndex = 0;
         for (PendingIngress ingress : temporary) {
-            CompletionStage<Void> admitted = admitBacklogTurn(() -> replayIngress(staged, ingress));
-            CompletionStage<Void> observed = admitted;
-            assert (observed =
-                            probe.completeOn(
-                                    admitted,
-                                    "temporary:actor:"
-                                            + staged.request().actorId()
-                                            + ":"
-                                            + temporaryIndex))
-                    != null;
-            temporaryIndex++;
-            completions.add(
-                    observed.whenComplete(
-                                    (ignored, failure) -> {
-                                        if (failure != null && ingress.failure() != null) {
-                                            ingress.failure().accept(unwrap(failure));
-                                        }
-                                    })
-                            .toCompletableFuture());
+            records.add(
+                    new ZLinkSerialExecutionQueue.QueuedRecord(
+                            records.size() + 1L, ingress.record()));
+            turns.add(() -> replayIngress(staged, ingress));
         }
-        return CompletableFuture.allOf(completions.toArray(CompletableFuture[]::new));
+        List<CompletionStage<Void>> replayObserved = new ArrayList<>(records.size());
+        return backend.admitBacklogPrefix(
+                        staged.actor(),
+                        staged.request(),
+                        records,
+                        (record, terminal) -> {
+                            int index = Math.toIntExact(record.sequence() - 1);
+                            if (index < saved.size())
+                                return replayer.prepareReplay(
+                                        lane, saved.get(index), terminal, replayObserved::add);
+                            if (index < saved.size() + relayed.size())
+                                return replayer.prepareReplay(
+                                        lane,
+                                        new ZLinkSerialExecutionQueue.QueuedRecord(
+                                                1, relayed.get(index - saved.size()).record()),
+                                        terminal,
+                                        replayObserved::add);
+                            replayObserved.add(terminal);
+                            return turns.get(index);
+                        })
+                .thenApply(
+                        accepted -> {
+                            List<CompletableFuture<Void>> observed =
+                                    new ArrayList<>(accepted.size());
+                            for (int index = 0; index < accepted.size(); index++) {
+                                CompletionStage<Void> execution = replayObserved.get(index);
+                                if (index >= saved.size() + relayed.size()) {
+                                    var ingress =
+                                            temporary.get(index - saved.size() - relayed.size());
+                                    execution =
+                                            execution.whenComplete(
+                                                    (ignored, failure) -> {
+                                                        if (failure != null
+                                                                && ingress.failure() != null)
+                                                            ingress.failure()
+                                                                    .accept(unwrap(failure));
+                                                    });
+                                }
+                                String key =
+                                        index < saved.size()
+                                                ? "journal:"
+                                                        + lane
+                                                        + ":"
+                                                        + saved.get(index).sequence()
+                                                : index < saved.size() + relayed.size()
+                                                        ? "relayed:"
+                                                                + lane
+                                                                + ":"
+                                                                + (index - saved.size())
+                                                        : "temporary:"
+                                                                + lane
+                                                                + ":"
+                                                                + (index
+                                                                        - saved.size()
+                                                                        - relayed.size());
+                                assert (execution = probe.completeOn(execution, key)) != null;
+                                observed.add(execution.toCompletableFuture());
+                            }
+                            var terminal =
+                                    CompletableFuture.allOf(
+                                            observed.toArray(CompletableFuture[]::new));
+                            terminal.whenComplete(
+                                    (ignored, failure) -> {
+                                        if (terminal.isCancelled())
+                                            accepted.forEach(entry -> entry.cancel(false));
+                                    });
+                            return terminal;
+                        });
     }
 
     private static Throwable unwrap(Throwable failure) {
@@ -379,14 +420,6 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
                             }
                             return null;
                         });
-    }
-
-    private CompletionStage<Void> admitBacklogTurn(Supplier<CompletionStage<Void>> turn) {
-        try {
-            return backend.admitApplicationJob(turn);
-        } catch (RuntimeException failure) {
-            return CompletableFuture.failedFuture(failure);
-        }
     }
 
     DirectJoinReplay closeDirectJoinIngress(Staged staged, byte[] finalRoot) {
@@ -422,7 +455,7 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
         Objects.requireNonNull(replay, "replay");
         Staged staged = replay.staged;
         requireActive(staged);
-        if (!staged.directReplaySealed || staged.directBacklog != replay || replay.replayed) {
+        if (!staged.directReplaySealed || staged.directBacklog != replay || staged.published) {
             throw new IllegalStateException(
                     "direct Join durable backlog publication fence is invalid");
         }
@@ -471,16 +504,12 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
                         route.bindingGeneration()));
     }
 
-    CompletionStage<Void> replayDirectJoin(
+    CompletionStage<CompletionStage<Void>> replayDirectJoin(
             DirectJoinReplay replay, ZLinkUserSpotAggregateStagingOwner.JournalReplayer replayer) {
         Objects.requireNonNull(replay, "replay");
         Objects.requireNonNull(replayer, "replayer");
         Staged staged = replay.staged();
         requireActive(staged);
-        if (!staged.published || !staged.lifecycleOpen) {
-            return CompletableFuture.failedFuture(
-                    new IllegalStateException("direct Join durable backlog is not runnable"));
-        }
         IllegalStateException alreadyReplayed =
                 inStateLane(
                         staged,
@@ -502,17 +531,31 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
                         replay.temporary(),
                         replayer,
                         replay.debugProbe)
-                .whenComplete(
-                        (ignored, failure) -> {
+                .thenApply(
+                        terminal -> {
                             inStateLane(
                                     staged,
                                     () -> {
-                                        staged.replayed = true;
-                                        staged.directBacklog = null;
-                                        staged.terminal = true;
+                                        staged.decoded = null;
                                         return null;
                                     });
-                            assert replay.debugProbe.assertDrainedResult();
+                            return terminal.whenComplete(
+                                    (ignored, failure) -> {
+                                        inStateLane(
+                                                staged,
+                                                () -> {
+                                                    completeReplay(staged);
+                                                    return null;
+                                                });
+                                        assert replay.debugProbe.assertDrainedResult();
+                                    });
+                        })
+                .thenApply(
+                        terminal -> {
+                            replay.saved = List.of();
+                            replay.relayed = List.of();
+                            replay.temporary = List.of();
+                            return terminal;
                         });
     }
 
@@ -563,7 +606,26 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
         }
         backend.publishTimers(staged.request());
         backend.openAdmission(staged.actor());
-        staged.lifecycleOpen = true;
+        inStateLane(
+                staged,
+                () -> {
+                    staged.lifecycleOpen = true;
+                    settleTerminal(staged);
+                    return null;
+                });
+    }
+
+    private static void completeReplay(Staged staged) {
+        staged.replayed = true;
+        settleTerminal(staged);
+    }
+
+    private static void settleTerminal(Staged staged) {
+        staged.terminal = staged.lifecycleOpen && staged.replayed;
+        if (staged.terminal) {
+            staged.durableBacklog = null;
+            staged.directBacklog = null;
+        }
     }
 
     CompletionStage<Void> discard(Staged staged) {
@@ -706,10 +768,10 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
     static final class Staged {
         private final ZLinkStandaloneActorRelocationStagingOwner owner;
         private final Request request;
-        private final ZLinkCanonicalActorRelocationEnvelope.Decoded decoded;
+        private ZLinkCanonicalActorRelocationEnvelope.Decoded decoded;
         private final Object actor;
         private final ZLinkActivationAdmission.Permit restorePermit;
-        private final List<PendingIngress> relayedIngress = new ArrayList<>();
+        private List<PendingIngress> relayedIngress = new ArrayList<>();
         private final List<PendingIngress> pendingIngress = new ArrayList<>();
         private AsyncDrainProbe debugProbe;
         private final ZLinkStateLane stateLane = new ZLinkStateLane();
@@ -758,9 +820,9 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
 
     static final class DurableBacklog {
         private final Staged staged;
-        private final List<ZLinkSerialExecutionQueue.QueuedRecord> saved;
-        private final List<PendingIngress> relayed;
-        private final List<PendingIngress> temporary;
+        private List<ZLinkSerialExecutionQueue.QueuedRecord> saved;
+        private List<PendingIngress> relayed;
+        private List<PendingIngress> temporary;
         private final ZLinkUserSpotAggregateStagingOwner.JournalReplayer replayer;
         private AsyncDrainProbe debugProbe;
         private boolean consumed;
@@ -783,9 +845,9 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
 
     static final class DirectJoinReplay {
         private final Staged staged;
-        private final List<ZLinkSerialExecutionQueue.QueuedRecord> saved;
-        private final List<PendingIngress> relayed;
-        private final List<PendingIngress> temporary;
+        private List<ZLinkSerialExecutionQueue.QueuedRecord> saved;
+        private List<PendingIngress> relayed;
+        private List<PendingIngress> temporary;
         private AsyncDrainProbe debugProbe;
         private boolean replayed;
 
@@ -850,14 +912,20 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
         CompletionStage<Optional<byte[]>> replay(
                 Object actor, Request request, ZLinkActorAcceptedJournal.Record record);
 
+        CompletionStage<List<CompletableFuture<Void>>> admitBacklogPrefix(
+                Object actor,
+                Request request,
+                List<ZLinkSerialExecutionQueue.QueuedRecord> records,
+                java.util.function.BiFunction<
+                                ZLinkSerialExecutionQueue.QueuedRecord,
+                                CompletableFuture<Void>,
+                                Supplier<CompletionStage<Void>>>
+                        replay);
+
         CompletionStage<Void> enqueueIngress(
                 Request request,
                 byte[] acceptedJournalRecord,
                 Supplier<CompletionStage<Void>> turn);
-
-        default <T> CompletionStage<T> admitApplicationJob(Supplier<CompletionStage<T>> turn) {
-            return Objects.requireNonNull(turn, "turn").get();
-        }
 
         default CompletionStage<Void> stageTimers(Request request, byte[] timerEnvelope) {
             if (ZLinkSpotTimerRelocationEnvelope.canonicalize(timerEnvelope).isEmpty()) {
@@ -937,6 +1005,24 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
         }
 
         @Override
+        public CompletionStage<List<CompletableFuture<Void>>> admitBacklogPrefix(
+                Object actor,
+                Request request,
+                List<ZLinkSerialExecutionQueue.QueuedRecord> records,
+                java.util.function.BiFunction<
+                                ZLinkSerialExecutionQueue.QueuedRecord,
+                                CompletableFuture<Void>,
+                                java.util.function.Supplier<CompletionStage<Void>>>
+                        replay) {
+            return spots.admitActorRelocationPrefix(
+                    actors,
+                    (ZLinkActorRuntime.PreparedTransferredActor) actor,
+                    request.targetSpotId(),
+                    records,
+                    replay);
+        }
+
+        @Override
         public CompletionStage<Void> enqueueIngress(
                 Request request,
                 byte[] acceptedJournalRecord,
@@ -947,11 +1033,6 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
                     acceptedJournalRecord.length,
                     turn,
                     () -> {});
-        }
-
-        @Override
-        public <T> CompletionStage<T> admitApplicationJob(Supplier<CompletionStage<T>> turn) {
-            return spots.admitNewApplicationJob(turn);
         }
 
         @Override

@@ -246,6 +246,7 @@ class mesh_node_runtime_t
       zlink::framework::runtime::protocol::instance_spot_activation_header_t request,
       std::optional<std::vector<std::uint8_t>> metadata,
       zlink::framework::runtime::protocol::application_payload_t application_payload);
+    void configure_peer_reconcile (std::function<void (const std::vector<std::uint8_t> &)> request);
     void connect_peer (const zlink::routing_id_t &expected_routing_id,
                        const std::string &endpoint,
                        std::uint64_t expected_lifecycle_generation = 0,
@@ -580,6 +581,8 @@ class mesh_node_runtime_t
       std::vector<std::pair<runtime::stateful::object_ref_t, authority_snapshot_t>> participants,
       runtime::protocol::relocation_id_t relocation,
       runtime::protocol::relocation_coordinator_fence_t coordinator,
+      zlink::routing_id_t target_node,
+      std::uint64_t target_node_generation,
       std::chrono::milliseconds timeout,
       std::chrono::steady_clock::time_point operation_deadline);
     task_t<std::optional<std::vector<runtime::stateful::relocation_session_binding_t>>>
@@ -587,6 +590,8 @@ class mesh_node_runtime_t
       std::vector<std::pair<runtime::stateful::object_ref_t, authority_snapshot_t>> participants,
       runtime::protocol::relocation_id_t relocation,
       runtime::protocol::relocation_coordinator_fence_t coordinator,
+      zlink::routing_id_t target_node,
+      std::uint64_t target_node_generation,
       std::shared_ptr<session_relocation_seal_outcome_t> outcome,
       std::shared_ptr<bool> attempted,
       std::chrono::steady_clock::time_point operation_deadline);

@@ -215,6 +215,7 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
     public async ValueTask StageAsync(
         ZLinkSpotRetireReservation reservation,
         ZLinkPreparedSpotRetireStaging relocation,
+        DateTimeOffset deadline,
         CancellationToken cancellationToken
     )
     {
@@ -279,7 +280,8 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
                 checked((ulong)transferPayload.TotalLength),
                 checked((uint)transferPayload.ChunkCount),
                 transferPayload.ChecksumCrc32c,
-                checked((ulong)registration.ApplicationVersion)
+                checked((ulong)registration.ApplicationVersion),
+                checked((ulong)deadline.ToUnixTimeMilliseconds())
             );
             _ = await canonical
                 .PrepareCanonicalRelocationAsync(

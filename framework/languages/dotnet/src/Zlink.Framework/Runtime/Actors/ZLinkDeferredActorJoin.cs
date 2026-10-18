@@ -115,14 +115,6 @@ internal sealed class ZLinkDeferredActorJoin(
     // that callback is captured here and re-entered in RunAsync.
     private readonly ZLinkFlowValue? _flow = ZLinkFlowContext.Current;
 
-    // Ledger §2.3: C++ posts the deferred work back onto the serial queue that
-    // owns the turn, Java chains it after the handler stage and Node runs it on
-    // the next event-loop tick. All three keep registration order and run the
-    // join right after the handler terminal, so .NET posts onto the submitting
-    // turn instead of detaching an unordered task.
-    private readonly ZLinkSerialTurn? _turn = ZLinkSerialTurn.Current;
-    private readonly IZLinkCurrentSpotActivation? _spotActivation =
-        ZLinkSpotAmbientContext.CurrentOrDefault;
     private ZLinkActorSerialExecutor.BarrierReservation? _barrier;
     private Task? _targetCompletion;
 
@@ -158,43 +150,11 @@ internal sealed class ZLinkDeferredActorJoin(
 
     private void Schedule()
     {
-        if (_turn is { } turn && turn.TryPost(RunOnSubmittingSpotAsync))
-            return;
+        // RunAsync claims the reserved Actor lifecycle barrier. Posting it as
+        // application work would place its activation behind its own barrier.
+        using var suppressed = ExecutionContext.SuppressFlow();
         if (!runtime.TryRunDetached("actor-deferred-join", RunAsync))
             Discard();
-    }
-
-    private async ValueTask RunOnSubmittingSpotAsync(CancellationToken cancellationToken)
-    {
-        using var spot = _spotActivation is null
-            ? null
-            : ZLinkSpotAmbientContext.Push(_spotActivation);
-        //  Ledger §2.3 fixes WHERE the deferred join starts — the submitting
-        //  queue, in registration order — not that the queue stays occupied
-        //  for the join's whole cross-node round trip. Running the join
-        //  without yielding held the Spot's serial queue while the routed
-        //  join awaited its remote commit, freezing every timer, push and
-        //  admission on the submitting Spot for up to the join deadline; two
-        //  Spots deferring joins into each other could not process the
-        //  counterpart's commit until a deadline broke the cycle. Yield the
-        //  executing turn exactly like every other framework call submitted
-        //  from a Spot handler, so the queue resumes as soon as the join
-        //  actually suspends.
-        if (ZLinkSerialTurn.Current is { } turn)
-        {
-            await turn.YieldFrameworkCallAsync(
-                    ct =>
-                    {
-                        // Nested Join calls must not resume the submitting turn again.
-                        using var suppressed = ZLinkSerialTurn.Suppress();
-                        return RunAsync(ct);
-                    },
-                    cancellationToken
-                )
-                .ConfigureAwait(false);
-            return;
-        }
-        await RunAsync(cancellationToken).ConfigureAwait(false);
     }
 
     public void Discard()
@@ -232,7 +192,7 @@ internal sealed class ZLinkDeferredActorJoin(
                         $"deferred_join_target_wait_failed kind={failure} {exception}"
                     );
                 }
-                barrier = actorState.ReserveDeferredJoinBarrierAfterTarget();
+                barrier ??= actorState.ReserveDeferredJoinBarrierAfterTarget();
             }
 
             if (barrier is not { } reservedBarrier)
@@ -243,6 +203,7 @@ internal sealed class ZLinkDeferredActorJoin(
             // outcome, including an elapsed deadline, completes inside that
             // turn. The reservation is therefore always claimed and released.
             using var turn = await reservedBarrier.ClaimAsync().ConfigureAwait(false);
+            await actorState.Handoff.WithdrawDeferredSuffixAsync().ConfigureAwait(false);
             // Re-enter the flow captured at registration, but only while the
             // live level still allows capture (spec 27 §4): an On→Off flip
             // before the deferred join runs must not re-install flow context.
