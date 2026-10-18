@@ -176,7 +176,8 @@ public sealed partial class EntrySpotActorDispatchTests
             Message body,
             RoutingId sourceSessionRid,
             bool relocationReplay,
-            CancellationToken cancellationToken
+            CancellationToken cancellationToken,
+            bool callerOwnsDispatchTurn = false
         ) => throw new InvalidOperationException();
 
         public ValueTask<ZLinkActorReply?> DispatchForReplyAsync(
@@ -186,7 +187,8 @@ public sealed partial class EntrySpotActorDispatchTests
             Message body,
             RoutingId sourceSessionRid,
             bool relocationReplay,
-            CancellationToken cancellationToken
+            CancellationToken cancellationToken,
+            bool callerOwnsDispatchTurn = false
         ) => throw new InvalidOperationException();
     }
 
