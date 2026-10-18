@@ -1808,29 +1808,36 @@ int main (int argc, char **argv)
     auto replacement_owner = std::make_shared<int> (1);
     const auto replacement_owner_weak = std::weak_ptr<int> (replacement_owner);
     auto replacement_calls = std::make_shared<std::atomic_size_t> (0);
+    bool replacement_owner_released_on_completion = false;
     std::promise<zlink::framework::result_t<void>> replacement_completion_source;
     auto replacement_completion = replacement_completion_source.get_future ();
     const auto replacement_submitted = runtime.dispatch_actor_binding_replaced_async (
       replacement_stream, "actor-exact-once",
-      [owner = replacement_owner, replacement_calls] (zlink::framework::stream_t &,
-                                                      std::string actor_id) {
+      [owner = std::move (replacement_owner), replacement_calls] (zlink::framework::stream_t &,
+                                                                  std::string actor_id) {
           if (*owner == 1 && actor_id == "actor-exact-once") {
               replacement_calls->fetch_add (1, std::memory_order_relaxed);
           }
           return zlink::framework::task_t<void> (zlink::framework::result_t<void>::success ());
       },
-      [&replacement_completion_source] (const zlink::framework::result_t<void> &result) {
+      [&replacement_completion_source, &replacement_owner_released_on_completion,
+       &replacement_owner_weak] (const zlink::framework::result_t<void> &result) {
+          replacement_owner_released_on_completion = replacement_owner_weak.expired ();
           replacement_completion_source.set_value (result);
       });
-    replacement_owner.reset ();
     if (!replacement_submitted
         || replacement_completion.wait_for (std::chrono::seconds (2)) != std::future_status::ready
         || !replacement_completion.get ()) {
         return 286;
     }
     runtime.drain_async_dispatch (replacement_stream);
-    if (replacement_calls->load (std::memory_order_relaxed) != 1
+    if (!replacement_owner_released_on_completion
+        || replacement_calls->load (std::memory_order_relaxed) != 1
         || !replacement_owner_weak.expired ()) {
+        std::cerr << "actor-binding-replacement result=287 calls="
+                  << replacement_calls->load (std::memory_order_relaxed)
+                  << " owner_released_on_completion=" << replacement_owner_released_on_completion
+                  << " owner_expired=" << replacement_owner_weak.expired () << '\n';
         return 287;
     }
 
