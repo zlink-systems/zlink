@@ -7321,19 +7321,108 @@ void spot_node_runtime_t::bind_relocation_authority (
     _state->lane.run ([&] { _state->relocation_authority = std::move (authority); }).get ();
 }
 
-runtime::stateful::frozen_object_state_t
-spot_node_runtime_t::capture_relocation_state (const runtime::stateful::object_ref_t &object,
-                                               const std::string &stable_type,
-                                               std::stop_token cancellation) const
+namespace
+{
+
+task_t<std::vector<std::uint8_t>>
+capture_spot_relocation_state_async (std::shared_ptr<spot_node_builder_state_t> state,
+                                     runtime::stateful::object_ref_t spot,
+                                     std::string stable_type,
+                                     std::stop_token cancellation)
+{
+    if (spot.kind == runtime::stateful::object_kind_t::actor) {
+        detail::spot_node_builder_state_t::actor_factory_registration_t factory;
+        std::shared_ptr<void> instance;
+        co_await state->lane.run_task ([&] {
+            const auto configured = state->actor_factories.find (stable_type);
+            const auto materialized = state->actor_instances.find (stable_type + ":" + spot.key);
+            if (configured == state->actor_factories.end ()
+                || materialized == state->actor_instances.end () || !materialized->second) {
+                throw framework_exception_t (framework_error_kind_t::not_found,
+                                             "Relocation source Actor is not materialized");
+            }
+            factory = configured->second;
+            instance = materialized->second;
+        });
+        if (factory.relocation.kind != detail::factory_relocation_kind_t::preserve_state)
+            co_return std::vector<std::uint8_t>{};
+        const auto capture = factory.relocation.capture;
+        if (!capture) {
+            throw framework_exception_t (
+              framework_error_kind_t::not_configured,
+              "State-preserving Actor relocation has no capture callback");
+        }
+        const auto captured = co_await capture (instance.get (), cancellation);
+        if (captured.size () > max_spot_relocation_state_bytes) {
+            throw framework_exception_t (framework_error_kind_t::rejected,
+                                         "Actor relocation state exceeds the 64 MiB limit");
+        }
+        std::vector<std::uint8_t> output;
+        output.reserve (captured.size ());
+        for (const auto value : captured)
+            output.push_back (std::to_integer<std::uint8_t> (value));
+        co_return output;
+    }
+
+    std::shared_ptr<spot_context_state_t> context;
+    detail::factory_relocation_configuration_t relocation;
+    co_await state->lane.run_task ([&] {
+        const auto found = state->spot_contexts_by_id.find (spot.key);
+        const auto configured = state->spot_factory_relocations.find (stable_type);
+        const auto candidate = found == state->spot_contexts_by_id.end ()
+                                 ? nullptr
+                                 : spot_context_access_t::state (found->second);
+        if (!candidate || candidate->spot_name != stable_type
+            || configured == state->spot_factory_relocations.end ()
+            || !candidate->allows_relocation ()) {
+            throw framework_exception_t (framework_error_kind_t::not_found,
+                                         "Relocation source Spot is not materialized");
+        }
+        context = candidate;
+        relocation = configured->second;
+    });
+    if (relocation.kind != detail::factory_relocation_kind_t::preserve_state)
+        co_return std::vector<std::uint8_t>{};
+    const auto capture = relocation.capture;
+    if (!capture || !context->spot_instance) {
+        throw framework_exception_t (framework_error_kind_t::not_configured,
+                                     "State-preserving Spot relocation has no capture callback");
+    }
+    std::vector<std::byte> payload;
+    const auto work = [&] () -> task_t<void> {
+        payload = co_await capture (context->spot_instance.get (), cancellation);
+    };
+    const auto barrier =
+      co_await state->lane.run_task ([&] { return context->relocation_ready_barrier; });
+    const auto capture_task = [&] {
+        return context->run_serial_task ("spot-relocation-capture", work);
+    };
+    co_await (barrier ? barrier->run (capture_task) : capture_task ());
+    std::vector<std::uint8_t> output;
+    if (payload.size () > max_spot_relocation_state_bytes) {
+        throw framework_exception_t (framework_error_kind_t::rejected,
+                                     "Spot relocation state exceeds the 64 MiB limit");
+    }
+    output.reserve (payload.size ());
+    for (const auto value : payload)
+        output.push_back (std::to_integer<std::uint8_t> (value));
+    co_return output;
+}
+
+task_t<runtime::stateful::frozen_object_state_t>
+capture_relocation_state_async (std::shared_ptr<spot_node_builder_state_t> state,
+                                runtime::stateful::object_ref_t object,
+                                std::string stable_type,
+                                std::stop_token cancellation)
 {
     runtime::stateful::frozen_object_state_t captured;
     captured.owner = object;
     captured.stable_type = stable_type;
-    captured.application_state = capture_spot_relocation_state (object, stable_type, cancellation);
+    captured.application_state =
+      co_await capture_spot_relocation_state_async (state, object, stable_type, cancellation);
     if (object.kind != runtime::stateful::object_kind_t::actor)
-        return captured;
-    auto backlog =
-      _state->actor_transfer_coordinator->take_backlog (stable_type + ":" + object.key);
+        co_return captured;
+    auto backlog = state->actor_transfer_coordinator->take_backlog (stable_type + ":" + object.key);
     std::vector<handoff_packet_t> legacy;
     captured.pending_application.reserve (backlog.size ());
     for (auto &packet : backlog) {
@@ -7347,105 +7436,19 @@ spot_node_runtime_t::capture_relocation_state (const runtime::stateful::object_r
         record->invocation.reset ();
         captured.pending_application.back ().accepted_owner = std::move (record);
     }
-    _state->actor_transfer_coordinator->prepend_source_suffix (stable_type + ":" + object.key,
-                                                               std::move (legacy));
-    return captured;
+    state->actor_transfer_coordinator->prepend_source_suffix (stable_type + ":" + object.key,
+                                                              std::move (legacy));
+    co_return captured;
 }
 
-std::vector<std::uint8_t>
-spot_node_runtime_t::capture_spot_relocation_state (const runtime::stateful::object_ref_t &spot,
-                                                    const std::string &stable_type,
-                                                    std::stop_token cancellation) const
-{
-    if (spot.kind == runtime::stateful::object_kind_t::actor) {
-        detail::spot_node_builder_state_t::actor_factory_registration_t factory;
-        std::shared_ptr<void> instance;
-        _state->lane
-          .run ([&] {
-              const auto configured = _state->actor_factories.find (stable_type);
-              const auto materialized = _state->actor_instances.find (stable_type + ":" + spot.key);
-              if (configured == _state->actor_factories.end ()
-                  || materialized == _state->actor_instances.end () || !materialized->second) {
-                  throw framework_exception_t (framework_error_kind_t::not_found,
-                                               "Relocation source Actor is not materialized");
-              }
-              factory = configured->second;
-              instance = materialized->second;
-          })
-          .get ();
-        if (factory.relocation.kind != detail::factory_relocation_kind_t::preserve_state)
-            return {};
-        const auto capture = factory.relocation.capture;
-        if (!capture) {
-            throw framework_exception_t (
-              framework_error_kind_t::not_configured,
-              "State-preserving Actor relocation has no capture callback");
-        }
-        const auto captured = capture (instance.get (), cancellation).result ();
-        if (!captured) {
-            throw framework_exception_t (captured.error_kind (),
-                                         captured.error () != nullptr
-                                           ? captured.error ()->what ()
-                                           : "Actor relocation capture failed");
-        }
-        if (captured.value ().size () > max_spot_relocation_state_bytes) {
-            throw framework_exception_t (framework_error_kind_t::rejected,
-                                         "Actor relocation state exceeds the 64 MiB limit");
-        }
-        std::vector<std::uint8_t> output;
-        output.reserve (captured.value ().size ());
-        for (const auto value : captured.value ())
-            output.push_back (std::to_integer<std::uint8_t> (value));
-        return output;
-    }
+} // namespace
 
-    std::shared_ptr<spot_context_state_t> context;
-    detail::factory_relocation_configuration_t relocation;
-    _state->lane
-      .run ([&] {
-          const auto found = _state->spot_contexts_by_id.find (spot.key);
-          const auto configured = _state->spot_factory_relocations.find (stable_type);
-          if (found == _state->spot_contexts_by_id.end ()
-              || found->second._state->spot_name != stable_type
-              || configured == _state->spot_factory_relocations.end ()
-              || !found->second._state->allows_relocation ()) {
-              throw framework_exception_t (framework_error_kind_t::not_found,
-                                           "Relocation source Spot is not materialized");
-          }
-          context = found->second._state;
-          relocation = configured->second;
-      })
-      .get ();
-    if (relocation.kind != detail::factory_relocation_kind_t::preserve_state)
-        return {};
-    const auto capture = relocation.capture;
-    if (!capture || !context->spot_instance) {
-        throw framework_exception_t (framework_error_kind_t::not_configured,
-                                     "State-preserving Spot relocation has no capture callback");
-    }
-    std::vector<std::byte> payload;
-    const auto work = [&] () -> task_t<void> {
-        payload = co_await capture (context->spot_instance.get (), cancellation);
-    };
-    const auto barrier =
-      _state->lane.run ([&] { return context->relocation_ready_barrier; }).get ();
-    const auto capture_task = [&] {
-        return context->run_serial_task ("spot-relocation-capture", work);
-    };
-    const auto captured = (barrier ? barrier->run (capture_task) : capture_task ()).result ();
-    if (!captured)
-        throw framework_exception_t (captured.error_kind (), captured.error () != nullptr
-                                                               ? captured.error ()->what ()
-                                                               : "Spot relocation capture failed");
-    std::vector<std::uint8_t> output;
-    if (payload.size () > max_spot_relocation_state_bytes) {
-        throw framework_exception_t (framework_error_kind_t::rejected,
-                                     "Spot relocation state exceeds the 64 MiB limit");
-    }
-    output.reserve (payload.size ());
-    for (const auto value : payload)
-        output.push_back (std::to_integer<std::uint8_t> (value));
-    return output;
+task_t<runtime::stateful::frozen_object_state_t>
+spot_node_runtime_t::capture_relocation_state (const runtime::stateful::object_ref_t &object,
+                                               const std::string &stable_type,
+                                               std::stop_token cancellation) const
+{
+    return capture_relocation_state_async (_state, object, stable_type, cancellation);
 }
 
 bool spot_node_runtime_t::restore_spot_relocation_state (

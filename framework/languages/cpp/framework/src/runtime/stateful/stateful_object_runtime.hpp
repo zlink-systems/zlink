@@ -259,7 +259,7 @@ struct retained_relocation_source_t
 class stateful_object_runtime_t
 {
   public:
-    using relocation_state_capture_t = std::function<frozen_object_state_t (
+    using relocation_state_capture_t = std::function<task_t<frozen_object_state_t> (
       const object_ref_t &, const std::string &, std::stop_token)>;
     using relocation_state_restore_t =
       std::function<bool (const frozen_object_state_t &, const object_ref_t &, std::stop_token)>;

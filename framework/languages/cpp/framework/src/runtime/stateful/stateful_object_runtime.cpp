@@ -1408,7 +1408,7 @@ stateful_object_runtime_t::try_seal_relocation_aggregate (
     if (plan.capture) {
         for (std::size_t index = 0; index != plan.sources.size (); ++index) {
             try {
-                application_states[index] = plan.capture (
+                application_states[index] = co_await plan.capture (
                   plan.sources[index],
                   _lane
                     .run ([this, &plan, index] {

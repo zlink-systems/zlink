@@ -686,8 +686,9 @@ TEST (FrameworkRelocationSealContract, restored_actor_owns_active_capacity_until
                                             .active_capacity = 1,
                                             .pending_capacity = 1}});
     objects.configure_relocation_state (
-      [] (const auto &, const auto &, std::stop_token) {
-          return stateful::frozen_object_state_t{};
+      [] (const auto &, const auto &, std::stop_token)
+        -> zlink::framework::task_t<zlink::framework::runtime::stateful::frozen_object_state_t> {
+          co_return stateful::frozen_object_state_t{};
       },
       [] (const auto &, const auto &, std::stop_token) { return true; });
     const stateful::object_ref_t source{
@@ -722,8 +723,9 @@ TEST (FrameworkRelocationSealContract, restored_aggregate_releases_each_active_o
                                             .active_capacity = 2,
                                             .pending_capacity = 2}});
     objects.configure_relocation_state (
-      [] (const auto &, const auto &, std::stop_token) {
-          return stateful::frozen_object_state_t{};
+      [] (const auto &, const auto &, std::stop_token)
+        -> zlink::framework::task_t<zlink::framework::runtime::stateful::frozen_object_state_t> {
+          co_return stateful::frozen_object_state_t{};
       },
       [] (const auto &, const auto &, std::stop_token) { return true; });
     const std::vector<stateful::frozen_object_state_t> frozen{

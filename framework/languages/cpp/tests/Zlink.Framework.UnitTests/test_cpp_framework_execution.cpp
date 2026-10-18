@@ -8425,7 +8425,8 @@ bool verify_aggregate_capture_waits_for_participant_terminal ()
     const auto participant = create (stateful::object_kind_t::actor, "actor", "actor");
     const auto other = create (stateful::object_kind_t::actor, "other", "actor");
     objects.configure_relocation_state (
-      [&] (const auto &object, const auto &, auto) {
+      [&] (const auto &object, const auto &, auto)
+        -> zlink::framework::task_t<zlink::framework::runtime::stateful::frozen_object_state_t> {
           stateful::frozen_object_state_t state;
           if (object.kind == stateful::object_kind_t::user_spot) {
               // This is the same readiness phase used by Spot capture. Publish
@@ -8437,9 +8438,9 @@ bool verify_aggregate_capture_waits_for_participant_terminal ()
                   co_return;
               });
               capture_admitted.set_value ();
-              pending.result ().value ();
+              co_await pending;
           }
-          return state;
+          co_return state;
       },
       [] (const auto &, const auto &, auto) { return true; });
     stateful::stateful_error_t error = stateful::stateful_error_t::conflict;
@@ -8529,14 +8530,15 @@ bool verify_source_suffix_native_order_and_rollback ()
     auto original = std::make_shared<serial_application_record_t> ();
     original->admission.take_over ();
     objects.configure_relocation_state (
-      [original] (const auto &, const auto &, auto) {
+      [original] (const auto &, const auto &, auto)
+        -> zlink::framework::task_t<zlink::framework::runtime::stateful::frozen_object_state_t> {
           frozen_object_state_t state;
           // Coordinator holds and exported suffixes need not form one sorted
           // range. Native sequence is the existing acceptance-order owner.
           state.pending_application.push_back ({4, {4, 4}});
           state.pending_application.push_back ({2, {2, 2}});
           state.pending_application.back ().accepted_owner = original;
-          return state;
+          co_return state;
       },
       [] (const auto &, const auto &, auto) { return true; });
     const auto enqueued = objects.enqueue (actor, turn_domain_t::application, {3, {3, 3}});
@@ -8576,14 +8578,15 @@ bool verify_source_suffix_native_order_and_rollback ()
     passed = passed && objects.pending (actor, turn_domain_t::application) == 0
              && objects.pending_bytes (actor, turn_domain_t::application) == 0;
     objects.configure_relocation_state (
-      [original] (const auto &, const auto &, auto) {
+      [original] (const auto &, const auto &, auto)
+        -> zlink::framework::task_t<zlink::framework::runtime::stateful::frozen_object_state_t> {
           frozen_object_state_t state;
           // Exercise abort after suffix ownership moved, before frozen
           // materialization, using the existing 64 MiB capture limit.
           state.application_state.resize (64u * 1024u * 1024u + 1);
           state.pending_application.push_back ({5, {5, 5}});
           state.pending_application.back ().accepted_owner = original;
-          return state;
+          co_return state;
       },
       [] (const auto &, const auto &, auto) { return true; });
     const auto failed = objects.try_seal_relocation_aggregate ({actor}).result ().value ();
@@ -10273,8 +10276,44 @@ bool verify_seal_waits_for_yielded_handler_terminal ()
     return passed;
 }
 
+bool verify_async_capture_releases_state_owner ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::runtime::stateful;
+    stateful_object_runtime_t objects;
+    const object_ref_t object{object_kind_t::user_spot, "async-capture", 1, 1, "mesh", "node"};
+    const auto created = objects.begin_reserved_object (object, "spot", {});
+    if (created.error != stateful_error_t::none
+        || objects.commit_create (created.attempt) != stateful_error_t::none)
+        return false;
+    task_completion_source_t<frozen_object_state_t> capture;
+    bool entered = false;
+    objects.configure_relocation_state (
+      [&] (const auto &, const auto &, auto)
+        -> zlink::framework::task_t<zlink::framework::runtime::stateful::frozen_object_state_t> {
+          entered = true;
+          co_return co_await capture.task ();
+      },
+      [] (const auto &, const auto &, auto) { return true; });
+    auto sealing = objects.try_seal_relocation_aggregate ({object});
+    const bool suspended = entered && !sealing.await_ready ();
+    const bool owner_available = objects.pending (object, turn_domain_t::application) == 0;
+    capture.complete (result_t<frozen_object_state_t>::success ({object, "spot"}));
+    const auto sealed = sealing.result ().value ();
+    const bool passed =
+      suspended && owner_available && sealed.error == stateful_error_t::none
+      && objects.abort_relocation_before_cutover (sealed.seal.token) == stateful_error_t::none;
+    std::cout << "async-capture suspended=" << suspended << " owner=" << owner_available
+              << " passed=" << passed << '\n';
+    return passed;
+}
+
 int main (int argc, char **argv)
 {
+    if (argc == 2 && std::string_view (argv[1]) == "--async-capture-owner")
+        return verify_async_capture_releases_state_owner () ? EXIT_SUCCESS : EXIT_FAILURE;
+    if (argc == 1 && !verify_async_capture_releases_state_owner ())
+        return EXIT_FAILURE;
     if (argc == 2 && std::string_view (argv[1]) == "--seal-yield-terminal")
         return verify_seal_waits_for_yielded_handler_terminal () ? EXIT_SUCCESS : EXIT_FAILURE;
     if (argc == 1 && !verify_seal_waits_for_yielded_handler_terminal ())

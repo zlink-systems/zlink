@@ -6600,8 +6600,9 @@ void verify_aggregate_saved_request_terminal_identity ()
         .runtime_failures =
           std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()}});
     target->objects ().configure_relocation_state (
-      [] (const auto &, const auto &, std::stop_token) {
-          return stateful::frozen_object_state_t{};
+      [] (const auto &, const auto &, std::stop_token)
+        -> zlink::framework::task_t<zlink::framework::runtime::stateful::frozen_object_state_t> {
+          co_return stateful::frozen_object_state_t{};
       },
       [] (const auto &, const auto &, std::stop_token) { return true; });
     target->configure_stateful_dispatch (

@@ -97,8 +97,10 @@ struct public_host_runtime_test_access_t
     {
         host._user_spot_store = std::move (store);
         host._objects.configure_relocation_state (
-          [] (const stateful::object_ref_t &owner, const std::string &type, std::stop_token) {
-              return stateful::frozen_object_state_t{owner, type};
+          [] (const stateful::object_ref_t &owner, const std::string &type, std::stop_token)
+            -> zlink::framework::task_t<
+              zlink::framework::runtime::stateful::frozen_object_state_t> {
+              co_return stateful::frozen_object_state_t{owner, type};
           },
           [&materialized] (const auto &, const auto &, std::stop_token) {
               ++materialized;
@@ -1569,8 +1571,12 @@ void next_join_suffix (bool remote,
         initiator_services.emplace (initiator.app.advanced ().services ().build_provider ());
         initial_sender = &initiator_services->get_required<fw::actor_client_t> ();
     }
-    ASSERT_TRUE (
-      initial_sender->send (fw::actor_id_t (actor_id), move_t{local_spot}).async ().result ());
+    const auto initial_sent =
+      initial_sender->send (fw::actor_id_t (actor_id), move_t{local_spot}).async ().result ();
+    ASSERT_TRUE (initial_sent) << "kind=" << static_cast<int> (initial_sent.error_kind ())
+                               << " error="
+                               << (initial_sent.error () ? initial_sent.error ()->what ()
+                                                         : "no error");
     if (const auto hold = evidence.native_handoff_hold) {
         std::unique_lock lock (evidence.mutex);
         ASSERT_TRUE (evidence.changed.wait_for (lock, wait_budget, [&] {

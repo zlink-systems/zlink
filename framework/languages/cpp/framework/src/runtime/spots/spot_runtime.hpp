@@ -2168,14 +2168,10 @@ class spot_node_runtime_t
     void bind_relocation_store (std::shared_ptr<runtime::stateful::relocation_store_port_t> store);
     void bind_relocation_authority (
       std::shared_ptr<runtime::stateful::authority_relocation_port_t> authority);
-    runtime::stateful::frozen_object_state_t
+    task_t<runtime::stateful::frozen_object_state_t>
     capture_relocation_state (const runtime::stateful::object_ref_t &object,
                               const std::string &stable_type,
                               std::stop_token cancellation) const;
-    std::vector<std::uint8_t>
-    capture_spot_relocation_state (const runtime::stateful::object_ref_t &spot,
-                                   const std::string &stable_type,
-                                   std::stop_token cancellation = {}) const;
     bool restore_spot_relocation_state (const runtime::stateful::frozen_object_state_t &frozen,
                                         const runtime::stateful::object_ref_t &target,
                                         std::stop_token cancellation = {});

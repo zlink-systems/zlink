@@ -5236,10 +5236,12 @@ int early_zero_generation_leave_waits_for_source_transfer_completion (bool no_fo
         node->native_node = native_source;
         auto &objects = native_source->objects ();
         objects.configure_relocation_state (
-          [] (const stateful::object_ref_t &, const std::string &, std::stop_token) {
+          [] (const stateful::object_ref_t &, const std::string &, std::stop_token)
+            -> zlink::framework::task_t<
+              zlink::framework::runtime::stateful::frozen_object_state_t> {
               stateful::frozen_object_state_t captured;
               captured.application_state = std::vector<std::uint8_t>{1};
-              return captured;
+              co_return captured;
           },
           [] (const stateful::frozen_object_state_t &, const stateful::object_ref_t &,
               std::stop_token) { return true; });
