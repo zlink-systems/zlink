@@ -3662,9 +3662,7 @@ task_t<void> app_t::run_shared_relocation (detail::app_state_t &state)
                 readiness_meshes.push_back (node->mesh_name ());
             }
             const auto local_rid = node->routing_id ();
-            auto application_units = spot_runtime->application_relocation_units ();
-            while (std::any_of (application_units.begin (), application_units.end (),
-                                [] (const auto &unit) { return !unit.ready; })) {
+            while (!spot_runtime->relocation_ready ()) {
                 if (shutdown_requested () || std::chrono::steady_clock::now () >= deadline_at) {
                     terminal.reason = shutdown_requested ()
                                         ? relocation_reason_t::shutdown_requested
@@ -3673,8 +3671,8 @@ task_t<void> app_t::run_shared_relocation (detail::app_state_t &state)
                     co_return;
                 }
                 zlink::framework::runtime::wait_poll_interval (std::chrono::milliseconds (1));
-                application_units = spot_runtime->application_relocation_units ();
             }
+            const auto units = spot_runtime->relocation_units ();
             // §5.1: with no unit on this Mesh there is no target to narrow.
             if (!has_relocation_units (*node))
                 continue;
@@ -3716,8 +3714,7 @@ task_t<void> app_t::run_shared_relocation (detail::app_state_t &state)
                 source_descriptor = *found;
             }
 
-            std::set<std::string> aggregate_actor_ids;
-            for (const auto &unit : application_units) {
+            for (const auto &unit : units.spots) {
                 const auto target = co_await wait_for_relocation_target (
                   peers->get (), state.delays, node->mesh_name (), deadline_at,
                   topology_poll_interval, shutdown_requested,
@@ -3771,7 +3768,6 @@ task_t<void> app_t::run_shared_relocation (detail::app_state_t &state)
                     sources.push_back (*source);
                     stable_types.emplace_back (
                       ::zlink::framework::detail::actor_ref_access_t::actor_type (actor));
-                    aggregate_actor_ids.insert (std::string (actor.actor_id ().value ()));
                 }
 
                 std::vector<authority_snapshot_t> authorities;
@@ -3812,12 +3808,7 @@ task_t<void> app_t::run_shared_relocation (detail::app_state_t &state)
                 relocated_ready_spots[node->mesh_name ()].push_back (unit.spot_id);
             }
 
-            const auto actors = spot_runtime->local_actor_refs ();
-            if (actors.empty ())
-                continue;
-            for (const auto &actor : actors) {
-                if (aggregate_actor_ids.contains (std::string (actor.actor_id ().value ())))
-                    continue;
+            for (const auto &actor : units.standalone_actors) {
                 if (shutdown_requested ()) {
                     terminal.reason = relocation_reason_t::shutdown_requested;
                     complete (terminal);

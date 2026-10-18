@@ -2064,6 +2064,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   add_executable(test_cpp_framework_spot_close_conformance
     tests/Zlink.Framework.UnitTests/test_cpp_framework_spot_close_conformance.cpp
     tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_spotwide_host_relocation.cpp
     tests/Zlink.Framework.UnitTests/test_cpp_framework_spot_reincarnate_conformance.cpp)
   target_compile_features(test_cpp_framework_spot_close_conformance PRIVATE cxx_std_20)
   target_link_zlink_test_harness(test_cpp_framework_spot_close_conformance)
