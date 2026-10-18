@@ -2586,30 +2586,20 @@ void app_t::_apply_zlink_framework ()
           });
         actor_gateway_runtime.offload_session_relay ();
         actor_gateway_runtime.on_disconnect (
-          [mesh_nodes, request_timeout] (const actor_ref_t &actor) -> task_t<void> {
-              bool notified = false;
-              result_t<void> last = result_t<void>::failure (
-                framework_error_kind_t::not_found, "Actor disconnect RouteMesh was not found");
-              for (const auto &mesh : mesh_nodes) {
-                  try {
-                      co_await mesh->notify_application_actor_disconnected (
-                        actor, actor.node_rid (), request_timeout);
-                      notified = true;
-                  }
-                  catch (const framework_exception_t &error) {
-                      last = detail::result_access_t::failure<void> (error);
-                  }
-                  catch (const std::exception &error) {
-                      last = result_t<void>::failure (framework_error_kind_t::internal_failure,
-                                                      error.what ());
-                  }
-              }
-              if (!notified) {
-                  throw framework_exception_t (last.error_kind (),
-                                               last.error () != nullptr
-                                                 ? last.error ()->what ()
-                                                 : "Actor disconnect RouteMesh failed");
-              }
+          [mesh_nodes, request_timeout] (
+            const actor_ref_t &actor,
+            const std::optional<runtime::stateful::stream_binding_t> &binding) -> task_t<void> {
+              if (!binding)
+                  co_return;
+              const auto mesh =
+                std::find_if (mesh_nodes.begin (), mesh_nodes.end (), [&] (const auto &candidate) {
+                    return candidate->mesh_name () == binding->actor.mesh_name;
+                });
+              if (mesh == mesh_nodes.end ())
+                  throw framework_exception_t (framework_error_kind_t::not_found,
+                                               "Actor disconnect RouteMesh was not found");
+              co_await (*mesh)->notify_application_actor_disconnected (actor, *binding,
+                                                                       request_timeout);
               co_return;
           });
         application_mesh->configure_bound_session_operations (

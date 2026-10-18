@@ -14,6 +14,27 @@ internal static class ZLinkActorReplyDecoder
     // observation-only flow fields on the terminal reply.
     public static TReply Decode<TReply>(IReadOnlyList<Message> reply, bool captureFlow = true)
     {
+        var payload = DecodeResponsePayload(reply, captureFlow);
+        try
+        {
+            return ZLinkFrameworkJsonPayloadCodec.Deserialize<TReply>(payload)
+                ?? throw ProtocolError("Actor request reply payload is null.");
+        }
+        catch (Exception error)
+            when (error is not OperationCanceledException and not ZLinkFrameworkException)
+        {
+            throw ProtocolError("Actor request reply payload could not be decoded.", error);
+        }
+    }
+
+    public static void DecodeTerminal(IReadOnlyList<Message> reply, bool captureFlow = true) =>
+        _ = DecodeResponsePayload(reply, captureFlow);
+
+    private static ReadOnlySpan<byte> DecodeResponsePayload(
+        IReadOnlyList<Message> reply,
+        bool captureFlow
+    )
+    {
         if (reply.Count == 0)
             throw ProtocolError("Actor request reply is empty.");
 
@@ -60,16 +81,7 @@ internal static class ZLinkActorReplyDecoder
         if (header.Kind != ZlinkStreamMessageKind.Response)
             throw ProtocolError($"Actor request reply kind '{header.Kind}' is not a response.");
 
-        try
-        {
-            return ZLinkFrameworkJsonPayloadCodec.Deserialize<TReply>(payload)
-                ?? throw PayloadDecodeFailed("Actor request reply payload is null.");
-        }
-        catch (Exception error)
-            when (error is not OperationCanceledException and not ZLinkFrameworkException)
-        {
-            throw PayloadDecodeFailed("Actor request reply payload could not be decoded.", error);
-        }
+        return payload;
     }
 
     private static Exception DecodeError(ReadOnlySpan<byte> payload)
@@ -84,14 +96,11 @@ internal static class ZLinkActorReplyDecoder
         }
         catch (Exception decodeError) when (decodeError is not OperationCanceledException)
         {
-            return PayloadDecodeFailed(
-                "Actor request error payload could not be decoded.",
-                decodeError
-            );
+            return ProtocolError("Actor request error payload could not be decoded.", decodeError);
         }
 
         if (error is null)
-            return PayloadDecodeFailed("Actor request error payload is null.");
+            return ProtocolError("Actor request error payload is null.");
         // Cross-language snake_case wire names only (C++ stream_error_code);
         // an unknown name stays a protocol error.
         if (ZLinkErrorWireNames.TryParse(error.Code, out var kind))
@@ -104,11 +113,6 @@ internal static class ZLinkActorReplyDecoder
     }
 
     private static ZLinkFrameworkException ProtocolError(
-        string message,
-        Exception? innerException = null
-    ) => new(ZLinkFrameworkErrorKind.ProtocolError, message, innerException: innerException);
-
-    private static ZLinkFrameworkException PayloadDecodeFailed(
         string message,
         Exception? innerException = null
     ) => new(ZLinkFrameworkErrorKind.ProtocolError, message, innerException: innerException);

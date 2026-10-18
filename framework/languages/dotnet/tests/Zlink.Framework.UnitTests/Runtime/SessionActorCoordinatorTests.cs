@@ -1405,18 +1405,17 @@ public sealed class SessionActorCoordinatorTests
         Assert.True(runtime.TryGetActorBoundSession(actorId, out var current));
         using var stalePayload = Message.From(
             ZLinkActorBoundSessionRelay.EncodeSessionDisconnected(
-                "stale-binding",
-                current.BindingGeneration,
-                current.SessionOwnerNodeGeneration
+                RoutingId.From("different-session-owner"),
+                current.SessionOwnerNodeGeneration,
+                current.BindingGeneration
             )
         );
 
         Assert.False(
             ZLinkActorBoundSessionRelay.TryValidateDisconnectedBinding(
                 state,
-                sessionNodeRid,
-                sessionRid,
                 stalePayload,
+                out _,
                 out _
             )
         );
@@ -1425,17 +1424,16 @@ public sealed class SessionActorCoordinatorTests
 
         using var wrongGenerationPayload = Message.From(
             ZLinkActorBoundSessionRelay.EncodeSessionDisconnected(
-                current.BindingToken,
-                current.BindingGeneration + 1,
-                current.SessionOwnerNodeGeneration
+                sessionNodeRid,
+                current.SessionOwnerNodeGeneration,
+                current.BindingGeneration + 1
             )
         );
         Assert.False(
             ZLinkActorBoundSessionRelay.TryValidateDisconnectedBinding(
                 state,
-                sessionNodeRid,
-                sessionRid,
                 wrongGenerationPayload,
+                out _,
                 out _
             )
         );
@@ -1445,27 +1443,25 @@ public sealed class SessionActorCoordinatorTests
         Assert.False(
             ZLinkActorBoundSessionRelay.TryValidateDisconnectedBinding(
                 state,
-                sessionNodeRid,
-                sessionRid,
                 emptyPayload,
+                out _,
                 out _
             )
         );
 
         using var exactPayload = Message.From(
             ZLinkActorBoundSessionRelay.EncodeSessionDisconnected(
-                current.BindingToken,
-                current.BindingGeneration,
-                current.SessionOwnerNodeGeneration
+                sessionNodeRid,
+                current.SessionOwnerNodeGeneration,
+                current.BindingGeneration
             )
         );
         Assert.True(
             ZLinkActorBoundSessionRelay.TryValidateDisconnectedBinding(
                 state,
-                sessionNodeRid,
-                sessionRid,
                 exactPayload,
-                out var exactBindingToken
+                out var exactBindingToken,
+                out _
             )
         );
         Assert.True(runtime.TryGetActorBoundSession(actorId, out _));

@@ -3077,7 +3077,9 @@ void verify_displaced_stream_binding_can_be_restored ()
     assert (second_error == stateful::stateful_error_t::none);
     assert (sessions.current_binding (actor.key) == second_binding);
 
-    assert (sessions.unbind (second_binding) == stateful::stateful_error_t::none);
+    const auto removed = sessions.unbind (second_binding);
+    assert (removed.first == stateful::stateful_error_t::none);
+    assert (removed.second == second_binding);
     assert (sessions.restore (first_binding) == stateful::stateful_error_t::none);
     assert (sessions.current_binding (actor.key) == first_binding);
 

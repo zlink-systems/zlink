@@ -41,6 +41,7 @@ const telemetryTracer = openTelemetryTrace.getTracer('@zlink-systems/framework')
 let diagnosticsGeneration = 0n;
 
 interface ZLinkTelemetryRecord {
+  readonly severity?: 'warning';
   readonly eventId: typeof MESSAGE_FLOW_EVENT_ID | typeof DISPATCH_ERROR_EVENT_ID;
   readonly timestamp: Date;
   readonly phase?: string;
@@ -150,6 +151,7 @@ type MessageFlowInput = Omit<
   ZLinkRuntimeMessageFlowEvent,
   'effectiveMode' | 'flowId' | 'flowOrigin'
 > & {
+  readonly severity?: 'warning';
   readonly effectiveMode?: ZLinkMessageFlowLogMode;
   readonly flowId?: string;
   readonly flowOrigin?: import('../../contracts').ZLinkFlowOrigin;
@@ -243,7 +245,7 @@ export class ZLinkMessageFlowTracer {
     const ambient = currentFlowContext();
     const flowId = flowInput.flowId ?? acceptedFlowId ?? ambient?.flowId;
     const flowOrigin = flowInput.flowOrigin ?? acceptedFlowOrigin ?? ambient?.flowOrigin;
-    const flow: ZLinkRuntimeMessageFlowEvent = {
+    const flow: MessageFlowInput = {
       ...flowInput,
       ...(flowId === undefined ? {} : { flowId, flowOrigin }),
       streamSessionId: flowInput.streamSessionId ?? ambient?.streamSessionId,
@@ -311,13 +313,17 @@ export class ZLinkMessageFlowTracer {
 
   private publishToLogger(record: ZLinkTelemetryRecord): void {
     try {
-      const severityNumber =
-        record.eventId === DISPATCH_ERROR_EVENT_ID ? SeverityNumber.ERROR : SeverityNumber.INFO;
+      const severity =
+        record.severity === 'warning'
+          ? 'WARN'
+          : record.eventId === DISPATCH_ERROR_EVENT_ID
+            ? 'ERROR'
+            : 'INFO';
       telemetryLogger.emit({
         eventName: record.eventId,
         timestamp: record.timestamp,
-        severityNumber,
-        severityText: record.eventId === DISPATCH_ERROR_EVENT_ID ? 'ERROR' : 'INFO',
+        severityNumber: SeverityNumber[severity],
+        severityText: severity,
         body: structuredLogBody(record),
         attributes: structuredLogAttributes(record)
       });
@@ -351,11 +357,12 @@ export class ZLinkMessageFlowTracer {
 }
 
 function toTelemetryRecord(
-  flow: ZLinkRuntimeMessageFlowEvent,
+  flow: MessageFlowInput,
   messageSizeBytes: number | undefined,
   durationSeconds: number | undefined
 ): ZLinkTelemetryRecord {
   return {
+    severity: flow.severity,
     eventId:
       flow.outcome === ZLinkMessageFlowOutcome.Error
         ? DISPATCH_ERROR_EVENT_ID
@@ -396,7 +403,7 @@ function toTelemetryRecord(
 function traceAttributes(record: ZLinkTelemetryRecord): Attributes {
   const attributes: Attributes = {};
   for (const [name, value] of Object.entries(record)) {
-    if (value === undefined || name === 'timestamp') continue;
+    if (value === undefined || name === 'timestamp' || name === 'severity') continue;
     attributes[toSnakeCase(name)] = value instanceof Date ? value.toISOString() : value;
   }
   return attributes;

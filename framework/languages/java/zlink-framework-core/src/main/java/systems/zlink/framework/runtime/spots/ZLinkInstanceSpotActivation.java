@@ -373,24 +373,7 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
             admitted =
                     context.enqueueMessage(
                             received,
-                            () -> {
-                                // Pending frames belong to the accepted queue record. Only the
-                                // executing handler is registered for terminal dispatch cleanup.
-                                trackRouteReceived(received);
-                                ParsedPacket packet;
-                                try {
-                                    packet = ZLinkSpotRuntime.parsePacket(received.parts());
-                                } catch (
-                                        systems.zlink.framework.errors.ZLinkFrameworkException
-                                                invalidEnvelope) {
-                                    failRouteInvalidFlow(received, invalidEnvelope);
-                                    return CompletableFuture.completedFuture(null);
-                                } catch (RuntimeException failure) {
-                                    closeRouteReceived(received);
-                                    return CompletableFuture.failedFuture(failure);
-                                }
-                                return dispatchSpotRouteHandler(received, packet);
-                            },
+                            () -> host.dispatchQueuedInstanceMessage(this, received),
                             accepted);
             if (observed != null) {
                 try (var ignored =
@@ -470,7 +453,7 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
         return context.enqueueClose(
                         () -> closeOnLifecycle(reason).thenAccept(result::complete),
                         message ->
-                                host.replayClosedInstanceMessage(
+                                host.dispatchQueuedInstanceMessage(
                                         this, (ZLinkBackendReceived) message),
                         () ->
                                 existingCloseCoordinator() != null
@@ -629,11 +612,20 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
     }
 
     CompletionStage<Void> replayMessage(ZLinkBackendReceived received) {
+        // Pending frames belong to the accepted queue record. Only the executing handler
+        // is registered for terminal dispatch cleanup, on the current incarnation.
         trackRouteReceived(received);
-        return context.runLifecycleExecution(
-                () ->
-                        dispatchSpotRouteHandler(
-                                received, ZLinkSpotRuntime.parsePacket(received.parts())));
+        ParsedPacket packet;
+        try {
+            packet = ZLinkSpotRuntime.parsePacket(received.parts());
+        } catch (systems.zlink.framework.errors.ZLinkFrameworkException invalidEnvelope) {
+            failRouteInvalidFlow(received, invalidEnvelope);
+            return CompletableFuture.completedFuture(null);
+        } catch (RuntimeException failure) {
+            closeRouteReceived(received);
+            return CompletableFuture.failedFuture(failure);
+        }
+        return context.runLifecycleExecution(() -> dispatchSpotRouteHandler(received, packet));
     }
 
     CompletionStage<Void> closeResourcesAsync() {

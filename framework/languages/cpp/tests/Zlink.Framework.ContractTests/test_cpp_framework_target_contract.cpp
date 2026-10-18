@@ -670,8 +670,10 @@ int main ()
      * boundary. */
     gate.require (
       mesh_node_runtime.find ("\"commit_ack\", actor, transfer_id") == std::string::npos
-        && spot_runtime.find ("emit_actor_transfer_marker (\"source_cleanup\"")
-             != std::string::npos,
+        && std::regex_search (
+          spot_runtime,
+          std::regex (
+            R"marker(emit_actor_transfer_marker(?:_async)?\s*\(\s*"source_cleanup")marker")),
       "E2E-CP-51",
       "remote transfer still emits a target commit_ack or lacks source_cleanup evidence");
     const auto target_authority_commit =
@@ -1056,7 +1058,8 @@ int main ()
      * owned by the coordinator's Actor entrypoints, without a second
      * handler-wide mailbox lock. */
     gate.require (
-      spot_runtime.find ("executor->execute_actor (") != std::string::npos
+      spot_runtime.find ("coordinator->execute_actor (") != std::string::npos
+        && spot_runtime_header.find ("executor->execute_actor (") != std::string::npos
         && spot_runtime.find ("execute_actor_cancellable") != std::string::npos
         && spot_runtime_surface.find ("class spot_serial_executor_t") != std::string::npos
         && actor_serial_executor.find ("class actor_serial_executor_t") != std::string::npos

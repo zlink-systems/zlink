@@ -4,6 +4,8 @@
 #include "runtime/execution/state_lane.hpp"
 #include "runtime/dispatch/coroutine_executor.hpp"
 #include "runtime/foundation/operation_registry.hpp"
+#include "runtime/spots/spot_runtime.hpp"
+#include "../support/runtime_failure_fixture.hpp"
 #ifdef ZLINK_FRAMEWORK_DEBUG_WAIT_GUARD
 #include "runtime/execution/infrastructure_wait_guard.hpp"
 #endif
@@ -11,6 +13,8 @@
 #include <gtest/gtest.h>
 
 #include <atomic>
+#include <cstdio>
+#include <cstdlib>
 #include <map>
 #include <numeric>
 #include <stdexcept>
@@ -65,6 +69,71 @@ TEST (ZLinkStateLane, RunReturnsTheResultOfTheWork)
     state_lane_t lane (executor);
 
     EXPECT_EQ (42, lane.run ([] { return 42; }).get ());
+}
+
+TEST (ZLinkStateLaneDeathTest, CleanupContinuationReleasesWorkerForPendingLaneAndAttachment)
+{
+    // A failed self-wait cannot unwind the executor. Isolate it so the bounded
+    // observation reports a failure without joining the blocked worker.
+    ::testing::FLAGS_gtest_death_test_style = "threadsafe";
+    ASSERT_EXIT (
+      ([] {
+          using namespace zlink::framework;
+          using namespace zlink::framework::detail;
+          constexpr auto completion_timeout = std::chrono::seconds (2);
+          auto node = test::runtime_failure_fixture<spot_node_builder_state_t> ("cleanup-lane");
+          spot_node_runtime_t spots (node);
+          node->spot_factories.emplace ("attachment", std::type_index (typeid (void)));
+          std::atomic<int> settled{0};
+          node->pending_remote_actor_leaves.push_back (
+            spot_node_builder_state_t::pending_remote_actor_leave_t{
+              .transfer_id = "abandoned-transfer",
+              .source_actor = actor_ref_access_t::make (node_rid_t::from_string ("cleanup-lane"),
+                                                        "player", "actor", 1),
+              .source_spot_id = spot_id_t ("source"),
+              .target_spot_id = spot_id_t ("target"),
+              .target_fence = {},
+              .transfer_owner_reservation = [&] { ++settled; }});
+          std::promise<void> snapshot_taken;
+          auto snapshot = snapshot_taken.get_future ();
+          std::promise<void> attachment_started;
+          auto attaching = attachment_started.get_future ();
+          std::promise<std::size_t> cleaned;
+          auto cleanup = cleaned.get_future ();
+          node->lane_executor.submit ([&] {
+              auto pending = spots.cleanup_expired_actor_admissions_at_async (
+                std::chrono::steady_clock::now (), [&] {
+                    // The drain is queued behind this sole worker's continuation.
+                    if (!node->lane.try_post ([] {}))
+                        std::_Exit (2);
+                    snapshot_taken.set_value ();
+                    attaching.wait ();
+                });
+              observe_task_completion (pending, [&] (const result_t<std::size_t> &result) {
+                  if (!result)
+                      std::_Exit (3);
+                  cleaned.set_value (result.value ());
+              });
+          });
+          if (snapshot.wait_for (completion_timeout) != std::future_status::ready)
+              std::_Exit (4);
+          auto attachment = std::async (std::launch::async, [&] {
+              attachment_started.set_value ();
+              return spots.get_or_create_spot ("attachment", spot_id_t ("attachment"));
+          });
+          if (cleanup.wait_for (completion_timeout) != std::future_status::ready
+              || attachment.wait_for (completion_timeout) != std::future_status::ready) {
+              std::fputs ("cleanup/attachment blocked on the state lane\n", stderr);
+              std::_Exit (5);
+          }
+          if (cleanup.get () != 1 || settled != 1)
+              std::_Exit (6);
+          if (attachment.get ().state != spot_create_state_t::created)
+              std::_Exit (7);
+          node->lane_executor.drain ();
+          std::_Exit (0);
+      }()),
+      ::testing::ExitedWithCode (0), "");
 }
 
 TEST (ZLinkStateLane, CallerDrainedTaskDoesNotWaitForUnrelatedExecutorWork)
