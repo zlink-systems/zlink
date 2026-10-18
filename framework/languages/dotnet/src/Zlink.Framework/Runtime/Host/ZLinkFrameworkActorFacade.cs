@@ -120,21 +120,9 @@ internal sealed class ZLinkFrameworkActorFacade(
             var target =
                 localActivation
                 ?? throw new InvalidOperationException($"SPOT '{spotId}' is not active.");
-            ZLinkSpotActorJoinResult joinResult;
-            if (sourceActivation is not null)
-            {
-                joinResult = await target
-                    .AdmitActorJoinFromCallerTurnAsync(actor, request, cancellationToken)
-                    .ConfigureAwait(false);
-                if (joinResult.Accepted)
-                    await target
-                        .CommitActorJoinFromCallerTurnAsync(actor, cancellationToken, deadline.Utc)
-                        .ConfigureAwait(false);
-            }
-            else
-                joinResult = await target
-                    .JoinActorAsync(actor, request, cancellationToken, deadline.Utc)
-                    .ConfigureAwait(false);
+            var joinResult = await target
+                .JoinActorAsync(actor, request, cancellationToken, deadline.Utc)
+                .ConfigureAwait(false);
             var reply = joinResult.Reply ?? ZLinkMessage.Empty;
             return joinResult.Accepted
                 ? new ZLinkActorJoinResult.Accepted(ToActorRef(actorState), reply)
