@@ -98,16 +98,23 @@ final class ZLinkSpotActivationFactory {
                             context.setSpot(spot);
                             spot.configure();
                             context.closeRegistration();
+                            SpotActivation activation =
+                                    new SpotActivation(
+                                            host, handlerInvoker, spot, backendSpot, context);
+                            registerDispatchHandler(backendSpot, activation);
                             context.bindSubscriptions(backendSpot);
                             return host.runWithOutbound(
-                                            context.dispatchOutbound(),
-                                            () ->
-                                                    ZLinkHandlerStages.fromStageSupplier(
-                                                            () -> spot.onCreate(effectiveRequest)))
-                                    .thenCompose(
-                                            response ->
-                                                    initializeAcceptedSpot(
-                                                            spot, backendSpot, context, response));
+                                    context.dispatchOutbound(),
+                                    () -> {
+                                        CompletionStage<ZLinkSpotCreateResponse> creating =
+                                                ZLinkHandlerStages.fromStageSupplier(
+                                                        () -> spot.onCreate(effectiveRequest));
+                                        return ZLinkSerialExecutionQueue.manageCurrent(creating)
+                                                .thenCompose(
+                                                        response ->
+                                                                initializeAcceptedSpot(
+                                                                        activation, response));
+                                    });
                         })
                 .handle(
                         (activation, error) -> {
@@ -414,14 +421,12 @@ final class ZLinkSpotActivationFactory {
     }
 
     private CompletionStage<SpotActivationCreateResult> initializeAcceptedSpot(
-            ZLinkSpot<?> spot,
-            ZLinkBackendSpot backendSpot,
-            DefaultSpotContext context,
-            ZLinkSpotCreateResponse response) {
+            SpotActivation activation, ZLinkSpotCreateResponse response) {
+        var context = activation.context;
         ZLinkSpotCreateResponse effectiveResponse =
                 response == null ? ZLinkSpotCreateResponse.accept() : response;
         if (!effectiveResponse.accepted()) {
-            return context.closeResourcesAsync()
+            return ZLinkSerialExecutionQueue.yieldCurrent(context.closeResourcesAsync())
                     .thenApply(ignored -> new SpotActivationCreateResult(null, effectiveResponse));
         }
         return context.runLifecycleExecution(
@@ -430,15 +435,9 @@ final class ZLinkSpotActivationFactory {
                                         context.dispatchOutbound(),
                                         () ->
                                                 ZLinkHandlerStages.fromStageSupplier(
-                                                        spot::onInitialize)))
+                                                        activation.spot()::onInitialize)))
                 .thenApply(
-                        ignored -> {
-                            SpotActivation activation =
-                                    new SpotActivation(
-                                            host, handlerInvoker, spot, backendSpot, context);
-                            registerDispatchHandler(backendSpot, activation);
-                            return new SpotActivationCreateResult(activation, effectiveResponse);
-                        });
+                        ignored -> new SpotActivationCreateResult(activation, effectiveResponse));
     }
 
     private static void registerDispatchHandler(

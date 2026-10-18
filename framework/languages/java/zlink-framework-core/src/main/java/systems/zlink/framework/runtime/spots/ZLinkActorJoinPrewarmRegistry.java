@@ -138,17 +138,18 @@ final class ZLinkActorJoinPrewarmRegistry {
         return inStateLane(() -> Optional.ofNullable(byRelocation.get(relocationId)));
     }
 
-    IngressRoute parkOrDeliver(String actorId, long objectGeneration, ParkedMessage message) {
+    IngressRoute parkOrDeliver(
+            String actorId, long objectGeneration, Supplier<ParkedMessage> message) {
         DeliveryState delivery =
                 inStateLane(() -> parkOrDeliverOnLane(actorId, objectGeneration, message));
         if (delivery == null) return IngressRoute.NOT_FOUND;
         if (delivery.sink() == null) return IngressRoute.PARKED;
-        delivery.sink().accept(message);
+        delivery.sink().accept(message.get());
         return IngressRoute.DELIVERED;
     }
 
     private DeliveryState parkOrDeliverOnLane(
-            String actorId, long objectGeneration, ParkedMessage message) {
+            String actorId, long objectGeneration, Supplier<ParkedMessage> message) {
         UUID relocationId = byObject.get(new ObjectKey(actorId, objectGeneration));
         if (relocationId == null) return null;
         Attempt attempt = byRelocation.get(relocationId);
@@ -156,7 +157,7 @@ final class ZLinkActorJoinPrewarmRegistry {
         if (attempt.installedSink != null && !attempt.migrationInProgress) {
             return new DeliveryState(attempt.installedSink);
         }
-        attempt.parked.add(message);
+        attempt.parked.add(message.get());
         return new DeliveryState(null);
     }
 

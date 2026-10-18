@@ -647,7 +647,11 @@ public final class ZLinkSerialExecutionQueue {
                 for (Entry entry : applicationPending) {
                     entry.operation = () -> dispatchPending(entry);
                 }
-                discarded.forEach(ZLinkSerialExecutionQueue.this::release);
+                discarded.forEach(
+                        entry -> {
+                            release(entry);
+                            decrementOutstanding();
+                        });
             }
             for (Entry entry : discarded) {
                 entry.relocationRelease.run();
@@ -673,6 +677,7 @@ public final class ZLinkSerialExecutionQueue {
     }
 
     private void failPendingApplications(Throwable failure) {
+        closingAdmissionSealed = true;
         materializePublished();
         for (Entry entry : applicationPending) {
             entry.operation =
@@ -858,6 +863,26 @@ public final class ZLinkSerialExecutionQueue {
             long payloadBytes,
             Supplier<CompletionStage<Void>> operation,
             CompletableFuture<Void> admission) {
+        EnqueueResult result = enqueueWithPayloadBytesResult(payloadBytes, operation, admission);
+        if (result.entry() == null && admission != null) {
+            result.result()
+                    .whenComplete((done, failure) -> admission.completeExceptionally(failure));
+        }
+        return result.result();
+    }
+
+    /** Returns an Actor candidate rejection without completing the public admission. */
+    public CompletionStage<Void> enqueueActorWithPayloadBytes(
+            long payloadBytes,
+            Supplier<CompletionStage<Void>> operation,
+            CompletableFuture<Void> admission) {
+        return enqueueWithPayloadBytesResult(payloadBytes, operation, admission).result();
+    }
+
+    private EnqueueResult enqueueWithPayloadBytesResult(
+            long payloadBytes,
+            Supplier<CompletionStage<Void>> operation,
+            CompletableFuture<Void> admission) {
         EnqueueResult result;
         CompletionStage<Void> rejection = null;
         synchronized (this) {
@@ -869,14 +894,9 @@ public final class ZLinkSerialExecutionQueue {
                                     null, payloadBytes, operation, () -> {}, null, admission)
                             : null;
         }
-        if (rejection != null) {
-            if (admission != null) {
-                rejection.whenComplete((done, failure) -> admission.completeExceptionally(failure));
-            }
-            return rejection;
-        }
+        if (result == null) return new EnqueueResult(rejection, false, null);
         scheduleDrainIfNeeded(result);
-        return result.result();
+        return result;
     }
 
     /**
@@ -954,14 +974,39 @@ public final class ZLinkSerialExecutionQueue {
     }
 
     public CompletionStage<Void> finishActivationPreparation() {
-        return completeActivationPreparation(
-                null, null, () -> CompletableFuture.completedFuture(null));
+        return completePreparation(null, null, () -> CompletableFuture.completedFuture(null));
+    }
+
+    public CompletionStage<Void> discardActivationPreparation() {
+        return completePreparation(
+                null,
+                null,
+                () ->
+                        underSharedSpotGateAsync(
+                                () -> {
+                                    synchronized (this) {
+                                        failPendingApplications(
+                                                new IllegalStateException(
+                                                        "Spot activation was discarded"));
+                                    }
+                                    return null;
+                                }));
     }
 
     public CompletionStage<Void> completeActivationPreparation(
             Predicate<Object> firstRecord,
             Throwable failure,
             Supplier<CompletionStage<Void>> discard) {
+        return completePreparation(
+                firstRecord,
+                failure,
+                failure == null ? () -> CompletableFuture.completedFuture(null) : discard);
+    }
+
+    private CompletionStage<Void> completePreparation(
+            Predicate<Object> firstRecord,
+            Throwable failure,
+            Supplier<CompletionStage<Void>> cleanupAction) {
         return underSharedSpotGateAsync(
                         () -> {
                             ActivationPreparation<?> preparation = activationPreparation;
@@ -975,40 +1020,36 @@ public final class ZLinkSerialExecutionQueue {
                 .thenCompose(
                         preparation -> {
                             if (preparation == null) return CompletableFuture.completedFuture(null);
-                            CompletionStage<Void> cleanup =
-                                    failure == null
-                                            ? CompletableFuture.completedFuture(null)
-                                            : discard.get();
+                            CompletionStage<Void> cleanup = cleanupAction.get();
                             return cleanup.handle(
                                             (ignored, cleanupFailure) -> {
-                                                if (failure != null
-                                                        && cleanupFailure != null
+                                                if (failure == null) return cleanupFailure;
+                                                if (cleanupFailure != null
                                                         && failure != cleanupFailure)
                                                     failure.addSuppressed(cleanupFailure);
-                                                return null;
+                                                return failure;
                                             })
                                     .thenCompose(
-                                            ignored ->
+                                            terminalFailure ->
                                                     underSharedSpotGateAsync(
                                                             () -> {
                                                                 synchronized (this) {
                                                                     if (activationPreparation
                                                                             == preparation) {
-                                                                        if (failure != null) {
-                                                                            closingAdmissionSealed =
-                                                                                    true;
+                                                                        if (terminalFailure
+                                                                                != null) {
                                                                             failPendingApplications(
-                                                                                    failure);
+                                                                                    terminalFailure);
                                                                         }
                                                                         activationPreparation =
                                                                                 null;
-                                                                        if (failure == null)
+                                                                        if (terminalFailure == null)
                                                                             preparation.terminal
                                                                                     .complete(null);
                                                                         else
                                                                             preparation.terminal
                                                                                     .completeExceptionally(
-                                                                                            failure);
+                                                                                            terminalFailure);
                                                                     }
                                                                 }
                                                                 return null;
@@ -1243,6 +1284,34 @@ public final class ZLinkSerialExecutionQueue {
             Supplier<CompletionStage<Void>> operation,
             Runnable relocationRelease,
             CompletableFuture<Void> admission) {
+        EnqueueResult result =
+                enqueueRelocatableLazyRecordResult(
+                        record, recordSizeHint, operation, relocationRelease, admission);
+        if (result.entry() == null && admission != null) {
+            result.result()
+                    .whenComplete((done, failure) -> admission.completeExceptionally(failure));
+        }
+        return result.result();
+    }
+
+    /** Returns an Actor candidate rejection without completing the public admission. */
+    public CompletionStage<Void> enqueueActorRelocatableLazyRecord(
+            Supplier<byte[]> record,
+            long recordSizeHint,
+            Supplier<CompletionStage<Void>> operation,
+            Runnable relocationRelease,
+            CompletableFuture<Void> admission) {
+        return enqueueRelocatableLazyRecordResult(
+                        record, recordSizeHint, operation, relocationRelease, admission)
+                .result();
+    }
+
+    private EnqueueResult enqueueRelocatableLazyRecordResult(
+            Supplier<byte[]> record,
+            long recordSizeHint,
+            Supplier<CompletionStage<Void>> operation,
+            Runnable relocationRelease,
+            CompletableFuture<Void> admission) {
         EnqueueResult result = null;
         CompletionStage<Void> immediate = null;
         synchronized (this) {
@@ -1283,21 +1352,24 @@ public final class ZLinkSerialExecutionQueue {
             }
             if (entry != null) result = new EnqueueResult(entry, requestDrainLocked(entry));
         }
-        if (result != null) scheduleDrainIfNeeded(result);
-        if (result == null && admission != null) {
-            immediate.whenComplete((done, failure) -> admission.completeExceptionally(failure));
+        if (result != null) {
+            scheduleDrainIfNeeded(result);
+            return result;
         }
-        if (immediate != null) return immediate;
-        return result.result();
+        return new EnqueueResult(immediate, false, null);
     }
 
     public boolean tryEnqueue(Supplier<CompletionStage<Void>> operation) {
+        return tryEnqueue(operation, () -> {});
+    }
+
+    public boolean tryEnqueue(Supplier<CompletionStage<Void>> operation, Runnable release) {
         EnqueueResult result;
         synchronized (this) {
             if (admissionFailureLocked() != null) {
                 return false;
             }
-            result = enqueueAccepted(null, 0, operation);
+            result = enqueueAccepted(null, 0, operation, release);
         }
         scheduleDrainIfNeeded(result);
         return true;

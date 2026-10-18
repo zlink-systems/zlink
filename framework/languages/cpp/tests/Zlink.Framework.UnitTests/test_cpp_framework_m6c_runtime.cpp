@@ -5337,7 +5337,7 @@ void test_source_completion_wait_scope (test_context_t &test)
     auto delivered = terminal.get_future ();
     detail::actor_transfer_coordinator_t coordinator;
     const std::string key = "player:source-completion";
-    test.require (coordinator.try_begin_source_remote (key, "source-completion"),
+    test.require (coordinator.try_begin_source_remote (key, "source-completion").has_value (),
                   "source completion fixture must begin its source move");
     auto waiting = coordinator.wait_for_source_completion (key);
     const bool suspended = !waiting.await_ready ();
@@ -6964,7 +6964,8 @@ void test_return_actor_relocation_replaces_departed_spot_instance (
     const auto entry_id = state->spot_ids_by_name.at ("entry");
     state->actor_authority_fences.erase (key);
     if (delayed_source_completion) {
-        test.require (state->actor_transfer_coordinator.try_begin_source_remote (key, "return-a-b"),
+        test.require (state->actor_transfer_coordinator->try_begin_source_remote (key, "return-a-b")
+                        .has_value (),
                       "fixture must retain the previous source Join until publication");
     } else {
         zlink::framework::detail::record_actor_route_unlocked (
@@ -6972,7 +6973,7 @@ void test_return_actor_relocation_replaces_departed_spot_instance (
           zlink::framework::spot_route_t{zlink::framework::node_rid_t::from_string ("node-b"),
                                          zlink::framework::spot_id_t ("spot-b"), "entry"},
           1);
-        state->actor_transfer_coordinator.activate_message_follow (
+        state->actor_transfer_coordinator->activate_message_follow (
           key, source_fence, returned_source,
           zlink::framework::spot_route_t{zlink::framework::node_rid_t::from_string ("node-b"),
                                          zlink::framework::spot_id_t ("spot-b"), "entry"},

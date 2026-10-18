@@ -18,6 +18,8 @@
 #include "runtime/diagnostics/dispatch_diagnostics_names.hpp"
 #include "runtime/execution/actor_execution_context.hpp"
 #include "runtime/mesh/raw_mesh_node_owner.hpp"
+#include "runtime/mesh/mesh_metadata_codec.hpp"
+#include <service_wire_codec.hpp>
 #include "runtime/mesh/mesh_node_runtime.hpp"
 #include "runtime/mesh/user_spot_terminal_mapping.hpp"
 #include "runtime/mesh/route_mesh_connection_policy.hpp"
@@ -50,6 +52,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <atomic>
 #include <array>
 #include <cassert>
@@ -3912,6 +3915,8 @@ void verify_logical_multicast_continues_after_one_target_failure ()
           std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()}});
     source->start ();
     target->start ();
+    const std::string source_spot_id = source->entry_spot ().spot_id ();
+    assert (zlink::framework::detail::is_framework_entry_spot_id (source_spot_id));
 
     const auto target_status = target->status ();
     const auto source_status = source->status ();
@@ -3978,7 +3983,10 @@ void verify_logical_multicast_continues_after_one_target_failure ()
     zlink::framework::serializer_registry_t serializers;
     zlink::framework::spot_publisher_client_t publisher (publisher_runtime.manager (), serializers);
     const auto publish_terminal =
-      publisher.publish<std::string> ("framework.spot", "reward", "payload").async ().result ();
+      publisher.publish<std::string> ("framework.spot", "reward", "payload")
+        .metadata ("trace-key", "multicast-snapshot")
+        .async ()
+        .result ();
     assert (publish_terminal);
 
     const auto diagnostic_deadline = std::chrono::steady_clock::now () + 5s;
@@ -4006,6 +4014,30 @@ void verify_logical_multicast_continues_after_one_target_failure ()
     assert (
       target->transport ().mailbox ().pending_messages (mesh::service_mailbox_domain_t::application)
       == 1);
+
+    auto claim = target->transport ().mailbox ().try_claim (
+      mesh::service_mailbox_domain_t::application, 1, 4096);
+    assert (claim && claim->records.size () == 1);
+    const auto &received = claim->records.front ();
+    assert (received.parts.size () == 3);
+    namespace wire = zlink::framework::runtime::protocol::generated::detail;
+    wire::logicalMulticast_23_t header;
+    wire::reader_t reader (protocol::message_bytes (received.parts.front ()));
+    assert (wire::decode_head_logicalMulticast_23 (reader, header) == wire::error_code::ok);
+    assert (header.flags == static_cast<std::uint8_t> (protocol::flag::metadata));
+    assert (header.channelName.value == "framework.spot");
+    assert (header.topic.value == "reward");
+    assert (header.sourceSpotId.value == source_spot_id);
+    std::map<std::string, std::string> metadata;
+    assert (zlink::framework::detail::mesh_metadata_codec_t::decode (received.parts[1].to_bytes (),
+                                                                     metadata));
+    assert ((metadata == std::map<std::string, std::string>{{"trace-key", "multicast-snapshot"}}));
+    const auto payload =
+      protocol::decode_application_payload (protocol::message_bytes (received.parts[2]));
+    const auto payload_parts = protocol::decode_application_parts (payload);
+    assert (payload_parts.size () == 1);
+    assert (payload_parts.front ().size () != 0);
+    assert (target->transport ().mailbox ().release (*claim));
 
     source->close ();
     target->close ();
@@ -4133,32 +4165,251 @@ void verify_failed_relay_persistence_rearms_dispatch_wait ()
     }
 }
 
-void verify_local_application_enqueue_wakes_dispatch_wait ()
+void verify_creating_spot_subscription_uses_native_object_lifetime ()
 {
+    auto local = descriptor ("creating-subscription");
+    local.channels = {{"local", 0}};
     auto host = std::make_shared<host::public_host_runtime_t> (host::host_options_t{
       mesh::raw_mesh_node_options_t{
-        .descriptor = descriptor ("local-dispatch-wake"),
+        .descriptor = std::move (local),
+        .runtime_failures =
+          std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()},
+      "entry",
+      {"framework.spot"}});
+    host->start ();
+    const stateful::object_ref_t reference{stateful::object_kind_t::user_spot,
+                                           "creating-room",
+                                           7,
+                                           1,
+                                           "m6b-mesh",
+                                           "creating-subscription"};
+    const auto creating = host->objects ().begin_reserved_object (reference, "room", {});
+    assert (creating.factory_owner);
+    assert (await_task (host->objects ().contains_async (reference)));
+    assert (!host->objects ().find (reference.kind, reference.key));
+    host::spot_handle_t spot (host, reference);
+    // Configure registers subscriptions before the same native record becomes Ready.
+    spot.set_subscription ("local", "creating-topic");
+    assert (host->get_or_create_spot (reference.key).status ().lifecycle_generation ()
+            == reference.object_generation);
+    assert (host->objects ().commit_create (creating.attempt) == stateful::stateful_error_t::none);
+    assert (host->objects ().find (reference.kind, reference.key) == reference);
+    auto publisher = host->entry_spot ();
+    std::vector<std::string> delivered;
+    const auto dispatch = [&] (const host::ready_record_t &owner,
+                               const host::receive_record_t &record,
+                               std::vector<zlink::message_t> parts) {
+        assert (record.kind == host::record_kind_t::spot_multicast);
+        assert (parts.size () == 1 && parts.front ().to_string () == "payload");
+        if (record.before_application_handler)
+            record.before_application_handler ();
+        delivered.push_back (owner.spot_id);
+    };
+    const auto publish = [&] (const std::string &topic) {
+        await_task (
+          publisher.publish ("local", topic, {zlink::message_t::from (std::string ("payload"))}));
+        while (await_task (host->dispatch_ready (dispatch)) != 0) {
+        }
+    };
+    publish ("creating-topic");
+    assert ((delivered == std::vector<std::string>{reference.key}));
+    delivered.clear ();
+    assert (spot.close ());
+    publish ("creating-topic");
+    assert (delivered.empty ());
+
+    auto failed_reference = reference;
+    ++failed_reference.object_generation;
+    const auto failed = host->objects ().begin_reserved_object (failed_reference, "room", {});
+    assert (failed.factory_owner);
+    host::spot_handle_t failed_spot (host, failed_reference);
+    failed_spot.set_subscription ("local", "aborted-topic");
+    assert (host->objects ().abort_create (failed.attempt) == stateful::stateful_error_t::none);
+    assert (!await_task (host->objects ().contains_async (failed_reference)));
+
+    auto replacement_reference = failed_reference;
+    ++replacement_reference.object_generation;
+    const auto replacement =
+      host->objects ().begin_reserved_object (replacement_reference, "room", {});
+    assert (replacement.factory_owner);
+    assert (host->objects ().commit_create (replacement.attempt)
+            == stateful::stateful_error_t::none);
+    publish ("aborted-topic");
+    assert (delivered.empty ());
+    host::spot_handle_t replacement_spot (host, replacement_reference);
+    replacement_spot.set_subscription ("local", "aborted-topic");
+    failed_spot.unset_subscription ("local", "aborted-topic");
+    bool stale_subscription_rejected = false;
+    try {
+        failed_spot.set_subscription ("local", "aborted-topic");
+    }
+    catch (const zlink::framework::framework_exception_t &error) {
+        assert (error.kind () == zlink::framework::framework_error_kind_t::invalid_operation);
+        stale_subscription_rejected = true;
+    }
+    assert (stale_subscription_rejected);
+    publish ("aborted-topic");
+    assert ((delivered == std::vector<std::string>{reference.key}));
+    assert (replacement_spot.close ());
+    auto actor_reference = replacement_reference;
+    actor_reference.kind = stateful::object_kind_t::actor;
+    actor_reference.key = "not-a-subscriber";
+    const auto actor = host->objects ().begin_reserved_object (actor_reference, "actor", {});
+    assert (actor.factory_owner);
+    host::spot_handle_t actor_as_spot (host, actor_reference);
+    bool actor_subscription_rejected = false;
+    try {
+        actor_as_spot.set_subscription ("local", "aborted-topic");
+    }
+    catch (const zlink::framework::framework_exception_t &error) {
+        assert (error.kind () == zlink::framework::framework_error_kind_t::invalid_operation);
+        actor_subscription_rejected = true;
+    }
+    assert (actor_subscription_rejected);
+    actor_as_spot.unset_subscription ("local", "aborted-topic");
+    assert (host->objects ().abort_create (actor.attempt) == stateful::stateful_error_t::none);
+    host->close ();
+}
+
+void verify_local_application_enqueue_wakes_dispatch_wait ()
+{
+    auto local_descriptor = descriptor ("local-dispatch-wake");
+    local_descriptor.channels = {{"local", 0}, {"other", 100}};
+    auto host = std::make_shared<host::public_host_runtime_t> (host::host_options_t{
+      mesh::raw_mesh_node_options_t{
+        .descriptor = std::move (local_descriptor),
         .runtime_failures =
           std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()},
       "entry",
       {"framework.spot"}});
     auto entry = host->entry_spot ();
     host->start ();
+    const std::string entry_spot_id = entry.spot_id ();
+    assert (zlink::framework::detail::is_framework_entry_spot_id (entry_spot_id));
+    entry.set_subscription ("local", "wake");
+    auto closing = host->get_or_create_spot ("closing-subscriber");
+    closing.set_subscription ("local", "wake");
+    auto wrong_topic = host->get_or_create_spot ("other-topic");
+    wrong_topic.set_subscription ("local", "different");
+    auto wrong_channel = host->get_or_create_spot ("other-channel");
+    wrong_channel.set_subscription ("other", "wake");
 
+    const auto deadline = std::chrono::steady_clock::now () + 5s;
     std::promise<void> waiting_started;
     auto waiting = waiting_started.get_future ();
     auto awakened = std::async (std::launch::async, [&] {
         waiting_started.set_value ();
-        return host->wait_for_dispatch_activity (5s, true, std::nullopt);
+        return host->wait_for_dispatch_activity (5s, true, deadline);
     });
     waiting.wait ();
-    std::this_thread::sleep_for (20ms);
-    assert (entry.publish ("local", "wake", {zlink::message_t::from (std::string ("payload"))})
-            == zlink::submit_result_t::ok);
-    assert (awakened.wait_for (500ms) == std::future_status::ready);
+    await_task (
+      entry.publish ("local", "wake", {zlink::message_t::from (std::string ("payload"))}));
+    const auto wake_budget =
+      std::min (500ms, std::max (0ms, std::chrono::duration_cast<std::chrono::milliseconds> (
+                                        deadline - std::chrono::steady_clock::now ())));
+    assert (awakened.wait_for (wake_budget) == std::future_status::ready);
     assert (awakened.get ());
 
+    std::vector<std::string> delivered;
+    const auto dispatch = [&] (const host::ready_record_t &owner,
+                               const host::receive_record_t &record,
+                               std::vector<zlink::message_t> parts) {
+        assert (owner.owner_kind == host::owner_kind_t::spot);
+        assert (record.kind == host::record_kind_t::spot_multicast);
+        assert (record.channel_name == "local");
+        assert (record.topic == "wake");
+        assert (parts.size () == 1 && parts.front ().to_string () == "payload");
+        if (record.before_application_handler)
+            record.before_application_handler ();
+        delivered.push_back (owner.spot_id);
+    };
+    while (await_task (host->dispatch_ready (dispatch)) != 0) {
+    }
+    std::sort (delivered.begin (), delivered.end ());
+    std::vector<std::string> expected{"closing-subscriber", entry_spot_id};
+    std::sort (expected.begin (), expected.end ());
+    assert (delivered == expected);
+
+    delivered.clear ();
+    entry.unset_subscription ("local", "wake");
+    await_task (
+      entry.publish ("local", "wake", {zlink::message_t::from (std::string ("payload"))}));
+    while (await_task (host->dispatch_ready (dispatch)) != 0) {
+    }
+    assert ((delivered == std::vector<std::string>{"closing-subscriber"}));
+
+    delivered.clear ();
+    assert (closing.close ());
+    await_task (
+      entry.publish ("local", "wake", {zlink::message_t::from (std::string ("payload"))}));
+    while (await_task (host->dispatch_ready (dispatch)) != 0) {
+    }
+    assert (delivered.empty ());
+
     host->close ();
+
+    auto application_jobs = std::make_shared<zlink::framework::runtime::application_job_queue_t> (
+      zlink::framework::runtime::application_job_queue_configuration_t{
+        zlink::framework::application_job_queue_profile_t::balanced, std::uint32_t{1}, 1, 1});
+    auto fenced_descriptor = descriptor ("local-multicast-incarnation");
+    fenced_descriptor.channels = {{"local", 0}};
+    auto fenced = std::make_shared<host::public_host_runtime_t> (host::host_options_t{
+      mesh::raw_mesh_node_options_t{
+        .descriptor = std::move (fenced_descriptor),
+        .application_jobs = application_jobs,
+        .runtime_failures =
+          std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()},
+      "entry",
+      {"framework.spot"}});
+    fenced->start ();
+    auto publisher = fenced->entry_spot ();
+    auto original = fenced->get_or_create_spot ("recreated-subscriber");
+    original.set_subscription ("local", "wake");
+    auto held = application_jobs->try_reserve_supply ();
+    assert (held);
+    auto pending =
+      publisher.publish ("local", "wake", {zlink::message_t::from (std::string ("payload"))});
+    while (application_jobs->snapshot ().capacity_waiters == 0
+           && std::chrono::steady_clock::now () < deadline) {
+        (void) fenced->wait_for_dispatch_activity (5s, true, deadline);
+    }
+    const auto waiting_for_capacity = application_jobs->snapshot ();
+    if (waiting_for_capacity.capacity_waiters != 1)
+        held.reset ();
+    assert (waiting_for_capacity.capacity_waiters == 1);
+    const bool pending_before_release = !pending.await_ready ();
+    assert (original.close ());
+    auto replacement = fenced->get_or_create_spot ("recreated-subscriber");
+    replacement.set_subscription ("local", "wake");
+    const bool different_incarnation =
+      original.status ().lifecycle_generation () != replacement.status ().lifecycle_generation ();
+    held.reset ();
+    await_task (std::move (pending));
+    assert (pending_before_release);
+    assert (different_incarnation);
+    while (await_task (fenced->dispatch_ready (dispatch)) != 0) {
+    }
+    assert (delivered.empty ());
+    await_task (
+      publisher.publish ("local", "wake", {zlink::message_t::from (std::string ("payload"))}));
+    while (await_task (fenced->dispatch_ready (dispatch)) != 0) {
+    }
+    assert ((delivered == std::vector<std::string>{"recreated-subscriber"}));
+
+    assert (replacement.close ());
+    held = application_jobs->try_reserve_supply ();
+    assert (held);
+    await_task (
+      publisher.publish ("local", "wake", {zlink::message_t::from (std::string ("payload"))}));
+    const auto closed_target_capacity = application_jobs->snapshot ();
+    assert (closed_target_capacity.reserved_supply_permits == 1);
+    assert (closed_target_capacity.queued_application_jobs == 0);
+    assert (closed_target_capacity.capacity_waiters == 0);
+    held.reset ();
+    while (await_task (fenced->dispatch_ready (dispatch)) != 0) {
+    }
+    assert ((delivered == std::vector<std::string>{"recreated-subscriber"}));
+    fenced->close ();
 }
 
 void verify_root_location_session_seal_timeout_is_startup_snapshot ()
@@ -7183,14 +7434,15 @@ bool verify_remote_user_spot_create_close_terminal_once (bool cleanup_only = fal
       static_cast<std::uint64_t> (std::chrono::duration_cast<std::chrono::milliseconds> (
                                     std::chrono::system_clock::now ().time_since_epoch () + 5s)
                                     .count ());
-    const auto moving_inventory = target->objects ().try_begin_maintenance_inventory ();
+    const auto moving_inventory =
+      target->objects ().try_begin_maintenance_inventory ().result ().value ();
     assert (moving_inventory);
     const auto moving_reply = send_create_and_wait (moving_create);
     assert (moving_reply.header.terminal_result
             == static_cast<std::uint32_t> (protocol::request_terminal_result::conflict));
     assert (moving_reply.header.failure_code
             == static_cast<std::uint32_t> (protocol::framework_error_code::spotMoving));
-    target->objects ().end_maintenance_inventory ();
+    target->objects ().end_maintenance_inventory ().result ().value ();
 
     const stateful::object_ref_t reserved_ref{
       stateful::object_kind_t::user_spot,
@@ -7834,6 +8086,10 @@ int main (int argc, char **argv)
         return 0;
     }
 
+    if (argc == 2 && std::string_view (argv[1]) == "--creating-subscription") {
+        verify_creating_spot_subscription_uses_native_object_lifetime ();
+        return 0;
+    }
     if (argc == 2 && std::string_view (argv[1]) == "--unadmitted-request") {
         verify_unadmitted_request_is_dropped_without_framework_queue ();
         return 0;
@@ -7907,6 +8163,7 @@ int main (int argc, char **argv)
     verify_public_host_batches_with_finite_permits ();
     verify_public_host_fifo_drains_before_liveness_probe ();
     verify_logical_multicast_continues_after_one_target_failure ();
+    verify_creating_spot_subscription_uses_native_object_lifetime ();
     verify_local_application_enqueue_wakes_dispatch_wait ();
     verify_relocation_finalize_write_lowers_published_bound ();
     verify_pending_relocation_management_bounds_dispatch_wait ();

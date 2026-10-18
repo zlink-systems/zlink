@@ -1808,7 +1808,7 @@ task_t<termination_result_t> host_maintenance_runtime_t::run_shutdown ()
 {
     if (_seal_targets)
         co_await _seal_targets ();
-    const auto inventory = _objects.try_begin_maintenance_inventory ();
+    const auto inventory = co_await _objects.try_begin_maintenance_inventory ();
     if (!inventory) {
         co_return termination_result_t{termination_outcome_t::force_stopped,
                                        termination_reason_t::teardown_failed};

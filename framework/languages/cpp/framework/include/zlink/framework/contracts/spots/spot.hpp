@@ -393,6 +393,7 @@ struct spot_inbound_message_t
     {
         publish_message_context_t context{to_message_context (std::move (packet_name))};
         context.topic = std::move (subscription_topic);
+        context.channel_name = channel_name;
         context.source = source;
         return context;
     }
@@ -402,6 +403,7 @@ struct spot_inbound_message_t
     std::optional<std::string> mesh_name;
     std::optional<std::string> correlation_id;
     std::optional<std::string> source;
+    std::optional<std::string> channel_name;
 };
 
 class message_metadata_policy_t
@@ -617,6 +619,7 @@ struct spot_handler_descriptor_t
     std::type_index payload_type;
     std::type_index actor_type;
     std::type_index reply_type;
+    std::string channel_name;
 };
 
 struct spot_info_t
@@ -939,24 +942,8 @@ class spot_context_t
     channel_client_t outbound () const;
     task_t<bool> close ();
 
-    template <typename TEvent> send_call_t publish (std::string topic, TEvent event)
-    {
-        auto *serializers = serializer_registry ();
-        if (serializers == nullptr) {
-            return send_call_t (
-              result_t<void>::failure (framework_error_kind_t::protocol_error,
-                                       "spot publish requires a serializer registry"));
-        }
-        try {
-            const auto serializer = serializers->get<TEvent> ();
-            auto payload = detail::encoded_payload_to_raw (serializer.serialize (event));
-            return publish_erased (std::move (topic), detail::message_name<TEvent> (),
-                                   serializer.content_type (), std::move (payload));
-        }
-        catch (const framework_exception_t &error) {
-            return send_call_t (detail::result_access_t::failure<void> (error));
-        }
-    }
+    template <typename TEvent>
+    publish_call_t publish (std::string channel_name, std::string topic, TEvent event);
 
     template <typename TRequest>
     spot_request_call_t request_to_spot (spot_id_t target_spot_id, TRequest request)
@@ -1218,10 +1205,6 @@ class spot_context_t
     void ensure_submission_open () const;
     std::function<result_t<void> ()> submission_preflight () const;
 
-    send_call_t publish_erased (std::string topic,
-                                std::string packet_name,
-                                std::string content_type,
-                                zlink::message_t payload);
     serializer_registry_t *serializer_registry () const noexcept;
     route_client_t spot_route_client () const;
     send_call_t send_to_erased (node_rid_t node_rid,
@@ -1486,7 +1469,8 @@ class spot_handler_registry_t
           });
     }
 
-    template <auto Method> spot_handler_registry_t &add_subscribe (std::string topic)
+    template <auto Method>
+    spot_handler_registry_t &add_subscribe (std::string channel_name, std::string topic)
     {
         using traits = detail::spot_member_traits_t<Method>;
         static_assert (traits::arg_count == 1 || traits::arg_count == 2,
@@ -1525,7 +1509,8 @@ class spot_handler_registry_t
                     [&typed_spot, payload] { return (typed_spot.*Method) (*payload); }, serializers,
                     payload);
               }
-          });
+          },
+          std::move (channel_name));
     }
 
     template <auto Method>
@@ -1653,7 +1638,14 @@ class spot_handler_registry_t
                                                  std::type_index payload_type,
                                                  std::type_index actor_type,
                                                  std::type_index reply_type,
-                                                 invoker_t invoker);
+                                                 invoker_t invoker,
+                                                 std::string channel_name = {});
+
+    std::optional<std::size_t> find_handler (spot_handler_kind_t kind,
+                                             std::string_view packet_name,
+                                             std::string_view topic,
+                                             std::type_index actor_type,
+                                             std::string_view channel_name) const;
 
     task_t<zlink::message_t> invoke_erased (
       spot_handler_kind_t kind,
@@ -1812,11 +1804,6 @@ class spot_publisher_client_t
     template <typename TEvent>
     publish_call_t publish (std::string channel_name, std::string topic, const TEvent &event) const
     {
-        if (!_serializers) {
-            return publish_call_t (
-              result_t<void>::failure (framework_error_kind_t::not_configured,
-                                       "logical multicast has no serializer registry"));
-        }
         try {
             const auto serializer = _serializers->get<TEvent> ();
             auto payload = detail::encoded_payload_to_raw (serializer.serialize (event));
@@ -1839,6 +1826,21 @@ class spot_publisher_client_t
     spot_manager_t _manager;
     serializer_registry_t *_serializers = nullptr;
 };
+
+template <typename TEvent>
+publish_call_t spot_context_t::publish (std::string channel_name, std::string topic, TEvent event)
+{
+    auto *serializers = serializer_registry ();
+    if (serializers == nullptr) {
+        return publish_call_t (result_t<void>::failure (
+          framework_error_kind_t::protocol_error, "spot publish requires a serializer registry"));
+    }
+    auto call = spot_publisher_client_t (manager (), *serializers)
+                  .publish (std::move (channel_name), std::move (topic), event);
+    call._context_lifetime = _state;
+    call._preflight = submission_preflight ();
+    return call;
+}
 
 namespace detail
 {

@@ -291,6 +291,7 @@ final class ZLinkActorRelocationStagingTest {
                                                 destroys.incrementAndGet();
                                                 yield CompletableFuture.completedFuture(null);
                                             }
+                                            case "boundSessionRoute" -> java.util.Optional.empty();
                                             case "close" -> null;
                                             default -> defaultValue(method.getReturnType());
                                         });

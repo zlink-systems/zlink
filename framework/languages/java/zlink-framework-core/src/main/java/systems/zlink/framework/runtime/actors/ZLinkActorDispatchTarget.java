@@ -15,6 +15,12 @@ import java.util.function.Supplier;
  * Actor queue.
  */
 public interface ZLinkActorDispatchTarget {
+    record QueuedTurn(
+            String actorId,
+            ZLinkActorDispatchTarget target,
+            Object incarnation,
+            ZLinkActorSerialExecutor activation) {}
+
     record ActivationSnapshot(ZLinkActorDispatchTarget target, Object incarnation) {}
 
     CompletionStage<ZLinkActorSerialExecutor> claimActorQueue(String actorId);

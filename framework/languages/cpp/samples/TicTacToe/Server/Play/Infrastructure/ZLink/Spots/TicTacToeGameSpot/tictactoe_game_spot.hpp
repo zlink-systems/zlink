@@ -183,7 +183,10 @@ class tictactoe_game_spot_t : public spot_t<player_actor_t>
             const auto milestone_event = player_win_milestone_event_t{
               state.room_id, player.actor_id, player.display_name, player.wins};
             // --8<-- [start:doc-multicast-publish]
-            co_await _context.publish (sample_names_t::player_milestone_topic, milestone_event)
+            co_await _context
+              .publish (sample_names_t::game_spot_node,
+                        sample_names_t::player_milestone_topic,
+                        milestone_event)
               .async ();
             // --8<-- [end:doc-multicast-publish]
         }

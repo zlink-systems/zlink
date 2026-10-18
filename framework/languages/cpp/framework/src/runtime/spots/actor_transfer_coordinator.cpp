@@ -86,6 +86,7 @@ task_t<void> actor_transfer_coordinator_t::wait_for_source_completion (std::stri
         if (found == _moves.end ()
             || (found->second.phase != actor_move_phase_t::source_reserved
                 && found->second.phase != actor_move_phase_t::source_remote
+                && found->second.phase != actor_move_phase_t::local
                 && (found->second.phase != actor_move_phase_t::reconcile
                     || !found->second.reconcile_context)))
             return std::shared_ptr<task_completion_source_t<void>>{};
@@ -95,6 +96,19 @@ task_t<void> actor_transfer_coordinator_t::wait_for_source_completion (std::stri
     });
     if (completion)
         co_await completion->task ();
+}
+
+task_t<void> actor_transfer_coordinator_t::wait_for_source_completions ()
+{
+    const auto keys = co_await _lane.run_task ([this] {
+        std::vector<std::string> result;
+        result.reserve (_moves.size ());
+        for (const auto &[key, move] : _moves)
+            result.push_back (key);
+        return result;
+    });
+    for (const auto &key : keys)
+        co_await wait_for_source_completion (key);
 }
 
 void actor_transfer_coordinator_t::erase_move_on_lane (const std::string &actor_key)
@@ -111,53 +125,82 @@ void actor_transfer_coordinator_t::erase_move_on_lane (const std::string &actor_
                                                        "Actor transfer executor is stopping"));
 }
 
-bool actor_transfer_coordinator_t::try_reserve_source (const std::string &actor_key,
-                                                       std::string transfer_id)
+task_t<bool> actor_transfer_coordinator_t::try_seal_maintenance_inventory ()
+{
+    const auto sealed = co_await _lane.run_task ([this] {
+        if (_source_claims_sealed)
+            return false;
+        _source_claims_sealed = true;
+        return true;
+    });
+    if (!sealed)
+        co_return false;
+    co_await wait_for_source_completions ();
+    co_return true;
+}
+
+task_t<void> actor_transfer_coordinator_t::end_maintenance_inventory ()
+{
+    return _lane.run_task ([this] { _source_claims_sealed = false; });
+}
+
+result_t<void> actor_transfer_coordinator_t::try_claim_source_on_lane (const std::string &actor_key,
+                                                                       move_state_t move)
+{
+    assert (_lane.is_on_lane ());
+    if (_source_claims_sealed)
+        return result_t<void>::failure (framework_error_kind_t::unavailable,
+                                        "Actor maintenance inventory is sealed");
+    if (!_moves.emplace (actor_key, std::move (move)).second)
+        return result_t<void>::failure (framework_error_kind_t::rejected,
+                                        "Actor join is already reserved or moving");
+    return result_t<void>::success ();
+}
+
+result_t<void> actor_transfer_coordinator_t::try_reserve_source (const std::string &actor_key,
+                                                                 std::string transfer_id)
 {
     return _lane
       .run ([&, this] {
-          return _moves
-            .emplace (actor_key,
-                      move_state_t{actor_move_phase_t::source_reserved, std::move (transfer_id)})
-            .second;
+          return try_claim_source_on_lane (
+            actor_key, {actor_move_phase_t::source_reserved, std::move (transfer_id)});
       })
       .get ();
 }
 
-bool actor_transfer_coordinator_t::try_begin_local (const std::string &actor_key)
+result_t<void> actor_transfer_coordinator_t::try_begin_local (const std::string &actor_key)
 {
     return _lane
       .run ([&, this] {
           if (auto found = _moves.find (actor_key); found != _moves.end ()) {
               if (found->second.phase != actor_move_phase_t::source_reserved)
-                  return false;
+                  return result_t<void>::failure (framework_error_kind_t::rejected,
+                                                  "Actor move is already in progress");
               found->second.phase = actor_move_phase_t::local;
-              return true;
+              return result_t<void>::success ();
           }
-          return _moves.emplace (actor_key, move_state_t{actor_move_phase_t::local, std::string{}})
-            .second;
+          return try_claim_source_on_lane (actor_key, {actor_move_phase_t::local, std::string{}});
       })
       .get ();
 }
 
-bool actor_transfer_coordinator_t::try_begin_source_remote (const std::string &actor_key,
-                                                            std::string transfer_id)
+result_t<void> actor_transfer_coordinator_t::try_begin_source_remote (const std::string &actor_key,
+                                                                      std::string transfer_id)
 {
     return _lane
       .run ([&, this] {
           if (auto found = _moves.find (actor_key); found != _moves.end ()) {
               if (found->second.phase != actor_move_phase_t::source_reserved)
-                  return false;
+                  return result_t<void>::failure (framework_error_kind_t::rejected,
+                                                  "Actor move is already in progress");
               found->second.phase = actor_move_phase_t::source_remote;
               found->second.transfer_id = std::move (transfer_id);
               found->second.transfer_started_at = std::chrono::steady_clock::now ();
-              return true;
+              return result_t<void>::success ();
           }
-          return _moves
-            .emplace (actor_key,
-                      move_state_t{actor_move_phase_t::source_remote, std::move (transfer_id),
-                                   std::chrono::steady_clock::now ()})
-            .second;
+          return try_claim_source_on_lane (actor_key, {actor_move_phase_t::source_remote,
+                                                       std::move (transfer_id),
+                                                       std::chrono::steady_clock::now ()});
       })
       .get ();
 }
