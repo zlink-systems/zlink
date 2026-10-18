@@ -1010,6 +1010,47 @@ void public_host_runtime_t::configure_stateful_dispatch (
       .get ();
 }
 
+void public_host_runtime_t::configure_stateful_dispatch (
+  std::function<std::optional<location_owner_token_t> ()> owner)
+{
+    configure_stateful_dispatch (
+      [this, owner = std::move (owner)] (stateful::accepted_record_authority_query_t query) {
+          return accepted_record_authority (query, owner ());
+      });
+}
+
+task_t<std::optional<stateful::accepted_record_authority_t>>
+public_host_runtime_t::accepted_record_authority (
+  const stateful::accepted_record_authority_query_t &query,
+  const std::optional<location_owner_token_t> &owner) const
+{
+    using authority_t = std::optional<stateful::accepted_record_authority_t>;
+    authority_t accepted;
+    const auto &local = _options.mesh.descriptor;
+    if (owner && !owner->owner_id.empty () && owner->lease_generation > 0
+        && query.target_node_routing_id == local.node_routing_id
+        && query.target_node_generation == local.lifecycle_generation) {
+        const auto peer = query.source_node_routing_id == local.node_routing_id
+                            ? nullptr
+                            : _transport->topology ().peer (query.source_node_routing_id);
+        const auto local_source = query.source_node_routing_id == local.node_routing_id
+                                  && query.source_node_generation == local.lifecycle_generation;
+        if (local_source
+            || (peer && peer->ready
+                && peer->descriptor.lifecycle_generation == query.source_node_generation
+                && !peer->descriptor.owner_id.empty ()
+                && peer->descriptor.owner_lease_generation > 0)) {
+            accepted = stateful::accepted_record_authority_t{
+              {local_source ? owner->owner_id : peer->descriptor.owner_id,
+               static_cast<std::uint64_t> (local_source ? owner->lease_generation
+                                                        : peer->descriptor.owner_lease_generation),
+               query.source_node_routing_id, query.source_node_generation},
+              static_cast<std::uint64_t> (owner->lease_generation)};
+        }
+    }
+    return task_t<authority_t> (result_t<authority_t>::success (std::move (accepted)));
+}
+
 void public_host_runtime_t::forward_relocation_application (
   const stateful::object_ref_t &owner,
   const stateful::turn_record_t &record,
@@ -1152,7 +1193,8 @@ bool public_host_runtime_t::connect_peer (const std::string &endpoint,
                                           std::optional<zlink::routing_id_t> expected,
                                           std::uint64_t expected_lifecycle_generation,
                                           std::string security_identity,
-                                          bool automatic)
+                                          bool automatic,
+                                          location_owner_token_t owner)
 {
     return _peer_endpoint_lane
       .run ([&] {
@@ -1171,6 +1213,8 @@ bool public_host_runtime_t::connect_peer (const std::string &endpoint,
               descriptor.advertised_endpoint = endpoint;
               descriptor.lifecycle_generation = expected_lifecycle_generation;
               descriptor.security_identity = std::move (security_identity);
+              descriptor.owner_id = std::move (owner.owner_id);
+              descriptor.owner_lease_generation = owner.lease_generation;
               connected = _transport->connect_peer (endpoint, std::move (descriptor));
           } else {
               connected = _transport->connect_peer (endpoint);
@@ -1185,13 +1229,16 @@ bool public_host_runtime_t::connect_peer (const std::string &endpoint,
 void public_host_runtime_t::expect_peer (const std::string &endpoint,
                                          const zlink::routing_id_t &expected,
                                          std::uint64_t expected_lifecycle_generation,
-                                         std::string security_identity)
+                                         std::string security_identity,
+                                         location_owner_token_t owner)
 {
     auto descriptor = _options.mesh.descriptor;
     descriptor.node_routing_id = expected.to_bytes ();
     descriptor.advertised_endpoint = endpoint;
     descriptor.lifecycle_generation = expected_lifecycle_generation;
     descriptor.security_identity = std::move (security_identity);
+    descriptor.owner_id = std::move (owner.owner_id);
+    descriptor.owner_lease_generation = owner.lease_generation;
     _transport->expect_peer (std::move (descriptor));
 }
 
@@ -3887,6 +3934,35 @@ task_t<bool> public_host_runtime_t::restore_relocation_assembly (
     stateful::stateful_error_t restored = stateful::stateful_error_t::conflict;
     std::optional<framework_exception_t> failure;
     try {
+        // Relocation is the durable boundary. Validate each original source
+        // before either Actor intake or Spot restore can expose accepted work.
+        std::map<std::string, std::vector<protocol::request_source_fence_t>> sources_by_mesh;
+        for (const auto &participant : staging->frozen) {
+            auto &sources = sources_by_mesh[participant.owner.mesh_name];
+            for (const auto &turn : participant.pending_application) {
+                const auto record =
+                  turn.application_record
+                    ? protocol::summarize_frozen_application_record (*turn.application_record)
+                  : turn.frozen_record ? *turn.frozen_record
+                                       : protocol::decode_frozen_record (turn.payload);
+                if (record.application
+                    && std::find (sources.begin (), sources.end (), record.source)
+                         == sources.end ())
+                    sources.push_back (record.source);
+            }
+        }
+        for (const auto &[mesh, sources] : sources_by_mesh) {
+            if (sources.empty ())
+                continue;
+            if (!_user_spot_store)
+                throw framework_exception_t (framework_error_kind_t::unavailable,
+                                             "Relocation source repository is unavailable");
+            const auto current =
+              co_await stateful::read_accepted_record_sources (*_user_spot_store, mesh, sources);
+            if (!current || *current != sources)
+                throw framework_exception_t (framework_error_kind_t::unavailable,
+                                             "Relocation accepted source fence is unavailable");
+        }
         const auto previous_actor_identities = co_await _spot_actor_index_lane.run_task ([&] {
             std::vector<stateful::object_ref_t> previous;
             for (const auto &target : staging->targets) {

@@ -598,11 +598,13 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
                        std::optional<zlink::routing_id_t> expected = std::nullopt,
                        std::uint64_t expected_lifecycle_generation = 0,
                        std::string security_identity = "default",
-                       bool automatic = false);
+                       bool automatic = false,
+                       location_owner_token_t owner = {});
     void expect_peer (const std::string &endpoint,
                       const zlink::routing_id_t &expected,
                       std::uint64_t expected_lifecycle_generation,
-                      std::string security_identity);
+                      std::string security_identity,
+                      location_owner_token_t owner = {});
     void forget_peer (const std::string &endpoint, const zlink::routing_id_t &expected);
     void disconnect_peer (const std::string &endpoint) noexcept;
     bool disconnect_peer (const std::vector<std::uint8_t> &expected_routing_id,
@@ -700,6 +702,11 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     void configure_stateful_dispatch (
       std::function<task_t<std::optional<stateful::accepted_record_authority_t>> (
         stateful::accepted_record_authority_query_t)> resolver);
+    void
+    configure_stateful_dispatch (std::function<std::optional<location_owner_token_t> ()> owner);
+    task_t<std::optional<stateful::accepted_record_authority_t>>
+    accepted_record_authority (const stateful::accepted_record_authority_query_t &query,
+                               const std::optional<location_owner_token_t> &owner) const;
     void forward_relocation_application (const stateful::object_ref_t &owner,
                                          const stateful::turn_record_t &record,
                                          const std::vector<std::uint8_t> &target_routing_id,

@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <cstring>
 #include <iomanip>
+#include <iterator>
 #include <limits>
 #include <sstream>
 #include <tuple>
@@ -190,6 +191,44 @@ bool frozen_matches_registration (const protocol::frozen_record_t &frozen,
 
 }
 
+task_t<std::optional<std::vector<protocol::request_source_fence_t>>>
+read_accepted_record_sources (zlink::framework::location_repository_t &store,
+                              const std::string &mesh_name,
+                              const std::vector<protocol::request_source_fence_t> &sources)
+{
+    std::vector<protocol::request_source_fence_t> resolved;
+    if (sources.empty ())
+        co_return resolved;
+    std::vector<mesh_node_descriptor_t> nodes;
+    location_page_request_t page;
+    do {
+        auto listed = co_await store.list_mesh_nodes (mesh_name, page);
+        nodes.insert (nodes.end (), std::make_move_iterator (listed.items.begin ()),
+                      std::make_move_iterator (listed.items.end ()));
+        page.continuation_token = std::move (listed.continuation_token);
+    } while (page.continuation_token);
+    std::map<std::string, owner_lease_read_result_t> leases;
+    resolved.reserve (sources.size ());
+    for (const auto &source : sources) {
+        const auto rid = zlink::routing_id_t::from (source.node_routing_id);
+        const auto node = std::find_if (nodes.begin (), nodes.end (), [&] (const auto &candidate) {
+            return candidate.rid == rid && candidate.lifecycle_generation == source.node_generation;
+        });
+        if (node == nodes.end () || node->owner_id.empty () || node->lease_generation <= 0)
+            co_return std::nullopt;
+        if (!leases.contains (node->owner_id))
+            leases.emplace (node->owner_id, co_await store.read_owner_lease (node->owner_id));
+        const auto *live = std::get_if<owner_lease_found_t> (&leases.at (node->owner_id));
+        if (!live || live->token.owner_id != node->owner_id
+            || live->token.lease_generation != node->lease_generation
+            || live->lease_expires_at <= live->store_now)
+            co_return std::nullopt;
+        resolved.push_back ({node->owner_id, static_cast<std::uint64_t> (node->lease_generation),
+                             source.node_routing_id, source.node_generation});
+    }
+    co_return resolved;
+}
+
 accepted_record_authority_resolver_t
 make_location_store_authority_resolver (zlink::framework::location_repository_t &store)
 {
@@ -217,26 +256,14 @@ make_location_store_authority_resolver (zlink::framework::location_repository_t 
                 co_return std::nullopt;
             }
 
-            const auto nodes = co_await store.list_mesh_nodes (query.target.mesh_name);
-            const auto source_rid = zlink::routing_id_t::from (query.source_node_routing_id);
-            const auto source = std::find_if (
-              nodes.items.begin (), nodes.items.end (), [&] (const mesh_node_descriptor_t &node) {
-                  return node.rid == source_rid
-                         && node.lifecycle_generation == query.source_node_generation;
-              });
-            if (source == nodes.items.end () || source->owner_id.empty ()
-                || source->lease_generation <= 0) {
+            const std::vector<protocol::request_source_fence_t> requested{
+              {{}, 0, query.source_node_routing_id, query.source_node_generation}};
+            const auto sources =
+              co_await read_accepted_record_sources (store, query.target.mesh_name, requested);
+            if (!sources)
                 co_return std::nullopt;
-            }
-            const auto lease = co_await store.read_owner_lease (source->owner_id);
-            const auto *live = std::get_if<owner_lease_found_t> (&lease);
-            if (!live || live->token.lease_generation != source->lease_generation
-                || live->lease_expires_at <= live->store_now) {
-                co_return std::nullopt;
-            }
             co_return accepted_record_authority_t{
-              {source->owner_id, static_cast<std::uint64_t> (source->lease_generation),
-               query.source_node_routing_id, query.source_node_generation},
+              sources->front (),
               static_cast<std::uint64_t> (snapshot->allocation.target.owner.lease_generation)};
         }
         catch (...) {
