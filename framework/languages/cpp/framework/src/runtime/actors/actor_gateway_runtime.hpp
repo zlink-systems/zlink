@@ -131,7 +131,7 @@ struct actor_record_t
 {
     actor_ref_t ref;
     bool bound = false;
-    bool disconnected = false;
+    std::shared_ptr<task_completion_source_t<void>> disconnected;
     stream_codec_t bound_session_codec = stream_codec_t::message_pack;
     bool bound_session_stream_sink = false;
     std::optional<zlink::message_t> create_payload;
@@ -163,6 +163,10 @@ class session_actor_binding_context_t
     std::set<std::string> ready_actors;
     std::map<std::string, std::weak_ptr<stream_state_t>> actor_streams;
     std::function<request_task_t<void> (actor_ref_t, std::uint64_t, std::uint16_t)> native_binder;
+    std::function<std::optional<runtime::stateful::stream_binding_t> (const actor_ref_t &,
+                                                                      std::uint64_t)>
+      disconnect_snapshot;
+    std::function<task_t<void> (runtime::stateful::stream_binding_t)> disconnect_cleanup;
     std::uint32_t next_actor_slot = 1;
 };
 
@@ -179,6 +183,14 @@ class session_actor_manager_access_t
     static std::optional<session_actor_t> find_slot (session_actor_manager_t &manager,
                                                      std::uint16_t actor_slot);
     static void disconnect (session_actor_manager_t &manager) noexcept;
+    static task_t<void> disconnect_async (
+      session_actor_manager_t &manager,
+      std::function<std::vector<runtime::stateful::stream_binding_t> ()> close = {});
+    static void bind_disconnect (
+      session_actor_manager_t &manager,
+      std::function<std::optional<runtime::stateful::stream_binding_t> (const actor_ref_t &,
+                                                                        std::uint64_t)> snapshot,
+      std::function<task_t<void> (runtime::stateful::stream_binding_t)> cleanup);
 };
 
 struct relayed_frame_t
@@ -218,7 +230,8 @@ class actor_gateway_state_t
       const zlink::message_t &,
       std::optional<bound_session_relay_source_t>,
       std::chrono::milliseconds)>;
-    using disconnect_dispatcher_t = std::function<task_t<void> (const actor_ref_t &)>;
+    using disconnect_dispatcher_t = std::function<task_t<void> (
+      const actor_ref_t &, const std::optional<runtime::stateful::stream_binding_t> &)>;
     using bound_session_registrar_t = std::function<result_t<void> (const actor_ref_t &)>;
     using bound_session_sender_t = std::function<task_t<result_t<void>> (
       const actor_ref_t &, std::uint64_t, const stream_header_t &, const zlink::message_t &)>;

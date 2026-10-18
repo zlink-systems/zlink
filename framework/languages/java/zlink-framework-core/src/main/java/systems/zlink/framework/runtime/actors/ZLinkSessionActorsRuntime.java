@@ -53,6 +53,14 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
     static final Duration RELAY_SUBMIT_TIMEOUT = Duration.ofSeconds(30);
     private final ZLinkSessionRelayHeaders relayHeaders = new ZLinkSessionRelayHeaders();
     private final ZLinkBackendStreamSocket stream;
+
+    private ZLinkSessionDisconnected disconnectIdentity(long generation) {
+        return new ZLinkSessionDisconnected(
+                spotNode == null ? null : spotNode.routingId(),
+                spotNode == null ? 0 : spotNode.localNodeGeneration(),
+                generation);
+    }
+
     private final ZLinkInternalSpotNode spotNode;
     private final RoutingId sessionRid;
     private final ZLinkActorRuntime actors;
@@ -473,7 +481,8 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                                                                                 actors,
                                                                                 serializer,
                                                                                 0,
-                                                                                bindingGeneration,
+                                                                                disconnectIdentity(
+                                                                                        bindingGeneration),
                                                                                 allocatedActorSlot,
                                                                                 null,
                                                                                 true,
@@ -572,7 +581,10 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                                                         boundSession,
                                                         sourceNodeRid,
                                                         sourceSessionRid,
-                                                        bindingGeneration)
+                                                        bindingGeneration,
+                                                        spotNode == null
+                                                                ? 0
+                                                                : spotNode.localNodeGeneration())
                                                 .thenApply(
                                                         bindingToken -> {
                                                             boundSession.setBindingToken(
@@ -591,7 +603,8 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                                                                             actors,
                                                                             serializer,
                                                                             bindingToken,
-                                                                            bindingGeneration,
+                                                                            disconnectIdentity(
+                                                                                    bindingGeneration),
                                                                             actorSlot,
                                                                             localActorDispatcher,
                                                                             nativeSessionRelayAttached,

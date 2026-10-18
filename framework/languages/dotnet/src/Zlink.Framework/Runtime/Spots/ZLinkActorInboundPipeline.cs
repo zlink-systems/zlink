@@ -726,10 +726,9 @@ internal sealed class ZLinkActorInboundPipeline(
         if (
             ZLinkActorBoundSessionRelay.TryValidateDisconnectedBinding(
                 state,
-                frame.SourceNodeRid,
-                frame.SourceSessionRid,
                 frame.Body,
-                out var bindingToken
+                out var bindingToken,
+                out var malformed
             )
         )
         {
@@ -746,17 +745,22 @@ internal sealed class ZLinkActorInboundPipeline(
             }
             finally
             {
-                runtime.RemoveActorSessionBinding(actor.Context.ActorId, bindingToken);
+                if (bindingToken.Length != 0)
+                    runtime.RemoveActorSessionBinding(actor.Context.ActorId, bindingToken);
             }
         }
-        else if (runtime.Flow.CaptureEnabled)
+        else if (malformed && runtime.Flow.DispatchErrorsEnabled)
             runtime.Flow.TraceDispatchError(
                 new ZLinkDispatchFailure(
                     ZLinkDispatchErrorSurface.StreamSession,
                     ZLinkDispatchMessageKind.Send,
                     ZLinkDispatchErrorReason.InvalidFrame,
                     ZLinkDispatchErrorAction.Drop,
-                    null,
+                    frame.Header.Name,
+                    Exception: new ZLinkFrameworkException(
+                        ZLinkFrameworkErrorKind.ProtocolError,
+                        "ProtocolError: malformed Session disconnect identity."
+                    ),
                     ActorId: actor.Context.ActorId,
                     StreamSessionId: frame.SourceSessionRid.IsEmpty
                         ? null
@@ -769,8 +773,8 @@ internal sealed class ZLinkActorInboundPipeline(
             ? ZLinkActorReply.FromError(failure)
             : new ZLinkActorReply(
                 ZlinkStreamMessageKind.Response,
-                ZlinkStreamCodec.Json,
-                ZLinkFrameworkJsonPayloadCodec.Serialize(true),
+                ZlinkStreamCodec.Raw,
+                [],
                 ZlinkStreamHeaderFlags.None,
                 ZlinkStreamMetadata.Empty
             );

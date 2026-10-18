@@ -3,7 +3,6 @@ using Zlink.Framework.Runtime.Streams;
 namespace Zlink.Framework.Runtime.Actors;
 
 using System.Buffers.Binary;
-using System.Text;
 
 internal static class ZLinkActorBoundSessionRelay
 {
@@ -18,7 +17,7 @@ internal static class ZLinkActorBoundSessionRelay
         );
     }
 
-    private static readonly UTF8Encoding StrictUtf8 = new(false, true);
+    private const int DisconnectedGenerationBytes = sizeof(ulong) * 2;
 
     internal static bool MatchesRelaySource(
         ZLinkActorBoundSession session,
@@ -32,94 +31,95 @@ internal static class ZLinkActorBoundSessionRelay
     }
 
     public static byte[] EncodeSessionDisconnected(
-        string bindingToken,
-        ulong bindingGeneration,
-        ulong sessionOwnerNodeGeneration
+        RoutingId sessionOwnerNodeRid,
+        ulong sessionOwnerNodeGeneration,
+        ulong bindingGeneration
     )
     {
         if (
-            string.IsNullOrWhiteSpace(bindingToken)
+            sessionOwnerNodeRid.IsEmpty
             || bindingGeneration == 0
             || sessionOwnerNodeGeneration == 0
         )
             throw new InvalidOperationException(
                 "Actor session disconnect requires an exact binding identity."
             );
-        var token = StrictUtf8.GetBytes(bindingToken);
-        var payload = new byte[sizeof(uint) + token.Length + (sizeof(ulong) * 2)];
-        BinaryPrimitives.WriteUInt32BigEndian(payload, checked((uint)token.Length));
-        token.CopyTo(payload.AsSpan(sizeof(uint)));
-        var generationOffset = sizeof(uint) + token.Length;
-        BinaryPrimitives.WriteUInt64BigEndian(payload.AsSpan(generationOffset), bindingGeneration);
+        var rid = sessionOwnerNodeRid.ToBytes();
+        var payload = new byte[sizeof(byte) + rid.Length + DisconnectedGenerationBytes];
+        payload[0] = checked((byte)rid.Length);
+        rid.CopyTo(payload.AsSpan(sizeof(byte)));
+        var generationOffset = sizeof(byte) + rid.Length;
+        BinaryPrimitives.WriteUInt64BigEndian(
+            payload.AsSpan(generationOffset),
+            sessionOwnerNodeGeneration
+        );
         BinaryPrimitives.WriteUInt64BigEndian(
             payload.AsSpan(generationOffset + sizeof(ulong)),
-            sessionOwnerNodeGeneration
+            bindingGeneration
         );
         return payload;
     }
 
     public static bool TryValidateDisconnectedBinding(
         ZLinkActorRuntimeState state,
-        RoutingId sourceNodeRid,
-        RoutingId sourceSessionRid,
         Message payload,
-        out string bindingToken
+        out string bindingToken,
+        out bool malformed
     )
     {
         bindingToken = string.Empty;
+        malformed = false;
         var bytes = payload.AsReadOnlyMemory();
         if (
             !TryDecodeSessionDisconnected(
                 bytes.Span,
-                out var decodedBindingToken,
-                out var bindingGeneration,
-                out var sessionOwnerNodeGeneration
+                out var sessionOwnerNodeRid,
+                out var sessionOwnerNodeGeneration,
+                out var bindingGeneration
             )
         )
+        {
+            malformed = true;
             return false;
-        bindingToken = decodedBindingToken;
+        }
         // A bindingAbsent participant has no target binding to compare. Only a
         // different current binding fences its in-flight disconnect (§8.3).
-        return !state.TryGetBoundSessionForInbound(out var current)
-            || string.Equals(current.BindingToken, decodedBindingToken, StringComparison.Ordinal)
-                && (current.SessionNodeRid ?? state.NativeActorRef?.NodeRid) == sourceNodeRid
-                && current.SessionRid == sourceSessionRid
-                && current.BindingGeneration == bindingGeneration
-                && current.SessionOwnerNodeGeneration == sessionOwnerNodeGeneration;
-    }
-
-    private static bool TryDecodeSessionDisconnected(
-        ReadOnlySpan<byte> payload,
-        out string bindingToken,
-        out ulong bindingGeneration,
-        out ulong sessionOwnerNodeGeneration
-    )
-    {
-        bindingToken = string.Empty;
-        bindingGeneration = 0;
-        sessionOwnerNodeGeneration = 0;
-        if (payload.Length < sizeof(uint) + (sizeof(ulong) * 2))
-            return false;
-        var tokenLength = BinaryPrimitives.ReadUInt32BigEndian(payload);
+        if (!state.TryGetBoundSessionForInbound(out var current))
+            return true;
         if (
-            tokenLength == 0
-            || tokenLength > int.MaxValue
-            || payload.Length != sizeof(uint) + (int)tokenLength + (sizeof(ulong) * 2)
+            (current.SessionNodeRid ?? state.NativeActorRef?.NodeRid) != sessionOwnerNodeRid
+            || current.BindingGeneration != bindingGeneration
+            || current.SessionOwnerNodeGeneration != sessionOwnerNodeGeneration
         )
             return false;
-        try
-        {
-            bindingToken = StrictUtf8.GetString(payload.Slice(sizeof(uint), (int)tokenLength));
-        }
-        catch (DecoderFallbackException)
-        {
+        bindingToken = current.BindingToken;
+        return true;
+    }
+
+    internal static bool TryDecodeSessionDisconnected(
+        ReadOnlySpan<byte> payload,
+        out RoutingId sessionOwnerNodeRid,
+        out ulong sessionOwnerNodeGeneration,
+        out ulong bindingGeneration
+    )
+    {
+        sessionOwnerNodeRid = default;
+        bindingGeneration = 0;
+        sessionOwnerNodeGeneration = 0;
+        if (payload.Length < sizeof(byte) + 1 + DisconnectedGenerationBytes)
             return false;
-        }
-        var generationOffset = sizeof(uint) + (int)tokenLength;
-        bindingGeneration = BinaryPrimitives.ReadUInt64BigEndian(
+        var ridLength = payload[0];
+        if (
+            ridLength == 0
+            || payload.Length != sizeof(byte) + ridLength + DisconnectedGenerationBytes
+        )
+            return false;
+        sessionOwnerNodeRid = RoutingId.From(payload.Slice(sizeof(byte), ridLength));
+        var generationOffset = sizeof(byte) + ridLength;
+        sessionOwnerNodeGeneration = BinaryPrimitives.ReadUInt64BigEndian(
             payload.Slice(generationOffset, sizeof(ulong))
         );
-        sessionOwnerNodeGeneration = BinaryPrimitives.ReadUInt64BigEndian(
+        bindingGeneration = BinaryPrimitives.ReadUInt64BigEndian(
             payload.Slice(generationOffset + sizeof(ulong), sizeof(ulong))
         );
         return bindingGeneration != 0 && sessionOwnerNodeGeneration != 0;

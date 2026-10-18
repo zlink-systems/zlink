@@ -21,6 +21,7 @@ export type { ZLinkDispatchErrorSink } from '../diagnostics/dispatch-error-port'
 
 type ZLinkRuntimeDispatchFailure = ZLinkDispatchFailure & {
   readonly error?: unknown;
+  readonly severity?: 'warning';
 };
 
 export class ZLinkDispatchErrorReporter {
@@ -86,7 +87,8 @@ export class ZLinkDispatchErrorReporter {
       errorType: errorInfo.errorType,
       errorMessage: errorInfo.errorMessage,
       errorCauseType: errorInfo.errorCauseType,
-      errorCauseMessage: errorInfo.errorCauseMessage
+      errorCauseMessage: errorInfo.errorCauseMessage,
+      severity: normalized.severity
     });
   }
 
