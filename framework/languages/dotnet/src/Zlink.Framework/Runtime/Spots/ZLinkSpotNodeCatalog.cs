@@ -985,11 +985,17 @@ internal sealed class ZLinkSpotNodeCatalog(
             {
                 EnsureSpotTypeRegisteredLocked(spotType);
                 EnsureCreationAdmissionOpenLocked();
-                ThrowIfClosingLocked(requestedSpotId);
                 if (_spots.TryGetValue(requestedSpotId, out var existing))
                 {
-                    ThrowIfSpotTypeMismatch(existing.Spot.GetType(), spotType, requestedSpotId);
-                    return new PreparedReservedSpot(existing, true, null);
+                    if (existing.ObjectGeneration == objectGeneration)
+                    {
+                        ThrowIfClosingLocked(requestedSpotId);
+                        ThrowIfSpotTypeMismatch(existing.Spot.GetType(), spotType, requestedSpotId);
+                        return new PreparedReservedSpot(existing, true, null);
+                    }
+                    // The reservation names a new incarnation; finalization of the
+                    // released incarnation still owns its remaining completion work.
+                    RemoveActivationLocked(existing);
                 }
                 if (_pending.ContainsKey(requestedSpotId))
                     throw new ZLinkFrameworkException(

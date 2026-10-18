@@ -31,6 +31,69 @@ public sealed class SpotCloseConformanceTests(Xunit.Abstractions.ITestOutputHelp
 {
     private static readonly TimeSpan Wait = TimeSpan.FromSeconds(10);
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task GetOrCreate_waits_for_Closing_authority(bool expire)
+    {
+        await using var host = await SpotCloseHost.StartAsync();
+        var original = await host.CreateSpotAsync();
+        host.State.HoldOnClosing = true;
+        var close = host.Manager.CloseAsync(original).AsTask();
+        try
+        {
+            await host.State.OnClosingEntered.Task.WaitAsync(Wait);
+            var mismatch = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+                await host
+                    .Manager.GetOrCreate(original.SpotId, SpotCloseHost.OtherSpotType)
+                    .InMesh(SpotCloseHost.MeshName)
+                    .Async()
+            );
+            Assert.Equal(ZLinkFrameworkErrorKind.TypeMismatch, mismatch.Kind);
+            var pending = host
+                .Manager.GetOrCreate(original.SpotId, SpotCloseHost.SpotType)
+                .InMesh(SpotCloseHost.MeshName)
+                .Timeout(expire ? TimeSpan.FromMilliseconds(100) : Wait)
+                .Async()
+                .AsTask();
+            if (expire)
+            {
+                var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(() => pending);
+                Assert.Equal(ZLinkFrameworkErrorKind.DeadlineExceeded, error.Kind);
+            }
+            else
+            {
+                Assert.False(pending.IsCompleted);
+                host.State.ReleaseOnClosing.TrySetResult();
+                Assert.True(await close.WaitAsync(Wait));
+                var created = await pending.WaitAsync(Wait);
+                Assert.Equal(ZLinkSpotCreateState.Created, created.State);
+                Assert.NotEqual(original.ObjectGeneration, created.Spot.ObjectGeneration);
+            }
+        }
+        finally
+        {
+            host.State.ReleaseOnClosing.TrySetResult();
+            Assert.True(await close.WaitAsync(Wait));
+        }
+    }
+
+    [Fact]
+    public async Task GetOrCreate_preserves_Ready_after_membership_prevents_Close()
+    {
+        await using var host = await SpotCloseHost.StartAsync();
+        var original = await host.CreateSpotAsync();
+        await host.JoinActorAsync(original.SpotId);
+        await host.State.Joined.Task.WaitAsync(Wait);
+        Assert.False(await host.Manager.CloseAsync(original));
+        var existing = await host
+            .Manager.GetOrCreate(original.SpotId, SpotCloseHost.SpotType)
+            .InMesh(SpotCloseHost.MeshName)
+            .Async();
+        Assert.Equal(ZLinkSpotCreateState.Existing, existing.State);
+        Assert.Equal(original.ObjectGeneration, existing.Spot.ObjectGeneration);
+    }
+
     [Fact]
     public async Task Flow_file_snapshots_are_complete_while_dispatch_events_are_written()
     {
@@ -2087,6 +2150,7 @@ internal sealed class SpotCloseHost : IAsyncDisposable
 {
     internal const string MeshName = "spot-close";
     internal const string SpotType = "spot-close-probe";
+    internal const string OtherSpotType = "spot-close-other";
     internal const string ActorType = "spot-close-actor";
     internal const string InstanceType = "spot-close-instance";
 
@@ -2169,6 +2233,10 @@ internal sealed class SpotCloseHost : IAsyncDisposable
                 )
                 .AddSpotFactory<SpotCloseProbeSpot>(
                     SpotType,
+                    static factory => factory.DisableRelocation()
+                )
+                .AddSpotFactory<SpotCloseOtherProbeSpot>(
+                    OtherSpotType,
                     static factory => factory.DisableRelocation()
                 );
             if (registerInstanceFactory)
@@ -2555,6 +2623,26 @@ internal sealed class SpotCloseProbeSpot(
         if (State.ThrowOnClosing)
             throw new SpotCloseProbeFailure();
     }
+}
+
+internal sealed class SpotCloseOtherProbeSpot(IZLinkSpotContext context)
+    : IZLinkSpot<SpotCloseActor>
+{
+    public IZLinkSpotContext Context { get; } = context;
+
+    public ValueTask<ZLinkSpotActorJoinResult> OnActorJoinAsync(
+        string actorId,
+        ZLinkMessage request,
+        CancellationToken cancellationToken
+    ) => ValueTask.FromResult(ZLinkSpotActorJoinResult.Accept());
+
+    public ValueTask OnJoinedActorAsync(
+        SpotCloseActor actor,
+        CancellationToken cancellationToken
+    ) => ValueTask.CompletedTask;
+
+    public ValueTask OnLeaveActorAsync(SpotCloseActor actor, CancellationToken cancellationToken) =>
+        ValueTask.CompletedTask;
 }
 
 internal sealed class SpotCloseProbeHandler
