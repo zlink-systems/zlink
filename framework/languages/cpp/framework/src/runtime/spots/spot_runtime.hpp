@@ -2281,7 +2281,10 @@ class spot_node_runtime_t
       std::function<void ()> transfer_owner_reservation = {},
       std::size_t transferred_owner_byte_cost = 0,
       std::shared_ptr<actor_dispatch_admission_token_t> admission_token = {});
-    task_t<void> notify_actor_disconnected_erased (const actor_ref_t &actor_ref) const;
+    task_t<zlink::message_t> notify_actor_disconnected_erased (void *instance,
+                                                               std::type_index actor_type,
+                                                               actor_gateway_runtime_t gateway,
+                                                               zlink::message_t body) const;
 
     template <typename TActor>
     std::optional<std::reference_wrapper<TActor>> actor_instance (const actor_ref_t &actor_ref)
@@ -2302,6 +2305,11 @@ class spot_node_runtime_t
     }
 
   private:
+    static task_t<void> fast_fail_reconcile_backlog_core (
+      std::shared_ptr<spot_node_builder_state_t> state,
+      actor_ref_t actor_ref,
+      std::string actor_key,
+      std::optional<runtime::protocol::actor_route_fence_t> source_fence);
     task_t<std::vector<runtime::stateful::object_inventory_t>> local_actor_inventory_async () const;
     std::size_t active_user_spot_count_on_lane () const;
     std::optional<std::string> spot_name_for_unlocked (const spot_id_t &spot_id) const;
@@ -2311,8 +2319,15 @@ class spot_node_runtime_t
                         bool relocation_restore = false,
                         bool publish = true);
 
-    std::size_t settle_abandoned_actor_leave_reservations (
+    task_t<std::size_t> settle_abandoned_actor_leave_reservations_async (
       std::function<void ()> after_coordinator_snapshot = {});
+    task_t<void>
+    emit_actor_transfer_marker_async (std::string marker,
+                                      const actor_ref_t &actor_ref,
+                                      std::string transfer_id,
+                                      std::optional<spot_id_t> spot_id = std::nullopt,
+                                      std::optional<node_rid_t> target_node_rid = std::nullopt,
+                                      std::exception_ptr exception = nullptr) const;
 
     static std::string actor_key (const actor_ref_t &actor_ref)
     {
@@ -2461,9 +2476,9 @@ class spot_node_runtime_t
                                                  std::string transfer_id);
     task_t<void> replay_actor_handoff_until_move_closed_async (actor_ref_t actor_ref,
                                                                std::string transfer_id);
-    void replay_actor_handoff_core (const actor_ref_t &actor_ref,
-                                    std::string transfer_id,
-                                    std::optional<service_provider_t> root_services);
+    task_t<void> replay_actor_handoff_core (const actor_ref_t &actor_ref,
+                                            std::string transfer_id,
+                                            std::optional<service_provider_t> root_services);
 
     std::shared_ptr<spot_node_builder_state_t> _state;
 };

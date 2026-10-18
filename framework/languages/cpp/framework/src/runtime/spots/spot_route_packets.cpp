@@ -507,32 +507,6 @@ void from_json (const nlohmann::json &json, spot_actor_packet_route_reply_t &val
     value.payload = decode_base64_field (json, packet_field::payload);
 }
 
-void to_json (nlohmann::json &json, const spot_actor_disconnect_route_request_t &value)
-{
-    json = nlohmann::json{{packet_field::actorNodeRid, value.actor_node_rid},
-                          {packet_field::actorType, value.actor_type},
-                          {packet_field::actorId, value.actor_id},
-                          {packet_field::actorGeneration, value.actor_generation}};
-}
-
-void from_json (const nlohmann::json &json, spot_actor_disconnect_route_request_t &value)
-{
-    value.actor_node_rid = json.at (packet_field::actorNodeRid).get<std::string> ();
-    value.actor_type = json.at (packet_field::actorType).get<std::string> ();
-    value.actor_id = json.at (packet_field::actorId).get<std::string> ();
-    value.actor_generation = json.at (packet_field::actorGeneration).get<std::uint64_t> ();
-}
-
-void to_json (nlohmann::json &json, const spot_actor_disconnect_route_reply_t &value)
-{
-    json = nlohmann::json{{packet_field::accepted, value.accepted}};
-}
-
-void from_json (const nlohmann::json &json, spot_actor_disconnect_route_reply_t &value)
-{
-    value.accepted = json.value (packet_field::accepted, true);
-}
-
 void to_json (nlohmann::json &json, const actor_bound_session_route_request_t &value)
 {
     json = nlohmann::json{
@@ -678,24 +652,6 @@ spot_actor_packet_route_request_t make_spot_actor_packet_route_request (
 }
 
 actor_ref_t actor_ref_from_spot_route (const spot_actor_packet_route_request_t &request)
-{
-    return ::zlink::framework::detail::actor_ref_access_t::make (
-      node_rid_t::from_string (request.actor_node_rid), request.actor_type, request.actor_id,
-      request.actor_generation);
-}
-
-spot_actor_disconnect_route_request_t
-make_spot_actor_disconnect_route_request (const actor_ref_t &actor_ref)
-{
-    return spot_actor_disconnect_route_request_t{
-      .actor_node_rid = std::string (actor_ref.node_rid ().value ()),
-      .actor_type =
-        std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (actor_ref)),
-      .actor_id = std::string (actor_ref.actor_id ().value ()),
-      .actor_generation = actor_ref.object_generation ()};
-}
-
-actor_ref_t actor_ref_from_spot_route (const spot_actor_disconnect_route_request_t &request)
 {
     return ::zlink::framework::detail::actor_ref_access_t::make (
       node_rid_t::from_string (request.actor_node_rid), request.actor_type, request.actor_id,

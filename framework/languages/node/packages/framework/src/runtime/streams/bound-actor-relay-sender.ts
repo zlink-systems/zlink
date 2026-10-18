@@ -23,6 +23,7 @@ import {
 } from './protocol';
 import { DefaultZLinkSessionActor, DefaultZLinkSessionContext } from './session-context';
 import { ZLinkStreamFrameMessageFactory } from './stream-frame-factory';
+import type { ServiceStreamSessionBinding } from '../foundation/service-runtime-contracts';
 export const DEFAULT_RELAY_ACTOR_BIND_TIMEOUT_MS = 2000;
 
 export interface ZLinkBoundActorRelaySenderOptions {
@@ -34,7 +35,11 @@ export interface ZLinkBoundActorRelaySenderOptions {
     header: ZLinkStreamFrameHeader,
     payload: Message
   ) => Promise<boolean>;
-  readonly notifyDisconnected?: (actor: ZLinkSessionActor, signal?: AbortSignal) => Promise<void>;
+  readonly notifyDisconnected?: (
+    actor: ZLinkSessionActor,
+    signal?: AbortSignal,
+    binding?: ServiceStreamSessionBinding
+  ) => Promise<void>;
 }
 
 export class ZLinkBoundActorRelaySender {
@@ -246,21 +251,25 @@ export class ZLinkBoundActorRelaySender {
     const detached = await this.lifecycle.run(actor.actorId, async () => {
       await this.routes.requireCurrentToken(actor.actorId, actor.bindingToken);
       const route = await this.routes.requireRoute(actor.actorId);
+      const binding =
+        route.context.stream instanceof ZLinkManagedStream
+          ? route.context.stream.actorBinding(actor.actorId)
+          : undefined;
       await this.routes.unbind(actor.actorId, route.context, actor.bindingToken);
-      return route;
+      return { route, binding };
     });
     if (
       unbindNative &&
-      detached.bindingToken === actor.bindingToken &&
-      detached.context.stream instanceof ZLinkManagedStream
+      detached.route.bindingToken === actor.bindingToken &&
+      detached.route.context.stream instanceof ZLinkManagedStream
     ) {
-      await detached.context.stream.unbindActor(
+      await detached.route.context.stream.unbindActor(
         actor.actorId,
         this.options.actorBindTimeoutMs ?? DEFAULT_RELAY_ACTOR_BIND_TIMEOUT_MS,
         signal
       );
     }
-    await this.options.notifyDisconnected?.(actor, signal);
+    await this.options.notifyDisconnected?.(actor, signal, detached.binding);
   }
 
   async notifyPhysicalDisconnect(context: DefaultZLinkSessionContext): Promise<void> {
@@ -281,20 +290,25 @@ export class ZLinkBoundActorRelaySender {
           // The transport is already closed, so remove its exact route before
           // invoking application lifecycle code. A reconnect can then install
           // a successor while this best-effort notification is in flight.
+          const binding =
+            context.stream instanceof ZLinkManagedStream
+              ? context.stream.actorBinding(actor.actorId)
+              : undefined;
           await this.routes.unbind(
             actor.actorId,
             context,
             actor.bindingToken,
             ZLinkActorSessionBindingTermination.PhysicalDisconnect
           );
-          return true;
+          return { binding };
         });
-        if (!detached) return;
+        if (detached === false) return;
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), timeoutMs);
         try {
           await Promise.race([
-            this.options.notifyDisconnected?.(actor, controller.signal) ?? Promise.resolve(),
+            this.options.notifyDisconnected?.(actor, controller.signal, detached.binding) ??
+              Promise.resolve(),
             new Promise<never>((_, reject) => {
               controller.signal.addEventListener(
                 'abort',

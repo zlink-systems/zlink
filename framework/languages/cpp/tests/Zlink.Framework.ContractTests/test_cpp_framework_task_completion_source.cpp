@@ -58,8 +58,8 @@ int main ()
           result_t<copy_constructible_t>::success (copy_constructible_t (23)));
     });
     copy_producer.join ();
-    const auto copy_result = copy_waiter.result_for (0ms);
-    if (!copy_first || !copy_result || copy_result->value ().value != 23
+    const auto copy_result = copy_waiter.result ();
+    if (!copy_first || !copy_result || copy_result.value ().value != 23
         || copy_source.complete (
           result_t<copy_constructible_t>::success (copy_constructible_t (99))))
         return 9;

@@ -201,14 +201,27 @@ public sealed partial class EntrySpotActorDispatchTests
                     default,
                     header,
                     Message.From(
-                        ZLinkActorBoundSessionRelay.EncodeSessionDisconnected(bindingToken, 7, 11)
+                        ZLinkActorBoundSessionRelay.EncodeSessionDisconnected(
+                            actorRef.NodeRid,
+                            11,
+                            7
+                        )
                     ),
                     directReply: parts =>
                     {
-                        callbackReply =
-                            Zlink.Framework.Runtime.Messaging.ZLinkActorReplyDecoder.Decode<bool>(
-                                parts
-                            );
+                        Assert.True(
+                            ZLinkStreamFrameCodec.TryDecode(
+                                Assert.Single(parts).AsReadOnlySpan(),
+                                out var replyHeader,
+                                out var replyBody
+                            )
+                        );
+                        Assert.Equal(
+                            ZlinkStreamMessageKind.Response,
+                            ZLinkStreamProtocolDefaults.DecodeHeader(replyHeader.ToArray()).Kind
+                        );
+                        Assert.Empty(replyBody.ToArray());
+                        callbackReply = true;
                         return SubmitResult.Ok;
                     }
                 ),
