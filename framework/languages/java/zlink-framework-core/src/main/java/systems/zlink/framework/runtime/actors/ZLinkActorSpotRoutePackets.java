@@ -21,7 +21,7 @@ public final class ZLinkActorSpotRoutePackets {
     public static final String COMMIT_PHASE = "commit";
     public static final String BOUND_SESSION_SEND_PACKET_NAME = "__zlink.actor.boundSession.send";
     public static final String SESSION_DISCONNECTED_PACKET_NAME =
-            "__zlink.actor.sessionDisconnected";
+            "zlink.framework.actor.session_disconnected";
     public static final String ACTOR_PACKET_NAME = "__zlink.actor.packet";
     public static final String HANDOFF_DIRECT_REPLY_ACK = "__zlink.actor.handoff.directAck";
 

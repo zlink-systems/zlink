@@ -174,36 +174,6 @@ internal abstract partial class ZLinkSpotActivation
         return state.Result;
     }
 
-    internal async ValueTask<ZLinkSpotActorJoinResult> AdmitActorJoinFromCallerTurnAsync(
-        IZLinkActor actor,
-        ZLinkMessage request,
-        CancellationToken cancellationToken
-    )
-    {
-        ArgumentNullException.ThrowIfNull(actor);
-        ArgumentNullException.ThrowIfNull(request);
-        if (!_actorJoins.TryResolve(out var descriptor) || descriptor is null)
-            throw new InvalidOperationException(
-                $"SPOT '{Spot.GetType()}' does not declare an actor join callback."
-            );
-
-        TraceActorJoin(ZLinkMessageFlowOutcome.Received, actor.Context.ActorId);
-        var result = await InvokeActorJoinAsync(descriptor, actor, request, cancellationToken)
-            .ConfigureAwait(false);
-        TraceActorJoin(ZLinkMessageFlowOutcome.Replied, actor.Context.ActorId);
-        return result;
-    }
-
-    internal ValueTask CommitActorJoinFromCallerTurnAsync(
-        IZLinkActor actor,
-        CancellationToken cancellationToken,
-        DateTimeOffset? absoluteDeadline = null
-    )
-    {
-        ArgumentNullException.ThrowIfNull(actor);
-        return CommitActorJoinCoreAsync(actor, cancellationToken, absoluteDeadline);
-    }
-
     internal void StageRelocatedPerActorMember(IZLinkActor actor, ZLinkActorRuntimeState actorState)
     {
         ArgumentNullException.ThrowIfNull(actor);

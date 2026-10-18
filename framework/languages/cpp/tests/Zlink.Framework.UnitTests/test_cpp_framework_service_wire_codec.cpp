@@ -636,6 +636,55 @@ int main (int argc, char **argv)
     verify_runtime_service_roundtrip (
       from_hex (command_golden (ZLINK_SESSION_RELOCATION_BARRIER_GOLDEN_PATH, 42)));
     {
+        std::ifstream input (ZLINK_SESSION_DISCONNECTED_GOLDEN_PATH);
+        assert (input);
+        nlohmann::json fixture;
+        input >> fixture;
+        for (const auto &vector : fixture.at ("canonical")) {
+            const protocol::session_disconnected_identity_t expected{
+              from_hex (vector.at ("sessionOwnerNodeRidHex").get<std::string> ()),
+              std::stoull (vector.at ("sessionOwnerNodeGeneration").get<std::string> ()),
+              std::stoull (vector.at ("bindingGeneration").get<std::string> ())};
+            const auto bytes = from_hex (vector.at ("hex").get<std::string> ());
+            assert (protocol::encode_session_disconnected (expected) == bytes);
+            const auto actual = protocol::decode_session_disconnected (bytes);
+            assert (actual.session_owner_node_rid == expected.session_owner_node_rid);
+            assert (actual.session_owner_node_generation == expected.session_owner_node_generation);
+            assert (actual.binding_generation == expected.binding_generation);
+        }
+        for (const auto &vector : fixture.at ("rejected")) {
+            bool rejected = false;
+            try {
+                (void) protocol::decode_session_disconnected (
+                  from_hex (vector.at ("hex").get<std::string> ()));
+            }
+            catch (const protocol::service_wire_error_t &) {
+                rejected = true;
+            }
+            assert (rejected);
+        }
+        const auto rid = zlink::routing_id_t::from ("owner").to_bytes ();
+        for (const auto &identity :
+             {protocol::session_disconnected_identity_t{{}, 1, 1},
+              protocol::session_disconnected_identity_t{std::vector<std::uint8_t> (256, 1), 1, 1},
+              protocol::session_disconnected_identity_t{rid, 0, 1},
+              protocol::session_disconnected_identity_t{rid, 1, 0}}) {
+            bool rejected = false;
+            try {
+                (void) protocol::encode_session_disconnected (identity);
+            }
+            catch (const protocol::service_wire_error_t &) {
+                rejected = true;
+            }
+            assert (rejected);
+        }
+        const auto full_range = protocol::decode_session_disconnected (
+          protocol::encode_session_disconnected ({rid, UINT64_MAX, UINT64_MAX}));
+        assert (full_range.session_owner_node_generation == UINT64_MAX);
+        assert (full_range.binding_generation == UINT64_MAX);
+    }
+
+    {
         std::ifstream input (ZLINK_CLIENT_SERVER_METADATA_FIXTURE_PATH);
         assert (input.good ());
         const auto fixture = nlohmann::json::parse (input);

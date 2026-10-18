@@ -1309,7 +1309,7 @@ internal sealed class ZLinkActorBoundSessionCoordinator
             {
                 try
                 {
-                    _ = Zlink.Framework.Runtime.Messaging.ZLinkActorReplyDecoder.Decode<bool>(
+                    Zlink.Framework.Runtime.Messaging.ZLinkActorReplyDecoder.DecodeTerminal(
                         parts,
                         binding.Context.Runtime.Flow.CaptureEnabled
                     );
@@ -1332,9 +1332,9 @@ internal sealed class ZLinkActorBoundSessionCoordinator
         );
         var headerBytes = ZLinkStreamProtocolDefaults.EncodeHeader(header).ToArray();
         var bodyBytes = ZLinkActorBoundSessionRelay.EncodeSessionDisconnected(
-            binding.BindingToken,
-            binding.BindingGeneration,
-            binding.SessionOwnerNodeGeneration
+            sourceNodeRid,
+            binding.SessionOwnerNodeGeneration,
+            binding.BindingGeneration
         );
         //  A relayed session frame has to name the session it belongs to and
         //  the node it came from, and the relay validates that on the way out.

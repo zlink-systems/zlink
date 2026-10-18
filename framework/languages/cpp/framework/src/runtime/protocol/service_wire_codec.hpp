@@ -40,6 +40,20 @@ pack_infrastructure_reply (const std::vector<std::vector<std::uint8_t>> &parts);
 std::vector<std::vector<std::uint8_t>>
 unpack_infrastructure_reply (std::span<const std::uint8_t> packed);
 
+inline constexpr char session_disconnected_packet_name[] =
+  "zlink.framework.actor.session_disconnected";
+
+struct session_disconnected_identity_t
+{
+    std::vector<std::uint8_t> session_owner_node_rid;
+    std::uint64_t session_owner_node_generation = 0;
+    std::uint64_t binding_generation = 0;
+};
+
+std::vector<std::uint8_t>
+encode_session_disconnected (const session_disconnected_identity_t &identity);
+session_disconnected_identity_t decode_session_disconnected (std::span<const std::uint8_t> bytes);
+
 struct liveness_record_t
 {
     command kind;

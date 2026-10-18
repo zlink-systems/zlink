@@ -132,10 +132,6 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> {
         activeRouteReceives.add(received);
     }
 
-    final void transferRouteReceived(ZLinkBackendReceived received) {
-        activeRouteReceives.remove(received);
-    }
-
     /**
      * Spec 27 §3: malformed flow information on a SPOT route envelope completes the request as
      * ProtocolError and drops a one-way message.
@@ -245,8 +241,7 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> {
                                     headerPart.actor().actorId(),
                                     new ZLinkConfigurationException(
                                             "SPOT actor is not registered locally: "
-                                                    + headerPart.actor().actorId()),
-                                    "actor missing error reply failed");
+                                                    + headerPart.actor().actorId()));
                         } else {
                             host.closePendingActorHeader(headerPart, pendingHeader);
                         }

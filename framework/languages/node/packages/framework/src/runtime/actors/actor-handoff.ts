@@ -11,6 +11,9 @@ import {
   type MessageFollowSuppressionFence
 } from '../foundation/message-follow-suppression-registry';
 import type { ZLinkMessageFollowOrigin } from '../foundation/service-runtime-contracts';
+import type { ServiceActorRouteFence } from '../foundation/service-stateful-wire-codec';
+import { OPERATION_IDENTITY_BYTES } from '../foundation/operation-identity';
+import { UINT64_BYTES } from '@zlink-systems/stream-wire';
 import {
   createInternalFrameworkException,
   internalFrameworkErrorKind,
@@ -294,7 +297,12 @@ function requireExactTargetOwnerFence(
 /** Owns packet ordering from relocation start through Message Follow removal. */
 export class ZLinkActorHandoffCoordinator {
   private readonly active = new Map<string, ActiveHandoff>();
-  private readonly messageFollowRoutes = new Map<string, MessageFollowRoute>();
+  // Each route is stored once: Actor -> native fence -> location owner id.
+  // Native ingress has the complete fence except the location owner's text id.
+  private readonly messageFollowRoutes = new Map<
+    string,
+    Map<string, Map<string, MessageFollowRoute>>
+  >();
   private readonly messageFollowSuppression = new MessageFollowSuppressionRegistry();
   // Relocation preserves ObjectGeneration, so (nodeRid, objectGeneration) alone
   // also matches a tenure that later RETURNS to a previously-visited node. The
@@ -838,10 +846,31 @@ export class ZLinkActorHandoffCoordinator {
     provisionalReplay?: ZLinkActorHandoffDispatch,
     onAdmitted?: () => void
   ): Promise<unknown> | undefined {
-    const incomingContext = actorMessageFollowContext(fallbackActorRef);
+    let incomingContext = actorMessageFollowContext(fallbackActorRef);
     const originalDeadlineUnixMs =
       deadlineUnixMs ?? incomingContext?.deadlineUnixMs ?? packetDeadlineUnixMs(parts);
-    const handoff = this.active.get(actorId);
+    const followRoute = this.findMessageFollowRoute(
+      actorId,
+      incomingContext,
+      messageFollowOrigin?.target
+    );
+    // An exact departed tenure belongs to its committed route, even while the
+    // same Actor incarnation is performing a later Join on this node.
+    const handoff = followRoute === undefined ? this.active.get(actorId) : undefined;
+    if (
+      incomingContext === undefined &&
+      followRoute !== undefined &&
+      messageFollowOrigin?.target !== undefined
+    ) {
+      incomingContext = this.createInitialIngressContext(
+        followRoute.sourceOwner,
+        messageFollowOrigin.target.actor.generation,
+        parts,
+        returnResponse,
+        originalDeadlineUnixMs,
+        messageFollowOrigin
+      );
+    }
     if (handoff !== undefined) {
       if (
         handoff.phase === 'releasing' &&
@@ -871,7 +900,8 @@ export class ZLinkActorHandoffCoordinator {
           handoff.oldGeneration,
           parts,
           returnResponse,
-          originalDeadlineUnixMs
+          originalDeadlineUnixMs,
+          messageFollowOrigin
         );
       try {
         this.validateContext(actorId, context, parts, returnResponse, fallbackActorRef);
@@ -954,7 +984,6 @@ export class ZLinkActorHandoffCoordinator {
       return result;
     }
 
-    const followRoute = this.findMessageFollowRoute(actorId, incomingContext);
     const staleGeneration = fallbackActorRef?.objectGeneration;
     if (
       fallbackActorRef !== undefined &&
@@ -1137,11 +1166,16 @@ export class ZLinkActorHandoffCoordinator {
   }
 
   messageFollowCount(actorId?: string): number {
-    return actorId === undefined
-      ? this.messageFollowRoutes.size
-      : [...this.messageFollowRoutes.values()].filter(
-          (route) => route.targetActorRef.actorId === actorId
-        ).length;
+    let count = 0;
+    if (actorId === undefined) {
+      for (const id of this.messageFollowRoutes.keys()) count += this.messageFollowCount(id);
+    } else {
+      const routes = this.messageFollowRoutes.get(actorId);
+      if (routes !== undefined) {
+        for (const owners of routes.values()) count += owners.size;
+      }
+    }
+    return count;
   }
 
   pendingCount(actorId: string): number {
@@ -1150,7 +1184,7 @@ export class ZLinkActorHandoffCoordinator {
 
   isKnownStale(actor: ActorRef): boolean {
     return (
-      this.messageFollowCount(actor.actorId) === 0 &&
+      !this.messageFollowRoutes.has(actor.actorId) &&
       this.options.isCurrentActorRef?.(actor.actorId, actor) !== true &&
       this.isKnownStaleRef(actor.actorId, actor)
     );
@@ -1307,8 +1341,24 @@ export class ZLinkActorHandoffCoordinator {
         refs.set(exactRefKey, departedAuthorityOwnerGeneration);
       }
     }
-    const key = messageFollowRouteKey(actorId, oldGeneration, sourceOwner);
-    const previous = this.messageFollowRoutes.get(key);
+    const key = messageFollowRouteKey(
+      oldGeneration,
+      sourceOwner.nodeRidHex ?? encodeRoutingIdStorageHex(sourceOwner.nodeRid),
+      sourceOwner.nodeGeneration,
+      sourceOwner.authorityOwnerGeneration,
+      sourceOwner.ownerLeaseGeneration
+    );
+    let routes = this.messageFollowRoutes.get(actorId);
+    if (routes === undefined) {
+      routes = new Map();
+      this.messageFollowRoutes.set(actorId, routes);
+    }
+    let owners = routes.get(key);
+    if (owners === undefined) {
+      owners = new Map();
+      routes.set(key, owners);
+    }
+    const previous = owners.get(sourceOwner.ownerId);
     if (previous !== undefined) clearTimeout(previous.deadline);
     const suppressionFence = actorMessageFollowSuppressionFence(
       actorId,
@@ -1344,15 +1394,21 @@ export class ZLinkActorHandoffCoordinator {
     } else {
       this.messageFollowSuppression.replaceRoute(previous.suppressionFence, suppressionFence);
     }
-    this.messageFollowRoutes.set(key, entry);
+    owners.set(sourceOwner.ownerId, entry);
     this.options.onMarker?.('message_follow_registered', actorId, this.messageFollowDurationMs);
     return entry;
   }
 
   private removeMessageFollowRoute(entry: MessageFollowRoute): void {
-    if (this.messageFollowRoutes.get(entry.key) !== entry) return;
+    const actorId = entry.targetActorRef.actorId;
+    const routes = this.messageFollowRoutes.get(actorId);
+    if (routes === undefined) return;
+    const owners = routes.get(entry.key);
+    if (owners?.get(entry.sourceOwner.ownerId) !== entry) return;
     clearTimeout(entry.deadline);
-    this.messageFollowRoutes.delete(entry.key);
+    owners.delete(entry.sourceOwner.ownerId);
+    if (owners.size === 0) routes.delete(entry.key);
+    if (routes.size === 0) this.messageFollowRoutes.delete(actorId);
     this.messageFollowSuppression.expireRoute(entry.suppressionFence);
     this.pruneStaleTenureRecords(entry);
     this.options.onMarker?.('message_follow_route_removed', entry.targetActorRef.actorId);
@@ -1391,22 +1447,54 @@ export class ZLinkActorHandoffCoordinator {
 
   private findMessageFollowRoute(
     actorId: string,
-    context: ZLinkActorMessageFollowContext | undefined
+    context: ZLinkActorMessageFollowContext | undefined,
+    nativeTarget?: ServiceActorRouteFence
   ): MessageFollowRoute | undefined {
-    if (context === undefined) return undefined;
-    return this.messageFollowRoutes.get(
-      messageFollowRouteKey(actorId, BigInt(context.objectGeneration), context.targetOwner)
-    );
+    const routes = this.messageFollowRoutes.get(actorId);
+    if (routes === undefined) return undefined;
+    if (context === undefined) {
+      if (nativeTarget === undefined || nativeTarget.actor.actorId !== actorId) return undefined;
+      return routes
+        .get(
+          messageFollowRouteKey(
+            nativeTarget.actor.generation,
+            encodeRoutingIdStorageHex(nativeTarget.actor.nodeRid),
+            nativeTarget.targetNodeGeneration,
+            nativeTarget.authorityOwnerGeneration,
+            nativeTarget.ownerLeaseGeneration
+          )
+        )
+        ?.values()
+        .next().value;
+    }
+    const owner = context.targetOwner;
+    return routes
+      .get(
+        messageFollowRouteKey(
+          BigInt(context.objectGeneration),
+          owner.nodeRidHex ?? encodeRoutingIdStorageHex(owner.nodeRid),
+          owner.nodeGeneration,
+          owner.authorityOwnerGeneration,
+          owner.ownerLeaseGeneration
+        )
+      )
+      ?.get(owner.ownerId);
   }
 
   private hasMessageFollowRouteForStaleRef(actorId: string, actorRef: ActorRef): boolean {
-    return [...this.messageFollowRoutes.values()].some(
-      (route) =>
-        route.targetActorRef.actorId === actorId &&
-        actorRef.objectGeneration === route.oldGeneration &&
-        (route.oldNodeRid === undefined ||
-          routingIdsEqual(actorRef.nodeRid, messageFollowOwnerNodeRid(route.sourceOwner)))
-    );
+    const routes = this.messageFollowRoutes.get(actorId);
+    if (routes === undefined) return false;
+    for (const owners of routes.values()) {
+      for (const route of owners.values()) {
+        if (
+          actorRef.objectGeneration === route.oldGeneration &&
+          (route.oldNodeRid === undefined ||
+            routingIdsEqual(actorRef.nodeRid, messageFollowOwnerNodeRid(route.sourceOwner)))
+        )
+          return true;
+      }
+    }
+    return false;
   }
 
   private createInitialIngressContext(
@@ -1414,9 +1502,21 @@ export class ZLinkActorHandoffCoordinator {
     generation: bigint,
     parts: readonly Message[],
     request: boolean,
-    deadlineUnixMs?: number
+    deadlineUnixMs?: number,
+    origin?: ZLinkMessageFollowOrigin
   ): ZLinkActorMessageFollowContext {
-    const operationId = createMessageFollowId();
+    let operationId: string;
+    if (origin === undefined) {
+      operationId = createMessageFollowId();
+    } else {
+      const bytes = Buffer.allocUnsafe(OPERATION_IDENTITY_BYTES);
+      bytes.writeBigUInt64BE(BigInt.asUintN(UINT64_BYTES * 8, origin.originalOperation.high));
+      bytes.writeBigUInt64BE(
+        BigInt.asUintN(UINT64_BYTES * 8, origin.originalOperation.low),
+        UINT64_BYTES
+      );
+      operationId = bytes.toString('hex');
+    }
     return Object.freeze({
       operationId,
       objectGeneration: generation.toString(),
@@ -1424,7 +1524,11 @@ export class ZLinkActorHandoffCoordinator {
       targetOwner: sourceOwner,
       deadlineUnixMs,
       correlationId: request ? createMessageFollowId() : undefined,
-      replyRouteId: request ? createMessageFollowId() : undefined,
+      replyRouteId: request
+        ? origin === undefined
+          ? createMessageFollowId()
+          : operationId
+        : undefined,
       request,
       hopCount: 0,
       visitedOwners: Object.freeze([messageFollowOwnerFenceKey(sourceOwner)]),
@@ -1854,11 +1958,13 @@ async function waitForHandoffReplayStart(start: Promise<void>, signal: AbortSign
 }
 
 function messageFollowRouteKey(
-  actorId: string,
   objectGeneration: bigint,
-  sourceOwner: ZLinkActorMessageFollowOwnerFence
+  nodeRidHex: string,
+  nodeGeneration: bigint | string,
+  authorityOwnerGeneration: bigint | string,
+  ownerLeaseGeneration: bigint | string
 ): string {
-  return `${actorId}\u0000${objectGeneration}\u0000${messageFollowOwnerFenceKey(sourceOwner)}`;
+  return `${objectGeneration}\u0000${nodeRidHex}\u0000${nodeGeneration}\u0000${authorityOwnerGeneration}\u0000${ownerLeaseGeneration}`;
 }
 
 function actorRefKey(nodeRid: ActorRef['nodeRid'], generation: bigint): string {
