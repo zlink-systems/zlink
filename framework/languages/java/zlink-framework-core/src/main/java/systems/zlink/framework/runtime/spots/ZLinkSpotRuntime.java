@@ -3546,32 +3546,41 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                                         activation))));
     }
 
-    private CompletionStage<Void> publishInstancePreparation(
+    private CompletionStage<Void> publishInstanceActivation(
             ZLinkInstanceSpotActivation activation,
             java.util.function.BiFunction<
                             ZLinkBackendSpot, CompletableFuture<Void>, CompletionStage<Void>>
                     restoreFirst,
             boolean recoveryPending) {
         CompletableFuture<Void> admission = new CompletableFuture<>();
-        CompletionStage<Void> ready =
-                recoveryPending
-                        ? CompletableFuture.completedFuture(null)
-                        : activation.context.finishActivationPreparation();
-        return ready.thenCompose(
-                ignored -> {
-                    try {
-                        Objects.requireNonNull(
-                                restoreFirst.apply(activation.backendSpot, admission),
-                                "first record terminal");
-                    } catch (RuntimeException failure) {
-                        admission.completeExceptionally(failure);
-                        return CompletableFuture.failedFuture(failure);
-                    }
-                    return activation
-                            .context
-                            .openActivationPreparationAdmission()
-                            .thenCompose(opened -> admission);
-                });
+        return activation
+                .context
+                .ownerQueue()
+                .underSharedSpotGateAsync(
+                        () -> {
+                            // Keep the first record and current incarnation visible
+                            // in one owner turn before application dispatch starts.
+                            Objects.requireNonNull(
+                                    restoreFirst.apply(activation.backendSpot, admission),
+                                    "first record terminal");
+                            if (instanceSpotActivations.put(activation.context.spotId(), activation)
+                                    == null) signalCountChanged();
+                            activation.startIdleEviction(
+                                    instanceSpotIdleTimeouts.getOrDefault(
+                                            activation.context.meshName(), Duration.ZERO));
+                            return null;
+                        })
+                .thenCompose(
+                        ignored ->
+                                recoveryPending
+                                        ? CompletableFuture.completedFuture(null)
+                                        : activation.context.finishActivationPreparation())
+                .thenCompose(
+                        ignored ->
+                                activation
+                                        .context
+                                        .openActivationPreparationAdmission()
+                                        .thenCompose(opened -> admission));
     }
 
     private CompletionStage<Void> activateInstanceSpotTarget(
@@ -3676,14 +3685,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                             route.leaseGeneration(),
                                                             route.authorityOwnerGeneration(),
                                                             route.targetNodeGeneration());
-                                                    if (instanceSpotActivations.put(
-                                                                    route.targetSpotId(),
-                                                                    activation)
-                                                            == null) signalCountChanged();
-                                                    activation.startIdleEviction(
-                                                            instanceSpotIdleTimeouts.getOrDefault(
-                                                                    meshName, Duration.ZERO));
-                                                    return publishInstancePreparation(
+                                                    return publishInstanceActivation(
                                                                     activation,
                                                                     restoreFirst,
                                                                     authority
@@ -3814,19 +3816,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                                                     .authorityOwnerGeneration(),
                                                                             route
                                                                                     .targetNodeGeneration());
-                                                                    if (instanceSpotActivations.put(
-                                                                                    route
-                                                                                            .targetSpotId(),
-                                                                                    activation)
-                                                                            == null)
-                                                                        signalCountChanged();
-                                                                    activation.startIdleEviction(
-                                                                            instanceSpotIdleTimeouts
-                                                                                    .getOrDefault(
-                                                                                            meshName,
-                                                                                            Duration
-                                                                                                    .ZERO));
-                                                                    return publishInstancePreparation(
+                                                                    return publishInstanceActivation(
                                                                             activation,
                                                                             restoreFirst,
                                                                             true);
@@ -6273,11 +6263,10 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                         });
     }
 
-    CompletionStage<Void> replayClosedInstanceMessage(
+    CompletionStage<Void> dispatchQueuedInstanceMessage(
             ZLinkInstanceSpotActivation previous, ZLinkBackendReceived received) {
-        previous.transferRouteReceived(received);
         ZLinkInstanceSpotActivation fresh = instanceSpotActivations.get(previous.context.spotId());
-        if (received.activationMessage().isEmpty() || fresh == null || fresh == previous) {
+        if (fresh == null) {
             ZLinkFrameworkErrorKind releaseFailure =
                     received.activationMessage().isPresent() ? instanceCloseReleaseFailure() : null;
             ZLinkFrameworkException failure =

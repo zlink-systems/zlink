@@ -305,8 +305,7 @@ final class DefaultInstanceSpotContext implements ZLinkInstanceSpotContext, Spot
                         () -> runLifecycleExecution(operation),
                         dispatch,
                         committed,
-                        message ->
-                                ((ZLinkBackendReceived) message).activationMessage().isPresent());
+                        DefaultInstanceSpotContext::hasInstanceIntent);
         return dispatchQueue.isCurrent() ? ZLinkSerialExecutionQueue.yieldCurrent(close) : close;
     }
 
@@ -317,13 +316,18 @@ final class DefaultInstanceSpotContext implements ZLinkInstanceSpotContext, Spot
         host.ensureOwnerAdmissionOpen();
         return dispatchQueue.enqueueMessage(
                 received,
+                DefaultInstanceSpotContext::hasInstanceIntent,
                 systems.zlink.framework.runtime.internal.dispatch.ZLinkReceiveBatchBudget.bytesOf(
                         received.parts(),
                         received.applicationMetadataSize(),
                         received.acceptedJournalRecordSize()),
-                () -> runLifecycleExecution(operation),
+                operation,
                 received::close,
                 admission);
+    }
+
+    private static boolean hasInstanceIntent(Object message) {
+        return ((ZLinkBackendReceived) message).activationMessage().isPresent();
     }
 
     @Override

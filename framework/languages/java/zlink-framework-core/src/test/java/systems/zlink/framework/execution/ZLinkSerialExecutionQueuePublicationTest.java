@@ -42,6 +42,7 @@ final class ZLinkSerialExecutionQueuePublicationTest {
                                     .join())) {
                 serial.enqueueMessage(
                         new Object(),
+                        message -> false,
                         0,
                         () -> CompletableFuture.completedFuture(null),
                         () -> {},

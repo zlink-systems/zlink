@@ -257,6 +257,7 @@ final class ZLinkSerialExecutionQueueTest {
             var later =
                     queue.enqueueMessage(
                             new Object(),
+                            ignored -> false,
                             0,
                             () -> {
                                 invoked.set(true);
@@ -272,7 +273,7 @@ final class ZLinkSerialExecutionQueueTest {
                                             () -> later.toCompletableFuture().join())
                                     .getCause());
             assertEquals(
-                    systems.zlink.framework.errors.ZLinkFrameworkErrorKind.REJECTED,
+                    systems.zlink.framework.errors.ZLinkFrameworkErrorKind.NOT_FOUND,
                     rejected.kind());
             assertSame(
                     rejected,
@@ -308,6 +309,7 @@ final class ZLinkSerialExecutionQueueTest {
             var first =
                     queue.enqueueMessage(
                             firstRecord,
+                            ignored -> false,
                             0,
                             () -> {
                                 events.add("first");
@@ -503,6 +505,53 @@ final class ZLinkSerialExecutionQueueTest {
         }
     }
 
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void completedCloseRefusesLateMessageBeforeAdmission(boolean instanceIntent) throws Exception {
+        CountingExecutor executor = new CountingExecutor();
+        var queue = new ZLinkSerialExecutionQueue(executor, ZLinkExecutionLanePolicy.spot());
+        AtomicBoolean committed = new AtomicBoolean();
+        var close =
+                queue.enqueueLifecycleTransition(
+                        () -> {
+                            committed.set(true);
+                            queue.sealClosingAdmission();
+                            return CompletableFuture.completedFuture(null);
+                        },
+                        ignored -> fail("released incarnation has no successor"),
+                        committed::get,
+                        ignored -> true);
+        executor.runUntil(close.toCompletableFuture());
+        close.toCompletableFuture().get(3, TimeUnit.SECONDS);
+        var admission = new CompletableFuture<Void>();
+        var message =
+                queue.enqueueMessage(
+                        new Object(),
+                        ignored -> instanceIntent,
+                        0,
+                        () -> fail("closed incarnation must not invoke a handler"),
+                        () -> {},
+                        admission);
+        var refused =
+                assertThrows(ExecutionException.class, () -> admission.get(3, TimeUnit.SECONDS));
+        var failure =
+                assertInstanceOf(
+                        systems.zlink.framework.errors.ZLinkFrameworkException.class,
+                        refused.getCause());
+        assertEquals(
+                instanceIntent
+                        ? systems.zlink.framework.errors.ZLinkFrameworkErrorKind.UNAVAILABLE
+                        : systems.zlink.framework.errors.ZLinkFrameworkErrorKind.NOT_FOUND,
+                failure.kind());
+        assertSame(
+                failure,
+                assertThrows(
+                                ExecutionException.class,
+                                () -> message.toCompletableFuture().get(3, TimeUnit.SECONDS))
+                        .getCause());
+        queue.close();
+    }
+
     @Test
     void incarnationTransitionRetainsOriginalMessagesAndNeverRunsOldClosures() throws Exception {
         CountingExecutor executor = new CountingExecutor();
@@ -516,6 +565,7 @@ final class ZLinkSerialExecutionQueueTest {
         var first =
                 queue.enqueueMessage(
                         original,
+                        ignored -> true,
                         0,
                         () -> {
                             oldCalls.incrementAndGet();
@@ -543,6 +593,7 @@ final class ZLinkSerialExecutionQueueTest {
         var second =
                 queue.enqueueMessage(
                         later,
+                        ignored -> true,
                         0,
                         () -> {
                             oldCalls.incrementAndGet();
@@ -577,6 +628,7 @@ final class ZLinkSerialExecutionQueueTest {
         var message =
                 queue.enqueueMessage(
                         new Object(),
+                        ignored -> true,
                         0,
                         () -> fail("the old incarnation must not dispatch"),
                         () -> {},
