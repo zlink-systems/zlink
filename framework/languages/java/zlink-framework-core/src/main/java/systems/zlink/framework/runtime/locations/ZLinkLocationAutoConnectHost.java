@@ -444,8 +444,9 @@ public final class ZLinkLocationAutoConnectHost implements AutoCloseable {
         }
 
         @Override
-        public void observeAdmissionExpectation(ZLinkAutoConnectPlanner.Target target) {
-            node.observePeerAdmissionExpectation(
+        public CompletionStage<Void> observeAdmissionExpectation(
+                ZLinkAutoConnectPlanner.Target target) {
+            return node.observePeerAdmissionExpectation(
                     target.nodeRid(),
                     target.endpoint(),
                     target.lifecycleGeneration(),
@@ -454,8 +455,9 @@ public final class ZLinkLocationAutoConnectHost implements AutoCloseable {
         }
 
         @Override
-        public void forgetAdmissionExpectation(ZLinkAutoConnectPlanner.Target target) {
-            node.forgetPeerAdmissionExpectation(target.nodeRid());
+        public CompletionStage<Void> forgetAdmissionExpectation(
+                ZLinkAutoConnectPlanner.Target target) {
+            return node.forgetPeerAdmissionExpectation(target.nodeRid());
         }
 
         @Override

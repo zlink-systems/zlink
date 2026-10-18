@@ -451,6 +451,26 @@ final class ZLinkJavaRawMeshNode
                 || ownerLeaseGeneration <= 0) {
             return null;
         }
+        return localActorMessage(
+                new ZLinkServiceM6BWireCodec.ActorRouteFence(
+                        actor,
+                        descriptor.lifecycleGeneration(),
+                        ownerGeneration,
+                        ownerLeaseGeneration),
+                sourceNodeRid,
+                sourceSessionRid,
+                sourceBindingGeneration,
+                sourceSessionSequence,
+                requestId);
+    }
+
+    ZLinkServiceM6BWireCodec.ActorMessage localActorMessage(
+            ZLinkServiceM6BWireCodec.ActorRouteFence target,
+            RoutingId sourceNodeRid,
+            RoutingId sourceSessionRid,
+            long sourceBindingGeneration,
+            long sourceSessionSequence,
+            long requestId) {
         var boundSession =
                 sourceSessionRid == null
                         ? null
@@ -465,11 +485,7 @@ final class ZLinkJavaRawMeshNode
                 operation.getLeastSignificantBits(),
                 0,
                 null,
-                new ZLinkServiceM6BWireCodec.ActorRouteFence(
-                        actor,
-                        descriptor.lifecycleGeneration(),
-                        ownerGeneration,
-                        ownerLeaseGeneration),
+                target,
                 boundSession);
     }
 
@@ -1093,90 +1109,126 @@ final class ZLinkJavaRawMeshNode
         closedPeerIntents.remove(connectionIntentId);
         closeRequestedPeerIntents.remove(connectionIntentId);
         RoutingId learnedRoutingId = peerIntentRoutingIds.remove(connectionIntentId);
-        if (removed != null && router != null) {
-            if (removed.expectedRoutingId() != null) {
-                notRequiredPeers.remove(removed.expectedRoutingId());
-                rejectedPeers.remove(removed.expectedRoutingId());
-                disconnectAdmitted(
-                        removed.expectedRoutingId(),
-                        admittedConnectionId(removed.expectedRoutingId()));
-                forgetKnownPeerChannelsIfUntracked(removed.expectedRoutingId());
-            }
-            if (disconnectEndpoint) {
-                router.disconnect(removed.endpoint());
-            }
+        if (removed == null) return;
+        RoutingId target =
+                removed.expectedRoutingId() == null
+                        ? learnedRoutingId
+                        : removed.expectedRoutingId();
+        if (target != null) {
+            notRequiredPeers.remove(target);
+            rejectedPeers.remove(target);
         }
-        signalStateChanged(removed == null ? learnedRoutingId : removed.expectedRoutingId());
+        if (router != null && disconnectEndpoint) {
+            router.disconnect(removed.endpoint());
+        }
+        retireUnownedPeer(target);
     }
 
     @Override
-    public void observePeerAdmissionExpectation(
+    public CompletionStage<Void> observePeerAdmissionExpectation(
             RoutingId peerRid,
             String endpoint,
             long lifecycleGeneration,
             String securityIdentity,
             ZLinkMeshNodeObjectRole objectRole) {
-        peerAdmissionExpectations.put(
-                Objects.requireNonNull(peerRid, "peerRid"),
-                new PeerAdmissionExpectation(
-                        endpoint, lifecycleGeneration, securityIdentity, objectRole));
+        return runDescriptorTurn(
+                () ->
+                        peerAdmissionExpectations.put(
+                                Objects.requireNonNull(peerRid, "peerRid"),
+                                new PeerAdmissionExpectation(
+                                        endpoint,
+                                        lifecycleGeneration,
+                                        securityIdentity,
+                                        objectRole)));
     }
 
     @Override
-    public void forgetPeerAdmissionExpectation(RoutingId peerRid) {
-        peerAdmissionExpectations.remove(peerRid);
-        forgetKnownPeerChannelsIfUntracked(peerRid);
-        signalStateChanged(peerRid);
+    public CompletionStage<Void> forgetPeerAdmissionExpectation(RoutingId peerRid) {
+        return runDescriptorTurn(
+                () -> {
+                    if (peerAdmissionExpectations.remove(peerRid) != null)
+                        retireUnownedPeer(peerRid);
+                });
     }
 
-    private record StateObserver(RoutingId target, Runnable callback) {}
+    private void retireUnownedPeer(RoutingId target) {
+        if (target == null || hasPeerExpectation(target)) {
+            signalStateChanged(target);
+            return;
+        }
+        disconnectAdmitted(target, admittedConnectionId(target));
+        knownPeerChannels.remove(target);
+        if (topology == null || topology.peer(target).isEmpty()) signalLifecycleEnded(target);
+    }
+
+    private record StateObserver(
+            RoutingId target, Runnable routeChanged, Runnable lifecycleEnded) {}
 
     @Override
     public AutoCloseable onStateChanged(Runnable listener) {
-        return observeState(null, listener);
+        return observeState(null, listener, listener);
     }
 
-    private AutoCloseable onPeerStateChanged(RoutingId target, Runnable listener) {
-        return observeState(Objects.requireNonNull(target, "target"), listener);
+    @Override
+    public AutoCloseable onPeerStateChanged(
+            RoutingId target, Runnable routeChanged, Runnable lifecycleEnded) {
+        return observeState(Objects.requireNonNull(target, "target"), routeChanged, lifecycleEnded);
     }
 
-    private AutoCloseable observeState(RoutingId target, Runnable listener) {
-        var observer = new StateObserver(target, Objects.requireNonNull(listener, "listener"));
+    private AutoCloseable observeState(
+            RoutingId target, Runnable routeChanged, Runnable lifecycleEnded) {
+        var observer =
+                new StateObserver(
+                        target,
+                        Objects.requireNonNull(routeChanged, "routeChanged"),
+                        Objects.requireNonNull(lifecycleEnded, "lifecycleEnded"));
         stateListeners.add(observer);
-        deliverStateSignal(() -> notifyStateListener(observer));
-        return () -> stateListeners.remove(observer);
+        deliverStateSignal(() -> notifyStateListener(observer, observer.routeChanged()));
+        return () -> stateListeners.removeIf(current -> current == observer);
     }
 
     /** Local descriptor changes are observations, not target route progress. */
     void signalStateChanged() {
-        signalStateChanged(null, false);
+        signalStateChanged(null);
     }
 
     private void signalStateChanged(RoutingId target) {
-        signalStateChanged(target, false);
-    }
-
-    private void signalLifecycleEnded() {
-        signalStateChanged(null, true);
-    }
-
-    private void signalStateChanged(RoutingId target, boolean lifecycleEnded) {
         if (stateListeners.isEmpty()) return;
         deliverStateSignal(
                 () ->
                         stateListeners.forEach(
                                 observer -> {
                                     if (observer.target() == null
-                                            || lifecycleEnded
                                             || observer.target().equals(target))
-                                        notifyStateListener(observer);
+                                        notifyStateListener(observer, observer.routeChanged());
                                 }));
     }
 
-    private void deliverStateSignal(Runnable signal) {
+    private void signalLifecycleEnded() {
+        signalLifecycleEnded(null);
+    }
+
+    private CompletionStage<Void> signalLifecycleEnded(RoutingId target) {
+        var observers =
+                stateListeners.stream()
+                        .filter(
+                                observer ->
+                                        target == null
+                                                || observer.target() == null
+                                                || observer.target().equals(target))
+                        .toList();
+        if (observers.isEmpty()) return CompletableFuture.completedFuture(null);
+        return deliverStateSignal(
+                () ->
+                        observers.forEach(
+                                observer ->
+                                        notifyStateListener(observer, observer.lifecycleEnded())));
+    }
+
+    private CompletionStage<Void> deliverStateSignal(Runnable signal) {
         // Enter after the publishing turn. Callbacks may enter another owner
         // and must never occupy the shared deadline executor.
-        CompletableFuture.completedStage(null)
+        return CompletableFuture.completedStage(null)
                 .thenComposeAsync(unused -> descriptorStateLane.runAsync(() -> null))
                 .thenRunAsync(signal)
                 .whenComplete(
@@ -1189,10 +1241,10 @@ final class ZLinkJavaRawMeshNode
                         });
     }
 
-    private void notifyStateListener(StateObserver observer) {
-        if (!stateListeners.contains(observer)) return;
+    private void notifyStateListener(StateObserver observer, Runnable callback) {
+        if (stateListeners.stream().noneMatch(current -> current == observer)) return;
         try {
-            observer.callback().run();
+            callback.run();
         } catch (RuntimeException failure) {
             LOGGER.log(Level.WARNING, "MeshNode state observer failed", failure);
         }
@@ -2328,20 +2380,13 @@ final class ZLinkJavaRawMeshNode
         }
     }
 
-    CompletionStage<Void> sendActor(ZLinkBackendActorRef actor, List<Message> parts) {
+    CompletionStage<Void> sendActor(
+            ZLinkServiceM6BWireCodec.ActorRouteFence target, List<Message> parts) {
+        ZLinkBackendActorRef actor = target.actor();
         Optional<ZLinkServiceTopologyRegistry.Peer> peer =
                 topology == null ? Optional.empty() : topology.peerFromOwner(actor.nodeRid());
-        ZLinkJavaRawSpotNode spots = (ZLinkJavaRawSpotNode) spotNode();
-        long authorityOwnerGeneration = spots.actorAuthorityOwnerGeneration(actor);
-        long ownerLeaseGeneration = spots.actorAuthorityOwnerLeaseGeneration(actor);
-        if (peer.isEmpty()
-                || actor.generation() <= 0
-                || authorityOwnerGeneration <= 0
-                || ownerLeaseGeneration <= 0) {
-            return CompletableFuture.failedFuture(
-                    new ZlinkSubmitException(SubmitResult.NOT_CONNECTED));
-        }
-        if (!isReadyPeer(peer.orElseThrow())) {
+        if (peer.isEmpty() || !isReadyPeer(peer.orElseThrow())) {
+
             return CompletableFuture.failedFuture(
                     new ZlinkSubmitException(SubmitResult.NOT_CONNECTED));
         }
@@ -2356,11 +2401,7 @@ final class ZLinkJavaRawMeshNode
                                 operation.getLeastSignificantBits(),
                                 0,
                                 null,
-                                new ZLinkServiceM6BWireCodec.ActorRouteFence(
-                                        actor,
-                                        peer.orElseThrow().descriptor().lifecycleGeneration(),
-                                        authorityOwnerGeneration,
-                                        ownerLeaseGeneration)),
+                                target),
                         wire.encodeFrameworkMultipartFrame(parts));
         return port.send(requireStarted(), actor.nodeRid(), frames);
     }
@@ -3147,7 +3188,7 @@ final class ZLinkJavaRawMeshNode
         return now + duration;
     }
 
-    CompletionStage<List<Message>> requestActor(
+    CompletionStage<List<Message>> requestExactActor(
             ZLinkBackendActorRef actor,
             List<Message> parts,
             Duration timeout,
@@ -3166,6 +3207,31 @@ final class ZLinkJavaRawMeshNode
                             ZLinkFrameworkErrorKind.UNAVAILABLE,
                             "remote Actor route is not connected"));
         }
+        return requestActor(
+                new ZLinkServiceM6BWireCodec.ActorRouteFence(
+                        actor,
+                        peer.orElseThrow().descriptor().lifecycleGeneration(),
+                        authorityOwnerGeneration,
+                        ownerLeaseGeneration),
+                parts,
+                timeout,
+                requestAdmission);
+    }
+
+    CompletionStage<List<Message>> requestActor(
+            ZLinkServiceM6BWireCodec.ActorRouteFence target,
+            List<Message> parts,
+            Duration timeout,
+            CompletableFuture<Void> requestAdmission) {
+        ZLinkBackendActorRef actor = target.actor();
+        Optional<ZLinkServiceTopologyRegistry.Peer> peer =
+                topology == null ? Optional.empty() : topology.peerFromOwner(actor.nodeRid());
+        if (peer.isEmpty()) {
+            return CompletableFuture.failedFuture(
+                    new ZLinkFrameworkException(
+                            ZLinkFrameworkErrorKind.UNAVAILABLE,
+                            "remote Actor route is not connected"));
+        }
         long correlation = allocateCorrelation();
         UUID operationId = UUID.randomUUID();
         List<byte[]> frames =
@@ -3178,11 +3244,7 @@ final class ZLinkJavaRawMeshNode
                                 operationId.getLeastSignificantBits(),
                                 0,
                                 null,
-                                new ZLinkServiceM6BWireCodec.ActorRouteFence(
-                                        actor,
-                                        peer.orElseThrow().descriptor().lifecycleGeneration(),
-                                        authorityOwnerGeneration,
-                                        ownerLeaseGeneration)),
+                                target),
                         wire.encodeFrameworkMultipartFrame(parts));
         ZLinkServiceOperationRegistry.Operation<ZLinkBackendReceived> operation =
                 operations.register(operationId, timeout);
@@ -4335,7 +4397,9 @@ final class ZLinkJavaRawMeshNode
                             if (sessionOwnerRouteReady(
                                     sessionOwnerNodeRid, sessionOwnerNodeGeneration))
                                 ready.complete(null);
-                        });
+                        },
+                        // The relocation attempt owns termination and cancels this wait.
+                        () -> {});
         ready.whenComplete(
                 (unused, failure) -> {
                     try {
@@ -6630,11 +6694,7 @@ final class ZLinkJavaRawMeshNode
             replyActorFailure(inbound, header, 104, 12);
             return false;
         }
-        if (header.request() != (inbound.requestSequence() != null)
-                || !header.target().actor().nodeRid().equals(routingId)
-                || localDescriptor == null
-                || header.target().targetNodeGeneration()
-                        != localDescriptor.lifecycleGeneration()) {
+        if (header.request() != (inbound.requestSequence() != null)) {
             replyActorFailure(inbound, header, 102, 1);
             return false;
         }
@@ -7471,12 +7531,6 @@ final class ZLinkJavaRawMeshNode
         return true;
     }
 
-    private void forgetKnownPeerChannelsIfUntracked(RoutingId peer) {
-        if (!hasPeerExpectation(peer)) {
-            knownPeerChannels.remove(peer);
-        }
-    }
-
     private boolean hasPeerExpectation(RoutingId peer) {
         return peerAdmissionExpectations.containsKey(peer)
                 || peerIntents.entrySet().stream()
@@ -7501,13 +7555,6 @@ final class ZLinkJavaRawMeshNode
                                 == generation
                         && isReadyPeer(peer.orElseThrow());
         return new PeerRouteObservation(generation, ready);
-    }
-
-    @Override
-    public boolean targetLifecycleEnded(RoutingId target) {
-        // Location owns logical removal. A physical disconnect still has an
-        // expectation and must retain durable replay (routing §2, actor model §5).
-        return !hasPeerExpectation(target) && (topology == null || topology.peer(target).isEmpty());
     }
 
     private Map.Entry<Long, PeerIntent> findExpectedPeer(
@@ -7548,7 +7595,7 @@ final class ZLinkJavaRawMeshNode
         return String.join(",", fields);
     }
 
-    private CompletionStage<Void> runDurableTurn(Runnable command) {
+    private CompletionStage<Void> runDescriptorTurn(Runnable command) {
         if (!descriptorStateLane.isOnLane())
             return descriptorStateLane.runNowOrQueue(
                     () -> {
@@ -7576,10 +7623,9 @@ final class ZLinkJavaRawMeshNode
                 },
                 (frames, remaining, admission) ->
                         requestApplication(target, frames, remaining, admission),
-                () -> targetLifecycleEnded(target),
                 () -> observePeerRoute(target),
-                listener -> onPeerStateChanged(target, listener),
-                this::runDurableTurn,
+                (changed, ended) -> onPeerStateChanged(target, changed, ended),
+                this::runDescriptorTurn,
                 timeout,
                 nanoTime);
     }

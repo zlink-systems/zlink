@@ -105,9 +105,8 @@ final class ZLinkJavaDurableRequestTest {
                                     attempts.incrementAndGet();
                                     return pending;
                                 },
-                                () -> false,
                                 () -> source.route,
-                                source::observe,
+                                (changed, ended) -> source.observe(changed),
                                 action -> {
                                     turns.add(action);
                                     return CompletableFuture.completedStage(null);
@@ -122,6 +121,74 @@ final class ZLinkJavaDurableRequestTest {
         while (!turns.isEmpty()) turns.remove().run();
         assertSame(terminal, result.join());
         assertEquals(1, attempts.get());
+    }
+
+    @Test
+    void receivedReplyWinsOverQueuedLifecycleRemoval() throws Exception {
+        lifecycleRemovalAfterReceivedTerminal(null);
+    }
+
+    @Test
+    void receivedTerminalFailureWinsOverQueuedLifecycleRemoval() throws Exception {
+        lifecycleRemovalAfterReceivedTerminal(new IllegalArgumentException("terminal"));
+    }
+
+    @Test
+    void receivedTransientFailureCannotReplayAfterQueuedLifecycleRemoval() throws Exception {
+        lifecycleRemovalAfterReceivedTerminal(
+                new ZlinkRequestException(RequestResult.NOT_CONNECTED));
+    }
+
+    private void lifecycleRemovalAfterReceivedTerminal(Throwable failure) throws Exception {
+        var turns = new java.util.concurrent.LinkedBlockingQueue<Runnable>();
+        var removed = new java.util.concurrent.atomic.AtomicReference<Runnable>();
+        var pending = new CompletableFuture<List<byte[]>>();
+        var terminal = List.of(new byte[] {9});
+        var attempts = new AtomicInteger();
+        var result =
+                ZLinkJavaDurableRequest.request(
+                                () -> List.of(new byte[] {1}),
+                                (frames, remaining, admission) -> {
+                                    attempts.incrementAndGet();
+                                    admission.complete(null);
+                                    return pending;
+                                },
+                                () -> new PeerRouteObservation(1, true),
+                                (changed, ended) -> {
+                                    removed.set(ended);
+                                    changed.run();
+                                    return () -> {};
+                                },
+                                action -> {
+                                    turns.add(action);
+                                    return CompletableFuture.completedStage(null);
+                                },
+                                Duration.ofSeconds(5),
+                                () -> 0)
+                        .toCompletableFuture();
+        turns.remove().run();
+        removed.get().run();
+        if (failure == null) pending.complete(terminal);
+        else pending.completeExceptionally(failure);
+        // The removal owner turn precedes the native settlement owner turn.
+        turns.remove().run();
+        if (failure == null) assertSame(terminal, result.join());
+        else {
+            var ended = assertThrows(CompletionException.class, result::join);
+            if (failure instanceof ZlinkRequestException) {
+                var error = assertInstanceOf(ZLinkFrameworkException.class, ended.getCause());
+                assertEquals(ZLinkFrameworkErrorKind.UNAVAILABLE, error.kind());
+            } else assertSame(failure, ended.getCause());
+        }
+        if (failure instanceof ZlinkRequestException) {
+            // Receive both native settlement and the existing async ready-replay post.
+            for (int i = 0; i < 2; i++) {
+                var turn = turns.poll(3, TimeUnit.SECONDS);
+                assertNotNull(turn);
+                turn.run();
+            }
+        } else while (!turns.isEmpty()) turns.remove().run();
+        assertEquals(1, attempts.get(), "Lifecycle removal cannot submit another attempt");
     }
 
     @Test
@@ -166,9 +233,9 @@ final class ZLinkJavaDurableRequestTest {
         var disconnected = new ZlinkRequestException(RequestResult.NOT_CONNECTED);
         var submitted = new CompletableFuture<List<byte[]>>();
         var attempts = new AtomicInteger();
+        var source = new Source();
         var completion =
-                new Source()
-                        .request(
+                source.request(
                                 () -> List.of(new byte[] {1}),
                                 (frames, remaining) -> {
                                     attempts.incrementAndGet();
@@ -179,6 +246,7 @@ final class ZLinkJavaDurableRequestTest {
                         .toCompletableFuture();
 
         ended.set(true);
+        source.signal();
         submitted.completeExceptionally(disconnected);
 
         var failure =
@@ -477,9 +545,8 @@ final class ZLinkJavaDurableRequestTest {
                         () -> List.of(new byte[] {1}),
                         (frames, remaining, admission) ->
                                 CompletableFuture.completedFuture(List.of()),
-                        () -> false,
                         () -> source.route,
-                        source::observe,
+                        (changed, ended) -> source.observe(changed),
                         action -> CompletableFuture.failedStage(failure),
                         Duration.ofSeconds(5));
         assertSame(
@@ -618,9 +685,13 @@ final class ZLinkJavaDurableRequestTest {
                             admission.complete(null);
                         return pending;
                     },
-                    ended,
                     () -> route,
-                    this::observe,
+                    (changed, removed) ->
+                            observe(
+                                    () -> {
+                                        if (ended.getAsBoolean()) removed.run();
+                                        else changed.run();
+                                    }),
                     action -> {
                         try {
                             if (stateLane.isOnLane()) action.run();

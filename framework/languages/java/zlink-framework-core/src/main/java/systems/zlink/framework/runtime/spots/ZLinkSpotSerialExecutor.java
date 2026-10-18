@@ -105,7 +105,7 @@ public final class ZLinkSpotSerialExecutor implements ZLinkActorDispatchTarget {
                                                         payloadBytes,
                                                         operation,
                                                         admission)),
-                admission);
+                null);
     }
 
     @Override
@@ -115,7 +115,7 @@ public final class ZLinkSpotSerialExecutor implements ZLinkActorDispatchTarget {
             Supplier<CompletionStage<Void>> operation,
             CompletableFuture<Void> admission) {
         return submitActor(
-                () -> enqueueActor(activation, payloadBytes, operation, admission), admission);
+                () -> enqueueActor(activation, payloadBytes, operation, admission), null);
     }
 
     private CompletionStage<Void> enqueueActor(
@@ -195,7 +195,7 @@ public final class ZLinkSpotSerialExecutor implements ZLinkActorDispatchTarget {
                                                         operation,
                                                         relocationRelease,
                                                         admission)),
-                admission);
+                null);
     }
 
     @Override
@@ -215,7 +215,7 @@ public final class ZLinkSpotSerialExecutor implements ZLinkActorDispatchTarget {
                                 operation,
                                 relocationRelease,
                                 admission),
-                admission);
+                null);
     }
 
     private CompletionStage<Void> enqueueActorLazyRecord(

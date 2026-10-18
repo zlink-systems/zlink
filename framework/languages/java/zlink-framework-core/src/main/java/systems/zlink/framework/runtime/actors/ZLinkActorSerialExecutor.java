@@ -38,7 +38,7 @@ public final class ZLinkActorSerialExecutor {
             long payloadBytes,
             Supplier<CompletionStage<Void>> operation,
             CompletableFuture<Void> admission) {
-        return queue.enqueueWithPayloadBytes(payloadBytes, operation, admission);
+        return queue.enqueueActorWithPayloadBytes(payloadBytes, operation, admission);
     }
 
     public CompletionStage<Void> executeActor(
@@ -58,7 +58,7 @@ public final class ZLinkActorSerialExecutor {
             Supplier<CompletionStage<Void>> operation,
             Runnable relocationRelease,
             CompletableFuture<Void> admission) {
-        return queue.enqueueRelocatableLazyRecord(
+        return queue.enqueueActorRelocatableLazyRecord(
                 acceptedJournalRecord,
                 acceptedJournalRecordSizeHint,
                 operation,

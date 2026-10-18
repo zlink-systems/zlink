@@ -5,6 +5,7 @@ import systems.zlink.framework.locations.ZLinkLocationOptions;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationOwnerToken;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
+import systems.zlink.framework.runtime.internal.locations.ZLinkLocationStoreFailure;
 import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseClaimResult;
 import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseClaimed;
 import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseGenerationExhausted;
@@ -1130,7 +1131,14 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
 
     private void ensureOwnerAdmissionOpenCore() {
         if (!isOwnerAdmissionOpenCore()) {
-            throw new IllegalStateException("The owner lease admission deadline has expired.");
+            throw new OwnerLeaseAdmissionClosedException();
+        }
+    }
+
+    private static final class OwnerLeaseAdmissionClosedException extends IllegalStateException
+            implements ZLinkLocationStoreFailure {
+        private OwnerLeaseAdmissionClosedException() {
+            super("The owner lease admission deadline has expired.");
         }
     }
 
