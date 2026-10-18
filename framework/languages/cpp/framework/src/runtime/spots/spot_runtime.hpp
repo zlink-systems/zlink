@@ -1776,12 +1776,16 @@ class spot_node_runtime_t
     friend struct spot_context_state_t;
 
   public:
-    struct application_relocation_unit_t
+    struct spot_relocation_unit_t
     {
         spot_id_t spot_id;
         std::string spot_type;
-        bool ready = false;
         std::vector<actor_ref_t> actors;
+    };
+    struct relocation_units_t
+    {
+        std::vector<spot_relocation_unit_t> spots;
+        std::vector<actor_ref_t> standalone_actors;
     };
     struct remote_actor_transfer_t
     {
@@ -1895,8 +1899,8 @@ class spot_node_runtime_t
     /* Actors still joined to this node's spots, for the drain handoff pass
      * (graceful-drain-handoff §5.2). */
     std::vector<actor_ref_t> local_actor_refs () const;
-    std::vector<spot_id_t> deferred_relocation_ready_spots () const;
-    std::vector<application_relocation_unit_t> application_relocation_units () const;
+    bool relocation_ready () const;
+    relocation_units_t relocation_units () const;
     void begin_relocation_readiness ();
     void end_relocation_readiness (const std::vector<spot_id_t> &relocated_spots);
     /* Domain snapshot for the drain handoff join — the same shape the erased
@@ -2298,7 +2302,7 @@ class spot_node_runtime_t
     }
 
   private:
-    task_t<std::vector<actor_ref_t>> local_actor_refs_async () const;
+    task_t<std::vector<runtime::stateful::object_inventory_t>> local_actor_inventory_async () const;
     std::size_t active_user_spot_count_on_lane () const;
     std::optional<std::string> spot_name_for_unlocked (const spot_id_t &spot_id) const;
 
@@ -2312,8 +2316,13 @@ class spot_node_runtime_t
 
     static std::string actor_key (const actor_ref_t &actor_ref)
     {
-        return std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (actor_ref))
-               + ":" + std::string (actor_ref.actor_id ().value ());
+        return actor_key (::zlink::framework::detail::actor_ref_access_t::actor_type (actor_ref),
+                          actor_ref.actor_id ().value ());
+    }
+
+    static std::string actor_key (std::string_view actor_type, std::string_view actor_id)
+    {
+        return std::string (actor_type) + ":" + std::string (actor_id);
     }
 
     /* `refuse_destroyed` re-checks the destroy tombstone in the same lane turn
