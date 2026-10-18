@@ -7934,7 +7934,10 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             );
             if (
                 !hasTargetSpot
-                || spot!.AuthorityOwnerGeneration != stateful.AuthorityOwnerGeneration
+                || instanceReadyRoute && spot!.LifecycleGeneration < stateful.TargetSpotGeneration
+                || spot!.LifecycleGeneration == stateful.TargetSpotGeneration
+                    && spot.AuthorityOwnerGeneration != stateful.AuthorityOwnerGeneration
+                || instanceReadyRoute && stateful.TargetOwnerId != _localRequestSourceFence.OwnerId
                 || stateful.OwnerLeaseGeneration != localOwnerLeaseGeneration
             )
             {
@@ -7943,9 +7946,10 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 );
                 if (instanceReadyRoute)
                 {
-                    const ServiceWireConstants.FrameworkErrorCode failureCode = ServiceWireConstants
-                        .FrameworkErrorCode
-                        .SpotMoving;
+                    var failureCode =
+                        hasTargetSpot && spot!.LifecycleGeneration < stateful.TargetSpotGeneration
+                            ? ServiceWireConstants.FrameworkErrorCode.SpotGenerationStale
+                            : ServiceWireConstants.FrameworkErrorCode.SpotMoving;
                     if (_logicalMulticastDispatchErrors is { Enabled: true } reporter)
                         reporter.Report(
                             new ZLinkDispatchFailure(

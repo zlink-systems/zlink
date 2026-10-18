@@ -478,6 +478,11 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     return RequestResult.Ok;
   }
 
+  cancelPendingOperations(reason: unknown): void {
+    this.stateful?.cancelPendingOperations(reason);
+    this.runtime?.cancelPendingOperations(reason);
+  }
+
   async publishDraining(): Promise<void> {
     for (const name of this.channels.keys()) this.channels.set(name, 0);
     await this.requireRuntime().updateLocalDescriptor({ state: 'draining' });
@@ -972,7 +977,8 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   }
 
   waitForInstanceApplicationQuiescence(spotId: string, signal?: AbortSignal): Promise<void> {
-    return this.requireStateful().waitForInstanceApplicationQuiescence(spotId, signal);
+    // Closing the stateful owner terminalizes its operations and clears these waiters.
+    return this.stateful?.waitForInstanceApplicationQuiescence(spotId, signal) ?? Promise.resolve();
   }
 
   restoreUserSpotAuthority(

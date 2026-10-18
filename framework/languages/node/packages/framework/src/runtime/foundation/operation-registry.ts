@@ -150,6 +150,10 @@ export class OperationRegistry<T, Context = unknown> {
     this.deadlineCursor = undefined;
   }
 
+  failAll(reason: unknown): void {
+    for (const id of this.entries.keys()) this.fail(id, reason);
+  }
+
   get size(): number {
     return this.entries.size;
   }

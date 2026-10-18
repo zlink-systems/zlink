@@ -453,7 +453,8 @@ internal sealed class ZLinkSpotNodeCatalog(
                                 owner,
                                 transaction,
                                 ZLinkSpotCloseReason.HostShutdown,
-                                DateTimeOffset.UtcNow + activation.DefaultRequestTimeout
+                                DateTimeOffset.UtcNow + activation.DefaultRequestTimeout,
+                                requireNoActors: false
                             )
                             .ConfigureAwait(false);
                     else
@@ -508,49 +509,18 @@ internal sealed class ZLinkSpotNodeCatalog(
                                 )
                             ).Task;
                     using (ExecutionContext.SuppressFlow())
-                        return _disposeTask = Task.Run(() =>
-                            DisposeCoreAsync(creationsDrained, forceStop: false)
-                        );
+                        return _disposeTask = Task.Run(() => DisposeCoreAsync(creationsDrained));
                 })
             )
         );
     }
 
-    internal ValueTask ForceStopAsync()
-    {
-        return new ValueTask(
-            AwaitStateLane(
-                _lane.RunAsync(() =>
-                {
-                    if (_disposeTask is not null)
-                        return _disposeTask;
-
-                    Task creationsDrained;
-                    _closed = true;
-                    creationsDrained =
-                        _activeCreations == 0
-                            ? Task.CompletedTask
-                            : (
-                                _creationsDrained ??= new TaskCompletionSource(
-                                    TaskCreationOptions.RunContinuationsAsynchronously
-                                )
-                            ).Task;
-                    using (ExecutionContext.SuppressFlow())
-                        return _disposeTask = Task.Run(() =>
-                            DisposeCoreAsync(creationsDrained, forceStop: true)
-                        );
-                })
-            )
-        );
-    }
-
-    private async Task DisposeCoreAsync(Task creationsDrained, bool forceStop)
+    private async Task DisposeCoreAsync(Task creationsDrained)
     {
         List<Exception>? failures = null;
         await CaptureAsync(StopIdleEvictionAsync).ConfigureAwait(false);
         await CaptureAsync(() => new ValueTask(creationsDrained)).ConfigureAwait(false);
-        if (!forceStop)
-            await CaptureAsync(CloseLifecycleAsync).ConfigureAwait(false);
+        await CaptureAsync(CloseLifecycleAsync).ConfigureAwait(false);
 
         ZLinkSpotActivation[] activations;
         activations = await _lane.RunAsync(() => _spots.Values.ToArray()).ConfigureAwait(false);

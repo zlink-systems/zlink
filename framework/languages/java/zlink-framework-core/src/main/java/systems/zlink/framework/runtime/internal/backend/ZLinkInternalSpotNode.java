@@ -69,19 +69,20 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
         // Alternate backends may not expose raw relocation staging.
     }
 
-    /** Resolves Spot admission from the target owner's current authority. */
+    /** Resolves current Spot authority; the activation owns Instance application admission. */
     default void setSpotAdmissionResolver(SpotAdmissionResolver resolver) {
         // Alternate backends may not expose raw target ingress.
     }
 
     @FunctionalInterface
     interface SpotAdmissionResolver {
-        /** A null result admits an Instance intent against Ready authority. */
+        /** A null result leaves ingress to the existing target queue admission. */
         CompletionStage<? extends RuntimeException> resolve(
                 String spotId,
                 long authorityOwnerGeneration,
                 boolean instanceIntent,
-                boolean activationPresent);
+                boolean activationPresent,
+                ZLinkServiceM6BWireCodec.InstanceRouteFence instanceRoute);
     }
 
     /**

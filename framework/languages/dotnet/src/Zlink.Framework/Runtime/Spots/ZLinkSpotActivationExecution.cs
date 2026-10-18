@@ -1228,7 +1228,8 @@ internal abstract partial class ZLinkSpotActivation
                     await activation.InvokeClosingAsync(reason, deadline).ConfigureAwait(false);
                     return true;
                 },
-                cancellationToken
+                cancellationToken,
+                reason
             )
             .ConfigureAwait(false);
     }
@@ -1305,7 +1306,8 @@ internal abstract partial class ZLinkSpotActivation
                         await activation.InvokeClosingAsync(reason, deadline).ConfigureAwait(false);
                     return true;
                 },
-                cancellationToken
+                cancellationToken,
+                reason
             )
             .ConfigureAwait(false);
     }

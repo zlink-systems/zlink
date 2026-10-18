@@ -4822,10 +4822,19 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation_core (
            std::optional<instance_spot_authority_payload_t> ready_state) -> task_t<bool> {
         const auto *snapshot = std::get_if<authority_snapshot_t> (&current);
         if (request.target.authority_owner_generation != 0) {
-            // Ready Instance direct의 object generation은 target 판정에 쓰지 않는다.
-            // authority가 없으면 owner fence가 다른 것이다(Spot address messaging §9).
+            // Authority generations identify owner changes within one incarnation.
+            if (snapshot && snapshot->allocation.state == placement_allocation_state_t::active
+                && snapshot->object_generation < request.target.object_generation) {
+                const auto failure = messaging::request_failure_mapper_t{}.target_failure_reply (
+                  framework_error_kind_t::invalid_operation,
+                  static_cast<std::uint32_t> (protocol::framework_error_code::spotGenerationStale));
+                reply_terminal ({failure->terminal_result, failure->failure_code, std::nullopt});
+                co_return true;
+            }
             if (!snapshot || snapshot->allocation.state != placement_allocation_state_t::active
-                || snapshot->authority_owner_generation != request.target.authority_owner_generation
+                || (snapshot->object_generation == request.target.object_generation
+                    && snapshot->authority_owner_generation
+                         != request.target.authority_owner_generation)
                 || snapshot->owner.owner_id != request.target.owner_id
                 || static_cast<std::uint64_t> (snapshot->owner.lease_generation)
                      != request.target.owner_lease_generation

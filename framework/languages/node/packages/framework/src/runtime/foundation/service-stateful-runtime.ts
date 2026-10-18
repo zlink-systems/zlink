@@ -2039,6 +2039,10 @@ export class ServiceStatefulRuntime {
     this.spotMessageFollow.clear();
   }
 
+  cancelPendingOperations(reason: unknown): void {
+    this.operations.failAll(reason);
+  }
+
   private async ingress(
     record: RawServiceIngressRecord
   ): Promise<RawServicePumpResult | undefined> {

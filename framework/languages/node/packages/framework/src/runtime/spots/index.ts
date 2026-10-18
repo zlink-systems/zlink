@@ -1130,19 +1130,24 @@ export class DefaultZLinkSpotManager {
   }
 
   async drainForShutdown(meshName: string, signal?: AbortSignal, deadline?: Date): Promise<void> {
-    const results = await Promise.allSettled(
-      this.activations
-        .activeActivations()
-        .filter((activation) => activation.meshName === meshName)
-        .map((activation) =>
-          this.closeWithReason(
-            meshName,
-            activation.spotId,
-            signal,
-            ZLinkSpotCloseReason.HostShutdown,
-            deadline
+    // The host bounds observation of the whole Close, including lifecycle admission.
+    // The owned operation keeps the gate and scopes until its running turns settle.
+    const results = await awaitWithAbort(
+      Promise.allSettled(
+        this.activations
+          .activeActivations()
+          .filter((activation) => activation.meshName === meshName)
+          .map((activation) =>
+            this.closeWithReason(
+              meshName,
+              activation.spotId,
+              undefined,
+              ZLinkSpotCloseReason.HostShutdown,
+              deadline
+            )
           )
-        )
+      ),
+      signal
     );
     const errors = results
       .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
@@ -1305,7 +1310,7 @@ export class DefaultZLinkSpotManager {
     const seal = await this.beginCloseAuthority(meshName, spotId, operation, signal);
     if (seal === undefined) return false;
     if (seal !== true) {
-      await this.activationLifecycle.sealForClose(operation.activation, seal);
+      await this.activationLifecycle.sealForClose(operation.activation, seal, signal);
     } else {
       await operation.activation.executionBarrier.waitForStartedTurns(signal);
     }
