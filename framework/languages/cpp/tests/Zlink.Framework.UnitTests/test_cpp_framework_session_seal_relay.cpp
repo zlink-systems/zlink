@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+#include "../support/async_application_dispatch.hpp"
 #include "../support/runtime_failure_fixture.hpp"
 
 #include <zlink/framework.hpp>
@@ -82,7 +83,11 @@ struct dispatch_loop_t
                      Progress progress) :
         owner (value), thread ([this, dispatch, progress] {
             while (!stopped.load ()) {
-                const auto result = owner.dispatch_ready (dispatch).result ();
+                const auto result =
+                  owner
+                    .dispatch_ready (
+                      ::zlink::framework::test::async_application_dispatch (dispatch))
+                    .result ();
                 EXPECT_TRUE (result);
                 if (!result)
                     return;
@@ -629,9 +634,13 @@ TEST (FrameworkSessionSealRelay, different_sessions_do_not_share_replies_for_sam
                   record.complete_stateful_dispatch ();
           };
           bool deferred = false;
-          const auto handled = spots.dispatch_mesh_record (
-            owner, record, parts, header.value (), *node->root_services, serializers, complete,
-            &deferred, record.before_application_handler);
+          const auto handled =
+            spots
+              .dispatch_mesh_record (owner, record, parts, header.value (), *node->root_services,
+                                     serializers, complete, &deferred,
+                                     record.before_application_handler)
+              .result ()
+              .value ();
           EXPECT_TRUE (handled);
           if (!deferred)
               complete ();
@@ -759,9 +768,12 @@ TEST (FrameworkSessionSealRelay, different_sessions_do_not_share_replies_for_sam
             return result_t<std::optional<zlink::message_t>>::failure (
               framework_error_kind_t::protocol_error, "replayed request header was invalid");
         bool deferred = false;
-        if (!spots.dispatch_mesh_record (
-              owner, record, parts, decoded.value (), *node->root_services, serializers, [] {},
-              &deferred))
+        if (!spots
+               .dispatch_mesh_record (
+                 owner, record, parts, decoded.value (), *node->root_services, serializers, [] {},
+                 &deferred)
+               .result ()
+               .value ())
             return result_t<std::optional<zlink::message_t>>::failure (
               framework_error_kind_t::internal_failure, "replayed request was not dispatched");
         if (reply.wait_for (2s) != std::future_status::ready)

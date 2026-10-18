@@ -663,22 +663,22 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     void configure_actor_create_operations (actor_create_operation_target_t target);
     void configure_actor_join_operations (actor_join_operation_target_t target);
     using actor_join_relocation_prepare_validator_t =
-      std::function<std::optional<bool> (const protocol::relocation_prepare_t &)>;
+      std::function<task_t<std::optional<bool>> (const protocol::relocation_prepare_t &)>;
     using actor_join_recovery_consumer_t =
-      std::function<bool (stateful::frozen_object_state_t &,
-                          const stateful::object_ref_t &,
-                          const protocol::relocation_prepare_t &)>;
+      std::function<task_t<bool> (stateful::frozen_object_state_t &,
+                                  const stateful::object_ref_t &,
+                                  const protocol::relocation_prepare_t &)>;
     /* Cleanup symmetry for the consumer above (15 §4.2: each Actor is
      * admitted independently). Any staging failure after the consumer took
      * the ZLJR record must give the entry back, or every later attempt for
      * that Actor on this node is refused by the leftover. */
     using actor_join_recovery_rollback_t =
-      std::function<void (const std::string &, const stateful::object_ref_t &)>;
+      std::function<task_t<void> (const std::string &, const stateful::object_ref_t &)>;
     using actor_relocation_authority_resolver_t =
       std::function<std::optional<runtime::actor_authority_payload_t> (
         const stateful::object_ref_t &)>;
     using actor_join_committed_authority_adopter_t =
-      std::function<bool (const stateful::object_ref_t &, std::uint64_t, std::uint64_t)>;
+      std::function<task_t<bool> (stateful::object_ref_t, std::uint64_t, std::uint64_t)>;
     void
     configure_actor_join_relocation (actor_join_relocation_prepare_validator_t prepare_validator,
                                      actor_join_recovery_consumer_t recovery_consumer,
@@ -814,17 +814,14 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
                                                        const std::vector<zlink::message_t> &parts,
                                                        pending_operation_t &operation,
                                                        std::chrono::milliseconds timeout);
-    task_t<std::size_t> dispatch_ready (
-      const std::function<void (
-        const ready_record_t &, const receive_record_t &, std::vector<zlink::message_t>)> &dispatch,
-      bool accept_application_receive = true,
-      const std::function<bool ()> &next_application_receive = {});
-    task_t<bool> dispatch_application_owner (
-      std::string owner,
-      const std::function<void (
-        const ready_record_t &, const receive_record_t &, std::vector<zlink::message_t>)> dispatch,
-      std::function<void ()> started,
-      std::function<void ()> rejected);
+    task_t<std::size_t> dispatch_ready (mesh::service_mailbox_t::application_dispatch_t dispatch,
+                                        bool accept_application_receive = true,
+                                        std::function<bool ()> next_application_receive = {});
+    task_t<bool>
+    dispatch_application_owner (std::string owner,
+                                mesh::service_mailbox_t::application_dispatch_t dispatch,
+                                std::function<void ()> started,
+                                std::function<void ()> rejected);
     bool wait_for_dispatch_activity (
       std::chrono::milliseconds timeout,
       bool accept_application_receive,
@@ -944,18 +941,15 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
                              foundation::operation_terminal_t terminal,
                              zlink::message_t payload);
     task_t<std::size_t> dispatch_user_spot_operations ();
-    task_t<std::size_t> dispatch_application_claim (
-      mesh::service_mailbox_claim_t claim,
-      const std::function<void (
-        const ready_record_t &, const receive_record_t &, std::vector<zlink::message_t>)> dispatch);
+    task_t<std::size_t>
+    dispatch_application_claim (mesh::service_mailbox_claim_t claim,
+                                mesh::service_mailbox_t::application_dispatch_t dispatch);
     task_t<bool> notify_stateful_owner (const stateful::object_ref_t &owner);
-    bool claim_stateful_owner (const stateful::object_ref_t &object,
-                               const mesh::service_mailbox_t::application_dispatch_t &dispatch);
-    task_t<bool>
-    dispatch_stateful_owner (const stateful::object_ref_t &object,
-                             const std::function<void (const ready_record_t &,
-                                                       const receive_record_t &,
-                                                       std::vector<zlink::message_t>)> &dispatch);
+    std::optional<local_application_dispatch_t>
+    claim_stateful_owner (stateful::object_ref_t object,
+                          std::function<void (std::exception_ptr)> &dispatch_failure);
+    task_t<bool> dispatch_stateful_owner (const stateful::object_ref_t &object,
+                                          mesh::service_mailbox_t::application_dispatch_t dispatch);
     bool dispatch_bound_session_send (const mesh::service_mailbox_record_t &record);
 
     host_options_t _options;
@@ -1024,7 +1018,7 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
       const std::function<void (const std::vector<std::uint8_t> &)> &reconcile);
     using relocation_attempt_key_t = std::tuple<std::uint64_t, std::uint64_t, std::uint64_t>;
     struct relocation_target_attempt_t;
-    bool try_finalize_relocation_target (const relocation_attempt_key_t &key);
+    task_t<bool> try_finalize_relocation_target (relocation_attempt_key_t key);
     /* 28/52: command 44 (session_relocation_route) is submitted one-way
      * exactly once per route after the target CAS commits (S2) -- there is
      * no application reply and no retry loop; a late duplicate could cross
@@ -1128,8 +1122,9 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     };
     std::map<relocation_attempt_key_t, pending_relocation_assembly_t> _relocation_assemblies;
     static constexpr auto relocation_assembly_retention = std::chrono::seconds (10);
-    void complete_relocation_assembly (const relocation_attempt_key_t &key,
-                                       std::shared_ptr<pending_relocation_assembly_t> pending);
+    task_t<void>
+    complete_relocation_assembly (relocation_attempt_key_t key,
+                                  std::shared_ptr<pending_relocation_assembly_t> pending);
     task_t<void>
     reply_relocation_assembly_failure (relocation_attempt_key_t key,
                                        std::shared_ptr<const pending_relocation_assembly_t> pending,
@@ -1137,8 +1132,8 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     void reply_relocation_assembly_failure (
       const pending_relocation_assembly_t &pending,
       protocol::framework_error_code code = protocol::framework_error_code::relocationDataLost);
-    void rollback_actor_join_recoveries (
-      const std::vector<std::pair<std::string, stateful::object_ref_t>> &consumed) noexcept;
+    task_t<void> rollback_actor_join_recoveries (
+      std::vector<std::pair<std::string, stateful::object_ref_t>> consumed);
     void
     discard_relocation_assembly_staging (const pending_relocation_assembly_t &pending,
                                          const relocation_assembly_staging_t &staging) noexcept;
@@ -1177,16 +1172,16 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     bool stage_relocation_record (const stateful::object_ref_t &target,
                                   const protocol::relocation_data_t &data,
                                   std::uint64_t participant_id);
-    void poll_relocation_target_attempts ();
+    task_t<void> poll_relocation_target_attempts ();
     static bool relocation_target_wire_ready (const relocation_target_attempt_t &attempt) noexcept;
     static bool relocation_target_terminal (const relocation_target_attempt_t &attempt);
     static std::optional<relocation_target_attempt_t>
     take_relocation_target_discard (relocation_target_attempt_t &attempt);
-    void discard_unverified_relocation_targets (
-      const std::vector<relocation_attempt_key_t> &observed = {});
-    void discard_relocation_target_attempts (
+    task_t<void>
+    discard_unverified_relocation_targets (std::vector<relocation_attempt_key_t> observed = {});
+    task_t<void> discard_relocation_target_attempts (
       std::vector<relocation_target_attempt_t> attempts,
-      std::optional<framework_exception_t> failure = std::nullopt) noexcept;
+      std::optional<framework_exception_t> failure = std::nullopt);
     std::map<relocation_attempt_key_t, relocation_target_attempt_t> _relocation_target_attempts;
     std::shared_ptr<stateful::authority_relocation_port_t> _relocation_authority;
     std::shared_ptr<stateful::aggregate_authority_port_t> _aggregate_relocation_authority;

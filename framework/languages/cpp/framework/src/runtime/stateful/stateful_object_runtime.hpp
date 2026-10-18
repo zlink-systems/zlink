@@ -9,13 +9,11 @@
 #include <zlink/framework/contracts/dispatch/task.hpp>
 
 #include <array>
-#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
 #include <functional>
 #include <map>
-#include <mutex>
 #include <memory>
 #include <tuple>
 #include <optional>
@@ -270,8 +268,8 @@ struct relocation_ingress_batch_t
 class stateful_object_runtime_t
 {
   public:
-    using relocation_state_capture_t = std::function<frozen_object_state_t (
-      const object_ref_t &, const std::string &, std::stop_token)>;
+    using relocation_state_capture_t =
+      std::function<task_t<frozen_object_state_t> (object_ref_t, std::string, std::stop_token)>;
     using relocation_state_restore_t =
       std::function<bool (const frozen_object_state_t &, const object_ref_t &, std::stop_token)>;
     // Application materialization is a second, internal boundary from the
@@ -284,10 +282,11 @@ class stateful_object_runtime_t
                                   const object_ref_t &,
                                   const std::optional<object_ref_t> &,
                                   std::stop_token)>;
-    using relocation_state_commit_t = std::function<bool (const std::vector<object_ref_t> &)>;
-    using relocation_state_abort_t = std::function<void (const std::vector<object_ref_t> &)>;
+    using relocation_state_commit_t = std::function<task_t<bool> (std::vector<object_ref_t>)>;
+    using relocation_state_abort_t = std::function<task_t<void> (std::vector<object_ref_t>)>;
 
     stateful_object_runtime_t ();
+    explicit stateful_object_runtime_t (runtime::offload_executor_t &lane_executor);
     ~stateful_object_runtime_t ();
 
     void configure_relocation_state (relocation_state_capture_t capture,
@@ -373,8 +372,13 @@ class stateful_object_runtime_t
     std::pair<stateful_error_t, relocation_ingress_batch_t> begin_relocation_boundary (
       std::uint64_t token,
       std::function<void (const object_ref_t &, const turn_record_t &)> deliver = {});
+    task_t<std::pair<stateful_error_t, relocation_ingress_batch_t>>
+    begin_relocation_boundary_async (
+      std::uint64_t token,
+      std::function<void (const object_ref_t &, const turn_record_t &)> deliver = {});
     // Only an exact target abort before Cutover may reopen source dispatch.
     stateful_error_t abort_relocation_before_cutover (std::uint64_t token);
+    task_t<stateful_error_t> abort_relocation_before_cutover_async (std::uint64_t token);
     // Makes the source permanently follow-only once Cutover has been queued
     // (or its enqueue outcome is uncertain).
     stateful_error_t finalize_relocation_cutover (
@@ -382,6 +386,10 @@ class stateful_object_runtime_t
       std::optional<std::function<void (const object_ref_t &, const turn_record_t &)>> deliver =
         std::nullopt);
     stateful_error_t abort_relocation (std::uint64_t token);
+    task_t<stateful_error_t> finalize_relocation_cutover_async (
+      std::uint64_t token,
+      std::optional<std::function<void (const object_ref_t &, const turn_record_t &)>> deliver =
+        std::nullopt);
     std::pair<stateful_error_t, std::vector<object_ref_t>>
     commit_relocation_aggregate (std::uint64_t token, std::string target_node_id);
     task_t<stateful_error_t>
@@ -405,6 +413,16 @@ class stateful_object_runtime_t
     stateful_error_t
     abort_relocation_restore_aggregate (const std::vector<object_ref_t> &targets,
                                         const relocation_restore_identity_t &identity);
+    task_t<stateful_error_t>
+    commit_relocation_restore_async (object_ref_t target, relocation_restore_identity_t identity);
+    task_t<stateful_error_t>
+    commit_relocation_restore_aggregate_async (std::vector<object_ref_t> targets,
+                                               relocation_restore_identity_t identity);
+    task_t<stateful_error_t>
+    abort_relocation_restore_async (object_ref_t target, relocation_restore_identity_t identity);
+    task_t<stateful_error_t>
+    abort_relocation_restore_aggregate_async (std::vector<object_ref_t> targets,
+                                              relocation_restore_identity_t identity);
 
   private:
     struct object_key_t
@@ -484,14 +502,18 @@ class stateful_object_runtime_t
     static std::size_t retained_bytes (const turn_record_t &record) noexcept;
     void move_held_application_locked (object_record_t &object);
     void release_pending_capacity_locked (const object_record_t &record);
-    void notify_quiescence () noexcept;
-    void wait_for_quiescence_change (std::uint64_t observed);
+    void notify_quiescence ();
+    stateful_error_t abort_relocation_before_cutover_on_lane (std::uint64_t token);
+    std::pair<stateful_error_t, relocation_ingress_batch_t> begin_relocation_boundary_on_lane (
+      std::uint64_t token,
+      std::function<void (const object_ref_t &, const turn_record_t &)> deliver);
+    stateful_error_t finalize_relocation_cutover_on_lane (
+      std::uint64_t token,
+      std::optional<std::function<void (const object_ref_t &, const turn_record_t &)>> deliver);
 
     runtime::offload_executor_t _lane_executor;
     mutable runtime::state_lane_t _lane{_lane_executor};
-    std::mutex _quiescence_mutex;
-    std::condition_variable _quiescence;
-    std::atomic_uint64_t _quiescence_epoch = 0;
+    std::shared_ptr<task_completion_source_t<void>> _quiescence_changed;
     std::vector<placement_candidate_t> _candidates;
     std::map<object_key_t, object_record_t> _objects;
     std::map<object_key_t, std::uint64_t> _last_generation;

@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+#include "../support/async_application_dispatch.hpp"
 #include "runtime/mesh/mesh_node_host_service.hpp"
 #include "../support/runtime_failure_fixture.hpp"
 #include "runtime/backend/raw_binding_adapter.hpp"
@@ -75,6 +76,88 @@ namespace zlink::framework::runtime::host
 struct public_host_runtime_test_access_t
 {
     using key_t = public_host_runtime_t::relocation_attempt_key_t;
+
+    struct inventory_authority_t final : stateful::authority_relocation_port_t
+    {
+        std::vector<stateful::relocation_participant_identity_t> rows;
+        std::optional<std::vector<stateful::relocation_participant_identity_t>>
+        list_participant_identities () override
+        {
+            return rows;
+        }
+        stateful::source_relocation_settlement_t
+        settle_source_relocation (const stateful::relocation_authority_fence_t &,
+                                  const std::vector<stateful::object_ref_t> &,
+                                  bool) override
+        {
+            return {};
+        }
+        stateful::authority_publish_result_t publish (const stateful::object_ref_t &,
+                                                      const stateful::object_ref_t &,
+                                                      location_owner_token_t,
+                                                      object_creation_target_t,
+                                                      std::string,
+                                                      std::uint32_t,
+                                                      stateful::inventory_digest_t,
+                                                      std::vector<std::byte>,
+                                                      std::string,
+                                                      protocol::relocation_id_t,
+                                                      location_owner_token_t) override
+        {
+            return {};
+        }
+        std::optional<stateful::authority_relocation_reference_t>
+        read (stateful::object_kind_t, const std::string &) override
+        {
+            return std::nullopt;
+        }
+    };
+
+    static task_t<void> consume_payload (public_host_runtime_t &host,
+                                         protocol::relocation_prepare_t prepare,
+                                         const std::vector<stateful::frozen_object_state_t> &frozen)
+    {
+        auto authority = std::make_shared<inventory_authority_t> ();
+        for (const auto &saved : frozen)
+            authority->rows.push_back (
+              {saved.owner, saved.stable_type,
+               saved.owner.kind == stateful::object_kind_t::actor
+                 ? std::make_optional (std::make_pair (prepare.object.object_id, 1u))
+                 : std::nullopt});
+        host._relocation_authority = std::move (authority);
+        const auto payload =
+          stateful::maintenance_runtime_t::encode_envelope (frozen, prepare.relocation);
+        const auto manifest = stateful::plan_relocation_payload (payload, payload.size ());
+        auto pending = std::make_shared<public_host_runtime_t::pending_relocation_assembly_t> (
+          public_host_runtime_t::pending_relocation_assembly_t{
+            prepare,
+            {},
+            stateful::relocation_state_assembly_t{prepare.relocation,
+                                                  prepare.target_attempt_generation,
+                                                  prepare.coordinator, prepare.object, manifest}});
+        const auto chunk = stateful::make_relocation_state_chunk (
+          prepare.relocation, prepare.target_attempt_generation, prepare.coordinator,
+          prepare.object, payload, 0, payload.size ());
+        if (pending->assembly.accept (chunk) != stateful::relocation_assembly_result_t::completed)
+            throw std::runtime_error ("consumer fixture assembly rejected");
+        return host.complete_relocation_assembly (
+          {prepare.relocation.high, prepare.relocation.low, prepare.target_attempt_generation},
+          std::move (pending));
+    }
+
+    static bool register_consumed_target (public_host_runtime_t &host,
+                                          const protocol::relocation_prepare_t &prepare,
+                                          const stateful::frozen_object_state_t &saved)
+    {
+        return host.register_relocation_target_queue (
+          prepare, saved.owner,
+          {saved.owner.kind == stateful::object_kind_t::actor
+             ? protocol::relocation_object_kind_t::actor
+             : protocol::relocation_object_kind_t::user_spot,
+           saved.stable_type, saved.owner.key, saved.owner.object_generation,
+           saved.owner.authority_owner_generation},
+          1);
+    }
 
     static bool restore_saved (public_host_runtime_t &host,
                                const protocol::relocation_prepare_t &prepare,
@@ -528,9 +611,12 @@ void verify_actor_calls_keep_selected_route_until_follow_notice ()
        || !new_target->has_admitted_peer (old_status.routing_id (),
                                           old_status.lifecycle_generation ()))
       && std::chrono::steady_clock::now () < connected_deadline) {
-        (void) await_task (source->dispatch_ready (discard));
-        (void) await_task (old_target->dispatch_ready (discard));
-        (void) await_task (new_target->dispatch_ready (discard));
+        (void) await_task (
+          source->dispatch_ready (::zlink::framework::test::async_application_dispatch (discard)));
+        (void) await_task (old_target->dispatch_ready (
+          ::zlink::framework::test::async_application_dispatch (discard)));
+        (void) await_task (new_target->dispatch_ready (
+          ::zlink::framework::test::async_application_dispatch (discard)));
         std::this_thread::sleep_for (1ms);
     }
     assert (
@@ -721,53 +807,55 @@ void verify_actor_calls_keep_selected_route_until_follow_notice ()
     std::atomic<bool> stop_target_dispatch{false};
     std::thread target_dispatch ([&] {
         while (!stop_target_dispatch.load (std::memory_order_acquire)) {
-            (void) await_task (new_target->dispatch_ready (
-              [&] (const host::ready_record_t &ready, const host::receive_record_t &record,
-                   std::vector<zlink::message_t> parts) {
-                  assert (ready.owner_kind == host::owner_kind_t::spot);
-                  assert (ready.spot_id == "actor-send-spot");
-                  assert (record.kind == host::record_kind_t::spot_request);
-                  runtime::messaging::message_parts_t encoded (std::move (parts));
-                  runtime::messaging::envelope_codec_t codec;
-                  const auto header = codec.decode_header (encoded);
-                  const auto body = codec.decode_body (encoded);
-                  assert (header);
-                  assert (body);
-                  assert (header.value ().message_name == "__zlink.spot.actor.packet");
-                  const auto request = nlohmann::json::parse (
-                    detail::encoded_payload_from_raw (body.value ()).to_string ());
-                  assert (request.at ("actorId").get<std::string> () == key.global_id);
-                  assert (request.at ("actorNodeRid").get<std::string> ()
-                          == new_actor.node_rid ().value ());
-                  assert (request.at ("actorGeneration").get<std::uint64_t> ()
-                          == new_actor.object_generation ());
-                  assert (request.at ("messageFollowHopCount").get<std::uint8_t> () == 1);
-                  const auto packet_name = request.at ("packetName").get<std::string> ();
-                  if (packet_name == "B6Request") {
-                      request_deliveries.fetch_add (1, std::memory_order_relaxed);
-                  } else {
-                      assert (packet_name == "B7OneWay");
-                      one_way_deliveries.fetch_add (1, std::memory_order_relaxed);
-                  }
-                  const bool has_reply = packet_name == "B6Request";
-                  const auto reply_body = nlohmann::json{
-                    {"actorRefPresent", true},
-                    {"actorNodeRid", std::string (new_actor.node_rid ().value ())},
-                    {"actorType", std::string (detail::actor_ref_access_t::actor_type (new_actor))},
-                    {"actorId", std::string (new_actor.actor_id ().value ())},
-                    {"actorGeneration", new_actor.object_generation ()},
-                    {"hasReply", has_reply},
-                    {"payload", has_reply
-                                  ? "ImZvbGxvdy1yZXBseSI="
-                                  : ""}}.dump ();
-                  detail::channel_reply_writer_t replies;
-                  auto reply = replies.reply_raw_envelope (
-                    replies.create_reply_header (runtime::messaging::message_kind_t::response,
-                                                 header.value ().channel_name, header.value ()),
-                    detail::encoded_payload_to_raw (encoded_payload_t::from_string (reply_body)));
-                  assert (host::reply (record.reply_token, reply.items ())
-                          == zlink::submit_result_t::ok);
-              }));
+            (void) await_task (
+              new_target->dispatch_ready (::zlink::framework::test::async_application_dispatch (
+                [&] (const host::ready_record_t &ready, const host::receive_record_t &record,
+                     std::vector<zlink::message_t> parts) {
+                    assert (ready.owner_kind == host::owner_kind_t::spot);
+                    assert (ready.spot_id == "actor-send-spot");
+                    assert (record.kind == host::record_kind_t::spot_request);
+                    runtime::messaging::message_parts_t encoded (std::move (parts));
+                    runtime::messaging::envelope_codec_t codec;
+                    const auto header = codec.decode_header (encoded);
+                    const auto body = codec.decode_body (encoded);
+                    assert (header);
+                    assert (body);
+                    assert (header.value ().message_name == "__zlink.spot.actor.packet");
+                    const auto request = nlohmann::json::parse (
+                      detail::encoded_payload_from_raw (body.value ()).to_string ());
+                    assert (request.at ("actorId").get<std::string> () == key.global_id);
+                    assert (request.at ("actorNodeRid").get<std::string> ()
+                            == new_actor.node_rid ().value ());
+                    assert (request.at ("actorGeneration").get<std::uint64_t> ()
+                            == new_actor.object_generation ());
+                    assert (request.at ("messageFollowHopCount").get<std::uint8_t> () == 1);
+                    const auto packet_name = request.at ("packetName").get<std::string> ();
+                    if (packet_name == "B6Request") {
+                        request_deliveries.fetch_add (1, std::memory_order_relaxed);
+                    } else {
+                        assert (packet_name == "B7OneWay");
+                        one_way_deliveries.fetch_add (1, std::memory_order_relaxed);
+                    }
+                    const bool has_reply = packet_name == "B6Request";
+                    const auto reply_body = nlohmann::json{
+                      {"actorRefPresent", true},
+                      {"actorNodeRid", std::string (new_actor.node_rid ().value ())},
+                      {"actorType",
+                       std::string (detail::actor_ref_access_t::actor_type (new_actor))},
+                      {"actorId", std::string (new_actor.actor_id ().value ())},
+                      {"actorGeneration", new_actor.object_generation ()},
+                      {"hasReply", has_reply},
+                      {"payload", has_reply
+                                    ? "ImZvbGxvdy1yZXBseSI="
+                                    : ""}}.dump ();
+                    detail::channel_reply_writer_t replies;
+                    auto reply = replies.reply_raw_envelope (
+                      replies.create_reply_header (runtime::messaging::message_kind_t::response,
+                                                   header.value ().channel_name, header.value ()),
+                      detail::encoded_payload_to_raw (encoded_payload_t::from_string (reply_body)));
+                    assert (host::reply (record.reply_token, reply.items ())
+                            == zlink::submit_result_t::ok);
+                })));
             std::this_thread::sleep_for (1ms);
         }
     });
@@ -785,11 +873,15 @@ void verify_actor_calls_keep_selected_route_until_follow_notice ()
         auto completion = std::make_shared<std::promise<bool>> ();
         old_dispatch_future = completion->get_future ();
         bool terminal_deferred = false;
-        const auto accepted = old_spots.dispatch_mesh_record (
-          ready, record, parts,
-          zlink::framework::runtime::decode_mesh_record_header (record, parts, false).value (),
-          provider, serializers, [completion] { completion->set_value (true); },
-          &terminal_deferred);
+        const auto accepted =
+          old_spots
+            .dispatch_mesh_record (
+              ready, record, parts,
+              zlink::framework::runtime::decode_mesh_record_header (record, parts, false).value (),
+              provider, serializers, [completion] { completion->set_value (true); },
+              &terminal_deferred)
+            .result ()
+            .value ();
         if (!accepted || !terminal_deferred)
             completion->set_value (accepted);
     };
@@ -822,7 +914,8 @@ void verify_actor_calls_keep_selected_route_until_follow_notice ()
     while ((!old_dispatch_future.valid ()
             || old_dispatch_future.wait_for (0ms) != std::future_status::ready)
            && std::chrono::steady_clock::now () < request_deadline) {
-        (void) await_task (old_target->dispatch_ready (dispatch_follow));
+        (void) await_task (old_target->dispatch_ready (
+          ::zlink::framework::test::async_application_dispatch (dispatch_follow)));
         std::this_thread::sleep_for (1ms);
     }
     assert (old_dispatch_future.valid ());
@@ -842,7 +935,8 @@ void verify_actor_calls_keep_selected_route_until_follow_notice ()
             || old_dispatch_future.wait_for (0ms) != std::future_status::ready
             || one_way_deliveries.load (std::memory_order_acquire) == 0)
            && std::chrono::steady_clock::now () < one_way_deadline) {
-        (void) await_task (old_target->dispatch_ready (dispatch_follow));
+        (void) await_task (old_target->dispatch_ready (
+          ::zlink::framework::test::async_application_dispatch (dispatch_follow)));
         std::this_thread::sleep_for (1ms);
     }
     assert (old_dispatch_future.valid ());
@@ -858,7 +952,8 @@ void verify_actor_calls_keep_selected_route_until_follow_notice ()
     while ((invalidated_route_count.load (std::memory_order_acquire) == 0
             || request_future.wait_for (0ms) != std::future_status::ready)
            && std::chrono::steady_clock::now () < notice_deadline) {
-        (void) await_task (source->dispatch_ready (discard));
+        (void) await_task (
+          source->dispatch_ready (::zlink::framework::test::async_application_dispatch (discard)));
         std::this_thread::sleep_for (1ms);
     }
     assert (invalidated_route_count.load (std::memory_order_acquire) == 1);
@@ -945,11 +1040,13 @@ void verify_actor_calls_keep_selected_route_until_follow_notice ()
     assert (collect_actor_sends (*old_target, 2s) == 1);
     assert (collect_actor_sends (*new_target, 20ms) == 0);
 
-    assert (old_spots.matches_actor_message_follow_source (old_actor, source_fence));
+    assert (
+      old_spots.matches_actor_message_follow_source (old_actor, source_fence).result ().value ());
     assert (
       old_spots.cleanup_expired_actor_admissions_at (std::chrono::steady_clock::time_point::max ())
       != 0);
-    assert (!old_spots.matches_actor_message_follow_source (old_actor, source_fence));
+    assert (
+      !old_spots.matches_actor_message_follow_source (old_actor, source_fence).result ().value ());
     assert (
       old_spots.cleanup_expired_actor_admissions_at (std::chrono::steady_clock::time_point::max ())
       == 0);
@@ -987,7 +1084,8 @@ void verify_actor_calls_keep_selected_route_until_follow_notice ()
     const auto completion_deadline = std::chrono::steady_clock::now () + 2s;
     while (timed_out_request.wait_for (0ms) != std::future_status::ready
            && std::chrono::steady_clock::now () < completion_deadline) {
-        (void) await_task (source->dispatch_ready (discard));
+        (void) await_task (
+          source->dispatch_ready (::zlink::framework::test::async_application_dispatch (discard)));
     }
     assert (timed_out_request.wait_for (0ms) == std::future_status::ready);
     const auto timed_out = timed_out_request.get ();
@@ -1156,8 +1254,10 @@ void verify_mesh_stop_drains_admitted_request_completion ()
             || !target.has_admitted_peer (source.status ().routing_id (),
                                           source.status ().lifecycle_generation ()))
            && std::chrono::steady_clock::now () < connected_deadline) {
-        (void) source.dispatch_ready (discard);
-        (void) target.dispatch_ready (discard);
+        (void) source.dispatch_ready (
+          ::zlink::framework::test::async_application_dispatch (discard));
+        (void) target.dispatch_ready (
+          ::zlink::framework::test::async_application_dispatch (discard));
         std::this_thread::sleep_for (1ms);
     }
     assert (source.has_admitted_peer (target_status.routing_id (),
@@ -1175,12 +1275,12 @@ void verify_mesh_stop_drains_admitted_request_completion ()
     std::optional<host::reply_token_t> delayed_reply;
     const auto admitted_deadline = std::chrono::steady_clock::now () + 2s;
     while (!delayed_reply && std::chrono::steady_clock::now () < admitted_deadline) {
-        (void) target.dispatch_ready ([&] (const host::ready_record_t &,
-                                           const host::receive_record_t &record,
-                                           std::vector<zlink::message_t>) {
-            if (record.kind == host::record_kind_t::node_request)
-                delayed_reply = record.reply_token;
-        });
+        (void) target.dispatch_ready (::zlink::framework::test::async_application_dispatch (
+          [&] (const host::ready_record_t &, const host::receive_record_t &record,
+               std::vector<zlink::message_t>) {
+              if (record.kind == host::record_kind_t::node_request)
+                  delayed_reply = record.reply_token;
+          }));
         std::this_thread::sleep_for (1ms);
     }
     assert (delayed_reply);
@@ -1273,8 +1373,10 @@ void verify_remote_bound_session_bind_classifies_retryable_outcomes ()
             || !target.has_admitted_peer (source.status ().routing_id (),
                                           source.status ().lifecycle_generation ()))
            && std::chrono::steady_clock::now () < peer_deadline) {
-        (void) source.dispatch_ready ([] (const auto &, const auto &, auto) {});
-        (void) target.dispatch_ready ([] (const auto &, const auto &, auto) {});
+        (void) source.dispatch_ready (::zlink::framework::test::async_application_dispatch (
+          [] (const auto &, const auto &, auto) {}));
+        (void) target.dispatch_ready (::zlink::framework::test::async_application_dispatch (
+          [] (const auto &, const auto &, auto) {}));
         std::this_thread::sleep_for (1ms);
     }
     assert (source.has_admitted_peer (target_rid, target.status ().lifecycle_generation ()));
@@ -1326,7 +1428,8 @@ void verify_remote_bound_session_bind_classifies_retryable_outcomes ()
                     replied = true;
                 }
             }
-            (void) source.dispatch_ready ([] (const auto &, const auto &, auto) {});
+            (void) source.dispatch_ready (::zlink::framework::test::async_application_dispatch (
+              [] (const auto &, const auto &, auto) {}));
             std::this_thread::sleep_for (1ms);
         }
         assert (replied);
@@ -1412,7 +1515,8 @@ void verify_remote_bound_session_bind_classifies_retryable_outcomes ()
                 admitted_without_reply = true;
             }
         }
-        (void) source.dispatch_ready ([] (const auto &, const auto &, auto) {});
+        (void) source.dispatch_ready (::zlink::framework::test::async_application_dispatch (
+          [] (const auto &, const auto &, auto) {}));
         std::this_thread::sleep_for (1ms);
     }
     assert (admitted_without_reply);
@@ -1625,7 +1729,12 @@ void verify_bound_session_push_uses_session_registry_when_gateway_projection_rej
       source_node.to_bytes (), std::nullopt, std::nullopt, 19}));
     const auto noop_dispatch = [] (const host::ready_record_t &, const host::receive_record_t &,
                                    std::vector<zlink::message_t>) {};
-    assert (session_owner->dispatch_ready (noop_dispatch).result ().value () == 1);
+    assert (
+      session_owner
+        ->dispatch_ready (::zlink::framework::test::async_application_dispatch (noop_dispatch))
+        .result ()
+        .value ()
+      == 1);
     const auto current = session_owner->sessions ().current_binding (target.key);
     const auto lagging_projection =
       gateway.bound_session_route_async (previous_actor).result ().value ();
@@ -1694,7 +1803,9 @@ void verify_bound_session_push_admission_uses_only_session_owned_fields ()
             {protocol::encode_bound_session_send (send),
              protocol::encode_application_payload (application)}),
           actor_node.to_bytes (), std::nullopt, std::nullopt, 13}));
-        (void) session_owner->dispatch_ready (noop_dispatch).result ();
+        (void) session_owner
+          ->dispatch_ready (::zlink::framework::test::async_application_dispatch (noop_dispatch))
+          .result ();
     };
 
     // Owner lifecycle fields changed after the binding was made.
@@ -2015,8 +2126,10 @@ void verify_public_host_route_fence_reads_store_without_second_cache (bool relea
     while (
       !ready_peer (source->transport ().topology (), target->status ().routing_id ().to_bytes ())
       && std::chrono::steady_clock::now () < connect_deadline) {
-        (void) source->dispatch_ready (noop_dispatch);
-        (void) target->dispatch_ready (noop_dispatch);
+        (void) source->dispatch_ready (
+          ::zlink::framework::test::async_application_dispatch (noop_dispatch));
+        (void) target->dispatch_ready (
+          ::zlink::framework::test::async_application_dispatch (noop_dispatch));
         std::this_thread::sleep_for (1ms);
     }
     assert (source->transport ().topology ().peer (target->status ().routing_id ().to_bytes ()));
@@ -3154,7 +3267,9 @@ void verify_verified_remote_stream_binding ()
 void verify_message_follow_route_admission_and_suppression ()
 {
     using namespace zlink::framework;
-    spots::actor_transfer_coordinator_t coordinator;
+    zlink::framework::runtime::offload_executor_t coordinator_executor;
+    zlink::framework::runtime::state_lane_t coordinator_lane (coordinator_executor);
+    spots::actor_transfer_coordinator_t coordinator (coordinator_executor, coordinator_lane);
     const actor_ref_t target = detail::actor_ref_access_t::make (
       node_rid_t::from_string ("node-b"), "player", "actor-message-follow", 7);
     const spot_route_t route{node_rid_t::from_string ("node-b"), "spot-b", "game"};
@@ -3299,7 +3414,9 @@ void verify_message_follow_route_admission_and_suppression ()
 void verify_actor_commit_is_replayable_until_deadline ()
 {
     using namespace zlink::framework;
-    spots::actor_transfer_coordinator_t coordinator;
+    zlink::framework::runtime::offload_executor_t coordinator_executor;
+    zlink::framework::runtime::state_lane_t coordinator_lane (coordinator_executor);
+    spots::actor_transfer_coordinator_t coordinator (coordinator_executor, coordinator_lane);
     std::size_t activity = 0;
     coordinator.set_activity_handler ([&] { ++activity; });
     assert (!coordinator.next_activity ());
@@ -3357,7 +3474,9 @@ void verify_actor_commit_is_replayable_until_deadline ()
 
 void verify_reconcile_management_deadline_advances_after_each_attempt ()
 {
-    spots::actor_transfer_coordinator_t coordinator;
+    zlink::framework::runtime::offload_executor_t coordinator_executor;
+    zlink::framework::runtime::state_lane_t coordinator_lane (coordinator_executor);
+    spots::actor_transfer_coordinator_t coordinator (coordinator_executor, coordinator_lane);
     coordinator.mark_reconcile ("player:reconcile-deadline", 1s);
     const auto first = coordinator.next_activity ();
     assert (first);
@@ -3402,7 +3521,9 @@ void verify_unbounded_actor_handoff_backlog ()
     using detail::handoff_packet_t;
 
     const std::string actor_key = "player:actor-handoff-backlog";
-    spots::actor_transfer_coordinator_t coordinator;
+    zlink::framework::runtime::offload_executor_t coordinator_executor;
+    zlink::framework::runtime::state_lane_t coordinator_lane (coordinator_executor);
+    spots::actor_transfer_coordinator_t coordinator (coordinator_executor, coordinator_lane);
     assert (coordinator.try_begin_source_remote (actor_key, "transfer-1"));
 
     const auto packet_with_payload = [] (std::size_t bytes) {
@@ -3504,8 +3625,10 @@ void verify_public_host_dispatches_one_application_record_per_turn ()
     };
     while (!peers_ready ()
            && mesh::service_liveness_registry_t::clock_t::now () < connect_deadline) {
-        await_task (source->dispatch_ready (noop_dispatch));
-        await_task (target->dispatch_ready (noop_dispatch));
+        await_task (source->dispatch_ready (
+          ::zlink::framework::test::async_application_dispatch (noop_dispatch)));
+        await_task (target->dispatch_ready (
+          ::zlink::framework::test::async_application_dispatch (noop_dispatch)));
         std::this_thread::sleep_for (1ms);
     }
     assert (source->transport ().topology ().peer (target_status.routing_id ().to_bytes ()));
@@ -3546,13 +3669,15 @@ void verify_public_host_dispatches_one_application_record_per_turn ()
         assert (parts.size () == 1);
         ++dispatched;
     };
-    await_task (target->dispatch_ready (dispatch));
+    await_task (
+      target->dispatch_ready (::zlink::framework::test::async_application_dispatch (dispatch)));
     assert (dispatched == 1);
     assert (
       target->transport ().mailbox ().pending_messages (mesh::service_mailbox_domain_t::application)
       == 1);
 
-    await_task (target->dispatch_ready (dispatch));
+    await_task (
+      target->dispatch_ready (::zlink::framework::test::async_application_dispatch (dispatch)));
     assert (dispatched == 2);
     assert (
       target->transport ().mailbox ().pending_messages (mesh::service_mailbox_domain_t::application)
@@ -3593,15 +3718,16 @@ void verify_public_host_dispatches_one_owner_claim_as_a_batch ()
     assert (target
               ->dispatch_application_owner (
                 owner,
-                [&] (const host::ready_record_t &, const host::receive_record_t &record,
-                     std::vector<zlink::message_t> parts) {
-                    assert (record.retain_mailbox_reservation);
-                    assert (record.release_mailbox_reservation);
-                    record.retain_mailbox_reservation ();
-                    assert (parts.size () == 1);
-                    dispatched.push_back (parts.front ().to_string ());
-                    record.release_mailbox_reservation ();
-                },
+                ::zlink::framework::test::async_application_dispatch (
+                  [&] (const host::ready_record_t &, const host::receive_record_t &record,
+                       std::vector<zlink::message_t> parts) {
+                      assert (record.retain_mailbox_reservation);
+                      assert (record.release_mailbox_reservation);
+                      record.retain_mailbox_reservation ();
+                      assert (parts.size () == 1);
+                      dispatched.push_back (parts.front ().to_string ());
+                      record.release_mailbox_reservation ();
+                  }),
                 [&] { ++started; }, [&] { ++rejected; })
               .result ()
               .value ());
@@ -3639,8 +3765,10 @@ void verify_public_host_batches_with_finite_permits ()
       (!ready_peer (source->transport ().topology (), target_status.routing_id ().to_bytes ())
        || !ready_peer (target->transport ().topology (), source_status.routing_id ().to_bytes ()))
       && mesh::service_liveness_registry_t::clock_t::now () < connect_deadline) {
-        await_task (source->dispatch_ready (noop_dispatch));
-        await_task (target->dispatch_ready (noop_dispatch));
+        await_task (source->dispatch_ready (
+          ::zlink::framework::test::async_application_dispatch (noop_dispatch)));
+        await_task (target->dispatch_ready (
+          ::zlink::framework::test::async_application_dispatch (noop_dispatch)));
         std::this_thread::sleep_for (1ms);
     }
     assert (source->transport ().topology ().peer (target_status.routing_id ().to_bytes ()));
@@ -3707,7 +3835,9 @@ void verify_public_host_batches_with_finite_permits ()
             return true;
         };
         const auto delivered_before = delivered.size ();
-        await_task (target->dispatch_ready (dispatch, true, next_application_receive));
+        await_task (
+          target->dispatch_ready (::zlink::framework::test::async_application_dispatch (dispatch),
+                                  true, next_application_receive));
         ++turns;
         const auto delivered_this_turn = delivered.size () - delivered_before;
         assert (delivered_this_turn <= 1 + handoffs);
@@ -3721,7 +3851,8 @@ void verify_public_host_batches_with_finite_permits ()
     // No initial permit means ordinary application receive is disabled for
     // the turn, and the remaining FIFO stays untouched.
     const auto delivered_before_no_permit = delivered.size ();
-    await_task (target->dispatch_ready (dispatch, false));
+    await_task (target->dispatch_ready (
+      ::zlink::framework::test::async_application_dispatch (dispatch), false));
     assert (delivered.size () == delivered_before_no_permit);
     assert (
       target->transport ().mailbox ().pending_messages (mesh::service_mailbox_domain_t::application)
@@ -3761,7 +3892,8 @@ void verify_public_host_fifo_drains_before_liveness_probe ()
     const auto admit = [&] (host::public_host_runtime_t &runtime, const zlink::routing_id_t &peer) {
         while (!ready_peer (runtime.transport ().topology (), peer.to_bytes ())
                && clock_t::now () < connect_deadline) {
-            await_task (runtime.dispatch_ready (noop_dispatch));
+            await_task (runtime.dispatch_ready (
+              ::zlink::framework::test::async_application_dispatch (noop_dispatch)));
             if (!ready_peer (runtime.transport ().topology (), peer.to_bytes ()))
                 wait_for_input (runtime.transport (), connect_deadline);
         }
@@ -3799,15 +3931,15 @@ void verify_public_host_fifo_drains_before_liveness_probe ()
            && mesh::service_liveness_registry_t::clock_t::now () < io_deadline) {
         const auto before = consumed.size ();
         await_task (target->dispatch_ready (
-          [&] (const host::ready_record_t &owner, const host::receive_record_t &record,
-               std::vector<zlink::message_t> parts) {
-              assert (owner.domain == host::ready_domain_t::application);
-              assert (record.kind == host::record_kind_t::node_send);
-              assert (parts.size () == 1);
-              consumed.push_back (parts.front ().to_string ());
-          },
-          true,
-          [&] {
+          ::zlink::framework::test::async_application_dispatch (
+            [&] (const host::ready_record_t &owner, const host::receive_record_t &record,
+                 std::vector<zlink::message_t> parts) {
+                assert (owner.domain == host::ready_domain_t::application);
+                assert (record.kind == host::record_kind_t::node_send);
+                assert (parts.size () == 1);
+                consumed.push_back (parts.front ().to_string ());
+            }),
+          true, [&] {
               // One receive permit advances one FIFO record. Admission may
               // precede the prefix, but no control may overtake its remainder.
               if (before != 0)
@@ -3924,8 +4056,10 @@ void verify_logical_multicast_continues_after_one_target_failure ()
       (!ready_peer (source->transport ().topology (), target_status.routing_id ().to_bytes ())
        || !ready_peer (target->transport ().topology (), source_status.routing_id ().to_bytes ()))
       && mesh::service_liveness_registry_t::clock_t::now () < connect_deadline) {
-        (void) source->dispatch_ready (noop_dispatch);
-        (void) target->dispatch_ready (noop_dispatch);
+        (void) source->dispatch_ready (
+          ::zlink::framework::test::async_application_dispatch (noop_dispatch));
+        (void) target->dispatch_ready (
+          ::zlink::framework::test::async_application_dispatch (noop_dispatch));
         std::this_thread::sleep_for (1ms);
     }
     assert (source->transport ().topology ().peer (target_status.routing_id ().to_bytes ()));
@@ -4252,7 +4386,8 @@ void verify_same_node_session_seal_waits_for_active_ingress ()
     // Observe the seal-registration wake before the dispatch turn can
     // consume it. The turn must leave the active ingress unfinished.
     assert (local->transport ().wait_for_activity (-1ms, false));
-    await_task (local->dispatch_ready (dispatch));
+    await_task (
+      local->dispatch_ready (::zlink::framework::test::async_application_dispatch (dispatch)));
     assert (completed.wait_for (0ms) != std::future_status::ready);
     assert (journal_capture_count == 0);
 
@@ -4262,7 +4397,8 @@ void verify_same_node_session_seal_waits_for_active_ingress ()
     // explicitly before observing seal completion and journal capture.
     assert (completed.wait_for (0ms) != std::future_status::ready);
     assert (journal_capture_count == 0);
-    await_task (local->dispatch_ready (dispatch));
+    await_task (
+      local->dispatch_ready (::zlink::framework::test::async_application_dispatch (dispatch)));
     assert (completed.wait_for (0ms) == std::future_status::ready);
     const auto result = completed.get ();
     assert (result.first == foundation::operation_terminal_t::completed);
@@ -4294,7 +4430,8 @@ void verify_same_node_session_seal_waits_for_active_ingress ()
             && current->actor.authority_owner_generation
                  == actor_object->authority_owner_generation);
     assert (local->sessions ().remote_route_sealed (actor_object->key));
-    await_task (local->dispatch_ready (dispatch));
+    await_task (
+      local->dispatch_ready (::zlink::framework::test::async_application_dispatch (dispatch)));
     current = local->sessions ().current_binding (actor_object->key);
     assert (current
             && current->actor.authority_owner_generation == target_authority_owner_generation);
@@ -4408,7 +4545,8 @@ void verify_configured_session_seal_timeout_closes_actual_owner ()
     const auto deadline = std::chrono::steady_clock::now () + 2s;
     while (local->sessions ().current_binding (actor_object->key)
            && std::chrono::steady_clock::now () < deadline) {
-        (void) local->dispatch_ready (dispatch);
+        (void) local->dispatch_ready (
+          ::zlink::framework::test::async_application_dispatch (dispatch));
         std::this_thread::sleep_for (1ms);
     }
     assert (!local->sessions ().current_binding (actor_object->key));
@@ -4439,11 +4577,11 @@ void verify_configured_session_seal_timeout_closes_actual_owner ()
        actor_object->authority_owner_generation, target_authority_owner_generation,
        status.routing_id ().to_bytes (), status.lifecycle_generation (), 0, 13}};
     assert (local->route_session_remote (status.routing_id (), late_route).result ().value ());
-    (void) local->dispatch_ready (dispatch);
+    (void) local->dispatch_ready (::zlink::framework::test::async_application_dispatch (dispatch));
     assert (!local->sessions ().current_binding (actor_object->key));
     assert (late_session_route_update_count.load (std::memory_order_acquire) == 1);
     assert (local->route_session_remote (status.routing_id (), late_route).result ().value ());
-    (void) local->dispatch_ready (dispatch);
+    (void) local->dispatch_ready (::zlink::framework::test::async_application_dispatch (dispatch));
     assert (late_session_route_update_count.load (std::memory_order_acquire) == 2);
     assert (held_settlement_count.load (std::memory_order_acquire) == 1);
 
@@ -5920,8 +6058,9 @@ void verify_aggregate_saved_request_terminal_identity ()
         .runtime_failures =
           std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()}});
     target->objects ().configure_relocation_state (
-      [] (const auto &, const auto &, std::stop_token) {
-          return stateful::frozen_object_state_t{};
+      [] (auto, auto, std::stop_token)
+        -> zlink::framework::task_t<zlink::framework::runtime::stateful::frozen_object_state_t> {
+          co_return stateful::frozen_object_state_t{};
       },
       [] (const auto &, const auto &, std::stop_token) { return true; });
     target->configure_stateful_dispatch (
@@ -6050,9 +6189,12 @@ void verify_public_host_dispatches_durable_reply_relay ()
     const auto deadline = std::chrono::steady_clock::now () + 5s;
     while ((completions != 1 || acknowledgements != 1)
            && std::chrono::steady_clock::now () < deadline) {
-        (void) target->dispatch_ready (dispatch);
-        (void) source->dispatch_ready (dispatch);
-        (void) target->dispatch_ready (dispatch);
+        (void) target->dispatch_ready (
+          ::zlink::framework::test::async_application_dispatch (dispatch));
+        (void) source->dispatch_ready (
+          ::zlink::framework::test::async_application_dispatch (dispatch));
+        (void) target->dispatch_ready (
+          ::zlink::framework::test::async_application_dispatch (dispatch));
     }
     assert (completions == 1);
     assert (acknowledgements == 1);
@@ -6323,8 +6465,9 @@ bool verify_remote_user_spot_create_close_terminal_once (bool cleanup_only = fal
                                  .result ();
         assert (submitted && submitted.value ());
         auto dispatched =
-          target->dispatch_ready ([] (const host::ready_record_t &, const host::receive_record_t &,
-                                      std::vector<zlink::message_t>) {});
+          target->dispatch_ready (::zlink::framework::test::async_application_dispatch (
+            [] (const host::ready_record_t &, const host::receive_record_t &,
+                std::vector<zlink::message_t>) {}));
         const auto pending_before_cleanup = target->pending_operation_count ();
         cleanup_release.complete (result_t<void>::success ());
         const auto result = dispatched.result ();
@@ -6440,8 +6583,10 @@ bool verify_remote_user_spot_create_close_terminal_once (bool cleanup_only = fal
        || !ready_peer (target->transport ().topology (),
                        source->status ().routing_id ().to_bytes ()))
       && std::chrono::steady_clock::now () < deadline) {
-        (void) source->dispatch_ready (dispatch);
-        (void) target->dispatch_ready (dispatch);
+        (void) source->dispatch_ready (
+          ::zlink::framework::test::async_application_dispatch (dispatch));
+        (void) target->dispatch_ready (
+          ::zlink::framework::test::async_application_dispatch (dispatch));
         std::this_thread::sleep_for (1ms);
     }
     assert (source->transport ().topology ().peer (target->status ().routing_id ().to_bytes ()));
@@ -6477,8 +6622,10 @@ bool verify_remote_user_spot_create_close_terminal_once (bool cleanup_only = fal
               .value ());
     deadline = std::chrono::steady_clock::now () + 5s;
     while (!instance_reply_header && std::chrono::steady_clock::now () < deadline) {
-        (void) target->dispatch_ready (dispatch);
-        (void) source->dispatch_ready (dispatch);
+        (void) target->dispatch_ready (
+          ::zlink::framework::test::async_application_dispatch (dispatch));
+        (void) source->dispatch_ready (
+          ::zlink::framework::test::async_application_dispatch (dispatch));
         std::this_thread::sleep_for (1ms);
     }
     assert (instance_reply_header);
@@ -6650,8 +6797,10 @@ bool verify_remote_user_spot_create_close_terminal_once (bool cleanup_only = fal
                         : request.request ? !instance_reply_header
                                           : dispatch_diagnostic_snapshot ().empty ())
                        && std::chrono::steady_clock::now () < deadline) {
-                    (void) target->dispatch_ready (dispatch);
-                    (void) source->dispatch_ready (dispatch);
+                    (void) target->dispatch_ready (
+                      ::zlink::framework::test::async_application_dispatch (dispatch));
+                    (void) source->dispatch_ready (
+                      ::zlink::framework::test::async_application_dispatch (dispatch));
                     std::this_thread::sleep_for (1ms);
                 }
                 assert (store->authority_reads.load () > reads_before);
@@ -6784,8 +6933,10 @@ bool verify_remote_user_spot_create_close_terminal_once (bool cleanup_only = fal
               .value ());
     deadline = std::chrono::steady_clock::now () + 5s;
     while (!instance_reply_header && std::chrono::steady_clock::now () < deadline) {
-        (void) target->dispatch_ready (dispatch);
-        (void) source->dispatch_ready (dispatch);
+        (void) target->dispatch_ready (
+          ::zlink::framework::test::async_application_dispatch (dispatch));
+        (void) source->dispatch_ready (
+          ::zlink::framework::test::async_application_dispatch (dispatch));
         std::this_thread::sleep_for (1ms);
     }
     assert (instance_reply_header && instance_reply_header->terminal_result == 0);
@@ -6810,8 +6961,10 @@ bool verify_remote_user_spot_create_close_terminal_once (bool cleanup_only = fal
               .value ());
     deadline = std::chrono::steady_clock::now () + 5s;
     while (!instance_reply_header && std::chrono::steady_clock::now () < deadline) {
-        (void) target->dispatch_ready (dispatch);
-        (void) source->dispatch_ready (dispatch);
+        (void) target->dispatch_ready (
+          ::zlink::framework::test::async_application_dispatch (dispatch));
+        (void) source->dispatch_ready (
+          ::zlink::framework::test::async_application_dispatch (dispatch));
         std::this_thread::sleep_for (1ms);
     }
     assert (instance_reply_header && instance_reply_header->terminal_result == 0);
@@ -6844,8 +6997,10 @@ bool verify_remote_user_spot_create_close_terminal_once (bool cleanup_only = fal
               .value ());
     deadline = std::chrono::steady_clock::now () + 5s;
     while (!instance_reply_header && std::chrono::steady_clock::now () < deadline) {
-        (void) target->dispatch_ready (dispatch);
-        (void) source->dispatch_ready (dispatch);
+        (void) target->dispatch_ready (
+          ::zlink::framework::test::async_application_dispatch (dispatch));
+        (void) source->dispatch_ready (
+          ::zlink::framework::test::async_application_dispatch (dispatch));
         std::this_thread::sleep_for (1ms);
     }
     assert (instance_reply_header && instance_reply_header->terminal_result == 105);
@@ -6922,8 +7077,10 @@ bool verify_remote_user_spot_create_close_terminal_once (bool cleanup_only = fal
               .value ());
     deadline = std::chrono::steady_clock::now () + 5s;
     while (!instance_reply_header && std::chrono::steady_clock::now () < deadline) {
-        (void) target->dispatch_ready (dispatch);
-        (void) source->dispatch_ready (dispatch);
+        (void) target->dispatch_ready (
+          ::zlink::framework::test::async_application_dispatch (dispatch));
+        (void) source->dispatch_ready (
+          ::zlink::framework::test::async_application_dispatch (dispatch));
         std::this_thread::sleep_for (1ms);
     }
     assert (instance_reply_header && instance_reply_header->terminal_result == 0);
@@ -6971,8 +7128,10 @@ bool verify_remote_user_spot_create_close_terminal_once (bool cleanup_only = fal
               .value ());
     deadline = std::chrono::steady_clock::now () + 5s;
     while (!instance_reply_header && std::chrono::steady_clock::now () < deadline) {
-        (void) target->dispatch_ready (dispatch);
-        (void) source->dispatch_ready (dispatch);
+        (void) target->dispatch_ready (
+          ::zlink::framework::test::async_application_dispatch (dispatch));
+        (void) source->dispatch_ready (
+          ::zlink::framework::test::async_application_dispatch (dispatch));
         std::this_thread::sleep_for (1ms);
     }
     assert (instance_reply_header && instance_reply_header->terminal_result == 0);
@@ -7039,8 +7198,10 @@ bool verify_remote_user_spot_create_close_terminal_once (bool cleanup_only = fal
                   .value ());
         const auto wait_deadline = std::chrono::steady_clock::now () + 5s;
         while (!reply && std::chrono::steady_clock::now () < wait_deadline) {
-            (void) target->dispatch_ready (dispatch);
-            (void) source->dispatch_ready (dispatch);
+            (void) target->dispatch_ready (
+              ::zlink::framework::test::async_application_dispatch (dispatch));
+            (void) source->dispatch_ready (
+              ::zlink::framework::test::async_application_dispatch (dispatch));
             std::this_thread::sleep_for (1ms);
         }
         assert (reply);
@@ -7077,8 +7238,10 @@ bool verify_remote_user_spot_create_close_terminal_once (bool cleanup_only = fal
         .value ());
     deadline = std::chrono::steady_clock::now () + 5s;
     while (!invalid_reply && std::chrono::steady_clock::now () < deadline) {
-        (void) target->dispatch_ready (dispatch);
-        (void) source->dispatch_ready (dispatch);
+        (void) target->dispatch_ready (
+          ::zlink::framework::test::async_application_dispatch (dispatch));
+        (void) source->dispatch_ready (
+          ::zlink::framework::test::async_application_dispatch (dispatch));
         std::this_thread::sleep_for (1ms);
     }
     assert (invalid_reply);
@@ -7106,8 +7269,10 @@ bool verify_remote_user_spot_create_close_terminal_once (bool cleanup_only = fal
         .value ());
     deadline = std::chrono::steady_clock::now () + 5s;
     while (!mismatch_reply && std::chrono::steady_clock::now () < deadline) {
-        (void) target->dispatch_ready (dispatch);
-        (void) source->dispatch_ready (dispatch);
+        (void) target->dispatch_ready (
+          ::zlink::framework::test::async_application_dispatch (dispatch));
+        (void) source->dispatch_ready (
+          ::zlink::framework::test::async_application_dispatch (dispatch));
         std::this_thread::sleep_for (1ms);
     }
     assert (mismatch_reply);
@@ -7128,8 +7293,10 @@ bool verify_remote_user_spot_create_close_terminal_once (bool cleanup_only = fal
         .value ());
     deadline = std::chrono::steady_clock::now () + 5s;
     while (!replayed_mismatch_reply && std::chrono::steady_clock::now () < deadline) {
-        (void) target->dispatch_ready (dispatch);
-        (void) source->dispatch_ready (dispatch);
+        (void) target->dispatch_ready (
+          ::zlink::framework::test::async_application_dispatch (dispatch));
+        (void) source->dispatch_ready (
+          ::zlink::framework::test::async_application_dispatch (dispatch));
         std::this_thread::sleep_for (1ms);
     }
     assert (replayed_mismatch_reply);
@@ -7206,8 +7373,10 @@ bool verify_remote_user_spot_create_close_terminal_once (bool cleanup_only = fal
         .value ());
     deadline = std::chrono::steady_clock::now () + 5s;
     while (!create_reply && std::chrono::steady_clock::now () < deadline) {
-        (void) target->dispatch_ready (dispatch);
-        (void) source->dispatch_ready (dispatch);
+        (void) target->dispatch_ready (
+          ::zlink::framework::test::async_application_dispatch (dispatch));
+        (void) source->dispatch_ready (
+          ::zlink::framework::test::async_application_dispatch (dispatch));
         std::this_thread::sleep_for (1ms);
     }
     assert (create_reply);
@@ -7240,8 +7409,10 @@ bool verify_remote_user_spot_create_close_terminal_once (bool cleanup_only = fal
         .value ());
     deadline = std::chrono::steady_clock::now () + 5s;
     while (!replayed_create_reply && std::chrono::steady_clock::now () < deadline) {
-        (void) target->dispatch_ready (dispatch);
-        (void) source->dispatch_ready (dispatch);
+        (void) target->dispatch_ready (
+          ::zlink::framework::test::async_application_dispatch (dispatch));
+        (void) source->dispatch_ready (
+          ::zlink::framework::test::async_application_dispatch (dispatch));
         std::this_thread::sleep_for (1ms);
     }
     assert (replayed_create_reply);
@@ -7264,8 +7435,10 @@ bool verify_remote_user_spot_create_close_terminal_once (bool cleanup_only = fal
         .value ());
     deadline = std::chrono::steady_clock::now () + 5s;
     while (!distinct_reply && std::chrono::steady_clock::now () < deadline) {
-        (void) target->dispatch_ready (dispatch);
-        (void) source->dispatch_ready (dispatch);
+        (void) target->dispatch_ready (
+          ::zlink::framework::test::async_application_dispatch (dispatch));
+        (void) source->dispatch_ready (
+          ::zlink::framework::test::async_application_dispatch (dispatch));
         std::this_thread::sleep_for (1ms);
     }
     assert (distinct_reply);
@@ -7294,8 +7467,10 @@ bool verify_remote_user_spot_create_close_terminal_once (bool cleanup_only = fal
         .value ());
     deadline = std::chrono::steady_clock::now () + 5s;
     while (!expired_reply && std::chrono::steady_clock::now () < deadline) {
-        (void) target->dispatch_ready (dispatch);
-        (void) source->dispatch_ready (dispatch);
+        (void) target->dispatch_ready (
+          ::zlink::framework::test::async_application_dispatch (dispatch));
+        (void) source->dispatch_ready (
+          ::zlink::framework::test::async_application_dispatch (dispatch));
         std::this_thread::sleep_for (1ms);
     }
     assert (expired_reply);
@@ -7344,8 +7519,10 @@ bool verify_remote_user_spot_create_close_terminal_once (bool cleanup_only = fal
         .value ());
     deadline = std::chrono::steady_clock::now () + 5s;
     while (!capacity_filler_reply && std::chrono::steady_clock::now () < deadline) {
-        (void) target->dispatch_ready (dispatch);
-        (void) source->dispatch_ready (dispatch);
+        (void) target->dispatch_ready (
+          ::zlink::framework::test::async_application_dispatch (dispatch));
+        (void) source->dispatch_ready (
+          ::zlink::framework::test::async_application_dispatch (dispatch));
         std::this_thread::sleep_for (1ms);
     }
     assert (capacity_filler_reply);
@@ -7374,8 +7551,10 @@ bool verify_remote_user_spot_create_close_terminal_once (bool cleanup_only = fal
               .value ());
     deadline = std::chrono::steady_clock::now () + 5s;
     while (!expired_close_reply && std::chrono::steady_clock::now () < deadline) {
-        (void) target->dispatch_ready (dispatch);
-        (void) source->dispatch_ready (dispatch);
+        (void) target->dispatch_ready (
+          ::zlink::framework::test::async_application_dispatch (dispatch));
+        (void) source->dispatch_ready (
+          ::zlink::framework::test::async_application_dispatch (dispatch));
         std::this_thread::sleep_for (1ms);
     }
     assert (expired_close_reply && expired_close_reply->header.terminal_result == 101
@@ -7416,8 +7595,10 @@ bool verify_remote_user_spot_create_close_terminal_once (bool cleanup_only = fal
                     .value ());
           const auto bound = std::chrono::steady_clock::now () + 5s;
           while (!reply && std::chrono::steady_clock::now () < bound) {
-              (void) target->dispatch_ready (dispatch);
-              (void) source->dispatch_ready (dispatch);
+              (void) target->dispatch_ready (
+                ::zlink::framework::test::async_application_dispatch (dispatch));
+              (void) source->dispatch_ready (
+                ::zlink::framework::test::async_application_dispatch (dispatch));
               std::this_thread::sleep_for (1ms);
           }
           assert (reply && !reply->closed && reply->header.terminal_result == 107);
@@ -7469,8 +7650,10 @@ bool verify_remote_user_spot_create_close_terminal_once (bool cleanup_only = fal
               .value ());
     deadline = std::chrono::steady_clock::now () + 5s;
     while (!close_reply && std::chrono::steady_clock::now () < deadline) {
-        (void) target->dispatch_ready (dispatch);
-        (void) source->dispatch_ready (dispatch);
+        (void) target->dispatch_ready (
+          ::zlink::framework::test::async_application_dispatch (dispatch));
+        (void) source->dispatch_ready (
+          ::zlink::framework::test::async_application_dispatch (dispatch));
         std::this_thread::sleep_for (1ms);
     }
     assert (close_reply && close_reply->closed);
@@ -7496,7 +7679,8 @@ bool verify_remote_user_spot_create_close_terminal_once (bool cleanup_only = fal
              mesh::service_mailbox_domain_t::infrastructure)
              == 0
            && std::chrono::steady_clock::now () < deadline) {
-        (void) source->dispatch_ready (dispatch);
+        (void) source->dispatch_ready (
+          ::zlink::framework::test::async_application_dispatch (dispatch));
         const auto now = mesh::service_liveness_registry_t::clock_t::now ();
         (void) target->transport ().observe_routes ();
         assert (target->transport ().pump_one (now).result ().value ()
@@ -7509,7 +7693,8 @@ bool verify_remote_user_spot_create_close_terminal_once (bool cleanup_only = fal
     target->close ();
     deadline = std::chrono::steady_clock::now () + 5s;
     while (!create_operation_terminal && std::chrono::steady_clock::now () < deadline) {
-        (void) source->dispatch_ready (dispatch);
+        (void) source->dispatch_ready (
+          ::zlink::framework::test::async_application_dispatch (dispatch));
         std::this_thread::sleep_for (1ms);
     }
     assert (create_operation_terminal == foundation::operation_terminal_t::transport_failed);
@@ -7630,6 +7815,87 @@ void verify_relocation_id_generation_retries_collisions ()
     assert (next == candidates.size ());
 }
 
+void verify_pending_recovery_consumer_failure_rolls_back_registered_targets ()
+{
+    auto failures = std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ();
+    const auto original = std::make_exception_ptr (std::runtime_error ("pending consumer failed"));
+    auto reported = std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ();
+    failures->bind_runtime_reporter (
+      [reported] (std::exception_ptr error) { reported->report (error); });
+    auto target = std::make_shared<host::public_host_runtime_t> (
+      host::host_options_t{mesh::raw_mesh_node_options_t{
+        .descriptor = descriptor ("consumer-target"), .runtime_failures = failures}});
+    zlink::framework::task_completion_source_t<bool> release;
+    std::vector<std::string> consumed, rolled_back;
+    target->configure_actor_join_relocation (
+      [] (const protocol::relocation_prepare_t &) {
+          return zlink::framework::task_t<std::optional<bool>> (
+            zlink::framework::result_t<std::optional<bool>>::success (std::nullopt));
+      },
+      [&] (stateful::frozen_object_state_t &, const stateful::object_ref_t &owner,
+           const protocol::relocation_prepare_t &) {
+          consumed.push_back (owner.key);
+          if (consumed.size () == 1)
+              return zlink::framework::task_t<bool> (
+                zlink::framework::result_t<bool>::success (true));
+          return release.task ();
+      },
+      [] (const stateful::object_ref_t &)
+        -> std::optional<zlink::framework::runtime::actor_authority_payload_t> {
+          return std::nullopt;
+      },
+      [&] (const std::string &, const stateful::object_ref_t &owner) {
+          rolled_back.push_back (owner.key);
+          return zlink::framework::task_t<void> (zlink::framework::result_t<void>::success ());
+      },
+      [] (const stateful::object_ref_t &, std::uint64_t, std::uint64_t) {
+          return zlink::framework::task_t<bool> (zlink::framework::result_t<bool>::success (true));
+      });
+    protocol::relocation_prepare_t prepare;
+    prepare.relocation = {0x1786, 0x71};
+    prepare.target_attempt_generation = 1;
+    prepare.coordinator = {"consumer-owner", 1, {'s'}, 1, "v1"};
+    prepare.object = {protocol::relocation_object_kind_t::user_spot, "spot", "consumer-spot", 1, 1};
+    prepare.application_version = 1;
+    prepare.source_node_routing_id = {'s'};
+    prepare.source_node_generation = 1;
+    const std::vector<stateful::frozen_object_state_t> frozen{
+      {{stateful::object_kind_t::user_spot, "consumer-spot", 1, 1, "mesh", "source"},
+       "spot",
+       {},
+       {},
+       {}},
+      {{stateful::object_kind_t::actor, "consumer-actor-a", 1, 1, "mesh", "source"},
+       "actor",
+       {},
+       {},
+       {}},
+      {{stateful::object_kind_t::actor, "consumer-actor-b", 1, 1, "mesh", "source"},
+       "actor",
+       {},
+       {},
+       {}}};
+    using access = host::public_host_runtime_test_access_t;
+    auto pending = access::consume_payload (*target, prepare, frozen);
+    assert (!pending.await_ready ());
+    assert (consumed.size () == 2);
+    assert (rolled_back.empty ());
+    for (const auto &saved : frozen)
+        assert (!access::register_consumed_target (*target, prepare, saved));
+    release.complete (zlink::framework::detail::result_access_t::failure<bool> (original));
+    pending.result ().value ();
+    assert (rolled_back == std::vector<std::string>{consumed.front ()});
+    for (const auto &saved : frozen)
+        assert (access::register_consumed_target (*target, prepare, saved));
+    try {
+        reported->rethrow_if_failed ();
+        assert (false && "consumer failure must be reported");
+    }
+    catch (...) {
+        assert (std::current_exception () == original);
+    }
+}
+
 void verify_draining_target_relocation_prepare (bool already_accepted)
 {
     auto source = std::make_shared<host::public_host_runtime_t> (
@@ -7644,18 +7910,25 @@ void verify_draining_target_relocation_prepare (bool already_accepted)
           std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()}});
     int prepares = 0;
     target->configure_actor_join_relocation (
-      [&] (const protocol::relocation_prepare_t &) -> std::optional<bool> {
+      [&] (const protocol::relocation_prepare_t &) {
           ++prepares;
-          return std::nullopt;
+          return zlink::framework::task_t<std::optional<bool>> (
+            zlink::framework::result_t<std::optional<bool>>::success (std::nullopt));
       },
       [] (stateful::frozen_object_state_t &, const stateful::object_ref_t &,
-          const protocol::relocation_prepare_t &) { return true; },
+          const protocol::relocation_prepare_t &) {
+          return zlink::framework::task_t<bool> (zlink::framework::result_t<bool>::success (true));
+      },
       [] (const stateful::object_ref_t &)
         -> std::optional<zlink::framework::runtime::actor_authority_payload_t> {
           return std::nullopt;
       },
-      [] (const std::string &, const stateful::object_ref_t &) {},
-      [] (const stateful::object_ref_t &, std::uint64_t, std::uint64_t) { return true; });
+      [] (const std::string &, const stateful::object_ref_t &) {
+          return zlink::framework::task_t<void> (zlink::framework::result_t<void>::success ());
+      },
+      [] (const stateful::object_ref_t &, std::uint64_t, std::uint64_t) {
+          return zlink::framework::task_t<bool> (zlink::framework::result_t<bool>::success (true));
+      });
     source->start ();
     target->start ();
     target->configure_session_route_owner ([] {
@@ -7671,8 +7944,10 @@ void verify_draining_target_relocation_prepare (bool already_accepted)
       (!ready_peer (source->transport ().topology (), target_status.routing_id ().to_bytes ())
        || !ready_peer (target->transport ().topology (), source_status.routing_id ().to_bytes ()))
       && std::chrono::steady_clock::now () < deadline) {
-        (void) source->dispatch_ready (dispatch);
-        (void) target->dispatch_ready (dispatch);
+        (void) source->dispatch_ready (
+          ::zlink::framework::test::async_application_dispatch (dispatch));
+        (void) target->dispatch_ready (
+          ::zlink::framework::test::async_application_dispatch (dispatch));
     }
     const protocol::relocation_prepare_t prepare{
       {801, 802},
@@ -7695,8 +7970,10 @@ void verify_draining_target_relocation_prepare (bool already_accepted)
         initial.emplace (source->transport ().request_relocation_prepare (
           target_status.routing_id ().to_bytes (), prepare, 2s));
         while (prepares < 1 && std::chrono::steady_clock::now () < deadline) {
-            (void) await_task (target->dispatch_ready (dispatch));
-            (void) source->dispatch_ready (dispatch);
+            (void) await_task (target->dispatch_ready (
+              ::zlink::framework::test::async_application_dispatch (dispatch)));
+            (void) source->dispatch_ready (
+              ::zlink::framework::test::async_application_dispatch (dispatch));
         }
         assert (prepares == 1);
         assert (!initial->await_ready ());
@@ -7707,8 +7984,10 @@ void verify_draining_target_relocation_prepare (bool already_accepted)
       target_status.routing_id ().to_bytes (), prepare, 2s);
     if (already_accepted) {
         while (prepares < 2 && std::chrono::steady_clock::now () < deadline) {
-            (void) await_task (target->dispatch_ready (dispatch));
-            (void) source->dispatch_ready (dispatch);
+            (void) await_task (target->dispatch_ready (
+              ::zlink::framework::test::async_application_dispatch (dispatch)));
+            (void) source->dispatch_ready (
+              ::zlink::framework::test::async_application_dispatch (dispatch));
         }
         assert (prepares == 2);
         const auto chunk = stateful::make_relocation_state_chunk (
@@ -7718,8 +7997,10 @@ void verify_draining_target_relocation_prepare (bool already_accepted)
           target_status.routing_id ().to_bytes (), chunk)));
     }
     while (!pending.await_ready () && std::chrono::steady_clock::now () < deadline) {
-        (void) target->dispatch_ready (dispatch);
-        (void) source->dispatch_ready (dispatch);
+        (void) target->dispatch_ready (
+          ::zlink::framework::test::async_application_dispatch (dispatch));
+        (void) source->dispatch_ready (
+          ::zlink::framework::test::async_application_dispatch (dispatch));
     }
     const auto response = await_task (std::move (pending));
     assert (!response.ready);
@@ -7791,6 +8072,10 @@ int main (int argc, char **argv)
     zlink::framework::runtime::install_host_context_hooks ();
     if (argc == 2 && std::string_view (argv[1]) == "--aggregate-request-identity") {
         verify_aggregate_saved_request_terminal_identity ();
+        return 0;
+    }
+    if (argc == 2 && std::string_view (argv[1]) == "--pending-recovery-consumer") {
+        verify_pending_recovery_consumer_failure_rolls_back_registered_targets ();
         return 0;
     }
 
@@ -7882,6 +8167,7 @@ int main (int argc, char **argv)
     verify_unadmitted_request_is_dropped_without_framework_queue ();
     verify_queued_owner_accepts_request_without_blocking_other_owner ();
     verify_aggregate_saved_request_terminal_identity ();
+    verify_pending_recovery_consumer_failure_rolls_back_registered_targets ();
     verify_raw_terminal_reply_relay ();
     verify_relocation_data_duplicates_are_distinct_arrivals ();
     verify_relocation_ingress_boundary_owns_saved_and_follow_only_work ();

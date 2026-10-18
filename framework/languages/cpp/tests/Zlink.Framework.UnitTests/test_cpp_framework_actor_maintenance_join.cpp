@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+#include "../support/async_application_dispatch.hpp"
 #include "../support/manual_internal_scheduler.hpp"
 #include <zlink/framework.hpp>
 #include "../support/runtime_failure_fixture.hpp"
@@ -1782,8 +1783,10 @@ TEST (NativeIntake, TypedControlMalformedWireAndKernelMetadata)
     const auto drain = [&] {
         EXPECT_TRUE (mailbox.begin_application_drain (owner));
         const auto result =
-          host->dispatch_application_owner (
-                owner, callback, [&] { ++started; }, [&] { ++rejected; })
+          host
+            ->dispatch_application_owner (
+              owner, ::zlink::framework::test::async_application_dispatch (callback),
+              [&] { ++started; }, [&] { ++rejected; })
             .result ();
         EXPECT_TRUE (result);
         if (result)
@@ -1989,10 +1992,12 @@ TEST (NativeIntake, NativeMailboxTransferKeepsActualPrivateMClaim)
         const auto drain = [&] {
             if (!mailbox.begin_application_drain (owner))
                 return false;
-            const auto result = host
-                                  ->dispatch_application_owner (
-                                    owner, dispatch, [&] { ++started; }, [&] { ++rejected; })
-                                  .result ();
+            const auto result =
+              host
+                ->dispatch_application_owner (
+                  owner, ::zlink::framework::test::async_application_dispatch (dispatch),
+                  [&] { ++started; }, [&] { ++rejected; })
+                .result ();
             mailbox.end_application_drain (owner);
             EXPECT_TRUE (result);
             return result && result.value ();
@@ -3115,17 +3120,18 @@ TEST (ActorMaintenanceJoin, LocalDirectAdmissionUsesCurrentActorId)
     ASSERT_TRUE (sent);
     ASSERT_EQ (sent.value (), zlink::submit_result_t::ok);
     bool delivered = false;
-    ASSERT_TRUE (
-      node
-        ->dispatch_ready ([&] (const host::ready_record_t &owner, const host::receive_record_t &,
-                               std::vector<zlink::message_t> received) {
-            ASSERT_TRUE (owner.actor);
-            EXPECT_EQ (owner.actor->object_generation (), actor.ref ().object_generation ());
-            ASSERT_EQ (received.size (), 1);
-            EXPECT_EQ (received.front ().to_string (), "local-admission");
-            delivered = true;
-        })
-        .result ());
+    ASSERT_TRUE (node
+                   ->dispatch_ready (::zlink::framework::test::async_application_dispatch (
+                     [&] (const host::ready_record_t &owner, const host::receive_record_t &,
+                          std::vector<zlink::message_t> received) {
+                         ASSERT_TRUE (owner.actor);
+                         EXPECT_EQ (owner.actor->object_generation (),
+                                    actor.ref ().object_generation ());
+                         ASSERT_EQ (received.size (), 1);
+                         EXPECT_EQ (received.front ().to_string (), "local-admission");
+                         delivered = true;
+                     }))
+                   .result ());
     EXPECT_TRUE (delivered);
     const auto absent =
       host::public_host_runtime_t::remote_actor_ref (rid, "absent", stale_generation);
@@ -3191,7 +3197,7 @@ TEST (ActorMaintenanceJoin, RejectsWhilePreviousSourceLeaveIsPending)
               .commit_relocation_materialization (objects);
         },
         [target_state] (const auto &objects) {
-            fw::detail::spot_node_runtime_t (target_state)
+            return fw::detail::spot_node_runtime_t (target_state)
               .abort_relocation_materialization (objects);
         });
     auto &routes = services.get_required<fw::route_mesh_runtime_t> ();
@@ -3303,10 +3309,11 @@ TEST_P (ActorRestoreCommitFailure, DiscardsPublishedIdentity)
           return fw::detail::spot_node_runtime_t (state).materialize_relocation_state (
             frozen, object, spot, cancellation);
       },
-      [&, state, weak_target, throw_failure] (const auto &objects) {
+      [&, state, weak_target, throw_failure] (
+        std::vector<fw::runtime::stateful::object_ref_t> objects) -> fw::task_t<bool> {
           const auto node = weak_target.lock ();
           if (!node)
-              return false;
+              co_return false;
           const auto ref = fw::runtime::host::public_host_runtime_t::remote_actor_ref (
             zlink::routing_id_t::from (objects.front ().node_id), objects.front ().key,
             objects.front ().object_generation);
@@ -3320,16 +3327,18 @@ TEST_P (ActorRestoreCommitFailure, DiscardsPublishedIdentity)
           // On the old implementation, let its unpublished target finish so
           // the publication assertion fails without stranding its terminal.
           if (!current)
-              return fw::detail::spot_node_runtime_t (state).commit_relocation_materialization (
-                objects);
+              co_return co_await fw::detail::spot_node_runtime_t (state)
+                .commit_relocation_materialization (objects);
           if (throw_failure)
               throw std::runtime_error ("injected restore commit failure");
-          return false;
+          co_return false;
       },
-      [&, state, weak_target] (const auto &objects) {
+      [&, state,
+       weak_target] (std::vector<fw::runtime::stateful::object_ref_t> objects) -> fw::task_t<void> {
           const auto node = weak_target.lock ();
           const auto removed = !candidate || !node || !node->resolve_actor (*candidate);
-          fw::detail::spot_node_runtime_t (state).abort_relocation_materialization (objects);
+          co_await fw::detail::spot_node_runtime_t (state).abort_relocation_materialization (
+            objects);
           {
               std::lock_guard lock (evidence.mutex);
               discarded = true;
@@ -4797,7 +4806,10 @@ void restore_probe (replay_case_t test_case, bool multiple_packets = false)
         auto complete = std::exchange (finish_barrier, {});
         complete (fw::result_t<void>::success ());
     } else {
-        detail::spot_node_runtime_t (node).fail_remote_actor_transfer (actor, false, std::nullopt);
+        detail::spot_node_runtime_t (node)
+          .fail_remote_actor_transfer (actor, false, std::nullopt)
+          .result ()
+          .value ();
     }
     scheduler->run_all ();
     if (local_target) {
@@ -5091,7 +5103,10 @@ void capacity_probe (bool handler_failure = false, bool extra_supply = false)
                          metadata,
                          false,
                          accepted_record (mesh->application_jobs, metadata.empty () ? 1 : 2)}));
-    detail::spot_node_runtime_t (node).fail_remote_actor_transfer (actor, false, std::nullopt);
+    detail::spot_node_runtime_t (node)
+      .fail_remote_actor_transfer (actor, false, std::nullopt)
+      .result ()
+      .value ();
     ASSERT_TRUE (until ([&] {
         return first_started.load () || mesh->application_jobs->snapshot ().capacity_waiters == 1;
     }));

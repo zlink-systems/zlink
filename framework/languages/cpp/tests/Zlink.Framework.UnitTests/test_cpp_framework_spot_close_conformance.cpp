@@ -309,7 +309,7 @@ void verify_target_staging_commit (bool initialize_throws)
     timer_runtime_t::post_fire_count (context, timer, {}, 1);
     observe_scheduled_expiry (node->worker_executor);
     const auto callbacks_before_commit = callbacks->load ();
-    const bool committed = owner.commit_relocation_materialization ({target});
+    const bool committed = owner.commit_relocation_materialization ({target}).result ().value ();
     context->serial_queue->drain ();
     context->spot_serial_executor->close ();
     context->serial_queue->close ();

@@ -200,15 +200,12 @@ TEST (ZLinkFrameworkLocationLifecycle, RenewKeepsTrackedActor)
     owner_a.start (zlink::routing_id_t::from ("node-a"));
 
     location_lifecycle_t lifecycle_a (owner_a);
-    std::vector<std::string> deactivated;
-    const auto claim = lifecycle_a.claim_actor (
-      make_actor ("actor-1"), [&] (const auto &actor) { deactivated.push_back (actor.actor_id); });
+    const auto claim = lifecycle_a.claim_actor (make_actor ("actor-1"));
     ASSERT_EQ (location_write_status_t::stored, claim.status);
 
     const auto renewed =
       lifecycle_a.renew_actor (actor_location_key_t{.mesh_name = "node-a", .actor_id = "actor-1"});
     EXPECT_EQ (location_write_status_t::stored, renewed.status);
-    EXPECT_TRUE (deactivated.empty ());
     EXPECT_EQ (1u, lifecycle_a.tracked_actor_count ());
 
     owner_a.stop ();

@@ -609,7 +609,7 @@ class maintenance_runtime_t
     task_t<bool> relocate_seal (std::shared_ptr<relocation_terminal_state_t> state);
     task_t<bool> capture_relocation_session_bindings (
       eligible_relocation_unit_t::canonical_wire_context_t &context);
-    bool relocate_encode (const std::shared_ptr<relocation_terminal_state_t> &state);
+    task_t<bool> relocate_encode (const std::shared_ptr<relocation_terminal_state_t> &state);
     task_t<bool> relocate_prepare_target (std::shared_ptr<relocation_terminal_state_t> state);
     task_t<bool> relocate_send_state_chunks (std::shared_ptr<relocation_terminal_state_t> state,
                                              std::function<bool ()> target_failed = {});

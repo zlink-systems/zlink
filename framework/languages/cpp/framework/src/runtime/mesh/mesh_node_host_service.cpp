@@ -1115,7 +1115,7 @@ mesh_node_host_service_t::create_actor (bool exclusive,
             auto published = std::make_shared<task_completion_source_t<actor_create_result_t>> ();
             auto terminal = published->task ();
             detail::observe_task_completion (
-              creation, [node, actor = created.value (), published,
+              creation, [node, actor = created.value (), published, failures = _runtime_failures,
                          activation_admission = std::move (activation_admission)] (
                           const result_t<actor_create_result_t> &result) mutable {
                   // complete_creation has published the Ready/Created terminal.
@@ -1123,11 +1123,13 @@ mesh_node_host_service_t::create_actor (bool exclusive,
                   activation_admission.reset ();
                   const bool ready =
                     result && !std::holds_alternative<actor_create_rejected_t> (result.value ());
-                  if (!ready)
-                      node->settle_application_actor_creation (actor, false);
-                  published->complete (result);
-                  if (ready)
-                      node->settle_application_actor_creation (actor, true);
+                  auto settled =
+                    std::make_shared<task_t<void>> (node->settle_application_actor_creation (
+                      actor, ready, [published, result] { published->complete (result); }));
+                  detail::observe_task_completion (
+                    *settled, [settled, failures] (const result_t<void> &result) {
+                        failures->capture ([&] { result.value (); });
+                    });
               });
             co_return co_await terminal;
         }
@@ -1394,7 +1396,7 @@ task_t<bool> mesh_node_host_service_t::destroy_actor (actor_ref_t actor)
               return routing_id && routing_id->to_string () == actor.node_rid ().value ();
           });
         if (node != _nodes.end ()) {
-            if ((*node)->application_actor_transfer_in_progress (actor)) {
+            if (co_await (*node)->application_actor_transfer_in_progress (actor)) {
                 co_return result_t<bool>::failure (framework_error_kind_t::unavailable,
                                                    "Actor transfer is in progress");
             }
@@ -1403,7 +1405,8 @@ task_t<bool> mesh_node_host_service_t::destroy_actor (actor_ref_t actor)
              * callback runs after local state is detached and only then
              * removes Location authority. This keeps a failed local cleanup
              * from leaving a deleted authority with retained capacity. */
-            const auto local_destroyed = (*node)->destroy_application_actor (actor);
+            const auto local_destroyed =
+              co_await await_result ((*node)->destroy_application_actor (actor));
             if (!local_destroyed) {
                 co_return result_t<bool>::failure (local_destroyed.error_kind (),
                                                    local_destroyed.error ()
@@ -1903,6 +1906,8 @@ void execute_actor_create_operation_target (
     auto accepting = detail::spot_node_runtime_t (registration->spot_state)
                        .entry_accepts_actor (request.stable_type);
     detail::observe_task_completion (accepting, [request, node, store, status, completion,
+                                                 failures =
+                                                   registration->spot_state->runtime_failures (),
                                                  failed] (const result_t<bool> &accepting) {
         if (!accepting) {
             completion (failed ());
@@ -2037,14 +2042,17 @@ void execute_actor_create_operation_target (
             return;
         }
         const auto actor = created.value ();
-        auto finish_creation = [node, actor, completion, activation_admission] (
+        auto finish_creation = [node, actor, completion, activation_admission, failures] (
                                  host::actor_create_operation_result_t result, bool ready) mutable {
             activation_admission.reset ();
-            if (!ready)
-                node->settle_application_actor_creation (actor, false);
-            completion (std::move (result));
-            if (ready)
-                node->settle_application_actor_creation (actor, true);
+            auto settled = std::make_shared<task_t<void>> (node->settle_application_actor_creation (
+              actor, ready, [completion, result = std::move (result)] () mutable {
+                  completion (std::move (result));
+              }));
+            detail::observe_task_completion (*settled,
+                                             [settled, failures] (const result_t<void> &result) {
+                                                 failures->capture ([&] { result.value (); });
+                                             });
         };
         host::pending_operation_t join_operation;
         const auto joined = node->submit_application_actor_entry_spot_join (
@@ -2516,13 +2524,13 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                   return detail::spot_node_runtime_t (registration->spot_state)
                     .materialize_relocation_state (frozen, target, target_spot, cancellation);
               },
-              [registration] (const std::vector<stateful::object_ref_t> &targets) {
+              [registration] (std::vector<stateful::object_ref_t> targets) {
                   return detail::spot_node_runtime_t (registration->spot_state)
-                    .commit_relocation_materialization (targets);
+                    .commit_relocation_materialization (std::move (targets));
               },
-              [registration] (const std::vector<stateful::object_ref_t> &targets) {
-                  detail::spot_node_runtime_t (registration->spot_state)
-                    .abort_relocation_materialization (targets);
+              [registration] (std::vector<stateful::object_ref_t> targets) {
+                  return detail::spot_node_runtime_t (registration->spot_state)
+                    .abort_relocation_materialization (std::move (targets));
               });
         }
         _published_mesh_nodes.clear ();
@@ -2742,9 +2750,14 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                       [node, registration, services, serializers, filters, options,
                        take = std::move (take)] () mutable -> std::optional<serial_prefix_work_t> {
                           std::optional<serial_prefix_work_t> item;
-                          take ([&] (const host::ready_record_t &owner,
-                                     const host::receive_record_t &record,
-                                     std::vector<zlink::message_t> parts) {
+                          std::function<void (std::exception_ptr)> dispatch_failure;
+                          auto claimed = take (dispatch_failure);
+                          if (!claimed)
+                              return std::nullopt;
+                          try {
+                              const auto &owner = claimed->owner;
+                              const auto &record = claimed->record;
+                              auto parts = std::move (claimed->parts);
                               node->application_work_enqueued ();
                               item.emplace ();
                               item->name = "actor-native";
@@ -2765,9 +2778,15 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                                             filters, options] (auto complete) mutable {
                                   record.application_record->retire_invocation = {};
                                   node->application_work_started ();
-                                  dispatch_application (
-                                    node, registration, owner, record, std::move (parts), false,
-                                    services, serializers, filters, *options, std::move (complete));
+                                  auto pending =
+                                    std::make_shared<task_t<void>> (dispatch_application (
+                                      node, registration, owner, record, std::move (parts), false,
+                                      services, serializers, filters, *options, complete));
+                                  detail::observe_task_completion (
+                                    *pending, [pending, complete] (const result_t<void> &result) {
+                                        if (!result)
+                                            complete ([result] { result.value (); });
+                                    });
                               };
                               item->cancel = [node, record] {
                                   node->application_work_started ();
@@ -2783,8 +2802,12 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                                     framework_error_kind_t::shutting_down,
                                     "Actor private application queue is stopping");
                               };
-                          });
-                          return item;
+                              return item;
+                          }
+                          catch (...) {
+                              dispatch_failure (std::current_exception ());
+                              return std::nullopt;
+                          }
                       });
               });
 
@@ -2844,7 +2867,7 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                         node->dispatch_ready (
                           [&] (const host::ready_record_t &owner,
                                const host::receive_record_t &record,
-                               std::vector<zlink::message_t> parts) {
+                               std::vector<zlink::message_t> parts) -> task_t<void> {
                               trace_mesh_application ("callback", record, parts.size ());
                               detail::spot_node_runtime_t spot_runtime (registration->spot_state);
                               const bool transfer_dispatch =
@@ -2852,7 +2875,7 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                                 && (record.kind == host::record_kind_t::actor_send
                                     || record.kind == host::record_kind_t::actor_request)
                                 && owner.actor
-                                && spot_runtime.actor_transfer_in_progress (*owner.actor);
+                                && co_await spot_runtime.actor_transfer_in_progress (*owner.actor);
                               const bool framework_object_dispatch =
                                 (owner.owner_kind == host::owner_kind_t::actor
                                  && (record.kind == host::record_kind_t::actor_send
@@ -2875,13 +2898,14 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                               };
                               terminal_callback_guard_t release_guard (release_mailbox_reservation);
                               terminal_callback_guard_t stateful_guard (complete_stateful_dispatch);
-                              auto run_direct = [this] (auto &&work) {
+                              auto run_direct =
+                                [this] (std::function<task_t<void> ()> work) -> task_t<void> {
                                   {
                                       std::lock_guard lock (_dispatch_gate_mutex);
                                       ++_active_direct_dispatch;
                                   }
                                   try {
-                                      work ();
+                                      co_await work ();
                                   }
                                   catch (...) {
                                       {
@@ -2900,16 +2924,16 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                               if (framework_object_dispatch && transfer_dispatch) {
                                   bool handled = false;
                                   try {
-                                      run_direct ([&] {
+                                      co_await run_direct ([&] () -> task_t<void> {
                                           const auto header = decode_mesh_record_header (
                                             record, parts,
                                             detail::message_flow_tracer_t (_dispatch_options)
                                               .flow_tracing (),
                                             _dispatch_options);
                                           if (!header) {
-                                              return;
+                                              co_return;
                                           }
-                                          handled = spot_runtime.dispatch_mesh_record (
+                                          handled = co_await spot_runtime.dispatch_mesh_record (
                                             owner, record, parts, header.value (), *_services,
                                             *_serializers);
                                       });
@@ -2920,7 +2944,7 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                                   }
                                   if (handled || transfer_dispatch) {
                                       release_mailbox ();
-                                      return;
+                                      co_return;
                                   }
                               }
                               if (owner.domain == host::ready_domain_t::application) {
@@ -2943,27 +2967,27 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                                         record, std::move (mailbox_record.application->parts),
                                         framework_error_kind_t::shutting_down,
                                         "MeshNode application mailbox is closed");
-                                      return;
+                                      co_return;
                                   }
                                   if (retain_mailbox_reservation)
                                       retain_mailbox_reservation ();
                                   stateful_guard.dismiss ();
                                   release_guard.dismiss ();
-                                  return;
+                                  co_return;
                               }
-                              run_direct ([&] {
+                              co_await run_direct ([&] () -> task_t<void> {
                                   auto decoded_header = decode_mesh_record_header (
                                     record, parts,
                                     detail::message_flow_tracer_t (_dispatch_options)
                                       .flow_tracing (),
                                     _dispatch_options);
                                   if (!decoded_header)
-                                      return;
-                                  if (spot_runtime.dispatch_mesh_record (owner, record, parts,
-                                                                         decoded_header.value (),
-                                                                         *_services, *_serializers)
+                                      co_return;
+                                  if (co_await spot_runtime.dispatch_mesh_record (
+                                        owner, record, parts, decoded_header.value (), *_services,
+                                        *_serializers)
                                       || !decoded_header.value ()) {
-                                      return;
+                                      co_return;
                                   }
                                   detail::mesh_record_dispatcher_t dispatcher (
                                     *_services, *_serializers, registration->handlers, *_filters,
@@ -3256,17 +3280,17 @@ std::vector<std::shared_ptr<detail::mesh_node_runtime_t>> mesh_node_host_service
     return _nodes;
 }
 
-void mesh_node_host_service_t::dispatch_application (
-  const std::shared_ptr<detail::mesh_node_runtime_t> &node,
-  const std::shared_ptr<detail::mesh_node_builder_state_t> &registration,
-  const host::ready_record_t &owner,
-  const host::receive_record_t &record,
+task_t<void> mesh_node_host_service_t::dispatch_application (
+  std::shared_ptr<detail::mesh_node_runtime_t> node,
+  std::shared_ptr<detail::mesh_node_builder_state_t> registration,
+  host::ready_record_t owner,
+  host::receive_record_t record,
   std::vector<zlink::message_t> parts,
   bool reject_only,
   service_provider_t *services,
   serializer_registry_t *serializers,
   const handler_registry_t *filters,
-  const dispatch_options_t &dispatch_options,
+  dispatch_options_t dispatch_options,
   serial_execution_queue_t::async_completion_t application_completed)
 {
     if (record.retain_mailbox_reservation)
@@ -3285,7 +3309,7 @@ void mesh_node_host_service_t::dispatch_application (
                                         "MeshNode is draining and rejects new application work");
             if (application_completed)
                 application_completed ([] {});
-            return;
+            co_return;
         }
         deferred_terminal =
           std::make_shared<application_dispatch_terminal_owner_t> (std::move (terminal));
@@ -3298,9 +3322,9 @@ void mesh_node_host_service_t::dispatch_application (
             deferred_terminal->settle ();
             if (application_completed)
                 application_completed ([] {});
-            return;
+            co_return;
         }
-        const auto handled = application_spot_runtime.dispatch_mesh_record (
+        const auto handled = co_await application_spot_runtime.dispatch_mesh_record (
           owner, record, parts, decoded_header.value (), *services, *serializers,
           [deferred_terminal] { deferred_terminal->settle (); }, &terminal_deferred,
           record.before_application_handler, application_completed);
@@ -3358,12 +3382,12 @@ task_t<void> mesh_node_host_service_t::drain_application_owner (
         co_return;
     const auto deadline = std::chrono::steady_clock::now () + dispatch_limits::owner_time_budget;
     try {
-        const std::function<void (const host::ready_record_t &, const host::receive_record_t &,
-                                  std::vector<zlink::message_t>)>
-          dispatch = [&] (const host::ready_record_t &ready, const host::receive_record_t &record,
-                          std::vector<zlink::message_t> parts) {
-              dispatch_application (node, registration, ready, record, std::move (parts),
-                                    reject_only, services, serializers, filters, dispatch_options);
+        const mesh::service_mailbox_t::application_dispatch_t dispatch =
+          [&] (const host::ready_record_t &ready, const host::receive_record_t &record,
+               std::vector<zlink::message_t> parts) {
+              return dispatch_application (node, registration, ready, record, std::move (parts),
+                                           reject_only, services, serializers, filters,
+                                           dispatch_options);
           };
         const std::function<void ()> started = [&node] { node->application_work_started (); };
         const std::function<void ()> rejected = [&node] { node->application_work_finished (); };

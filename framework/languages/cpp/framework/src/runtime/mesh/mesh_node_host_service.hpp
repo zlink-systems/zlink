@@ -153,17 +153,17 @@ class mesh_node_host_service_t final : public hosted_service_t, public hosted_se
     result_t<void> finalize_local_actor_destroy (const actor_ref_t &actor);
     task_t<bool> destroy_actor (actor_ref_t actor);
 
-    static void
-    dispatch_application (const std::shared_ptr<detail::mesh_node_runtime_t> &node,
-                          const std::shared_ptr<detail::mesh_node_builder_state_t> &registration,
-                          const host::ready_record_t &owner,
-                          const host::receive_record_t &record,
+    static task_t<void>
+    dispatch_application (std::shared_ptr<detail::mesh_node_runtime_t> node,
+                          std::shared_ptr<detail::mesh_node_builder_state_t> registration,
+                          host::ready_record_t owner,
+                          host::receive_record_t record,
                           std::vector<zlink::message_t> parts,
                           bool reject_only,
                           service_provider_t *services,
                           serializer_registry_t *serializers,
                           const handler_registry_t *filters,
-                          const dispatch_options_t &dispatch_options,
+                          dispatch_options_t dispatch_options,
                           serial_execution_queue_t::async_completion_t application_completed = {});
     static task_t<void>
     drain_application_owner (std::shared_ptr<detail::mesh_node_runtime_t> node,

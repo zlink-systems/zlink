@@ -70,9 +70,10 @@ class service_mailbox_t
 
     using application_prepare_t = std::function<void (service_mailbox_record_t &)>;
     using application_ready_t = std::function<void (const std::string &)>;
-    using application_dispatch_t = std::function<void (
+    using application_dispatch_t = std::function<task_t<void> (
       const host::ready_record_t &, const host::receive_record_t &, std::vector<zlink::message_t>)>;
-    using stateful_take_t = std::function<bool (const application_dispatch_t &)>;
+    using stateful_take_t = std::function<std::optional<host::local_application_dispatch_t> (
+      std::function<void (std::exception_ptr)> &)>;
     using stateful_ready_t = std::function<task_t<bool> (const std::string &, stateful_take_t)>;
     void bind_application_dispatch (application_prepare_t prepare,
                                     application_ready_t ready,

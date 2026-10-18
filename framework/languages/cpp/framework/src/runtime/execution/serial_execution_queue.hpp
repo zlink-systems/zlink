@@ -170,9 +170,9 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
     accept_application_ready (std::function<std::optional<serial_prefix_work_t> ()> take);
     void notify_control (std::string name, std::function<void ()> control);
     task_t<bool>
-    adopt_application_prefix (std::function<std::vector<serial_prefix_work_t> ()> take);
+    adopt_application_prefix (std::function<task_t<std::vector<serial_prefix_work_t>> ()> take);
     task_t<std::vector<std::shared_ptr<serial_application_record_t>>>
-    take_application_suffix (std::function<void ()> seal = {});
+    take_application_suffix (std::function<task_t<void> ()> seal = {});
     bool try_post (std::string name, std::function<void ()> work);
     bool try_post (std::string name, std::function<void ()> work, serial_work_options_t options);
     bool try_post_async (std::string name, async_work_t work);
@@ -192,6 +192,7 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
                           serial_work_options_t options,
                           std::function<bool ()> stop_requested = {});
     bool try_post_deferred (std::string name, std::function<void ()> work);
+    bool try_post_deferred_task (std::string name, std::function<task_t<void> ()> work);
     result_t<std::shared_ptr<detail::deferred_barrier_t>> reserve_deferred_barrier_next (
       std::string name,
       std::function<void ()> cancel = {},
@@ -317,6 +318,58 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
                                                         "shared Spot gate executor is stopping"));
         return task;
     }
+    template <typename T, typename Work> task_t<result_t<T>> retained_control_task (Work work)
+    {
+        auto retained = weak_from_this ().lock ();
+        const auto turn = detail::capture_current_serial_turn ();
+        if (turn && turn->belongs_to (this))
+            co_return result_t<T>::success (co_await work ());
+
+        struct terminal_guard_t
+        {
+            std::shared_ptr<task_completion_source_t<void>> source;
+            void finish ()
+            {
+                if (auto terminal = std::exchange (source, {}))
+                    terminal->complete (result_t<void>::success ());
+            }
+            ~terminal_guard_t () { finish (); }
+        } terminal{std::make_shared<task_completion_source_t<void>> ()};
+        auto released = std::make_shared<task_completion_source_t<result_t<void>>> ();
+        const auto held = retain_mailbox_until (
+          terminal.source->task (),
+          [source = terminal.source] {
+              source->complete (result_t<void>::failure (framework_error_kind_t::shutting_down,
+                                                         "Actor mailbox is closed"));
+          },
+          [released] (const result_t<void> &result) {
+              released->complete (result_t<result_t<void>>::success (result));
+          });
+        if (!held)
+            co_return detail::propagate_failure<T> (held, "Actor mailbox hold was rejected");
+        std::optional<result_t<T>> outcome;
+        try {
+            // Registration and this fence share the existing control FIFO.
+            co_await control_async<void> ([] {});
+            outcome.emplace (result_t<T>::success (co_await work ()));
+        }
+        catch (...) {
+            outcome.emplace (detail::current_exception_result<T> ());
+        }
+        terminal.finish ();
+        const auto mailbox = co_await released->task ();
+        if (!*outcome)
+            co_return detail::propagate_failure<result_t<T>> (*outcome,
+                                                              "Actor control operation failed");
+        if (!mailbox)
+            co_return detail::propagate_failure<T> (mailbox, "Actor mailbox release failed");
+        co_return std::move (*outcome);
+    }
+    result_t<void> retain_mailbox_until (task_t<void> terminal,
+                                         std::function<void ()> cancel,
+                                         std::function<void (const result_t<void> &)> released);
+    void cancel_pending_work (const std::shared_ptr<serial_application_record_t> &record,
+                              const std::function<void ()> &cancel) noexcept;
     serial_cancel_submission_outcome_t
     cancel_submission_owned (serial_submission_id_t submission_id) noexcept;
     std::shared_ptr<const void> first_pending_message_or_close_owned ();
@@ -340,10 +393,10 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
     void close_locked ();
     void drain_loop ();
     void execute_item (work_item_t item);
-    void complete_one (std::string name,
-                       std::function<void ()> completion,
-                       bool allow_inline_claim = true,
-                       std::unique_lock<std::mutex> claim = {});
+    result_t<void> complete_one (std::string name,
+                                 std::function<void ()> completion,
+                                 bool allow_inline_claim = true,
+                                 std::unique_lock<std::mutex> claim = {});
     void complete_turn (std::string name,
                         std::function<void ()> completion,
                         const std::shared_ptr<serial_turn_handle_impl_t> &turn,

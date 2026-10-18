@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+#include "../support/async_application_dispatch.hpp"
 #include "../support/session_disconnect_probe_spot.hpp"
 #include "../support/runtime_failure_fixture.hpp"
 
@@ -296,9 +297,10 @@ bool wait_until_admitted (zlink::framework::detail::mesh_node_runtime_t &node)
         if (node.admitted_peer_count () > 0)
             return true;
         (void) std::move (
-          node.dispatch_ready ([] (const zlink::framework::runtime::host::ready_record_t &,
-                                   const zlink::framework::runtime::host::receive_record_t &,
-                                   std::vector<zlink::message_t>) {}))
+          node.dispatch_ready (::zlink::framework::test::async_application_dispatch (
+            [] (const zlink::framework::runtime::host::ready_record_t &,
+                const zlink::framework::runtime::host::receive_record_t &,
+                std::vector<zlink::message_t>) {})))
           .result ()
           .value ();
         std::this_thread::sleep_for (10ms);
@@ -349,9 +351,10 @@ bool wait_until_admitted_count (zlink::framework::detail::mesh_node_runtime_t &n
         if (node.admitted_peer_count () >= expected)
             return true;
         (void) std::move (
-          node.dispatch_ready ([] (const zlink::framework::runtime::host::ready_record_t &,
-                                   const zlink::framework::runtime::host::receive_record_t &,
-                                   std::vector<zlink::message_t>) {}))
+          node.dispatch_ready (::zlink::framework::test::async_application_dispatch (
+            [] (const zlink::framework::runtime::host::ready_record_t &,
+                const zlink::framework::runtime::host::receive_record_t &,
+                std::vector<zlink::message_t>) {})))
           .result ()
           .value ();
         std::this_thread::sleep_for (10ms);
@@ -394,13 +397,14 @@ bool receive_one (zlink::framework::detail::mesh_node_runtime_t &node,
     while (std::chrono::steady_clock::now () < deadline) {
         bool matched = false;
         (void) std::move (
-          node.dispatch_ready ([&] (const zlink::framework::runtime::host::ready_record_t &,
-                                    const zlink::framework::runtime::host::receive_record_t &record,
-                                    std::vector<zlink::message_t> parts) {
-              matched = matched
-                        || (record.kind == expected_kind && !parts.empty ()
-                            && parts.front ().to_string () == expected_text);
-          }))
+          node.dispatch_ready (::zlink::framework::test::async_application_dispatch (
+            [&] (const zlink::framework::runtime::host::ready_record_t &,
+                 const zlink::framework::runtime::host::receive_record_t &record,
+                 std::vector<zlink::message_t> parts) {
+                matched = matched
+                          || (record.kind == expected_kind && !parts.empty ()
+                              && parts.front ().to_string () == expected_text);
+            })))
           .result ()
           .value ();
         if (matched)
@@ -419,17 +423,19 @@ bool reply_to_one_request (zlink::framework::detail::mesh_node_runtime_t &node,
     while (std::chrono::steady_clock::now () < deadline) {
         bool replied = false;
         (void) std::move (
-          node.dispatch_ready ([&] (const zlink::framework::runtime::host::ready_record_t &,
-                                    const zlink::framework::runtime::host::receive_record_t &record,
-                                    std::vector<zlink::message_t> parts) {
-              if (record.kind == expected_kind && !parts.empty ()
-                  && parts.front ().to_string () == expected_text) {
-                  const std::vector<zlink::message_t> reply_parts{
-                    zlink::message_t::from (reply_text)};
-                  replied = zlink::framework::runtime::host::reply (record.reply_token, reply_parts)
-                            == zlink::submit_result_t::ok;
-              }
-          }))
+          node.dispatch_ready (::zlink::framework::test::async_application_dispatch (
+            [&] (const zlink::framework::runtime::host::ready_record_t &,
+                 const zlink::framework::runtime::host::receive_record_t &record,
+                 std::vector<zlink::message_t> parts) {
+                if (record.kind == expected_kind && !parts.empty ()
+                    && parts.front ().to_string () == expected_text) {
+                    const std::vector<zlink::message_t> reply_parts{
+                      zlink::message_t::from (reply_text)};
+                    replied =
+                      zlink::framework::runtime::host::reply (record.reply_token, reply_parts)
+                      == zlink::submit_result_t::ok;
+                }
+            })))
           .result ()
           .value ();
         if (replied)
@@ -728,15 +734,16 @@ void verify_local_join_timeout_releases_membership ()
             == zlink::submit_result_t::ok);
     bool replied = false;
     (void) runtime
-      .dispatch_ready ([&] (const host::ready_record_t &, const host::receive_record_t &record,
-                            std::vector<zlink::message_t>) {
-          if (record.kind == host::record_kind_t::spot_control)
-              replied = host::actor_join_reply (
-                record.reply_token,
-                zlink::framework::result_t<host::actor_join_result_t>::success (
-                  host::actor_join_result_t::accepted),
-                {});
-      })
+      .dispatch_ready (::zlink::framework::test::async_application_dispatch (
+        [&] (const host::ready_record_t &, const host::receive_record_t &record,
+             std::vector<zlink::message_t>) {
+            if (record.kind == host::record_kind_t::spot_control)
+                replied = host::actor_join_reply (
+                  record.reply_token,
+                  zlink::framework::result_t<host::actor_join_result_t>::success (
+                    host::actor_join_result_t::accepted),
+                  {});
+        }))
       .result ()
       .value ();
     assert (replied);
@@ -1816,9 +1823,10 @@ void verify_manual_peer_public_status ()
 
     const auto dispatch_ready = [] (zlink::framework::detail::mesh_node_runtime_t &node) {
         (void) std::move (
-          node.dispatch_ready ([] (const zlink::framework::runtime::host::ready_record_t &,
-                                   const zlink::framework::runtime::host::receive_record_t &,
-                                   std::vector<zlink::message_t>) {}))
+          node.dispatch_ready (::zlink::framework::test::async_application_dispatch (
+            [] (const zlink::framework::runtime::host::ready_record_t &,
+                const zlink::framework::runtime::host::receive_record_t &,
+                std::vector<zlink::message_t>) {})))
           .result ()
           .value ();
     };
@@ -2691,15 +2699,16 @@ int run_cross_process_delivery ()
             == zlink::submit_result_t::ok);
     bool local_send_delivered = false;
     (void) std::move (
-      node.dispatch_ready ([&] (const zlink::framework::runtime::host::ready_record_t &owner,
-                                const zlink::framework::runtime::host::receive_record_t &record,
-                                std::vector<zlink::message_t> parts) {
-          local_send_delivered =
-            owner.owner_kind == zlink::framework::runtime::host::owner_kind_t::spot
-            && owner.spot_id == "local-target"
-            && record.kind == zlink::framework::runtime::host::record_kind_t::spot_send
-            && !parts.empty () && parts.front ().to_string () == "local-send";
-      }))
+      node.dispatch_ready (::zlink::framework::test::async_application_dispatch (
+        [&] (const zlink::framework::runtime::host::ready_record_t &owner,
+             const zlink::framework::runtime::host::receive_record_t &record,
+             std::vector<zlink::message_t> parts) {
+            local_send_delivered =
+              owner.owner_kind == zlink::framework::runtime::host::owner_kind_t::spot
+              && owner.spot_id == "local-target"
+              && record.kind == zlink::framework::runtime::host::record_kind_t::spot_send
+              && !parts.empty () && parts.front ().to_string () == "local-send";
+        })))
       .result ()
       .value ();
     assert (local_send_delivered);
@@ -2723,10 +2732,10 @@ int run_cross_process_delivery ()
               .value ()
             == zlink::submit_result_t::ok);
     std::this_thread::sleep_for (40ms);
-    (void) std::move (
-      node.dispatch_ready ([] (const zlink::framework::runtime::host::ready_record_t &,
-                               const zlink::framework::runtime::host::receive_record_t &,
-                               std::vector<zlink::message_t>) {}))
+    (void) std::move (node.dispatch_ready (::zlink::framework::test::async_application_dispatch (
+                        [] (const zlink::framework::runtime::host::ready_record_t &,
+                            const zlink::framework::runtime::host::receive_record_t &,
+                            std::vector<zlink::message_t>) {})))
       .result ()
       .value ();
     // Expiry claims the entry in this ingress turn; the already-reserved

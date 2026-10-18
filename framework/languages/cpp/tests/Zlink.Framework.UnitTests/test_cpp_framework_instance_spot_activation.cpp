@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+#include "../support/async_application_dispatch.hpp"
 #include "../support/runtime_failure_fixture.hpp"
 
 #include <zlink/framework.hpp>
@@ -264,8 +265,11 @@ static void verify_same_target_activation_order (
                                                            std::nullopt, payload)
                    .result ());
     auto pump = [&] {
-        ASSERT_TRUE (
-          target->dispatch_ready ([] (const auto &, const auto &, auto) {}, false).result ());
+        ASSERT_TRUE (target
+                       ->dispatch_ready (::zlink::framework::test::async_application_dispatch (
+                                           [] (const auto &, const auto &, auto) {}),
+                                         false)
+                       .result ());
     };
     const auto until = std::chrono::steady_clock::now () + 3s;
     while ((store->reserves == 0 || (ready_request && store->commits == 0))
@@ -1146,8 +1150,11 @@ void verify_reserve_loser (bool expire_deadline, bool one_way)
     while ((one_way ? diagnostic_future.wait_for (0ms) : reply_future.wait_for (0ms))
              != std::future_status::ready
            && std::chrono::steady_clock::now () < pump_deadline) {
-        ASSERT_TRUE (
-          target->dispatch_ready ([] (const auto &, const auto &, auto) {}, false).result ());
+        ASSERT_TRUE (target
+                       ->dispatch_ready (::zlink::framework::test::async_application_dispatch (
+                                           [] (const auto &, const auto &, auto) {}),
+                                         false)
+                       .result ());
         std::this_thread::yield ();
     }
     if (one_way) {
@@ -1677,10 +1684,14 @@ TEST (ZLinkFrameworkInstanceSpotActivation, RetiredOwnerRequestCompletesWithUnav
       traced_request_t{7}, serializers);
     auto request_parts = std::move (encoded).take_items ();
 
-    EXPECT_TRUE (runtime->dispatch_mesh_record (
-      owner, record, request_parts,
-      zlink::framework::runtime::decode_mesh_record_header (record, request_parts, false).value (),
-      provider, serializers));
+    EXPECT_TRUE (runtime
+                   ->dispatch_mesh_record (owner, record, request_parts,
+                                           zlink::framework::runtime::decode_mesh_record_header (
+                                             record, request_parts, false)
+                                             .value (),
+                                           provider, serializers)
+                   .result ()
+                   .value ());
     ASSERT_EQ (2u, reply_parts.size ());
     const auto reply_header = codec.decode_header (messaging::message_parts_t (reply_parts));
     ASSERT_TRUE (reply_header);
@@ -2199,7 +2210,10 @@ TEST (ZLinkFrameworkInstanceSpotActivation, StoredActivationMismatchPreservesAut
                 while (result.wait_for (0ms) != std::future_status::ready
                        && std::chrono::steady_clock::now () < until) {
                     ASSERT_TRUE (
-                      target->dispatch_ready ([] (const auto &, const auto &, auto) {}, false)
+                      target
+                        ->dispatch_ready (::zlink::framework::test::async_application_dispatch (
+                                            [] (const auto &, const auto &, auto) {}),
+                                          false)
                         .result ());
                     std::this_thread::yield ();
                 }
@@ -2518,8 +2532,11 @@ static void verify_ready_recovery_root_deletion (bool local_available)
                    .result ());
     const auto until = std::chrono::steady_clock::now () + 3s;
     auto pump = [&] {
-        ASSERT_TRUE (
-          target->dispatch_ready ([] (const auto &, const auto &, auto) {}, false).result ());
+        ASSERT_TRUE (target
+                       ->dispatch_ready (::zlink::framework::test::async_application_dispatch (
+                                           [] (const auto &, const auto &, auto) {}),
+                                         false)
+                       .result ());
     };
     while (entered.load () == 0 && std::chrono::steady_clock::now () < until)
         pump ();

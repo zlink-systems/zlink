@@ -109,13 +109,13 @@ void relocation_target_restore_holds_admission_until_commit_or_abort ()
     require (creation_rejected, "a User Spot creation beyond the limit must be unavailable");
     require (admission->active () == 1, "rejected operations must not hold an admission");
 
-    (void) runtime.commit_relocation_materialization ({target ("first")});
+    (void) runtime.commit_relocation_materialization ({target ("first")}).result ().value ();
     require (admission->active () == 0, "the target commit must end the Restore admission");
 
     require (runtime.restore_spot_relocation_state (frozen ("second"), target ("second")),
              "a Restore must be admitted again after the commit");
     require (admission->active () == 1, "the second Restore must hold one admission");
-    runtime.abort_relocation_materialization ({target ("second")});
+    runtime.abort_relocation_materialization ({target ("second")}).result ().value ();
     require (wait_for_released_admission (admission),
              "the target abort must end the Restore admission");
 

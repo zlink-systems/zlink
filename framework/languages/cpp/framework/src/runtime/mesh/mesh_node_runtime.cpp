@@ -2,6 +2,7 @@
 
 #include "runtime/mesh/mesh_node_runtime.hpp"
 #include "runtime/timers/async_delay.hpp"
+#include "runtime/execution/task_result.hpp"
 #include "runtime/actors/actor_gateway_runtime.hpp"
 #include "runtime/locations/actor_authority_payload.hpp"
 #include "runtime/locations/live_location_reader.hpp"
@@ -345,32 +346,6 @@ advance_message_follow_path (const std::map<std::string, std::string> &metadata,
     path.encoded += local_node;
     return result_t<message_follow_path_t>::success (std::move (path));
 }
-
-class actor_message_follow_lease_t
-{
-  public:
-    actor_message_follow_lease_t (spot_node_runtime_t runtime,
-                                  actor_ref_t actor,
-                                  runtime::protocol::actor_route_fence_t source_fence,
-                                  std::size_t payload_bytes) :
-        _runtime (std::move (runtime)),
-        _actor (std::move (actor)),
-        _source_fence (std::move (source_fence)),
-        _payload_bytes (payload_bytes)
-    {
-    }
-
-    ~actor_message_follow_lease_t ()
-    {
-        _runtime.release_actor_message_follow (_actor, _source_fence, _payload_bytes);
-    }
-
-  private:
-    spot_node_runtime_t _runtime;
-    actor_ref_t _actor;
-    runtime::protocol::actor_route_fence_t _source_fence;
-    std::size_t _payload_bytes;
-};
 
 std::string node_submit_target (const zlink::routing_id_t &node)
 {
@@ -847,7 +822,7 @@ void mesh_node_runtime_t::start ()
           return spot_node_runtime_t (spot_state).actor_relocation_authority (target);
       },
       [spot_state] (const std::string &stable_type, const runtime::stateful::object_ref_t &target) {
-          spot_node_runtime_t (spot_state).discard_actor_join_recovery (stable_type, target);
+          return spot_node_runtime_t (spot_state).discard_actor_join_recovery (stable_type, target);
       },
       [spot_state] (const runtime::stateful::object_ref_t &target,
                     std::uint64_t target_node_generation,
@@ -1434,22 +1409,23 @@ task_t<runtime::stateful::relocation_result_t> mesh_node_runtime_t::relocate_app
     co_return result;
 }
 
-bool mesh_node_runtime_t::application_actor_transfer_in_progress (const actor_ref_t &actor) const
+task_t<bool> mesh_node_runtime_t::application_actor_transfer_in_progress (actor_ref_t actor) const
 {
-    return spot_node_runtime_t (_state->spot_state).actor_transfer_in_progress (actor);
+    return spot_node_runtime_t (_state->spot_state).actor_transfer_in_progress (std::move (actor));
 }
 
-result_t<bool> mesh_node_runtime_t::destroy_application_actor (const actor_ref_t &actor)
+task_t<bool> mesh_node_runtime_t::destroy_application_actor (actor_ref_t actor)
 {
-    const auto destroyed = spot_node_runtime_t (_state->spot_state).destroy_actor (actor);
+    const auto destroyed = co_await runtime::await_result (
+      spot_node_runtime_t (_state->spot_state).destroy_actor (actor));
     if (!destroyed)
-        return destroyed;
+        co_return destroyed;
     const auto stateful = cleanup_application_actor_stateful (actor);
     if (!stateful)
-        return result_t<bool>::failure (stateful.error_kind (),
-                                        stateful.error () ? stateful.error ()->what ()
-                                                          : "stateful Actor cleanup failed");
-    return result_t<bool>::success (true);
+        co_return result_t<bool>::failure (stateful.error_kind (),
+                                           stateful.error () ? stateful.error ()->what ()
+                                                             : "stateful Actor cleanup failed");
+    co_return result_t<bool>::success (true);
 }
 
 result_t<void> mesh_node_runtime_t::cleanup_application_actor_stateful (const actor_ref_t &actor)
@@ -2324,25 +2300,34 @@ mesh_node_runtime_t::join_application_actor_to_entry_spot (actor_ref_t actor,
     co_return reply;
 }
 
-void mesh_node_runtime_t::settle_application_actor_creation (const actor_ref_t &actor, bool ready)
+task_t<void> mesh_node_runtime_t::settle_application_actor_creation (actor_ref_t actor,
+                                                                     bool ready,
+                                                                     std::function<void ()> publish)
 {
-    spot_node_runtime_t spots (_state->spot_state);
+    auto state = _state;
+    spot_node_runtime_t spots (state->spot_state);
+    const auto failures = state->spot_state->runtime_failures ();
     if (!ready) {
-        spots.cancel_local_actor_handoff (actor);
-        return;
+        const auto cancelled =
+          co_await runtime::await_result (spots.cancel_local_actor_handoff (actor));
+        publish ();
+        if (!cancelled)
+            failures->report (cancelled.exception ());
+        co_return;
     }
-    auto opened = spots.open_local_actor_handoff (actor);
-    detail::observe_task_completion (
-      opened, [state = _state, actor] (const result_t<result_t<void>> &terminal) {
-          const auto result =
-            terminal
-              ? terminal.value ()
-              : detail::propagate_failure<void> (terminal, "Actor creation handoff prefix failed");
-          if (!result) {
-              spot_node_runtime_t (state->spot_state).cancel_local_actor_handoff (actor);
-              state->spot_state->runtime_failures ()->report (result.exception ());
-          }
-      });
+    // Creation publication precedes opening the same Actor ingress owner.
+    publish ();
+    const auto opened = co_await runtime::await_result (spots.open_local_actor_handoff (actor));
+    const auto result =
+      opened ? opened.value ()
+             : detail::propagate_failure<void> (opened, "Actor creation handoff prefix failed");
+    if (!result) {
+        const auto cancelled =
+          co_await runtime::await_result (spots.cancel_local_actor_handoff (actor));
+        if (!cancelled)
+            failures->report (cancelled.exception ());
+        failures->report (result.exception ());
+    }
 }
 
 result_t<void>
@@ -2623,8 +2608,8 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::admit_remote_application_actor_j
                                                    "source Spot generation is unavailable");
     }
     s->source_spot_generation = *source_spot_generation;
-    auto reserved = spot.reserved_actor_transfer_id (s->actor);
-    s->transfer_id = reserved ? std::move (*reserved) : spot.next_actor_transfer_id ();
+    auto reserved = co_await spot.reserved_actor_transfer_id (s->actor);
+    s->transfer_id = reserved ? std::move (*reserved) : co_await spot.next_actor_transfer_id ();
     s->completion_operation_id_low =
       _state->next_join_completion_operation.fetch_add (1, std::memory_order_relaxed);
     s->completion_operation_id_high =
@@ -3171,7 +3156,7 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::prepare_remote_application_actor
     s->relocation_content_type = prepared.value ().relocation_content_type;
     auto *maintenance = _node->maintenance ();
     if (!maintenance || !s->source_authority || !s->source_spot) {
-        spot.fail_remote_actor_transfer (s->actor, false);
+        co_await spot.fail_remote_actor_transfer (s->actor, false);
         (void) co_await abort_remote_actor_join_seal (s);
         co_return co_await fail_remote_actor_join (
           *s,
@@ -3219,7 +3204,7 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::prepare_remote_application_actor
         recovery_encode_error = error.what ();
     }
     if (!recovery_encode_error.empty ()) {
-        spot.fail_remote_actor_transfer (s->actor, false);
+        co_await spot.fail_remote_actor_transfer (s->actor, false);
         (void) co_await abort_remote_actor_join_seal (s);
         co_return co_await fail_remote_actor_join (
           *s,
@@ -3355,7 +3340,7 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::prepare_remote_application_actor
                 + ":" + std::string (s->actor.actor_id ().value ()),
               source_fence);
         } else
-            spot.fail_remote_actor_transfer (s->actor, false);
+            co_await spot.fail_remote_actor_transfer (s->actor, false);
         (void) co_await abort_remote_actor_join_seal (s);
         co_return co_await fail_remote_actor_join (
           *s,
@@ -3517,6 +3502,139 @@ mesh_node_runtime_t::relay_application_actor (const actor_ref_t &actor,
       runtime::protocol::actor_route_fence_t{}, 0, runtime::protocol::wire_operation_id_t{}, 0));
 }
 
+request_task_t<std::optional<zlink::message_t>>
+mesh_node_runtime_t::relay_application_actor_follow (
+  actor_ref_t actor,
+  runtime::messaging::envelope_header_t header,
+  zlink::message_t payload,
+  std::chrono::milliseconds timeout,
+  zlink::routing_id_t source_node,
+  runtime::protocol::actor_route_fence_t stale_route,
+  std::uint8_t incoming_hop_count,
+  runtime::protocol::wire_operation_id_t original_operation,
+  std::uint64_t original_reply_route_id,
+  zlink::routing_id_t local_routing_id,
+  actor_message_follow_target_t follow_target,
+  std::size_t payload_bytes)
+{
+    spot_node_runtime_t spot_runtime (_state->spot_state);
+    const auto local_node = local_routing_id.to_hex ();
+    auto follow_path = advance_message_follow_path (
+      header.metadata, local_node, follow_target.source_fence.authority_owner_generation);
+    if (!follow_path) {
+        co_return detail::propagate_failure<std::optional<zlink::message_t>> (
+          follow_path, "Actor Message Follow loop detection failed");
+    }
+    const auto target_node =
+      zlink::routing_id_t::from (std::string (follow_target.route.node_rid.value ()));
+    auto target_identity = target_node.to_hex ();
+    target_identity.push_back ('@');
+    target_identity += std::to_string (follow_target.target_fence.authority_owner_generation);
+    if (follow_path.value ().visited.contains (target_identity)) {
+        co_return result_t<std::optional<zlink::message_t>>::failure (
+          framework_error_kind_t::unavailable,
+          "Actor Message Follow target authority fence was already visited");
+    }
+    if (spot_runtime.actor_transfer_marker_enabled ()) {
+        spot_runtime.emit_actor_transfer_marker (
+          "message_follow_relay", actor,
+          header.correlation_id.empty () ? std::string (actor.actor_id ().value ())
+                                         : header.correlation_id,
+          follow_target.route.spot_id, follow_target.route.node_rid);
+    }
+    spot_inbound_message_t metadata;
+    metadata.content_type = header.content_type;
+    metadata.values = header.metadata;
+    if (header.kind == runtime::messaging::message_kind_t::request
+        && !header.correlation_id.empty ()) {
+        metadata.values.insert_or_assign ("__zlink.actorRequestId", header.correlation_id);
+    }
+    if (header.kind == runtime::messaging::message_kind_t::request
+        && (original_operation.high != 0 || original_operation.low != 0)) {
+        metadata.values[std::string (detail::actor_handoff_source_node_key)] =
+          source_node.to_hex ();
+        metadata.values[std::string (detail::actor_handoff_parking_node_key)] =
+          local_routing_id.to_hex ();
+        metadata.values[std::string (detail::actor_handoff_operation_high_key)] =
+          std::to_string (original_operation.high);
+        metadata.values[std::string (detail::actor_handoff_operation_low_key)] =
+          std::to_string (original_operation.low);
+        metadata.values[std::string (detail::actor_handoff_reply_route_key)] =
+          std::to_string (original_reply_route_id);
+    }
+    metadata.values[std::string (message_follow_path_key)] =
+      std::move (follow_path.value ().encoded);
+    metadata.values["__zlink.messageFollowHopCount"] =
+      std::to_string (static_cast<unsigned int> (incoming_hop_count + 1));
+    if (header.kind == runtime::messaging::message_kind_t::command)
+        metadata.values["__zlink.actorRelayKind"] = "send";
+    runtime::messaging::client_call_codec_t codec;
+    auto request_header =
+      codec.create_envelope (runtime::messaging::message_kind_t::request, "spot",
+                             spot_actor_packet_route_request_t::packet_name, timeout);
+    // Message Follow owns a local relay window, but the next hop must
+    // receive the original client-managed absolute deadline unchanged.
+    request_header.deadline = header.deadline;
+    auto request = make_spot_actor_packet_route_request (
+      follow_target.actor, follow_target.route.spot_id, header.message_name, payload, metadata,
+      follow_target.target_fence);
+    auto request_parts = codec.encode_envelope_parts (request_header, request, *_serializers);
+    const auto target_generation =
+      co_await spot_runtime.resolve_spot_generation (target_node, follow_target.route.spot_id);
+    if (!target_generation) {
+        co_return result_t<std::optional<zlink::message_t>>::failure (
+          framework_error_kind_t::not_found,
+          "Actor message follow target Spot generation is unavailable");
+    }
+    auto origin = get_or_create_spot ("__zlink-route-origin-" + routing_id ()->to_hex ());
+    host::pending_operation_t operation;
+    auto submission = origin.request_to_spot (target_node, follow_target.route.spot_id,
+                                              *target_generation, request_parts.items (), operation,
+                                              zlink::send_flags_t::none, timeout);
+    auto admitted = co_await detail::request_admission_source_t{};
+    observe_request_failure (operation, admitted, "Actor message follow route request");
+    const auto submitted = co_await submission;
+    if (submitted != zlink::submit_result_t::ok) {
+        co_return result_t<std::optional<zlink::message_t>>::failure (
+          framework_error_kind_t::internal_failure,
+          "Actor message follow route request was not submitted");
+    }
+    co_await detail::request_admitted_t{};
+    auto completed = co_await await_request_reply (operation, "Actor message follow route request");
+    if (!completed)
+        co_return detail::result_access_t::failure<std::optional<zlink::message_t>> (
+          completed.exception ());
+    runtime::messaging::message_parts_t reply_parts (std::move (completed.value ()));
+    auto decoded = codec.decode_envelope_reply<spot_actor_packet_route_reply_t> (
+      reply_parts, *_serializers, "Actor message follow reply is empty",
+      "Actor message follow reply decode failed", header.message_name);
+    if (!decoded)
+        co_return detail::propagate_failure<std::optional<zlink::message_t>> (
+          decoded, "Actor message follow relay failed");
+    if ((original_operation.high != 0 || original_operation.low != 0)
+        && !source_node.to_bytes ().empty () && stale_route.owner_lease_generation != 0) {
+        const auto notification_started =
+          co_await spot_runtime.try_begin_actor_message_follow_notification (
+            actor, follow_target.source_fence, follow_target.target_fence);
+        if (notification_started) {
+            const auto accepted = co_await _node->send_message_follow (
+              source_node.to_bytes (),
+              runtime::protocol::message_follow_notice_t{
+                follow_target.source_fence, follow_target.target_fence,
+                static_cast<std::uint8_t> (incoming_hop_count + 1), 1,
+                static_cast<std::uint32_t> (std::min<std::size_t> (
+                  payload_bytes, std::numeric_limits<std::uint32_t>::max ())),
+                original_operation, original_reply_route_id});
+            (void) co_await spot_runtime.complete_actor_message_follow_notification (
+              actor, follow_target.source_fence, follow_target.target_fence, accepted);
+        }
+    }
+    co_return result_t<std::optional<zlink::message_t>>::success (
+      decoded.value ().has_reply
+        ? std::make_optional (zlink::message_t::from (decoded.value ().payload))
+        : std::nullopt);
+}
+
 request_task_t<std::optional<zlink::message_t>> mesh_node_runtime_t::relay_application_actor (
   actor_ref_t actor,
   runtime::messaging::envelope_header_t header,
@@ -3551,130 +3669,35 @@ request_task_t<std::optional<zlink::message_t>> mesh_node_runtime_t::relay_appli
         auto acquired_follow =
           !exact_route_targets_local_source
             ? result_t<std::optional<detail::actor_message_follow_target_t>>::success (std::nullopt)
-            : spot_runtime.try_acquire_actor_message_follow (actor, payload_bytes,
-                                                             incoming_hop_count, stale_route);
+            : co_await runtime::await_result (spot_runtime.try_acquire_actor_message_follow (
+                actor, payload_bytes, incoming_hop_count, stale_route));
         if (!acquired_follow) {
             co_return detail::propagate_failure<std::optional<zlink::message_t>> (
               acquired_follow, "Actor Message Follow admission failed");
         }
         if (acquired_follow.value ()) {
-            const auto follow_target = std::move (*acquired_follow.value ());
-            actor_message_follow_lease_t lease (spot_runtime, actor, follow_target.source_fence,
-                                                payload_bytes);
-            auto follow_path = advance_message_follow_path (
-              header.metadata, local_node, follow_target.source_fence.authority_owner_generation);
-            if (!follow_path) {
-                co_return detail::propagate_failure<std::optional<zlink::message_t>> (
-                  follow_path, "Actor Message Follow loop detection failed");
+            auto follow_target = std::move (*acquired_follow.value ());
+            const auto source_fence = follow_target.source_fence;
+            auto completed_follow =
+              result_t<std::optional<zlink::message_t>>::success (std::nullopt);
+            try {
+                completed_follow = result_t<std::optional<zlink::message_t>>::success (
+                  co_await detail::request_submission (relay_application_actor_follow (
+                    actor, std::move (header), std::move (payload), timeout,
+                    std::move (source_node), std::move (stale_route), incoming_hop_count,
+                    original_operation, original_reply_route_id, *local_routing_id,
+                    std::move (follow_target), payload_bytes)));
             }
-            const auto target_node =
-              zlink::routing_id_t::from (std::string (follow_target.route.node_rid.value ()));
-            auto target_identity = target_node.to_hex ();
-            target_identity.push_back ('@');
-            target_identity +=
-              std::to_string (follow_target.target_fence.authority_owner_generation);
-            if (follow_path.value ().visited.contains (target_identity)) {
-                co_return result_t<std::optional<zlink::message_t>>::failure (
-                  framework_error_kind_t::unavailable,
-                  "Actor Message Follow target authority fence was already visited");
+            catch (...) {
+                completed_follow =
+                  detail::result_access_t::failure<std::optional<zlink::message_t>> (
+                    std::current_exception ());
             }
-            if (spot_runtime.actor_transfer_marker_enabled ()) {
-                spot_runtime.emit_actor_transfer_marker (
-                  "message_follow_relay", actor,
-                  header.correlation_id.empty () ? std::string (actor.actor_id ().value ())
-                                                 : header.correlation_id,
-                  follow_target.route.spot_id, follow_target.route.node_rid);
-            }
-            spot_inbound_message_t metadata;
-            metadata.content_type = header.content_type;
-            metadata.values = header.metadata;
-            if (header.kind == runtime::messaging::message_kind_t::request
-                && !header.correlation_id.empty ()) {
-                metadata.values.insert_or_assign ("__zlink.actorRequestId", header.correlation_id);
-            }
-            if (header.kind == runtime::messaging::message_kind_t::request
-                && (original_operation.high != 0 || original_operation.low != 0)) {
-                metadata.values[std::string (detail::actor_handoff_source_node_key)] =
-                  source_node.to_hex ();
-                metadata.values[std::string (detail::actor_handoff_parking_node_key)] =
-                  local_routing_id->to_hex ();
-                metadata.values[std::string (detail::actor_handoff_operation_high_key)] =
-                  std::to_string (original_operation.high);
-                metadata.values[std::string (detail::actor_handoff_operation_low_key)] =
-                  std::to_string (original_operation.low);
-                metadata.values[std::string (detail::actor_handoff_reply_route_key)] =
-                  std::to_string (original_reply_route_id);
-            }
-            metadata.values[std::string (message_follow_path_key)] =
-              std::move (follow_path.value ().encoded);
-            metadata.values["__zlink.messageFollowHopCount"] =
-              std::to_string (static_cast<unsigned int> (incoming_hop_count + 1));
-            if (header.kind == runtime::messaging::message_kind_t::command)
-                metadata.values["__zlink.actorRelayKind"] = "send";
-            runtime::messaging::client_call_codec_t codec;
-            auto request_header =
-              codec.create_envelope (runtime::messaging::message_kind_t::request, "spot",
-                                     spot_actor_packet_route_request_t::packet_name, timeout);
-            // Message Follow owns a local relay window, but the next hop must
-            // receive the original client-managed absolute deadline unchanged.
-            request_header.deadline = header.deadline;
-            auto request = make_spot_actor_packet_route_request (
-              follow_target.actor, follow_target.route.spot_id, header.message_name, payload,
-              metadata, follow_target.target_fence);
-            auto request_parts =
-              codec.encode_envelope_parts (request_header, request, *_serializers);
-            const auto target_generation = co_await spot_runtime.resolve_spot_generation (
-              target_node, follow_target.route.spot_id);
-            if (!target_generation) {
-                co_return result_t<std::optional<zlink::message_t>>::failure (
-                  framework_error_kind_t::not_found,
-                  "Actor message follow target Spot generation is unavailable");
-            }
-            auto origin = get_or_create_spot ("__zlink-route-origin-" + routing_id ()->to_hex ());
-            host::pending_operation_t operation;
-            auto submission = origin.request_to_spot (
-              target_node, follow_target.route.spot_id, *target_generation, request_parts.items (),
-              operation, zlink::send_flags_t::none, timeout);
-            auto admitted = co_await detail::request_admission_source_t{};
-            observe_request_failure (operation, admitted, "Actor message follow route request");
-            const auto submitted = co_await submission;
-            if (submitted != zlink::submit_result_t::ok) {
-                co_return result_t<std::optional<zlink::message_t>>::failure (
-                  framework_error_kind_t::internal_failure,
-                  "Actor message follow route request was not submitted");
-            }
-            co_await detail::request_admitted_t{};
-            auto completed =
-              co_await await_request_reply (operation, "Actor message follow route request");
-            if (!completed)
-                co_return detail::result_access_t::failure<std::optional<zlink::message_t>> (
-                  completed.exception ());
-            runtime::messaging::message_parts_t reply_parts (std::move (completed.value ()));
-            auto decoded = codec.decode_envelope_reply<spot_actor_packet_route_reply_t> (
-              reply_parts, *_serializers, "Actor message follow reply is empty",
-              "Actor message follow reply decode failed", header.message_name);
-            if (!decoded)
-                co_return detail::propagate_failure<std::optional<zlink::message_t>> (
-                  decoded, "Actor message follow relay failed");
-            if ((original_operation.high != 0 || original_operation.low != 0)
-                && !source_node.to_bytes ().empty () && stale_route.owner_lease_generation != 0
-                && spot_runtime.try_begin_actor_message_follow_notification (
-                  actor, follow_target.source_fence, follow_target.target_fence)) {
-                const auto accepted = co_await _node->send_message_follow (
-                  source_node.to_bytes (),
-                  runtime::protocol::message_follow_notice_t{
-                    follow_target.source_fence, follow_target.target_fence,
-                    static_cast<std::uint8_t> (incoming_hop_count + 1), 1,
-                    static_cast<std::uint32_t> (std::min<std::size_t> (
-                      payload_bytes, std::numeric_limits<std::uint32_t>::max ())),
-                    original_operation, original_reply_route_id});
-                (void) spot_runtime.complete_actor_message_follow_notification (
-                  actor, follow_target.source_fence, follow_target.target_fence, accepted);
-            }
-            co_return result_t<std::optional<zlink::message_t>>::success (
-              decoded.value ().has_reply
-                ? std::make_optional (zlink::message_t::from (decoded.value ().payload))
-                : std::nullopt);
+            const auto released = co_await runtime::await_result (
+              spot_runtime.release_actor_message_follow (actor, source_fence, payload_bytes));
+            if (!released)
+                _state->spot_state->runtime_failures ()->report (released.exception ());
+            co_return completed_follow;
         }
         const bool targets_local_node =
           !actor.node_rid ().empty ()
@@ -4358,11 +4381,9 @@ mesh_node_runtime_t::request_to_channel (const std::string &channel_name,
 }
 
 task_t<std::size_t> mesh_node_runtime_t::dispatch_ready (
-  const std::function<void (const host::ready_record_t &,
-                            const host::receive_record_t &,
-                            std::vector<zlink::message_t>)> &dispatch,
+  runtime::mesh::service_mailbox_t::application_dispatch_t dispatch,
   bool accept_application_receive,
-  const std::function<bool ()> &next_application_receive)
+  std::function<bool ()> next_application_receive)
 {
     if (!dispatch)
         throw configuration_error ("MeshNode dispatch callback is required");

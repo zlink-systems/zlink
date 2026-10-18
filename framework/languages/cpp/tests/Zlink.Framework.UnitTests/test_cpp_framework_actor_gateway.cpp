@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+#include "../support/async_application_dispatch.hpp"
 #include "../support/session_disconnect_probe_spot.hpp"
 #include "runtime/mesh/mesh_node_host_service.hpp"
 #include "../support/runtime_failure_fixture.hpp"
@@ -2301,10 +2302,13 @@ int bound_session_actor_dispatch_uses_current_binding_without_location_reread ()
                                        .message_name = "MoveMsg"},
           zlink::message_t::from (std::string ("move")));
         auto parts = std::move (encoded).take_items ();
-        return spots.dispatch_mesh_record (
-          owner, record, parts,
-          zlink::framework::runtime::decode_mesh_record_header (record, parts, false).value (),
-          provider, serializers);
+        return spots
+          .dispatch_mesh_record (
+            owner, record, parts,
+            zlink::framework::runtime::decode_mesh_record_header (record, parts, false).value (),
+            provider, serializers)
+          .result ()
+          .value ();
     };
     const auto wait_for_calls = [&] (int expected) {
         const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (1);
@@ -2894,8 +2898,10 @@ int session_disconnect_resolves_context_without_ingress_metadata (bool replay)
         .seal_actor_application_suffix (
           actor,
           [&] {
-              if (!node->actor_transfer_coordinator.try_begin_local ("player:context-player"))
-                  throw std::runtime_error ("disconnect replay source did not seal");
+              return node->lane.run_task ([node] {
+                  if (!node->actor_transfer_coordinator.try_begin_local ("player:context-player"))
+                      throw std::runtime_error ("disconnect replay source did not seal");
+              });
           })
         .result ();
     if (!sealed) {
@@ -3321,8 +3327,11 @@ int common_session_disconnect_uses_actor_packet_route ()
                   .seal_actor_application_suffix (
                     current_actor,
                     [&] {
-                        if (!node->actor_transfer_coordinator.try_begin_local ("player:player-one"))
-                            throw std::runtime_error ("disconnect wire source did not seal");
+                        return node->lane.run_task ([node] {
+                            if (!node->actor_transfer_coordinator.try_begin_local (
+                                  "player:player-one"))
+                                throw std::runtime_error ("disconnect wire source did not seal");
+                        });
                     })
                   .result ();
               if (!sealed)
@@ -4224,8 +4233,10 @@ int relocation_barrier_fences_late_actor_fifo_admission (bool commit_before_post
 
     if (!commit_before_post && barrier_reserved.load (std::memory_order_acquire)) {
         auto sealed = spots.seal_actor_application_suffix (actor, [&] {
-            if (!node->actor_transfer_coordinator.try_begin_source_remote (key, "fifo-fence"))
-                throw std::runtime_error ("reserved Actor did not enter source handoff");
+            return node->lane.run_task ([node, key] {
+                if (!node->actor_transfer_coordinator.try_begin_source_remote (key, "fifo-fence"))
+                    throw std::runtime_error ("reserved Actor did not enter source handoff");
+            });
         });
         scheduler->run_all ();
         const auto sealed_result = finite_task_result (std::move (sealed));
@@ -4428,8 +4439,11 @@ int relocation_barrier_fences_late_actor_request_without_deadlock ()
 
     if (barrier_reserved.load (std::memory_order_acquire)) {
         auto sealed = spots.seal_actor_application_suffix (actor, [&] {
-            if (!node->actor_transfer_coordinator.try_begin_source_remote (key, "request-fence"))
-                throw std::runtime_error ("reserved request did not enter source handoff");
+            return node->lane.run_task ([node, key] {
+                if (!node->actor_transfer_coordinator.try_begin_source_remote (key,
+                                                                               "request-fence"))
+                    throw std::runtime_error ("reserved request did not enter source handoff");
+            });
         });
         scheduler->run_all ();
         const auto sealed_result = finite_task_result (std::move (sealed));
@@ -5054,8 +5068,10 @@ int known_generation_source_leave_claims_transfer ()
     spot_node_runtime_t spots (node);
     const auto fence = runtime::protocol::actor_route_fence_t{
       "known-leave-actor", 7, zlink::routing_id_t::from ("actor-b").to_bytes (), 1, 5, 9};
-    const auto result = spots.submit_remote_actor_leave (transfer_id, actor, entry_spot->spot_id, 7,
-                                                         spot_id_t ("spot-b-target"), fence);
+    const auto result = spots
+                          .submit_remote_actor_leave (transfer_id, actor, entry_spot->spot_id, 7,
+                                                      spot_id_t ("spot-b-target"), fence)
+                          .result ();
     if (!result || node->pending_remote_actor_leaves.size () != 1
         || !node->actor_spot_ids.contains (key))
         return 2;
@@ -5100,8 +5116,10 @@ int known_generation_source_leave_claims_transfer ()
             || follow->target_fence.authority_owner_generation != 28)
             return 6;
         if (duplicate == 0
-            && !spots.submit_remote_actor_leave (transfer_id, actor, entry_spot->spot_id, 7,
-                                                 spot_id_t ("spot-b-target"), fence))
+            && !spots
+                  .submit_remote_actor_leave (transfer_id, actor, entry_spot->spot_id, 7,
+                                              spot_id_t ("spot-b-target"), fence)
+                  .result ())
             return 7;
     }
 
@@ -5235,10 +5253,12 @@ int early_zero_generation_leave_waits_for_source_transfer_completion (bool no_fo
         node->native_node = native_source;
         auto &objects = native_source->objects ();
         objects.configure_relocation_state (
-          [] (const stateful::object_ref_t &, const std::string &, std::stop_token) {
+          [] (stateful::object_ref_t, std::string, std::stop_token)
+            -> zlink::framework::task_t<
+              zlink::framework::runtime::stateful::frozen_object_state_t> {
               stateful::frozen_object_state_t captured;
               captured.application_state = std::vector<std::uint8_t>{1};
-              return captured;
+              co_return captured;
           },
           [] (const stateful::frozen_object_state_t &, const stateful::object_ref_t &,
               std::stop_token) { return true; });
@@ -5369,10 +5389,14 @@ int early_zero_generation_leave_waits_for_source_transfer_completion (bool no_fo
         record.transferred_owner_byte_cost = transferred_owner_byte_cost;
         const bool owns_terminal = static_cast<bool> (transfer_owner_reservation);
         bool terminal_deferred = false;
-        const auto handled = spots.dispatch_mesh_record (
-          owner, record, parts,
-          zlink::framework::runtime::decode_mesh_record_header (record, parts, false).value (),
-          provider, serializers, std::move (transfer_owner_reservation), &terminal_deferred);
+        const auto handled =
+          spots
+            .dispatch_mesh_record (
+              owner, record, parts,
+              zlink::framework::runtime::decode_mesh_record_header (record, parts, false).value (),
+              provider, serializers, std::move (transfer_owner_reservation), &terminal_deferred)
+            .result ()
+            .value ();
         return handled && (!owns_terminal || terminal_deferred);
     };
 
@@ -6479,9 +6503,12 @@ struct native_actor_relay_fixture_t
         const auto header =
           zlink::framework::runtime::decode_mesh_record_header (record, parts, false);
         if (!header
-            || !spots.dispatch_mesh_record (
-              owner, record, parts, header.value (), provider, serializers,
-              [parked] { parked->set_value (); }, &deferred))
+            || !spots
+                  .dispatch_mesh_record (
+                    owner, record, parts, header.value (), provider, serializers,
+                    [parked] { parked->set_value (); }, &deferred)
+                  .result ()
+                  .value ())
             return false;
         return !deferred
                || parking.wait_for (std::chrono::seconds (2)) == std::future_status::ready;
@@ -6600,19 +6627,20 @@ int local_relay_preserves_handoff_request_route (bool has_original_operation)
             return 7;
         bool received = false;
         const auto dispatched = finite_task_result (
-          fixture.reply_host->dispatch_ready ([&] (const auto &, const auto &incoming, auto parts) {
-              if (incoming.kind != runtime::host::record_kind_t::actor_request)
-                  return;
-              record = incoming;
-              fixture.observe_reply (record.reply_token);
-              received = fixture.dispatch_parts (spots, record, parts);
-          }));
+          fixture.reply_host->dispatch_ready (::zlink::framework::test::async_application_dispatch (
+            [&] (const auto &, const auto &incoming, auto parts) {
+                if (incoming.kind != runtime::host::record_kind_t::actor_request)
+                    return;
+                record = incoming;
+                fixture.observe_reply (record.reply_token);
+                received = fixture.dispatch_parts (spots, record, parts);
+            })));
         if (!dispatched || !*dispatched || !received
             || native_operation.id == runtime::host::call_id_t{}
             || record.operation_id != native_operation.id || record.reply_route_id == 0)
             return 8;
     }
-    auto backlog = spots.take_actor_handoff_backlog (actor);
+    auto backlog = spots.take_actor_handoff_backlog (actor).result ().value ();
     if (backlog.size () != 1 || !backlog.front ().is_request
         || backlog.front ().packet_name != "LocalRelayProbe"
         || backlog.front ().metadata.at ("__zlink.actorRequestId") != header.correlation_id
@@ -6828,7 +6856,7 @@ int parked_request_reply_case (const std::string &requester_rid,
             })
             .get ();
         if (!filled) {
-            spots.fail_remote_actor_transfer (actor, false, std::nullopt);
+            spots.fail_remote_actor_transfer (actor, false, std::nullopt).result ().value ();
             return 9;
         }
     }
@@ -6885,11 +6913,14 @@ int parked_request_reply_case (const std::string &requester_rid,
         return accepted;
     };
     bool terminal_deferred = false;
-    if (!spots.dispatch_mesh_record (
-          owner, record, request_parts,
-          zlink::framework::runtime::decode_mesh_record_header (record, request_parts, false)
-            .value (),
-          provider, serializers, [parked] { parked->set_value (); }, &terminal_deferred)
+    if (!spots
+           .dispatch_mesh_record (
+             owner, record, request_parts,
+             zlink::framework::runtime::decode_mesh_record_header (record, request_parts, false)
+               .value (),
+             provider, serializers, [parked] { parked->set_value (); }, &terminal_deferred)
+           .result ()
+           .value ()
         || !terminal_deferred
         || parking.wait_for (std::chrono::seconds (2)) != std::future_status::ready)
         return 2;
@@ -6902,7 +6933,7 @@ int parked_request_reply_case (const std::string &requester_rid,
         || handler_ran.load (std::memory_order_acquire)
         || reply_ready.wait_for (std::chrono::milliseconds::zero ()) == std::future_status::ready)
         return 3;
-    spots.fail_remote_actor_transfer (actor, false, std::nullopt);
+    spots.fail_remote_actor_transfer (actor, false, std::nullopt).result ().value ();
     if (reply_ready.wait_for (std::chrono::seconds (2)) != std::future_status::ready)
         return 4;
     if (!handler_ran.load (std::memory_order_acquire))
@@ -7102,10 +7133,14 @@ int relayed_request_without_deferred_terminal_receives_follow_reply ()
 
     // Deliberately the deferred-terminal-less overload: this is the direct
     // dispatch shape used while the transfer window is still open.
-    (void) spots.dispatch_mesh_record (
-      owner, record, request_parts,
-      zlink::framework::runtime::decode_mesh_record_header (record, request_parts, false).value (),
-      provider, serializers);
+    (void) spots
+      .dispatch_mesh_record (
+        owner, record, request_parts,
+        zlink::framework::runtime::decode_mesh_record_header (record, request_parts, false)
+          .value (),
+        provider, serializers)
+      .result ()
+      .value ();
 
     const auto reply_deadline = std::chrono::steady_clock::now () + std::chrono::seconds (2);
     for (;;) {

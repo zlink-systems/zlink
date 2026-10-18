@@ -1677,9 +1677,9 @@ class spot_handler_registry_t
       std::function<void ()> transfer_owner_reservation = {},
       std::size_t transferred_owner_byte_cost = 0,
       std::function<void ()> application_admission_terminal = {},
-      // Runs only during synchronous admission. Empty result means
+      // Runs the admission and queue publication in one owner turn. Empty result means
       // no queue submission; the caller owns the admission outcome.
-      std::function<std::optional<bool> (std::function<bool ()>)> admit_actor_queue = {},
+      std::function<task_t<std::optional<bool>> (std::function<bool ()>)> admit_actor_queue = {},
       std::shared_ptr<const void> retained_message = {},
       std::shared_ptr<runtime::serial_application_record_t> application_record = {},
       std::function<void ()> on_application_export = {}) const;

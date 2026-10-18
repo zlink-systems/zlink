@@ -6,11 +6,9 @@
 #include "runtime/locations/legacy_location_rows.hpp"
 #include "runtime/execution/state_lane.hpp"
 
-#include <functional>
 #include <map>
 #include <memory>
 #include <utility>
-#include <vector>
 
 namespace zlink::framework::runtime
 {
@@ -18,8 +16,6 @@ namespace zlink::framework::runtime
 class location_lifecycle_t
 {
   public:
-    using actor_deactivate_callback_t = std::function<void (const actor_location_t &)>;
-
     struct actor_claim_result_t
     {
         location_write_status_t status = location_write_status_t::ignored_stale;
@@ -58,9 +54,7 @@ class location_lifecycle_t
     location_lifecycle_t (const location_lifecycle_t &) = delete;
     location_lifecycle_t &operator= (const location_lifecycle_t &) = delete;
 
-    actor_claim_result_t claim_actor (actor_location_t actor,
-                                      actor_deactivate_callback_t deactivate = {},
-                                      bool takeover = false)
+    actor_claim_result_t claim_actor (actor_location_t actor, bool takeover = false)
     {
         (void) takeover;
         const auto now = std::chrono::system_clock::now ();
@@ -72,8 +66,7 @@ class location_lifecycle_t
         return _state->lane
           .run ([&] {
               if (_state->active) {
-                  _state->actors[actor_key (actor)] =
-                    actor_claim_t{actor, generation, std::move (deactivate)};
+                  _state->actors[actor_key (actor)] = actor_claim_t{actor, generation};
               }
               return actor_claim_result_t{location_write_status_t::stored, std::move (actor),
                                           generation, now};
@@ -216,7 +209,6 @@ class location_lifecycle_t
     {
         actor_location_t actor;
         std::uint64_t store_generation = 0;
-        actor_deactivate_callback_t deactivate;
     };
 
     struct state_t
@@ -246,51 +238,6 @@ class location_lifecycle_t
     static std::string spot_key (const spot_location_key_t &key)
     {
         return location_key_codec_t::encode_spot_key (key);
-    }
-
-    static void deactivate_actor (state_t &state, const std::string &key)
-    {
-        actor_claim_t claim;
-        claim = state.lane
-                  .run ([&] {
-                      if (!state.active) {
-                          return actor_claim_t{};
-                      }
-                      const auto found = state.actors.find (key);
-                      if (found == state.actors.end ()) {
-                          return actor_claim_t{};
-                      }
-                      auto claim = std::move (found->second);
-                      state.actors.erase (found);
-                      return claim;
-                  })
-                  .get ();
-        if (claim.deactivate) {
-            claim.deactivate (claim.actor);
-        }
-    }
-
-    static void deactivate_all (state_t &state)
-    {
-        std::vector<actor_claim_t> claims;
-        claims = state.lane
-                   .run ([&] {
-                       std::vector<actor_claim_t> claims;
-                       if (!state.active) {
-                           return claims;
-                       }
-                       for (auto &entry : state.actors) {
-                           claims.push_back (std::move (entry.second));
-                       }
-                       state.actors.clear ();
-                       return claims;
-                   })
-                   .get ();
-        for (const auto &claim : claims) {
-            if (claim.deactivate) {
-                claim.deactivate (claim.actor);
-            }
-        }
     }
 
     location_runtime_t *_location_runtime = nullptr;

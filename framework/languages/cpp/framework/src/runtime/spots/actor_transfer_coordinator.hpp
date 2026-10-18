@@ -18,10 +18,11 @@
 #include <functional>
 #include <map>
 #include <memory>
-#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <type_traits>
+#include <utility>
 #include <vector>
 
 namespace zlink::framework::runtime
@@ -211,6 +212,17 @@ struct actor_transfer_packet_admission_t
 class actor_transfer_coordinator_t
 {
   public:
+    actor_transfer_coordinator_t (runtime::offload_executor_t &lane_executor,
+                                  runtime::state_lane_t &lane) noexcept :
+        _lane_executor (lane_executor), _lane (lane)
+    {
+    }
+
+    actor_transfer_coordinator_t (const actor_transfer_coordinator_t &) = delete;
+    actor_transfer_coordinator_t &operator= (const actor_transfer_coordinator_t &) = delete;
+    actor_transfer_coordinator_t (actor_transfer_coordinator_t &&) = delete;
+    actor_transfer_coordinator_t &operator= (actor_transfer_coordinator_t &&) = delete;
+
     // The reservation may carry the transfer ID that the deferred join will
     // use, so packets preserved before transfer-out already emit their
     // handoff markers under the final transfer correlation.
@@ -274,8 +286,10 @@ class actor_transfer_coordinator_t
     // append or the whole batch is rejected.
     bool stage_commit_backlog (const std::string &transfer_id,
                                std::vector<handoff_packet_t> backlog);
-    void prepend_source_suffix (const std::string &actor_key, std::vector<handoff_packet_t> suffix);
+    task_t<void> prepend_source_suffix (std::string actor_key,
+                                        std::vector<handoff_packet_t> suffix);
     std::vector<handoff_packet_t> take_backlog (const std::string &actor_key);
+    task_t<std::vector<handoff_packet_t>> take_backlog_async (std::string actor_key);
 
     // Message Follow route lifetime (§10.4): each committed source fence keeps
     // its own bounded route until the configured duration expires. Rapid
@@ -342,7 +356,7 @@ class actor_transfer_coordinator_t
 
     // Decides whether a new Join attempt may start its admission. A newer
     // attempt displaces an older one that has not reached commit authority;
-    // the displaced attempt releases its lifecycle position with it.
+    // the older pending admission is discarded with its backlog.
     bool admit_attempt (const std::string &actor_key,
                         const std::string &transfer_id,
                         std::vector<handoff_packet_t> &discarded_backlog);
@@ -458,14 +472,56 @@ class actor_transfer_coordinator_t
     handoff_append_result_t try_append_backlog_unlocked (const std::string &actor_key,
                                                          handoff_packet_t &packet);
 
+    std::vector<handoff_packet_t> take_backlog_on_lane (const std::string &actor_key);
     void erase_move_on_lane (const std::string &actor_key);
 
     bool blocks_dispatch_on_lane (const std::string &actor_key) const;
     bool matches_source_reservation_on_lane (const std::string &actor_key,
                                              const std::string &transfer_id) const;
 
-    runtime::offload_executor_t _lane_executor;
-    mutable runtime::state_lane_t _lane{_lane_executor};
+    template <bool Async, typename Work>
+    auto
+    with_state_owned (Work &&work) const -> std::conditional_t<Async,
+                                                               task_t<std::invoke_result_t<Work &>>,
+                                                               std::invoke_result_t<Work &>>
+    {
+        using value_t = std::invoke_result_t<Work &>;
+        if (_lane.is_on_lane ()) {
+            if constexpr (Async) {
+                try {
+                    if constexpr (std::is_void_v<value_t>) {
+                        std::invoke (work);
+                        return task_t<void> (result_t<void>::success ());
+                    } else {
+                        return task_t<value_t> (result_t<value_t>::success (std::invoke (work)));
+                    }
+                }
+                catch (...) {
+                    return task_t<value_t> (current_exception_result<value_t> ());
+                }
+            } else {
+                return std::invoke (work);
+            }
+        }
+        if constexpr (Async)
+            return _lane.run_task (std::forward<Work> (work));
+        else
+            return _lane.run (std::forward<Work> (work)).get ();
+    }
+
+    template <typename Work> auto with_state (Work &&work) const -> std::invoke_result_t<Work &>
+    {
+        return with_state_owned<false> (std::forward<Work> (work));
+    }
+
+    template <typename Work>
+    auto with_state_async (Work work) const -> task_t<std::invoke_result_t<Work &>>
+    {
+        return with_state_owned<true> (std::move (work));
+    }
+
+    runtime::offload_executor_t &_lane_executor;
+    runtime::state_lane_t &_lane;
     // Earliest due instant, written on the lane. A lane turn that adds a
     // deadline resets it to due_now; the next scan publishes the bound again.
     static constexpr std::chrono::steady_clock::rep due_now =

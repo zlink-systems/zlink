@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+#include "../support/async_application_dispatch.hpp"
 #include "../support/runtime_failure_fixture.hpp"
 
 #include "metric_test_reader.hpp"
@@ -830,14 +831,14 @@ void verify_public_host_local_spot_and_actor_requests ()
     require_metric (provider, "zlink.mesh_node.requests.inflight", "updown", "{request}",
                     {{"mesh_name", "metrics-local-public"}, {"surface", "spot"}}, 1);
     bool spot_replied = false;
-    (void) await_task (
-      node.dispatch_ready ([&] (const host::ready_record_t &, const host::receive_record_t &record,
-                                std::vector<zlink::message_t>) {
+    (void) await_task (node.dispatch_ready (::zlink::framework::test::async_application_dispatch (
+      [&] (const host::ready_record_t &, const host::receive_record_t &record,
+           std::vector<zlink::message_t>) {
           if (record.kind == host::record_kind_t::spot_request) {
               spot_replied =
                 host::reply (record.reply_token, reply_parts) == zlink::submit_result_t::ok;
           }
-      }));
+      })));
     require (spot_replied, "local public Spot request was not replied");
     require (node.wait_for_completion (spot_operation, 2s).has_value (),
              "local public Spot completion was not delivered");
@@ -861,14 +862,14 @@ void verify_public_host_local_spot_and_actor_requests ()
     require_metric (provider, "zlink.mesh_node.requests.inflight", "updown", "{request}",
                     {{"mesh_name", "metrics-local-public"}, {"surface", "actor"}}, 1);
     bool actor_replied = false;
-    (void) await_task (
-      node.dispatch_ready ([&] (const host::ready_record_t &, const host::receive_record_t &record,
-                                std::vector<zlink::message_t>) {
+    (void) await_task (node.dispatch_ready (::zlink::framework::test::async_application_dispatch (
+      [&] (const host::ready_record_t &, const host::receive_record_t &record,
+           std::vector<zlink::message_t>) {
           if (record.kind == host::record_kind_t::actor_request) {
               actor_replied =
                 host::reply (record.reply_token, reply_parts) == zlink::submit_result_t::ok;
           }
-      }));
+      })));
     require (actor_replied, "local public Actor request was not replied");
     require (node.wait_for_completion (actor_operation, 2s).has_value (),
              "local public Actor completion was not delivered");

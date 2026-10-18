@@ -2,6 +2,7 @@
 
 #include "runtime/dispatch/offload_executor.hpp"
 #include "runtime/execution/state_lane.hpp"
+#include "runtime/execution/serial_application_record.hpp"
 #include "runtime/dispatch/coroutine_executor.hpp"
 #include "runtime/foundation/operation_registry.hpp"
 #include "runtime/spots/spot_runtime.hpp"
@@ -24,6 +25,18 @@
 #include <type_traits>
 #include <utility>
 #include <vector>
+
+namespace zlink::framework::detail
+{
+// The baseline adapter calls this immediately before its pending synchronous
+// wait. The production implementation has no dependency on this observer.
+std::function<void ()> suffix_blocking_wait_observer;
+void observe_suffix_blocking_wait ()
+{
+    if (suffix_blocking_wait_observer)
+        suffix_blocking_wait_observer ();
+}
+}
 
 namespace
 {
@@ -135,6 +148,105 @@ TEST (ZLinkStateLaneDeathTest, CleanupContinuationReleasesWorkerForPendingLaneAn
           std::_Exit (0);
       }()),
       ::testing::ExitedWithCode (0), "");
+}
+
+TEST (ZLinkStateLane, ActorTransferUsesTheNodeOwnerForQueriesAndAsyncMutations)
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+    test::manual_internal_scheduler_t scheduler;
+    runtime::state_lane_t node_lane (scheduler);
+    actor_transfer_coordinator_t coordinator (scheduler, node_lane);
+    int activity = 0;
+    bool activity_on_node = false;
+    coordinator.set_activity_handler ([&] {
+        ++activity;
+        activity_on_node = runtime::state_lane_t::current () == &node_lane;
+    });
+    auto turn = node_lane.run ([&] {
+        EXPECT_TRUE (coordinator.try_reserve_source ("player:coowner", "coowner-transfer"));
+        EXPECT_FALSE (coordinator.blocks_dispatch ("player:coowner"));
+        EXPECT_TRUE (coordinator.try_begin_local ("player:coowner"));
+        EXPECT_TRUE (coordinator.blocks_dispatch ("player:coowner"));
+        EXPECT_EQ (coordinator.phase ("player:coowner"), actor_move_phase_t::local);
+        std::vector<handoff_packet_t> prefix (1);
+        prefix.front ().packet_name = "coowner-prefix";
+        auto prepended = coordinator.prepend_source_suffix ("player:coowner", std::move (prefix));
+        EXPECT_TRUE (prepended.await_ready ());
+        EXPECT_TRUE (prepended.result ());
+        auto cleanup =
+          coordinator.cleanup_expired_async (std::chrono::steady_clock::now (), {"player:coowner"});
+        EXPECT_TRUE (cleanup.await_ready ());
+        ASSERT_EQ (cleanup.result ().value ().blocked_dispatch_keys.size (), 1u);
+        auto backlog = coordinator.take_backlog_async ("player:coowner");
+        EXPECT_TRUE (backlog.await_ready ());
+        ASSERT_EQ (backlog.result ().value ().size (), 1u);
+        EXPECT_EQ (backlog.result ().value ().front ().packet_name, "coowner-prefix");
+        auto no_source_wait = coordinator.wait_for_source_completion ("player:coowner");
+        EXPECT_TRUE (no_source_wait.await_ready ());
+        EXPECT_TRUE (no_source_wait.result ());
+        coordinator.cancel_move ("player:coowner");
+        EXPECT_FALSE (coordinator.blocks_dispatch ("player:coowner"));
+    });
+    EXPECT_NO_THROW (turn.get ());
+    EXPECT_EQ (activity, 1);
+    EXPECT_TRUE (activity_on_node);
+    scheduler.retire ();
+}
+
+TEST (ZLinkStateLane, ActorSuffixReturnsPendingBeforeTheOwnerTurnIsReleased)
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+    zlink::framework::runtime::offload_executor_t coordinator_executor;
+    zlink::framework::runtime::state_lane_t coordinator_lane (coordinator_executor);
+    actor_transfer_coordinator_t coordinator (coordinator_executor, coordinator_lane);
+    ASSERT_TRUE (coordinator.try_begin_local ("player:actor"));
+    handoff_packet_t tail;
+    tail.packet_name = "tail";
+    ASSERT_EQ (handoff_append_result_t::appended,
+               coordinator.try_append_backlog ("player:actor", tail));
+    std::promise<void> entered;
+    std::promise<void> release;
+    auto released = release.get_future ().share ();
+    coordinator.set_activity_handler ([&] {
+        entered.set_value ();
+        released.wait ();
+    });
+    std::thread holder (
+      [&] { coordinator.mark_reconcile ("holder", std::chrono::steady_clock::duration::zero ()); });
+    entered.get_future ().get ();
+
+    std::promise<bool> first_observation;
+    auto observed = first_observation.get_future ();
+    std::atomic_bool observation_sent{false};
+    const auto observe = [&] (bool returned_pending) {
+        if (!observation_sent.exchange (true))
+            first_observation.set_value (returned_pending);
+    };
+    suffix_blocking_wait_observer = [&] { observe (false); };
+    std::promise<bool> completed;
+    auto terminal = completed.get_future ();
+    std::thread caller ([&] {
+        std::vector<handoff_packet_t> suffix (2);
+        suffix[0].packet_name = "first";
+        suffix[1].packet_name = "second";
+        auto pending = coordinator.prepend_source_suffix ("player:actor", std::move (suffix));
+        observe (!pending.await_ready ());
+        completed.set_value (static_cast<bool> (pending.result ()));
+    });
+    const bool returned_before_release = observed.get ();
+    release.set_value ();
+    holder.join ();
+    caller.join ();
+    suffix_blocking_wait_observer = {};
+    EXPECT_TRUE (returned_before_release);
+    EXPECT_TRUE (terminal.get ());
+    const auto backlog = coordinator.take_backlog ("player:actor");
+    ASSERT_EQ (3U, backlog.size ());
+    EXPECT_EQ ("first", backlog[0].packet_name);
+    EXPECT_EQ ("second", backlog[1].packet_name);
+    EXPECT_EQ ("tail", backlog[2].packet_name);
 }
 
 TEST (ZLinkStateLane, ActorMailboxLookupAndReadyReleaseTheOnlyLaneWorker)
@@ -840,3 +952,287 @@ TEST (ZLinkStateLane, CloseIsIdempotent)
 }
 
 } // namespace
+
+TEST (ZLinkStateLane, AsyncPrefixRetainsMailboxUntilFactoryAndMutationFinish)
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::runtime;
+    test::manual_internal_scheduler_t scheduler;
+    auto queue = std::make_shared<serial_execution_queue_t> (scheduler);
+    task_completion_source_t<void> release;
+    std::vector<int> order;
+    auto adoption =
+      queue->adopt_application_prefix ([&] () -> task_t<std::vector<serial_prefix_work_t>> {
+          co_await release.task ();
+          serial_prefix_work_t item;
+          item.name = "async-prefix";
+          item.work = [&] (auto complete) { complete ([&] { order.push_back (1); }); };
+          std::vector<serial_prefix_work_t> prefix;
+          prefix.push_back (std::move (item));
+          co_return prefix;
+      });
+    EXPECT_FALSE (adoption.await_ready ());
+    queue->post ("ordinary-suffix", [&] { order.push_back (2); });
+    scheduler.run_all ();
+    EXPECT_TRUE (order.empty ());
+    release.complete (result_t<void>::success ());
+    scheduler.run_until (adoption);
+    ASSERT_TRUE (adoption.result ());
+    EXPECT_TRUE (adoption.result ().value ());
+    scheduler.run_all ();
+    EXPECT_EQ (order, (std::vector<int>{1, 2}));
+    queue->close ();
+    queue->drain ();
+    scheduler.retire ();
+}
+
+TEST (ZLinkStateLane, AsyncPrefixCloseOrCancelSettlesOnlyItsRejectedAcceptedRecords)
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::runtime;
+    for (const bool cancel : {false, true}) {
+        test::manual_internal_scheduler_t scheduler;
+        auto queue = std::make_shared<serial_execution_queue_t> (scheduler);
+        task_completion_source_t<void> release;
+        int initial_returns = 0, retired = 0, prefix_cancelled = 0, native_terminals = 0;
+        int suffix_ran = 0, suffix_cancelled = 0;
+        auto record = std::make_shared<serial_application_record_t> ();
+        record->admission.retain_initial ([&] { ++initial_returns; });
+        record->retire_invocation = [&] (const result_t<void> &outcome) {
+            EXPECT_FALSE (outcome);
+            ++retired;
+        };
+        record->native_reply = [&] (auto) {
+            ++native_terminals;
+            return true;
+        };
+        auto adoption =
+          queue->adopt_application_prefix ([&] () -> task_t<std::vector<serial_prefix_work_t>> {
+              co_await release.task ();
+              serial_prefix_work_t item;
+              item.name = "closing-prefix";
+              item.options.application_record = record;
+              item.work = [] (auto complete) { complete ([] {}); };
+              item.cancel = [&] {
+                  ++prefix_cancelled;
+                  (void) record->native_reply (std::nullopt);
+              };
+              std::vector<serial_prefix_work_t> prefix;
+              prefix.push_back (std::move (item));
+              co_return prefix;
+          });
+        ASSERT_TRUE (queue->try_post_cancellable_async (
+          "existing-suffix", [&] (auto complete) { complete ([&] { ++suffix_ran; }); },
+          [&] { ++suffix_cancelled; }));
+        scheduler.run_all ();
+        EXPECT_EQ (suffix_ran, 0);
+        if (cancel) {
+            queue->cancel_pending ();
+            scheduler.run_all ();
+            queue->drain ();
+        } else {
+            queue->close ();
+        }
+        release.complete (result_t<void>::success ());
+        scheduler.run_until (adoption);
+        ASSERT_TRUE (adoption.result ());
+        EXPECT_FALSE (adoption.result ().value ());
+        scheduler.run_all ();
+        EXPECT_EQ (initial_returns, 1);
+        EXPECT_EQ (retired, 1);
+        EXPECT_EQ (prefix_cancelled, 1);
+        EXPECT_EQ (native_terminals, 1);
+        EXPECT_EQ (suffix_ran, cancel ? 0 : 1);
+        EXPECT_EQ (suffix_cancelled, cancel ? 1 : 0);
+        queue->drain ();
+        scheduler.retire ();
+    }
+}
+
+TEST (ZLinkStateLane, AsyncPrefixFactoryFailureReleasesMailboxAndPreservesError)
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::runtime;
+    test::manual_internal_scheduler_t scheduler;
+    auto queue = std::make_shared<serial_execution_queue_t> (scheduler);
+    task_completion_source_t<void> release;
+    int suffix = 0;
+    auto adoption =
+      queue->adopt_application_prefix ([&] () -> task_t<std::vector<serial_prefix_work_t>> {
+          co_await release.task ();
+          throw std::runtime_error ("prefix factory failed");
+          co_return std::vector<serial_prefix_work_t>{};
+      });
+    queue->post ("after-prefix-failure", [&] { ++suffix; });
+    scheduler.run_all ();
+    EXPECT_EQ (suffix, 0);
+    release.complete (result_t<void>::success ());
+    scheduler.run_until (adoption);
+    EXPECT_FALSE (adoption.result ());
+    try {
+        adoption.result ().value ();
+    }
+    catch (const std::runtime_error &error) {
+        EXPECT_STREQ (error.what (), "prefix factory failed");
+    }
+    scheduler.run_all ();
+    EXPECT_EQ (suffix, 1);
+    queue->close ();
+    queue->drain ();
+    scheduler.retire ();
+}
+
+TEST (ZLinkStateLane, AsyncPrefixRetiredWorkerPreservesRejectedAdmission)
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::runtime;
+    test::manual_internal_scheduler_t scheduler;
+    auto jobs = std::make_shared<application_job_queue_t> (
+      application_job_queue_configuration_t{application_job_queue_profile_t::balanced, 1u, 1, 1});
+    auto queue = std::make_shared<serial_execution_queue_t> (scheduler);
+    scheduler.retire ();
+    auto record = std::make_shared<serial_application_record_t> ();
+    record->payload.emplace ();
+    record->admission.jobs = jobs;
+    int cancelled = 0, returned = 0;
+    record->admission.retain_initial ([&] { ++returned; });
+    auto adoption =
+      queue->adopt_application_prefix ([&] () -> task_t<std::vector<serial_prefix_work_t>> {
+          serial_prefix_work_t item;
+          item.name = "retired-prefix";
+          item.options.application_record = record;
+          item.work = [] (auto complete) { complete ([] {}); };
+          item.cancel = [&] { ++cancelled; };
+          std::vector<serial_prefix_work_t> prefix;
+          prefix.push_back (std::move (item));
+          co_return prefix;
+      });
+    scheduler.run_until (adoption);
+    ASSERT_TRUE (adoption.result ());
+    EXPECT_FALSE (adoption.result ().value ());
+    EXPECT_EQ (cancelled, 1);
+    EXPECT_EQ (returned, 1);
+    EXPECT_EQ (queue->pending_count (), 0u);
+    jobs->stop ();
+    queue->cancel_pending ();
+    scheduler.run_all ();
+    queue->drain ();
+}
+
+TEST (ZLinkStateLane, ExternalPrefixAdmissionDoesNotWaitForAnExistingHandlerTerminal)
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::runtime;
+    test::manual_internal_scheduler_t scheduler;
+    auto queue = std::make_shared<serial_execution_queue_t> (scheduler);
+    serial_execution_queue_t::async_completion_t finish_handler;
+    std::vector<int> order;
+    queue->post_async ("existing-handler",
+                       [&] (auto complete) { finish_handler = std::move (complete); });
+    scheduler.run_all ();
+    ASSERT_TRUE (finish_handler);
+    queue->post ("existing-suffix", [&] { order.push_back (2); });
+    auto adoption =
+      queue->adopt_application_prefix ([&] () -> task_t<std::vector<serial_prefix_work_t>> {
+          serial_prefix_work_t item;
+          item.name = "external-prefix";
+          item.work = [&] (auto complete) { complete ([&] { order.push_back (1); }); };
+          std::vector<serial_prefix_work_t> prefix;
+          prefix.push_back (std::move (item));
+          co_return prefix;
+      });
+    // The existing runner owns its own future M; this admission must finish
+    // while that handler is still deliberately held by the fixture.
+    EXPECT_TRUE (adoption.await_ready ());
+    EXPECT_TRUE (order.empty ());
+    finish_handler ([] {});
+    scheduler.run_until (adoption);
+    ASSERT_TRUE (adoption.result ());
+    EXPECT_TRUE (adoption.result ().value ());
+    scheduler.run_all ();
+    EXPECT_EQ (order, (std::vector<int>{1, 2}));
+    queue->close ();
+    queue->drain ();
+    scheduler.retire ();
+}
+
+TEST (ZLinkStateLane, AsyncSuffixSealKeepsTheSameMailboxAcrossAllExecutionPolicies)
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::runtime;
+    for (const int policy : {0, 1, 2}) {
+        test::manual_internal_scheduler_t scheduler;
+        std::shared_ptr<serial_execution_queue_t> gate;
+        if (policy != 0) {
+            gate = std::make_shared<serial_execution_queue_t> (
+              scheduler, serial_execution_queue_options_t{},
+              serial_execution_queue_t::error_handler_t{},
+              policy == 1 ? serial_lane_policy_t::spot_wide ()
+                          : serial_lane_policy_t::per_actor_spot ());
+        }
+        auto queue = std::make_shared<serial_execution_queue_t> (scheduler);
+        if (gate)
+            queue->attach_spot_gate (gate);
+        task_completion_source_t<void> seal;
+        auto exported =
+          queue->take_application_suffix ([&] () -> task_t<void> { co_await seal.task (); });
+        auto record = std::make_shared<serial_application_record_t> ();
+        record->payload.emplace ();
+        int handlers = 0, native_returns = 0;
+        record->transferred = [&] { ++native_returns; };
+        serial_work_options_t options;
+        options.application_record = record;
+        ASSERT_TRUE (queue->try_post_async (
+          "retained-suffix", [&] (auto complete) { complete ([&] { ++handlers; }); },
+          std::move (options)));
+        scheduler.run_all ();
+        EXPECT_EQ (handlers, 0);
+        EXPECT_FALSE (exported.await_ready ());
+        seal.complete (result_t<void>::success ());
+        scheduler.run_until (exported);
+        ASSERT_TRUE (exported.result ());
+        ASSERT_EQ (exported.result ().value ().size (), 1u);
+        EXPECT_EQ (exported.result ().value ().front (), record);
+        scheduler.run_all ();
+        EXPECT_EQ (handlers, 0);
+        EXPECT_EQ (native_returns, 1);
+        EXPECT_EQ (queue->pending_count (), 0u);
+        queue->close ();
+        if (gate)
+            gate->close ();
+        queue->drain ();
+        if (gate)
+            gate->drain ();
+        scheduler.retire ();
+    }
+}
+
+TEST (ZLinkStateLane, DeferredTaskKeepsItsAcceptedPositionUntilItsTerminal)
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::runtime;
+    test::manual_internal_scheduler_t scheduler;
+    auto queue = std::make_shared<serial_execution_queue_t> (scheduler);
+    task_completion_source_t<void> release;
+    int entered = 0, terminal = 0, suffix = 0;
+    queue->post ("handler", [&] {
+        EXPECT_TRUE (queue->try_post_deferred_task ("after-handler-task", [&] () -> task_t<void> {
+            ++entered;
+            co_await release.task ();
+            ++terminal;
+        }));
+    });
+    queue->post ("after-deferred-task", [&] { ++suffix; });
+    scheduler.run_all ();
+    EXPECT_EQ (entered, 1);
+    EXPECT_EQ (terminal, 0);
+    EXPECT_EQ (suffix, 0);
+    release.complete (result_t<void>::success ());
+    scheduler.run_until ([&] { return suffix == 1; });
+    EXPECT_EQ (terminal, 1);
+    EXPECT_EQ (suffix, 1);
+    queue->close ();
+    scheduler.run_all ();
+    queue->drain ();
+    scheduler.retire ();
+}

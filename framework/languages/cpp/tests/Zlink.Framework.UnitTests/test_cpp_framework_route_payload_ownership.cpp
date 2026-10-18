@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+#include "../support/async_application_dispatch.hpp"
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
 #include "runtime/mesh/mesh_node_host_service.hpp"
@@ -119,7 +120,9 @@ TEST (RoutePayloadOwnership, ApplicationDispatcherConsumesTheDecodedHeader)
     record.channel_name = "mesh";
     auto decoded = runtime::decode_mesh_record_header (record, parts, false);
     EXPECT_FALSE (
-      spots.dispatch_mesh_record (owner, record, parts, decoded.value (), provider, serializers));
+      spots.dispatch_mesh_record (owner, record, parts, decoded.value (), provider, serializers)
+        .result ()
+        .value ());
     ASSERT_TRUE (decoded);
     ASSERT_TRUE (decoded.value ());
     // A consumer of the parsed header must never consult its wire frame again.
@@ -148,7 +151,9 @@ TEST (RoutePayloadOwnership, MeshIngressProvidesHeaderWithoutARouteClient)
                    .take_items ();
     auto decoded = runtime::decode_mesh_record_header (record, parts, false);
     EXPECT_FALSE (
-      spots.dispatch_mesh_record (owner, record, parts, decoded.value (), provider, serializers));
+      spots.dispatch_mesh_record (owner, record, parts, decoded.value (), provider, serializers)
+        .result ()
+        .value ());
     ASSERT_TRUE (decoded);
     ASSERT_TRUE (decoded.value ());
     EXPECT_EQ (decoded.value ()->message_name, "payload");
@@ -173,7 +178,9 @@ TEST (RoutePayloadOwnership, ActorSendFallbackProvidesHeader)
                    .take_items ();
     auto decoded = runtime::decode_mesh_record_header (record, parts, false);
     EXPECT_FALSE (
-      spots.dispatch_mesh_record (owner, record, parts, decoded.value (), provider, serializers));
+      spots.dispatch_mesh_record (owner, record, parts, decoded.value (), provider, serializers)
+        .result ()
+        .value ());
     EXPECT_NO_THROW ((void) decoded.value ());
     ASSERT_TRUE (decoded);
     ASSERT_TRUE (decoded.value ());
@@ -205,7 +212,9 @@ TEST (RoutePayloadOwnership, ActorSendWithoutTerminalPreservesIngressHeaderAndFr
     auto decoded = runtime::decode_mesh_record_header (record, parts, false);
     parts[0] = zlink::message_t::from (std::string ("invalid header"));
     EXPECT_FALSE (
-      spots.dispatch_mesh_record (owner, record, parts, decoded.value (), provider, serializers));
+      spots.dispatch_mesh_record (owner, record, parts, decoded.value (), provider, serializers)
+        .result ()
+        .value ());
     ASSERT_TRUE (decoded);
     ASSERT_TRUE (decoded.value ());
     EXPECT_EQ (decoded.value ()->message_name, "payload");
@@ -505,7 +514,11 @@ TEST (RoutePayloadOwnership, BoundSessionInternalSendSkipsUserTargetClassificati
     source.connect_peer (*target_state->routing_id, target.status ().local_endpoint ());
     const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (5);
     auto pump = [] (detail::mesh_node_runtime_t &node) {
-        node.dispatch_ready ([] (const auto &, const auto &, auto) {}).result ().value ();
+        node
+          .dispatch_ready (::zlink::framework::test::async_application_dispatch (
+            [] (const auto &, const auto &, auto) {}))
+          .result ()
+          .value ();
     };
     while ((source.admitted_peer_count () == 0 || target.admitted_peer_count () == 0)
            && std::chrono::steady_clock::now () < deadline) {
@@ -549,13 +562,14 @@ TEST (RoutePayloadOwnership, BoundSessionInternalSendSkipsUserTargetClassificati
     const auto receive_deadline = std::chrono::steady_clock::now () + std::chrono::seconds (5);
     while (sent && !delivered && std::chrono::steady_clock::now () < receive_deadline) {
         target
-          .dispatch_ready ([&] (const auto &, const auto &, auto parts) {
-              auto decoded = runtime::messaging::envelope_codec_t{}.decode_header (
-                runtime::messaging::message_parts_t (std::move (parts)), false);
-              delivered = decoded
-                          && decoded.value ().message_name
-                               == detail::actor_bound_session_route_request_t::packet_name;
-          })
+          .dispatch_ready (::zlink::framework::test::async_application_dispatch (
+            [&] (const auto &, const auto &, auto parts) {
+                auto decoded = runtime::messaging::envelope_codec_t{}.decode_header (
+                  runtime::messaging::message_parts_t (std::move (parts)), false);
+                delivered = decoded
+                            && decoded.value ().message_name
+                                 == detail::actor_bound_session_route_request_t::packet_name;
+            }))
           .result ()
           .value ();
         std::this_thread::yield ();

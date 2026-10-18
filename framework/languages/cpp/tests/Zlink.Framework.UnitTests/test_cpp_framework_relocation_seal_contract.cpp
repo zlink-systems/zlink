@@ -1,5 +1,7 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+#include "../support/async_application_dispatch.hpp"
 #include "../support/runtime_failure_fixture.hpp"
+#include "../support/manual_internal_scheduler.hpp"
 #include "runtime/backend/raw_binding_adapter.hpp"
 
 #include "runtime/actors/actor_gateway_runtime.hpp"
@@ -144,7 +146,11 @@ TEST (FrameworkRelocationSealContract, public_actor_push_submits_while_session_r
           const auto noop_dispatch = [] (const host::ready_record_t &,
                                          const host::receive_record_t &,
                                          std::vector<zlink::message_t>) {};
-          const auto dispatched = session_owner->dispatch_ready (noop_dispatch).result ();
+          const auto dispatched =
+            session_owner
+              ->dispatch_ready (
+                ::zlink::framework::test::async_application_dispatch (noop_dispatch))
+              .result ();
           if (!dispatched || dispatched.value () != 1) {
               co_return result_t<void>::failure (framework_error_kind_t::unavailable,
                                                  "Session owner did not dispatch the bound push");
@@ -631,6 +637,229 @@ TEST (FrameworkRelocationSealContract, old_drain_failure_preserves_new_binding_s
                stateful::stateful_error_t::none);
     ASSERT_EQ (delivery.wait_for (std::chrono::seconds{2}), std::future_status::ready);
     EXPECT_TRUE (delivery.get ());
+}
+
+namespace
+{
+// The callable is copied by the native owner when it captures the registered
+// callback. Observe that existing registration boundary without a runtime hook.
+struct native_capture_lane_probe_t
+{
+    runtime::state_lane_t **owner;
+    explicit native_capture_lane_probe_t (runtime::state_lane_t **value) : owner (value) {}
+    native_capture_lane_probe_t (const native_capture_lane_probe_t &other) : owner (other.owner)
+    {
+        if (auto *lane = runtime::state_lane_t::current ())
+            *owner = lane;
+    }
+    task_t<stateful::frozen_object_state_t>
+    operator() (stateful::object_ref_t, std::string, std::stop_token) const
+    {
+        co_return stateful::frozen_object_state_t{};
+    }
+};
+std::function<void ()> native_wait_release;
+} // namespace
+
+// An instrumented copy of the old native wait calls this observer before its
+// real future.get(). It lets the fixture release the predecessor and join.
+extern "C" void zlink_test_native_pending_wait ()
+{
+    if (native_wait_release)
+        native_wait_release ();
+}
+
+TEST (FrameworkRelocationSealContract, native_seal_releases_owner_worker_through_capture_and_abort)
+{
+    test::manual_internal_scheduler_t scheduler;
+    stateful::stateful_object_runtime_t objects (scheduler);
+    objects.replace_placement_candidates ({{.mesh_name = "mesh",
+                                            .node_id = "native-owner",
+                                            .stable_types = {"actor"},
+                                            .weight = 100,
+                                            .active_capacity = 100,
+                                            .pending_capacity = 100}});
+    std::vector<stateful::object_ref_t> participants;
+    for (const auto *key : {"native-first", "native-second"}) {
+        const auto created = objects.begin_create ({.kind = stateful::object_kind_t::actor,
+                                                    .key = key,
+                                                    .stable_type = "actor",
+                                                    .mesh_name = "mesh",
+                                                    .exclusive = true});
+        ASSERT_EQ (created.status, stateful::create_status_t::reserved);
+        ASSERT_EQ (objects.commit_create (created.attempt), stateful::stateful_error_t::none);
+        participants.push_back (created.object);
+    }
+    runtime::state_lane_t *owner = nullptr;
+    objects.configure_relocation_state (native_capture_lane_probe_t (&owner),
+                                        [] (const auto &, const auto &, auto) { return true; });
+    const auto probe = objects.try_seal_relocation_aggregate (participants).result ().value ();
+    ASSERT_EQ (probe.error, stateful::stateful_error_t::none);
+    ASSERT_NE (owner, nullptr);
+    ASSERT_EQ (objects.abort_relocation_before_cutover (probe.seal.token),
+               stateful::stateful_error_t::none);
+    int captures = 0;
+    objects.configure_relocation_state (
+      [&] (stateful::object_ref_t object, std::string type,
+           std::stop_token) -> task_t<stateful::frozen_object_state_t> {
+          EXPECT_EQ (type, "actor");
+          ++captures;
+          EXPECT_TRUE (owner->try_post ([] {}));
+          stateful::frozen_object_state_t frozen;
+          frozen.owner = std::move (object);
+          frozen.pending_application = {{4, {4}}, {2, {2}}};
+          co_return frozen;
+      },
+      [] (const auto &, const auto &, auto) { return true; });
+    for (const auto &object : participants)
+        ASSERT_EQ (objects.enqueue (object, stateful::turn_domain_t::application, {3, {3}}),
+                   stateful::stateful_error_t::none);
+    native_wait_release = [&] { scheduler.run_all (); };
+    struct reset_wait_observer_t
+    {
+        ~reset_wait_observer_t () { native_wait_release = {}; }
+    } reset_wait_observer;
+    ASSERT_TRUE (owner->try_post ([] {}));
+    auto seal = objects.try_seal_relocation_aggregate (participants);
+    EXPECT_FALSE (seal.await_ready ());
+    scheduler.run_until (seal);
+    const auto frozen = seal.result ().value ();
+    EXPECT_EQ (frozen.error, stateful::stateful_error_t::none);
+    EXPECT_EQ (captures, 2);
+    ASSERT_EQ (frozen.seal.participants.size (), 2u);
+    for (const auto &participant : frozen.seal.participants) {
+        ASSERT_EQ (participant.pending_application.size (), 3u);
+        EXPECT_EQ (participant.pending_application[0].sequence, 2u);
+        EXPECT_EQ (participant.pending_application[1].sequence, 3u);
+        EXPECT_EQ (participant.pending_application[2].sequence, 4u);
+    }
+    ASSERT_TRUE (owner->try_post ([] {}));
+    auto boundary = objects.begin_relocation_boundary_async (frozen.seal.token);
+    EXPECT_FALSE (boundary.await_ready ());
+    scheduler.run_until (boundary);
+    EXPECT_EQ (boundary.result ().value ().first, stateful::stateful_error_t::none);
+    ASSERT_TRUE (owner->try_post ([] {}));
+    auto abort = objects.abort_relocation_before_cutover_async (frozen.seal.token);
+    EXPECT_FALSE (abort.await_ready ());
+    scheduler.run_until (abort);
+    EXPECT_EQ (abort.result ().value (), stateful::stateful_error_t::none);
+    for (const auto &object : participants)
+        EXPECT_EQ (objects.pending (object, stateful::turn_domain_t::application), 3u);
+
+    objects.configure_relocation_state (
+      [&] (stateful::object_ref_t, std::string,
+           std::stop_token) -> task_t<stateful::frozen_object_state_t> {
+          EXPECT_TRUE (owner->try_post ([] {}));
+          throw std::runtime_error ("native capture failed");
+          co_return stateful::frozen_object_state_t{};
+      },
+      [] (const auto &, const auto &, auto) { return true; });
+    auto failed = objects.try_seal_relocation_aggregate (participants);
+    EXPECT_FALSE (failed.await_ready ());
+    scheduler.run_until (failed);
+    EXPECT_EQ (failed.result ().value ().error, stateful::stateful_error_t::conflict);
+    for (const auto &object : participants)
+        EXPECT_EQ (objects.pending (object, stateful::turn_domain_t::application), 3u);
+    objects.configure_relocation_state (native_capture_lane_probe_t (&owner),
+                                        [] (const auto &, const auto &, auto) { return true; });
+    auto terminal_seal = objects.try_seal_relocation_aggregate (participants);
+    scheduler.run_until (terminal_seal);
+    const auto token = terminal_seal.result ().value ().seal.token;
+    auto terminal_boundary = objects.begin_relocation_boundary_async (token);
+    scheduler.run_until (terminal_boundary);
+    EXPECT_EQ (terminal_boundary.result ().value ().first, stateful::stateful_error_t::none);
+    ASSERT_TRUE (owner->try_post ([] {}));
+    auto finalize = objects.finalize_relocation_cutover_async (token);
+    EXPECT_FALSE (finalize.await_ready ());
+    scheduler.run_until (finalize);
+    EXPECT_EQ (finalize.result ().value (), stateful::stateful_error_t::none);
+    EXPECT_EQ (objects.abort_relocation_before_cutover (token),
+               stateful::stateful_error_t::conflict);
+    scheduler.retire ();
+}
+
+TEST (FrameworkRelocationSealContract, native_quiescence_returns_pending_before_claim_terminal)
+{
+    test::manual_internal_scheduler_t scheduler;
+    stateful::stateful_object_runtime_t objects (scheduler);
+    objects.replace_placement_candidates ({{.mesh_name = "mesh",
+                                            .node_id = "quiescence-owner",
+                                            .stable_types = {"actor"},
+                                            .weight = 100,
+                                            .active_capacity = 100,
+                                            .pending_capacity = 100}});
+    const auto created = objects.begin_create ({.kind = stateful::object_kind_t::actor,
+                                                .key = "quiescent-actor",
+                                                .stable_type = "actor",
+                                                .mesh_name = "mesh",
+                                                .exclusive = true});
+    ASSERT_EQ (created.status, stateful::create_status_t::reserved);
+    ASSERT_EQ (objects.commit_create (created.attempt), stateful::stateful_error_t::none);
+    ASSERT_EQ (objects.enqueue (created.object, stateful::turn_domain_t::application, {1, {1}}),
+               stateful::stateful_error_t::none);
+    ASSERT_TRUE (objects.try_claim (created.object, stateful::turn_domain_t::application).second);
+    auto seal = objects.try_seal_relocation_aggregate ({created.object});
+    EXPECT_FALSE (seal.await_ready ());
+    ASSERT_EQ (objects.complete_claim (created.object, stateful::turn_domain_t::application),
+               stateful::stateful_error_t::none);
+    scheduler.run_until (seal);
+    const auto captured = seal.result ().value ();
+    EXPECT_EQ (captured.error, stateful::stateful_error_t::none);
+    EXPECT_EQ (objects.abort_relocation_before_cutover (captured.seal.token),
+               stateful::stateful_error_t::none);
+    scheduler.retire ();
+}
+
+TEST (FrameworkRelocationSealContract, native_materialization_commit_and_abort_return_pending_tasks)
+{
+    test::manual_internal_scheduler_t scheduler;
+    stateful::stateful_object_runtime_t objects (scheduler);
+    task_completion_source_t<bool> committed;
+    task_completion_source_t<void> aborted;
+    int commit_calls = 0, abort_calls = 0;
+    objects.configure_relocation_materialization (
+      [] (const auto &, const auto &, const auto &, auto) -> task_t<bool> { co_return true; },
+      [&] (std::vector<stateful::object_ref_t> targets) -> task_t<bool> {
+          EXPECT_EQ (targets.size (), 1u);
+          ++commit_calls;
+          co_return co_await committed.task ();
+      },
+      [&] (std::vector<stateful::object_ref_t> targets) -> task_t<void> {
+          EXPECT_EQ (targets.size (), 1u);
+          ++abort_calls;
+          co_await aborted.task ();
+      });
+    stateful::object_ref_t source{
+      stateful::object_kind_t::actor, "commit-pending", 1, 1, "mesh", "source"};
+    auto target = source;
+    target.node_id = "target";
+    target.authority_owner_generation = 2;
+    stateful::frozen_object_state_t frozen;
+    frozen.owner = source;
+    frozen.stable_type = "actor";
+    stateful::relocation_restore_identity_t identity{"native-pending-restore", 1, {}};
+    identity.inventory_digest[0] = 1;
+    auto restored = objects.restore_relocation (frozen, target, identity);
+    scheduler.run_until (restored);
+    ASSERT_EQ (restored.result ().value (), stateful::stateful_error_t::none);
+    auto commit = objects.commit_relocation_restore_async (target, identity);
+    EXPECT_EQ (commit_calls, 1);
+    EXPECT_FALSE (commit.await_ready ());
+    committed.complete (result_t<bool>::success (true));
+    scheduler.run_until (commit);
+    EXPECT_EQ (commit.result ().value (), stateful::stateful_error_t::none);
+    frozen.owner.key = "abort-pending";
+    target.key = frozen.owner.key;
+    auto second = objects.restore_relocation (frozen, target, identity);
+    scheduler.run_until (second);
+    ASSERT_EQ (second.result ().value (), stateful::stateful_error_t::none);
+    auto abort = objects.abort_relocation_restore_async (target, identity);
+    EXPECT_EQ (abort_calls, 1);
+    EXPECT_FALSE (abort.await_ready ());
+    aborted.complete (result_t<void>::success ());
+    scheduler.run_until (abort);
+    EXPECT_EQ (abort.result ().value (), stateful::stateful_error_t::none);
+    scheduler.retire ();
 }
 
 TEST (FrameworkRelocationSealContract, session_seal_ack_precedes_source_dispatch_stop)

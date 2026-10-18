@@ -211,9 +211,9 @@ class mesh_node_runtime_t
                                 const mesh_node_descriptor_t &target,
                                 const authority_snapshot_t &authority,
                                 std::chrono::steady_clock::time_point restore_deadline);
-    bool application_actor_transfer_in_progress (const actor_ref_t &actor) const;
+    task_t<bool> application_actor_transfer_in_progress (actor_ref_t actor) const;
     result_t<void> cleanup_application_actor_stateful (const actor_ref_t &actor);
-    result_t<bool> destroy_application_actor (const actor_ref_t &actor);
+    task_t<bool> destroy_application_actor (actor_ref_t actor);
     task_t<runtime::stateful::aggregate_relocation_result_t>
     relocate_application_unit (std::vector<runtime::stateful::object_ref_t> sources,
                                std::vector<std::string> stable_types,
@@ -371,7 +371,9 @@ class mesh_node_runtime_t
                                                              host::pending_operation_t &operation,
                                                              actor_join_completion_t completion);
 
-    void settle_application_actor_creation (const actor_ref_t &actor, bool ready);
+    task_t<void> settle_application_actor_creation (actor_ref_t actor,
+                                                    bool ready,
+                                                    std::function<void ()> publish);
 
     task_t<actor_join_reply_t> join_application_actor_to_spot (
       actor_ref_t actor,
@@ -444,11 +446,9 @@ class mesh_node_runtime_t
                          std::string_view operation_name);
 
     task_t<std::size_t>
-    dispatch_ready (const std::function<void (const host::ready_record_t &,
-                                              const host::receive_record_t &,
-                                              std::vector<zlink::message_t>)> &dispatch,
+    dispatch_ready (runtime::mesh::service_mailbox_t::application_dispatch_t dispatch,
                     bool accept_application_receive = true,
-                    const std::function<bool ()> &next_application_receive = {});
+                    std::function<bool ()> next_application_receive = {});
     host::node_status_t status () const;
     task_t<std::tuple<std::vector<std::string>, std::int32_t, std::int32_t>>
     monitoring_configuration_async () const;
@@ -522,6 +522,20 @@ class mesh_node_runtime_t
     registrations (zlink_builder_t &builder);
 
   private:
+    request_task_t<std::optional<zlink::message_t>>
+    relay_application_actor_follow (actor_ref_t actor,
+                                    runtime::messaging::envelope_header_t header,
+                                    zlink::message_t payload,
+                                    std::chrono::milliseconds timeout,
+                                    zlink::routing_id_t source_node,
+                                    runtime::protocol::actor_route_fence_t stale_route,
+                                    std::uint8_t incoming_hop_count,
+                                    runtime::protocol::wire_operation_id_t original_operation,
+                                    std::uint64_t original_reply_route_id,
+                                    zlink::routing_id_t local_routing_id,
+                                    actor_message_follow_target_t follow_target,
+                                    std::size_t payload_bytes);
+
     struct session_relocation_checkpoint_t
     {
         runtime::stateful::object_ref_t source;
