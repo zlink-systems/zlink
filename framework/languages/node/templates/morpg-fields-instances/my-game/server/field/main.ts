@@ -24,7 +24,7 @@ import {
 } from './handlers';
 runHost((_builder, config, mesh) => {
   const objects = mesh.objects().server();
-  objects.addEntrySpot(Entry);
+  objects.addEntrySpot(Entry, Names.actor);
   objects.addActorFactory(Names.actor, PlayerFactory, (f) => f.preserveStateWith(PlayerRelocation));
   objects.addSpotFactory(Names.field, Field, (f) => {
     f.stableTypeLimit(config.fieldCapacity);

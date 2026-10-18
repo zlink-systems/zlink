@@ -16,7 +16,7 @@ runHost((_builder, config, mesh) => {
   if (!Number.isInteger(config.dungeonCapacity) || config.dungeonCapacity! < 1)
     throw new Error('Dungeon capacity required');
   const objects = mesh.objects().server();
-  objects.addEntrySpot(Entry);
+  objects.addEntrySpot(Entry, Names.actor);
   objects.addActorFactory(Names.actor, PlayerFactory, (f) => f.preserveStateWith(PlayerRelocation));
   objects.addSpotFactory(Names.dungeon, Dungeon, (f) => {
     f.stableTypeLimit(config.dungeonCapacity!);

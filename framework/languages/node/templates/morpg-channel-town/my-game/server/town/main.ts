@@ -24,7 +24,7 @@ runHost((_builder, config, mesh) => {
   if (!config.townId || !Number.isInteger(config.townCapacity) || config.townCapacity! < 1)
     throw new Error('Town configuration required');
   const objects = mesh.objects().server();
-  objects.addEntrySpot(Entry);
+  objects.addEntrySpot(Entry, Names.actor);
   objects.addActorFactory(Names.actor, PlayerFactory, (f) => f.preserveStateWith(PlayerRelocation));
   objects.addSpotFactory(Names.town, Town, (f) => {
     f.stableTypeLimit(config.townCapacity!);
