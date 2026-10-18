@@ -5,6 +5,7 @@
 #include "runtime/dispatch/coroutine_executor.hpp"
 #include "runtime/foundation/operation_registry.hpp"
 #include "runtime/spots/spot_runtime.hpp"
+#include "runtime/stateful/stateful_object_runtime.hpp"
 #include "../support/runtime_failure_fixture.hpp"
 #ifdef ZLINK_FRAMEWORK_DEBUG_WAIT_GUARD
 #include "runtime/execution/infrastructure_wait_guard.hpp"
@@ -62,6 +63,36 @@ static_assert (std::is_same_v<decltype (std::declval<state_lane_t &> ().run (voi
                               std::future<void>>);
 static_assert (std::is_same_v<decltype (std::declval<state_lane_t &> ().run (reference_work_t{})),
                               std::future<int &>>);
+
+TEST (ZLinkStateLane, MaintenanceInventoryAwaitPreservesSealAndReacquisition)
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::runtime;
+    stateful::stateful_object_runtime_t objects;
+    objects.replace_placement_candidates ({{"mesh", "node", {"player"}, 100, 16, 0, 4, 0}});
+    const stateful::create_request_t request{
+      stateful::object_kind_t::actor, "actor", "player", std::string ("mesh"), {}, false, false};
+    const auto created = objects.begin_create (request);
+    ASSERT_EQ (stateful::create_status_t::reserved, created.status);
+    ASSERT_EQ (stateful::stateful_error_t::none, objects.commit_create (created.attempt));
+
+    const auto exercise = [&] () -> task_t<void> {
+        const auto inventory = co_await objects.try_begin_maintenance_inventory ();
+        EXPECT_TRUE (inventory);
+        if (inventory) {
+            EXPECT_EQ (1u, inventory->size ());
+            if (!inventory->empty ())
+                EXPECT_EQ (created.object, inventory->front ().owner);
+        }
+        EXPECT_FALSE (co_await objects.try_begin_maintenance_inventory ());
+        EXPECT_EQ (stateful::stateful_error_t::moving, objects.begin_create (request).error);
+        co_await objects.end_maintenance_inventory ();
+        EXPECT_EQ (stateful::create_status_t::existing, objects.begin_create (request).status);
+        EXPECT_TRUE (co_await objects.try_begin_maintenance_inventory ());
+        co_await objects.end_maintenance_inventory ();
+    };
+    exercise ().result ().value ();
+}
 
 TEST (ZLinkStateLane, RunReturnsTheResultOfTheWork)
 {

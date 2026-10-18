@@ -3676,7 +3676,6 @@ task_t<void> app_t::run_shared_relocation (detail::app_state_t &state)
                 }
                 zlink::framework::runtime::wait_poll_interval (std::chrono::milliseconds (1));
             }
-            const auto units = spot_runtime->relocation_units ();
             // §5.1: with no unit on this Mesh there is no target to narrow.
             if (!has_relocation_units (*node))
                 continue;
@@ -3717,6 +3716,10 @@ task_t<void> app_t::run_shared_relocation (detail::app_state_t &state)
                 }
                 source_descriptor = *found;
             }
+
+            // Resolve the source lifecycle fence before acquiring current units;
+            // descriptor I/O must not retain an earlier Actor ownership snapshot.
+            const auto units = co_await spot_runtime->relocation_units ();
 
             for (const auto &unit : units.spots) {
                 const auto target = co_await wait_for_relocation_target (

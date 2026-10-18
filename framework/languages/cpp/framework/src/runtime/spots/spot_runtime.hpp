@@ -1902,7 +1902,7 @@ class spot_node_runtime_t
      * (graceful-drain-handoff §5.2). */
     std::vector<actor_ref_t> local_actor_refs () const;
     bool relocation_ready () const;
-    relocation_units_t relocation_units () const;
+    task_t<relocation_units_t> relocation_units () const;
     void begin_relocation_readiness ();
     void end_relocation_readiness (const std::vector<spot_id_t> &relocated_spots);
     /* Domain snapshot for the drain handoff join — the same shape the erased
