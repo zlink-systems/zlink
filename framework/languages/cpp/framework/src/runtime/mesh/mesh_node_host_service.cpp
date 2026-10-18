@@ -2870,12 +2870,13 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                                std::vector<zlink::message_t> parts) -> task_t<void> {
                               trace_mesh_application ("callback", record, parts.size ());
                               detail::spot_node_runtime_t spot_runtime (registration->spot_state);
-                              const bool transfer_dispatch =
-                                owner.owner_kind == host::owner_kind_t::actor
-                                && (record.kind == host::record_kind_t::actor_send
-                                    || record.kind == host::record_kind_t::actor_request)
-                                && owner.actor
-                                && co_await spot_runtime.actor_transfer_in_progress (*owner.actor);
+                              bool transfer_dispatch = false;
+                              if (owner.owner_kind == host::owner_kind_t::actor
+                                  && (record.kind == host::record_kind_t::actor_send
+                                      || record.kind == host::record_kind_t::actor_request)
+                                  && owner.actor)
+                                  transfer_dispatch =
+                                    co_await spot_runtime.actor_transfer_in_progress (*owner.actor);
                               const bool framework_object_dispatch =
                                 (owner.owner_kind == host::owner_kind_t::actor
                                  && (record.kind == host::record_kind_t::actor_send

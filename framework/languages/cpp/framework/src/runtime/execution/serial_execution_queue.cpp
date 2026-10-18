@@ -26,6 +26,13 @@ std::size_t normalized_byte_cost (serial_work_options_t options) noexcept
                                   : options.byte_cost;
 }
 
+serial_execution_queue_t::cancellation_t adapt_cancellation (std::function<void ()> cancel)
+{
+    if (!cancel)
+        return {};
+    return [cancel = std::move (cancel)] (serial_cancel_submission_outcome_t) { cancel (); };
+}
+
 } // namespace
 
 // Deferred operations and participants create these actual completion objects.
@@ -761,25 +768,16 @@ class serial_turn_handle_impl_t final
 
     serial_work_lane_t lane () const noexcept { return _lane; }
 
-    template <typename Completion> void after_handler (Completion completion)
+    template <typename Completion> void release_mailbox_owned (Completion completion)
     {
-        std::shared_ptr<task_t<void>> terminal;
         std::unique_lock claim (_queue._mutex, std::defer_lock);
         if (!_queue.owns_shared_gate ())
             claim.lock ();
-        {
-            auto handler = _handler.lock ();
-            auto &source = handler ? *handler : *this;
-            if (source._chain && source._chain->completion)
-                terminal = std::make_shared<task_t<void>> (
-                  source._chain->completion->handler_terminal.task ());
-        }
-        if (!terminal) {
+        auto *terminal = _chain ? _chain->completion.get () : nullptr;
+        if (!terminal || !terminal->mailbox_continuation) {
             completion (std::move (claim));
             return;
         }
-        if (claim.owns_lock ())
-            claim.unlock ();
         serial_turn_completion_t::mailbox_release_t finish =
           [completion = std::move (completion)] (
             std::unique_lock<std::mutex> claim) mutable -> result_t<void> {
@@ -791,10 +789,8 @@ class serial_turn_handle_impl_t final
                 return completion (std::move (claim));
             }
         };
-        detail::observe_task_terminal (
-          *terminal,
-          [self = shared_from_this (), terminal, finish = std::move (finish)] (
-            const result_t<void> &) mutable { self->release_mailbox (std::move (finish)); });
+        auto continuation = std::exchange (terminal->mailbox_continuation, {});
+        continuation (std::move (finish), std::move (claim));
     }
 
     void retain_until (task_t<void> terminal,
@@ -833,16 +829,7 @@ class serial_turn_handle_impl_t final
     {
         _queue.notify_control (
           "mailbox-terminal", [self = shared_from_this (), finish = std::move (finish)] () mutable {
-              std::unique_lock claim (self->_queue._mutex, std::defer_lock);
-              if (!self->_queue.owns_shared_gate ())
-                  claim.lock ();
-              serial_turn_completion_t::mailbox_continuation_t continuation;
-              if (self->_chain && self->_chain->completion)
-                  continuation = std::exchange (self->_chain->completion->mailbox_continuation, {});
-              if (continuation)
-                  continuation (std::move (finish), std::move (claim));
-              else if (finish)
-                  finish (std::move (claim));
+              self->release_mailbox_owned (std::move (finish));
           });
     }
 
@@ -1179,13 +1166,10 @@ task_t<bool> serial_execution_queue_t::accept_application_ready (
                 return true;
             if (owns_shared_gate ())
                 lock.lock ();
-            const bool accepted = !_closed
-                                  && enqueue_locked (std::move (item->name), std::move (item->work),
-                                                     std::move (item->options), 0,
-                                                     [cancel = item->cancel] (auto) {
-                                                         if (cancel)
-                                                             cancel ();
-                                                     });
+            const bool accepted =
+              !_closed
+              && enqueue_locked (std::move (item->name), std::move (item->work),
+                                 std::move (item->options), 0, adapt_cancellation (item->cancel));
             if (owns_shared_gate ())
                 lock.unlock ();
             if (!accepted) {
@@ -1221,10 +1205,7 @@ task_t<bool> serial_execution_queue_t::adopt_application_prefix (
                       lock.unlock ();
                   for (const auto &item : prefix)
                       cancel_pending_work (item.options.application_record,
-                                           [cancel = item.cancel] (auto) {
-                                               if (cancel)
-                                                   cancel ();
-                                           });
+                                           adapt_cancellation (item.cancel));
                   return false;
               }
               if (prefix.empty ())
@@ -1241,10 +1222,7 @@ task_t<bool> serial_execution_queue_t::adopt_application_prefix (
                   work_item_t item;
                   item.name = std::move (it->name);
                   item.work = std::move (it->work);
-                  item.cancel = [cancel = std::move (it->cancel)] (auto) {
-                      if (cancel)
-                          cancel ();
-                  };
+                  item.cancel = adapt_cancellation (std::move (it->cancel));
                   item.lane = it->options.lane;
                   item.byte_cost = normalized_byte_cost (it->options);
                   item.retained_message = std::move (it->options.retained_message);
@@ -1387,12 +1365,9 @@ bool serial_execution_queue_t::try_post_async (std::string name,
 result_t<serial_submission_id_t> serial_execution_queue_t::try_post_cancellable_async (
   std::string name, async_work_t work, std::function<void ()> cancel, serial_work_options_t options)
 {
-    if (!cancel)
-        throw std::invalid_argument ("serial execution queue cancellation is empty");
-    return try_post_cancellable_async (
-      std::move (name), std::move (work),
-      [cancel = std::move (cancel)] (serial_cancel_submission_outcome_t) { cancel (); },
-      std::move (options));
+    return try_post_cancellable_async (std::move (name), std::move (work),
+                                       adapt_cancellation (std::move (cancel)),
+                                       std::move (options));
 }
 
 result_t<serial_submission_id_t> serial_execution_queue_t::try_post_cancellable_async (
@@ -1772,9 +1747,9 @@ result_t<void> serial_execution_queue_t::retain_mailbox_until (
                 if (cancel) {
                     auto previous = std::move (_active_turn->cancel);
                     _active_turn->cancel = [previous = std::move (previous),
-                                            cancel = std::move (cancel)] {
+                                            cancel = std::move (cancel)] (auto disposition) {
                         if (previous)
-                            previous ();
+                            previous (disposition);
                         cancel ();
                     };
                 }
@@ -1785,7 +1760,7 @@ result_t<void> serial_execution_queue_t::retain_mailbox_until (
             ++_active;
             _active_turn.emplace ();
             _active_turn->turn = turn;
-            _active_turn->cancel = std::move (cancel);
+            _active_turn->cancel = adapt_cancellation (std::move (cancel));
             turn->retain_until (std::move (*pending), std::move (released));
             if (shared_spot_gate ())
                 _spot_gate->disconnect_actor_head (shared_from_this ());
@@ -2019,8 +1994,7 @@ void serial_execution_queue_t::cancel_pending () noexcept
 }
 
 void serial_execution_queue_t::cancel_pending_work (
-  const std::shared_ptr<serial_application_record_t> &record,
-  const cancellation_t &cancel) noexcept
+  const std::shared_ptr<serial_application_record_t> &record, const cancellation_t &cancel) noexcept
 {
     if (record) {
         record->admission.discard ();
@@ -2813,8 +2787,9 @@ void serial_execution_queue_t::complete_turn (
     catch (...) {
         report_deferred_error (name, std::current_exception ());
     }
-    turn->after_handler ([this, retained = weak_from_this ().lock (), turn, name = std::move (name),
-                          allow_inline_claim] (std::unique_lock<std::mutex> claim) mutable {
+    turn->release_mailbox_owned ([this, retained = weak_from_this ().lock (), turn,
+                                  name = std::move (name),
+                                  allow_inline_claim] (std::unique_lock<std::mutex> claim) mutable {
         return complete_one (std::move (name), [] {}, allow_inline_claim, std::move (claim));
     });
 }

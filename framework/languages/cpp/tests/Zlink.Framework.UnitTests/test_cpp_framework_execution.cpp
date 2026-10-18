@@ -6016,7 +6016,7 @@ class actor_cutover_probe_spot_t final : public zlink::framework::spot_t<actor_c
     zlink::framework::spot_context_t _context;
 };
 
-bool verify_actor_join_finalize_replies_after_target_activation ()
+bool verify_actor_join_finalize_replies_after_target_activation (bool hold_failure_cleanup = false)
 {
     using namespace zlink::framework;
     using namespace zlink::framework::detail;
@@ -6039,7 +6039,11 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
                   leave_submit_unavailable_events.fetch_add (1, std::memory_order_release);
           }
       });
-    node->worker_executor = std::make_shared<runtime::offload_executor_t> (1, "actor-finalize");
+    const auto manual = hold_failure_cleanup
+                          ? std::make_shared<zlink::framework::test::manual_internal_scheduler_t> ()
+                          : nullptr;
+    node->worker_executor =
+      manual ? manual : std::make_shared<runtime::offload_executor_t> (1, "actor-finalize");
     node->channel_runtime =
       zlink::framework::test::runtime_failure_fixture<channel_runtime_state_t> ();
     node->channel_runtime->serializers = &serializers;
@@ -6221,21 +6225,109 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
 
     const std::string transfer_id = "transfer-c2";
     const std::string key = "player:actor-c2";
-    const auto admitted = owner
-                            .admit_remote_actor_to_spot (
-                              transfer_id, actor, spot_id_t ("source-spot"), target->spot_id,
-                              zlink::message_t::from (std::string ("prepare")), 11, 13, 19, 1, 29)
-                            .result ();
+    auto admission = owner.admit_remote_actor_to_spot (
+      transfer_id, actor, spot_id_t ("source-spot"), target->spot_id,
+      zlink::message_t::from (std::string ("prepare")), 11, 13, 19, 1, 29);
+    if (manual)
+        manual->run_until (admission);
+    const auto admitted = admission.result ();
     if (!admitted || !admitted.value ().accepted) {
         return false;
     }
-    const auto prepared =
-      owner
-        .prepare_remote_actor_to_spot (transfer_id, actor, target->spot_id, zlink::message_t{},
-                                       gateway.actor_context (actor), true)
-        .result ();
+    auto preparation = owner.prepare_remote_actor_to_spot (
+      transfer_id, actor, target->spot_id, zlink::message_t{}, gateway.actor_context (actor), true);
+    if (manual)
+        manual->run_until (preparation);
+    const auto prepared = preparation.result ();
     if (!prepared) {
         return false;
+    }
+
+    if (hold_failure_cleanup) {
+        manual->publication_fence (
+          zlink::framework::test::state_lane_publication_fence (node->lane, node->lane_executor));
+        target->actor_admissions.at (std::type_index (typeid (int))).on_actor_joined =
+          [] (void *, void *) -> task_t<void> { co_return; };
+        node->actor_factories.at ("player").on_join_completed =
+          [] (void *, actor_join_completion_outcome_t, std::uint64_t, std::uint64_t,
+              const actor_ref_t *, const std::optional<message_t> &, framework_error_kind_t,
+              bool) -> task_t<void> { co_return; };
+        task_completion_source_t<void> cleanup_owner_entered;
+        auto cleanup_entered = cleanup_owner_entered.task ();
+        std::promise<void> release_cleanup;
+        auto cleanup_release = release_cleanup.get_future ();
+        task_completion_source_t<void> failure_selected;
+        auto failure_observed = failure_selected.task ();
+        const auto activity = [weak = std::weak_ptr (native)] {
+            if (auto host = weak.lock ())
+                host->signal_dispatch_activity ();
+        };
+        node->lane
+          .run ([&] {
+              node->actor_transfer_coordinator.set_activity_handler ([&] {
+                  activity ();
+                  // After the registry failure, the next coordinator mutation is
+                  // fail_commit. Hold its actual owner turn before it settles.
+                  if (failure_observed.await_ready ()) {
+                      cleanup_owner_entered.complete (result_t<void>::success ());
+                      cleanup_release.wait ();
+                  }
+              });
+          })
+          .get ();
+        node->update_actor_registry_ref = [&] (const actor_ref_t &) {
+            // This is the final external operation before the failure outcome.
+            // Keep only the existing cleanup owner pending; the Actor scheduler
+            // remains entirely under the fixture driver's control.
+            manual->publication_fence ({});
+            failure_selected.complete (result_t<void>::success ());
+            return result_t<void>::failure (framework_error_kind_t::unavailable,
+                                            "deterministic Actor registry update failure");
+        };
+        task_completion_source_t<actor_join_reply_t> finalized;
+        auto terminal = finalized.task ();
+        int final_completions = 0;
+        std::vector<std::string> order;
+        owner.finalize_remote_actor_to_spot_async (transfer_id, actor, target->spot_id, provider,
+                                                   &gateway, std::nullopt,
+                                                   [&] (result_t<actor_join_reply_t> result) {
+                                                       ++final_completions;
+                                                       order.emplace_back ("Join completion");
+                                                       finalized.complete (std::move (result));
+                                                   });
+        manual->run_until (cleanup_entered);
+        auto actor_queue =
+          target->ensure_spot_serial_executor ()->prepare_actor_executor (key)->queue ();
+        actor_queue->try_post ("following-failed-finalize",
+                               [&] { order.emplace_back ("following Actor"); });
+        manual->run_all ();
+        const bool held_until_cleanup = final_completions == 0 && order.empty ();
+        order.emplace_back ("cleanup release");
+        release_cleanup.set_value ();
+        manual->publication_fence (
+          zlink::framework::test::state_lane_publication_fence (node->lane, node->lane_executor));
+        manual->run_until (terminal);
+        manual->run_all ();
+        const auto result = terminal.result ();
+        const auto phase =
+          node->lane.run ([&] { return node->actor_transfer_coordinator.phase (key); }).get ();
+        actor_queue->drain ();
+        target->serial_queue->drain ();
+        manual->retire ();
+        node->lane.run ([&] { node->actor_transfer_coordinator.set_activity_handler (activity); })
+          .get ();
+        node->update_actor_registry_ref = {};
+        std::cout << "finalize-cleanup held=" << held_until_cleanup
+                  << " completions=" << final_completions << " phase-reconcile="
+                  << (phase == std::make_optional (actor_move_phase_t::reconcile)) << " order=";
+        for (const auto &entry : order)
+            std::cout << entry << ',';
+        std::cout << '\n';
+        return held_until_cleanup && !result && final_completions == 1
+               && phase == std::make_optional (actor_move_phase_t::reconcile)
+               && order
+                    == std::vector<std::string>{"cleanup release", "Join completion",
+                                                "following Actor"};
     }
 
     spot_actor_commit_route_request_t cutover{
@@ -8729,18 +8821,31 @@ bool verify_durable_head_owner_transitions ()
         work.cancel = [&] { ++cancelled; };
         co_return std::vector<serial_prefix_work_t>{std::move (work)};
     };
-    bool passed = source->adopt_application_prefix (prefix).result ().value ();
+    auto adoption = source->adopt_application_prefix (prefix);
+    worker.run_until (adoption);
+    bool passed = adoption.result ().value ();
     std::cout << "head-owner checkpoint waiters=" << jobs->snapshot ().capacity_waiters
               << " started=" << started << " passed_before=" << passed << '\n';
     passed = passed && jobs->snapshot ().capacity_waiters == 1 && started == 0;
-    // Keep the source grant queued until ownership has moved to target.
+    worker.run_all ();
+    // Retain the pending source grant capability while control completion
+    // transfers the accepted record to target.
     held.reset ();
-    auto exported = source->take_application_suffix ().result ().value ();
+    auto late_grant = worker.take_next ();
+    passed = passed && static_cast<bool> (late_grant);
+    auto taking = source->take_application_suffix ();
+    worker.run_until (taking);
+    auto exported = taking.result ().value ();
     passed = passed && exported.size () == 1 && exported.front () == record;
-    passed = target->adopt_application_prefix (prefix).result ().value () && passed;
+    auto target_adoption = target->adopt_application_prefix (prefix);
+    worker.run_until (target_adoption);
+    passed = target_adoption.result ().value () && passed;
     std::cout << "head-owner checkpoint waiters=" << jobs->snapshot ().capacity_waiters
               << " started=" << started << " passed_before=" << passed << '\n';
     passed = passed && jobs->snapshot ().capacity_waiters == 1 && started == 0;
+    if (late_grant)
+        late_grant ();
+    late_grant = {};
     worker.run_all ();
     const bool reached_terminal = started == 1;
     if (!reached_terminal) {
@@ -8786,26 +8891,24 @@ bool verify_durable_head_rejection_and_close ()
         record->payload.emplace ();
         record->admission.jobs = jobs;
         record->admission.retain_initial ([&] { ++initial_returns; });
-        const auto adopted =
-          queue
-            ->adopt_application_prefix (
-              [&] () -> zlink::framework::task_t<
-                       std::vector<zlink::framework::runtime::serial_prefix_work_t>> {
-                  serial_prefix_work_t work;
-                  work.name = "durable-rejected";
-                  work.options.application_record = record;
-                  work.work = [&] (auto complete) {
-                      ++started;
-                      complete ([] {});
-                  };
-                  work.cancel = [&] {
-                      ++cancelled;
-                      terminal = true;
-                  };
-                  co_return std::vector<serial_prefix_work_t>{std::move (work)};
-              })
-            .result ()
-            .value ();
+        auto adoption = queue->adopt_application_prefix (
+          [&] () -> zlink::framework::task_t<
+                   std::vector<zlink::framework::runtime::serial_prefix_work_t>> {
+              serial_prefix_work_t work;
+              work.name = "durable-rejected";
+              work.options.application_record = record;
+              work.work = [&] (auto complete) {
+                  ++started;
+                  complete ([] {});
+              };
+              work.cancel = [&] {
+                  ++cancelled;
+                  terminal = true;
+              };
+              co_return std::vector<serial_prefix_work_t>{std::move (work)};
+          });
+        worker.run_until (adoption);
+        const auto adopted = adoption.result ().value ();
         worker.run_all ();
         const bool settled = terminal;
         if (!settled)
@@ -8853,7 +8956,7 @@ bool verify_durable_head_rejection_and_close ()
           work.cancel = [&] { cancelled = true; };
           co_return std::vector<serial_prefix_work_t>{std::move (work)};
       });
-    scheduler->run_all ();
+    scheduler->run_until (adoption);
     adoption.result ().value ();
     serial.close ();
     scheduler->run_all ();
@@ -9895,42 +9998,50 @@ bool verify_durable_policy_late_grant (bool transfer)
     };
     source->set_application_start_policy (
       [b] (const std::shared_ptr<const void> &message) { return message == b; });
-    const auto accepted =
-      source
-        ->adopt_application_prefix (
+    auto acceptance = source->adopt_application_prefix (
+      [&] ()
+        -> zlink::framework::task_t<std::vector<zlink::framework::runtime::serial_prefix_work_t>> {
+          std::vector<rt::serial_prefix_work_t> prefix;
+          if (!transfer)
+              prefix.push_back (work (a, started_a));
+          prefix.push_back (work (b, started_b));
+          co_return prefix;
+      });
+    worker.run_until (acceptance);
+    const auto accepted = acceptance.result ();
+    bool passed = accepted && accepted.value () && started_a == 0 && started_b == 0
+                  && jobs->snapshot ().capacity_waiters == 1;
+    // Supply is still held, so admission completion cannot start either record.
+    worker.run_all ();
+    // Keep the pending source grant capability while transferring the accepted
+    // body; control completion can advance without delivering that grant.
+    held.reset ();
+    auto late_grant = transfer ? worker.take_next () : std::function<void ()>{};
+    passed = passed && (!transfer || static_cast<bool> (late_grant));
+    if (transfer) {
+        auto taking = source->take_application_suffix ();
+        worker.run_until (taking);
+        auto exported = taking.result ();
+        passed =
+          passed && exported && exported.value ().size () == 1 && exported.value ().front () == b;
+        auto adoption = target->adopt_application_prefix (
           [&] () -> zlink::framework::task_t<
                    std::vector<zlink::framework::runtime::serial_prefix_work_t>> {
               std::vector<rt::serial_prefix_work_t> prefix;
-              if (!transfer)
-                  prefix.push_back (work (a, started_a));
               prefix.push_back (work (b, started_b));
               co_return prefix;
-          })
-        .result ();
-    bool passed = accepted && accepted.value () && started_a == 0 && started_b == 0
-                  && jobs->snapshot ().capacity_waiters == 1;
-    // The grant is delivered on the manual scheduler; keep it queued while
-    // changing the selected record or transferring its actual accepted body.
-    held.reset ();
-    if (transfer) {
-        auto exported = source->take_application_suffix ().result ();
-        passed =
-          passed && exported && exported.value ().size () == 1 && exported.value ().front () == b;
-        auto adopted = target
-                         ->adopt_application_prefix (
-                           [&] () -> zlink::framework::task_t<
-                                    std::vector<zlink::framework::runtime::serial_prefix_work_t>> {
-                               std::vector<rt::serial_prefix_work_t> prefix;
-                               prefix.push_back (work (b, started_b));
-                               co_return prefix;
-                           })
-                         .result ();
+          });
+        worker.run_until (adoption);
+        const auto adopted = adoption.result ();
         passed = passed && adopted && adopted.value ();
     } else {
         // Opening preparation makes the earlier physical record A eligible.
         // B's pending grant must not strand B or consume A's only supply.
         source->set_application_start_policy ({});
     }
+    if (late_grant)
+        late_grant ();
+    late_grant = {};
     worker.run_all ();
     const auto source_pending = source->pending_count ();
     const auto target_pending = target->pending_count ();
@@ -10307,6 +10418,9 @@ int main (int argc, char **argv)
 
     if (argc == 2 && std::string_view (argv[1]) == "--source-suffix-native-order")
         return verify_source_suffix_native_order_and_rollback () ? EXIT_SUCCESS : EXIT_FAILURE;
+    if (argc == 2 && std::string_view (argv[1]) == "--finalize-cleanup-before-mailbox")
+        return verify_actor_join_finalize_replies_after_target_activation (true) ? EXIT_SUCCESS
+                                                                                 : EXIT_FAILURE;
     if (argc == 2 && std::string_view (argv[1]) == "--aggregate-membership-pending")
         return verify_relocation_membership_pending_releases_root_turn () ? EXIT_SUCCESS
                                                                           : EXIT_FAILURE;
@@ -10747,6 +10861,8 @@ int main (int argc, char **argv)
         std::cerr << "actor cutover dispatcher regression failed\n";
         return 59;
     }
+    if (!verify_actor_join_finalize_replies_after_target_activation (true))
+        return EXIT_FAILURE;
     if (!verify_spot_close_waits_for_earlier_lifecycle_join ()) {
         return 131;
     }

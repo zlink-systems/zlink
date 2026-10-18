@@ -29,19 +29,29 @@ class manual_internal_scheduler_t final : public runtime::offload_executor_t
         return true;
     }
 
-    bool run_one ()
+    std::function<void ()> take_next ()
     {
         std::function<void ()> work;
         {
             std::lock_guard lock (_wake->mutex);
             if (_ready.empty ())
-                return false;
+                return {};
             work = std::move (_ready.front ());
             _ready.pop ();
         }
+        return [this, work = std::move (work)] () mutable {
+            work ();
+            if (_publication_fence)
+                _publication_fence ();
+        };
+    }
+
+    bool run_one ()
+    {
+        auto work = take_next ();
+        if (!work)
+            return false;
         work ();
-        if (_publication_fence)
-            _publication_fence ();
         return true;
     }
 

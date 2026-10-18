@@ -4939,10 +4939,10 @@ void restore_probe (replay_case_t test_case, bool multiple_packets = false)
         auto complete = std::exchange (finish_barrier, {});
         complete (fw::result_t<void>::success ());
     } else {
-        detail::spot_node_runtime_t (node)
-          .fail_remote_actor_transfer (actor, false, std::nullopt)
-          .result ()
-          .value ();
+        auto restored = detail::spot_node_runtime_t (node).fail_remote_actor_transfer (
+          actor, false, std::nullopt);
+        scheduler->run_until (restored);
+        restored.result ().value ();
     }
     scheduler->run_all ();
     if (local_target) {
@@ -4996,6 +4996,14 @@ void restore_probe (replay_case_t test_case, bool multiple_packets = false)
         next_barrier.reset ();
     }
     scheduler->run_all ();
+    scheduler->run_until ([&] {
+        return spot->ensure_spot_serial_executor ()->spot_queue ()->pending_count () == 0
+               && spot->ensure_spot_serial_executor ()
+                      ->actor_executor (actor_key)
+                      ->queue ()
+                      ->pending_count ()
+                    == 0;
+    });
     EXPECT_EQ (spot->ensure_spot_serial_executor ()->spot_queue ()->pending_count (), 0u);
     EXPECT_EQ (
       spot->ensure_spot_serial_executor ()->actor_executor (actor_key)->queue ()->pending_count (),
@@ -5194,6 +5202,7 @@ void capacity_probe (bool handler_failure = false, bool extra_supply = false)
         const auto entered = first_started.load ();
         release_first.complete (fw::result_t<void>::success ());
         scheduler->run_all ();
+        scheduler->run_until (failed);
         const auto activated = join_activated;
         const auto cancelled = join_cancelled;
         const auto failed_ready = failed.await_ready ();
@@ -5236,10 +5245,10 @@ void capacity_probe (bool handler_failure = false, bool extra_supply = false)
                          metadata,
                          false,
                          accepted_record (mesh->application_jobs, metadata.empty () ? 1 : 2)}));
-    detail::spot_node_runtime_t (node)
-      .fail_remote_actor_transfer (actor, false, std::nullopt)
-      .result ()
-      .value ();
+    auto restored =
+      detail::spot_node_runtime_t (node).fail_remote_actor_transfer (actor, false, std::nullopt);
+    scheduler->run_until (restored);
+    restored.result ().value ();
     ASSERT_TRUE (until ([&] {
         return first_started.load () || mesh->application_jobs->snapshot ().capacity_waiters == 1;
     }));

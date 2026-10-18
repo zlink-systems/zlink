@@ -4238,7 +4238,7 @@ int relocation_barrier_fences_late_actor_fifo_admission (bool commit_before_post
                     throw std::runtime_error ("reserved Actor did not enter source handoff");
             });
         });
-        scheduler->run_all ();
+        scheduler->run_until (sealed);
         const auto sealed_result = finite_task_result (std::move (sealed));
         if (!sealed_result || !*sealed_result) {
             cleanup ();
@@ -4445,7 +4445,7 @@ int relocation_barrier_fences_late_actor_request_without_deadlock ()
                     throw std::runtime_error ("reserved request did not enter source handoff");
             });
         });
-        scheduler->run_all ();
+        scheduler->run_until (sealed);
         const auto sealed_result = finite_task_result (std::move (sealed));
         if (!sealed_result || !*sealed_result) {
             cleanup ();

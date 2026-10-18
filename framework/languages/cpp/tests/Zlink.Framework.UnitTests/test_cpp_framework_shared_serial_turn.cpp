@@ -106,7 +106,7 @@ TEST (ZLinkFrameworkSharedSerialTurn, ActiveCommitCancellationBeforeBeginKeepsMa
         std::unique_lock lock (mutex);
         changed.wait (lock, [&] { return selected; });
     }
-    ASSERT_TRUE (queue.try_post ("following-actor", [&] {
+    EXPECT_TRUE (queue.try_post ("following-actor", [&] {
         std::lock_guard lock (mutex);
         order.emplace_back ("following Actor");
     }));

@@ -208,6 +208,55 @@ TEST (ZLinkStateLane, SpotRestoreReturnsPendingUntilLifecycleRestoreTerminal)
     node->lane_executor.drain ();
 }
 
+TEST (ZLinkStateLane, ReadyAliasFailureDiscardsActivationBeforeItsTerminal)
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+    auto node = test::runtime_failure_fixture<spot_node_builder_state_t> ("ready-alias-failure");
+    auto worker = std::make_shared<runtime::offload_executor_t> (2);
+    auto coordinator = std::make_shared<spot_serial_executor_t> (
+      worker, node->lane, runtime::serial_lane_policy_t::spot_wide ());
+    auto spot = std::make_shared<spot_context_state_t> ();
+    spot->node = node;
+    spot->lane_owner = node;
+    spot->spot_id = spot_id_t ("ready-alias-failure");
+    spot->spot_name = "ready-alias-failure";
+    spot->spot_instance = std::make_shared<int> (7);
+    spot->serial_queue = coordinator->spot_queue ();
+    spot->spot_serial_executor = coordinator;
+    node->spot_contexts_by_id.emplace (spot->spot_id, spot_context_access_t::create (spot));
+    node->spot_ids_by_name.emplace (spot->spot_name, spot->spot_id);
+    node->spot_names_by_id.emplace (std::string (spot->spot_id), spot->spot_name);
+    auto preparation = coordinator->begin_preparation ();
+    const auto failure = std::make_exception_ptr (std::runtime_error ("ready alias failed"));
+    auto release = std::move (preparation->release_aliases);
+    preparation->release_aliases = [release = std::move (release),
+                                    failure] (result_t<void> result) mutable {
+        auto released = release (std::move (result));
+        return released ? detail::result_access_t::failure<void> (failure) : released;
+    };
+
+    auto terminal = spot->complete_preparation (true);
+    const auto &result = terminal.result ();
+    EXPECT_FALSE (result);
+    EXPECT_EQ (failure, result.exception ());
+    const auto discarded =
+      node->lane
+        .run ([&] {
+            return spot->closed && !spot->spot_instance
+                   && !node->spot_contexts_by_id.contains (std::string (spot->spot_id))
+                   && !node->spot_ids_by_name.contains (spot->spot_name)
+                   && !node->spot_names_by_id.contains (std::string (spot->spot_id));
+        })
+        .get ();
+    EXPECT_TRUE (discarded);
+    if (!discarded)
+        spot->discard_preparation ({}).result ().value ();
+    coordinator->close ();
+    worker->drain ();
+    node->lane_executor.drain ();
+}
+
 TEST (ZLinkStateLane, RunReturnsTheResultOfTheWork)
 {
     offload_executor_t executor (2);

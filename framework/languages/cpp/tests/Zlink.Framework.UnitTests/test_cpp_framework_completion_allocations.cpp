@@ -165,7 +165,8 @@ std::size_t measure_spot_dispatch ()
     spot_handler_registry_t registry;
     registry.add_handler<&allocation_spot_t::on_packet> ("allocation-packet");
     allocation_spot_t spot;
-    const auto payload = zlink::message_t::from (std::string ("payload"));
+    const auto encoded = serializers.get<std::string> ().serialize ("payload");
+    const auto payload = zlink::message_t::from (encoded.bytes ());
     const auto invoke = [&] {
         auto result =
           registry.invoke_packet ("allocation-packet", spot, provider, serializers, payload);

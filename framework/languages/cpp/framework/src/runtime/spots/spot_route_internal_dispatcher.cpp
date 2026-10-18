@@ -448,20 +448,27 @@ task_t<void> spot_route_internal_dispatcher_t::dispatch_actor_commit_request_cor
             session_relocation_route =
               runtime::protocol::decode_session_relocation_route (request.session_relocation_route);
             const auto &route = *session_relocation_route;
-            if (request.source_spot_id.empty ()
-                || route.sender_role != runtime::protocol::relocation_role_t::target
-                || route.route.action
-                     != runtime::protocol::session_relocation_route_action_t::commit
-                || route.actor.actor_id != request.actor_id
-                || route.actor.object_generation != request.actor_generation
-                || route.route.previous_authority_owner_generation
-                     != request.actor_authority_owner_generation
-                || zlink::routing_id_t::from (route.route.target_node_routing_id).to_string ()
-                     != (co_await runtime.node_rid_async ()).value ()
-                || route.route.target_node_generation != request.target_node_lifecycle_generation
-                || !co_await runtime.stage_session_relocation_route (
+            bool route_is_stale =
+              request.source_spot_id.empty ()
+              || route.sender_role != runtime::protocol::relocation_role_t::target
+              || route.route.action != runtime::protocol::session_relocation_route_action_t::commit
+              || route.actor.actor_id != request.actor_id
+              || route.actor.object_generation != request.actor_generation
+              || route.route.previous_authority_owner_generation
+                   != request.actor_authority_owner_generation;
+            if (!route_is_stale) {
+                const auto target_rid =
+                  zlink::routing_id_t::from (route.route.target_node_routing_id).to_string ();
+                const auto node_rid = co_await runtime.node_rid_async ();
+                route_is_stale =
+                  target_rid != node_rid.value ()
+                  || route.route.target_node_generation != request.target_node_lifecycle_generation;
+            }
+            if (!route_is_stale)
+                route_is_stale = !co_await runtime.stage_session_relocation_route (
                   request.transfer_id, request.session_relocation_route, request.actor_type,
-                  request.target_owner_lease_generation)) {
+                  request.target_owner_lease_generation);
+            if (route_is_stale) {
                 complete (result_t<zlink::message_t>::failure (
                   framework_error_kind_t::protocol_error,
                   "remote Actor Session relocation route is stale"));
@@ -619,14 +626,16 @@ task_t<void> spot_route_internal_dispatcher_t::dispatch_actor_commit_request_cor
                   authority_committed, "remote Actor authority commit failed"));
                 co_return;
             }
-            if (session_relocation_route
-                && !co_await runtime.commit_session_relocation_route_authority (
+            if (session_relocation_route) {
+                const auto retained = co_await runtime.commit_session_relocation_route_authority (
                   request.transfer_id, committed_previous_authority_owner_generation,
-                  committed_authority_owner_generation)) {
-                complete (result_t<zlink::message_t>::failure (
-                  framework_error_kind_t::unavailable,
-                  "committed Session relocation authority was not retained"));
-                co_return;
+                  committed_authority_owner_generation);
+                if (!retained) {
+                    complete (result_t<zlink::message_t>::failure (
+                      framework_error_kind_t::unavailable,
+                      "committed Session relocation authority was not retained"));
+                    co_return;
+                }
             }
             if (request.core_transfer) {
                 const auto core_activated = co_await runtime::await_result (

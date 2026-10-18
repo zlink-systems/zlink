@@ -223,15 +223,15 @@ TEST_F (SpotSubscribe, ContextFrameKeepsNamedChannelThroughLocalDelivery)
     ASSERT_TRUE (publication->result ());
     std::size_t received = 0;
     const auto receive = [&] (const auto &owner, const auto &record,
-                              std::vector<zlink::message_t> parts) {
+                              std::vector<zlink::message_t> parts) -> fw::task_t<void> {
         ++received;
         auto header = fw::runtime::decode_mesh_record_header (record, parts, true, node->dispatch);
         EXPECT_TRUE (header) << (header.error () ? header.error ()->what () : "");
         if (!header)
-            return;
-        EXPECT_TRUE (runtime.dispatch_mesh_record (owner, record, parts, header.value (), provider,
-                                                   serializers, {}, nullptr,
-                                                   record.before_application_handler));
+            co_return;
+        EXPECT_TRUE (co_await runtime.dispatch_mesh_record (owner, record, parts, header.value (),
+                                                            provider, serializers, {}, nullptr,
+                                                            record.before_application_handler));
     };
     // Submit/completion §6: source commit precedes target submission. Hold its
     // existing supply permit to expose that ordering without a timing wait.
@@ -448,14 +448,14 @@ void SpotSubscribe::verify_pre_ready (bool reject, bool fail_initialize)
       entry.publish (channel, topic, std::move (parts).take_items ()).result ();
     std::size_t received = 0;
     const auto receive = [&] (const auto &owner, const auto &record,
-                              std::vector<zlink::message_t> frames) {
+                              std::vector<zlink::message_t> frames) -> fw::task_t<void> {
         ++received;
         auto decoded =
           fw::runtime::decode_mesh_record_header (record, frames, true, node->dispatch);
         EXPECT_TRUE (decoded);
         if (decoded)
-            EXPECT_TRUE (runtime.dispatch_mesh_record (owner, record, frames, decoded.value (),
-                                                       provider, serializers));
+            EXPECT_TRUE (co_await runtime.dispatch_mesh_record (
+              owner, record, frames, decoded.value (), provider, serializers));
     };
     const auto dispatched = native->dispatch_ready (receive).result ();
     EXPECT_FALSE (native->objects ().find (reference.kind, reference.key));

@@ -745,11 +745,33 @@ int main ()
         ? std::string{}
         : spot_runtime.substr (target_finalizer_begin,
                                target_finalizer_end - target_finalizer_begin);
+    const auto target_setup_begin = spot_runtime.find (
+      "task_t<void> spot_node_runtime_t::remote_actor_commit_execution_t::setup (");
+    const auto target_setup =
+      target_setup_begin == std::string::npos || target_finalizer_begin == std::string::npos
+          || target_setup_begin >= target_finalizer_begin
+        ? std::string{}
+        : spot_runtime.substr (target_setup_begin, target_finalizer_begin - target_setup_begin);
+    const auto target_run_begin =
+      spot_runtime.find ("spot_node_runtime_t::remote_actor_commit_execution_t::run (");
+    const auto target_run_end =
+      target_run_begin == std::string::npos
+        ? std::string::npos
+        : spot_runtime.find ("void report_logical_multicast_failure (", target_run_begin);
+    const auto target_run =
+      target_run_begin == std::string::npos || target_run_end == std::string::npos
+        ? std::string{}
+        : spot_runtime.substr (target_run_begin, target_run_end - target_run_begin);
     gate.require (
       mesh_node_runtime.find ("deliver_remote_actor_join(*s,accepted)") == std::string::npos
-        && target_finalizer.find ("actor_join_accepted_t{") != std::string::npos
-        && target_finalizer.find ("deliver_actor_join_completion_async (") != std::string::npos
-        && target_finalizer.find ("stage_commit_backlog (") == std::string::npos,
+        && target_finalizer.find ("auto setup = remote_actor_commit_execution_t::setup (")
+             != std::string::npos
+        && target_setup.find ("auto pending = run (") != std::string::npos
+        && target_run.find ("actor_join_accepted_t{") != std::string::npos
+        && target_run.find ("deliver_actor_join_completion_async (") != std::string::npos
+        && target_finalizer.find ("stage_commit_backlog (") == std::string::npos
+        && target_setup.find ("stage_commit_backlog (") == std::string::npos
+        && target_run.find ("stage_commit_backlog (") == std::string::npos,
       "E2E-CP-53",
       "target does not exclusively own the Accepted OperationId or the finalizer restages the "
       "source prefix");

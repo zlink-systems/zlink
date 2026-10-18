@@ -122,7 +122,7 @@ class location_lifecycle_t
 
     spot_claim_result_t claim_spot (spot_location_t spot)
     {
-        return claim_spot_async (std::move (spot)).get ();
+        return claim_spot_async (std::move (spot)).result ().value ();
     }
 
     task_t<spot_claim_result_t> claim_spot_async (spot_location_t spot)
@@ -137,7 +137,7 @@ class location_lifecycle_t
 
     location_write_result_t release_spot (spot_location_key_t key)
     {
-        return release_spot_async (std::move (key)).get ();
+        return release_spot_async (std::move (key)).result ().value ();
     }
 
     task_t<location_write_result_t> release_spot_async (spot_location_key_t key)

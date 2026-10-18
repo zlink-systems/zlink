@@ -71,9 +71,9 @@ class remote_actor_commit_turn_state_t
             _stop_requested = true;
             if (_phase == phase_t::queued
                 && disposition == runtime::serial_cancel_submission_outcome_t::queued_cancelled) {
-                _phase = phase_t::terminal;
                 _outcome = outcome_t{false, _cancel_kind, _cancel_error};
                 outcome = _outcome;
+                _phase = phase_t::terminal;
                 terminal = std::move (_terminal);
             }
         }
@@ -81,8 +81,8 @@ class remote_actor_commit_turn_state_t
             terminal (std::move (outcome), {});
     }
 
-    using terminal_t = std::function<void (outcome_t,
-                                          runtime::serial_execution_queue_t::async_completion_t)>;
+    using terminal_t =
+      std::function<void (outcome_t, runtime::serial_execution_queue_t::async_completion_t)>;
 
     void settle (outcome_t value,
                  runtime::serial_execution_queue_t::async_completion_t actor_complete = {})
@@ -93,9 +93,9 @@ class remote_actor_commit_turn_state_t
             std::lock_guard lock (_mutex);
             if (_phase == phase_t::terminal)
                 return;
-            _phase = phase_t::terminal;
             _outcome = std::move (value);
             outcome = _outcome;
+            _phase = phase_t::terminal;
             terminal = std::move (_terminal);
         }
         if (terminal)

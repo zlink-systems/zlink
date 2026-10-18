@@ -656,42 +656,80 @@ class spot_serial_executor_t : public std::enable_shared_from_this<spot_serial_e
         }
     }
 
-    task_t<void> finish_preparation (detail::deferred_barrier_t::async_work_t cleanup = {})
+    task_t<void> finish_preparation () { return finish_preparation (true, {}); }
+
+    task_t<void> finish_preparation (bool ready,
+                                     detail::deferred_barrier_t::async_work_t cleanup,
+                                     std::function<void (std::exception_ptr)> report_cleanup = {})
     {
         auto preparation = std::atomic_load (&_preparation);
         if (!preparation)
             return task_t<void> (result_t<void>::success ());
+        auto cleanup_owner =
+          std::make_shared<detail::deferred_barrier_t::async_work_t> (std::move (cleanup));
         auto release = std::exchange (preparation->release_aliases, {});
         if (!release)
             return preparation->terminal.task ();
-        auto settle = [preparation, release = std::move (release)] (result_t<void> result) mutable {
-            std::atomic_store (&preparation->admission,
-                               std::shared_ptr<const preparation_t::admission_t>{});
-            // The terminal publisher consumes this operation's alias chain once;
-            // every other publisher waits for the same task.
-            result = release (std::move (result));
-            preparation->terminal.complete (result);
-            return result;
+        auto discard = [self = shared_from_this (), cleanup_owner,
+                        report_cleanup] (result_t<void> primary,
+                                         detail::deferred_barrier_t::async_completion_t complete) {
+            auto finish = [primary, complete, report_cleanup] (result_t<void> result) mutable {
+                if (!primary && !result && report_cleanup)
+                    report_cleanup (result.exception ());
+                complete (primary ? std::move (result) : primary);
+            };
+            auto owned = std::move (*cleanup_owner);
+            if (!owned) {
+                finish (result_t<void>::success ());
+                return;
+            }
+            try {
+                self->close_preparation_admission ();
+                owned (finish);
+            }
+            catch (...) {
+                finish (detail::current_exception_result<void> ());
+            }
         };
-        const auto activated = preparation->lifecycle->activate_async (
-          [self = shared_from_this (), cleanup = std::move (cleanup), settle] (auto complete) {
-              auto finish = [settle, complete] (result_t<void> result) mutable {
-                  complete (settle (std::move (result)));
-              };
-              if (!cleanup) {
-                  finish (result_t<void>::success ());
+        auto settle = [preparation, release = std::move (release),
+                       discard] (result_t<void> result,
+                                 detail::deferred_barrier_t::async_completion_t complete) mutable {
+            try {
+                auto released = release (result);
+                if (result)
+                    result = std::move (released);
+            }
+            catch (...) {
+                if (result)
+                    result = detail::current_exception_result<void> ();
+            }
+            auto publish = [preparation, complete] (result_t<void> result) mutable {
+                std::atomic_store (&preparation->admission,
+                                   std::shared_ptr<const preparation_t::admission_t>{});
+                preparation->terminal.complete (result);
+                if (complete)
+                    complete (result);
+            };
+            if (!result)
+                discard (result, std::move (publish));
+            else
+                publish (result);
+        };
+        const auto activated =
+          preparation->lifecycle->activate_async ([ready, discard, settle] (auto complete) mutable {
+              if (ready) {
+                  settle (result_t<void>::success (), std::move (complete));
                   return;
               }
-              try {
-                  self->close_preparation_admission ();
-                  cleanup (finish);
-              }
-              catch (...) {
-                  finish (detail::current_exception_result<void> ());
-              }
+              discard (result_t<void>::success (),
+                       [settle, complete] (result_t<void> result) mutable {
+                           settle (std::move (result), std::move (complete));
+                       });
           });
-        if (!activated)
-            settle (activated);
+        if (!activated) {
+            discard (activated,
+                     [settle] (result_t<void> result) mutable { settle (std::move (result), {}); });
+        }
         return preparation->terminal.task ();
     }
 
@@ -2202,8 +2240,8 @@ class spot_node_runtime_t
                                    std::string stable_type,
                                    std::stop_token cancellation = {}) const;
     task_t<bool> restore_spot_relocation_state (runtime::stateful::frozen_object_state_t frozen,
-                                        runtime::stateful::object_ref_t target,
-                                        std::stop_token cancellation = {});
+                                                runtime::stateful::object_ref_t target,
+                                                std::stop_token cancellation = {});
     // Completes when the application lifecycle steps of the materialization do.
     task_t<bool>
     materialize_relocation_state (const runtime::stateful::frozen_object_state_t &frozen,
@@ -2447,7 +2485,7 @@ class spot_node_runtime_t
       std::shared_ptr<runtime::serial_execution_queue_t> retained_queue = {},
       std::function<task_t<void> (bool)> *preparation_terminal = nullptr,
       std::shared_ptr<spot_serial_executor_t::preparation_t> inherited_operation = {});
-    task_t<local_spot_create_result_t> create_spot_context_async (
+    task_t<std::shared_ptr<local_spot_create_result_t>> create_spot_context_async (
       std::string spot_name,
       spot_id_t spot_id,
       zlink::message_t request,

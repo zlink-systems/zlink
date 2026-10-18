@@ -4342,7 +4342,9 @@ void verify_creating_spot_subscription_uses_native_object_lifetime ()
     const auto publish = [&] (const std::string &topic) {
         await_task (
           publisher.publish ("local", topic, {zlink::message_t::from (std::string ("payload"))}));
-        while (await_task (host->dispatch_ready (dispatch)) != 0) {
+        while (await_task (host->dispatch_ready (
+                 ::zlink::framework::test::async_application_dispatch (dispatch)))
+               != 0) {
         }
     };
     publish ("creating-topic");
@@ -4457,7 +4459,9 @@ void verify_local_application_enqueue_wakes_dispatch_wait ()
             record.before_application_handler ();
         delivered.push_back (owner.spot_id);
     };
-    while (await_task (host->dispatch_ready (dispatch)) != 0) {
+    while (await_task (
+             host->dispatch_ready (::zlink::framework::test::async_application_dispatch (dispatch)))
+           != 0) {
     }
     std::sort (delivered.begin (), delivered.end ());
     std::vector<std::string> expected{"closing-subscriber", entry_spot_id};
@@ -4468,7 +4472,9 @@ void verify_local_application_enqueue_wakes_dispatch_wait ()
     entry.unset_subscription ("local", "wake");
     await_task (
       entry.publish ("local", "wake", {zlink::message_t::from (std::string ("payload"))}));
-    while (await_task (host->dispatch_ready (dispatch)) != 0) {
+    while (await_task (
+             host->dispatch_ready (::zlink::framework::test::async_application_dispatch (dispatch)))
+           != 0) {
     }
     assert ((delivered == std::vector<std::string>{"closing-subscriber"}));
 
@@ -4476,7 +4482,9 @@ void verify_local_application_enqueue_wakes_dispatch_wait ()
     assert (closing.close ());
     await_task (
       entry.publish ("local", "wake", {zlink::message_t::from (std::string ("payload"))}));
-    while (await_task (host->dispatch_ready (dispatch)) != 0) {
+    while (await_task (
+             host->dispatch_ready (::zlink::framework::test::async_application_dispatch (dispatch)))
+           != 0) {
     }
     assert (delivered.empty ());
 
@@ -4521,12 +4529,16 @@ void verify_local_application_enqueue_wakes_dispatch_wait ()
     await_task (std::move (pending));
     assert (pending_before_release);
     assert (different_incarnation);
-    while (await_task (fenced->dispatch_ready (dispatch)) != 0) {
+    while (await_task (fenced->dispatch_ready (
+             ::zlink::framework::test::async_application_dispatch (dispatch)))
+           != 0) {
     }
     assert (delivered.empty ());
     await_task (
       publisher.publish ("local", "wake", {zlink::message_t::from (std::string ("payload"))}));
-    while (await_task (fenced->dispatch_ready (dispatch)) != 0) {
+    while (await_task (fenced->dispatch_ready (
+             ::zlink::framework::test::async_application_dispatch (dispatch)))
+           != 0) {
     }
     assert ((delivered == std::vector<std::string>{"recreated-subscriber"}));
 
@@ -4540,7 +4552,9 @@ void verify_local_application_enqueue_wakes_dispatch_wait ()
     assert (closed_target_capacity.queued_application_jobs == 0);
     assert (closed_target_capacity.capacity_waiters == 0);
     held.reset ();
-    while (await_task (fenced->dispatch_ready (dispatch)) != 0) {
+    while (await_task (fenced->dispatch_ready (
+             ::zlink::framework::test::async_application_dispatch (dispatch)))
+           != 0) {
     }
     assert ((delivered == std::vector<std::string>{"recreated-subscriber"}));
     fenced->close ();

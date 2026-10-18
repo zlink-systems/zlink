@@ -2610,7 +2610,10 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::admit_remote_application_actor_j
     }
     s->source_spot_generation = *source_spot_generation;
     auto reserved = co_await spot.reserved_actor_transfer_id (s->actor);
-    s->transfer_id = reserved ? std::move (*reserved) : co_await spot.next_actor_transfer_id ();
+    if (reserved)
+        s->transfer_id = std::move (*reserved);
+    else
+        s->transfer_id = co_await spot.next_actor_transfer_id ();
     s->completion_operation_id_low =
       _state->next_join_completion_operation.fetch_add (1, std::memory_order_relaxed);
     s->completion_operation_id_high =
@@ -3668,9 +3671,10 @@ request_task_t<std::optional<zlink::message_t>> mesh_node_runtime_t::relay_appli
           has_exact_stale_route
           && stale_route.target_node_routing_id == local_routing_id->to_bytes ();
         auto acquired_follow =
-          !exact_route_targets_local_source
-            ? result_t<std::optional<detail::actor_message_follow_target_t>>::success (std::nullopt)
-            : co_await runtime::await_result (spot_runtime.try_acquire_actor_message_follow (
+          result_t<std::optional<detail::actor_message_follow_target_t>>::success (std::nullopt);
+        if (exact_route_targets_local_source)
+            acquired_follow =
+              co_await runtime::await_result (spot_runtime.try_acquire_actor_message_follow (
                 actor, payload_bytes, incoming_hop_count, stale_route));
         if (!acquired_follow) {
             co_return detail::propagate_failure<std::optional<zlink::message_t>> (

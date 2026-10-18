@@ -814,7 +814,7 @@ task_t<void> spot_handle_t::publish (
 
 void spot_handle_t::set_subscription (const std::string &channel_name, const std::string &topic)
 {
-    set_subscription_async (channel_name, topic).get ();
+    set_subscription_async (channel_name, topic).result ().value ();
 }
 
 task_t<void> spot_handle_t::set_subscription_async (std::string channel_name, std::string topic)
@@ -831,7 +831,7 @@ task_t<void> spot_handle_t::set_subscription_async (std::string channel_name, st
                                        + channel_name);
     }
     if (co_await host->_objects.set_subscription_async (_object, std::move (channel_name),
-                                                     std::move (topic))
+                                                        std::move (topic))
         != stateful::stateful_error_t::none)
         throw framework_exception_t (framework_error_kind_t::invalid_operation,
                                      "logical multicast subscriber is no longer registered");
@@ -2641,34 +2641,36 @@ task_t<spot_handle_t> public_host_runtime_t::entry_spot_async ()
 
 spot_handle_t public_host_runtime_t::get_or_create_spot (std::string spot_id)
 {
-    return get_or_create_spot_async (std::move (spot_id)).get ();
+    return get_or_create_spot_async (std::move (spot_id)).result ().value ();
 }
 
 task_t<spot_handle_t> public_host_runtime_t::get_or_create_spot_async (std::string spot_id)
 {
+    const auto self = shared_from_this ();
     const auto &key = spot_id;
     if (const auto existing = co_await _objects.resolve_spot_async (key))
-        co_return spot_handle_t (shared_from_this (), *existing);
-    auto created =
-      co_await _objects.begin_create_async (stateful::create_request_t{stateful::object_kind_t::user_spot,
-                                                        key,
-                                                        "framework.spot",
-                                                        _options.mesh.descriptor.mesh_name,
-                                                        {},
-                                                        false,
-                                                        false});
+        co_return spot_handle_t (self, *existing);
+    auto created = co_await _objects.begin_create_async (
+      stateful::create_request_t{stateful::object_kind_t::user_spot,
+                                 key,
+                                 "framework.spot",
+                                 _options.mesh.descriptor.mesh_name,
+                                 {},
+                                 false,
+                                 false});
     if (created.error != stateful::stateful_error_t::none) {
         throw std::runtime_error ("framework Spot authority creation failed");
     }
-    if (created.factory_owner
-        && co_await _objects.commit_create_async (created.attempt) != stateful::stateful_error_t::none) {
-        throw std::runtime_error ("framework Spot Ready commit failed");
+    if (created.factory_owner) {
+        const auto committed = co_await _objects.commit_create_async (created.attempt);
+        if (committed != stateful::stateful_error_t::none)
+            throw std::runtime_error ("framework Spot Ready commit failed");
     }
     auto object = co_await _objects.find_async (stateful::object_kind_t::user_spot, key);
     if (!object) {
         throw std::runtime_error ("framework Spot authority is unavailable");
     }
-    co_return spot_handle_t (shared_from_this (), *object);
+    co_return spot_handle_t (self, *object);
 }
 
 spot_handle_t public_host_runtime_t::bind_relocation_spot (stateful::object_ref_t object)

@@ -293,7 +293,7 @@ void verify_target_staging_commit (bool initialize_throws)
                                            .object_generation = 1,
                                            .authority_owner_generation = 1};
     frozen.owner = target;
-    ASSERT_TRUE (owner.restore_spot_relocation_state (frozen, target));
+    ASSERT_TRUE (owner.restore_spot_relocation_state (frozen, target).result ().value ());
     const auto initializes_before_commit = initializes->load ();
     const auto callbacks = std::make_shared<std::atomic_int> (0);
     auto timer = std::make_shared<timer_state_t> ();

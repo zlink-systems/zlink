@@ -16,6 +16,7 @@
 #include <map>
 #include <memory>
 #include <tuple>
+#include <type_traits>
 #include <optional>
 #include <set>
 #include <stop_token>
@@ -270,8 +271,8 @@ class stateful_object_runtime_t
   public:
     using relocation_state_capture_t =
       std::function<task_t<frozen_object_state_t> (object_ref_t, std::string, std::stop_token)>;
-    using relocation_state_restore_t =
-      std::function<bool (const frozen_object_state_t &, const object_ref_t &, std::stop_token)>;
+    using relocation_state_restore_t = std::function<task_t<bool> (
+      const frozen_object_state_t &, const object_ref_t &, std::stop_token)>;
     // Application materialization is a second, internal boundary from the
     // persisted state machine.  Aggregate restore supplies the target Spot to
     // member Actors and invokes this callback in Spot-before-Actor order. The
@@ -291,6 +292,26 @@ class stateful_object_runtime_t
 
     void configure_relocation_state (relocation_state_capture_t capture,
                                      relocation_state_restore_t restore);
+    template <typename Restore>
+        requires std::is_same_v<std::invoke_result_t<Restore &,
+                                                     const frozen_object_state_t &,
+                                                     const object_ref_t &,
+                                                     std::stop_token>,
+                                bool>
+    void configure_relocation_state (relocation_state_capture_t capture, Restore restore)
+    {
+        std::function<bool (const frozen_object_state_t &, const object_ref_t &, std::stop_token)>
+          synchronous = std::move (restore);
+        relocation_state_restore_t adapted;
+        if (synchronous)
+            adapted = [restore = std::move (synchronous)] (const frozen_object_state_t &frozen,
+                                                           const object_ref_t &target,
+                                                           std::stop_token cancellation) mutable {
+                return task_t<bool> (
+                  result_t<bool>::success (restore (frozen, target, cancellation)));
+            };
+        configure_relocation_state (std::move (capture), std::move (adapted));
+    }
     void configure_relocation_materialization (relocation_state_materialize_t materialize,
                                                relocation_state_commit_t commit,
                                                relocation_state_abort_t abort);
@@ -330,9 +351,8 @@ class stateful_object_runtime_t
                 std::optional<object_state_t> required_state = object_state_t::ready) const;
     std::optional<object_ref_t> resolve_spot (const std::string &key) const;
     task_t<std::optional<object_ref_t>> resolve_spot_async (std::string key) const;
-    task_t<stateful_error_t> set_subscription_async (object_ref_t spot,
-                                                    std::string channel_name,
-                                                    std::string topic);
+    task_t<stateful_error_t>
+    set_subscription_async (object_ref_t spot, std::string channel_name, std::string topic);
     stateful_error_t set_subscription (const object_ref_t &spot,
                                        const std::string &channel_name,
                                        const std::string &topic);

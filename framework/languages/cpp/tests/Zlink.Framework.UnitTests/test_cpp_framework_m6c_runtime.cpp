@@ -2619,19 +2619,19 @@ void test_spot_restore_stages_before_publication (test_context_t &test)
 
     auto oversized = frozen;
     oversized.application_state.assign (64u * 1024u * 1024u + 1u, 0x5a);
-    test.require (!runtime.restore_spot_relocation_state (oversized, target)
+    test.require (!runtime.restore_spot_relocation_state (oversized, target).result ().value ()
                     && fail_first_restore_spot_t::factory_count == 0
                     && fail_first_restore_spot_t::restore_count == 0,
                   "oversized state must be rejected before Spot materialization");
 
-    test.require (!runtime.restore_spot_relocation_state (frozen, target)
+    test.require (!runtime.restore_spot_relocation_state (frozen, target).result ().value ()
                     && !runtime.find_spot (zlink::framework::spot_id_t ("staged-spot"))
                     && fail_first_restore_spot_t::factory_count == 1
                     && fail_first_restore_spot_t::create_count == 0
                     && fail_first_restore_spot_t::initialize_count == 0,
                   "failed restore must discard the private Spot before publication");
 
-    test.require (runtime.restore_spot_relocation_state (frozen, target)
+    test.require (runtime.restore_spot_relocation_state (frozen, target).result ().value ()
                     && runtime.find_spot (zlink::framework::spot_id_t ("staged-spot"))
                     && fail_first_restore_spot_t::factory_count == 2
                     && fail_first_restore_spot_t::restore_count == 2
@@ -2701,7 +2701,8 @@ void test_concurrent_spot_restore_owns_one_reservation (test_context_t &test)
                               .node_id = "target"};
 
     bool first = false;
-    std::thread owner ([&] { first = runtime.restore_spot_relocation_state (frozen, target); });
+    std::thread owner (
+      [&] { first = runtime.restore_spot_relocation_state (frozen, target).result ().value (); });
     {
         std::unique_lock lock (concurrent_restore_spot_t::restore_mutex);
         concurrent_restore_spot_t::restore_condition.wait (
@@ -6708,7 +6709,7 @@ void test_relocation_adapter_single_capture_restore_path (test_context_t &test)
                               .authority_owner_generation = 2,
                               .mesh_name = "mesh",
                               .node_id = "target"};
-    test.require (runtime.restore_spot_relocation_state (frozen, target)
+    test.require (runtime.restore_spot_relocation_state (frozen, target).result ().value ()
                     && fail_first_restore_spot_t::restore_count == 1
                     && fail_first_restore_spot_t::restored_payload
                          == std::vector<std::byte>{std::byte{0xca}, std::byte{0xfe}},

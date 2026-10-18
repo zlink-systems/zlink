@@ -93,11 +93,14 @@ void relocation_target_restore_holds_admission_until_commit_or_abort ()
     const auto admission = runtime.weak_state ().lock ()->activation_admission;
     admission->set_limit (1);
 
-    require (runtime.restore_spot_relocation_state (frozen ("first"), target ("first")),
-             "the first Restore must be admitted");
+    require (
+      runtime.restore_spot_relocation_state (frozen ("first"), target ("first")).result ().value (),
+      "the first Restore must be admitted");
     require (admission->active () == 1 && !admission->has_headroom (),
              "a restored target holds its admission until the target commit");
-    require (!runtime.restore_spot_relocation_state (frozen ("second"), target ("second")),
+    require (!runtime.restore_spot_relocation_state (frozen ("second"), target ("second"))
+                .result ()
+                .value (),
              "a Restore beyond the limit must be rejected");
     bool creation_rejected = false;
     try {
@@ -112,7 +115,9 @@ void relocation_target_restore_holds_admission_until_commit_or_abort ()
     (void) runtime.commit_relocation_materialization ({target ("first")}).result ().value ();
     require (admission->active () == 0, "the target commit must end the Restore admission");
 
-    require (runtime.restore_spot_relocation_state (frozen ("second"), target ("second")),
+    require (runtime.restore_spot_relocation_state (frozen ("second"), target ("second"))
+               .result ()
+               .value (),
              "a Restore must be admitted again after the commit");
     require (admission->active () == 1, "the second Restore must hold one admission");
     runtime.abort_relocation_materialization ({target ("second")}).result ().value ();
@@ -121,8 +126,9 @@ void relocation_target_restore_holds_admission_until_commit_or_abort ()
 
     auto unknown = frozen ("unknown");
     unknown.stable_type = "unregistered-spot";
-    require (!runtime.restore_spot_relocation_state (unknown, target ("unknown")),
-             "a Restore of an unregistered type must fail");
+    require (
+      !runtime.restore_spot_relocation_state (unknown, target ("unknown")).result ().value (),
+      "a Restore of an unregistered type must fail");
     require (admission->active () == 0, "a failed Restore must end its admission");
 
     runtime.request_stop ();
