@@ -191,9 +191,9 @@ ObjectGeneration, creation attempt)` 기준으로 한 번 이상 실행될 수 �
 
 `GetOrCreate`는 같은 User Spot type의 Ready object를 owner lease가 유효하면 `Existing`으로 반환하고,
 무효하면 [Location runtime §6.1](../05-location-relocation/01-location-runtime.ko.md#61-read와-cas)의 해제 결과를 따른다. 진행 중인
-Creating attempt를 관찰한 서로 다른 operation은 새 reservation이나 factory를 시작하지 않고
-authority 변경을 기다린다. 앞선 attempt가 Ready로 끝나면 `Existing`과 그 incarnation의
-`SpotRef`를 반환한다. Rejected·failure cleanup으로 Missing이 되면 남은 deadline 안에서 새
+Creating attempt나 Closing authority를 관찰한 서로 다른 operation은 새 reservation이나 factory를 시작하지 않고
+authority 변경을 기다린다. 같은 type의 Ready authority를 관찰하면 `Existing`과 그 incarnation의
+`SpotRef`를 반환한다. Rejected·failure cleanup이나 Close 완료로 Missing이 되면 남은 deadline 안에서 새
 reservation을 경쟁하고, winner가 자신의 creation request로 factory와 callback을 실행한다. 서로
 다른 operation은 앞선 attempt의 `Rejected` state와 application reply를 공유하지 않는다. 동일한
 operation ID가 재전달된 경우에만 retained terminal result를 재전송한다.
@@ -596,7 +596,7 @@ Seal 뒤 source ingress hold는 commit된 Message Follow route로 relay한다.
 | Instance intent가 없는 Spot direct send·request의 target authority가 `Missing` 또는 `Creating`이다 | `NotFound`다. |
 | `ActorRef`·`SpotRef`로 지정한 control의 generation이 current generation과 다르다(direct message는 [08-routing §2.6](08-routing.ko.md#26-objectgeneration을-어디에-사용하고-어디에-사용하지-않는가)대로 generation을 비교하지 않는다) | `InvalidOperation`이다. |
 | [owner fence](../00-foundation/02-glossary.ko.md#owner-fence)가 다르다 | `Unavailable`이다. |
-| `Closing` owner에 작업이 도착했거나 resolver가 `Closing` authority를 확인했다 | Instance intent가 있는 작업은 그 owner node로 보내며 §7 3단계에 따라 새 generation에서 실행된다. Instance intent가 없는 작업은 `Missing`과 같은 `NotFound`다. |
+| `Closing` owner에 작업이 도착했거나 resolver가 `Closing` authority를 확인했다 | User Spot `GetOrCreate`는 §3.2를 따른다. Instance intent가 있는 작업은 그 owner node로 보내며 §7 3단계에 따라 새 generation에서 실행된다. 그 밖의 작업은 `Missing`과 같은 `NotFound`다. |
 | `Draining` owner에 신규 admission을 요청했다 | `ShuttingDown`이다. |
 | Relocation seal 이후 source route로 ingress가 도착했다 | 거부하지 않고 relocation hold에 보관한다. |
 | `Relocating`이지만 아직 seal하지 않은 unit에 message가 도착했다 | 기존 owner admission을 유지해 수락한다. |

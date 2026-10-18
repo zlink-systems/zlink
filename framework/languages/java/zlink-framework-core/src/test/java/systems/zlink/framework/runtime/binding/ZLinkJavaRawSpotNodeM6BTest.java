@@ -81,7 +81,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                 var node = new ZLinkJavaRawMeshNode(context, "mesh")) {
             var spots = (ZLinkJavaRawSpotNode) node.spotNode();
             spots.setSpotAdmissionResolver(
-                    (spotId, generation, instanceIntent, activationPresent) -> {
+                    (spotId, generation, instanceIntent, activationPresent, route) -> {
                         assertFalse(instanceIntent);
                         assertFalse(activationPresent);
                         return CompletableFuture.completedFuture(

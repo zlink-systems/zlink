@@ -2,6 +2,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { browserCachePath } from './browser-cache-path.mjs';
 
 const workspaceRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const executable = process.execPath;
@@ -11,6 +12,9 @@ args.push('chromium');
 const result = spawnSync(executable, args, {
   cwd: workspaceRoot,
   stdio: 'inherit',
-  env: process.env
+  env: {
+    ...process.env,
+    PLAYWRIGHT_BROWSERS_PATH: browserCachePath()
+  }
 });
 process.exitCode = result.status ?? 1;

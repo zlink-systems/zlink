@@ -202,6 +202,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             new ZLinkSpotRelocationReplyRoutes();
     private final ZLinkSpotOutboundScope outboundScope = new ZLinkSpotOutboundScope();
     private volatile boolean closing;
+    private volatile CompletionStage<Void> applicationCleanup =
+            CompletableFuture.completedFuture(null);
     private volatile boolean draining;
     private volatile boolean relocating;
     private int drainInitialUserSpots;
@@ -720,31 +722,47 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                         systems.zlink.framework.runtime.internal
                                                                         .service
                                                                         .ZLinkServiceM6BWireCodec
+                                                                        .InstanceRouteFence
+                                                                currentRoute,
+                                                        systems.zlink.framework.runtime.internal
+                                                                        .service
+                                                                        .ZLinkServiceM6BWireCodec
                                                                         .InstanceSpotMessage
                                                                 message,
                                                         ZLinkBackendReceived received) {
                                                     var existing =
                                                             instanceSpotActivations.get(
                                                                     message.route().targetSpotId());
-                                                    // An older object generation is a closing
-                                                    // incarnation that keeps its lane until its
-                                                    // release ends; a route of a later generation
-                                                    // belongs to the next incarnation.
+                                                    // Close can replace the incarnation after the
+                                                    // authority read.
+                                                    var current =
+                                                            existing != null
+                                                                            && existing.context
+                                                                                            .objectGeneration()
+                                                                                    > currentRoute
+                                                                                            .objectGeneration()
+                                                                    ? existing.authorityRouteFence()
+                                                                    : currentRoute;
+                                                    var rejection =
+                                                            instanceApplicationAdmissionFailure(
+                                                                    current,
+                                                                    (systems.zlink.framework.runtime
+                                                                                    .internal
+                                                                                    .service
+                                                                                    .ZLinkServiceM6BWireCodec
+                                                                                    .InstanceRouteFence)
+                                                                            message.route());
+                                                    if (rejection != null) {
+                                                        received.close();
+                                                        return CompletableFuture.failedFuture(
+                                                                rejection);
+                                                    }
                                                     return existing == null
-                                                                    || ((systems.zlink.framework
-                                                                                                    .runtime
-                                                                                                    .internal
-                                                                                                    .service
-                                                                                                    .ZLinkServiceM6BWireCodec
-                                                                                                    .InstanceRouteFence)
-                                                                                            message
-                                                                                                    .route())
-                                                                                    .objectGeneration()
+                                                                    || current.objectGeneration()
                                                                             > existing.context
                                                                                     .objectGeneration()
                                                             ? null
-                                                            : existing.admitExisting(
-                                                                    message, received);
+                                                            : existing.admitRoute(received);
                                                 }
                                             }));
             if (nodeRegistration.objectServer()) {
@@ -870,14 +888,19 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             }
             meshNode.spotNode()
                     .setSpotAdmissionResolver(
-                            (spotId, authorityOwnerGeneration, instanceIntent, activationPresent) ->
+                            (spotId,
+                                    authorityOwnerGeneration,
+                                    instanceIntent,
+                                    activationPresent,
+                                    instanceRoute) ->
                                     targetSpotAdmission(
                                             authorityStore,
                                             meshNode.spotNode().routingId(),
                                             spotId,
                                             authorityOwnerGeneration,
                                             instanceIntent,
-                                            activationPresent));
+                                            activationPresent,
+                                            instanceRoute));
             if (registration.relocatableSpotFactories().isEmpty()) {
                 continue;
             }
@@ -896,13 +919,43 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         }
     }
 
+    static RuntimeException instanceApplicationAdmissionFailure(
+            systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
+                            .InstanceRouteFence
+                    current,
+            systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
+                            .InstanceRouteFence
+                    requested) {
+        if (current.objectGeneration() < requested.objectGeneration()) {
+            return ZLinkFrameworkErrorOrigin.framework(
+                    ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                    "Instance Spot is behind the requested generation",
+                    (int)
+                            systems.zlink.framework.runtime.protocol.ServiceWireConstants
+                                    .FRAMEWORK_ERROR_SPOT_GENERATION_STALE);
+        }
+        if (!current.targetNodeRid().equals(requested.targetNodeRid())
+                || current.targetNodeGeneration() != requested.targetNodeGeneration()
+                || !current.ownerId().equals(requested.ownerId())
+                || current.leaseGeneration() != requested.leaseGeneration()
+                || (current.objectGeneration() == requested.objectGeneration()
+                        && current.authorityOwnerGeneration()
+                                != requested.authorityOwnerGeneration())) {
+            return ZLinkFrameworkErrorOrigin.ownerFenceRefusal("Instance Spot owner fence changed");
+        }
+        return null;
+    }
+
     private CompletionStage<? extends RuntimeException> targetSpotAdmission(
             ZLinkLocationRepository authorityStore,
             RoutingId targetNodeRid,
             String spotId,
             long authorityOwnerGeneration,
             boolean instanceIntent,
-            boolean activationPresent) {
+            boolean activationPresent,
+            systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
+                            .InstanceRouteFence
+                    instanceRoute) {
         var hostRejection = spotHostAdmissionFailure(spotId);
         if (hostRejection != null) {
             return CompletableFuture.completedFuture(hostRejection);
@@ -926,14 +979,21 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                     "Spot is not available: " + spotId));
                                 }
                                 if (!authority.get().nodeRid().equals(targetNodeRid)
-                                        || (authorityOwnerGeneration != 0
+                                        || (instanceRoute == null
+                                                && authorityOwnerGeneration != 0
                                                 && snapshot.authorityOwnerGeneration()
                                                         != authorityOwnerGeneration)) {
                                     return CompletableFuture.completedFuture(
                                             ZLinkFrameworkErrorOrigin.ownerFenceRefusal(
                                                     "Spot owner fence has changed: " + spotId));
                                 }
-                                if (instanceIntent && authority.get().instance().isPresent()) {
+                                if (instanceRoute != null
+                                        && authority.get().instance().isPresent()
+                                        && (instanceIntent
+                                                || authority.get().state()
+                                                        != systems.zlink.framework.runtime.locations
+                                                                .ZLinkServiceAuthorityPayloadCodec
+                                                                .State.CLOSING)) {
                                     //  The target takes the Instance route fence from the
                                     //  authority it has just read, Ready or Closing, so the
                                     //  admitted message does not depend on the background
@@ -1947,40 +2007,74 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
     }
 
     public CompletionStage<Void> closeAsync() {
+        return closeAsync(new CompletableFuture<>());
+    }
+
+    public CompletionStage<Void> applicationCleanup() {
+        return applicationCleanup;
+    }
+
+    public CompletionStage<Void> closeAsync(CompletionStage<? extends Throwable> forceStop) {
         beginClose();
         // Accepted Instance activations finish their first-message Store cleanup before Spots
         // close; the host drain stage bounds this wait with its deadline.
-        return CompletableFuture.allOf(
-                        nodes.stream()
-                                .map(
-                                        node ->
-                                                node.instanceActivationTerminals()
-                                                        .toCompletableFuture())
-                                .toArray(CompletableFuture[]::new))
-                .thenCompose(ignored -> spotLifecycle.closeAllAsync())
-                .handle(
+        CompletionStage<Void> applicationClosing =
+                CompletableFuture.allOf(
+                                nodes.stream()
+                                        .map(
+                                                node ->
+                                                        node.instanceActivationTerminals()
+                                                                .toCompletableFuture())
+                                        .toArray(CompletableFuture[]::new))
+                        .thenCompose(ignored -> spotLifecycle.closeAllAsync())
+                        .handle(
+                                (ignored, failure) -> {
+                                    CompletionStage<Void> closing =
+                                            CompletableFuture.completedFuture(null);
+                                    for (ZLinkInstanceSpotActivation activation :
+                                            instanceSpotActivations.values()) {
+                                        closing =
+                                                closing.handle(
+                                                                (nothing, closeFailure) ->
+                                                                        SpotActivationBase
+                                                                                .finishCleanup(
+                                                                                        closeFailure,
+                                                                                        activation
+                                                                                                .closeAsync(
+                                                                                                        systems
+                                                                                                                .zlink
+                                                                                                                .framework
+                                                                                                                .spots
+                                                                                                                .ZLinkSpotCloseReason
+                                                                                                                .HOST_SHUTDOWN,
+                                                                                                        Instant
+                                                                                                                .now())))
+                                                        .thenCompose(stage -> stage);
+                                    }
+                                    return SpotActivationBase.finishCleanup(failure, closing);
+                                })
+                        .thenCompose(stage -> stage);
+        applicationCleanup =
+                applicationClosing.whenComplete(
                         (ignored, failure) -> {
-                            CompletionStage<Void> closing = CompletableFuture.completedFuture(null);
-                            for (ZLinkInstanceSpotActivation activation :
-                                    instanceSpotActivations.values()) {
-                                closing =
-                                        closing.handle(
-                                                        (nothing, closeFailure) ->
-                                                                SpotActivationBase.finishCleanup(
-                                                                        closeFailure,
-                                                                        activation.closeAsync(
-                                                                                systems.zlink
-                                                                                        .framework
-                                                                                        .spots
-                                                                                        .ZLinkSpotCloseReason
-                                                                                        .HOST_SHUTDOWN,
-                                                                                Instant.now())))
-                                                .thenCompose(stage -> stage);
+                            if (!instanceSpotActivations.isEmpty()) {
+                                instanceSpotActivations.clear();
+                                signalCountChanged();
                             }
-                            return SpotActivationBase.finishCleanup(failure, closing);
-                        })
-                .thenCompose(stage -> stage)
-                .handle(
+                        });
+        var observed = new CompletableFuture<Void>();
+        applicationCleanup.whenComplete(
+                (ignored, failure) -> {
+                    if (failure == null) {
+                        observed.complete(null);
+                    } else if (!observed.completeExceptionally(failure)) {
+                        reportSpotLifecycleFailure(null, failure);
+                    }
+                });
+        forceStop.whenComplete(
+                (cause, failure) ->
+                        observed.completeExceptionally(failure == null ? cause : failure));
+        return observed.handle(
                         (ignored, failure) ->
                                 SpotActivationBase.finishCleanup(failure, publishers.closeAsync()))
                 .thenCompose(stage -> stage)
@@ -1992,10 +2086,6 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                             : failure instanceof RuntimeException runtime
                                                     ? runtime
                                                     : new RuntimeException(failure);
-                            if (!instanceSpotActivations.isEmpty()) {
-                                instanceSpotActivations.clear();
-                                signalCountChanged();
-                            }
                             for (ZLinkInternalSpotNode node : nodes) {
                                 firstFailure = closeRuntimeComponent(node::close, firstFailure);
                             }

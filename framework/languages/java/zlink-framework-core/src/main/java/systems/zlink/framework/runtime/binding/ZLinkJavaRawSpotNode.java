@@ -1561,7 +1561,8 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                             header.target().spotId(),
                             header.target().authorityOwnerGeneration(),
                             false,
-                            false)
+                            false,
+                            null)
                     .whenComplete(
                             (rejection, readFailure) -> {
                                 try {
@@ -2713,7 +2714,8 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                         ((ZLinkServiceM6BWireCodec.InstanceRouteFence) header.route())
                                 .authorityOwnerGeneration(),
                         header.instanceIntent(),
-                        false)
+                        false,
+                        (ZLinkServiceM6BWireCodec.InstanceRouteFence) header.route())
                 .whenComplete(
                         (rejection, readFailure) -> {
                             if (readFailure != null || rejection != null) {
@@ -2772,7 +2774,10 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                         try {
                             retained =
                                     instanceSpots.admitExisting(
-                                            authority.stableType(), header, received);
+                                            authority.stableType(),
+                                            authority.route(),
+                                            header,
+                                            received);
                         } catch (RuntimeException | Error retainedFailure) {
                             received.close();
                             failure.accept(retainedFailure);
@@ -2792,8 +2797,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                                     instanceSpots.activate(
                                             header.route().targetSpotId(),
                                             authority.stableType(),
-                                            (ZLinkServiceM6BWireCodec.InstanceRouteFence)
-                                                    header.route());
+                                            authority.route());
                         } catch (Throwable activationFailure) {
                             received.close();
                             failure.accept(activationFailure);
@@ -3294,7 +3298,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
             return resolver == null
                     ? CompletableFuture.failedFuture(
                             new ZlinkSubmitException(SubmitResult.NOT_FOUND))
-                    : resolver.resolve(targetSpotId, 0, false, false)
+                    : resolver.resolve(targetSpotId, 0, false, false, null)
                             .thenCompose(CompletableFuture::failedFuture);
         }
         byte[] acceptedRecord =
@@ -3427,7 +3431,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
             return resolver == null
                     ? CompletableFuture.failedFuture(
                             new ZlinkRequestException(RequestResult.NOT_FOUND))
-                    : resolver.resolve(targetSpotId, 0, false, false)
+                    : resolver.resolve(targetSpotId, 0, false, false, null)
                             .thenCompose(CompletableFuture::failedFuture);
         }
         ZLinkTerminalWinner terminal = new ZLinkTerminalWinner();

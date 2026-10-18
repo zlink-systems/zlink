@@ -63,6 +63,7 @@ export type ZLinkBackendObjectPlacement =
 
 export interface ZLinkBackendMeshNode {
   readonly routingId?: RoutingId;
+  cancelPendingOperations?(reason: unknown): void;
   completeClosedInstance?(spotId: string, objectGeneration: bigint): void;
   setDispatchErrorReporter?(
     reporter: import('../../channels/dispatch-error-reporter').ZLinkDispatchErrorReporter,
