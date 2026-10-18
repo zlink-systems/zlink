@@ -1087,6 +1087,7 @@ final class ZLinkStreamRuntimeIngressTest {
             assertEquals(PEER_B, second.context.routingId().orElseThrow());
             assertTrue(second.dispatchLatch.await(5, TimeUnit.SECONDS));
             assertEquals(List.of("b-first"), second.packetNames);
+            assertTrue(first.dispatchLatch.await(5, TimeUnit.SECONDS));
             assertEquals(List.of("a-first"), first.packetNames);
             assertEquals(2, TestSession.createdCount.get(), "one Session per peer");
 
