@@ -461,10 +461,7 @@ public final class ZLinkSpotSerialExecutor implements ZLinkActorDispatchTarget {
     }
 
     CompletionStage<Void> discardActivationPreparation() {
-        return spotQueue.completeActivationPreparation(
-                null,
-                new IllegalStateException("Spot activation was discarded"),
-                () -> CompletableFuture.completedFuture(null));
+        return spotQueue.discardActivationPreparation();
     }
 
     private CompletionStage<Void> resumeTimerQueues() {

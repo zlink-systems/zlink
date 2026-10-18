@@ -673,6 +673,7 @@ public final class ZLinkSerialExecutionQueue {
     }
 
     private void failPendingApplications(Throwable failure) {
+        closingAdmissionSealed = true;
         materializePublished();
         for (Entry entry : applicationPending) {
             entry.operation =
@@ -954,14 +955,39 @@ public final class ZLinkSerialExecutionQueue {
     }
 
     public CompletionStage<Void> finishActivationPreparation() {
-        return completeActivationPreparation(
-                null, null, () -> CompletableFuture.completedFuture(null));
+        return completePreparation(null, null, () -> CompletableFuture.completedFuture(null));
+    }
+
+    public CompletionStage<Void> discardActivationPreparation() {
+        return completePreparation(
+                null,
+                null,
+                () ->
+                        underSharedSpotGateAsync(
+                                () -> {
+                                    synchronized (this) {
+                                        failPendingApplications(
+                                                new IllegalStateException(
+                                                        "Spot activation was discarded"));
+                                    }
+                                    return null;
+                                }));
     }
 
     public CompletionStage<Void> completeActivationPreparation(
             Predicate<Object> firstRecord,
             Throwable failure,
             Supplier<CompletionStage<Void>> discard) {
+        return completePreparation(
+                firstRecord,
+                failure,
+                failure == null ? () -> CompletableFuture.completedFuture(null) : discard);
+    }
+
+    private CompletionStage<Void> completePreparation(
+            Predicate<Object> firstRecord,
+            Throwable failure,
+            Supplier<CompletionStage<Void>> cleanupAction) {
         return underSharedSpotGateAsync(
                         () -> {
                             ActivationPreparation<?> preparation = activationPreparation;
@@ -975,40 +1001,36 @@ public final class ZLinkSerialExecutionQueue {
                 .thenCompose(
                         preparation -> {
                             if (preparation == null) return CompletableFuture.completedFuture(null);
-                            CompletionStage<Void> cleanup =
-                                    failure == null
-                                            ? CompletableFuture.completedFuture(null)
-                                            : discard.get();
+                            CompletionStage<Void> cleanup = cleanupAction.get();
                             return cleanup.handle(
                                             (ignored, cleanupFailure) -> {
-                                                if (failure != null
-                                                        && cleanupFailure != null
+                                                if (failure == null) return cleanupFailure;
+                                                if (cleanupFailure != null
                                                         && failure != cleanupFailure)
                                                     failure.addSuppressed(cleanupFailure);
-                                                return null;
+                                                return failure;
                                             })
                                     .thenCompose(
-                                            ignored ->
+                                            terminalFailure ->
                                                     underSharedSpotGateAsync(
                                                             () -> {
                                                                 synchronized (this) {
                                                                     if (activationPreparation
                                                                             == preparation) {
-                                                                        if (failure != null) {
-                                                                            closingAdmissionSealed =
-                                                                                    true;
+                                                                        if (terminalFailure
+                                                                                != null) {
                                                                             failPendingApplications(
-                                                                                    failure);
+                                                                                    terminalFailure);
                                                                         }
                                                                         activationPreparation =
                                                                                 null;
-                                                                        if (failure == null)
+                                                                        if (terminalFailure == null)
                                                                             preparation.terminal
                                                                                     .complete(null);
                                                                         else
                                                                             preparation.terminal
                                                                                     .completeExceptionally(
-                                                                                            failure);
+                                                                                            terminalFailure);
                                                                     }
                                                                 }
                                                                 return null;

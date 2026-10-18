@@ -205,6 +205,30 @@ final class ZLinkSerialExecutionQueueTest {
     }
 
     @Test
+    void successfulActivationPreparationDoesNotRunFailureCleanup() throws Exception {
+        var executor = new CountingExecutor();
+        var queue = new ZLinkSerialExecutionQueue(executor, ZLinkExecutionLanePolicy.spot());
+        var prepared = queue.prepareActivation(() -> CompletableFuture.completedFuture(null));
+        executor.runUntil(prepared.toCompletableFuture());
+        var discarded = new AtomicBoolean();
+        try {
+            var completed =
+                    queue.completeActivationPreparation(
+                            null,
+                            null,
+                            () -> {
+                                discarded.set(true);
+                                return CompletableFuture.completedFuture(null);
+                            });
+            executor.runUntil(completed.toCompletableFuture());
+            executor.runUntil(queue.awaitQuiescence().toCompletableFuture());
+            assertFalse(discarded.get());
+        } finally {
+            queue.close();
+        }
+    }
+
+    @Test
     void failedActivationPreparationRejectsPendingApplicationAndCloseWithOriginalFailure()
             throws Exception {
         var executor = new CountingExecutor();
