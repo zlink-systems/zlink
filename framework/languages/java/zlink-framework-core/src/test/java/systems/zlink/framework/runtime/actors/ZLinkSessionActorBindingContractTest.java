@@ -1169,7 +1169,9 @@ final class ZLinkSessionActorBindingContractTest {
                         authorityOwnerGeneration,
                         4),
                 new ZLinkServiceM6BWireCodec.SessionOwnerFence(
-                        NODE_A, 3, "session-owner", 4, SESSION, BINDING_GENERATION));
+                        NODE_A, 3, "session-owner", 4, SESSION, BINDING_GENERATION),
+                RoutingId.from("relocation-target"),
+                7);
     }
 
     private static ZLinkServiceM6BWireCodec.SessionRelocationSeal seal(
@@ -1189,7 +1191,9 @@ final class ZLinkSessionActorBindingContractTest {
                         authorityOwnerGeneration,
                         ownerLeaseGeneration),
                 new ZLinkServiceM6BWireCodec.SessionOwnerFence(
-                        NODE_A, 3, "session-owner", 4, SESSION, bindingGeneration));
+                        NODE_A, 3, "session-owner", 4, SESSION, bindingGeneration),
+                RoutingId.from("relocation-target"),
+                7);
     }
 
     private static ZLinkServiceM6BWireCodec.SessionRelocationRoute route(

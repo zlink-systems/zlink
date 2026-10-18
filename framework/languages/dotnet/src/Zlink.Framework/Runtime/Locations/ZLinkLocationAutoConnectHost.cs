@@ -568,6 +568,18 @@ internal sealed class ZLinkLocationAutoConnectHost
         _localLoops[(type, meshName, role)] = loop;
     }
 
+    internal ValueTask ReconcilePeerAsync(
+        string meshName,
+        RoutingId peer,
+        CancellationToken cancellationToken
+    )
+    {
+        var meshKey = ZLinkMeshName.FromBoundary(meshName, nameof(meshName));
+        return _routeMeshReconcilers.TryGetValue(meshKey, out var reconciler)
+            ? reconciler.ReconcilePeerAsync(peer, cancellationToken)
+            : ValueTask.CompletedTask;
+    }
+
     public ZLinkRouteMeshTargetClassification ClassifyRouteMeshTarget(
         string meshName,
         RoutingId nodeRid

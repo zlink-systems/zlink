@@ -2369,13 +2369,6 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                 },
                 this::spotFor,
                 this::meshNameForSpot);
-        actorRuntime.setTransferBacklogRestorer(
-                (actor, packet) ->
-                        dispatchTransferBacklog(
-                                actorRuntime.currentRef(actor),
-                                packet.header(),
-                                packet.payload(),
-                                packet.acceptedJournalRecord()));
         ZLinkInternalMeshNode relocationMesh = routeMeshNodesByName.get(primaryNodeSourceName);
         var sessionRelocationPeer =
                 relocationMesh == null
@@ -5042,6 +5035,31 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         return admitNewApplicationJob(operation);
     }
 
+    CompletionStage<java.util.List<CompletableFuture<Void>>> admitActorRelocationPrefix(
+            ZLinkActorSessionCoordinator actors,
+            ZLinkActorRuntime.PreparedTransferredActor prepared,
+            String targetSpotId,
+            List<ZLinkSerialExecutionQueue.QueuedRecord> records,
+            java.util.function.BiFunction<
+                            ZLinkSerialExecutionQueue.QueuedRecord,
+                            CompletableFuture<Void>,
+                            java.util.function.Supplier<CompletionStage<Void>>>
+                    replay) {
+        Object surface = spotSurfaceFor(targetSpotId);
+        ZLinkActorDispatchTarget target;
+        if (surface instanceof ZLinkSpot<?> spot
+                && spot.context() instanceof DefaultSpotContext context)
+            target = context.actorDispatchTarget();
+        else if (surface instanceof ZLinkEntrySpot<?> entry
+                && entry.context() instanceof DefaultEntrySpotContext context)
+            target = context.actorDispatchTarget();
+        else
+            return CompletableFuture.failedFuture(
+                    new IllegalStateException(
+                            "target execution Spot is unavailable: " + targetSpotId));
+        return actors.admitRelocationPrefix(prepared, target, records, replay, applicationJobQueue);
+    }
+
     <T> CompletionStage<T> admitNewApplicationJob(Supplier<CompletionStage<T>> operation) {
         Objects.requireNonNull(operation, "operation");
         try {
@@ -6823,6 +6841,35 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                 failure.sourceRid,
                 failure.correlationId,
                 failure.error);
+    }
+
+    void reportAcceptedActorReplayFailure(
+            String spotId, ZLinkActorAcceptedJournal.Record record, Throwable failure) {
+        if (!dispatchErrors.errorsEnabled()) return;
+        boolean request = record.header().requestSequence().isPresent();
+        reportDispatchError(
+                DispatchFailureReport.of(
+                                ZLinkDispatchErrorSurface.SPOT_ACTOR,
+                                request
+                                        ? ZLinkDispatchMessageKind.ACTOR_REQUEST
+                                        : ZLinkDispatchMessageKind.ACTOR_SEND,
+                                ZLinkDispatchErrorReporter.reasonFrom(
+                                        failure,
+                                        systems.zlink.framework.runtime.internal.backend
+                                                .ZLinkRequestFailureMapping.causeCode(failure)),
+                                request
+                                        ? ZLinkDispatchErrorAction.REPLY_ERROR
+                                        : ZLinkDispatchErrorAction.DROP)
+                        .packetName(record.header().packetName())
+                        .spotId(spotId)
+                        .actorId(record.actorId())
+                        .sourceRid(record.sourceNodeRid())
+                        .correlationId(
+                                record.header()
+                                        .requestSequence()
+                                        .map(Long::toUnsignedString)
+                                        .orElse(null))
+                        .error(failure));
     }
 
     void reportSpotClosingFailure(String spotId, Throwable failure) {

@@ -121,6 +121,7 @@ export interface ZLinkActorHandoffPrefixAdmission {
 }
 
 export interface ZLinkActorHandoffPrefixRecord {
+  readonly onWithdrawable?: (withdraw: () => boolean) => void;
   readonly drain: (dispatch: ZLinkActorHandoffDispatch) => Promise<void>;
   readonly preparation?: {
     prepare(signal: AbortSignal): Promise<void>;
@@ -141,6 +142,7 @@ export type ZLinkActorHandoffPrefixQueue = (
 ) => ZLinkActorHandoffPrefixAdmission;
 
 interface PendingPacket {
+  withdraw?: () => boolean;
   readonly origin: ApplicationJobOrigin;
   readonly packet: ZLinkActorHandoffPacket;
   readonly resolve?: (value: unknown) => void;
@@ -206,12 +208,6 @@ interface ActiveHandoff {
   pendingBytes: number;
   releaseTask?: Promise<void>;
   prefixRelease?: ActivePrefixRelease;
-  /**
-   * Settles when the released handoff this hold replaced has drained its
-   * durable prefix. This hold releases its own records only after that
-   * prefix, so ingress stays durable while an earlier durable record waits.
-   */
-  readonly predecessorRelease?: Promise<void>;
 }
 
 interface MessageFollowRoute {
@@ -373,6 +369,24 @@ export class ZLinkActorHandoffCoordinator {
       nodeGeneration: source.nodeGeneration,
       authorityOwnerGeneration: source.authorityOwnerGeneration
     });
+    const pending: PendingPacket[] = [];
+    if (previous?.prefixRelease !== undefined) {
+      // Only records still in the FIFO belong to the new barrier. Running
+      // records keep their existing terminal; withdrawn records surrender
+      // readiness and move their payload before later ingress can arrive.
+      for (let index = 0; index < previous.pending.length;) {
+        const record = previous.pending[index]!;
+        if (record.withdraw?.() === true) {
+          record.withdraw = undefined;
+          pending.push(record);
+          previous.pending.splice(index, 1);
+          previous.prefixRelease.cursor -= 1;
+          previous.pendingBytes -= packetBytes(record.packet);
+        } else {
+          index += 1;
+        }
+      }
+    }
     this.active.set(actorId, {
       oldGeneration,
       oldNodeRid: sourceOwner.nodeRid,
@@ -382,15 +396,10 @@ export class ZLinkActorHandoffCoordinator {
       phase,
       deferredJoin: phase === 'provisional',
       connectionBoundSealed: false,
-      pending: [],
-      nextIndex: 0,
+      pending,
+      nextIndex: pending.reduce((next, record) => Math.max(next, record.packet.index + 1), 0),
       snapshotIndex: -1,
-      pendingBytes: 0,
-      // The predecessor reports its own replay failures; only its drain order matters here.
-      predecessorRelease: previous?.releaseTask?.then(
-        () => undefined,
-        () => undefined
-      )
+      pendingBytes: pending.reduce((bytes, record) => bytes + packetBytes(record.packet), 0)
     });
   }
 
@@ -469,6 +478,40 @@ export class ZLinkActorHandoffCoordinator {
     return this.admitHandoffPrefix(actorId, handoff, queue, preparation, start);
   }
 
+  /** Installs a restored target's payload in the same owner used by local handoffs. */
+  admitTransferredPrefix(
+    actorId: string,
+    objectGeneration: bigint,
+    packets: readonly ZLinkActorHandoffPacket[],
+    queue: ZLinkActorHandoffPrefixQueue,
+    preparation: ZLinkActorHandoffReplayPreparation | undefined,
+    start: Promise<void>,
+    onResult: (packet: ZLinkActorHandoffPacket, result: ZLinkActorHandoffResult) => void
+  ): ZLinkActorHandoffPrefixAdmission {
+    this.beginProvisional(actorId, objectGeneration);
+    const handoff = this.requireActive(actorId);
+    for (const packet of packets) {
+      handoff.pending.push({
+        packet,
+        origin: 'remote',
+        resolve: (response) => onResult(packet, { index: packet.index, ok: true, response }),
+        reject: (error) =>
+          onResult(packet, {
+            index: packet.index,
+            ok: false,
+            error: error instanceof Error ? error.message : String(error),
+            errorKind:
+              error instanceof ZLinkFrameworkException
+                ? internalFrameworkErrorKind(error)
+                : undefined
+          })
+      });
+      handoff.nextIndex = Math.max(handoff.nextIndex, packet.index + 1);
+      handoff.pendingBytes += packetBytes(packet);
+    }
+    return this.admitHandoffPrefix(actorId, handoff, queue, preparation, start);
+  }
+
   private admitHandoffPrefix(
     actorId: string,
     handoff: ActiveHandoff,
@@ -480,9 +523,6 @@ export class ZLinkActorHandoffCoordinator {
       return { terminal: handoff.releaseTask };
     }
     handoff.phase = 'releasing';
-    if (handoff.predecessorRelease !== undefined) {
-      start = Promise.all([handoff.predecessorRelease, start]).then(() => undefined);
-    }
     let resolveTerminal!: () => void;
     let rejectTerminal!: (reason: unknown) => void;
     const terminal = new Promise<void>((resolve, reject) => {
@@ -564,6 +604,9 @@ export class ZLinkActorHandoffCoordinator {
       prepared = undefined;
     };
     return {
+      onWithdrawable: (withdraw) => {
+        pending.withdraw = withdraw;
+      },
       payloadBytes: packetBytes(pending.packet),
       preparation: {
         prepare: async (signal) => {
@@ -585,6 +628,9 @@ export class ZLinkActorHandoffCoordinator {
         cancel
       },
       drain: async (replay) => {
+        // The FIFO claim, rather than this prefix's eventual terminal,
+        // ends the record's durable ownership and transfer capability.
+        pending.withdraw = undefined;
         const admission =
           prepared === undefined
             ? undefined
@@ -677,7 +723,6 @@ export class ZLinkActorHandoffCoordinator {
     admission?: ZLinkActorHandoffReplayAdmission
   ): Promise<void> {
     try {
-      await handoff.predecessorRelease;
       if (handoff.pending.length === 0) return;
       if (replay === undefined) {
         const error = new Error(
@@ -798,6 +843,12 @@ export class ZLinkActorHandoffCoordinator {
       deadlineUnixMs ?? incomingContext?.deadlineUnixMs ?? packetDeadlineUnixMs(parts);
     const handoff = this.active.get(actorId);
     if (handoff !== undefined) {
+      if (
+        handoff.phase === 'releasing' &&
+        handoff.prefixRelease !== undefined &&
+        handoff.pending.at(-1)?.withdraw === undefined
+      )
+        return undefined;
       if (parts.length < 2) return Promise.resolve(undefined);
       if (
         handoff.connectionBoundSealed &&

@@ -17,6 +17,7 @@
 #include "runtime/messaging/envelope_codec.hpp"
 #include "runtime/messaging/failure_origin_wire.hpp"
 #include "runtime/messaging/request_failure_mapper.hpp"
+#include "runtime/messaging/request_deadline.hpp"
 #include "runtime/messaging/submit_result_mapper.hpp"
 #include "runtime/utils/poll_interval_wait.hpp"
 #include "runtime/spots/spot_route_packets.hpp"
@@ -1064,6 +1065,8 @@ mesh_node_runtime_t::seal_bound_sessions (
   std::vector<std::pair<runtime::stateful::object_ref_t, authority_snapshot_t>> participants,
   runtime::protocol::relocation_id_t relocation,
   runtime::protocol::relocation_coordinator_fence_t coordinator,
+  zlink::routing_id_t target_node,
+  std::uint64_t target_node_generation,
   std::chrono::milliseconds timeout,
   std::chrono::steady_clock::time_point operation_deadline)
 {
@@ -1139,7 +1142,9 @@ mesh_node_runtime_t::seal_bound_sessions (
           session->session_owner.owner_id,
           static_cast<std::uint64_t> (session->session_owner.lease_generation),
           session->session.to_bytes (),
-          session->binding_generation};
+          session->binding_generation,
+          target_node.to_bytes (),
+          target_node_generation};
 
         struct completion_t
         {
@@ -1189,12 +1194,15 @@ mesh_node_runtime_t::capture_session_bindings (
   std::vector<std::pair<runtime::stateful::object_ref_t, authority_snapshot_t>> participants,
   runtime::protocol::relocation_id_t relocation,
   runtime::protocol::relocation_coordinator_fence_t coordinator,
+  zlink::routing_id_t target_node,
+  std::uint64_t target_node_generation,
   std::shared_ptr<session_relocation_seal_outcome_t> outcome,
   std::shared_ptr<bool> attempted,
   std::chrono::steady_clock::time_point operation_deadline)
 {
     *attempted = true;
     *outcome = co_await seal_bound_sessions (participants, relocation, coordinator,
+                                             std::move (target_node), target_node_generation,
                                              _session_relocation_seal_timeout, operation_deadline);
     if (!outcome->completed)
         co_return std::nullopt;
@@ -1283,6 +1291,7 @@ task_t<runtime::stateful::relocation_result_t> mesh_node_runtime_t::relocate_app
         || authority.allocation.target.node_rid.value () != status.routing_id ().to_string ())
         co_return blocked ();
 
+    const auto deadline_unix_ms = runtime::messaging::request_deadline_unix_ms (restore_deadline);
     runtime::protocol::relocation_id_t relocation;
     try {
         relocation = relocation_ids ().issue ();
@@ -1305,18 +1314,18 @@ task_t<runtime::stateful::relocation_result_t> mesh_node_runtime_t::relocate_app
       .application_version =
         static_cast<std::uint64_t> (std::max<std::int64_t> (0, target.application_version)),
       .capture_session_bindings =
-        [this, source = *source, authority, relocation, coordinator, session_seal,
+        [this, source = *source, authority, target, relocation, coordinator, session_seal,
          session_checkpoint_attempted, restore_deadline] () {
             return capture_session_bindings ({{source, authority}}, relocation, coordinator,
-                                             session_seal, session_checkpoint_attempted,
-                                             restore_deadline);
+                                             target.rid, target.lifecycle_generation, session_seal,
+                                             session_checkpoint_attempted, restore_deadline);
         },
-      .prepare_target =
-        [this, target, source_status = status, source = *source,
-         stable_type =
-           std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (actor)),
-         relocation, coordinator] (const std::vector<runtime::stateful::frozen_object_state_t> &,
-                                   const runtime::stateful::relocation_payload_manifest_t &manifest)
+      .prepare_target = [this, target, source_status = status, source = *source,
+                         stable_type = std::string (
+                           ::zlink::framework::detail::actor_ref_access_t::actor_type (actor)),
+                         relocation, coordinator, deadline_unix_ms] (
+                          const std::vector<runtime::stateful::frozen_object_state_t> &,
+                          const runtime::stateful::relocation_payload_manifest_t &manifest)
         -> task_t<runtime::stateful::relocation_reason_t> {
           runtime::protocol::relocation_object_kind_t kind;
           switch (source.kind) {
@@ -1348,7 +1357,8 @@ task_t<runtime::stateful::relocation_result_t> mesh_node_runtime_t::relocate_app
               manifest.total_length,
               manifest.chunk_count,
               manifest.checksum_crc32c,
-              static_cast<std::uint64_t> (std::max<std::int64_t> (0, target.application_version))},
+              static_cast<std::uint64_t> (std::max<std::int64_t> (0, target.application_version)),
+              deadline_unix_ms},
             std::chrono::seconds (5));
       },
       .send_state_chunk =
@@ -1523,6 +1533,7 @@ mesh_node_runtime_t::relocate_application_unit (
         ? static_cast<std::size_t> (std::distance (input.begin (), principal))
         : 0u;
 
+    const auto deadline_unix_ms = runtime::messaging::request_deadline_unix_ms (restore_deadline);
     runtime::protocol::relocation_id_t relocation;
     try {
         relocation = relocation_ids ().issue ();
@@ -1551,16 +1562,16 @@ mesh_node_runtime_t::relocate_application_unit (
       .application_version =
         static_cast<std::uint64_t> (std::max<std::int64_t> (0, target.application_version)),
       .capture_session_bindings =
-        [this, session_participants, relocation, coordinator, session_seal,
+        [this, session_participants, target, relocation, coordinator, session_seal,
          session_checkpoint_attempted, restore_deadline] () {
             return capture_session_bindings (session_participants, relocation, coordinator,
-                                             session_seal, session_checkpoint_attempted,
-                                             restore_deadline);
+                                             target.rid, target.lifecycle_generation, session_seal,
+                                             session_checkpoint_attempted, restore_deadline);
         },
       .prepare_target =
-        [this, target, status, sources, stable_types, principal_index, relocation,
-         coordinator] (const std::vector<frozen_object_state_t> &,
-                       const runtime::stateful::relocation_payload_manifest_t &manifest)
+        [this, target, status, sources, stable_types, principal_index, relocation, coordinator,
+         deadline_unix_ms] (const std::vector<frozen_object_state_t> &,
+                            const runtime::stateful::relocation_payload_manifest_t &manifest)
         -> task_t<runtime::stateful::relocation_reason_t> {
           runtime::protocol::relocation_object_kind_t kind;
           switch (sources[principal_index].kind) {
@@ -1593,7 +1604,8 @@ mesh_node_runtime_t::relocate_application_unit (
               manifest.total_length,
               manifest.chunk_count,
               manifest.checksum_crc32c,
-              static_cast<std::uint64_t> (std::max<std::int64_t> (0, target.application_version))},
+              static_cast<std::uint64_t> (std::max<std::int64_t> (0, target.application_version)),
+              deadline_unix_ms},
             std::chrono::seconds (5));
       },
       .send_state_chunk =
@@ -1902,6 +1914,13 @@ void mesh_node_runtime_t::stop ()
     spot_runtime.detach_native_node ();
     spot_runtime.release_native_handles ();
     _node.reset ();
+}
+
+void mesh_node_runtime_t::configure_peer_reconcile (
+  std::function<void (const std::vector<std::uint8_t> &)> request)
+{
+    if (_node)
+        _node->configure_peer_reconcile (std::move (request));
 }
 
 void mesh_node_runtime_t::connect_peer (const zlink::routing_id_t &expected_routing_id,
@@ -2440,6 +2459,7 @@ struct mesh_node_runtime_t::remote_actor_join_state_t
     session_relocation_seal_outcome_t session_seal;
     std::string relocation_content_type;
     std::chrono::steady_clock::time_point deadline;
+    std::uint64_t deadline_unix_ms = 0;
 };
 
 task_t<actor_join_reply_t> mesh_node_runtime_t::join_application_actor_to_spot (
@@ -2604,6 +2624,7 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::admit_remote_application_actor_j
     s->target_completion_operation_id_high = s->completion_operation_id_high;
     s->target_completion_operation_id_low = s->completion_operation_id_low;
     s->deadline = std::chrono::steady_clock::now () + s->timeout;
+    s->deadline_unix_ms = runtime::messaging::request_deadline_unix_ms (s->deadline);
     const auto source = _node->resolve_actor (s->actor);
     if (!source || source->authority_owner_generation == 0) {
         const auto failed = result_t<actor_join_reply_t>::failure (
@@ -2851,6 +2872,7 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::admit_remote_application_actor_j
     s->actor_authority_owner_generation = source->authority_owner_generation;
     s->target_spot_authority_owner_generation = observed.authority_owner_generation;
     s->deadline = std::chrono::steady_clock::now () + s->timeout;
+    s->deadline_unix_ms = runtime::messaging::request_deadline_unix_ms (s->deadline);
     s->transfer_id = canonical_actor_join_handoff_id (
       local.routing_id ().to_bytes (), s->actor.actor_id ().value (), s->actor.object_generation (),
       local.lifecycle_generation (), correlation);
@@ -3096,7 +3118,8 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::seal_remote_application_actor_jo
         auto output = completion->task ();
         auto attempt =
           std::make_shared<task_t<session_relocation_seal_outcome_t>> (seal_bound_sessions (
-            {{s->source_actor, authority}}, relocation, coordinator, remaining, s->deadline));
+            {{s->source_actor, authority}}, relocation, coordinator, s->target.node_rid,
+            s->target.node_generation, remaining, s->deadline));
         detail::observe_task_completion (
           *attempt,
           [completion, attempt] (const result_t<session_relocation_seal_outcome_t> &settled) {
@@ -3254,7 +3277,8 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::prepare_remote_application_actor
               manifest.total_length,
               manifest.chunk_count,
               manifest.checksum_crc32c,
-              s->target_application_version},
+              s->target_application_version,
+              s->deadline_unix_ms},
             s->timeout);
       },
       .send_state_chunk = [this,

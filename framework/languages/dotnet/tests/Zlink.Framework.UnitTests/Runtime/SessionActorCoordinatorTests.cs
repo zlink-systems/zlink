@@ -53,7 +53,9 @@ public sealed class SessionActorCoordinatorTests
                 actor.NodeRid,
                 1,
                 "v1"
-            )
+            ),
+            RoutingId.From("target"),
+            3
         );
         var closed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -390,7 +392,9 @@ public sealed class SessionActorCoordinatorTests
                 11,
                 context.RoutingId!.Value,
                 5
-            )
+            ),
+            RoutingId.From("target"),
+            3
         );
 
     private static ZLinkServiceWireCodec.SessionRelocationRouteRecord BindingAbsentAbort(
@@ -2146,7 +2150,9 @@ public sealed class SessionActorCoordinatorTests
                 identity.SessionOwnerLeaseGeneration,
                 identity.Context.RoutingId!.Value,
                 identity.BindingGeneration
-            )
+            ),
+            RoutingId.From("target"),
+            3
         );
         if (foreignMetadata)
             seal = seal with
@@ -2415,7 +2421,9 @@ public sealed class SessionActorCoordinatorTests
                 11,
                 sessionRid,
                 5
-            )
+            ),
+            RoutingId.From("target"),
+            3
         );
         _ = await table.SealCanonicalRouteAsync(seal, CancellationToken.None);
         var routeWait = table

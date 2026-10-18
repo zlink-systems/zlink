@@ -170,11 +170,12 @@ async function relocationHarness(ids, nativeBinding = false, hooks = {}) {
       sendToNode: (_target, bytes) => submit(sourceRuntime, ids.owner, bytes)
     }),
     boundSessionRelocation: {
-      receiveSeal: async (value, signal) => {
+      receiveSeal: async (value, signal, onInstalled) => {
         await hooks.beforeSeal?.();
         return host.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationSeal(
           value,
-          signal
+          signal,
+          onInstalled
         );
       },
       receiveRoute: (value) =>
@@ -233,7 +234,7 @@ async function relocationHarness(ids, nativeBinding = false, hooks = {}) {
     sourceRuntime,
     sessionRuntime,
     dispatch,
-    seal: () => transfer.sealBoundSessionRoute(actor, state, abort.signal, { high: 7n, low: 9n }),
+    seal: () => transfer.sealBoundSessionRoute(actor, state, abort.signal, { high: 7n, low: 9n }, { rid: ids.target, lifecycleGeneration: 3n }),
     receiveSeal: (request) =>
       dispatch(sessionRuntime, ids.source, wire.encodeSessionRelocationSeal(request)),
     commit: async (sealed) => {
@@ -298,6 +299,7 @@ for (const [name, ids] of Object.entries({
       assert.equal(request.session.sessionOwnerNodeRid, ids.owner, 'owner RoutingId is preserved');
       assert.equal(request.session.sessionRid, ids.session, 'Session RoutingId is preserved');
       for (const [actual, expected] of [
+        [request.targetNodeRid, ids.target],
         [request.actor.actor.nodeRid, ids.source],
         [request.coordinator.nodeRid, ids.source],
         [request.session.sessionOwnerNodeRid, ids.owner],
@@ -694,6 +696,8 @@ test('Session owner records each participant and rejects any changed command 42 
       { ...request, coordinator: { ...request.coordinator, ownerId: 'other-owner' } },
       { ...request, session: { ...request.session, sessionRid: 'other-session' } },
       { ...request, session: { ...request.session, bindingGeneration: 7n } },
+      { ...request, targetNodeRid: 'other-target' },
+      { ...request, targetNodeGeneration: 42n },
       {
         ...request,
         actor: { ...request.actor, actor: { ...request.actor.actor, generation: 6n } }

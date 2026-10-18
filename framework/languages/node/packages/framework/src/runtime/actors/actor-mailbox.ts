@@ -8,8 +8,10 @@ import {
 import { runZLinkActorExecution } from './actor-execution-context';
 import {
   bindApplicationJobPermit,
-  hasApplicationJobPermit
+  currentApplicationJobPermit,
+  runWithApplicationJobPermit
 } from '../application-jobs/application-job-queue-scope';
+import type { ApplicationJobPermitPort } from '../application-jobs/contracts';
 
 export class ZLinkActorSerialExecutor {
   private readonly scheduler: ZLinkSerialExecutionQueue;
@@ -28,10 +30,46 @@ export class ZLinkActorSerialExecutor {
   }
 
   execute<T>(operation: () => Promise<T> | T, workOptions?: ZLinkSerialWorkOptions): Promise<T> {
+    const initial = currentApplicationJobPermit();
+    if (
+      initial !== undefined &&
+      workOptions?.lane !== 'lifecycle' &&
+      this.scheduler.hasPendingDurableApplication
+    ) {
+      let prepared: ApplicationJobPermitPort | undefined;
+      const cancel = (): void => {
+        prepared?.releaseAfterInternalProcessing();
+        prepared = undefined;
+      };
+      const terminal = this.scheduler.admitDurablePrefix(
+        () =>
+          runWithApplicationJobPermit(prepared!, () =>
+            runZLinkActorExecution(this.actorId, this.sourceSpotId, operation)
+          ),
+        workOptions,
+        undefined,
+        {
+          prepare: async (signal) => {
+            if (initial.reacquire === undefined) {
+              throw new Error('Durable Actor ingress requires its host permit source.');
+            }
+            prepared = await initial.reacquire(signal);
+            if (signal.aborted) {
+              cancel();
+              throw signal.reason;
+            }
+            prepared.markApplicationQueued();
+          },
+          cancel
+        }
+      );
+      initial.releaseAfterInternalProcessing();
+      return terminal;
+    }
     const boundOperation = bindApplicationJobPermit(() =>
       runZLinkActorExecution(this.actorId, this.sourceSpotId, operation)
     );
-    return hasApplicationJobPermit()
+    return initial !== undefined
       ? this.scheduler.submitPreAdmitted(boundOperation, workOptions)
       : this.scheduler.submit(boundOperation, workOptions);
   }

@@ -4,8 +4,10 @@
 #include "runtime/backend/raw_binding_adapter.hpp"
 #include "runtime/protocol/actor_join_recovery_codec.hpp"
 #include "runtime/messaging/envelope_codec.hpp"
+#include "runtime/messaging/request_deadline.hpp"
 
 #include <service_wire_pilot_codec.hpp>
+#include <service_wire_codec.hpp>
 
 #include <algorithm>
 #include <cassert>
@@ -217,16 +219,26 @@ void verify_generated_service_roundtrip (const std::vector<std::uint8_t> &bytes)
                       protocol::decode_relocation_cutover_34 (bytes))
                     == bytes);
             break;
-        case 40:
-            assert (protocol::encode_relocation_prepare_40 (
-                      protocol::decode_relocation_prepare_40 (bytes))
-                    == bytes);
+        case 40: {
+            const auto decoded =
+              protocol::generated::detail::decode_relocationPrepare_40_frames ({bytes});
+            if (!decoded)
+                throw std::invalid_argument ("generated command 40 rejected fixture");
+            const auto encoded =
+              protocol::generated::detail::encode_relocationPrepare_40_frames (decoded.value);
+            assert (encoded && encoded.value.size () == 1 && encoded.value.front () == bytes);
             break;
-        case 42:
-            assert (protocol::encode_session_relocation_seal_42 (
-                      protocol::decode_session_relocation_seal_42 (bytes))
-                    == bytes);
+        }
+        case 42: {
+            const auto decoded =
+              protocol::generated::detail::decode_sessionRelocationSeal_42_frames ({bytes});
+            if (!decoded)
+                throw std::invalid_argument ("generated command 42 rejected fixture");
+            const auto encoded =
+              protocol::generated::detail::encode_sessionRelocationSeal_42_frames (decoded.value);
+            assert (encoded && encoded.value.size () == 1 && encoded.value.front () == bytes);
             break;
+        }
         case 43:
             assert (protocol::encode_session_relocation_sealed_43 (
                       protocol::decode_session_relocation_sealed_43 (bytes))
@@ -597,8 +609,32 @@ static void test_retained_multipart_wire_bytes ()
     }
 }
 
-int main ()
+int main (int argc, char **argv)
 {
+    const auto command_golden = [] (const char *path, std::uint8_t command) {
+        const auto fixture = load_fixture (path);
+        const auto &canonical = fixture.at ("canonical");
+        const auto found =
+          std::find_if (canonical.begin (), canonical.end (), [&] (const auto &item) {
+              return item.at ("command").template get<std::uint8_t> () == command;
+          });
+        assert (found != canonical.end ());
+        return found->at ("hex").template get<std::string> ();
+    };
+    if (argc == 2 && std::string_view (argv[1]) == "--command40-deadline") {
+        verify_runtime_service_roundtrip (
+          from_hex (command_golden (ZLINK_RELOCATION_CONTROL_GOLDEN_PATH, 40)));
+        return 0;
+    }
+    if (argc == 2 && std::string_view (argv[1]) == "--command42-target") {
+        verify_runtime_service_roundtrip (
+          from_hex (command_golden (ZLINK_SESSION_RELOCATION_BARRIER_GOLDEN_PATH, 42)));
+        return 0;
+    }
+    verify_runtime_service_roundtrip (
+      from_hex (command_golden (ZLINK_RELOCATION_CONTROL_GOLDEN_PATH, 40)));
+    verify_runtime_service_roundtrip (
+      from_hex (command_golden (ZLINK_SESSION_RELOCATION_BARRIER_GOLDEN_PATH, 42)));
     {
         std::ifstream input (ZLINK_SESSION_DISCONNECTED_GOLDEN_PATH);
         assert (input);
@@ -1327,7 +1363,9 @@ int main ()
                                                            "owner",
                                                            8,
                                                            {0xb1},
-                                                           9};
+                                                           9,
+                                                           {0xd1},
+                                                           12};
 
     const protocol::reply_relay_t reply_relay{
       {1, 2},
@@ -1509,7 +1547,9 @@ int main ()
           identity.at ("sessionOwnerId").get<std::string> (),
           ordinal ("sessionOwnerLeaseGeneration"),
           bytes ("sessionRid"),
-          ordinal ("bindingGeneration")};
+          ordinal ("bindingGeneration"),
+          bytes ("targetNodeRid"),
+          ordinal ("targetNodeGeneration")};
         const protocol::session_relocation_sealed_t sealed{relocation,
                                                            coordinator,
                                                            actor,
@@ -1561,7 +1601,7 @@ int main ()
         assert (rejected);
     }
 
-    const std::vector<std::string_view> relocation_control_golden{
+    const std::vector<std::string> relocation_control_golden{
       "5a4d011e000000000000000004000000000000000500000000000000060b636f6f7264696e61746f720000000000"
       "000007066e6f64652d61000000000000000b000773746f72652d33066e6f64652d62000000000000000c0c746172"
       "6765742d6f776e657200000000000000080200170673706f742d310000000000000009000000000000000a02",
@@ -1574,13 +1614,7 @@ int main ()
       "5a4d0122000000000000000004000000000000000500000000000000060b636f6f7264696e61746f720000000000"
       "000007066e6f64652d61000000000000000b000773746f72652d33010200170673706f742d310000000000000009"
       "000000000000000a0000000000000003e3069283",
-      /* relocationPrepareRestore (golden): the manifest body carries
-       * payloadTotalLength, payloadChunkCount, payloadChecksumCrc32c and
-       * applicationVersion only (baseChecksumCrc32c removed). */
-      "5a4d0128000000000000000004000000000000000500000000000000060b636f6f7264696e61746f720000000000"
-      "000007066e6f64652d61000000000000000b000773746f72652d33066e6f64652d62000000000000000c0c746172"
-      "6765742d6f776e65720000000000000008010200170673706f742d310000000000000009000000000000000a066e"
-      "6f64652d61000000000000000b00000000000000180000000229bc87950000000000000001",
+      command_golden (ZLINK_RELOCATION_CONTROL_GOLDEN_PATH, 40),
       /* relocationStateChunk (golden): no payloadStage byte; chunkOrdinal
        * follows object directly. */
       "5a4d0134000000000000000004000000000000000500000000000000060b636f6f7264696e61746f720000000000"
@@ -1639,6 +1673,32 @@ int main ()
     assert (cutover.boundary_record_count == 3);
     assert (cutover.boundary_checksum_crc32c == 0xe3069283u);
     assert (prepare.initiator_role == protocol::relocation_role_t::source);
+    assert (prepare.deadline_unix_ms != 0);
+    {
+        for (const auto deadline : {std::uint64_t{0}, std::numeric_limits<std::uint64_t>::max ()}) {
+            auto invalid = prepare;
+            invalid.deadline_unix_ms = deadline;
+            bool rejected = false;
+            try {
+                (void) protocol::encode_relocation_control (invalid);
+            }
+            catch (const protocol::service_wire_error_t &) {
+                rejected = true;
+            }
+            assert (rejected);
+        }
+        namespace messaging = zlink::framework::runtime::messaging;
+        const auto zero_deadline = messaging::request_deadline_from_unix_ms (0);
+        const auto expired_deadline = messaging::request_deadline_from_unix_ms (1);
+        const auto observed_now = std::chrono::steady_clock::now ();
+        assert (zero_deadline <= observed_now);
+        assert (expired_deadline <= observed_now);
+        assert (
+          messaging::request_deadline_from_unix_ms (std::numeric_limits<std::uint64_t>::max ())
+          == std::chrono::steady_clock::time_point::max ());
+        assert (messaging::request_deadline_unix_ms (std::chrono::steady_clock::time_point::min ())
+                == 1);
+    }
     assert (prepare.payload_total_length == 24);
     assert (prepare.payload_chunk_count == 2);
     assert (prepare.payload_checksum_crc32c == 0x29bc8795u);

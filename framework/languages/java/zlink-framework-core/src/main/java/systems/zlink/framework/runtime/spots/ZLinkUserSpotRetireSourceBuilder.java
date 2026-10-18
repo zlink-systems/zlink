@@ -400,7 +400,11 @@ final class ZLinkUserSpotRetireSourceBuilder {
                 .thenCompose(
                         captured -> {
                             UUID aggregateId = UUID.randomUUID();
-                            return sealSessionRoutes(captured, aggregateId, sealedSessions)
+                            return sealSessionRoutes(
+                                            captured,
+                                            aggregateId,
+                                            sealedSessions,
+                                            admission.target())
                                     .thenCompose(
                                             sealedResult -> {
                                                 Captured exact =
@@ -724,7 +728,8 @@ final class ZLinkUserSpotRetireSourceBuilder {
     private CompletionStage<List<SealedSessionRoute>> sealSessionRoutes(
             Captured captured,
             UUID aggregateId,
-            AtomicReference<List<SealedSessionRoute>> observed) {
+            AtomicReference<List<SealedSessionRoute>> observed,
+            ZLinkMeshNodeDescriptor targetNode) {
         if (captured.sessionRoutes().isEmpty()) {
             return CompletableFuture.completedFuture(List.of());
         }
@@ -753,7 +758,8 @@ final class ZLinkUserSpotRetireSourceBuilder {
                     chain.thenCompose(
                             ignored -> {
                                 ZLinkServiceM6BWireCodec.SessionRelocationSeal command =
-                                        sessionSeal(captured, actor, route, aggregateId);
+                                        sessionSeal(
+                                                captured, actor, route, aggregateId, targetNode);
                                 //  §8.3: a bindingAbsent participant moves without a
                                 //  Session binding: no envelope binding and no command 44.
                                 return sessionSealer
@@ -776,7 +782,8 @@ final class ZLinkUserSpotRetireSourceBuilder {
             Captured captured,
             Owned actor,
             ZLinkSpotRetireControl.SessionRouteFence route,
-            UUID aggregateId) {
+            UUID aggregateId,
+            ZLinkMeshNodeDescriptor targetNode) {
         ZLinkAuthoritySnapshot source = captured.inventory().spot().snapshot();
         return new ZLinkServiceM6BWireCodec.SessionRelocationSeal(
                 new ZLinkServiceM6BWireCodec.RelocationIdentity(
@@ -801,7 +808,9 @@ final class ZLinkUserSpotRetireSourceBuilder {
                         route.sessionOwnerId(),
                         route.sessionOwnerLeaseGeneration(),
                         route.sessionRid(),
-                        route.bindingGeneration()));
+                        route.bindingGeneration()),
+                targetNode.rid(),
+                targetNode.lifecycleGeneration());
     }
 
     /**
@@ -1305,7 +1314,8 @@ final class ZLinkUserSpotRetireSourceBuilder {
                                             retained.orElseThrow(
                                                     () ->
                                                             new IllegalStateException(
-                                                                    "source relocation barrier was lost"));
+                                                                    "source relocation barrier was"
+                                                                            + " lost"));
                                     installExpectedRelocationForwards();
                                     return stateLane
                                             .runAsync(
@@ -1534,7 +1544,9 @@ final class ZLinkUserSpotRetireSourceBuilder {
                                                         if (!restored) {
                                                             return failed(
                                                                     new IllegalStateException(
-                                                                            "source relocation retained queue cannot be"
+                                                                            "source relocation"
+                                                                                    + " retained queue"
+                                                                                    + " cannot be"
                                                                                     + " restored"));
                                                         }
                                                         inStateLane(

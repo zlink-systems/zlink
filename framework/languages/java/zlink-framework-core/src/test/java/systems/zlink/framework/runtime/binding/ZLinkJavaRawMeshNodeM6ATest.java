@@ -1222,7 +1222,9 @@ final class ZLinkJavaRawMeshNodeM6ATest {
                                 10,
                                 11),
                         new ZLinkServiceM6BWireCodec.SessionOwnerFence(
-                                sessionOwnerRid, 7, "session-owner", 8, sessionRid, 9));
+                                sessionOwnerRid, 7, "session-owner", 8, sessionRid, 9),
+                        RoutingId.from("relocation-target"),
+                        7);
         try (var context = Zlink.createContext();
                 var source = meshNode(context);
                 var sessionOwner = meshNode(context)) {

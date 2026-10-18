@@ -48,7 +48,11 @@ internal sealed record ZLinkActorHandoffFrame(
     ulong RelocationReplyRouteId = 0,
     long CanonicalEncodedLength = 0,
     ZLinkActorBoundSessionHandoffFence? BoundSessionSource = null
-);
+)
+{
+    internal Func<ValueTask<bool>>? Withdraw { get; set; }
+    public long CanonicalEncodedLength { get; set; } = CanonicalEncodedLength;
+}
 
 internal sealed record ZLinkActorAcceptedRecord(
     ZLinkActorHandoffFrame Frame,

@@ -5581,6 +5581,7 @@ function validateServiceInvariants(schema, types, fail) {
     { name: "payloadChunkCount", $ref: "relocation-chunk-count" },
     { name: "payloadChecksumCrc32c", $ref: "u32" },
     { name: "applicationVersion", $ref: "application-version" },
+    { name: "deadlineUnixMs", $ref: "nonzero-u64" },
   ], "$.commands", "relocationPrepare must carry the exact target, object and direct-transfer payload manifest without capacity negotiation");
   requireFields(commands.get("relocationReady")?.body, [
     { name: "relocation", $ref: "relocation-id" },
@@ -5622,6 +5623,8 @@ function validateServiceInvariants(schema, types, fail) {
       { name: "sessionOwnerLeaseGeneration", $ref: "nonzero-u64" },
       { name: "sessionRid", $ref: "rid" },
       { name: "bindingGeneration", $ref: "nonzero-u64" },
+      { name: "targetNodeRid", $ref: "rid" },
+      { name: "targetNodeGeneration", $ref: "nonzero-u64" },
     ],
     sessionRelocationSealed: [
       { name: "relocation", $ref: "relocation-id" },

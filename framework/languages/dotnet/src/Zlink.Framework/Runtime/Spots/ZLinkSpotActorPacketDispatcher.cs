@@ -62,7 +62,7 @@ internal sealed class ZLinkSpotActorPacketDispatcher(
             return;
         }
 
-        scope.Dropped(dispatchErrors);
+        ReportMissingSendHandler(dispatchErrors, actor, header, sourceSessionRid);
     }
 
     public async ValueTask<ZLinkActorReply?> DispatchForReplyAsync(
@@ -119,11 +119,54 @@ internal sealed class ZLinkSpotActorPacketDispatcher(
                 return ZLinkActorReply.FromError(ex);
             }
 
+        return MissingHandlerReply(dispatchErrors, actor, header, sourceSessionRid);
+    }
+
+    internal static void ReportMissingSendHandler(
+        ZLinkDispatchErrorReporter errors,
+        IZLinkActor actor,
+        ZlinkStreamHeader header,
+        RoutingId? sourceSessionRid
+    )
+    {
+        var scope = new ZLinkDispatchFlowScope(
+            ZLinkDispatchErrorSurface.SpotActor,
+            errors.Flow.CaptureEnabled,
+            ZLinkDispatchMessageKind.ActorSend,
+            header.Name,
+            correlationId: header.CorrelationId,
+            actorId: actor.Context.ActorId,
+            streamSessionId: errors.Enabled && sourceSessionRid is { IsEmpty: false } sessionRid
+                ? sessionRid.ToHex()
+                : null
+        );
+        scope.HandlerMissing(errors, ZLinkDispatchErrorAction.Drop);
+    }
+
+    internal static ZLinkActorReply MissingHandlerReply(
+        ZLinkDispatchErrorReporter errors,
+        IZLinkActor actor,
+        ZlinkStreamHeader header,
+        RoutingId? sourceSessionRid
+    )
+    {
         var error = new ZLinkFrameworkException(
             ZLinkFrameworkErrorKind.NotFound,
             $"No Spot actor request handler is registered for '{header.Name}'."
         );
-        scope.HandlerMissing(dispatchErrors, ZLinkDispatchErrorAction.ReplyError, error);
+        var scope = new ZLinkDispatchFlowScope(
+            ZLinkDispatchErrorSurface.SpotActor,
+            errors.Flow.CaptureEnabled,
+            ZLinkDispatchMessageKind.ActorRequest,
+            header.Name,
+            correlationId: header.CorrelationId,
+            actorId: actor.Context.ActorId,
+            streamSessionId: errors.Flow.CaptureEnabled
+            && sourceSessionRid is { IsEmpty: false } sessionRid
+                ? sessionRid.ToHex()
+                : null
+        );
+        scope.HandlerMissing(errors, ZLinkDispatchErrorAction.ReplyError, error);
         return ZLinkActorReply.FromError(error);
     }
 

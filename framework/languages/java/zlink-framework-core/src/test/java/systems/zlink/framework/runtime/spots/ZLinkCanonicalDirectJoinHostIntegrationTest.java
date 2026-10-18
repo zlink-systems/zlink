@@ -3,7 +3,7 @@ package systems.zlink.framework.runtime.spots;
 import static org.junit.jupiter.api.Assertions.*;
 
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import systems.zlink.contracts.core.RoutingId;
@@ -106,6 +106,12 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
     private static final AtomicReference<CompletableFuture<Void>> RESTORE_GATE =
             new AtomicReference<>();
 
+    private static final String NEXT_SPOT_ID = "canonical-next-room";
+    private static CompletableFuture<Void> nextJoined;
+    private static CompletableFuture<Void> nextJoinRelease;
+    private static CompletableFuture<Void> nextCompleted;
+    private static CompletableFuture<Void> firstPrefixTerminal;
+
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
     void canonicalJoinRejectsMissingLocalTargetAsUnavailable(boolean entry) {
@@ -137,11 +143,23 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
         }
     }
 
+    private static java.util.stream.Stream<Scenario> canonicalScenarios() {
+        return java.util.Arrays.stream(Scenario.values())
+                .flatMap(
+                        scenario ->
+                                java.util.stream.Stream.generate(() -> scenario)
+                                        .limit(scenario == Scenario.NEXT_DEFERRED_JOIN ? 20 : 1));
+    }
+
     @ParameterizedTest(name = "{0}")
-    @EnumSource(Scenario.class)
+    @MethodSource("canonicalScenarios")
     void actualHostsUseOneCanonicalOwnerForB1B2D1AndLifecycleOrdering(Scenario scenario)
             throws Exception {
         currentScenario = scenario;
+        nextJoined = new CompletableFuture<>();
+        nextJoinRelease = new CompletableFuture<>();
+        nextCompleted = new CompletableFuture<>();
+        firstPrefixTerminal = null;
         COMPLETION.set(new CompletableFuture<>());
         EVENTS.clear();
         ACCEPTED.set(null);
@@ -173,7 +191,13 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
         try (ZLinkFrameworkRuntime targetHost =
                         ZLinkFrameworkRuntimeTestAccess.start(targetOptions);
                 ZLinkFrameworkRuntime sourceHost =
-                        ZLinkFrameworkRuntimeTestAccess.start(sourceOptions)) {
+                        ZLinkFrameworkRuntimeTestAccess.start(sourceOptions);
+                AutoCloseable releaseGates =
+                        () -> {
+                            nextJoinRelease.complete(null);
+                            LEAVE_GATE.get().complete(null);
+                            RESTORE_GATE.get().complete(null);
+                        }) {
             ZLinkSpotRuntime targetSpots = (ZLinkSpotRuntime) targetHost.spotManager();
             ZLinkSpotRuntime sourceSpots = (ZLinkSpotRuntime) sourceHost.spotManager();
             ZLinkActorRuntime targetActors = (ZLinkActorRuntime) targetHost.actorManager();
@@ -184,6 +208,13 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                     .submit()
                     .toCompletableFuture()
                     .get();
+            if (scenario == Scenario.NEXT_DEFERRED_JOIN)
+                targetHost
+                        .spotManager()
+                        .getOrCreate(NEXT_SPOT_ID, SPOT_TYPE)
+                        .submit()
+                        .toCompletableFuture()
+                        .get();
             Object targetSpot = targetSpots.spotFor(TARGET_SPOT_ID);
             assertInstanceOf(
                     ZLinkActorCreateResult.Created.class,
@@ -304,11 +335,19 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                                 assertTrue(
                                         targetBackend.open.get(),
                                         "regular replay must begin only after admission opens");
-                                EVENTS.add(
-                                        "replay:"
-                                                + ZLinkActorAcceptedJournal.decode(queued.payload())
-                                                        .header()
-                                                        .packetName());
+                                String packet =
+                                        ZLinkActorAcceptedJournal.decode(queued.payload())
+                                                .header()
+                                                .packetName();
+                                if (scenario == Scenario.NEXT_DEFERRED_JOIN)
+                                    return targetBackend
+                                            .replay(
+                                                    targetBackend.prepared,
+                                                    null,
+                                                    ZLinkActorAcceptedJournal.decode(
+                                                            queued.payload()))
+                                            .thenApply(ignored -> null);
+                                EVENTS.add("replay:" + packet);
                                 return CompletableFuture.completedFuture(null);
                             },
                             targetSessionClient,
@@ -771,6 +810,24 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
             assertEquals(
                     1, targetCommits.get(), "only the target canonical owner may commit authority");
             link.targetCompletion.get(4, TimeUnit.SECONDS);
+            if (scenario == Scenario.NEXT_DEFERRED_JOIN) {
+                nextJoined.get(4, TimeUnit.SECONDS);
+                assertNotNull(firstPrefixTerminal);
+                assertTrue(
+                        firstPrefixTerminal.isDone(), "Defer starts after the B1 handler terminal");
+                assertFalse(EVENTS.contains("replay:B2"));
+                assertFalse(EVENTS.contains("replay:D1"));
+                assertTrue(
+                        EVENTS.contains("command44"),
+                        "previous move must finish while P1 waits for its new Join");
+                nextJoinRelease.complete(null);
+                nextCompleted.get(4, TimeUnit.SECONDS);
+            }
+            targetActors
+                    .actorRelocationLaneAsync(ACTOR_ID)
+                    .thenCompose(ZLinkSerialExecutionQueue::awaitQuiescence)
+                    .toCompletableFuture()
+                    .get(4, TimeUnit.SECONDS);
             assertEquals(
                     List.of("B1", "B2", "D1"),
                     EVENTS.stream()
@@ -782,7 +839,8 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
             assertBefore("target.accepted", "client.push.submitted");
             assertBefore("target.accepted", "target.open");
             assertBefore("target.open", "replay:B1");
-            assertBefore("replay:D1", "command44");
+            assertBefore("prefix.admitted", "target.open");
+            assertBefore("prefix.admitted", "command44");
             assertBefore("command44", "client.push.terminal");
             assertBefore("client.push.terminal", "target.normalize");
             link.checkCanonicalBindingRetries().toCompletableFuture().get(1, TimeUnit.SECONDS);
@@ -829,9 +887,6 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
             assertEquals(1, EVENTS.stream().filter("source.leave"::equals).count());
             assertTrue(sourceActors.localActor(ACTOR_ID).isEmpty());
             assertEquals(0, sourceAttemptCount(sourceJoin));
-        } finally {
-            LEAVE_GATE.get().complete(null);
-            RESTORE_GATE.get().complete(null);
         }
     }
 
@@ -842,6 +897,8 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
             InMemoryRelocationStore relocations,
             Duration sourceRetention) {
         var options = new DefaultZLinkFrameworkOptions();
+        if (currentScenario == Scenario.NEXT_DEFERRED_JOIN)
+            options.configureInboundDispatch().setMaxQueuedApplicationJobs(1);
         options.addLocationStore(locations);
         options.addRelocationStore(relocations);
         setMessageFollowDuration(options, sourceRetention);
@@ -897,7 +954,13 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
 
     private static byte[] actorRecord(String packetName) {
         return ZLinkAcceptedJournalTestRecords.actor(
-                ACTOR_ID, 0, packetName, Map.of(), new byte[] {1});
+                ACTOR_ID,
+                0,
+                packetName,
+                Map.of(),
+                currentScenario == Scenario.NEXT_DEFERRED_JOIN
+                        ? "{}".getBytes(java.nio.charset.StandardCharsets.UTF_8)
+                        : new byte[] {1});
     }
 
     private static void injectD1(
@@ -1119,6 +1182,7 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
 
     private enum Scenario {
         NORMAL(LeaveMode.DELIVER),
+        NEXT_DEFERRED_JOIN(LeaveMode.DELIVER),
         LEAVE_FAILED_FUTURE(LeaveMode.FAILED_FUTURE),
         LEAVE_THROW(LeaveMode.THROW),
         JOINED_TYPED_FAILURE(LeaveMode.DELIVER),
@@ -1226,7 +1290,8 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                                     changedPayload.length,
                                     prepare.manifest().chunkCount(),
                                     checksum.getValue()),
-                            prepare.applicationVersion());
+                            prepare.applicationVersion(),
+                            prepare.deadlineUnixMs());
             return targetMachine
                     .get()
                     .apply(
@@ -1321,6 +1386,9 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                                                 new ZLinkInternalMeshNode.PeerRouteObservation(
                                                         1, true);
                                         case "targetLifecycleEnded" -> false;
+                                        // The linked peers model an admitted Session owner route.
+                                        case "secureSessionOwnerRoute" ->
+                                                CompletableFuture.completedFuture(null);
                                         case "onStateChanged" -> {
                                             ((Runnable) arguments[0]).run();
                                             yield (AutoCloseable) () -> {};
@@ -1385,28 +1453,30 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                                         }
                                         case "requestSessionRelocationSeal" -> {
                                             var seal =
-                                                    ServiceWirePilotCodec
-                                                            .decodeSessionRelocationSeal42(
-                                                                    (byte[]) arguments[1]);
+                                                    codec.decodeSessionRelocationSeal(
+                                                            (byte[]) arguments[1]);
+                                            assertEquals(TARGET_RID, seal.targetNodeRid());
+                                            assertEquals(
+                                                    target.status().lifecycleGeneration(),
+                                                    seal.targetNodeGeneration());
                                             EVENTS.add("command42");
                                             yield CompletableFuture.completedFuture(
-                                                    ServiceWirePilotCodec
-                                                            .encodeSessionRelocationSealed43(
-                                                                    new ServiceWirePilotCodec
-                                                                            .SessionRelocationSealed43(
-                                                                            seal.relocation(),
-                                                                            seal.coordinator(),
-                                                                            seal.actor(),
-                                                                            seal.session(),
-                                                                            scenario
-                                                                                            == Scenario
-                                                                                                    .BINDING_ABSENT
-                                                                                    ? ServiceWirePilotCodec
-                                                                                            .SessionSealResult
+                                                    codec.encodeSessionRelocationSealed(
+                                                            new ZLinkServiceM6BWireCodec
+                                                                    .SessionRelocationSealed(
+                                                                    seal.relocation(),
+                                                                    seal.coordinator(),
+                                                                    seal.actor(),
+                                                                    seal.session(),
+                                                                    scenario
+                                                                                    == Scenario
                                                                                             .BINDING_ABSENT
-                                                                                    : ServiceWirePilotCodec
-                                                                                            .SessionSealResult
-                                                                                            .SEALED)));
+                                                                            ? ServiceWirePilotCodec
+                                                                                    .SessionSealResult
+                                                                                    .BINDING_ABSENT
+                                                                            : ServiceWirePilotCodec
+                                                                                    .SessionSealResult
+                                                                                    .SEALED)));
                                         }
                                         case "sendSessionRelocationRoute" -> {
                                             var route =
@@ -1486,12 +1556,40 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
 
     private static final class RecordingTargetBackend
             implements ZLinkStandaloneActorRelocationStagingOwner.Backend {
+        @Override
+        public CompletionStage<List<CompletableFuture<Void>>> admitBacklogPrefix(
+                Object actor,
+                ZLinkStandaloneActorRelocationStagingOwner.Request request,
+                List<ZLinkSerialExecutionQueue.QueuedRecord> records,
+                java.util.function.BiFunction<
+                                ZLinkSerialExecutionQueue.QueuedRecord,
+                                CompletableFuture<Void>,
+                                java.util.function.Supplier<CompletionStage<Void>>>
+                        replay) {
+            return spots.admitActorRelocationPrefix(
+                            actors,
+                            (ZLinkActorRuntime.PreparedTransferredActor) actor,
+                            request.targetSpotId(),
+                            records,
+                            replay)
+                    .thenApply(
+                            accepted -> {
+                                EVENTS.add("prefix.admitted");
+                                if (currentScenario == Scenario.NEXT_DEFERRED_JOIN
+                                        && !accepted.isEmpty()) {
+                                    firstPrefixTerminal = accepted.getFirst();
+                                }
+                                return accepted;
+                            });
+        }
+
         private final RoutingId targetRid;
         private final ZLinkActorSessionCoordinator actors;
         private final ZLinkActorRuntime actorRuntime;
         private final ZLinkRelocationAdapterRegistry adapters;
         private final ZLinkSpotRuntime spots;
         private final AtomicBoolean open = new AtomicBoolean();
+        private ZLinkActorRuntime.PreparedTransferredActor prepared;
 
         private RecordingTargetBackend(
                 RoutingId targetRid,
@@ -1534,7 +1632,11 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                             cancellation,
                             new ZLinkBackendActorRef(
                                     targetRid, request.actorId(), request.objectGeneration()))
-                    .thenApply(value -> value);
+                    .thenApply(
+                            value -> {
+                                prepared = value;
+                                return value;
+                            });
         }
 
         @Override
@@ -1543,6 +1645,13 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                 ZLinkStandaloneActorRelocationStagingOwner.Request request,
                 ZLinkActorAcceptedJournal.Record record) {
             assertTrue(open.get(), "D1 regular dispatch must stay closed until target open");
+            if (currentScenario == Scenario.NEXT_DEFERRED_JOIN) {
+                var transferred = (ZLinkActorRuntime.PreparedTransferredActor) actor;
+                return spots.replayPreparedActorAtSpot(
+                        transferred.actor().context().spotId().orElse(TARGET_SPOT_ID),
+                        transferred,
+                        record);
+            }
             EVENTS.add("replay:" + record.header().packetName());
             return CompletableFuture.completedFuture(Optional.empty());
         }
@@ -1597,8 +1706,8 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
         @Override
         public void openAdmission(Object actor) {
             EVENTS.add("target.open");
-            actors.openRelocatedActorAdmission((ZLinkActorRuntime.PreparedTransferredActor) actor);
             open.set(true);
+            actors.openRelocatedActorAdmission((ZLinkActorRuntime.PreparedTransferredActor) actor);
         }
 
         @Override
@@ -1680,6 +1789,12 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
         }
 
         @Override
+        public void configure() {
+            if (currentScenario == Scenario.NEXT_DEFERRED_JOIN)
+                context.handlers().addHandler(DeferredPrefixHandler.class);
+        }
+
+        @Override
         public CompletionStage<ZLinkSpotActorJoinResult> onActorJoin(
                 String actorId, ZLinkMessage request) {
             return CompletableFuture.completedFuture(ZLinkSpotActorJoinResult.accept());
@@ -1687,6 +1802,12 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
 
         @Override
         public CompletionStage<Void> onJoinedActor(ZLinkActor actor) {
+            if (currentScenario == Scenario.NEXT_DEFERRED_JOIN
+                    && actor.context().spotId().orElse("").equals(NEXT_SPOT_ID)) {
+                EVENTS.add("next.joined");
+                nextJoined.complete(null);
+                return nextJoinRelease;
+            }
             EVENTS.add("target.joined");
             RuntimeException failure = currentScenario.joinedFailure();
             return failure == null
@@ -1696,6 +1817,46 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
 
         @Override
         public CompletionStage<Void> onLeaveActor(ZLinkActor actor) {
+            return CompletableFuture.completedFuture(null);
+        }
+    }
+
+    public record PrefixProbe() {}
+
+    public static final class DeferredPrefixHandler {
+        @systems.zlink.framework.handlers.ZLinkSpotActorSend(packetName = "B1")
+        public CompletionStage<Void> first(
+                TrackingSpot spot,
+                TrackingActor actor,
+                systems.zlink.framework.ZLinkMessageContext context,
+                PrefixProbe message) {
+            EVENTS.add("replay:B1");
+            actor.context().joinSpot(NEXT_SPOT_ID, "next").timeout(TIMEOUT).defer();
+            EVENTS.add("next.deferred");
+            return CompletableFuture.completedFuture(null);
+        }
+
+        @systems.zlink.framework.handlers.ZLinkSpotActorSend(packetName = "B2")
+        public CompletionStage<Void> second(
+                TrackingSpot spot,
+                TrackingActor actor,
+                systems.zlink.framework.ZLinkMessageContext context,
+                PrefixProbe message) {
+            assertEquals(NEXT_SPOT_ID, actor.context().spotId().orElseThrow());
+            assertEquals(NEXT_SPOT_ID, spot.context().spotId());
+            EVENTS.add("replay:B2");
+            return CompletableFuture.completedFuture(null);
+        }
+
+        @systems.zlink.framework.handlers.ZLinkSpotActorSend(packetName = "D1")
+        public CompletionStage<Void> third(
+                TrackingSpot spot,
+                TrackingActor actor,
+                systems.zlink.framework.ZLinkMessageContext context,
+                PrefixProbe message) {
+            assertEquals(NEXT_SPOT_ID, actor.context().spotId().orElseThrow());
+            assertEquals(NEXT_SPOT_ID, spot.context().spotId());
+            EVENTS.add("replay:D1");
             return CompletableFuture.completedFuture(null);
         }
     }
@@ -1714,6 +1875,13 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
 
         @Override
         public CompletionStage<Void> onJoinCompleted(ZLinkActorJoinCompletion completion) {
+            if (currentScenario == Scenario.NEXT_DEFERRED_JOIN
+                    && context.spotId().orElse("").equals(NEXT_SPOT_ID)) {
+                assertInstanceOf(ZLinkActorJoinCompletion.Accepted.class, completion);
+                EVENTS.add("next.completed");
+                nextCompleted.complete(null);
+                return CompletableFuture.completedFuture(null);
+            }
             EVENTS.add("target.completion");
             COMPLETION.get().complete(completion);
             if (completion instanceof ZLinkActorJoinCompletion.Failed) {
