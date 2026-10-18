@@ -62,21 +62,22 @@ export class ZLinkSpotActivationRegistry {
 
   resolve(meshName: string, spotId: RoutingId): ZLinkSpotActivation | undefined {
     const key = spotActivationKey(meshName, spotId);
-    return this.staged.has(key) ? undefined : this.activations.get(key);
+    return this.staged.has(key) || this.pending.has(key) ? undefined : this.activations.get(key);
   }
 
   resolveUnique(spotId: RoutingId): ZLinkSpotActivation | undefined {
     const matches = [...this.activations.values()].filter(
       (activation) =>
         String(activation.spotId) === String(spotId) &&
-        !this.staged.has(spotActivationKey(activation.meshName, activation.spotId))
+        !this.staged.has(spotActivationKey(activation.meshName, activation.spotId)) &&
+        !this.pending.has(spotActivationKey(activation.meshName, activation.spotId))
     );
     return matches.length === 1 ? matches[0] : undefined;
   }
 
   has(meshName: string, spotId: RoutingId): boolean {
     const key = spotActivationKey(meshName, spotId);
-    return !this.staged.has(key) && this.activations.has(key);
+    return !this.staged.has(key) && !this.pending.has(key) && this.activations.has(key);
   }
 
   list(meshName: string): readonly ZLinkSpotInfo[] {
@@ -84,7 +85,7 @@ export class ZLinkSpotActivationRegistry {
       .filter((activation) => {
         if (activation.meshName !== meshName) return false;
         const key = spotActivationKey(activation.meshName, activation.spotId);
-        return !this.staged.has(key);
+        return !this.staged.has(key) && !this.pending.has(key);
       })
       .map((activation) => String(activation.spotId))
       .sort((left, right) => left.localeCompare(right))
@@ -157,14 +158,16 @@ export class ZLinkSpotActivationRegistry {
 
   register(activation: ZLinkSpotActivation): ZLinkSpotActivation | undefined {
     const key = spotActivationKey(activation.meshName, activation.spotId);
-    if (this.activations.has(key)) {
+    if (this.activations.has(key) && this.activations.get(key) !== activation) {
       throw createInternalFrameworkException(
         ZLinkFrameworkInternalErrorKind.SpotTypeMismatch,
         `Spot '${activation.spotId}' was activated more than once.`
       );
     }
-    this.activations.set(key, activation);
-    this.lifecycleMetrics.opened('user');
+    if (!this.activations.has(key)) {
+      this.activations.set(key, activation);
+      this.lifecycleMetrics.opened('user');
+    }
     return this.staged.has(key) ? undefined : activation;
   }
 
@@ -253,7 +256,7 @@ export class ZLinkSpotActivationRegistry {
   ): ZLinkSpotActivationOperation {
     const key = spotActivationKey(meshName, spotId);
     const existing = this.activations.get(key);
-    if (existing !== undefined) {
+    if (existing !== undefined && !this.pending.has(key)) {
       return {
         owner: false,
         ready: existing.serial.execute(() => {

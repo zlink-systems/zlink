@@ -172,7 +172,7 @@ export class ZLinkSpotSerialTurnExecutor {
     this.lastActivityAtMs = performance.now();
     let barrierClaim: ZLinkExecutionBarrierClaim | undefined;
     try {
-      const entry = this.executionBarrier?.enter();
+      const entry = this.executionBarrier?.enter(this.scheduler.retainsApplicationForLifecycle);
       barrierClaim = entry instanceof Promise ? await entry : entry;
       const refusal = this.applicationAdmissionRefusal(replay !== undefined);
       if (refusal !== undefined) throw refusal;
@@ -265,7 +265,7 @@ export class ZLinkSpotSerialTurnExecutor {
     this.lastActivityAtMs = performance.now();
     let barrierClaim: ZLinkExecutionBarrierClaim | undefined;
     try {
-      const entry = this.executionBarrier?.enter();
+      const entry = this.executionBarrier?.enter(this.scheduler.retainsApplicationForLifecycle);
       barrierClaim = entry instanceof Promise ? await entry : entry;
       const refusal = this.applicationAdmissionRefusal(replay !== undefined);
       if (refusal !== undefined) throw refusal;
