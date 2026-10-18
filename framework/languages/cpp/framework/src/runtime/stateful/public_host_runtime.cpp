@@ -6949,10 +6949,8 @@ task_t<std::size_t> public_host_runtime_t::dispatch_application_claim (
                     release_mailbox_reservation ();
                 continue;
             }
-            if (mailbox_record.parts.size () != 2)
-                throw protocol::service_wire_error_t ("application wire requires two parts");
             const auto wire =
-              protocol::decode_header (protocol::message_bytes (mailbox_record.parts.front ()));
+              protocol::decode_header (protocol::message_bytes (mailbox_record.parts.at (0)));
             if (wire.kind == protocol::command::logicalMulticast) {
                 namespace generated = protocol::generated::detail;
                 generated::logicalMulticast_23_t multicast;
@@ -6982,6 +6980,8 @@ task_t<std::size_t> public_host_runtime_t::dispatch_application_claim (
                     release_mailbox_reservation ();
                 continue;
             }
+            if (mailbox_record.parts.size () != 2)
+                throw protocol::service_wire_error_t ("application wire requires two parts");
             if (wire.kind == protocol::command::boundSessionSend) {
                 // The outbound stream delivery is a transport handoff, not an application handler.
                 mailbox_record.before_application_handler = {};

@@ -69,25 +69,27 @@ struct public_host_runtime_test_access_t
               attempt.terminal = std::make_shared<task_completion_source_t<void>> ();
           })
           .get ();
-        task_completion_source_t<void> release_index;
+        std::promise<void> release_index;
+        auto release_index_ready = release_index.get_future ();
         std::promise<void> index_entered;
         auto index = std::async (std::launch::async, [&] {
             host._spot_actor_index_lane
               .run ([&] {
                   index_entered.set_value ();
-                  release_index.task ().result ().value ();
+                  release_index_ready.wait ();
               })
               .get ();
         });
         struct release_and_join_t
         {
-            task_completion_source_t<void> &release;
+            std::promise<void> &release;
             std::future<void> &worker;
             ~release_and_join_t ()
             {
-                release.complete (result_t<void>::success ());
-                if (worker.valid ())
+                if (worker.valid ()) {
+                    release.set_value ();
                     worker.wait ();
+                }
             }
         } release_and_join{release_index, index};
         index_entered.get_future ().get ();
@@ -113,7 +115,7 @@ struct public_host_runtime_test_access_t
             .get ();
         if (!activation_started)
             activated.emplace (host.activate_relocation_assembly (key, pending, staging));
-        release_index.complete (result_t<void>::success ());
+        release_index.set_value ();
         index.get ();
         if (discarded) {
             std::vector<public_host_runtime_t::relocation_target_attempt_t> cleanup;
@@ -216,7 +218,12 @@ struct observations_t
     bool release_replay_prefix = false;
     std::shared_ptr<native_handoff_hold_t> native_handoff_hold;
     fw::task_completion_source_t<void> joined_send_captured;
-    std::function<void ()> joined_admission_completion;
+    struct joined_admission_batch_t
+    {
+        std::size_t remaining;
+        std::function<void ()> complete;
+    };
+    std::optional<joined_admission_batch_t> joined_admission_completion;
     fw::task_completion_source_t<void> release_leave;
     bool hold_join_admission = false;
     fw::task_completion_source_t<void> join_admission_entered;
@@ -558,9 +565,10 @@ class room_t final : public fw::spot_t<actor_t>
             {
                 std::lock_guard lock (observations->mutex);
                 auto *source = &observations->joined_send_captured;
-                observations->joined_admission_completion = [source] {
-                    source->complete (fw::result_t<void>::success ());
-                };
+                observations->joined_admission_completion =
+                  observations_t::joined_admission_batch_t{
+                    std::max<std::size_t> (1, observations->joined_payloads.size ()),
+                    [source] { source->complete (fw::result_t<void>::success ()); }};
             }
             if (observations->joined_payloads.empty ()) {
                 co_await observations->joined_sender.load ()
@@ -681,19 +689,24 @@ enum class entry_kind_t
 void observe_joined_batch_admission (observations_t &evidence,
                                      const fw::message_flow_event_t &event)
 {
-    if (event.outcome != fw::message_flow_outcome_t::admitted || event.actor_id != actor_id
-        || event.detail_stage != "canonical_application.commit_accepted_ingress"
+    if (event.actor_id != actor_id
         || (event.packet_name != move_t::packet_name && event.packet_name != probe_t::packet_name))
         return;
+    const bool native_admitted =
+      event.outcome == fw::message_flow_outcome_t::admitted
+      && event.detail_stage == "canonical_application.commit_accepted_ingress";
+    const bool retained = event.detail_stage == "relay_actor_packet.try_append_backlog"
+                          && event.detail_result == "result=appended";
     std::function<void ()> complete;
     {
         std::lock_guard lock (evidence.mutex);
-        if (!evidence.joined_admission_completion)
-            return;
-        ++evidence.backlog_appends;
-        if (evidence.backlog_appends
-            >= static_cast<int> (std::max<std::size_t> (1, evidence.joined_payloads.size ())))
-            complete = std::exchange (evidence.joined_admission_completion, {});
+        if (retained)
+            ++evidence.backlog_appends;
+        if (native_admitted && evidence.joined_admission_completion
+            && --evidence.joined_admission_completion->remaining == 0) {
+            complete = std::move (evidence.joined_admission_completion->complete);
+            evidence.joined_admission_completion.reset ();
+        }
     }
     if (complete)
         complete ();
@@ -1251,9 +1264,8 @@ void local_join_backlog (backlog_case_t scenario)
             // This later one-record batch owns its own admission future.
             evidence.joined_send_captured = fw::task_completion_source_t<void>{};
             auto *source = &evidence.joined_send_captured;
-            evidence.joined_admission_completion = [source] {
-                source->complete (fw::result_t<void>::success ());
-            };
+            evidence.joined_admission_completion = observations_t::joined_admission_batch_t{
+              1, [source] { source->complete (fw::result_t<void>::success ()); }};
         }
         ASSERT_TRUE (client.send (fw::actor_id_t (actor_id), probe_t{3}).async ().result ());
         std::unique_lock lock (evidence.mutex);
@@ -1731,10 +1743,11 @@ TEST (NativeIntake, JoinedBatchFenceExcludesInitialMoveAndOtherActor)
     EXPECT_EQ (evidence.backlog_appends, 0);
     EXPECT_FALSE (evidence.joined_send_captured.task ().await_ready ());
     int completions = 0;
-    evidence.joined_admission_completion = [&] {
-        ++completions;
-        evidence.joined_send_captured.complete (fw::result_t<void>::success ());
-    };
+    evidence.joined_admission_completion = observations_t::joined_admission_batch_t{
+      2, [&] {
+          ++completions;
+          evidence.joined_send_captured.complete (fw::result_t<void>::success ());
+      }};
     event.packet_name = probe_t::packet_name;
     event.actor_id = "other-actor";
     observe_joined_batch_admission (evidence, event);
@@ -1748,8 +1761,28 @@ TEST (NativeIntake, JoinedBatchFenceExcludesInitialMoveAndOtherActor)
     EXPECT_EQ (evidence.backlog_appends, 0);
     event.detail_stage = "canonical_application.commit_accepted_ingress";
     observe_joined_batch_admission (evidence, event);
-    EXPECT_EQ (evidence.backlog_appends, 1);
+    EXPECT_EQ (evidence.backlog_appends, 0);
+    ASSERT_TRUE (evidence.joined_admission_completion);
+    EXPECT_EQ (evidence.joined_admission_completion->remaining, 1u);
     EXPECT_FALSE (evidence.joined_send_captured.task ().await_ready ());
+
+    event.outcome = fw::message_flow_outcome_t::received;
+    event.detail_stage = "relay_actor_packet.try_append_backlog";
+    event.detail_result = "result=appended";
+    event.actor_id = "other-actor";
+    observe_joined_batch_admission (evidence, event);
+    EXPECT_EQ (evidence.backlog_appends, 0);
+    event.actor_id = actor_id;
+    observe_joined_batch_admission (evidence, event);
+    EXPECT_EQ (evidence.backlog_appends, 1);
+    observe_joined_batch_admission (evidence, event);
+    EXPECT_EQ (evidence.backlog_appends, 2);
+    EXPECT_EQ (evidence.joined_admission_completion->remaining, 1u);
+    EXPECT_FALSE (evidence.joined_send_captured.task ().await_ready ());
+
+    event.outcome = fw::message_flow_outcome_t::admitted;
+    event.detail_stage = "canonical_application.commit_accepted_ingress";
+    event.detail_result.reset ();
     observe_joined_batch_admission (evidence, event);
     EXPECT_EQ (evidence.backlog_appends, 2);
     EXPECT_TRUE (evidence.joined_send_captured.task ().await_ready ());
@@ -1757,6 +1790,13 @@ TEST (NativeIntake, JoinedBatchFenceExcludesInitialMoveAndOtherActor)
     EXPECT_EQ (evidence.backlog_appends, 2);
     EXPECT_EQ (completions, 1);
     EXPECT_FALSE (evidence.joined_admission_completion);
+
+    event.outcome = fw::message_flow_outcome_t::received;
+    event.detail_stage = "relay_actor_packet.try_append_backlog";
+    event.detail_result = "result=appended";
+    observe_joined_batch_admission (evidence, event);
+    EXPECT_EQ (evidence.backlog_appends, 3);
+    EXPECT_EQ (completions, 1);
 }
 
 TEST (NativeIntake, TypedControlMalformedWireAndKernelMetadata)

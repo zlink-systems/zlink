@@ -4441,9 +4441,9 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
         std::string trace_packet_name;
         std::string trace_actor_id;
         std::string trace_spot_id;
-        const auto retained_trace_owner =
-          _state->node ? std::shared_ptr<detail::spot_node_builder_state_t>{}
-                       : _state->state_lane_owner ();
+        const auto retained_trace_owner = _state->node
+                                            ? std::shared_ptr<detail::spot_node_builder_state_t>{}
+                                            : _state->state_lane_owner ();
         const auto &trace_owner = _state->node ? _state->node : retained_trace_owner;
         if (trace_owner) {
             detail::message_flow_tracer_t (trace_owner->dispatch)
@@ -4459,10 +4459,10 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
                     .surface = dispatch_error_surface_t::spot_actor,
                     .message_kind = trace_message_kind,
                     .packet_name = trace_packet_name,
-                    .spot_id = trace_spot_id.empty () ? std::nullopt
-                                                      : std::make_optional (trace_spot_id),
-                    .actor_id = trace_actor_id.empty () ? std::nullopt
-                                                        : std::make_optional (trace_actor_id),
+                    .spot_id =
+                      trace_spot_id.empty () ? std::nullopt : std::make_optional (trace_spot_id),
+                    .actor_id =
+                      trace_actor_id.empty () ? std::nullopt : std::make_optional (trace_actor_id),
                     .detail_stage = "invoke_erased.enter",
                     .detail_result =
                       std::string ("serial_dispatch=") + (serial_dispatch ? "true" : "false")};
@@ -4478,10 +4478,9 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
         }
         auto state = _state;
         const auto coordinator = state->ensure_spot_serial_executor ();
-        const bool requires_spot_serial =
-          coordinator && coordinator->uses_spot_execution_gate ();
-        if (actor_queue_dispatch == actor_queue_dispatch_t::acquire
-            && !actor_execution_key.empty () && coordinator) {
+        const bool requires_spot_serial = coordinator && coordinator->uses_spot_execution_gate ();
+        if (actor_queue_dispatch == actor_queue_dispatch_t::acquire && !actor_execution_key.empty ()
+            && coordinator) {
             serial_dispatch = true;
         }
         report_actor_dispatch_stage_trace_lazy (
@@ -4491,20 +4490,17 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
                      + " spot_serial=" + (requires_spot_serial ? "true" : "false");
           });
         if (!serial_dispatch) {
-            const bool admission_preclaimed =
-              static_cast<bool> (application_admission_terminal);
+            const bool admission_preclaimed = static_cast<bool> (application_admission_terminal);
             if (!admission_preclaimed
-                && !state->admit (
-                  true, static_cast<const detail::instance_spot_retained_message_t *> (
-                          retained_message.get ()))) {
+                && !state->admit (true,
+                                  static_cast<const detail::instance_spot_retained_message_t *> (
+                                    retained_message.get ()))) {
                 return task_t<zlink::message_t> (
-                  detail::result_access_t::failure<zlink::message_t> (
-                    state->admission_error ()));
+                  detail::result_access_t::failure<zlink::message_t> (state->admission_error ()));
             }
             auto admission_terminal = std::make_shared<std::function<void ()>> (
-              admission_preclaimed
-                ? std::move (application_admission_terminal)
-                : std::function<void ()>{[state] { state->leave_callback (); }});
+              admission_preclaimed ? std::move (application_admission_terminal)
+                                   : std::function<void ()>{[state] { state->leave_callback (); }});
             try {
                 detail::callback_context_scope_t callback_scope (state.get ());
                 std::shared_ptr<std::pair<zlink::message_t, spot_inbound_message_t>> carrier;
@@ -4529,10 +4525,9 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
                 auto handler_task = state->handler_invokers[handler_index](
                   spot, actor, services, serializers, carrier->first, carrier->second);
                 detail::observe_task_completion (
-                  handler_task,
-                  [state, completion, carrier, admission_terminal, trace_message_kind,
-                   trace_packet_name, trace_spot_id,
-                   trace_actor_id] (const result_t<zlink::message_t> &result) mutable {
+                  handler_task, [state, completion, carrier, admission_terminal, trace_message_kind,
+                                 trace_packet_name, trace_spot_id, trace_actor_id] (
+                                  const result_t<zlink::message_t> &result) mutable {
                       report_actor_dispatch_stage_trace_lazy (
                         state->node, message_flow_outcome_t::dispatched, trace_message_kind,
                         trace_packet_name, trace_spot_id, trace_actor_id,
@@ -4547,9 +4542,8 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
                           return;
                       }
                       completion->complete (result_t<zlink::message_t>::failure (
-                        result.error_kind (), result.error () != nullptr
-                                                ? result.error ()->what ()
-                                                : "spot handler failed"));
+                        result.error_kind (), result.error () != nullptr ? result.error ()->what ()
+                                                                         : "spot handler failed"));
                   });
             }
             catch (const framework_exception_t &error) {
@@ -4558,8 +4552,7 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
                   trace_packet_name, trace_spot_id, trace_actor_id,
                   "invoke_erased.application_handler", "result=finished success=false");
                 settle_handler_admission_once (admission_terminal);
-                completion->complete (
-                  detail::result_access_t::failure<zlink::message_t> (error));
+                completion->complete (detail::result_access_t::failure<zlink::message_t> (error));
             }
             catch (const std::exception &error) {
                 report_actor_dispatch_stage_trace (
@@ -4601,23 +4594,20 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
             work_options.application_record = application_record;
         }
         auto dispatch_flow = runtime::flow_context_t::current ();
-        auto trace_serial_queue =
-          coordinator ? coordinator->spot_queue () : state->serial_queue;
+        auto trace_serial_queue = coordinator ? coordinator->spot_queue () : state->serial_queue;
         std::function<bool (std::string, runtime::serial_execution_queue_t::async_work_t,
                             runtime::serial_work_options_t)>
           post_serial;
         if (coordinator && !actor_execution_key.empty ()) {
-            const auto current_turn =
-              actor_queue_dispatch == actor_queue_dispatch_t::current_turn;
+            const auto current_turn = actor_queue_dispatch == actor_queue_dispatch_t::current_turn;
             // Executor preparation may enter the node lane. Complete it before
             // the transfer coordinator atomically retains or posts this packet.
             const auto executor = current_turn
                                     ? detail::spot_serial_executor_t::actor_executor_ptr_t{}
                                     : coordinator->prepare_actor_executor (actor_execution_key);
-            post_serial = [coordinator, executor, completion,
-                           current_turn] (std::string name,
-                                          runtime::serial_execution_queue_t::async_work_t work,
-                                          runtime::serial_work_options_t options) {
+            post_serial = [coordinator, executor, completion, current_turn] (
+                            std::string name, runtime::serial_execution_queue_t::async_work_t work,
+                            runtime::serial_work_options_t options) {
                 auto rejected = [completion] {
                     completion->complete (result_t<zlink::message_t>::failure (
                       framework_error_kind_t::shutting_down,
@@ -4631,8 +4621,7 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
             post_serial = [state] (std::string name,
                                    runtime::serial_execution_queue_t::async_work_t work,
                                    runtime::serial_work_options_t options) {
-                return state->try_post_serial_async (std::move (name), std::move (work),
-                                                     options);
+                return state->try_post_serial_async (std::move (name), std::move (work), options);
             };
         }
         const bool admission_preclaimed = static_cast<bool> (application_admission_terminal);
@@ -4643,9 +4632,8 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
         // The work is admitted here, before its queue: a turn that starts
         // after the seal still runs it (Spot address messaging §7 step 2).
         if (!admission_preclaimed
-            && !state->admit (true,
-                              static_cast<const detail::instance_spot_retained_message_t *> (
-                                retained_message.get ()))) {
+            && !state->admit (true, static_cast<const detail::instance_spot_retained_message_t *> (
+                                      retained_message.get ()))) {
             return task_t<zlink::message_t> (
               detail::result_access_t::failure<zlink::message_t> (state->admission_error ()));
         }
@@ -4660,10 +4648,10 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
                   if (terminal && on_application_export)
                       on_application_export ();
                   settle_handler_admission_once (admission_terminal);
-                  completion->complete (
-                    terminal ? result_t<zlink::message_t>::success (zlink::message_t{})
-                             : detail::propagate_failure<zlink::message_t> (
-                                 terminal, "Actor application queue stopped"));
+                  completion->complete (terminal
+                                          ? result_t<zlink::message_t>::success (zlink::message_t{})
+                                          : detail::propagate_failure<zlink::message_t> (
+                                              terminal, "Actor application queue stopped"));
               };
         }
         runtime::serial_execution_queue_t::async_work_t work =
@@ -4672,16 +4660,16 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
            actor_execution_key = std::move (actor_execution_key),
            actor_execution_spot_id = std::move (actor_execution_spot_id),
            before_invoke = std::move (before_invoke),
-           before_application_handler = std::move (before_application_handler),
-           trace_message_kind, trace_packet_name, trace_actor_id, trace_spot_id,
-           completes_outer_actor_after_spot_yield, admission_terminal, retained_message,
-           application_record] (auto complete) mutable {
+           before_application_handler = std::move (before_application_handler), trace_message_kind,
+           trace_packet_name, trace_actor_id, trace_spot_id, completes_outer_actor_after_spot_yield,
+           admission_terminal, retained_message, application_record] (auto complete) mutable {
               runtime::flow_context_t::scope_t callback_flow (std::move (dispatch_flow));
               // incarnation을 넘길 때는 원본 activation record를 그대로 사용한다.
               if (state->closed) {
                   if (retained_message) {
-                      const auto original = std::static_pointer_cast<
-                        const detail::instance_spot_retained_message_t> (retained_message);
+                      const auto original =
+                        std::static_pointer_cast<const detail::instance_spot_retained_message_t> (
+                          retained_message);
                       if (original->completion) {
                           auto pending = original->completion->task ();
                           if (pending.await_ready ()) {
@@ -4696,20 +4684,20 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
                   }
                   const auto owner = state->state_lane_owner ();
                   const auto current =
-                    owner
-                      ? owner->lane
-                          .run ([&] {
-                              const auto found =
-                                owner->spot_contexts_by_id.find (std::string (state->spot_id));
-                              return found == owner->spot_contexts_by_id.end ()
-                                       ? std::shared_ptr<detail::spot_context_state_t>{}
-                                       : detail::spot_context_access_t::state (found->second);
-                          })
-                          .get ()
-                      : std::shared_ptr<detail::spot_context_state_t>{};
+                    owner ? owner->lane
+                              .run ([&] {
+                                  const auto found =
+                                    owner->spot_contexts_by_id.find (std::string (state->spot_id));
+                                  return found == owner->spot_contexts_by_id.end ()
+                                           ? std::shared_ptr<detail::spot_context_state_t>{}
+                                           : detail::spot_context_access_t::state (found->second);
+                              })
+                              .get ()
+                          : std::shared_ptr<detail::spot_context_state_t>{};
                   if (retained_message && !current) {
-                      const auto original = std::static_pointer_cast<
-                        const detail::instance_spot_retained_message_t> (retained_message);
+                      const auto original =
+                        std::static_pointer_cast<const detail::instance_spot_retained_message_t> (
+                          retained_message);
                       if (original->resume_missing) {
                           auto running = std::make_shared<task_t<zlink::message_t>> (
                             original->resume_missing ());
@@ -4741,11 +4729,9 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
                   const auto now = std::chrono::duration_cast<std::chrono::milliseconds> (
                                      std::chrono::system_clock::now ().time_since_epoch ())
                                      .count ();
-                  if (original->original_activation->activation.target
-                          .authority_owner_generation
+                  if (original->original_activation->activation.target.authority_owner_generation
                         == 0
-                      && original->original_activation->activation.target.deadline_unix_ms
-                           <= now) {
+                      && original->original_activation->activation.target.deadline_unix_ms <= now) {
                       complete ([state, completion, admission_terminal] {
                           settle_handler_admission_once (admission_terminal);
                           completion->complete (result_t<zlink::message_t>::failure (
@@ -4767,9 +4753,8 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
                     provider, *current->channel_runtime->serializers, carrier->first,
                     carrier->second, false);
                   detail::observe_task_completion (
-                    replay,
-                    [state, current, carrier, completion, admission_terminal, complete,
-                     empty_services] (const result_t<zlink::message_t> &result) mutable {
+                    replay, [state, current, carrier, completion, admission_terminal, complete,
+                             empty_services] (const result_t<zlink::message_t> &result) mutable {
                         complete ([state, completion, admission_terminal, result] {
                             settle_handler_admission_once (admission_terminal);
                             completion->complete (result);
@@ -4807,11 +4792,10 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
                   auto handler_task = state->handler_invokers[handler_index](
                     spot, actor, services, serializers, carrier->first, carrier->second);
                   detail::observe_task_completion (
-                    handler_task,
-                    [state, completion, turn, complete, carrier, admission_terminal,
-                     completes_outer_actor_after_spot_yield, trace_message_kind,
-                     trace_packet_name, trace_spot_id,
-                     trace_actor_id] (const result_t<zlink::message_t> &result) mutable {
+                    handler_task, [state, completion, turn, complete, carrier, admission_terminal,
+                                   completes_outer_actor_after_spot_yield, trace_message_kind,
+                                   trace_packet_name, trace_spot_id, trace_actor_id] (
+                                    const result_t<zlink::message_t> &result) mutable {
                         report_actor_dispatch_stage_trace_lazy (
                           state->node, message_flow_outcome_t::dispatched, trace_message_kind,
                           trace_packet_name, trace_spot_id, trace_actor_id,
@@ -4821,10 +4805,10 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
                           });
                         result_t<zlink::message_t> final_result =
                           result ? result_t<zlink::message_t>::success (result.value ())
-                                 : result_t<zlink::message_t>::failure (
-                                     result.error_kind (), result.error () != nullptr
-                                                             ? result.error ()->what ()
-                                                             : "spot handler failed");
+                                 : result_t<zlink::message_t>::failure (result.error_kind (),
+                                                                        result.error () != nullptr
+                                                                          ? result.error ()->what ()
+                                                                          : "spot handler failed");
                         auto finish = [completion, admission_terminal,
                                        final_result = std::move (final_result)] () mutable {
                             settle_handler_admission_once (admission_terminal);
@@ -4908,8 +4892,7 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
                      + (trace_serial_queue
                           ? " closed="
                               + std::string (trace_serial_queue->closed () ? "true" : "false")
-                              + " pending="
-                              + std::to_string (trace_serial_queue->pending_count ())
+                              + " pending=" + std::to_string (trace_serial_queue->pending_count ())
                           : " queue=inline");
           });
         if (!posted) {
@@ -4922,20 +4905,17 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
              * owner fence. */
             if (retained_message && state->state_sync ([&state] { return state->closed; }))
                 return task_t<zlink::message_t> (
-                  detail::result_access_t::failure<zlink::message_t> (
-                    detail::with_failure_code (
-                      detail::make_framework_origin_exception (
-                        framework_error_kind_t::unavailable,
-                        "Spot incarnation released its authority"),
-                      static_cast<std::uint32_t> (
-                        runtime::protocol::framework_error_code::spotMoving))));
+                  detail::result_access_t::failure<zlink::message_t> (detail::with_failure_code (
+                    detail::make_framework_origin_exception (
+                      framework_error_kind_t::unavailable,
+                      "Spot incarnation released its authority"),
+                    static_cast<std::uint32_t> (
+                      runtime::protocol::framework_error_code::spotMoving))));
             /* Dispatch rejection is framework-generated (zlink.origin
              * marker on the resulting error reply). */
-            return task_t<zlink::message_t> (
-              detail::result_access_t::failure<zlink::message_t> (
-                detail::make_framework_origin_exception (
-                  framework_error_kind_t::shutting_down,
-                  "spot serial queue is closed or stopping")));
+            return task_t<zlink::message_t> (detail::result_access_t::failure<zlink::message_t> (
+              detail::make_framework_origin_exception (framework_error_kind_t::shutting_down,
+                                                       "spot serial queue is closed or stopping")));
         }
         if (after_application_admission)
             after_application_admission ();
