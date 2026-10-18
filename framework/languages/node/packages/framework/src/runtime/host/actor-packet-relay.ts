@@ -111,35 +111,13 @@ export class ZLinkActorPacketRelay {
     actor: ZLinkSessionActor,
     signal?: AbortSignal
   ): Promise<void> {
-    const state = this.options.actorManager()?.getState(actor.actorId);
-    const currentRemoteBoundSessionTarget =
-      state?.spotId === undefined ? undefined : state.remoteBoundSessionTarget;
-    const currentRemoteActorPacketTarget =
-      state?.spotId === undefined ? undefined : state.remoteActorPacketTarget;
-    const remoteTarget =
-      currentRemoteBoundSessionTarget ??
-      currentRemoteActorPacketTarget ??
-      (state?.spotId === undefined ? undefined : this.targets.cachedTargetForActor(actor));
-    if (remoteTarget !== undefined) {
-      await this.notifyRemoteActorDisconnected(actor.actorId, remoteTarget, signal, actor.ref);
-      return;
-    }
+    // The Session binding owns this route, including after relocation and detach (§5, §7).
     const actorRefTarget = this.targets.targetForActorRef(actor.ref);
     if (actorRefTarget !== undefined) {
       await this.notifyRemoteActorDisconnected(actor.actorId, actorRefTarget, signal, actor.ref);
       return;
     }
-    if (state?.spotId !== undefined && state.actor !== undefined) {
-      const handled = await this.requireSpotManager().notifyJoinedSpotActorDisconnected(
-        state.spotId,
-        state.actor,
-        signal
-      );
-      if (handled) {
-        return;
-      }
-    }
-    await this.notifyActorDisconnectedById(actor.actorId, signal);
+    await this.notifyLocalActorDisconnectedById(actor.actorId, signal);
   }
 
   clearRemoteActorPacketTarget(actorId: string): void {

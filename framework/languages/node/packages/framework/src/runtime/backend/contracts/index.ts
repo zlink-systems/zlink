@@ -372,7 +372,10 @@ export interface ZLinkBackendMeshNode {
   sendToActor(
     actor: ZLinkBackendActorRef,
     parts: MessageLike | readonly MessageLike[],
-    options?: { flags?: number }
+    options?: {
+      flags?: number;
+      routeFence?: import('../../foundation/service-stateful-wire-codec').ServiceActorRouteFence;
+    }
   ): Promise<SubmitResult>;
   requestToActor(
     actor: ZLinkBackendActorRef,
@@ -382,6 +385,7 @@ export interface ZLinkBackendMeshNode {
       timeoutMs?: number;
       applicationMetadata?: Buffer;
       onAdmitted?: () => void;
+      routeFence?: import('../../foundation/service-stateful-wire-codec').ServiceActorRouteFence;
     }
   ): MeshOperationId;
   actorSendToActor(
