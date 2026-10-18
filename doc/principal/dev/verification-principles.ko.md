@@ -68,6 +68,11 @@
 | Framework E2E에서 handler 오류가 없었나 | Kotlin match update의 종료 코드 0과 `Scenarios: 1/1 passed` | 같은 회차의 JoinSpot message-flow에는 `INTERNAL_FAILURE`와 `ConcurrentModificationException`이 기록됐다. Program 결과와 서버의 예기치 않은 handler 오류를 함께 확인한다 | #1882 |
 | 일반 Actor dispatch가 실행 gate를 쓰나 | 소스 전체에서 executor 호출 문자열 검색 | 무관한 disconnect 전용 호출만 있어도 통과한다. 일반 coordinator 호출과 header forwarding을 확인하고, 일반 호출을 지워 옛 전용 호출만 남긴 입력과 forwarding을 지운 입력이 실패하는지 대조한다 | #1883 |
 | 실패한 incarnation 정리가 보류 메시지 완료보다 먼저 끝났나 | source reply 수신 순서 일치 | 전송 지연이 target의 조기 완료를 가릴 수 있다. 실제 destructor를 보류하고 target queue의 retained record와 completion 미완료를 확인한 뒤 release·join한다 | #1961 |
+| Fixture를 기존 dispatch 경로로 바꾼 뒤에도 원래 순서 결함을 잡나 | 같은 단언으로 main에서 통과 | observer의 handler terminal 대기를 빼면 replay 게시와 이동 종료 사이 순서를 고정하지 못한다. 메시지 수락 뒤에 같은 observer를 설치하고 수정 전 반복 실패를 확인한다 | #1786 · #1771 |
+| 모든 template 실행 파일이 최종 package를 link했나 | 전체 link 명령에 최종 archive 경로가 있다 | 한 실행 파일만 최종 archive를 사용해도 통과한다. 실행 파일마다 link 인자를 정확히 비교하고, 하나만 이전 archive를 사용하는 입력도 거부하는지 확인한다 | #1786 · #1771 |
+| GoogleTest 시험이 실제로 실행됐나 | 실행 파일이 exit 0 | GTEST_SKIP도 exit 0이다. skipped summary가 있는 출력과 정상 출력을 함께 넣어 판정을 확인하고, skip을 통과 수에서 제외한다 | #1786 · #1771 |
+| 검증 source hash가 stage된 변경도 포함하나 | `git ls-files --modified`로 만든 hash가 같다 | Stage된 변경은 빠진다. `git diff HEAD`와 untracked 파일을 함께 수집하고, stage된 실제 source의 두 내용을 입력해 hash가 달라지는지 확인한다 | #1786 · #1771 |
+| Host가 정상 정산했나 | GTest 단언 통과와 exit 0 | 종료 로그에 `force_stopping`이 있으면 정상 drain의 증거가 아니다. pending·active callback 정산과 정상 종료 transition을 함께 확인한다 | #1786 · #1771 |
 
 ## 4. 무엇이 실제로 답을 줬나
 
