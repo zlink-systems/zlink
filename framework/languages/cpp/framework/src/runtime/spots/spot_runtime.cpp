@@ -4912,7 +4912,7 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
                     static_cast<std::uint32_t> (
                       runtime::protocol::framework_error_code::spotMoving))));
             /* Dispatch rejection is framework-generated (zlink.origin
-                 * marker on the resulting error reply). */
+             * marker on the resulting error reply). */
             return task_t<zlink::message_t> (detail::result_access_t::failure<zlink::message_t> (
               detail::make_framework_origin_exception (framework_error_kind_t::shutting_down,
                                                        "spot serial queue is closed or stopping")));

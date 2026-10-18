@@ -4,6 +4,7 @@
 #include "../support/runtime_failure_fixture.hpp"
 #include "../support/stateful_ingress_fixture.hpp"
 #include "runtime/locations/in_memory_store_providers.hpp"
+#include "runtime/locations/in_memory_location_store.hpp"
 #include "runtime/stateful/public_host_runtime.hpp"
 #include "runtime/mesh/mesh_node_runtime.hpp"
 #include "runtime/actors/actor_gateway_runtime.hpp"
@@ -62,6 +63,57 @@ namespace zlink::framework::runtime::host
 // Reproduce a superseded assembly at the activation boundary without timing races.
 struct public_host_runtime_test_access_t
 {
+    static task_t<bool> restore_accepted_spot (public_host_runtime_t &host,
+                                               std::shared_ptr<location_repository_t> store,
+                                               const protocol::request_source_fence_t &source,
+                                               int &materialized)
+    {
+        host._user_spot_store = std::move (store);
+        host._objects.configure_relocation_state (
+          [] (const stateful::object_ref_t &owner, const std::string &type, std::stop_token) {
+              return stateful::frozen_object_state_t{owner, type};
+          },
+          [&materialized] (const auto &, const auto &, std::stop_token) {
+              ++materialized;
+              return true;
+          });
+        auto pending = std::make_shared<public_host_runtime_t::pending_relocation_assembly_t> (
+          public_host_runtime_t::pending_relocation_assembly_t{
+            .assembly = stateful::relocation_state_assembly_t{{}, 0, {}, {}, {}}});
+        auto staging = std::make_shared<public_host_runtime_t::relocation_assembly_staging_t> ();
+        stateful::object_ref_t owner{stateful::object_kind_t::user_spot,
+                                     "accepted-spot",
+                                     1,
+                                     1,
+                                     "source-boundary",
+                                     "source-node"};
+        auto target = owner;
+        target.node_id = "target-node";
+        target.authority_owner_generation = 2;
+        protocol::frozen_record_t record;
+        record.kind = protocol::frozen_record_kind_t::spot_send;
+        record.source = source;
+        record.operation = {1, 1};
+        record.application =
+          protocol::application_payload_t{"Probe", "application/json", {'{', '}'}};
+        stateful::turn_record_t turn;
+        turn.sequence = 1;
+        turn.frozen_record = std::move (record);
+        staging->frozen.push_back ({owner, "room", {}, {std::move (turn)}, {}});
+        staging->sources.push_back (owner);
+        staging->targets.push_back (target);
+        staging->wire_objects.push_back ({});
+        staging->restore_identity.reference = "accepted-source-boundary";
+        return host.restore_relocation_assembly (pending, staging);
+    }
+    static void use_store_authority (public_host_runtime_t &host, location_repository_t &store)
+    {
+        host._stateful_dispatch = std::make_unique<stateful::raw_stateful_dispatch_t> (
+          host._objects, *host._transport,
+          stateful::make_location_store_authority_resolver (store));
+        host._stateful_dispatch->set_flow_capture_provider (
+          [&host] { return host.capture_flow (); });
+    }
     static task_t<bool> activate_stale_actor_attempt (public_host_runtime_t &host,
                                                       bool replaced,
                                                       bool activation_started,
@@ -86,25 +138,27 @@ struct public_host_runtime_test_access_t
               attempt.terminal = std::make_shared<task_completion_source_t<void>> ();
           })
           .get ();
-        task_completion_source_t<void> release_index;
+        std::promise<void> release_index;
+        auto release_index_ready = release_index.get_future ();
         std::promise<void> index_entered;
         auto index = std::async (std::launch::async, [&] {
             host._spot_actor_index_lane
               .run ([&] {
                   index_entered.set_value ();
-                  release_index.task ().result ().value ();
+                  release_index_ready.wait ();
               })
               .get ();
         });
         struct release_and_join_t
         {
-            task_completion_source_t<void> &release;
+            std::promise<void> &release;
             std::future<void> &worker;
             ~release_and_join_t ()
             {
-                release.complete (result_t<void>::success ());
-                if (worker.valid ())
+                if (worker.valid ()) {
+                    release.set_value ();
                     worker.wait ();
+                }
             }
         } release_and_join{release_index, index};
         index_entered.get_future ().get ();
@@ -130,7 +184,7 @@ struct public_host_runtime_test_access_t
             .get ();
         if (!activation_started)
             activated.emplace (host.activate_relocation_assembly (key, pending, staging));
-        release_index.complete (result_t<void>::success ());
+        release_index.set_value ();
         index.get ();
         if (discarded) {
             std::vector<public_host_runtime_t::relocation_target_attempt_t> cleanup;
@@ -233,7 +287,12 @@ struct observations_t
     bool release_replay_prefix = false;
     std::shared_ptr<native_handoff_hold_t> native_handoff_hold;
     fw::task_completion_source_t<void> joined_send_captured;
-    std::function<void ()> joined_admission_completion;
+    struct joined_admission_batch_t
+    {
+        std::size_t remaining;
+        std::function<void ()> complete;
+    };
+    std::optional<joined_admission_batch_t> joined_admission_completion;
     fw::task_completion_source_t<void> release_leave;
     bool hold_join_admission = false;
     fw::task_completion_source_t<void> join_admission_entered;
@@ -575,9 +634,10 @@ class room_t final : public fw::spot_t<actor_t>
             {
                 std::lock_guard lock (observations->mutex);
                 auto *source = &observations->joined_send_captured;
-                observations->joined_admission_completion = [source] {
-                    source->complete (fw::result_t<void>::success ());
-                };
+                observations->joined_admission_completion =
+                  observations_t::joined_admission_batch_t{
+                    std::max<std::size_t> (1, observations->joined_payloads.size ()),
+                    [source] { source->complete (fw::result_t<void>::success ()); }};
             }
             if (observations->joined_payloads.empty ()) {
                 co_await observations->joined_sender.load ()
@@ -698,19 +758,24 @@ enum class entry_kind_t
 void observe_joined_batch_admission (observations_t &evidence,
                                      const fw::message_flow_event_t &event)
 {
-    if (event.outcome != fw::message_flow_outcome_t::admitted || event.actor_id != actor_id
-        || event.detail_stage != "canonical_application.commit_accepted_ingress"
+    if (event.actor_id != actor_id
         || (event.packet_name != move_t::packet_name && event.packet_name != probe_t::packet_name))
         return;
+    const bool native_admitted =
+      event.outcome == fw::message_flow_outcome_t::admitted
+      && event.detail_stage == "canonical_application.commit_accepted_ingress";
+    const bool retained = event.detail_stage == "relay_actor_packet.try_append_backlog"
+                          && event.detail_result == "result=appended";
     std::function<void ()> complete;
     {
         std::lock_guard lock (evidence.mutex);
-        if (!evidence.joined_admission_completion)
-            return;
-        ++evidence.backlog_appends;
-        if (evidence.backlog_appends
-            >= static_cast<int> (std::max<std::size_t> (1, evidence.joined_payloads.size ())))
-            complete = std::exchange (evidence.joined_admission_completion, {});
+        if (retained)
+            ++evidence.backlog_appends;
+        if (native_admitted && evidence.joined_admission_completion
+            && --evidence.joined_admission_completion->remaining == 0) {
+            complete = std::move (evidence.joined_admission_completion->complete);
+            evidence.joined_admission_completion.reset ();
+        }
     }
     if (complete)
         complete ();
@@ -1268,9 +1333,8 @@ void local_join_backlog (backlog_case_t scenario)
             // This later one-record batch owns its own admission future.
             evidence.joined_send_captured = fw::task_completion_source_t<void>{};
             auto *source = &evidence.joined_send_captured;
-            evidence.joined_admission_completion = [source] {
-                source->complete (fw::result_t<void>::success ());
-            };
+            evidence.joined_admission_completion = observations_t::joined_admission_batch_t{
+              1, [source] { source->complete (fw::result_t<void>::success ()); }};
         }
         ASSERT_TRUE (client.send (fw::actor_id_t (actor_id), probe_t{3}).async ().result ());
         std::unique_lock lock (evidence.mutex);
@@ -1994,10 +2058,11 @@ TEST (NativeIntake, JoinedBatchFenceExcludesInitialMoveAndOtherActor)
     EXPECT_EQ (evidence.backlog_appends, 0);
     EXPECT_FALSE (evidence.joined_send_captured.task ().await_ready ());
     int completions = 0;
-    evidence.joined_admission_completion = [&] {
-        ++completions;
-        evidence.joined_send_captured.complete (fw::result_t<void>::success ());
-    };
+    evidence.joined_admission_completion = observations_t::joined_admission_batch_t{
+      2, [&] {
+          ++completions;
+          evidence.joined_send_captured.complete (fw::result_t<void>::success ());
+      }};
     event.packet_name = probe_t::packet_name;
     event.actor_id = "other-actor";
     observe_joined_batch_admission (evidence, event);
@@ -2011,8 +2076,28 @@ TEST (NativeIntake, JoinedBatchFenceExcludesInitialMoveAndOtherActor)
     EXPECT_EQ (evidence.backlog_appends, 0);
     event.detail_stage = "canonical_application.commit_accepted_ingress";
     observe_joined_batch_admission (evidence, event);
-    EXPECT_EQ (evidence.backlog_appends, 1);
+    EXPECT_EQ (evidence.backlog_appends, 0);
+    ASSERT_TRUE (evidence.joined_admission_completion);
+    EXPECT_EQ (evidence.joined_admission_completion->remaining, 1u);
     EXPECT_FALSE (evidence.joined_send_captured.task ().await_ready ());
+
+    event.outcome = fw::message_flow_outcome_t::received;
+    event.detail_stage = "relay_actor_packet.try_append_backlog";
+    event.detail_result = "result=appended";
+    event.actor_id = "other-actor";
+    observe_joined_batch_admission (evidence, event);
+    EXPECT_EQ (evidence.backlog_appends, 0);
+    event.actor_id = actor_id;
+    observe_joined_batch_admission (evidence, event);
+    EXPECT_EQ (evidence.backlog_appends, 1);
+    observe_joined_batch_admission (evidence, event);
+    EXPECT_EQ (evidence.backlog_appends, 2);
+    EXPECT_EQ (evidence.joined_admission_completion->remaining, 1u);
+    EXPECT_FALSE (evidence.joined_send_captured.task ().await_ready ());
+
+    event.outcome = fw::message_flow_outcome_t::admitted;
+    event.detail_stage = "canonical_application.commit_accepted_ingress";
+    event.detail_result.reset ();
     observe_joined_batch_admission (evidence, event);
     EXPECT_EQ (evidence.backlog_appends, 2);
     EXPECT_TRUE (evidence.joined_send_captured.task ().await_ready ());
@@ -2020,6 +2105,13 @@ TEST (NativeIntake, JoinedBatchFenceExcludesInitialMoveAndOtherActor)
     EXPECT_EQ (evidence.backlog_appends, 2);
     EXPECT_EQ (completions, 1);
     EXPECT_FALSE (evidence.joined_admission_completion);
+
+    event.outcome = fw::message_flow_outcome_t::received;
+    event.detail_stage = "relay_actor_packet.try_append_backlog";
+    event.detail_result = "result=appended";
+    observe_joined_batch_admission (evidence, event);
+    EXPECT_EQ (evidence.backlog_appends, 3);
+    EXPECT_EQ (completions, 1);
 }
 
 TEST (NativeIntake, TypedControlMalformedWireAndKernelMetadata)
@@ -2467,6 +2559,11 @@ TEST_P (NativeIntakePendingStore, KeepsInfrastructureOutsideAcceptanceTurn)
     auto peer_services = peer.app.advanced ().services ().build_provider ();
     auto &local = services.get_required<fw::actor_client_t> ();
     auto &native = peer_services.get_required<fw::actor_client_t> ();
+    auto registration =
+      fw::detail::mesh_node_runtime_t::registrations (host.app.advanced ().zlink ()).front ();
+    auto test_host = fw::detail::spot_node_runtime_t (registration->spot_state).native_node ();
+    fw::runtime::host::public_host_runtime_test_access_t::use_store_authority (
+      *test_host, services.get_required<fw::location_repository_t> ());
     std::array<fw::task_t<void>, 3> entered{store->entered[0].task (), store->entered[1].task (),
                                             store->entered[2].task ()};
     store->stage.store (1);
@@ -2533,8 +2630,7 @@ TEST_P (NativeIntakePendingStore, KeepsInfrastructureOutsideAcceptanceTurn)
                                evidence.intake_probe_values.end (), following_payload),
                    1);
     }
-    auto registration =
-      fw::detail::mesh_node_runtime_t::registrations (host.app.advanced ().zlink ()).front ();
+
     auto jobs = registration->application_jobs;
     const auto node = fw::detail::spot_node_runtime_t (registration->spot_state).native_node ();
     host.app.request_stop ();
@@ -2681,10 +2777,12 @@ class observed_location_store_t final : public fw::location_store_t
   public:
     fw::task_t<fw::store_read_result_t> read (fw::store_key_t key) override
     {
+        count_accepted_read (key);
         return _inner.read (std::move (key));
     }
     fw::task_t<fw::store_scan_result_t> scan (fw::store_scan_request_t request) override
     {
+        count_accepted_scan ();
         std::function<fw::task_t<void> ()> before_scan;
         {
             std::lock_guard lock (_mutex);
@@ -2751,8 +2849,34 @@ class observed_location_store_t final : public fw::location_store_t
         std::lock_guard lock (_mutex);
         return _intercepted_write_conflicted;
     }
+    void observe_authority_reads (const std::string &authority_key)
+    {
+        std::lock_guard lock (_mutex);
+        _observed_authority_key = authority_key;
+        _acceptance_thread.reset ();
+        _acceptance_reads = _acceptance_scans = 0;
+    }
+    std::pair<std::size_t, std::size_t> accepted_store_calls ()
+    {
+        std::lock_guard lock (_mutex);
+        return {_acceptance_reads, _acceptance_scans};
+    }
 
   private:
+    void count_accepted_read (const fw::store_key_t &key)
+    {
+        std::lock_guard lock (_mutex);
+        if (!_observed_authority_key.empty () && key.value == _observed_authority_key)
+            _acceptance_thread = std::this_thread::get_id ();
+        if (_acceptance_thread == std::this_thread::get_id ())
+            ++_acceptance_reads;
+    }
+    void count_accepted_scan ()
+    {
+        std::lock_guard lock (_mutex);
+        if (_acceptance_thread == std::this_thread::get_id ())
+            ++_acceptance_scans;
+    }
     fw::runtime::in_memory_location_store_t _inner;
     std::mutex _mutex;
     std::function<fw::task_t<void> ()> _after_write;
@@ -2761,7 +2885,151 @@ class observed_location_store_t final : public fw::location_store_t
     std::function<bool ()> _scan_ready;
     std::function<fw::task_t<void> ()> _before_scan;
     bool _intercepted_write_conflicted = false;
+    std::string _observed_authority_key;
+    std::optional<std::thread::id> _acceptance_thread;
+    std::size_t _acceptance_reads = 0;
+    std::size_t _acceptance_scans = 0;
 };
+
+class accepted_source_repository_t final : public fw::runtime::in_memory_location_repository_t
+{
+  public:
+    std::optional<fw::owner_lease_read_result_t> lease_override;
+    fw::task_t<fw::owner_lease_read_result_t> read_owner_lease (std::string owner_id) override
+    {
+        if (lease_override)
+            return fw::task_t<fw::owner_lease_read_result_t> (
+              fw::result_t<fw::owner_lease_read_result_t>::success (*lease_override));
+        return in_memory_location_repository_t::read_owner_lease (std::move (owner_id));
+    }
+};
+
+enum class accepted_source_case_t
+{
+    live,
+    expired,
+    wrong_owner,
+    stale_node_generation,
+    lease_generation_mismatch,
+    replaced_live_owner
+};
+
+TEST (ActorMaintenanceJoin, RelocationValidatesAcceptedSourcesBeforeRestoringSpotQueue)
+{
+    using source_case = accepted_source_case_t;
+    for (const auto mode :
+         {source_case::live, source_case::expired, source_case::wrong_owner,
+          source_case::stale_node_generation, source_case::lease_generation_mismatch,
+          source_case::replaced_live_owner}) {
+        SCOPED_TRACE (static_cast<int> (mode));
+        auto store = std::make_shared<accepted_source_repository_t> ();
+        const auto token =
+          std::get<fw::owner_lease_claimed_t> (
+            store->claim_owner_lease ("accepted-source-owner", 15s).result ().value ())
+            .token;
+        fw::mesh_node_descriptor_t descriptor{.mesh_name = "source-boundary",
+                                              .rid = zlink::routing_id_t::from ("source-node"),
+                                              .lifecycle_generation = 1,
+                                              .descriptor_revision = 1,
+                                              .endpoint = "tcp://127.0.0.1:1",
+                                              .state = fw::framework_runtime_state_t::serving,
+                                              .security_identity = "test",
+                                              .owner_id = token.owner_id,
+                                              .lease_generation = token.lease_generation};
+        ASSERT_EQ (store->update_mesh_node (descriptor, fw::location_write_intent_t::new_claim)
+                     .result ()
+                     .value ()
+                     .status,
+                   fw::location_write_status_t::stored);
+        const auto now = std::chrono::system_clock::now ();
+        if (mode == source_case::expired)
+            store->lease_override = fw::owner_lease_found_t{token, now, now};
+        else if (mode == source_case::wrong_owner) {
+            auto other = token;
+            other.owner_id = "other-owner";
+            store->lease_override = fw::owner_lease_found_t{other, now + 15s, now};
+        } else if (mode == source_case::lease_generation_mismatch) {
+            auto newer = token;
+            ++newer.lease_generation;
+            store->lease_override = fw::owner_lease_found_t{newer, now + 15s, now};
+        } else if (mode == source_case::replaced_live_owner) {
+            const auto replacement =
+              std::get<fw::owner_lease_claimed_t> (
+                store->claim_owner_lease ("replacement-owner", 15s).result ().value ())
+                .token;
+            ASSERT_EQ (store->remove_mesh_node ({descriptor.mesh_name, descriptor.rid}, token)
+                         .result ()
+                         .value (),
+                       fw::location_write_status_t::stored);
+            descriptor.owner_id = replacement.owner_id;
+            descriptor.lease_generation = replacement.lease_generation;
+            ASSERT_EQ (store->update_mesh_node (descriptor, fw::location_write_intent_t::new_claim)
+                         .result ()
+                         .value ()
+                         .status,
+                       fw::location_write_status_t::stored);
+        }
+        fw::runtime::host::host_options_t options;
+        options.mesh.descriptor = {"source-boundary",
+                                   zlink::routing_id_t::from ("target-node").to_bytes (),
+                                   1,
+                                   1,
+                                   "tcp://127.0.0.1:0",
+                                   {},
+                                   fw::runtime::mesh::service_node_state_t::preparing};
+        options.mesh.runtime_failures =
+          std::make_shared<fw::runtime::runtime_failure_collector_t> ();
+        auto host =
+          std::make_shared<fw::runtime::host::public_host_runtime_t> (std::move (options));
+        const fw::runtime::protocol::request_source_fence_t source{
+          token.owner_id, static_cast<std::uint64_t> (token.lease_generation),
+          descriptor.rid.to_bytes (), mode == source_case::stale_node_generation ? 2u : 1u};
+        int materialized = 0;
+        const auto restored =
+          fw::runtime::host::public_host_runtime_test_access_t::restore_accepted_spot (
+            *host, store, source, materialized)
+            .result ();
+        ASSERT_TRUE (restored);
+        EXPECT_EQ (restored.value (), mode == source_case::live);
+        EXPECT_EQ (materialized, mode == source_case::live ? 1 : 0);
+        const auto object = host->objects ().resolve_spot ("accepted-spot");
+        EXPECT_EQ (object.has_value (), mode == source_case::live);
+        if (object)
+            EXPECT_EQ (
+              host->objects ().pending (*object, fw::runtime::stateful::turn_domain_t::application),
+              1u);
+    }
+}
+
+TEST (ActorMaintenanceJoin, WarmLocalAcceptedRequestDoesNotReadStore)
+{
+    observations_t evidence;
+    observations = &evidence;
+    auto store = std::make_shared<observed_location_store_t> ();
+    host_t host;
+    configure (host, first_rid, store,
+               std::make_shared<fw::runtime::in_memory_relocation_store_t> ());
+    host.start ();
+    ASSERT_TRUE (ready (host));
+    auto services = host.app.advanced ().services ().build_provider ();
+    ASSERT_TRUE (services.get_required<fw::actor_manager_t> ()
+                   .get_or_create (fw::actor_id_t (actor_id), actor_type)
+                   .async ()
+                   .result ());
+    auto &client = services.get_required<fw::actor_client_t> ();
+    ASSERT_TRUE (
+      client.request (fw::actor_id_t (actor_id), probe_t{17}).async<probe_t> ().result ());
+    // Use the provider's existing key conversion, as the pending-Store fixture does.
+    auto captured = std::make_shared<intake_store_t> ();
+    store->observe_authority_reads (captured->authority_store_key);
+    const auto reply =
+      client.request (fw::actor_id_t (actor_id), probe_t{23}).async<probe_t> ().result ();
+    ASSERT_TRUE (reply);
+    EXPECT_EQ (reply.value ().value, 23);
+    const auto [reads, scans] = store->accepted_store_calls ();
+    EXPECT_EQ (reads, 0u);
+    EXPECT_EQ (scans, 0u);
+}
 
 TEST (ActorMaintenanceJoin, StaleAttemptActivationDoesNotLeaveRawIdentity)
 {

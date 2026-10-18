@@ -31,6 +31,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+#include <variant>
 
 namespace zlink::framework
 {
@@ -225,8 +226,10 @@ class mesh_node_runtime_t
     void configure_bound_session_relocation_resolver (
       std::function<task_t<std::optional<bound_session_relocation_route_t>> (
         const runtime::stateful::object_ref_t &)> resolver);
-    void
-    configure_stateful_dispatch (runtime::stateful::accepted_record_authority_resolver_t resolver);
+    using stateful_dispatch_configuration_t =
+      std::variant<runtime::stateful::accepted_record_authority_resolver_t,
+                   std::function<std::optional<location_owner_token_t> ()>>;
+    void configure_stateful_dispatch (stateful_dispatch_configuration_t configuration);
     void configure_bound_session_operations (host::bound_session_operations_t operations);
     void configure_late_session_route_update (
       std::function<void (const runtime::protocol::session_relocation_route_t &)> reporter);
@@ -251,12 +254,14 @@ class mesh_node_runtime_t
                        const std::string &endpoint,
                        std::uint64_t expected_lifecycle_generation = 0,
                        std::string security_identity = "default",
-                       bool automatic = false);
+                       bool automatic = false,
+                       location_owner_token_t owner = {});
     void connect_peer (const std::string &endpoint, std::string security_identity = "default");
     void expect_peer (const zlink::routing_id_t &expected_routing_id,
                       const std::string &endpoint,
                       std::uint64_t expected_lifecycle_generation,
-                      std::string security_identity);
+                      std::string security_identity,
+                      location_owner_token_t owner = {});
     void forget_peer (const zlink::routing_id_t &expected_routing_id, const std::string &endpoint);
     void disconnect_peer (const std::string &endpoint) noexcept;
     void disconnect_peer (const zlink::routing_id_t &expected_routing_id,
@@ -660,7 +665,7 @@ class mesh_node_runtime_t
     std::function<task_t<std::optional<bound_session_relocation_route_t>> (
       const runtime::stateful::object_ref_t &)>
       _bound_session_relocation_resolver;
-    runtime::stateful::accepted_record_authority_resolver_t _stateful_dispatch_resolver;
+    stateful_dispatch_configuration_t _stateful_dispatch_configuration;
     std::optional<host::bound_session_operations_t> _bound_session_operations;
     std::function<void (const runtime::protocol::session_relocation_route_t &)>
       _late_session_route_update_reporter;

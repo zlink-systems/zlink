@@ -252,6 +252,27 @@ class counting_location_repository_t final
         return in_memory_location_repository_t::read_authority (std::move (key), cancellation);
     }
 
+    zlink::framework::task_t<
+      zlink::framework::location_page_t<zlink::framework::mesh_node_descriptor_t>>
+    list_mesh_nodes (std::string mesh_name,
+                     zlink::framework::location_page_request_t page = {}) override
+    {
+        mesh_node_reads.fetch_add (1);
+        return in_memory_location_repository_t::list_mesh_nodes (std::move (mesh_name),
+                                                                 std::move (page));
+    }
+
+    zlink::framework::task_t<zlink::framework::owner_lease_read_result_t>
+    read_owner_lease (std::string owner_id) override
+    {
+        owner_lease_reads.fetch_add (1);
+        if (owner_lease_override)
+            return zlink::framework::task_t<zlink::framework::owner_lease_read_result_t> (
+              zlink::framework::result_t<zlink::framework::owner_lease_read_result_t>::success (
+                *owner_lease_override));
+        return in_memory_location_repository_t::read_owner_lease (std::move (owner_id));
+    }
+
     zlink::framework::task_t<zlink::framework::authority_compare_exchange_result_t>
     compare_exchange_authority (zlink::framework::authority_key_t key,
                                 std::string expected_store_version,
@@ -295,6 +316,9 @@ class counting_location_repository_t final
     }
 
     std::atomic<std::size_t> authority_reads{0};
+    std::atomic<std::size_t> mesh_node_reads{0};
+    std::atomic<std::size_t> owner_lease_reads{0};
+    std::optional<zlink::framework::owner_lease_read_result_t> owner_lease_override;
     std::atomic<std::size_t> reservation_calls{0};
     std::function<void (const zlink::framework::authority_key_t &,
                         const zlink::framework::runtime::instance_spot_authority_payload_t &)>
@@ -4704,6 +4728,162 @@ void verify_configured_session_seal_timeout_closes_actual_owner ()
     assert (physical_close_count.load (std::memory_order_acquire) == 1);
 }
 
+void verify_discovery_owner_metadata_preserved ()
+{
+    mesh::raw_mesh_node_owner_t transport (mesh::raw_mesh_node_options_t{
+      .descriptor = descriptor ("metadata-target"),
+      .runtime_failures =
+        std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()});
+    auto &topology = transport.topology ();
+    auto source = descriptor ("metadata-source");
+    assert (topology.admit (source, {1}) == mesh::peer_admission_result_t::admitted);
+    auto discovered = source;
+    discovered.owner_id = "metadata-owner";
+    discovered.owner_lease_generation = 7;
+    const auto epoch = topology.peer (source.node_routing_id)->admission_epoch;
+    transport.expect_peer (discovered);
+    assert (topology.peer (source.node_routing_id)->descriptor.owner_id == "metadata-owner");
+    assert (topology.peer (source.node_routing_id)->admission_epoch == epoch);
+    assert (topology.admit (source, {1}, discovered)
+            == mesh::peer_admission_result_t::duplicate_connection);
+    source.descriptor_revision++;
+    source.state = mesh::service_node_state_t::draining;
+    assert (topology.admit (source, {1}, mesh::service_liveness_registry_t::clock_t::now (),
+                            protocol::command::update)
+            == mesh::peer_admission_result_t::admitted);
+    const auto updated = topology.peer (source.node_routing_id);
+    assert (updated->descriptor.owner_id == "metadata-owner");
+    assert (updated->descriptor.owner_lease_generation == 7);
+    source.lifecycle_generation++;
+    assert (topology.admit (source, {2}, source) == mesh::peer_admission_result_t::admitted);
+    assert (topology.peer (source.node_routing_id)->descriptor.owner_id.empty ());
+}
+
+void verify_memory_accepted_record_authority ()
+{
+    using namespace zlink::framework;
+    auto store = std::make_shared<counting_location_repository_t> ();
+    const auto target = descriptor ("memory-target");
+    auto source = descriptor ("memory-source");
+    source.owner_id = "remote-memory-owner";
+    source.owner_lease_generation = 7;
+    auto native = std::make_shared<host::public_host_runtime_t> (host::host_options_t{
+      .mesh = {.descriptor = target,
+               .runtime_failures = std::make_shared<runtime::runtime_failure_collector_t> ()}});
+    native->configure_user_spot_operations (store, [] (const auto &, const auto &, const auto &) {
+        return host::user_spot_materialize_result_t{};
+    });
+    assert (native->transport ().topology ().admit (source, {1})
+            == mesh::peer_admission_result_t::admitted);
+    const location_owner_token_t local_owner{"local-memory-owner", 11};
+    stateful::raw_stateful_dispatch_t dispatch (
+      native->objects (), native->transport (),
+      [native, local_owner] (stateful::accepted_record_authority_query_t query) {
+          return native->accepted_record_authority (query, local_owner);
+      });
+    std::uint64_t sequence = 0;
+    for (const bool remote : {false, true})
+        for (const bool actor : {false, true})
+            for (const bool request : {false, true}) {
+                ++sequence;
+                const stateful::object_ref_t object{
+                  actor ? stateful::object_kind_t::actor : stateful::object_kind_t::user_spot,
+                  "memory-object-" + std::to_string (sequence),
+                  1,
+                  1,
+                  target.mesh_name,
+                  zlink::routing_id_t::from (target.node_routing_id).to_string ()};
+                const auto created =
+                  native->objects ().begin_reserved_object (object, "memory", {});
+                assert (created.error == stateful::stateful_error_t::none);
+                assert (native->objects ().commit_create (created.attempt)
+                        == stateful::stateful_error_t::none);
+                const protocol::spot_route_fence_t spot{
+                  object.key, 1, target.node_routing_id, target.lifecycle_generation, 1, 11};
+                const protocol::actor_route_fence_t actor_route{
+                  object.key, 1, target.node_routing_id, target.lifecycle_generation, 1, 11};
+                const auto correlation = request ? std::make_optional (sequence) : std::nullopt;
+                const auto header =
+                  actor
+                    ? protocol::encode_actor_message_header (
+                        request ? protocol::command::actorRequest : protocol::command::actorSend,
+                        std::nullopt, actor_route, {1, sequence}, correlation)
+                    : protocol::encode_spot_message_header (
+                        request ? protocol::command::spotRequest : protocol::command::spotSend,
+                        "memory-source-spot", spot, {1, sequence}, correlation);
+                mesh::service_mailbox_record_t record;
+                record.source_routing_id = remote ? source.node_routing_id : target.node_routing_id;
+                record.source_node_generation =
+                  remote ? source.lifecycle_generation : target.lifecycle_generation;
+                record.parts = detail::backend::materialize_binding_parts (
+                  {header, protocol::encode_application_payload (
+                             {"Memory", "application/json", {'{', '}'}})});
+                assert (
+                  dispatch
+                    .ingest_claimed (object, std::move (record), std::function<void ()> ([] {}))
+                    .result ()
+                    .value ()
+                  == stateful::stateful_error_t::none);
+                const auto [error, delivery] = dispatch.try_claim (object);
+                assert (error == stateful::stateful_error_t::none && delivery);
+                assert (delivery->frozen.source.owner_id
+                        == (remote ? source.owner_id : local_owner.owner_id));
+                assert (delivery->frozen.source.lease_generation == (remote ? 7u : 11u));
+                assert (store->authority_reads == 0);
+                assert (store->mesh_node_reads == 0);
+                assert (store->owner_lease_reads == 0);
+            }
+}
+
+void verify_batched_accepted_record_sources ()
+{
+    using namespace zlink::framework;
+    counting_location_repository_t store;
+    const auto owner = std::get<owner_lease_claimed_t> (
+                         store.claim_owner_lease ("batch-source-owner", 15s).result ().value ())
+                         .token;
+    std::vector<protocol::request_source_fence_t> sources;
+    for (const auto *id : {"batch-source-one", "batch-source-two"}) {
+        mesh_node_descriptor_t node{.mesh_name = "m6b-mesh",
+                                    .rid = zlink::routing_id_t::from (id),
+                                    .lifecycle_generation = 1,
+                                    .descriptor_revision = 1,
+                                    .endpoint = "tcp://127.0.0.1:1",
+                                    .state = framework_runtime_state_t::serving,
+                                    .security_identity = "test",
+                                    .owner_id = owner.owner_id,
+                                    .lease_generation = owner.lease_generation};
+        assert (store.update_mesh_node (node, location_write_intent_t::new_claim)
+                  .result ()
+                  .value ()
+                  .status
+                == location_write_status_t::stored);
+        sources.push_back ({owner.owner_id, static_cast<std::uint64_t> (owner.lease_generation),
+                            node.rid.to_bytes (), 1});
+    }
+    const auto read = [&] {
+        return stateful::read_accepted_record_sources (store, "m6b-mesh", sources)
+          .result ()
+          .value ();
+    };
+    store.mesh_node_reads = store.owner_lease_reads = 0;
+    const auto live = read ();
+    assert (live && *live == sources);
+    assert (store.mesh_node_reads == 1 && store.owner_lease_reads == 1);
+    const auto now = std::chrono::system_clock::now ();
+    store.owner_lease_override = owner_lease_found_t{owner, now, now};
+    assert (!read ());
+    auto impostor = owner;
+    impostor.owner_id = "another-owner";
+    store.owner_lease_override = owner_lease_found_t{impostor, now + 15s, now};
+    assert (!read ());
+    store.owner_lease_override.reset ();
+    ++sources.front ().node_generation;
+    assert (!read ());
+    --sources.front ().node_generation;
+    assert (read () == live);
+}
+
 void verify_location_store_accepted_record_authority ()
 {
     using namespace zlink::framework;
@@ -6302,6 +6482,30 @@ void verify_aggregate_saved_request_terminal_identity ()
       });
     const protocol::relocation_coordinator_fence_t coordinator{"source-owner", 1, {'s'}, 1, "v1"};
     const protocol::request_source_fence_t source{"source-owner", 1, {'s'}, 1};
+    auto store = std::make_shared<zlink::framework::runtime::in_memory_location_repository_t> ();
+    const auto owner = std::get<zlink::framework::owner_lease_claimed_t> (
+                         store->claim_owner_lease (source.owner_id, 15s).result ().value ())
+                         .token;
+    assert (owner.lease_generation == static_cast<std::int64_t> (source.lease_generation));
+    const zlink::framework::mesh_node_descriptor_t source_node{
+      .mesh_name = "mesh",
+      .rid = zlink::routing_id_t::from (source.node_routing_id),
+      .lifecycle_generation = source.node_generation,
+      .descriptor_revision = 1,
+      .endpoint = "tcp://127.0.0.1:1",
+      .state = zlink::framework::framework_runtime_state_t::serving,
+      .security_identity = "test",
+      .owner_id = owner.owner_id,
+      .lease_generation = owner.lease_generation};
+    assert (
+      store->update_mesh_node (source_node, zlink::framework::location_write_intent_t::new_claim)
+        .result ()
+        .value ()
+        .status
+      == zlink::framework::location_write_status_t::stored);
+    target->configure_user_spot_operations (store, [] (const auto &, const auto &, const auto &) {
+        return host::user_spot_materialize_result_t{};
+    });
     protocol::relocation_prepare_t prepare;
     prepare.relocation = {0x1786, 3};
     prepare.target_attempt_generation = 1;
@@ -8161,6 +8365,13 @@ int main (int argc, char **argv)
 {
     // This test drives runtime parts without a host.
     zlink::framework::runtime::install_host_context_hooks ();
+    if (argc == 2 && std::string_view (argv[1]) == "--accepted-record-authority") {
+        verify_discovery_owner_metadata_preserved ();
+        verify_memory_accepted_record_authority ();
+        verify_batched_accepted_record_sources ();
+        verify_location_store_accepted_record_authority ();
+        return 0;
+    }
     if (argc == 2 && std::string_view (argv[1]) == "--aggregate-request-identity") {
         verify_aggregate_saved_request_terminal_identity ();
         return 0;
@@ -8251,6 +8462,9 @@ int main (int argc, char **argv)
     verify_root_location_session_seal_timeout_is_startup_snapshot ();
     verify_same_node_session_seal_waits_for_active_ingress ();
     verify_configured_session_seal_timeout_closes_actual_owner ();
+    verify_discovery_owner_metadata_preserved ();
+    verify_memory_accepted_record_authority ();
+    verify_batched_accepted_record_sources ();
     verify_location_store_accepted_record_authority ();
     verify_raw_spot_and_actor_routing ();
     verify_atomic_raw_stateful_ingress_commit ();

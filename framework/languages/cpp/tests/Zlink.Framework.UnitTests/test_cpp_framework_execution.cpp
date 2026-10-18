@@ -10017,6 +10017,156 @@ bool verify_durable_tail_across_controls_and_export ()
     return passed;
 }
 
+bool verify_inactive_barrier_and_cancel_reentry (bool shared)
+{
+    namespace fw = zlink::framework;
+    namespace rt = fw::runtime;
+    fw::test::manual_internal_scheduler_t worker;
+    auto queue = std::make_shared<rt::serial_execution_queue_t> (
+      worker, rt::serial_execution_queue_options_t{},
+      rt::serial_execution_queue_t::error_handler_t{},
+      shared ? rt::serial_lane_policy_t::spot_wide ()
+             : rt::serial_lane_policy_t::per_actor_spot ());
+    std::vector<std::string> events;
+    auto inactive = queue->reserve_deferred_barrier_next ("index-inactive-barrier");
+    queue->post ("index-before-activation", [&] { events.emplace_back ("ordinary"); });
+    worker.run_all ();
+    bool passed = inactive && events == std::vector<std::string>{"ordinary"};
+    fw::detail::deferred_barrier_t::async_completion_t settle;
+    if (inactive) {
+        const auto activated = inactive.value ()->activate_async ([&] (auto complete) {
+            events.emplace_back ("barrier");
+            settle = std::move (complete);
+        });
+        passed = passed && bool (activated);
+    }
+    queue->post ("index-after-activation", [&] { events.emplace_back ("suffix"); });
+    worker.run_all ();
+    passed = passed && settle && events == std::vector<std::string>{"ordinary", "barrier"};
+    if (settle)
+        settle (fw::result_t<void>::success ());
+    worker.run_all ();
+    auto cancelled = queue->reserve_deferred_barrier_next ("index-cancel-reentry", [&] {
+        // cancel() changes its own phase before this callback, and notifies
+        // the queue afterward. The FIFO index must not copy that phase.
+        queue->post ("index-from-cancel", [&] { events.emplace_back ("cancel-callback"); });
+    });
+    worker.run_all ();
+    if (cancelled)
+        cancelled.value ()->cancel ();
+    worker.run_all ();
+    passed =
+      passed && cancelled && cancelled.value ()->terminal ().await_ready ()
+      && !cancelled.value ()->terminal ().result ()
+      && events == std::vector<std::string>{"ordinary", "barrier", "suffix", "cancel-callback"}
+      && queue->pending_count () == 0;
+    queue->close ();
+    queue->drain ();
+    worker.drain ();
+    std::cout << "fifo-index-inactive-cancel-reentry shared=" << shared << " passed=" << passed
+              << '\n';
+    return passed;
+}
+
+bool verify_fifo_indexes_across_shutdown (bool shared)
+{
+    namespace fw = zlink::framework;
+    namespace rt = fw::runtime;
+    fw::test::manual_internal_scheduler_t worker;
+    const auto policy =
+      shared ? rt::serial_lane_policy_t::spot_wide () : rt::serial_lane_policy_t::per_actor_spot ();
+    auto queue = std::make_shared<rt::serial_execution_queue_t> (
+      worker, rt::serial_execution_queue_options_t{},
+      rt::serial_execution_queue_t::error_handler_t{}, policy);
+    rt::serial_execution_queue_t::async_completion_t finish;
+    queue->post_async ("index-blocker", [&] (auto complete) { finish = std::move (complete); });
+    worker.run_all ();
+    int handlers = 0, cancelled = 0, controls = 0, barrier_runs = 0;
+    const auto record = [] { return std::make_shared<rt::serial_application_record_t> (); };
+    const auto work = [&] (const auto &accepted) {
+        return [&, accepted] (auto complete) {
+            accepted->admission.enter_handler ();
+            ++handlers;
+            complete ([] {});
+        };
+    };
+    auto first = record ();
+    first->admission.take_over ();
+    queue->post_async ("index-durable-first", work (first),
+                       rt::serial_work_options_t{.application_record = first});
+    auto removed = record ();
+    const auto submission = queue->try_post_cancellable_async (
+      "index-cancel-tail", work (removed), [&] { ++cancelled; },
+      rt::serial_work_options_t{.application_record = removed});
+    worker.run_all ();
+    bool passed = submission && removed->admission.durable ();
+    if (submission) {
+        auto cancellation = queue->cancel_submission (submission.value ());
+        worker.run_until (cancellation);
+        passed = passed && cancellation.result ()
+                 && cancellation.result ().value ()
+                      == rt::serial_cancel_submission_outcome_t::queued_cancelled;
+    }
+    auto barrier = queue->reserve_deferred_barrier_next ("index-shutdown-barrier");
+    fw::detail::deferred_barrier_t::async_completion_t settle;
+    if (barrier) {
+        const auto activated = barrier.value ()->activate_async ([&] (auto complete) {
+            ++barrier_runs;
+            settle = std::move (complete);
+        });
+        passed = passed && bool (activated);
+    } else {
+        passed = false;
+    }
+    queue->post ("index-recordless-control", [&] { ++controls; });
+    auto last = record ();
+    queue->post_async ("index-durable-after-cancel", work (last),
+                       rt::serial_work_options_t{.application_record = last});
+    worker.run_all ();
+    passed = passed && last->admission.durable ();
+    queue->close ();
+    passed = passed && !queue->try_post ("index-closed-rejection", [&] { ++controls; });
+    if (finish)
+        finish ([] {});
+    worker.run_all ();
+    passed = passed && barrier_runs == 1 && handlers == 0 && controls == 0 && bool (settle);
+    if (settle)
+        settle (fw::result_t<void>::success ());
+    worker.run_all ();
+    passed = passed && handlers == 2 && cancelled == 1 && controls == 1
+             && queue->pending_count () == 0 && barrier
+             && barrier.value ()->terminal ().await_ready ();
+    queue->drain ();
+
+    auto cancelled_queue = std::make_shared<rt::serial_execution_queue_t> (
+      worker, rt::serial_execution_queue_options_t{},
+      rt::serial_execution_queue_t::error_handler_t{}, policy);
+    rt::serial_execution_queue_t::async_completion_t release;
+    cancelled_queue->post_async ("index-cancel-blocker",
+                                 [&] (auto complete) { release = std::move (complete); });
+    worker.run_all ();
+    auto pending = cancelled_queue->reserve_deferred_barrier_next ("index-cancelled-barrier");
+    auto cancelled_record = record ();
+    cancelled_record->admission.take_over ();
+    cancelled_queue->post_async ("index-cancelled-record", work (cancelled_record),
+                                 rt::serial_work_options_t{.application_record = cancelled_record});
+    worker.run_all ();
+    cancelled_queue->cancel_pending ();
+    worker.run_all ();
+    if (release)
+        release ([] {});
+    worker.run_all ();
+    passed = passed && pending && pending.value ()->terminal ().await_ready ()
+             && !pending.value ()->terminal ().result () && cancelled_queue->pending_count () == 0
+             && handlers == 2;
+    cancelled_queue->drain ();
+    worker.drain ();
+    std::cout << "fifo-index-shutdown shared=" << shared << " handlers=" << handlers
+              << " cancelled=" << cancelled << " barrier_runs=" << barrier_runs
+              << " passed=" << passed << '\n';
+    return passed;
+}
+
 enum class mailbox_shutdown_t
 {
     none,
@@ -10074,7 +10224,13 @@ bool verify_idle_mailbox_terminal (bool shared, mailbox_shutdown_t shutdown)
 
 int main (int argc, char **argv)
 {
-    bool mailbox_passed = verify_durable_tail_across_controls_and_export ();
+    bool mailbox_passed = verify_inactive_barrier_and_cancel_reentry (false);
+    mailbox_passed = verify_inactive_barrier_and_cancel_reentry (true) && mailbox_passed;
+    mailbox_passed = verify_fifo_indexes_across_shutdown (false) && mailbox_passed;
+    mailbox_passed = verify_fifo_indexes_across_shutdown (true) && mailbox_passed;
+    if (argc == 2 && std::string_view (argv[1]) == "--review-fifo-indexes")
+        return mailbox_passed ? EXIT_SUCCESS : EXIT_FAILURE;
+    mailbox_passed = verify_durable_tail_across_controls_and_export () && mailbox_passed;
     for (const bool shared : {false, true}) {
         mailbox_passed = verify_direct_continuation_after_close (shared) && mailbox_passed;
         for (const auto shutdown :

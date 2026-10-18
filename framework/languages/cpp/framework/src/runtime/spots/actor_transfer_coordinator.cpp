@@ -412,7 +412,7 @@ void actor_transfer_coordinator_t::prepend_source_suffix (const std::string &act
     if (suffix.empty ())
         return;
     _lane
-      .run ([&, this] {
+      .run_checked ([&, this] {
           auto &backlog = _backlogs[actor_key];
           backlog.insert (backlog.begin (), std::make_move_iterator (suffix.begin ()),
                           std::make_move_iterator (suffix.end ()));
@@ -474,7 +474,7 @@ std::vector<handoff_packet_t>
 actor_transfer_coordinator_t::take_backlog (const std::string &actor_key)
 {
     return _lane
-      .run ([&, this] () -> std::vector<handoff_packet_t> {
+      .run_checked ([&, this] () -> std::vector<handoff_packet_t> {
           const auto found = _backlogs.find (actor_key);
           if (found == _backlogs.end ()) {
               return {};
@@ -901,7 +901,7 @@ bool actor_transfer_coordinator_t::blocks_dispatch_on_lane (const std::string &a
 
 bool actor_transfer_coordinator_t::blocks_dispatch (const std::string &actor_key) const
 {
-    return _lane.run ([&, this] { return blocks_dispatch_on_lane (actor_key); }).get ();
+    return _lane.run_checked ([&, this] { return blocks_dispatch_on_lane (actor_key); }).get ();
 }
 
 std::optional<actor_move_phase_t>

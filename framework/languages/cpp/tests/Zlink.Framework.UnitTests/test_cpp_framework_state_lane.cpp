@@ -525,25 +525,185 @@ TEST (ZLinkStateLane, StandaloneTaskCompletionAllowsLaneReentry)
 }
 
 #ifdef ZLINK_FRAMEWORK_DEBUG_WAIT_GUARD
-TEST (ZLinkStateLane, DebugWaitRejectsPendingOwnerCompletion)
+// The worker is outside every lane scope while its target drain is queued
+// behind it. Only executor identity can diagnose this pending dependency.
+template <typename Wait> void same_executor_pending_wait (Wait wait)
 {
-    ASSERT_DEATH (
-      {
-          offload_executor_t executor (1);
-          state_lane_t lane (executor);
-          std::promise<void> entered;
-          std::promise<void> release;
-          auto released = release.get_future ();
-          lane.try_post ([&] {
+    offload_executor_t executor (1);
+    state_lane_t lane (executor);
+    std::promise<void> entered;
+    std::promise<void> release;
+    auto released = release.get_future ();
+    std::promise<void> done;
+    auto completed = done.get_future ();
+    executor.submit ([&] {
+        entered.set_value ();
+        released.wait ();
+        EXPECT_EQ (nullptr, state_lane_t::current ());
+        EXPECT_EQ (nullptr, zlink::framework::detail::current_infrastructure_wait_owner);
+        auto future = lane.run_checked ([] { return 7; });
+        wait (future);
+        done.set_value ();
+    });
+    entered.get_future ().wait ();
+    lane.try_post ([] {});
+    release.set_value ();
+    completed.wait ();
+    executor.drain ();
+}
+
+TEST (ZLinkStateLane, DebugWaitRejectsSameExecutorPendingGetOutsideLane)
+{
+    ASSERT_DEATH (same_executor_pending_wait ([] (auto &future) { future.get (); }),
+                  "infrastructure wait guard: state-lane/get");
+}
+
+TEST (ZLinkStateLane, DebugWaitRejectsSameExecutorPendingWaitOutsideLane)
+{
+    ASSERT_DEATH (same_executor_pending_wait ([] (auto &future) { future.wait (); }),
+                  "infrastructure wait guard: state-lane/wait");
+}
+
+TEST (ZLinkStateLane, DebugWaitRejectsSameExecutorPendingWaitForOutsideLane)
+{
+    ASSERT_DEATH (same_executor_pending_wait (
+                    [] (auto &future) { future.wait_for (std::chrono::seconds (1)); }),
+                  "infrastructure wait guard: state-lane/wait_for");
+}
+
+TEST (ZLinkStateLane, DebugWaitRejectsSameExecutorPendingWaitUntilOutsideLane)
+{
+    ASSERT_DEATH (same_executor_pending_wait ([] (auto &future) {
+                      future.wait_until (std::chrono::steady_clock::time_point::max ());
+                  }),
+                  "infrastructure wait guard: state-lane/wait_until");
+}
+
+TEST (ZLinkStateLane, DebugWaitAllowsSameExecutorZeroDurationPoll)
+{
+    same_executor_pending_wait ([] (auto &future) {
+        EXPECT_EQ (std::future_status::timeout, future.wait_for (std::chrono::seconds (0)));
+        EXPECT_EQ (std::future_status::timeout,
+                   future.wait_until (std::chrono::steady_clock::time_point::min ()));
+    });
+}
+
+TEST (ZLinkStateLane, DebugWaitAllowsIndependentExecutorPendingCompletionFromInfrastructure)
+{
+    offload_executor_t caller (1);
+    offload_executor_t target (1);
+    state_lane_t lane (target);
+    std::promise<void> entered;
+    std::promise<void> release;
+    auto released = release.get_future ();
+    lane.try_post ([&] {
+        entered.set_value ();
+        released.wait ();
+    });
+    entered.get_future ().wait ();
+    std::promise<void> checked;
+    auto observed = checked.get_future ();
+    std::promise<void> done;
+    auto completed = done.get_future ();
+    caller.submit ([&] {
+        zlink::framework::runtime::infrastructure_wait_guard::infrastructure_scope_t scope (
+          &caller);
+        auto future = lane.run_checked ([] { return 7; });
+        EXPECT_EQ (std::future_status::timeout, future.wait_for (std::chrono::seconds (0)));
+        EXPECT_FALSE (zlink::framework::runtime::state_lane_internal::pending_wait_is_unsafe (
+          std::future_status::timeout, &target));
+        checked.set_value ();
+        EXPECT_EQ (7, future.get ());
+        done.set_value ();
+    });
+    observed.wait ();
+    release.set_value ();
+    completed.wait ();
+    caller.drain ();
+    target.drain ();
+}
+
+struct release_after_pending_probe_t
+{
+    std::future<int> future;
+    std::promise<void> &release;
+
+    bool valid () const { return future.valid (); }
+    template <typename Rep, typename Period>
+    std::future_status wait_for (std::chrono::duration<Rep, Period> duration) const
+    {
+        const auto status = future.wait_for (duration);
+        EXPECT_EQ (std::future_status::timeout, status);
+        release.set_value ();
+        return status;
+    }
+    int get () { return future.get (); }
+};
+
+TEST (ZLinkStateLane, DebugWaitAllowsIndependentExecutorAtThePendingProbe)
+{
+    offload_executor_t caller (1);
+    offload_executor_t target (1);
+    state_lane_t lane (target);
+    std::promise<void> entered;
+    std::promise<void> release;
+    auto released = release.get_future ();
+    std::thread owner ([&] {
+        lane
+          .run ([&] {
               entered.set_value ();
               released.wait ();
-          });
-          entered.get_future ().wait ();
-          zlink::framework::runtime::infrastructure_wait_guard::infrastructure_scope_t scope (
-            &lane);
-          lane.run_checked ([] { return 7; }).get ();
-      },
-      "infrastructure wait guard: state-lane/get");
+          })
+          .get ();
+    });
+    entered.get_future ().wait ();
+    auto pending = lane.run ([] { return 7; });
+    std::promise<void> done;
+    auto completed = done.get_future ();
+    caller.submit ([&] {
+        zlink::framework::runtime::infrastructure_wait_guard::infrastructure_scope_t scope (
+          &caller);
+        zlink::framework::runtime::state_lane_internal::checked_future_t<
+          release_after_pending_probe_t>
+          checked (release_after_pending_probe_t{std::move (pending), release}, &target);
+        EXPECT_EQ (7, checked.get ());
+        done.set_value ();
+    });
+    completed.wait ();
+    owner.join ();
+    caller.drain ();
+    target.drain ();
+}
+
+TEST (ZLinkStateLane, DebugWaitBoxedFutureUsesTargetExecutorOnce)
+{
+    using namespace zlink::framework::runtime::state_lane_internal;
+    offload_executor_t caller (1);
+    offload_executor_t target (1);
+    std::promise<std::unique_ptr<move_constructible_snapshot_t>> completion;
+    checked_future_t<boxed_future_t<move_constructible_snapshot_t>> future (
+      boxed_future_t<move_constructible_snapshot_t> (completion.get_future ()), &target);
+    std::promise<void> checked;
+    auto observed = checked.get_future ();
+    std::promise<void> done;
+    auto completed = done.get_future ();
+    caller.submit ([&] {
+        zlink::framework::runtime::infrastructure_wait_guard::infrastructure_scope_t scope (
+          &caller);
+        EXPECT_EQ (std::future_status::timeout, future.wait_for (std::chrono::seconds (0)));
+        checked.set_value ();
+        future.wait ();
+        EXPECT_EQ (std::future_status::ready,
+                   future.wait_until (std::chrono::steady_clock::time_point::min ()));
+        auto moved = std::move (future);
+        EXPECT_EQ (7, moved.get ().value);
+        done.set_value ();
+    });
+    observed.wait ();
+    completion.set_value (std::make_unique<move_constructible_snapshot_t> (7));
+    completed.wait ();
+    caller.drain ();
+    target.drain ();
 }
 
 TEST (ZLinkStateLane, DebugWaitAcceptsReadyOwnerCompletion)
@@ -551,6 +711,39 @@ TEST (ZLinkStateLane, DebugWaitAcceptsReadyOwnerCompletion)
     offload_executor_t executor (1);
     state_lane_t lane (executor);
     EXPECT_EQ (7, lane.run_checked ([] { return 7; }).get ());
+}
+
+TEST (ZLinkStateLane, DebugWaitPreservesReadyVoidReferenceAndMoveResults)
+{
+    offload_executor_t executor (1);
+    state_lane_t lane (executor);
+    lane.run_checked ([] {}).get ();
+    int value = 7;
+    EXPECT_EQ (&value, &lane.run_checked ([&] () -> int & { return value; }).get ());
+    auto future = lane.run_checked ([] { return std::make_unique<int> (7); });
+    auto moved = std::move (future);
+    EXPECT_FALSE (future.valid ());
+    EXPECT_EQ (7, *moved.get ());
+}
+
+TEST (ZLinkStateLane, DebugWaitRejectsSameExecutorPendingBoxedGet)
+{
+    ASSERT_DEATH (
+      {
+          using namespace zlink::framework::runtime::state_lane_internal;
+          offload_executor_t executor (1);
+          std::promise<std::unique_ptr<move_constructible_snapshot_t>> completion;
+          checked_future_t<boxed_future_t<move_constructible_snapshot_t>> future (
+            boxed_future_t<move_constructible_snapshot_t> (completion.get_future ()), &executor);
+          std::promise<void> done;
+          auto completed = done.get_future ();
+          executor.submit ([&] {
+              future.get ();
+              done.set_value ();
+          });
+          completed.wait ();
+      },
+      "infrastructure wait guard: state-lane/get");
 }
 
 TEST (ZLinkStateLane, DebugWaitRejectsPendingCompletionFromCurrentLane)

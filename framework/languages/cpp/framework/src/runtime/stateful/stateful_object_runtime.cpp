@@ -1426,7 +1426,7 @@ stateful_object_runtime_t::try_seal_relocation_aggregate (
             // The native source queue receives the exported Actor suffix
             // before seal validation. Abort therefore restores this same owner.
             _lane
-              .run ([this, &plan, &application_states, index] {
+              .run_checked ([this, &plan, &application_states, index] {
                   auto &pending = application_states[index].pending_application;
                   if (pending.empty ())
                       return;

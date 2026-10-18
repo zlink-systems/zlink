@@ -864,8 +864,12 @@ void mesh_node_runtime_t::start ()
     }
     if (_session_route_owner_resolver)
         node->configure_session_route_owner (_session_route_owner_resolver);
-    if (_stateful_dispatch_resolver)
-        node->configure_stateful_dispatch (_stateful_dispatch_resolver);
+    std::visit (
+      [&node] (const auto &configuration) {
+          if (configuration)
+              node->configure_stateful_dispatch (configuration);
+      },
+      _stateful_dispatch_configuration);
     if (_bound_session_operations)
         node->configure_bound_session_operations (*_bound_session_operations);
     if (_late_session_route_update_reporter)
@@ -1708,13 +1712,13 @@ void mesh_node_runtime_t::configure_session_route_owner (
 }
 
 void mesh_node_runtime_t::configure_stateful_dispatch (
-  runtime::stateful::accepted_record_authority_resolver_t resolver)
+  stateful_dispatch_configuration_t configuration)
 {
-    if (!resolver)
+    if (!std::visit ([] (const auto &value) { return static_cast<bool> (value); }, configuration))
         throw configuration_error ("Stateful dispatch authority resolver is required");
     if (_node)
         throw configuration_error ("Stateful dispatch must be configured before MeshNode start");
-    _stateful_dispatch_resolver = std::move (resolver);
+    _stateful_dispatch_configuration = std::move (configuration);
 }
 
 void mesh_node_runtime_t::configure_bound_session_operations (
@@ -1928,7 +1932,8 @@ void mesh_node_runtime_t::connect_peer (const zlink::routing_id_t &expected_rout
                                         const std::string &endpoint,
                                         std::uint64_t expected_lifecycle_generation,
                                         std::string security_identity,
-                                        bool automatic)
+                                        bool automatic,
+                                        location_owner_token_t owner)
 {
     if (!_node || endpoint.empty ())
         return;
@@ -1939,7 +1944,7 @@ void mesh_node_runtime_t::connect_peer (const zlink::routing_id_t &expected_rout
               return;
           const auto submitted =
             _node->connect_peer (endpoint, expected_routing_id, expected_lifecycle_generation,
-                                 std::move (security_identity), automatic);
+                                 std::move (security_identity), automatic, std::move (owner));
           if (submitted)
               _peer_connection_intents.emplace (endpoint, next_connection_intent_id ());
       })
@@ -1964,12 +1969,13 @@ void mesh_node_runtime_t::connect_peer (const std::string &endpoint, std::string
 void mesh_node_runtime_t::expect_peer (const zlink::routing_id_t &expected_routing_id,
                                        const std::string &endpoint,
                                        std::uint64_t expected_lifecycle_generation,
-                                       std::string security_identity)
+                                       std::string security_identity,
+                                       location_owner_token_t owner)
 {
     if (!_node || endpoint.empty ())
         return;
     _node->expect_peer (endpoint, expected_routing_id, expected_lifecycle_generation,
-                        std::move (security_identity));
+                        std::move (security_identity), std::move (owner));
 }
 
 void mesh_node_runtime_t::forget_peer (const zlink::routing_id_t &expected_routing_id,

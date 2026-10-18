@@ -1596,10 +1596,37 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     TIER integration
     TIMEOUT 30)
 
+  # The layout contract scans tracked source only. Build and runner directories are
+  # mutable and are not members of the source layout contract.
+  set(_zlink_layout_manifest "${CMAKE_CURRENT_BINARY_DIR}/layout-tracked-source-files")
+  file(REMOVE "${_zlink_layout_manifest}")
+  find_package(Git QUIET)
+  if(Git_FOUND)
+    execute_process(
+      COMMAND "${GIT_EXECUTABLE}" -C "${ZLINK_FRAMEWORK_CPP_DIR}" rev-parse --git-path index
+      RESULT_VARIABLE _zlink_layout_git_result
+      OUTPUT_VARIABLE _zlink_layout_git_index OUTPUT_STRIP_TRAILING_WHITESPACE
+      ERROR_QUIET)
+    if(_zlink_layout_git_result EQUAL 0)
+      get_filename_component(_zlink_layout_git_index "${_zlink_layout_git_index}" ABSOLUTE
+        BASE_DIR "${ZLINK_FRAMEWORK_CPP_DIR}")
+      set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+        "${_zlink_layout_git_index}" "${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/.git")
+      execute_process(
+        COMMAND "${GIT_EXECUTABLE}" -C "${ZLINK_FRAMEWORK_CPP_DIR}" ls-files -z -- .
+        RESULT_VARIABLE _zlink_layout_manifest_result
+        OUTPUT_FILE "${_zlink_layout_manifest}")
+      if(NOT _zlink_layout_manifest_result EQUAL 0)
+        file(REMOVE "${_zlink_layout_manifest}")
+      endif()
+    endif()
+  endif()
+
   add_executable(test_cpp_framework_layout_contract
     tests/Zlink.Framework.ContractTests/test_cpp_framework_layout_contract.cpp)
   target_compile_definitions(test_cpp_framework_layout_contract PRIVATE
-    ZLINK_FRAMEWORK_CPP_SOURCE_DIR="${ZLINK_FRAMEWORK_CPP_DIR}")
+    ZLINK_FRAMEWORK_CPP_SOURCE_DIR="${ZLINK_FRAMEWORK_CPP_DIR}"
+    ZLINK_FRAMEWORK_CPP_TRACKED_SOURCE_MANIFEST="${_zlink_layout_manifest}")
   target_compile_features(test_cpp_framework_layout_contract PRIVATE cxx_std_20)
   target_link_zlink_test_harness(test_cpp_framework_layout_contract)
   zlink_framework_cpp_add_test(
