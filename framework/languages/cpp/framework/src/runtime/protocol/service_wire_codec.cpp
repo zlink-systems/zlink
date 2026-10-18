@@ -6,6 +6,7 @@
 #include "runtime/diagnostics/flow_context.hpp"
 
 #include <service_wire_pilot_codec.hpp>
+#include <service_wire_codec.hpp>
 #include <zlink/framework/detail/crc32c.hpp>
 #include <zlink/framework/detail/utf8.hpp>
 
@@ -285,6 +286,30 @@ actor_route_fence_t read_actor_route_fence (std::span<const std::uint8_t> bytes,
 }
 
 } // namespace
+
+std::vector<std::uint8_t>
+encode_session_disconnected (const session_disconnected_identity_t &identity)
+{
+    std::vector<std::uint8_t> bytes;
+    append_bytes8 (bytes, identity.session_owner_node_rid, "Session owner node RID");
+    append_nonzero_u64 (bytes, identity.session_owner_node_generation,
+                        "Session owner node generation");
+    append_nonzero_u64 (bytes, identity.binding_generation, "binding generation");
+    return bytes;
+}
+
+session_disconnected_identity_t decode_session_disconnected (std::span<const std::uint8_t> bytes)
+{
+    std::size_t offset = 0;
+    session_disconnected_identity_t identity;
+    identity.session_owner_node_rid = read_bytes8 (bytes, offset, "Session owner node RID");
+    identity.session_owner_node_generation =
+      read_nonzero_u64 (bytes, offset, "Session owner node generation");
+    identity.binding_generation = read_nonzero_u64 (bytes, offset, "binding generation");
+    if (offset != bytes.size ())
+        throw service_wire_error_t ("Session disconnect identity has trailing bytes");
+    return identity;
+}
 
 std::vector<std::uint8_t>
 pack_infrastructure_reply (const std::vector<std::vector<std::uint8_t>> &parts)
@@ -876,7 +901,18 @@ namespace
 template <typename Action> auto generated_codec_call (Action &&action)
 {
     try {
-        return std::forward<Action> (action) ();
+        auto result = std::forward<Action> (action) ();
+        if constexpr (requires {
+                          result.error;
+                          result.value;
+                      }) {
+            if (!result)
+                throw std::invalid_argument (
+                  "error " + std::to_string (static_cast<unsigned> (result.error)));
+            return std::move (result.value);
+        } else {
+            return result;
+        }
     }
     catch (const std::invalid_argument &error) {
         throw service_wire_error_t (std::string ("generated service-wire codec rejected record: ")
@@ -885,11 +921,14 @@ template <typename Action> auto generated_codec_call (Action &&action)
 }
 
 std::vector<std::uint8_t> wire_bytes (std::span<const std::uint8_t> bytes);
-service_wire_pilot_relocation_id to_generated (const relocation_id_t &value);
-service_wire_pilot_coordinator_fence to_generated (const relocation_coordinator_fence_t &value);
+template <typename Record = service_wire_pilot_relocation_id>
+Record to_generated (const relocation_id_t &value);
+template <typename Record = service_wire_pilot_coordinator_fence>
+Record to_generated (const relocation_coordinator_fence_t &value);
 service_wire_pilot_relocation_role to_generated (relocation_role_t value);
 relocation_role_t from_generated (service_wire_pilot_relocation_role value);
-service_wire_pilot_fence to_generated (const actor_route_fence_t &value);
+template <typename Record = service_wire_pilot_fence>
+Record to_generated (const actor_route_fence_t &value);
 actor_route_fence_t from_generated (const service_wire_pilot_fence &value);
 relocation_id_t from_generated (const service_wire_pilot_relocation_id &value);
 relocation_coordinator_fence_t from_generated (const service_wire_pilot_coordinator_fence &value);
@@ -920,25 +959,50 @@ std::vector<std::uint8_t> encode_session_relocation_route (const session_relocat
 
 std::vector<std::uint8_t> encode_session_relocation_seal (const session_relocation_seal_t &record)
 {
-    return generated_codec_call ([&] {
-        return encode_session_relocation_seal_42 (
-          {to_generated (record.relocation), to_generated (record.coordinator),
-           to_generated (record.sender_role), to_generated (record.actor),
-           to_generated_session (record)});
+    namespace codec = generated::detail;
+    auto frames = generated_codec_call ([&] {
+        return codec::encode_sessionRelocationSeal_42_frames (
+          {0,
+           to_generated<codec::relocation_id_t> (record.relocation),
+           to_generated<codec::relocation_coordinator_fence_t> (record.coordinator),
+           static_cast<codec::relocation_role_t> (record.sender_role),
+           to_generated<codec::actor_route_fence_t> (record.actor),
+           {record.session_owner_node_routing_id},
+           {record.session_owner_node_generation},
+           {record.session_owner_id},
+           {record.session_owner_lease_generation},
+           {record.session_routing_id},
+           {record.binding_generation},
+           {record.target_node_routing_id},
+           {record.target_node_generation}});
     });
+    return std::move (frames.front ());
 }
 
 session_relocation_seal_t decode_session_relocation_seal (std::span<const std::uint8_t> bytes)
 {
-    const auto generated =
-      generated_codec_call ([&] { return decode_session_relocation_seal_42 (wire_bytes (bytes)); });
-    session_relocation_seal_t record;
-    record.relocation = from_generated (generated.relocation);
-    record.coordinator = from_generated (generated.coordinator);
-    record.sender_role = from_generated (generated.sender_role);
-    record.actor = from_generated (generated.actor);
-    from_generated_session (record, generated.session);
-    return record;
+    const auto value = generated_codec_call ([&] {
+        return generated::detail::decode_sessionRelocationSeal_42_frames ({wire_bytes (bytes)});
+    });
+    return {{value.relocation.high.value, value.relocation.low.value},
+            {value.coordinator.coordinatorOwnerId.value,
+             value.coordinator.coordinatorLeaseGeneration.value,
+             value.coordinator.coordinatorNodeRid.value,
+             value.coordinator.coordinatorNodeGeneration.value,
+             value.coordinator.expectedAuthorityStoreVersion.value},
+            static_cast<relocation_role_t> (value.senderRole),
+            {value.actor.actor.actorId.value, value.actor.actor.objectGeneration.value,
+             value.actor.targetNodeRid.value, value.actor.targetNodeGeneration.value,
+             value.actor.expectedAuthorityOwnerGeneration.value,
+             value.actor.expectedOwnerLeaseGeneration.value},
+            value.sessionOwnerNodeRid.value,
+            value.sessionOwnerNodeGeneration.value,
+            value.sessionOwnerId.value,
+            value.sessionOwnerLeaseGeneration.value,
+            value.sessionRid.value,
+            value.bindingGeneration.value,
+            value.targetNodeRid.value,
+            value.targetNodeGeneration.value};
 }
 
 std::vector<std::uint8_t>
@@ -1069,7 +1133,7 @@ wire_operation_id_t from_generated (const service_wire_pilot_operation_id &value
     return {value.high, value.low};
 }
 
-service_wire_pilot_relocation_id to_generated (const relocation_id_t &value)
+template <typename Record> Record to_generated (const relocation_id_t &value)
 {
     return {value.high, value.low};
 }
@@ -1079,7 +1143,7 @@ relocation_id_t from_generated (const service_wire_pilot_relocation_id &value)
     return {value.high, value.low};
 }
 
-service_wire_pilot_coordinator_fence to_generated (const relocation_coordinator_fence_t &value)
+template <typename Record> Record to_generated (const relocation_coordinator_fence_t &value)
 {
     return {value.owner_id, value.lease_generation, value.node_routing_id, value.node_generation,
             value.expected_authority_store_version};
@@ -1092,7 +1156,8 @@ relocation_coordinator_fence_t from_generated (const service_wire_pilot_coordina
             value.expected_authority_store_version};
 }
 
-service_wire_pilot_target_fence to_generated (const relocation_target_fence_t &value)
+template <typename Record = service_wire_pilot_target_fence>
+Record to_generated (const relocation_target_fence_t &value)
 {
     return {value.target_node_routing_id, value.target_node_generation, value.target_owner_id,
             value.target_owner_lease_generation};
@@ -1125,22 +1190,48 @@ relocation_role_t from_generated (service_wire_pilot_relocation_role value)
     return static_cast<relocation_role_t> (value);
 }
 
-service_wire_pilot_relocation_object_identity to_generated (const relocation_object_t &value)
+template <typename Record = service_wire_pilot_relocation_object_identity>
+Record to_generated (const relocation_object_t &value)
 {
-    service_wire_pilot_relocation_object_identity result;
-    result.kind = static_cast<service_wire_pilot_relocation_object_kind> (value.kind);
-    result.object_generation = value.object_generation;
-    result.expected_authority_owner_generation = value.expected_authority_owner_generation;
+    constexpr bool pilot = std::is_same_v<Record, service_wire_pilot_relocation_object_identity>;
+    Record result;
+    if constexpr (pilot) {
+        result.kind = static_cast<service_wire_pilot_relocation_object_kind> (value.kind);
+        result.object_generation = value.object_generation;
+        result.expected_authority_owner_generation = value.expected_authority_owner_generation;
+    } else {
+        result.objectKind = static_cast<generated::detail::stateful_object_kind_t> (value.kind);
+    }
     switch (value.kind) {
         case relocation_object_kind_t::actor:
-            result.primary_id = value.object_id;
+            if constexpr (pilot) {
+                result.primary_id = value.object_id;
+            } else {
+                result.tag = Record::tag_t::case_0;
+                result.value =
+                  typename Record::case_0_t{{{value.object_id}, {value.object_generation}},
+                                            {value.expected_authority_owner_generation}};
+            }
             break;
         case relocation_object_kind_t::user_spot:
-            result.spot_id = value.object_id;
+            if constexpr (pilot) {
+                result.spot_id = value.object_id;
+            } else {
+                result.tag = Record::tag_t::case_1;
+                result.value =
+                  typename Record::case_1_t{{{value.object_id}, {value.object_generation}},
+                                            {value.expected_authority_owner_generation}};
+            }
             break;
         case relocation_object_kind_t::instance_spot:
-            result.primary_id = value.stable_type;
-            result.spot_id = value.object_id;
+            if constexpr (pilot) {
+                result.primary_id = value.stable_type;
+                result.spot_id = value.object_id;
+            } else {
+                result.tag = Record::tag_t::case_2;
+                result.value = typename Record::case_2_t{
+                  {value.stable_type}, {value.object_id}, {value.object_generation}};
+            }
             break;
         default:
             break;
@@ -1148,22 +1239,50 @@ service_wire_pilot_relocation_object_identity to_generated (const relocation_obj
     return result;
 }
 
-relocation_object_t from_generated (const service_wire_pilot_relocation_object_identity &value)
+template <typename Record> relocation_object_t from_generated (const Record &value)
 {
+    constexpr bool pilot = std::is_same_v<Record, service_wire_pilot_relocation_object_identity>;
     relocation_object_t result;
-    result.kind = static_cast<relocation_object_kind_t> (value.kind);
-    result.object_generation = value.object_generation;
-    result.expected_authority_owner_generation = value.expected_authority_owner_generation;
-    switch (value.kind) {
-        case service_wire_pilot_relocation_object_kind::actor:
-            result.object_id = value.primary_id;
+    if constexpr (pilot) {
+        result.kind = static_cast<relocation_object_kind_t> (value.kind);
+        result.object_generation = value.object_generation;
+        result.expected_authority_owner_generation = value.expected_authority_owner_generation;
+    } else {
+        result.kind = static_cast<relocation_object_kind_t> (value.objectKind);
+    }
+    switch (result.kind) {
+        case relocation_object_kind_t::actor:
+            if constexpr (pilot) {
+                result.object_id = value.primary_id;
+            } else {
+                const auto &part = std::get<typename Record::case_0_t> (value.value);
+                result.object_id = part.actor.actorId.value;
+                result.object_generation = part.actor.objectGeneration.value;
+                result.expected_authority_owner_generation =
+                  part.expectedAuthorityOwnerGeneration.value;
+            }
             break;
-        case service_wire_pilot_relocation_object_kind::user_spot:
-            result.object_id = value.spot_id;
+        case relocation_object_kind_t::user_spot:
+            if constexpr (pilot) {
+                result.object_id = value.spot_id;
+            } else {
+                const auto &part = std::get<typename Record::case_1_t> (value.value);
+                result.object_id = part.spot.spotId.value;
+                result.object_generation = part.spot.objectGeneration.value;
+                result.expected_authority_owner_generation =
+                  part.expectedAuthorityOwnerGeneration.value;
+            }
             break;
-        case service_wire_pilot_relocation_object_kind::instance_spot:
-            result.stable_type = value.primary_id;
-            result.object_id = value.spot_id;
+        case relocation_object_kind_t::instance_spot:
+            if constexpr (pilot) {
+                result.stable_type = value.primary_id;
+                result.object_id = value.spot_id;
+            } else {
+                const auto &part = std::get<typename Record::case_2_t> (value.value);
+                result.stable_type = part.instanceType.value;
+                result.object_id = part.spotId.value;
+                result.object_generation = part.objectGeneration.value;
+            }
             break;
         default:
             throw service_wire_error_t ("generated relocation object kind is invalid");
@@ -1171,7 +1290,7 @@ relocation_object_t from_generated (const service_wire_pilot_relocation_object_i
     return result;
 }
 
-service_wire_pilot_fence to_generated (const actor_route_fence_t &value)
+template <typename Record> Record to_generated (const actor_route_fence_t &value)
 {
     return {value.actor_id,
             value.object_generation,
@@ -1362,16 +1481,25 @@ std::vector<std::uint8_t> encode_relocation_control (const relocation_control_t 
                   > static_cast<std::uint64_t> (std::numeric_limits<std::int64_t>::max ()))
                   throw service_wire_error_t (
                     "application version exceeds the signed ordinal range");
-              return generated_codec_call ([&] {
-                  return encode_relocation_prepare_40 (
-                    {to_generated (value.relocation), value.target_attempt_generation,
-                     to_generated (value.coordinator), to_generated (value.target),
-                     to_generated (value.initiator_role), to_generated (value.object),
-                     value.source_node_routing_id, value.source_node_generation,
-                     value.payload_total_length, value.payload_chunk_count,
-                     value.payload_checksum_crc32c,
-                     static_cast<std::int64_t> (value.application_version)});
+              namespace codec = generated::detail;
+              auto frames = generated_codec_call ([&] {
+                  return codec::encode_relocationPrepare_40_frames (
+                    {0,
+                     to_generated<codec::relocation_id_t> (value.relocation),
+                     {value.target_attempt_generation},
+                     to_generated<codec::relocation_coordinator_fence_t> (value.coordinator),
+                     to_generated<codec::relocation_target_fence_t> (value.target),
+                     static_cast<codec::relocation_role_t> (value.initiator_role),
+                     to_generated<codec::relocation_object_identity_t> (value.object),
+                     {value.source_node_routing_id},
+                     {value.source_node_generation},
+                     {value.payload_total_length},
+                     {value.payload_chunk_count},
+                     {value.payload_checksum_crc32c},
+                     {static_cast<std::int64_t> (value.application_version)},
+                     {value.deadline_unix_ms}});
               });
+              return std::move (frames.front ());
           } else if constexpr (std::is_same_v<record_t, relocation_ready_t>) {
               return generated_codec_call ([&] {
                   return encode_relocation_ready_30 (
@@ -1421,21 +1549,30 @@ relocation_control_t decode_relocation_control (std::span<const std::uint8_t> by
         throw service_wire_error_t ("invalid relocation control flags");
     switch (header.kind) {
         case command::relocationPrepare: {
-            const auto generated = generated_codec_call (
-              [&] { return decode_relocation_prepare_40 (wire_bytes (bytes)); });
-            return relocation_prepare_t{from_generated (generated.relocation),
-                                        generated.target_attempt_generation,
-                                        from_generated (generated.coordinator),
-                                        from_generated (generated.target),
-                                        from_generated (generated.initiator_role),
-                                        from_generated (generated.object),
-                                        generated.source_node_rid,
-                                        generated.source_node_generation,
-                                        generated.payload_total_length,
-                                        generated.payload_chunk_count,
-                                        generated.payload_checksum_crc32c,
-                                        static_cast<std::uint64_t> (generated.application_version)};
+            namespace codec = generated::detail;
+            const auto value = generated_codec_call (
+              [&] { return codec::decode_relocationPrepare_40_frames ({wire_bytes (bytes)}); });
+            return relocation_prepare_t{
+              {value.relocation.high.value, value.relocation.low.value},
+              value.targetAttemptGeneration.value,
+              {value.coordinator.coordinatorOwnerId.value,
+               value.coordinator.coordinatorLeaseGeneration.value,
+               value.coordinator.coordinatorNodeRid.value,
+               value.coordinator.coordinatorNodeGeneration.value,
+               value.coordinator.expectedAuthorityStoreVersion.value},
+              {value.target.targetNodeRid.value, value.target.targetNodeGeneration.value,
+               value.target.targetOwnerId.value, value.target.targetOwnerLeaseGeneration.value},
+              static_cast<relocation_role_t> (value.initiatorRole),
+              from_generated (value.object),
+              value.sourceNodeRid.value,
+              value.sourceNodeGeneration.value,
+              value.payloadTotalLength.value,
+              value.payloadChunkCount.value,
+              value.payloadChecksumCrc32c.value,
+              static_cast<std::uint64_t> (value.applicationVersion.value),
+              value.deadlineUnixMs.value};
         }
+
         case command::relocationReady: {
             const auto generated = generated_codec_call (
               [&] { return decode_relocation_ready_30 (wire_bytes (bytes)); });

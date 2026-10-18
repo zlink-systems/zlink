@@ -55,7 +55,7 @@ final class ZLinkSameTargetActivationTest {
                         factoryThread.complete(Thread.currentThread());
                         return backendSpot(generation);
                     },
-                    (type, id, generation, spot) -> {
+                    (type, route, spot) -> {
                         hookThread.complete(Thread.currentThread());
                         return CompletableFuture.completedFuture(null);
                     });
@@ -64,9 +64,9 @@ final class ZLinkSameTargetActivationTest {
                             ? registry.activate(
                                     "spot",
                                     "room",
-                                    1,
+                                    route(),
                                     Long.MAX_VALUE,
-                                    spot -> {
+                                    (spot, admission) -> {
                                         restoreThread.complete(Thread.currentThread());
                                         return CompletableFuture.completedFuture(null);
                                     })
@@ -74,8 +74,8 @@ final class ZLinkSameTargetActivationTest {
                                     "spot",
                                     "room",
                                     Long.MAX_VALUE,
-                                    () -> CompletableFuture.completedFuture(1L),
-                                    spot -> {
+                                    () -> CompletableFuture.completedFuture(route()),
+                                    (spot, admission) -> {
                                         restoreThread.complete(Thread.currentThread());
                                         return CompletableFuture.completedFuture(null);
                                     });
@@ -215,14 +215,14 @@ final class ZLinkSameTargetActivationTest {
                     created.incrementAndGet();
                     return backendSpot(generation);
                 },
-                (type, id, generation, spot) -> ready);
+                (type, route, spot) -> ready);
         var event =
                 registry.activate(
                         "spot",
                         "room",
-                        1,
+                        route(),
                         Long.MAX_VALUE,
-                        spot -> {
+                        (spot, admission) -> {
                             admitted.add(1);
                             return CompletableFuture.completedFuture(null);
                         });
@@ -230,9 +230,9 @@ final class ZLinkSameTargetActivationTest {
                 registry.activate(
                         "spot",
                         "room",
-                        1,
+                        route(),
                         Long.MAX_VALUE,
-                        spot -> {
+                        (spot, admission) -> {
                             admitted.add(2);
                             return CompletableFuture.completedFuture(null);
                         });
@@ -240,9 +240,9 @@ final class ZLinkSameTargetActivationTest {
                 registry.activate(
                         "spot",
                         "room",
-                        1,
+                        route(),
                         Long.MAX_VALUE,
-                        spot -> {
+                        (spot, admission) -> {
                             admitted.add(3);
                             return CompletableFuture.completedFuture(null);
                         });
@@ -265,8 +265,14 @@ final class ZLinkSameTargetActivationTest {
         var registry =
                 new ZLinkJavaInstanceSpotRegistry(new ZLinkStateLane(Runnable::run), Runnable::run);
         registry.register("room", (id, generation) -> backendSpot(generation));
-        var first = registry.activate("spot", "room", 1, Long.MAX_VALUE, spot -> firstTerminal);
-        var joined = registry.activate("spot", "room", 1).toCompletableFuture();
+        var first =
+                registry.activate(
+                        "spot",
+                        "room",
+                        route(),
+                        Long.MAX_VALUE,
+                        (spot, admission) -> firstTerminal);
+        var joined = registry.activate("spot", "room", route()).toCompletableFuture();
         assertTrue(joined.isDone(), "Ready join waited for the earlier Store terminal");
         var terminals = registry.terminals().toCompletableFuture();
         assertFalse(terminals.isDone(), "shutdown did not wait for the earlier Store terminal");
@@ -283,18 +289,23 @@ final class ZLinkSameTargetActivationTest {
                 new ZLinkJavaInstanceSpotRegistry(
                         new ZLinkStateLane(Runnable::run), scheduled::add);
         registry.register("room", (id, generation) -> backendSpot(generation));
-        var first = registry.activate("spot", "room", 1).toCompletableFuture();
+        var first = registry.activate("spot", "room", route()).toCompletableFuture();
         Runnable next;
         while ((next = scheduled.poll()) != null) next.run();
         assertTrue(first.isDone());
 
         var closed =
-                registry.activate("spot", "room", 1)
+                registry.activate("spot", "room", route())
                         .thenApply(activation -> registry.close("spot", 1))
                         .toCompletableFuture();
         while ((next = scheduled.poll()) != null) next.run();
         assertTrue(closed.join(), "successful Ready join left the registry pending");
         registry.closeAll();
+    }
+
+    private static ZLinkServiceM6BWireCodec.InstanceRouteFence route() {
+        return new ZLinkServiceM6BWireCodec.InstanceRouteFence(
+                RoutingId.from("target"), 1, "spot", 1, "owner", 1, 1, "version");
     }
 
     private static ZLinkBackendSpot backendSpot(long generation) {

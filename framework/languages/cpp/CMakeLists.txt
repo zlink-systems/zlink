@@ -1022,6 +1022,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   target_compile_definitions(test_cpp_framework_service_wire_codec PRIVATE
     ZLINK_CLIENT_SERVER_METADATA_FIXTURE_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/fixtures/client-server-metadata.json"
+    ZLINK_SESSION_DISCONNECTED_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/golden/session-disconnected-v1.json"
     ZLINK_BOUND_SESSION_REPLACED_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/golden/bound-session-replaced-v1.json"
     ZLINK_REPLY_RELAY_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/golden/reply-relay-v1.json"
     ZLINK_RELOCATION_CONTROL_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/golden/relocation-control-v1.json"
@@ -2005,7 +2006,8 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     opentelemetry-cpp::metrics)
   target_include_directories(test_cpp_framework_location_runtime PRIVATE
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/include
-    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   zlink_framework_cpp_add_test(
     NAME test_cpp_framework_location_runtime
     COMMAND test_cpp_framework_location_runtime

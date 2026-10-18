@@ -45,15 +45,15 @@ final class ZLinkAcceptedJournalReplayer
         if (laneId.startsWith("actor:")) {
             ZLinkActorAcceptedJournal.Record record =
                     ZLinkActorAcceptedJournal.decode(queued.payload());
-            if (!laneId.substring("actor:".length()).equals(record.actorId())) {
-                return CompletableFuture.failedFuture(
-                        new IllegalArgumentException(
-                                "accepted Actor journal lane does not match ActorId"));
+            try {
+                requireActorLane(laneId, record);
+            } catch (IllegalArgumentException failure) {
+                return CompletableFuture.failedFuture(failure);
             }
-            return complete(
-                    () -> actorDispatch.dispatch(record),
-                    (reply, failure) ->
-                            replyRelay.completeActor(record, queued.sequence(), reply, failure));
+            return relayActorOutcome(
+                    record,
+                    queued.sequence(),
+                    ZLinkHandlerStages.fromStageSupplier(() -> actorDispatch.dispatch(record)));
         }
         return CompletableFuture.failedFuture(
                 new IllegalArgumentException("unknown accepted journal lane: " + laneId));
@@ -84,9 +84,66 @@ final class ZLinkAcceptedJournalReplayer
                 .thenCompose(stage -> stage);
     }
 
+    @Override
+    public java.util.function.Supplier<CompletionStage<Void>> prepareReplay(
+            String laneId,
+            ZLinkSerialExecutionQueue.QueuedRecord queued,
+            CompletionStage<Void> terminal,
+            java.util.function.Consumer<CompletionStage<Void>> observe) {
+        if (!laneId.startsWith("actor:"))
+            return ZLinkUserSpotAggregateStagingOwner.JournalReplayer.super.prepareReplay(
+                    laneId, queued, terminal, observe);
+        var record = ZLinkActorAcceptedJournal.decode(queued.payload());
+        requireActorLane(laneId, record);
+        var dispatched = new CompletableFuture<Optional<byte[]>>();
+        observe.accept(
+                terminal.handle(
+                                (ignored, failure) -> {
+                                    if (failure != null)
+                                        return relayActorOutcome(
+                                                record,
+                                                queued.sequence(),
+                                                CompletableFuture.failedFuture(unwrap(failure)));
+                                    // Commit completes a transferred, unstarted Entry without
+                                    // running its supplier.
+                                    // The next FIFO owner also owns its reply; this owner has no
+                                    // dispatch outcome.
+                                    if (!dispatched.isDone())
+                                        return CompletableFuture.<Void>completedFuture(null);
+                                    return relayActorOutcome(record, queued.sequence(), dispatched);
+                                })
+                        .thenCompose(result -> result));
+        return () -> {
+            var execution =
+                    ZLinkHandlerStages.fromStageSupplier(() -> actorDispatch.dispatch(record));
+            return execution
+                    .whenComplete(
+                            (reply, failure) -> {
+                                if (failure == null) dispatched.complete(reply);
+                                else dispatched.completeExceptionally(unwrap(failure));
+                            })
+                    .thenApply(reply -> null);
+        };
+    }
+
+    private static void requireActorLane(String laneId, ZLinkActorAcceptedJournal.Record record) {
+        if (!laneId.substring("actor:".length()).equals(record.actorId()))
+            throw new IllegalArgumentException(
+                    "accepted Actor journal lane does not match ActorId");
+    }
+
+    private CompletionStage<Void> relayActorOutcome(
+            ZLinkActorAcceptedJournal.Record record,
+            long sequence,
+            CompletionStage<Optional<byte[]>> dispatched) {
+        return complete(
+                () -> dispatched,
+                (reply, failure) -> replyRelay.completeActor(record, sequence, reply, failure));
+    }
+
     private static Throwable unwrap(Throwable failure) {
-        while (failure instanceof CompletionException && failure.getCause() != null)
-            failure = failure.getCause();
+        while (failure instanceof java.util.concurrent.CompletionException
+                && failure.getCause() != null) failure = failure.getCause();
         return failure;
     }
 

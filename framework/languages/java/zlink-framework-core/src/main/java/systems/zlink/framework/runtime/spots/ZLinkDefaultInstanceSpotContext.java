@@ -45,6 +45,7 @@ final class DefaultInstanceSpotContext implements ZLinkInstanceSpotContext, Spot
             handlerType -> handlers.addHandler(handlerType);
     private final ZLinkSpotTimerRegistry timers;
     private ZLinkInstanceSpot spot;
+    private ZLinkInstanceSpotActivation activation;
 
     DefaultInstanceSpotContext(
             ZLinkSpotContextHost host,
@@ -89,7 +90,8 @@ final class DefaultInstanceSpotContext implements ZLinkInstanceSpotContext, Spot
                                 enqueueDispatch(() -> host.runWithOutbound(outbound, operation)));
     }
 
-    void bind(ZLinkInstanceSpot value) {
+    void bind(ZLinkInstanceSpot value, ZLinkInstanceSpotActivation owner) {
+        activation = Objects.requireNonNull(owner, "owner");
         spot = Objects.requireNonNull(value, "spot");
         timers.setSpot(value);
     }
@@ -105,8 +107,50 @@ final class DefaultInstanceSpotContext implements ZLinkInstanceSpotContext, Spot
                                         timers.add(name, period, handlerType, options)));
     }
 
-    CompletionStage<Void> runLifecycle(Supplier<CompletionStage<Void>> operation) {
-        return enqueueDispatch(() -> host.runWithOutbound(outbound, operation));
+    <T> CompletionStage<T> prepareActivation(Supplier<CompletionStage<T>> operation) {
+        return dispatchQueue.prepareActivation(
+                () -> runLifecycleExecution(() -> host.runWithOutbound(outbound, operation)));
+    }
+
+    CompletionStage<Void> openActivationPreparationAdmission() {
+        return dispatchQueue.openActivationPreparationAdmission(
+                message ->
+                        message instanceof ZLinkBackendReceived received
+                                && received.activationMessage().isPresent());
+    }
+
+    CompletionStage<Void> completeRecoveredPreparation(
+            Throwable failure, Supplier<CompletionStage<Void>> discard) {
+        return dispatchQueue.completeActivationPreparation(null, failure, discard);
+    }
+
+    CompletionStage<Void> completeActivationRecovery(
+            systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
+                            .InstanceSpotMessage
+                    message,
+            Throwable failure,
+            Supplier<CompletionStage<Void>> discard) {
+        return dispatchQueue.completeActivationPreparation(
+                candidate -> {
+                    if (!(candidate instanceof ZLinkBackendReceived received)) return false;
+                    return received.activationMessage()
+                            .filter(
+                                    first ->
+                                            first.operationHigh() == message.operationHigh()
+                                                    && first.operationLow()
+                                                            == message.operationLow()
+                                                    && first.sourceNodeRid()
+                                                            .equals(message.sourceNodeRid())
+                                                    && first.sourceNodeGeneration()
+                                                            == message.sourceNodeGeneration())
+                            .isPresent();
+                },
+                failure,
+                discard);
+    }
+
+    CompletionStage<Void> finishActivationPreparation() {
+        return dispatchQueue.finishActivationPreparation();
     }
 
     /**
@@ -327,8 +371,7 @@ final class DefaultInstanceSpotContext implements ZLinkInstanceSpotContext, Spot
 
     @Override
     public CompletionStage<Boolean> close() {
-        return ZLinkSerialExecutionQueue.yieldCurrent(
-                host.closeInstanceSpot(spotId(), objectGeneration()));
+        return ZLinkSerialExecutionQueue.yieldCurrent(activation.closeExplicit());
     }
 
     @Override

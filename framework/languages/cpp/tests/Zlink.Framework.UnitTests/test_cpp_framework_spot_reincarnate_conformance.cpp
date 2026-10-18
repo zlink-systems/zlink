@@ -18,6 +18,7 @@
 #include <chrono>
 #include <cstdint>
 #include <fstream>
+#include <functional>
 #include <future>
 #include <map>
 #include <memory>
@@ -153,6 +154,7 @@ struct evidence_t
     std::promise<void> initializer_entered;
     zf::task_completion_source_t<void> initializer_release;
     std::uint64_t initializing_generation = 0;
+    std::function<void ()> initializer_cleanup;
     std::optional<std::promise<void>> intent_arrived{std::in_place};
     std::optional<std::promise<void>> followup_arrived{std::in_place};
     std::optional<std::promise<void>> draining_observed{std::in_place};
@@ -364,6 +366,11 @@ class reincarnating_spot_t final : public zf::instance_spot_t
     {
         _evidence->activation = zf::detail::spot_context_access_t::state (_context);
     }
+    ~reincarnating_spot_t () override
+    {
+        if (_initializer_cleanup)
+            _initializer_cleanup ();
+    }
     zf::instance_spot_context_t &context () noexcept override { return _context; }
     const zf::instance_spot_context_t &context () const noexcept override { return _context; }
     void configure () override
@@ -389,8 +396,13 @@ class reincarnating_spot_t final : public zf::instance_spot_t
         }
         if (recreating && initializer_is_held (_evidence->branch))
             co_await _evidence->initializer_release.task ();
-        if (recreating && _evidence->branch == branch_t::initialization_failure)
+        if (recreating && _evidence->branch == branch_t::initialization_failure) {
+            {
+                std::lock_guard lock (_evidence->mutex);
+                _initializer_cleanup = _evidence->initializer_cleanup;
+            }
             throw std::runtime_error ("conformance initializer failure");
+        }
         {
             std::lock_guard lock (_evidence->mutex);
             _projection = _evidence->durable_value;
@@ -460,6 +472,7 @@ class reincarnating_spot_t final : public zf::instance_spot_t
     zf::instance_spot_context_t _context;
     std::shared_ptr<evidence_t> _evidence;
     int _projection = 0;
+    std::function<void ()> _initializer_cleanup;
 };
 
 // The terminal observer records request completion before caller continuation scheduling.
@@ -601,6 +614,8 @@ class exercise_t final : public zf::hosted_service_t
     std::optional<reply_t> clear_marker_reply;
     std::optional<zf::result_t<bool>> close_result;
     bool close_pending_during_initializer = false;
+    bool intent_retained_during_cleanup = false;
+    bool intent_terminal_during_cleanup = true;
     std::size_t handlers_during_initializer = 0;
     std::optional<zf::authority_snapshot_t> authority_during_initializer;
     int factories_before_followup = 0;
@@ -840,6 +855,26 @@ class exercise_t final : public zf::hosted_service_t
               .result ();
         });
         std::future<zf::result_t<reply_t>> followup;
+        std::shared_ptr<zf::task_completion_source_t<void>> cleanup_release;
+        std::shared_ptr<std::promise<void>> cleanup_started;
+        std::future<void> cleanup_entered;
+        std::shared_ptr<const zf::detail::instance_spot_retained_message_t> cleanup_intent;
+        std::shared_ptr<zf::runtime::serial_execution_queue_t> cleanup_queue;
+        std::shared_ptr<zf::runtime::offload_executor_t> cleanup_worker;
+        if (_evidence->branch == branch_t::initialization_failure) {
+            cleanup_release = std::make_shared<zf::task_completion_source_t<void>> ();
+            cleanup_started = std::make_shared<std::promise<void>> ();
+            cleanup_entered = cleanup_started->get_future ();
+            std::lock_guard lock (_evidence->mutex);
+            _evidence->initializer_cleanup = [cleanup_started, cleanup_release] {
+                cleanup_started->set_value ();
+                cleanup_release->task ().result ().value ();
+            };
+        }
+        const std::shared_ptr<void> release_cleanup_on_exit (nullptr, [cleanup_release] (void *) {
+            if (cleanup_release)
+                cleanup_release->complete (zf::result_t<void>::success ());
+        });
         try {
             require_ready (intent_arrived, "intent request did not reach the Closing owner");
             const auto held = _store->inspect_authority ().result ().value ();
@@ -855,6 +890,19 @@ class exercise_t final : public zf::hosted_service_t
                      != original_authority->allocation.target.node_rid.value ())
                 throw std::runtime_error (
                   "intent admission did not preserve the Closing owner fence");
+            if (cleanup_release) {
+                const auto state = _evidence->activation;
+                cleanup_queue = state->serial_queue;
+                cleanup_worker = state->serial_executor;
+                const auto records = cleanup_queue->pending_messages ().result ().value ();
+                if (records.empty ())
+                    throw std::runtime_error ("Closing queue has no admitted intent");
+                cleanup_intent =
+                  std::static_pointer_cast<const zf::detail::instance_spot_retained_message_t> (
+                    records.front ());
+                if (!cleanup_intent->completion)
+                    throw std::runtime_error ("admitted intent has no target completion");
+            }
             no_intent_result.emplace (no_intent.get ());
             if (_evidence->branch == branch_t::draining
                 || _evidence->branch == branch_t::relocating) {
@@ -940,6 +988,21 @@ class exercise_t final : public zf::hosted_service_t
                       "operational admission seal did not match fixture phase");
             }
             _evidence->closing_release.complete (zf::result_t<void>::success ());
+            if (cleanup_release) {
+                require_ready (cleanup_entered, "failed initializer cleanup did not start");
+                // The single worker reaches this marker after the already-published
+                // queue runner. No application marker waits behind the held Close.
+                auto marker = std::make_shared<std::promise<void>> ();
+                auto observed = marker->get_future ();
+                if (!cleanup_worker->try_submit_internal ([marker] { marker->set_value (); }))
+                    throw std::runtime_error ("cleanup observation marker was rejected");
+                require_ready (observed, "cleanup observation marker did not run");
+                const auto retained = cleanup_queue->pending_messages ().result ().value ();
+                intent_retained_during_cleanup =
+                  std::find (retained.begin (), retained.end (), cleanup_intent) != retained.end ();
+                intent_terminal_during_cleanup = cleanup_intent->completion->task ().await_ready ();
+                cleanup_release->complete (zf::result_t<void>::success ());
+            }
             if (initializer_is_held (_evidence->branch)) {
                 require_ready (initializer_entered, "new incarnation initializer did not start");
                 const auto published = _store->inspect_authority ().result ().value ();
@@ -1046,6 +1109,8 @@ void configure_app (zf::app_t &app,
 {
     app.logging ().use_file ("spot-reincarnate.flow").set_min_level (zf::log_level_t::debug);
     app.add_zlink_framework ([&] (zf::zlink_framework_options_t &options) {
+        if (evidence->branch == branch_t::initialization_failure)
+            options.worker ().min_threads (1).max_threads (1);
         options.configure_dispatch ().message_flow (zf::message_flow_log_mode_t::detailed);
         zf::detail::dispatch_options_access_t::set_dispatch_error_observer_for_tests (
           options.configure_dispatch (),
@@ -1189,6 +1254,10 @@ void check_branch (branch_t kind,
     EXPECT_EQ (zf::framework_error_kind_t::not_found, exercise->no_intent_result->error_kind ());
     std::lock_guard lock (evidence->mutex);
     EXPECT_EQ (1, evidence->closing_calls);
+    if (kind == branch_t::initialization_failure) {
+        EXPECT_TRUE (exercise->intent_retained_during_cleanup);
+        EXPECT_FALSE (exercise->intent_terminal_during_cleanup);
+    }
     if (initializer_is_held (kind)) {
         EXPECT_TRUE (exercise->close_pending_during_initializer);
         EXPECT_EQ (0u, exercise->handlers_during_initializer);

@@ -7,10 +7,17 @@ internal sealed class ZLinkSessionStreamTransport(
 {
     public bool Write(Message payload)
     {
-        if (stream is ZLinkManagedStream managedStream)
-            return managedStream.WriteRaw(payload);
+        try
+        {
+            if (stream is ZLinkManagedStream managedStream)
+                return managedStream.WriteRaw(payload);
 
-        return stream.Write(ZLinkMessage.From(payload.ToArray()));
+            return stream.Write(ZLinkMessage.From(payload.ToArray()));
+        }
+        catch (ZlinkSubmitException failure)
+        {
+            throw ZLinkSubmitFailureMapper.CreateException(failure, "Session write");
+        }
     }
 
     public Task SubmitAsync(Message payload, CancellationToken cancellationToken) =>
@@ -98,15 +105,8 @@ internal sealed class ZLinkSessionStreamTransport(
         using (frame)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            try
-            {
-                if (!Write(frame))
-                    throw new InvalidOperationException(failureMessage);
-            }
-            catch
-            {
-                throw;
-            }
+            if (!Write(frame))
+                throw new InvalidOperationException(failureMessage);
         }
         traceWritten(responseHeader);
         return ValueTask.CompletedTask;

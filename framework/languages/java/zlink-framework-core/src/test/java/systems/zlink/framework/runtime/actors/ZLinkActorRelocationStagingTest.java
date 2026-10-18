@@ -228,7 +228,7 @@ final class ZLinkActorRelocationStagingTest {
     void boundSessionSendWithoutFenceAtMovingBoundaryIsRetryableUnavailable() {
         ZLinkActorRuntime runtime = runtime(new AtomicInteger());
         var prepared = publishedActor(runtime, "actor-moving-fence");
-        runtime.beginRemoteMove(prepared.actor()).toCompletableFuture().join();
+        runtime.beginLocalMove(prepared.actor());
         assertTrue(runtime.isMoving(prepared.actor()));
         try (Message payload = Message.from(new byte[] {1})) {
             ZLinkFrameworkException failure =

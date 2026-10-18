@@ -422,7 +422,8 @@ internal sealed partial class ZLinkFrameworkRuntime
         CancellationToken cancellationToken = default
     )
     {
-        using var operation = (await AdmitOperationAsync().ConfigureAwait(false)).Enter();
+        // Accepted disconnect cleanup is infrastructure (Session binding §10).
+        // The Actor lifecycle and Spot gate own callback serialization.
         if (_state is null)
             return false;
 
@@ -441,7 +442,6 @@ internal sealed partial class ZLinkFrameworkRuntime
         CancellationToken cancellationToken = default
     )
     {
-        using var operation = (await AdmitOperationAsync().ConfigureAwait(false)).Enter();
         if (_state is null)
             return false;
 

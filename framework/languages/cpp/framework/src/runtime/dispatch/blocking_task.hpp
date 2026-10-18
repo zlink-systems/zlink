@@ -16,11 +16,12 @@ template <typename T> task_t<T> run_blocking_step (std::function<task_t<T> ()> s
 {
     auto completion = std::make_shared<task_completion_source_t<T>> ();
     auto result = completion->task ();
-    auto run = [step = std::move (step), completion] () mutable {
+    auto owned_step = std::make_shared<std::function<task_t<T> ()>> (std::move (step));
+    auto run = [owned_step, completion] () mutable {
         try {
-            auto running = std::make_shared<task_t<T>> (step ());
+            auto running = std::make_shared<task_t<T>> ((*owned_step) ());
             detail::observe_task_terminal (
-              *running, [running, completion] (const result_t<T> &value) mutable {
+              *running, [running, completion, owned_step] (const result_t<T> &value) mutable {
                   completion->complete (value);
               });
         }

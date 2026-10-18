@@ -5,12 +5,14 @@ import type {
   ZLinkActorHandoffPrefixAdmission,
   ZLinkActorHandoffPrefixRecord
 } from '../actors/actor-handoff';
-import type { ZLinkExecutionBarrier } from '../execution';
+import type { ZLinkExecutionBarrier, ZLinkExecutionBarrierSeal } from '../execution';
 import type {
   ZLinkSerialSchedulerOptions,
   ZLinkSerialWorkOptions
 } from '../execution/serial-execution-queue';
 import { ZLinkSpotSerialTurnExecutor } from './spot-serial-turn-executor';
+
+export type ZLinkSpotPreparationCompletion = 'publication' | 'first-terminal';
 
 export type ZLinkActorPacketTurnDispatch = (
   serial: ZLinkSpotSerialTurnExecutor,
@@ -30,6 +32,11 @@ export class ZLinkSpotSerialExecutor {
   private executionBarrier: ZLinkExecutionBarrier | undefined;
   private closing = false;
   private closePromise: Promise<void> | undefined;
+  private preparation?: {
+    readonly seal: ZLinkExecutionBarrierSeal;
+    readonly complete: (terminal?: () => Promise<void>) => void;
+    readonly execution: Promise<void>;
+  };
 
   constructor(
     private readonly spotSerial: ZLinkSpotSerialTurnExecutor,
@@ -46,6 +53,54 @@ export class ZLinkSpotSerialExecutor {
     this.spotSerial.setExecutionBarrier(barrier);
     for (const serial of this.actorSerials.values()) serial.setExecutionBarrier(barrier);
     for (const serial of this.timerSerials.values()) serial.setExecutionBarrier(barrier);
+  }
+
+  get isPreparing(): boolean {
+    return this.preparation !== undefined;
+  }
+
+  beginPreparation(kind: 'activation' | 'relocation' = 'activation'): void {
+    if (this.preparation !== undefined || this.executionBarrier === undefined)
+      throw new Error('Activation preparation requires one unowned execution barrier.');
+    const barrier = this.executionBarrier;
+    const seal = barrier.seal(kind);
+    let complete!: (terminal?: () => Promise<void>) => void;
+    const terminal = new Promise<(() => Promise<void>) | undefined>((resolve) => {
+      complete = resolve;
+    });
+    // The staging seal itself owns target preparation. No normal preparation
+    // item is admitted in addition to this lifecycle owner.
+    const execution = this.spotSerial.executeControlLifecycleOperation(
+      async () => {
+        const finish = await terminal;
+        await finish?.();
+      },
+      {
+        canExecuteApplication: (record) => record.context === undefined || !barrier.isCurrent(seal)
+      }
+    );
+    this.preparation = { seal, complete, execution };
+  }
+
+  openPreparationAdmission(): void {
+    if (this.preparation !== undefined) this.executionBarrier!.abort(this.preparation.seal);
+  }
+
+  async finishPreparation(terminal?: () => Promise<void>): Promise<void> {
+    const preparation = this.preparation;
+    if (preparation === undefined) {
+      await terminal?.();
+      return;
+    }
+    preparation.complete(terminal);
+    try {
+      await preparation.execution;
+    } finally {
+      if (this.preparation === preparation) {
+        this.executionBarrier!.abort(preparation.seal);
+        this.preparation = undefined;
+      }
+    }
   }
 
   executeSpot<T>(
@@ -88,7 +143,7 @@ export class ZLinkSpotSerialExecutor {
             )
           ),
         preparation: record.preparation,
-        workOptions: { payloadBytes: record.payloadBytes }
+        workOptions: { payloadBytes: record.payloadBytes, onWithdrawable: record.onWithdrawable }
       }))
     );
     const terminal = Promise.allSettled(terminals).then((outcomes) => {

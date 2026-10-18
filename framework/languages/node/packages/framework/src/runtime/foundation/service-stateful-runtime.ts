@@ -247,6 +247,7 @@ export interface ServiceInstanceApplicationLifecycle {
   isIdleEvicting?(target: ServiceInstanceApplicationIdentity): boolean;
   beginIdleEviction?(target: ServiceInstanceApplicationIdentity): boolean;
   materialize(target: ServiceInstanceApplicationIdentity, objectGeneration: bigint): Promise<void>;
+  publish?(target: ServiceInstanceApplicationTarget): void;
   discard(target: ServiceInstanceActivationTarget): Promise<void>;
   beginTerminal(target: ServiceInstanceApplicationTarget): void;
   completeTerminal(target: ServiceInstanceApplicationTarget): Promise<boolean>;
@@ -1360,13 +1361,12 @@ export class ServiceStatefulRuntime {
 
   async sendToActor(
     target: ServiceActorRef,
-    _targetNodeGeneration: bigint,
-    _authorityOwnerGeneration: bigint,
     payload: ServiceApplicationPayload,
     sourceActor?: ServiceActorRef,
-    boundSession?: { readonly sessionRid: string; readonly bindingGeneration: bigint }
+    boundSession?: { readonly sessionRid: string; readonly bindingGeneration: bigint },
+    routeFence?: ServiceActorRouteFence
   ): Promise<number> {
-    const route = this.tryActorFence(target);
+    const route = routeFence ?? this.tryActorFence(target);
     if (route === undefined) return SubmitResult.NotFound;
     const header = encodeActorHeader(
       'actorSend',
@@ -1386,16 +1386,15 @@ export class ServiceStatefulRuntime {
 
   requestToActor(
     target: ServiceActorRef,
-    _targetNodeGeneration: bigint,
-    _authorityOwnerGeneration: bigint,
     payload: ServiceApplicationPayload,
     timeoutMs: number,
     sourceActor?: ServiceActorRef,
     boundSession?: { readonly sessionRid: string; readonly bindingGeneration: bigint },
-    onAdmitted?: () => void
+    onAdmitted?: () => void,
+    routeFence?: ServiceActorRouteFence
   ): ServiceStatefulPendingOperation {
     const pending = this.operations.register(timeoutMs);
-    const route = this.tryActorFence(target);
+    const route = routeFence ?? this.tryActorFence(target);
     if (route === undefined) {
       this.operations.reply(
         pending.id,
@@ -1973,17 +1972,10 @@ export class ServiceStatefulRuntime {
     if (delivery === undefined || !routingIdsEqual(delivery.binding.sessionRid, sessionRid)) {
       return SubmitResult.NotFound;
     }
-    return this.sendToActor(
-      actor,
-      this.peerGeneration(actor.nodeRid),
-      actor.generation,
-      payload,
-      undefined,
-      {
-        sessionRid,
-        bindingGeneration: delivery.binding.bindingGeneration
-      }
-    );
+    return this.sendToActor(actor, payload, undefined, {
+      sessionRid,
+      bindingGeneration: delivery.binding.bindingGeneration
+    });
   }
 
   async sendBoundSession(
@@ -2296,11 +2288,9 @@ export class ServiceStatefulRuntime {
               : { sourceBindingGeneration: record.boundSession.bindingGeneration }),
             targetActor: actor.ref,
             messageFollowOrigin: {
+              target: record.target,
               sourceNodeRid: ingress.sourceRoutingId,
-              originalOperation: {
-                high: this.peerGeneration(ingress.sourceRoutingId),
-                low: record.correlation ?? this.nextMessageFollowOperation++
-              },
+              originalOperation: record.operation,
               originalReplyRouteId: ingress.requestSequence ?? 0n
             },
             ...(record.kind === 'actorRequest'
@@ -2581,6 +2571,7 @@ export class ServiceStatefulRuntime {
         latestRoute !== undefined && sameInstanceApplicationOwner(latestRoute, record.route)
           ? { ...record, route: latestRoute }
           : record;
+      this.publishCommittedInstanceRoute(intent.instanceType, refreshedRecord.route);
       const spot = this.requireInstanceActivation(ingress, refreshedRecord);
       const admitted = this.enqueueActivatedInstanceSpot(
         ingress,
@@ -3232,8 +3223,6 @@ export class ServiceStatefulRuntime {
       if (activation.created) this.registry.closeSpot(activation.spot.ref);
       throw new ServiceStaleGenerationError('spot', target.targetSpotId);
     }
-    this.publishCommittedInstanceRoute(target.stableType, route);
-
     const confirmed = await authority.read(target);
     if (confirmed.kind !== 'ready' || !sameInstanceRoute(confirmed.route, route)) {
       if (confirmed.kind === 'ready' && confirmed.route.targetNodeRid !== this.nodeRid) {
@@ -3248,6 +3237,7 @@ export class ServiceStatefulRuntime {
     ) {
       throw new ServiceStaleGenerationError('spot', target.targetSpotId);
     }
+    this.publishCommittedInstanceRoute(target.stableType, confirmed.route);
     return { spot: current, route: confirmed.route };
   }
 
@@ -3265,6 +3255,9 @@ export class ServiceStatefulRuntime {
           : instanceRouteAsDirectRoute(expectedCurrentRoute);
     this.rememberSpotRoute(directRoute, expectedDirectRoute);
     this.registerInstanceIntent(stableType, route, expectedCurrentRoute);
+    const target = this.instanceSpotApplicationTarget(route.targetSpotId);
+    if (target !== undefined)
+      this.instanceApplicationLifecycle?.publish?.({ targetSpotId: route.targetSpotId, ...target });
   }
 
   private replaceCommittedInstanceRoute(
@@ -4567,6 +4560,12 @@ export class ServiceStatefulRuntime {
           operationKind: OperationKind.ActorRequest,
           correlation: decoded.correlation,
           targetActor: current.ref,
+          messageFollowOrigin: {
+            target: decoded.target,
+            sourceNodeRid: ingress.sourceRoutingId,
+            originalOperation: decoded.operation,
+            originalReplyRouteId: ingress.requestSequence ?? 0n
+          },
           ...(decoded.sourceActor === undefined
             ? {}
             : { sourceActor: { ...decoded.sourceActor, nodeRid: ingress.sourceRoutingId } }),

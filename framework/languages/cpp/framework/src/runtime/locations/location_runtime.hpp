@@ -24,6 +24,7 @@
 #include <random>
 #include <stop_token>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace zlink::framework::runtime
@@ -79,6 +80,7 @@ class location_runtime_t
         std::atomic_bool stop = false;
         std::mutex gate;
         std::condition_variable wake;
+        bool pending_peer_reconcile = false;
         std::shared_ptr<heartbeat_attempt_t> current;
     };
 
@@ -419,6 +421,19 @@ class location_runtime_t
           ->admission_deadline;
     }
 
+    auto peer_reconcile_requester () const
+    {
+        return
+          [owner = std::weak_ptr{std::atomic_load_explicit (
+             &_heartbeat_state, std::memory_order_acquire)}] (const std::vector<std::uint8_t> &) {
+              if (auto heartbeat = owner.lock ()) {
+                  std::lock_guard lock (heartbeat->gate);
+                  heartbeat->pending_peer_reconcile = true;
+                  heartbeat->wake.notify_all ();
+              }
+          };
+    }
+
     void wake_owner_lease_observers () const
     {
         if (auto heartbeat =
@@ -432,7 +447,6 @@ class location_runtime_t
                                       const task_t<void> &stopped,
                                       std::chrono::milliseconds polling_interval) const
     {
-        constexpr auto *wait_site = "location/discovery-input";
         if (auto heartbeat =
               std::atomic_load_explicit (&_heartbeat_state, std::memory_order_acquire);
             heartbeat && !heartbeat->stop.load (std::memory_order_acquire)) {
@@ -441,9 +455,12 @@ class location_runtime_t
               heartbeat->wake, lock, polling_interval,
               [&] {
                   return stopped.await_ready () || heartbeat->stop.load (std::memory_order_acquire)
-                         || owner_lease_observation () != observed;
+                         || owner_lease_observation () != observed
+                         || heartbeat->pending_peer_reconcile;
               },
-              wait_site, runtime::infrastructure_wait_guard::wait_relation_t::own_input);
+              "location/discovery-input",
+              runtime::infrastructure_wait_guard::wait_relation_t::own_input);
+            heartbeat->pending_peer_reconcile = false;
         } else {
             (void) detail::observe_task_result_for (stopped, polling_interval, std::stop_token{});
         }

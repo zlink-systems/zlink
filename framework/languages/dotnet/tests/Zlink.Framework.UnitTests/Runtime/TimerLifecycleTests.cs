@@ -804,7 +804,11 @@ public sealed class TimerLifecycleTests
         var second = await AddTimerAsync(registry, "local");
         registry.EndRelocatedInitialization();
         Assert.NotSame(first, second);
-        Assert.Equal(2, registry.FreezeRelocation().Count);
+        // Timer §1: a non-restored key creates a new generation and retires
+        // the previous one; it cannot produce two live snapshot entries.
+        Assert.True(first.IsDisposed);
+        Assert.False(second.IsDisposed);
+        Assert.Single(registry.FreezeRelocation());
     }
 
     private static ValueTask<IZLinkTimer> AddTimerAsync(

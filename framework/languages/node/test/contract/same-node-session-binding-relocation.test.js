@@ -133,7 +133,8 @@ test('a same-node Session binding is installed once and carried by the relocatio
     state,
     undefined,
     false,
-    relocation
+    relocation,
+    { rid: 'target', lifecycleGeneration: 4n }
   );
 
   assert.equal(seals.length, 1);

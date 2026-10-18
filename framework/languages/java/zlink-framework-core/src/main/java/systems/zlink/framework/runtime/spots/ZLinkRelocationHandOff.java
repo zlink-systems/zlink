@@ -71,7 +71,7 @@ final class ZLinkRelocationHandOff {
         Objects.requireNonNull(timeout, "timeout");
         Objects.requireNonNull(restoreDeadline, "restoreDeadline");
         RoutingId targetRid = request.targetNodeRid();
-        return client.stage(targetRid, request, timeout)
+        return client.stage(targetRid, request, timeout, restoreDeadline)
                 .thenCompose(
                         ready -> {
                             var committed =

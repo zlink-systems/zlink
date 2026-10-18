@@ -776,6 +776,7 @@ internal sealed class ZLinkSpotNodeCatalog(
                 })
                 .ConfigureAwait(false);
             ZLinkRuntimeMetrics.RecordSpotCreated(registration.SpotNodeName, "user");
+            await activation._serial.FinishActivationPreparation().ConfigureAwait(false);
 
             return new ZLinkSpotCreateResult(
                 Reference(activation),
@@ -958,6 +959,7 @@ internal sealed class ZLinkSpotNodeCatalog(
                 })
                 .ConfigureAwait(false);
             ZLinkRuntimeMetrics.RecordSpotCreated(registration.SpotNodeName, "user");
+            await activation._serial.FinishActivationPreparation().ConfigureAwait(false);
         }
         catch (Exception error)
         {
@@ -1109,7 +1111,8 @@ internal sealed class ZLinkSpotNodeCatalog(
         ulong authorityOwnerGeneration,
         CancellationToken cancellationToken,
         bool restoreLogicalTimers = false,
-        IReadOnlyList<ZLinkRelocationLogicalTimer>? logicalTimers = null
+        IReadOnlyList<ZLinkRelocationLogicalTimer>? logicalTimers = null,
+        bool relocationTarget = false
     )
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -1173,7 +1176,8 @@ internal sealed class ZLinkSpotNodeCatalog(
                     requestedSpotId,
                     cancellationToken,
                     restoreLogicalTimers,
-                    logicalTimers
+                    logicalTimers,
+                    relocationTarget
                 )
                 .ConfigureAwait(false);
             await _lane
@@ -1263,6 +1267,7 @@ internal sealed class ZLinkSpotNodeCatalog(
             })
             .ConfigureAwait(false);
         ZLinkRuntimeMetrics.RecordSpotCreated(registration.SpotNodeName, "user");
+        await prepared.Activation._serial.FinishActivationPreparation().ConfigureAwait(false);
     }
 
     internal ValueTask ValidateRelocatedReservedAsync(
@@ -1354,6 +1359,7 @@ internal sealed class ZLinkSpotNodeCatalog(
             registration.SpotNodeName,
             prepared.Activation.KindName
         );
+        await prepared.Activation._serial.FinishActivationPreparation().ConfigureAwait(false);
     }
 
     //  The remaining relocation coordinator is outside this conversion's allowed
@@ -1366,7 +1372,8 @@ internal sealed class ZLinkSpotNodeCatalog(
         PreparedReservedSpot prepared,
         ulong objectGeneration,
         ulong authorityOwnerGeneration,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        ZLinkInstanceSpotActivationRecoveryPointer? recovery = null
     )
     {
         try
@@ -1376,6 +1383,11 @@ internal sealed class ZLinkSpotNodeCatalog(
                     objectGeneration,
                     authorityOwnerGeneration,
                     cancellationToken
+                )
+                .ConfigureAwait(false);
+            await prepared
+                .Activation._serial.FinishActivationPreparation(
+                    waitForFirstTerminal: recovery is not null
                 )
                 .ConfigureAwait(false);
         }
@@ -2024,6 +2036,10 @@ internal sealed class ZLinkSpotNodeCatalog(
                             })
                     )
                     .ConfigureAwait(false);
+                if (outcome.Successor is { } publishedSuccessor)
+                    await publishedSuccessor
+                        ._serial.FinishActivationPreparation()
+                        .ConfigureAwait(false);
             }
         }
         catch (Exception exception)

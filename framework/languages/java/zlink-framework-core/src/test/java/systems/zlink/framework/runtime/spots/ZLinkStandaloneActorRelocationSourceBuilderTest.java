@@ -7,6 +7,7 @@ import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.actors.*;
+import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.locationprovider.ZLinkRelocationStore;
 import systems.zlink.framework.locations.*;
 import systems.zlink.framework.runtime.InMemoryRelocationStore;
@@ -38,9 +39,10 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.Supplier;
 
 final class ZLinkStandaloneActorRelocationSourceBuilderTest {
+    private static final java.time.Instant STAGE_DEADLINE =
+            java.time.Instant.parse("2100-01-01T00:00:00Z");
     private static final ZLinkStoreCancellation NEVER = () -> false;
     private static final String MESH = "actor-retire-source";
     private static final String ACTOR_TYPE = "player";
@@ -458,7 +460,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
             Duration timeout = Duration.ofSeconds(5);
             sourceMachine
                     .get()
-                    .stage(TARGET_RID, prepared.stageRequest(), timeout)
+                    .stage(TARGET_RID, prepared.stageRequest(), timeout, STAGE_DEADLINE)
                     .toCompletableFuture()
                     .get();
             List<CompletableFuture<Void>> accepted = new java.util.ArrayList<>();
@@ -558,6 +560,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
                     0,
                     targetReplayed.get(),
                     "standalone Actor records must replay through the Actor staging owner");
+            targetBackend.terminals.toCompletableFuture().get(3, TimeUnit.SECONDS);
             assertEquals(1027, targetBackend.replayedPackets.size());
             for (int index = 0; index < 1_025; index++) {
                 assertEquals("post-freeze-" + index, targetBackend.replayedPackets.get(index));
@@ -844,39 +847,12 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
         private final AtomicInteger activeTurns = new AtomicInteger();
         private final AtomicInteger maxActiveTurns = new AtomicInteger();
 
-        private final CompletableFuture<Void> moving = new CompletableFuture<>();
-        private final ZLinkManualExecutor executor = new ZLinkManualExecutor();
-
-        @Override
-        public CompletionStage<QueuedTurn> prepareIngress(
-                Object actor, ZLinkStandaloneActorRelocationStagingOwner.Request request) {
-            return CompletableFuture.completedFuture(
-                    executor.actorDispatch(request.actorId(), actor, moving));
-        }
-
         @Override
         public CompletionStage<Void> enqueueIngress(
-                QueuedTurn dispatch,
                 ZLinkStandaloneActorRelocationStagingOwner.Request request,
-                byte[] record,
-                Supplier<CompletionStage<Void>> turn,
-                CompletableFuture<Void> admission) {
-            admittedTurns.incrementAndGet();
-            return dispatch.target()
-                    .executeActorLazyRecord(
-                            dispatch.activation(),
-                            () -> record,
-                            record.length,
-                            () -> {
-                                int active = activeTurns.incrementAndGet();
-                                maxActiveTurns.accumulateAndGet(active, Math::max);
-                                return turn.get()
-                                        .whenComplete(
-                                                (ignored, failure) ->
-                                                        activeTurns.decrementAndGet());
-                            },
-                            () -> {},
-                            admission);
+                byte[] acceptedJournalRecord,
+                java.util.function.Supplier<CompletionStage<Void>> turn) {
+            return turn.get();
         }
 
         @Override
@@ -885,7 +861,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
                 byte[] state,
                 ZLinkRelocationCancellation cancellation) {
             assertArrayEquals(new byte[] {7, 2, 6}, state);
-            return CompletableFuture.completedFuture(new Object());
+            return CompletableFuture.completedFuture(new ZLinkActorRelocationTestQueue());
         }
 
         @Override
@@ -902,6 +878,43 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
                             : Optional.empty());
         }
 
+        private CompletionStage<Void> terminals = CompletableFuture.completedFuture(null);
+
+        @Override
+        public CompletionStage<List<CompletableFuture<Void>>> admitBacklogPrefix(
+                Object actor,
+                ZLinkStandaloneActorRelocationStagingOwner.Request request,
+                List<ZLinkSerialExecutionQueue.QueuedRecord> records,
+                java.util.function.BiFunction<
+                                ZLinkSerialExecutionQueue.QueuedRecord,
+                                CompletableFuture<Void>,
+                                java.util.function.Supplier<CompletionStage<Void>>>
+                        replay) {
+            return ((ZLinkActorRelocationTestQueue) actor)
+                    .admit(
+                            records,
+                            (record, terminal) -> {
+                                var operation = replay.apply(record, terminal);
+                                return () -> {
+                                    admittedTurns.incrementAndGet();
+                                    int active = activeTurns.incrementAndGet();
+                                    maxActiveTurns.accumulateAndGet(active, Math::max);
+                                    return operation
+                                            .get()
+                                            .whenComplete(
+                                                    (ignored, failure) ->
+                                                            activeTurns.decrementAndGet());
+                                };
+                            })
+                    .thenApply(
+                            accepted -> {
+                                terminals =
+                                        CompletableFuture.allOf(
+                                                accepted.toArray(CompletableFuture[]::new));
+                                return accepted;
+                            });
+        }
+
         @Override
         public void publish(
                 Object actor, ZLinkStandaloneActorRelocationStagingOwner.Request request) {
@@ -915,14 +928,13 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
                     replayedPackets.isEmpty(),
                     "durable backlog must not run before lifecycle admission");
             assertTrue(admitted.compareAndSet(false, true));
-            moving.complete(null);
-            executor.drain();
+            ((ZLinkActorRelocationTestQueue) actor).open();
         }
 
         @Override
         public CompletionStage<Void> discard(
                 Object actor, ZLinkStandaloneActorRelocationStagingOwner.Request request) {
-            return CompletableFuture.completedFuture(null);
+            return ((ZLinkActorRelocationTestQueue) actor).discard();
         }
     }
 

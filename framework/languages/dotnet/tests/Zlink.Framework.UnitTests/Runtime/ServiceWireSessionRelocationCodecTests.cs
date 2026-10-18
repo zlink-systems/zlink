@@ -6,6 +6,44 @@ namespace Zlink.Framework.UnitTests;
 
 public sealed class ServiceWireSessionRelocationCodecTests
 {
+    [Fact]
+    public void Command_42_preserves_target_fence_and_rejects_empty_fields()
+    {
+        var record = Seal() with { TargetNodeGeneration = ulong.MaxValue };
+        var encoded = ZLinkServiceWireCodec.EncodeSessionRelocationSeal(record);
+        Assert.Equal(
+            ulong.MaxValue,
+            System.Buffers.Binary.BinaryPrimitives.ReadUInt64BigEndian(encoded.AsSpan(^8))
+        );
+        var rid = record.TargetNodeRid.ToBytes().ToArray();
+        Assert.Equal(rid, encoded.AsSpan(encoded.Length - 8 - rid.Length, rid.Length).ToArray());
+        Assert.True(
+            ZLinkServiceWireCodec.TryDecodeSessionRelocationSeal(encoded, out var decoded, out _)
+        );
+        Assert.Equal(record, decoded);
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            ZLinkServiceWireCodec.EncodeSessionRelocationSeal(
+                record with
+                {
+                    TargetNodeRid = default,
+                }
+            )
+        );
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            ZLinkServiceWireCodec.EncodeSessionRelocationSeal(
+                record with
+                {
+                    TargetNodeGeneration = 0,
+                }
+            )
+        );
+        encoded.AsSpan(^8).Clear();
+        Assert.False(
+            ZLinkServiceWireCodec.TryDecodeSessionRelocationSeal(encoded, out _, out var error)
+        );
+        Assert.Equal(ZLinkServiceWireCodec.DecodeError.InvalidField, error);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -162,7 +200,14 @@ public sealed class ServiceWireSessionRelocationCodecTests
     [Fact]
     public void Commands_42_through_44_match_the_shared_golden_vectors()
     {
-        var seal = Seal();
+        var golden = ServiceWirePilotCodec.DecodeSessionRelocationSeal42(
+            ReadGolden("sessionRelocationSeal")
+        );
+        var seal = Seal() with
+        {
+            TargetNodeRid = RoutingId.From(golden.TargetNodeRid),
+            TargetNodeGeneration = golden.TargetNodeGeneration,
+        };
         AssertGoldenRoundTrip(
             "sessionRelocationSeal",
             seal,
@@ -359,7 +404,9 @@ public sealed class ServiceWireSessionRelocationCodecTests
                 8,
                 RoutingId.From("session"),
                 6
-            )
+            ),
+            RoutingId.From("target"),
+            3
         );
     }
 

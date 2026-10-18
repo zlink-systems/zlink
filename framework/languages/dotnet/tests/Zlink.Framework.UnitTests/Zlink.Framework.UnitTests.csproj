@@ -38,6 +38,7 @@
 
     <ItemGroup>
         <Compile Include="AssemblyInfo.cs"/>
+        <Compile Include="Runtime/SessionFailureClassificationTests.cs"/>
         <Compile Include="Runtime/MeshLivenessPhysicalCloseTests.cs"/>
         <Compile Include="Runtime/RequestAdmissionStageTests.cs"/>
         <Compile Include="Runtime/SpotRequestSourceDiscoveryTests.cs"/>
@@ -126,6 +127,7 @@
         <Compile Include="Runtime/DescriptorOwnerLeaseSelectionTests.cs"/>
         <Compile Include="Runtime/ActorCreationEntryCandidateTests.cs"/>
         <Compile Include="Runtime/EntrySpotActorDispatchTests.cs"/>
+        <Compile Include="Runtime/EntrySpotActorFifoActivationTests.cs"/>
         <Compile Include="Runtime/AcceptedHandlerSendSealTests.cs"/>
         <Compile Include="Runtime/EntrySpotActorDispatchTests.StartupIdentity.cs"/>
         <Compile Include="Runtime/EntrySpotActorDispatchTests.SourceRetirement.cs"/>
@@ -211,6 +213,7 @@
         <Compile Include="Runtime/StreamRequestRoundTripLatencyTests.cs"/>
         <Compile Include="Runtime/SessionJobQueueLoadTests.cs"/>
         <Compile Include="Runtime/TimerLifecycleTests.cs"/>
+        <Compile Include="Runtime/ActivationReadyTests.cs"/>
         <Compile Include="Runtime/SpotHandlerInvokerTests.cs"/>
         <Compile Include="Runtime/SpotIdValidationTests.cs"/>
         <Compile Include="Runtime/SpotLifecycleKindTests.cs"/>

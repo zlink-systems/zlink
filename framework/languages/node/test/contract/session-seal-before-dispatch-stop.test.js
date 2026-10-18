@@ -147,7 +147,8 @@ for (const manageMembership of [true, false]) {
       source.state,
       undefined,
       manageMembership,
-      relocation
+      relocation,
+    { rid: 'target', lifecycleGeneration: 4n }
     );
     try {
       assert.deepEqual(events, [
@@ -173,7 +174,8 @@ test('maintenance rollback after the dispatch stop restores the source and relea
     source.state,
     undefined,
     true,
-    relocation
+    relocation,
+    { rid: 'target', lifecycleGeneration: 4n }
   );
   await prepared.rollback();
   assert.deepEqual(events, [
@@ -193,7 +195,8 @@ test('a failed Session seal leaves the source dispatching', async () => {
   const { runtime, handoff } = sourceRuntime(source, events, { sealFailure: failure });
 
   await assert.rejects(
-    runtime.prepareMaintenanceSession(source.actor, source.state, undefined, true, relocation),
+    runtime.prepareMaintenanceSession(source.actor, source.state, undefined, true, relocation,
+    { rid: 'target', lifecycleGeneration: 4n }),
     (error) => error === failure
   );
   assert.deepEqual(events, ['session:seal moving=false handoff=idle']);
@@ -215,7 +218,8 @@ test('a dispatch stop that fails after the seal releases the matching seal', asy
   });
 
   await assert.rejects(
-    runtime.prepareMaintenanceSession(source.actor, source.state, undefined, true, relocation),
+    runtime.prepareMaintenanceSession(source.actor, source.state, undefined, true, relocation,
+    { rid: 'target', lifecycleGeneration: 4n }),
     (error) => error === failure
   );
   assert.deepEqual(events, [

@@ -125,22 +125,26 @@ public final class ZLinkLocationAutoConnectHost implements AutoCloseable {
                             peer ->
                                     manualExpectedRids.put(
                                             peer.endpoint(), peer.expectedRoutingId()));
-            addLoop(
-                    ZLinkAutoConnectType.ROUTE_MESH,
-                    mesh.meshName(),
-                    ZLinkLocationRole.ROUTER,
-                    mesh.routingId(),
-                    endpoint,
-                    100,
-                    new MeshNodeExecutor(node, manual, manualExpectedRids),
-                    null,
-                    null,
-                    mesh.objectServer()
-                            ? ZLinkMeshNodeObjectRole.SERVER
-                            : mesh.objectRoleEnabled()
-                                    ? ZLinkMeshNodeObjectRole.CLIENT
-                                    : ZLinkMeshNodeObjectRole.NONE,
-                    !mesh.channelWeights().isEmpty());
+            ZLinkAutoConnectLoop loop =
+                    addLoop(
+                            ZLinkAutoConnectType.ROUTE_MESH,
+                            mesh.meshName(),
+                            ZLinkLocationRole.ROUTER,
+                            mesh.routingId(),
+                            endpoint,
+                            100,
+                            new MeshNodeExecutor(node, manual, manualExpectedRids),
+                            null,
+                            null,
+                            mesh.objectServer()
+                                    ? ZLinkMeshNodeObjectRole.SERVER
+                                    : mesh.objectRoleEnabled()
+                                            ? ZLinkMeshNodeObjectRole.CLIENT
+                                            : ZLinkMeshNodeObjectRole.NONE,
+                            !mesh.channelWeights().isEmpty());
+            if (loop != null) {
+                node.setPeerReconcileRequester(peer -> loop.reconcileNow());
+            }
         }
         for (SpotNodeRegistration spot : registration.spotNodes()) {
             ZLinkInternalSpotNode node = spotNodesByName.get(spot.nodeName());
@@ -267,7 +271,7 @@ public final class ZLinkLocationAutoConnectHost implements AutoCloseable {
                 false);
     }
 
-    private void addLoop(
+    private ZLinkAutoConnectLoop addLoop(
             ZLinkAutoConnectType type,
             String meshName,
             ZLinkLocationRole role,
@@ -281,7 +285,7 @@ public final class ZLinkLocationAutoConnectHost implements AutoCloseable {
             boolean hasRouteMeshServerChannel) {
         boolean advertisable = shouldAdvertise(type, role, nodeRid, endpoint);
         if (!advertisable && executor == ZLinkAutoConnectExecutor.NONE) {
-            return;
+            return null;
         }
         ZLinkAutoConnectPlanner.Local local =
                 new ZLinkAutoConnectPlanner.Local(
@@ -301,7 +305,9 @@ public final class ZLinkLocationAutoConnectHost implements AutoCloseable {
                         System::nanoTime,
                         failure ->
                                 runtimeEvents.publishRuntimeTaskFailure("auto-connect", failure));
-        loops.add(new ZLinkAutoConnectLoop(reconciler, options));
+        ZLinkAutoConnectLoop loop = new ZLinkAutoConnectLoop(reconciler, options);
+        loops.add(loop);
+        return loop;
     }
 
     static boolean shouldAdvertise(

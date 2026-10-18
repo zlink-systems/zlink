@@ -1565,19 +1565,24 @@ test('managed stream actor rebind is idempotent for the same actor ref', async (
   });
 });
 
-test('managed stream actor route commit rebinds the native gateway for a new owner', async () => {
+test('managed stream actor route commit preserves the physical binding for a new owner', async () => {
   const socket = new FakeStreamSocket();
   const runtime = new framework.ZLinkStreamBindingRuntime({ actorBindTimeoutMs: 1234 });
-  const context = runtime.createSessionContext(new framework.ZLinkManagedStream(socket, 'backend-rid', 'public-session'));
+  const context = runtime.createSessionContext(
+    new framework.ZLinkManagedStream(socket, 'backend-rid', 'public-session')
+  );
   const actorRef = { nodeRid: 'node-a', actorId: 'actor-a', generation: 1n };
 
-  await context.actors.bind(actorRef);
+  const actor = await context.actors.bind(actorRef);
   await runtime.commitActorRoute({ ...actorRef, nodeRid: 'node-b' });
 
-  assert.equal(socket.boundActors.length, 2);
-  assert.deepEqual(socket.boundActors[1], {
+  // Session–Actor binding §4: relocation is a route change, not a rebind.
+  assert.equal(await context.actors.find(actorRef.actorId), actor);
+  assert.equal(actor.ref.nodeRid, 'node-b');
+  assert.equal(socket.boundActors.length, 1);
+  assert.deepEqual(socket.boundActors[0], {
     sessionRid: 'backend-rid',
-    actor: { ...actorRef, nodeRid: 'node-b' },
+    actor: actorRef,
     timeoutMs: 1234
   });
   assert.equal(socket.boundActorSends.length, 0);
@@ -2070,16 +2075,17 @@ test('runtime host bound session disconnect uses routed Session target before na
             remoteBoundSessionTarget: {
               routerChannelId: 'room.route',
               targetNodeRid: sessionNodeRid,
-              spotId: sessionSpotId
+              spotId: sessionSpotId,
+              sessionNodeRid,
+              sessionOwnerNodeGeneration: 2n,
+              bindingGeneration: 7n
             }
           }
         : undefined;
     }
   });
 
-  host.createActorManagerOptions()
-    .boundSessionFactory(actorRef.actorId)
-    .disconnect();
+  await host.createActorManagerOptions().boundSessionFactory(actorRef.actorId).disconnect();
 
   assert.equal(nativeDisconnects.length, 0);
   assert.equal(routeCalls.length, 1);
@@ -2087,7 +2093,9 @@ test('runtime host bound session disconnect uses routed Session target before na
   assert.equal(String(routeCalls[0].targetNodeRid), 'session-node');
   assert.equal(String(routeCalls[0].spotId), 'session-entry');
   assert.equal(routeCalls[0].packetName, '__zlink.actor.packet.relay');
-  const header = streamProtocol.decodeStreamHeader(Buffer.from(routeCalls[0].message.header, 'base64'));
+  const header = streamProtocol.decodeStreamHeader(
+    Buffer.from(routeCalls[0].message.header, 'base64')
+  );
   assert.equal(header.name, 'zlink.framework.actor.session_disconnected');
   assert.equal(header.kind, streamProtocol.ZLinkStreamMessageKind.Send);
   assert.equal(header.codec, streamProtocol.ZLinkStreamCodec.Raw);
@@ -4774,8 +4782,8 @@ test('M2 actorJoin A-to-B-to-A successor seal waits until predecessor exact term
       }
     }),
     boundSessionRelocation: {
-      receiveSeal: ( value ) =>
-        host.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationSeal(value),
+      receiveSeal: (value, signal, onInstalled) =>
+        host.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationSeal(value, signal, onInstalled),
       receiveRoute: ( value ) =>
         host.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationRoute(value),
       clear: () =>
@@ -5094,7 +5102,7 @@ test('service-wire relocation single-flights concurrent commands and rejects con
   assert.equal(String((await host.streamBindingRuntime.find('actor-service-single-flight')).ref.nodeRid), 'target');
 });
 
-test('failed one-way command 44 native rebind keeps prior relay admission complete', async () => {
+test('failed one-way command 44 route publication keeps prior relay admission complete', async () => {
   const socket = new FakeStreamSocket();
   const host = new framework.ZLinkFrameworkRuntimeHost({
     registration: framework.createFrameworkRegistration()
@@ -5103,9 +5111,13 @@ test('failed one-way command 44 native rebind keeps prior relay admission comple
     new framework.ZLinkManagedStream(socket, 'session', 'public-session')
   );
   const actor = await context.actors.bind({
-    nodeRid: 'source', actorId: 'actor-service-rebind-failure', generation: 5n,
-    ownershipGeneration: 11n, ownerLeaseGeneration: 13n,
-    bindingGeneration: 6n, acceptedHighWater: 41n
+    nodeRid: 'source',
+    actorId: 'actor-service-rebind-failure',
+    generation: 5n,
+    ownershipGeneration: 11n,
+    ownerLeaseGeneration: 13n,
+    bindingGeneration: 6n,
+    acceptedHighWater: 41n
   });
   const seal = serviceSessionRelocationSeal('actor-service-rebind-failure');
   await host.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationSeal(seal);
@@ -5117,23 +5129,27 @@ test('failed one-way command 44 native rebind keeps prior relay admission comple
   try {
     const relaying = actor.relay(serviceRelayMessage('{"held":true}'));
     await relaying;
-    await new Promise(( resolve ) => setImmediate(resolve));
-    socket.bindError = new Error('injected native rebind failure');
+    await new Promise((resolve) => setImmediate(resolve));
+    const updateRef = actor.updateRef;
+    actor.updateRef = () => {
+      throw new Error('injected route publication failure');
+    };
     await assert.rejects(
-      host.boundSessionRelay.boundSessions
-        .receiveServiceWireSessionRelocationRoute(commit),
-      /injected native rebind failure/
+      host.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationRoute(commit),
+      /injected route publication failure/
     );
     assert.equal(await host.streamBindingRuntime.find(actor.actorId), undefined);
-    assert.equal(await host.streamBindingRuntime.validateActorRouteSeal(
-      actor.actorId,
-      serviceSessionSealKey(seal)
-    ), false);
+    assert.equal(
+      await host.streamBindingRuntime.validateActorRouteSeal(
+        actor.actorId,
+        serviceSessionSealKey(seal)
+      ),
+      false
+    );
     assert.equal(socket.boundActorSends.length, 0);
 
-    socket.bindError = undefined;
-    await host.boundSessionRelay.boundSessions
-      .receiveServiceWireSessionRelocationRoute(commit);
+    actor.updateRef = updateRef;
+    await host.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationRoute(commit);
     assert.equal(await host.streamBindingRuntime.find(actor.actorId), undefined);
     assert.equal(socket.boundActors.length, 1, 'a terminal duplicate cannot retry the native bind');
     assert.equal(socket.boundActorSends.length, 0);
@@ -7529,13 +7545,18 @@ test('runtime host awaits routed actor disconnect notification before session cl
   };
 
   let disconnectCompleted = false;
-  const disconnecting = runtime.boundSessionRelay.actorPackets.notifyRemoteActorDisconnected('actor-disconnect-await', {
-    routerChannelId: 'spot.service',
-    targetNodeRid: 'play-node',
-    spotId: 'play-node'
-  }).then(() => {
-    disconnectCompleted = true;
-  });
+  const disconnecting = runtime.boundSessionRelay.actorPackets
+    .notifyRemoteActorDisconnected('actor-disconnect-await', {
+      routerChannelId: 'spot.service',
+      targetNodeRid: 'play-node',
+      spotId: 'play-node',
+      sessionNodeRid: 'node-a',
+      sessionOwnerNodeGeneration: 2n,
+      bindingGeneration: 7n
+    })
+    .then(() => {
+      disconnectCompleted = true;
+    });
   await new Promise((resolve) => setImmediate(resolve));
 
   assert.equal(sendStarted, true);
@@ -8817,6 +8838,8 @@ function testServiceNodeDescriptor(nodeRoutingId, lifecycleGeneration) {
 function serviceSessionRelocationSeal(actorId, options = {}) {
   const sourceNodeRid = options.sourceNodeRid ?? 'source';
   return {
+    targetNodeRid: 'target',
+    targetNodeGeneration: 4n,
     relocation: options.relocation ?? { high: 7n, low: 9n },
     coordinator: {
       ownerId: options.coordinatorOwnerId ?? 'coordinator',

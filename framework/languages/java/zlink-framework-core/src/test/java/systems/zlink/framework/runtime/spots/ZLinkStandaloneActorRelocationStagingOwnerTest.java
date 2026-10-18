@@ -7,10 +7,13 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import systems.zlink.framework.actors.ZLinkRelocationCancellation;
+import systems.zlink.framework.configuration.ZLinkApplicationJobQueueProfile;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.execution.ZLinkExecutionLanePolicy;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
-import systems.zlink.framework.runtime.actors.ZLinkActorDispatchTarget.QueuedTurn;
+import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext;
+import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
 import systems.zlink.framework.runtime.internal.drain.AsyncDrainProbe;
 import systems.zlink.framework.runtime.mesh.ZLinkActivationAdmission;
 
@@ -18,41 +21,22 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BiFunction;
+import java.util.function.Supplier;
 
 final class ZLinkStandaloneActorRelocationStagingOwnerTest {
     @ParameterizedTest
     @ValueSource(strings = {"saved", "relayed", "temporary"})
     void hiddenBacklogIsAdoptedByActorFifoBeforeFinalPublicationOpensHandlers(String origin) {
-        var tasks = new ZLinkManualExecutor();
-        var moving = new CompletableFuture<Void>();
-        var fifoDispatch = tasks.actorDispatch("actor-a", "prepared", moving);
-        var queue = fifoDispatch.activation().relocationLane();
         var handlerTerminal = new CompletableFuture<Optional<byte[]>>();
         var events = new ArrayList<String>();
         FakeBackend backend =
                 new FakeBackend() {
-                    @Override
-                    public CompletionStage<QueuedTurn> prepareIngress(
-                            Object actor,
-                            ZLinkStandaloneActorRelocationStagingOwner.Request request) {
-                        return CompletableFuture.completedFuture(fifoDispatch);
-                    }
-
-                    @Override
-                    public CompletionStage<Void> enqueueIngress(
-                            QueuedTurn dispatch,
-                            ZLinkStandaloneActorRelocationStagingOwner.Request request,
-                            byte[] record,
-                            java.util.function.Supplier<CompletionStage<Void>> turn,
-                            CompletableFuture<Void> admission) {
-                        return queue.enqueueRelocatableLazyRecord(
-                                () -> record, record.length, turn, () -> {}, admission);
-                    }
-
                     @Override
                     public CompletionStage<Optional<byte[]>> replay(
                             Object actor,
@@ -65,7 +49,7 @@ final class ZLinkStandaloneActorRelocationStagingOwnerTest {
                     @Override
                     public void openAdmission(Object actor) {
                         events.add("route-and-normalizer-complete");
-                        moving.complete(null);
+                        ((ZLinkActorRelocationTestQueue) actor).open();
                     }
                 };
         var owner = new ZLinkStandaloneActorRelocationStagingOwner(backend);
@@ -105,24 +89,24 @@ final class ZLinkStandaloneActorRelocationStagingOwnerTest {
         owner.publishHidden(backlog, 12);
         try {
             var adopted = owner.drainDurableBacklog(backlog).toCompletableFuture();
-            tasks.drain();
             assertTrue(
                     adopted.isDone() && !adopted.isCompletedExceptionally(),
                     "hidden backlog admission must finish without opening handlers");
             assertEquals(List.of(), events);
             owner.openAdmission(staged);
-            tasks.drain();
             assertEquals(List.of("route-and-normalizer-complete", "handler"), events);
             assertFalse(handlerTerminal.isDone());
             var terminalFailure = new IllegalStateException("handler failed after publication");
             handlerTerminal.completeExceptionally(terminalFailure);
-            tasks.drain();
-            assertSame(terminalFailure, failure.get());
+            assertSame(
+                    terminalFailure,
+                    assertThrows(
+                                    java.util.concurrent.CompletionException.class,
+                                    () -> adopted.join().toCompletableFuture().join())
+                            .getCause());
+            if (!origin.equals("temporary")) assertSame(terminalFailure, failure.get());
         } finally {
-            moving.complete(null);
             handlerTerminal.complete(Optional.empty());
-            tasks.drain();
-            queue.close();
         }
     }
 
@@ -133,9 +117,15 @@ final class ZLinkStandaloneActorRelocationStagingOwnerTest {
         FakeBackend backend =
                 new FakeBackend() {
                     @Override
-                    public CompletionStage<QueuedTurn> prepareIngress(
+                    public CompletionStage<List<CompletableFuture<Void>>> admitBacklogPrefix(
                             Object actor,
-                            ZLinkStandaloneActorRelocationStagingOwner.Request request) {
+                            ZLinkStandaloneActorRelocationStagingOwner.Request request,
+                            List<ZLinkSerialExecutionQueue.QueuedRecord> records,
+                            BiFunction<
+                                            ZLinkSerialExecutionQueue.QueuedRecord,
+                                            CompletableFuture<Void>,
+                                            Supplier<CompletionStage<Void>>>
+                                    replay) {
                         return CompletableFuture.failedFuture(rejected);
                     }
                 };
@@ -152,7 +142,7 @@ final class ZLinkStandaloneActorRelocationStagingOwnerTest {
                         "actor-a", 1, "actor.request", Map.of(), new byte[] {1}),
                 null,
                 observed::set);
-        CompletionStage<Void> adopted;
+        CompletionStage<?> adopted;
         Object retained;
         if (direct) {
             var backlog = owner.closeDirectJoinIngress(staged, root);
@@ -180,43 +170,39 @@ final class ZLinkStandaloneActorRelocationStagingOwnerTest {
                 "unadopted frozen payload must retain its existing backlog owner");
     }
 
-    @Test
-    void backendFailureBeforeQueueAdmissionSettlesPublicationAndIngress() {
-        var rejected = new IllegalStateException("queue target unavailable");
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void timerPreparationFailureDiscardsPreparedActorBeforeReleasingAdmission(boolean synchronous) {
+        var preparationFailure = new IllegalStateException("timer preparation failed");
+        var discardFailure = new IllegalStateException("discard failed");
         FakeBackend backend =
                 new FakeBackend() {
                     @Override
-                    public CompletionStage<Void> enqueueIngress(
-                            QueuedTurn dispatch,
+                    public CompletionStage<Void> stageTimers(
                             ZLinkStandaloneActorRelocationStagingOwner.Request request,
-                            byte[] record,
-                            java.util.function.Supplier<CompletionStage<Void>> turn,
-                            CompletableFuture<Void> admission) {
-                        return CompletableFuture.failedFuture(rejected);
+                            byte[] envelope) {
+                        if (synchronous) throw preparationFailure;
+                        return CompletableFuture.failedFuture(preparationFailure);
                     }
                 };
-        var owner = new ZLinkStandaloneActorRelocationStagingOwner(backend);
+        var discard = new CompletableFuture<Void>();
+        backend.discardResult = discard;
+        var admission = new ZLinkActivationAdmission(1);
+        var owner = new ZLinkStandaloneActorRelocationStagingOwner(backend, admission);
         var relocationId = UUID.randomUUID();
         byte[] root =
                 ZLinkCanonicalActorRelocationEnvelope.encode(
                         relocationId, "actor-a", 7, 11, true, new byte[] {4, 5}, List.of());
-        var staged = owner.stage(request(relocationId, true), root).toCompletableFuture().join();
-        var failure = new AtomicReference<Throwable>();
-        owner.acceptIngress(
-                staged,
-                ZLinkAcceptedJournalTestRecords.actor(
-                        "actor-a", 1, "actor.request", Map.of(), new byte[] {1}),
-                null,
-                failure::set);
-        var backlog = owner.closeDurableBacklog(staged, root, actorReplayer(owner, staged));
-        owner.publishHidden(backlog, 12);
-        var adopted = owner.drainDurableBacklog(backlog).toCompletableFuture();
-        assertTrue(adopted.isCompletedExceptionally());
-        assertSame(
-                rejected,
-                assertThrows(java.util.concurrent.CompletionException.class, adopted::join)
-                        .getCause());
-        assertSame(rejected, failure.get());
+        var result = owner.stage(request(relocationId, true), root).toCompletableFuture();
+        assertEquals(List.of("prepare", "discard"), backend.operations);
+        assertFalse(
+                result.isDone(), "the prepared resource must settle before admission is released");
+        assertEquals(1, admission.snapshot().active());
+        discard.completeExceptionally(discardFailure);
+        var terminal = assertThrows(java.util.concurrent.CompletionException.class, result::join);
+        assertSame(preparationFailure, terminal.getCause());
+        assertArrayEquals(new Throwable[] {discardFailure}, preparationFailure.getSuppressed());
+        assertEquals(0, admission.snapshot().active());
     }
 
     @Test
@@ -315,8 +301,15 @@ final class ZLinkStandaloneActorRelocationStagingOwnerTest {
                         ignored -> fail("later replay must succeed")));
         var backlog = owner.closeDurableBacklog(staged, root, actorReplayer(owner, staged));
         owner.publishHidden(backlog, 0);
-        owner.drainDurableBacklog(backlog).toCompletableFuture().join();
         owner.openAdmission(staged);
+
+        assertThrows(
+                java.util.concurrent.CompletionException.class,
+                () ->
+                        owner.drainDurableBacklog(backlog)
+                                .thenCompose(terminal -> terminal)
+                                .toCompletableFuture()
+                                .join());
         assertEquals(2, backend.operations.stream().filter("replay"::equals).count());
         assertInstanceOf(IllegalStateException.class, firstFailure.get());
     }
@@ -349,8 +342,15 @@ final class ZLinkStandaloneActorRelocationStagingOwnerTest {
                         ignored -> fail("later replay must succeed")));
         var replay = owner.closeDirectJoinIngress(staged, root);
         owner.publishDirectJoinHidden(replay, 12);
-        owner.replayDirectJoin(replay, actorReplayer(owner, staged)).toCompletableFuture().join();
         owner.openAdmission(staged);
+
+        assertThrows(
+                java.util.concurrent.CompletionException.class,
+                () ->
+                        owner.replayDirectJoin(replay, actorReplayer(owner, staged))
+                                .thenCompose(terminal -> terminal)
+                                .toCompletableFuture()
+                                .join());
         assertEquals(2, backend.operations.stream().filter("replay"::equals).count());
         assertInstanceOf(IllegalStateException.class, firstFailure.get());
     }
@@ -383,47 +383,17 @@ final class ZLinkStandaloneActorRelocationStagingOwnerTest {
                         ignored -> fail("later replay must succeed")));
         var backlog = owner.closeDurableBacklog(staged, root, actorReplayer(owner, staged));
         owner.publishHidden(backlog, 0);
+        owner.openAdmission(staged);
+
         assertThrows(
                 java.util.concurrent.CompletionException.class,
-                () -> owner.drainDurableBacklog(backlog).toCompletableFuture().join());
-        owner.openAdmission(staged);
+                () ->
+                        owner.drainDurableBacklog(backlog)
+                                .thenCompose(terminal -> terminal)
+                                .toCompletableFuture()
+                                .join());
         assertInstanceOf(IllegalStateException.class, rejected.get());
         assertEquals(1, backend.operations.stream().filter("replay"::equals).count());
-    }
-
-    @ParameterizedTest
-    @ValueSource(booleans = {false, true})
-    void timerPreparationFailureDiscardsPreparedActorBeforeReleasingAdmission(boolean synchronous) {
-        var preparationFailure = new IllegalStateException("timer preparation failed");
-        var discardFailure = new IllegalStateException("discard failed");
-        FakeBackend backend =
-                new FakeBackend() {
-                    @Override
-                    public CompletionStage<Void> stageTimers(
-                            ZLinkStandaloneActorRelocationStagingOwner.Request request,
-                            byte[] envelope) {
-                        if (synchronous) throw preparationFailure;
-                        return CompletableFuture.failedFuture(preparationFailure);
-                    }
-                };
-        var discard = new CompletableFuture<Void>();
-        backend.discardResult = discard;
-        var admission = new ZLinkActivationAdmission(1);
-        var owner = new ZLinkStandaloneActorRelocationStagingOwner(backend, admission);
-        var relocationId = UUID.randomUUID();
-        byte[] root =
-                ZLinkCanonicalActorRelocationEnvelope.encode(
-                        relocationId, "actor-a", 7, 11, true, new byte[] {4, 5}, List.of());
-        var result = owner.stage(request(relocationId, true), root).toCompletableFuture();
-        assertEquals(List.of("prepare", "discard"), backend.operations);
-        assertFalse(
-                result.isDone(), "the prepared resource must settle before admission is released");
-        assertEquals(1, admission.snapshot().active());
-        discard.completeExceptionally(discardFailure);
-        var terminal = assertThrows(java.util.concurrent.CompletionException.class, result::join);
-        assertSame(preparationFailure, terminal.getCause());
-        assertArrayEquals(new Throwable[] {discardFailure}, preparationFailure.getSuppressed());
-        assertEquals(0, admission.snapshot().active());
     }
 
     @Test
@@ -446,9 +416,12 @@ final class ZLinkStandaloneActorRelocationStagingOwnerTest {
         owner.publishHidden(backlog, 0);
         assertTrue(backend.visible);
         assertFalse(backend.admitted);
-        owner.drainDurableBacklog(backlog).toCompletableFuture().join();
         owner.openAdmission(staged);
         assertTrue(backend.admitted);
+        owner.drainDurableBacklog(backlog)
+                .thenCompose(terminal -> terminal)
+                .toCompletableFuture()
+                .join();
         assertEquals(List.of("prepare", "publish", "open"), backend.operations);
     }
 
@@ -525,8 +498,11 @@ final class ZLinkStandaloneActorRelocationStagingOwnerTest {
         assertTrue(backend.visible);
         assertFalse(backend.admitted);
         assertEquals(List.of("prepare", "publish"), backend.operations);
-        owner.drainDurableBacklog(backlog).toCompletableFuture().join();
         owner.openAdmission(staged);
+        owner.drainDurableBacklog(backlog)
+                .thenCompose(terminal -> terminal)
+                .toCompletableFuture()
+                .join();
         assertEquals(List.of("prepare", "publish", "open"), backend.operations);
     }
 
@@ -590,8 +566,11 @@ final class ZLinkStandaloneActorRelocationStagingOwnerTest {
         var backlog = owner.closeDurableBacklog(staged, root, replayer);
         assertNull(relayed.get());
         owner.publishHidden(backlog, 0);
-        owner.drainDurableBacklog(backlog).toCompletableFuture().join();
         owner.openAdmission(staged);
+        owner.drainDurableBacklog(backlog)
+                .thenCompose(terminal -> terminal)
+                .toCompletableFuture()
+                .join();
 
         assertNotNull(relayed.get());
         assertTrue(backend.visible);
@@ -642,6 +621,334 @@ final class ZLinkStandaloneActorRelocationStagingOwnerTest {
         assertTrue(backend.operations.isEmpty());
     }
 
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+    void prefixAdmissionPrecedesPublicationAndWaitsForExistingLifecycle(boolean nonempty) {
+        var backend = new FakeBackend();
+        backend.replayReply = Optional.empty();
+        var owner = new ZLinkStandaloneActorRelocationStagingOwner(backend);
+        UUID id = UUID.randomUUID();
+        var root =
+                ZLinkCanonicalActorRelocationEnvelope.encode(
+                        id, "actor-a", 7, 11, true, new byte[] {4, 5}, List.of());
+        var staged = owner.stage(request(id, true), root).toCompletableFuture().join();
+        if (nonempty)
+            assertTrue(
+                    owner.acceptIngress(
+                            staged,
+                            ZLinkAcceptedJournalTestRecords.actor(
+                                    "actor-a", 1, "actor.request", Map.of(), new byte[] {1}),
+                            null,
+                            ignored -> fail("replay must succeed")));
+        var replay = owner.closeDirectJoinIngress(staged, root);
+        var terminal =
+                owner.replayDirectJoin(replay, actorReplayer(owner, staged))
+                        .toCompletableFuture()
+                        .join();
+        assertEquals(
+                List.of("prepare"),
+                backend.operations,
+                "admitted prefix cannot execute before publication/lifecycle");
+        owner.publishDirectJoinHidden(replay, 12);
+        assertEquals(List.of("prepare", "publish"), backend.operations);
+        owner.openAdmission(staged);
+        terminal.toCompletableFuture().join();
+        assertEquals(
+                nonempty
+                        ? List.of("prepare", "publish", "open", "replay")
+                        : List.of("prepare", "publish", "open"),
+                backend.operations);
+    }
+
+    @Test
+    void eachPreparedFixtureActorOwnsItsQueueAndDiscardRunsNoHandler() throws Exception {
+        var backend = new FakeBackend();
+        var request = request(UUID.randomUUID(), false);
+        var first = backend.prepare(request, new byte[0], () -> false).toCompletableFuture().join();
+        var second =
+                backend.prepare(request, new byte[0], () -> false).toCompletableFuture().join();
+        assertNotSame(first, second);
+        var calls = new ArrayList<String>();
+        var records = List.of(new ZLinkSerialExecutionQueue.QueuedRecord(1, new byte[] {1}));
+        var firstEntries =
+                backend.admitBacklogPrefix(
+                                first,
+                                request,
+                                records,
+                                (record, terminal) ->
+                                        () -> {
+                                            calls.add("discarded");
+                                            return CompletableFuture.completedFuture(null);
+                                        })
+                        .toCompletableFuture()
+                        .join();
+        var secondEntries =
+                backend.admitBacklogPrefix(
+                                second,
+                                request,
+                                records,
+                                (record, terminal) ->
+                                        () -> {
+                                            calls.add("second");
+                                            return CompletableFuture.completedFuture(null);
+                                        })
+                        .toCompletableFuture()
+                        .join();
+        var discarded = backend.discard(first, request).toCompletableFuture();
+        assertTrue(discarded.isDone());
+        discarded.join();
+        assertTrue(firstEntries.getFirst().isCancelled());
+        assertTrue(calls.isEmpty());
+        assertFixtureReleased(first);
+        assertFalse(secondEntries.getFirst().isDone());
+        backend.openAdmission(second);
+        assertTrue(secondEntries.getFirst().isDone());
+        secondEntries.getFirst().join();
+        assertEquals(List.of("second"), calls);
+        assertFixtureReleased(second);
+    }
+
+    @Test
+    void fixtureFactoryFailureSettlesBarrierAndClosesItsHostOwner() throws Exception {
+        var helper = new ZLinkActorRelocationTestQueue();
+        var original = new IllegalArgumentException("fixture factory failed");
+        var failed =
+                helper.admit(
+                                List.of(
+                                        new ZLinkSerialExecutionQueue.QueuedRecord(
+                                                1, new byte[] {1})),
+                                (record, terminal) -> {
+                                    throw original;
+                                })
+                        .toCompletableFuture();
+        assertTrue(failed.isCompletedExceptionally());
+        assertSame(
+                original,
+                assertThrows(java.util.concurrent.CompletionException.class, failed::join)
+                        .getCause());
+        assertFixtureReleased(helper);
+    }
+
+    private static void assertFixtureReleased(Object actor) throws Exception {
+        var helper = (ZLinkActorRelocationTestQueue) actor;
+        var fifoField = ZLinkActorRelocationTestQueue.class.getDeclaredField("fifo");
+        var jobsField = ZLinkActorRelocationTestQueue.class.getDeclaredField("jobs");
+        fifoField.setAccessible(true);
+        jobsField.setAccessible(true);
+        var fifo = (ZLinkSerialExecutionQueue) fifoField.get(helper);
+        var jobs = (ZLinkApplicationJobQueue) jobsField.get(helper);
+        try {
+            var quiet = fifo.awaitQuiescence().toCompletableFuture();
+            assertTrue(quiet.isDone());
+            quiet.join();
+            assertEquals(0, jobs.snapshot().permitsInUse());
+            assertEquals(0, jobs.snapshot().capacityWaiters());
+            var closed = jobs.acquire(ZLinkApplicationJobQueue.Origin.LOCAL).toCompletableFuture();
+            if (closed.isDone() && !closed.isCompletedExceptionally()) closed.join().close();
+            assertTrue(
+                    closed.isCompletedExceptionally(),
+                    "fixture host owner must close after FIFO quiescence");
+        } finally {
+            jobs.close();
+            fifo.close();
+        }
+    }
+
+    @org.junit.jupiter.api.RepeatedTest(20)
+    void canonicalPrefixIsOwnedBeforeFirstHandlerCanBeginNextHandoff() {
+        var executor = new PrefixExecutor();
+        var serial =
+                new ZLinkSerialExecutionQueue(executor, ZLinkExecutionLanePolicy.actorDelivery());
+        var jobs =
+                new ZLinkApplicationJobQueue(
+                        ZLinkApplicationJobQueueProfile.BALANCED,
+                        OptionalLong.of(1),
+                        new ZLinkApplicationJobQueue.ProcessorCandidates(1, null, null, null));
+        var events = new ArrayList<Integer>();
+        var captured = new AtomicReference<ZLinkSerialExecutionQueue.RelocationSeal>();
+        var p1Terminal = new CompletableFuture<Optional<byte[]>>();
+        var qAdmission = new AtomicReference<CompletableFuture<Void>>();
+        var backend =
+                new FakeBackend() {
+                    @Override
+                    public CompletionStage<List<CompletableFuture<Void>>> admitBacklogPrefix(
+                            Object actor,
+                            ZLinkStandaloneActorRelocationStagingOwner.Request request,
+                            List<ZLinkSerialExecutionQueue.QueuedRecord> records,
+                            BiFunction<
+                                            ZLinkSerialExecutionQueue.QueuedRecord,
+                                            CompletableFuture<Void>,
+                                            Supplier<CompletionStage<Void>>>
+                                    replay) {
+                        return serial.admitDurablePrefix(records, replay, jobs)
+                                .thenApply(
+                                        terminal -> {
+                                            // The same semantic boundary as the red fixture: Q
+                                            // arrives after prefix
+                                            // admission starts and before P1 runs. It must really
+                                            // be accepted.
+                                            var accepted = new CompletableFuture<Void>();
+                                            qAdmission.set(
+                                                    jobs.acquire(
+                                                                    ZLinkApplicationJobQueue.Origin
+                                                                            .REMOTE)
+                                                            .thenCompose(
+                                                                    permit -> {
+                                                                        try (var scope =
+                                                                                ZLinkApplicationJobContext
+                                                                                        .enter(
+                                                                                                permit)) {
+                                                                            return serial
+                                                                                    .enqueueRelocatable(
+                                                                                            ZLinkAcceptedJournalTestRecords
+                                                                                                    .actor(
+                                                                                                            "actor-a",
+                                                                                                            3,
+                                                                                                            "actor.request",
+                                                                                                            Map
+                                                                                                                    .of(),
+                                                                                                            new byte
+                                                                                                                    [] {
+                                                                                                                3
+                                                                                                            }),
+                                                                                            () -> {
+                                                                                                ZLinkApplicationJobContext
+                                                                                                        .beforeFirstApplicationInstruction();
+                                                                                                events
+                                                                                                        .add(
+                                                                                                                3);
+                                                                                                return CompletableFuture
+                                                                                                        .completedFuture(
+                                                                                                                null);
+                                                                                            },
+                                                                                            () -> {},
+                                                                                            accepted);
+                                                                        } finally {
+                                                                            permit
+                                                                                    .abandonReservation();
+                                                                        }
+                                                                    })
+                                                            .toCompletableFuture());
+                                            assertTrue(
+                                                    accepted.isDone(),
+                                                    "Q must be accepted before P1 starts");
+                                            accepted.join();
+                                            return terminal;
+                                        });
+                    }
+
+                    @Override
+                    public CompletionStage<Optional<byte[]>> replay(
+                            Object actor,
+                            ZLinkStandaloneActorRelocationStagingOwner.Request request,
+                            ZLinkActorAcceptedJournal.Record record) {
+                        int id = record.payload()[0];
+                        ZLinkApplicationJobContext.beforeFirstApplicationInstruction();
+                        events.add(id);
+                        if (id == 1) {
+                            captured.set(
+                                    serial.trySealRelocation(
+                                                    serial.captureActiveTurnSealHandle()
+                                                            .orElseThrow())
+                                            .toCompletableFuture()
+                                            .join()
+                                            .orElseThrow());
+                            return p1Terminal;
+                        }
+                        return CompletableFuture.completedFuture(Optional.empty());
+                    }
+                };
+        var owner = new ZLinkStandaloneActorRelocationStagingOwner(backend);
+        UUID id = UUID.randomUUID();
+        var root =
+                ZLinkCanonicalActorRelocationEnvelope.encode(
+                        id, "actor-a", 7, 11, true, new byte[] {4, 5}, List.of());
+        var staged = owner.stage(request(id, true), root).toCompletableFuture().join();
+        for (int value : List.of(1, 2)) {
+            assertTrue(
+                    owner.acceptIngress(
+                            staged,
+                            ZLinkAcceptedJournalTestRecords.actor(
+                                    "actor-a",
+                                    value,
+                                    "actor.request",
+                                    Map.of(),
+                                    new byte[] {(byte) value}),
+                            null,
+                            ignored -> {}));
+        }
+        var replay = owner.closeDirectJoinIngress(staged, root);
+        var admitted =
+                owner.replayDirectJoin(replay, actorReplayer(owner, staged))
+                        .toCompletableFuture()
+                        .join();
+        assertEquals(List.of(), events);
+        owner.publishDirectJoinHidden(replay, 12);
+        owner.openAdmission(staged);
+        var finished = admitted.toCompletableFuture();
+        try {
+            executor.drain();
+            assertNotNull(captured.get());
+            assertFalse(p1Terminal.isDone(), "next handoff must own the suffix before P1 terminal");
+            assertEquals(
+                    List.of(2, 3),
+                    captured.get().captured().stream()
+                            .map(
+                                    record ->
+                                            (int)
+                                                    ZLinkActorAcceptedJournal.decode(
+                                                                    record.payload())
+                                                            .payload()[0])
+                            .toList(),
+                    "next handoff must take P2 then Q; P2 cannot remain outside FIFO waiting for Q's permit");
+        } finally {
+            p1Terminal.complete(Optional.empty());
+            executor.drain();
+            if (captured.get() != null)
+                assertTrue(serial.abortRelocation(captured.get()).toCompletableFuture().join());
+            executor.drain();
+            finished.join();
+            if (qAdmission.get() != null) qAdmission.get().join();
+            serial.close();
+            assertEquals(0, jobs.snapshot().permitsInUse());
+            assertEquals(0, jobs.snapshot().capacityWaiters());
+            jobs.close();
+        }
+    }
+
+    private static final class PrefixExecutor extends java.util.concurrent.AbstractExecutorService {
+        private final java.util.ArrayDeque<Runnable> pending = new java.util.ArrayDeque<>();
+        private boolean shutdown;
+
+        public void execute(Runnable command) {
+            pending.addLast(command);
+        }
+
+        void drain() {
+            while (!pending.isEmpty()) pending.removeFirst().run();
+        }
+
+        public void shutdown() {
+            shutdown = true;
+        }
+
+        public List<Runnable> shutdownNow() {
+            throw new UnsupportedOperationException();
+        }
+
+        public boolean isShutdown() {
+            return shutdown;
+        }
+
+        public boolean isTerminated() {
+            return shutdown && pending.isEmpty();
+        }
+
+        public boolean awaitTermination(long ignored, java.util.concurrent.TimeUnit unit) {
+            return isTerminated();
+        }
+    }
+
     private static ZLinkStandaloneActorRelocationStagingOwner.Request request(
             UUID relocationId, boolean restoreSnapshot) {
         return new ZLinkStandaloneActorRelocationStagingOwner.Request(
@@ -666,33 +973,36 @@ final class ZLinkStandaloneActorRelocationStagingOwnerTest {
         private int rejectAdmissionsRemaining;
         private CompletionStage<Void> discardResult = CompletableFuture.completedFuture(null);
 
-        private final CompletableFuture<Void> moving = new CompletableFuture<>();
-        private final ZLinkManualExecutor executor = new ZLinkManualExecutor();
-
         @Override
-        public CompletionStage<QueuedTurn> prepareIngress(
-                Object actor, ZLinkStandaloneActorRelocationStagingOwner.Request request) {
-            return CompletableFuture.completedFuture(
-                    executor.actorDispatch(request.actorId(), actor, moving));
+        public CompletionStage<List<CompletableFuture<Void>>> admitBacklogPrefix(
+                Object actor,
+                ZLinkStandaloneActorRelocationStagingOwner.Request request,
+                List<ZLinkSerialExecutionQueue.QueuedRecord> records,
+                BiFunction<
+                                ZLinkSerialExecutionQueue.QueuedRecord,
+                                CompletableFuture<Void>,
+                                Supplier<CompletionStage<Void>>>
+                        replay) {
+            return ((ZLinkActorRelocationTestQueue) actor)
+                    .admit(
+                            records,
+                            (record, terminal) -> {
+                                var operation = replay.apply(record, terminal);
+                                if (rejectAdmissionsRemaining-- > 0)
+                                    return () ->
+                                            CompletableFuture.failedFuture(
+                                                    new IllegalStateException(
+                                                            "backlog admission rejected"));
+                                return operation;
+                            });
         }
 
         @Override
         public CompletionStage<Void> enqueueIngress(
-                QueuedTurn dispatch,
                 ZLinkStandaloneActorRelocationStagingOwner.Request request,
-                byte[] record,
-                java.util.function.Supplier<CompletionStage<Void>> turn,
-                CompletableFuture<Void> admission) {
-            if (rejectAdmissionsRemaining-- > 0)
-                throw new IllegalStateException("backlog admission rejected");
-            return dispatch.target()
-                    .executeActorLazyRecord(
-                            dispatch.activation(),
-                            () -> record,
-                            record.length,
-                            turn,
-                            () -> {},
-                            admission);
+                byte[] acceptedJournalRecord,
+                java.util.function.Supplier<CompletionStage<Void>> turn) {
+            return turn.get();
         }
 
         @Override
@@ -703,7 +1013,7 @@ final class ZLinkStandaloneActorRelocationStagingOwnerTest {
             operations.add("prepare");
             assertArrayEquals(request.restoreSnapshot() ? new byte[] {4, 5} : new byte[0], state);
             assertFalse(cancellation.isCancellationRequested());
-            return CompletableFuture.completedFuture("prepared");
+            return CompletableFuture.completedFuture(new ZLinkActorRelocationTestQueue());
         }
 
         @Override
@@ -733,8 +1043,7 @@ final class ZLinkStandaloneActorRelocationStagingOwnerTest {
         public void openAdmission(Object actor) {
             operations.add("open");
             admitted = true;
-            moving.complete(null);
-            executor.drain();
+            ((ZLinkActorRelocationTestQueue) actor).open();
         }
 
         @Override
@@ -742,7 +1051,9 @@ final class ZLinkStandaloneActorRelocationStagingOwnerTest {
                 Object actor, ZLinkStandaloneActorRelocationStagingOwner.Request request) {
             operations.add("discard");
             discarded = true;
-            return discardResult;
+            return ((ZLinkActorRelocationTestQueue) actor)
+                    .discard()
+                    .thenCompose(ignored -> discardResult);
         }
     }
 }

@@ -1256,6 +1256,7 @@ internal static class ZLinkApplicationJobQueueInvocation
     internal static bool IsActive => Current.Value is not null;
 
     internal static ZLinkApplicationJobOrigin? CurrentOrigin => Current.Value?.Origin;
+    internal static Scope? CurrentScope => Current.Value;
 
     internal static IDisposable Enter(ZLinkApplicationJobQueueLease lease)
     {
@@ -1322,7 +1323,7 @@ internal static class ZLinkApplicationJobQueueInvocation
         }
     }
 
-    private sealed class Scope(Scope? previous, ZLinkApplicationJobQueueLease lease) : IDisposable
+    internal sealed class Scope(Scope? previous, ZLinkApplicationJobQueueLease lease) : IDisposable
     {
         private readonly Scope? _previous = previous;
         internal readonly ZLinkApplicationJobQueue Owner = lease.Owner;
@@ -1330,6 +1331,28 @@ internal static class ZLinkApplicationJobQueueInvocation
         internal ZLinkApplicationJobQueueLease? Lease = lease;
         internal int OwnerReservationTransferred;
         private int _disposed;
+
+        internal void ReleaseDurablePermit() => Interlocked.Exchange(ref Lease, null)?.Dispose();
+
+        internal async ValueTask ReacquireAsync(CancellationToken cancellationToken)
+        {
+            var acquired = await Owner
+                .AcquireAsync(cancellationToken, Origin)
+                .ConfigureAwait(false);
+            if (Interlocked.CompareExchange(ref Lease, acquired, null) is not null)
+            {
+                acquired.Dispose();
+                throw new InvalidOperationException(
+                    "The durable Actor record already owns a permit."
+                );
+            }
+            if (Volatile.Read(ref _disposed) != 0 || cancellationToken.IsCancellationRequested)
+            {
+                ReleaseDurablePermit();
+                throw new OperationCanceledException(cancellationToken);
+            }
+            acquired.MarkQueued();
+        }
 
         public void Dispose()
         {

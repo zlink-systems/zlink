@@ -26,7 +26,6 @@ namespace
 
 constexpr std::string_view actor_relay_kind_metadata_key = "__zlink.actorRelayKind";
 constexpr std::string_view actor_relay_kind_send = "send";
-constexpr std::string_view actor_bind_session_route_metadata_key = "__zlink.actorBindSessionRoute";
 
 stream_message_kind_t actor_relay_kind_from_metadata (spot_inbound_message_t &metadata)
 {
@@ -39,17 +38,6 @@ stream_message_kind_t actor_relay_kind_from_metadata (spot_inbound_message_t &me
         metadata.values.erase (found);
     }
     return kind;
-}
-
-bool should_bind_actor_session_route (spot_inbound_message_t &metadata)
-{
-    const auto found = metadata.values.find (std::string (actor_bind_session_route_metadata_key));
-    if (found == metadata.values.end ()) {
-        return true;
-    }
-    const auto bind = found->second != "false";
-    metadata.values.erase (found);
-    return bind;
 }
 
 task_t<void>
@@ -101,8 +89,7 @@ bool spot_route_internal_dispatcher_t::can_handle_request (std::string_view pack
            || packet_name == actor_bound_session_route_request_t::packet_name
            || packet_name == spot_actor_admission_route_request_t::packet_name
            || packet_name == spot_actor_commit_route_request_t::packet_name
-           || packet_name == spot_actor_packet_route_request_t::packet_name
-           || packet_name == spot_actor_disconnect_route_request_t::packet_name;
+           || packet_name == spot_actor_packet_route_request_t::packet_name;
 }
 
 result_t<void> spot_route_internal_dispatcher_t::dispatch_send (
@@ -269,15 +256,6 @@ bool spot_route_internal_dispatcher_t::dispatch_request_async (
             if (!header.correlation_id.empty ())
                 metadata.correlation_id = header.correlation_id;
             auto actor_gateway = _actor_gateway;
-            if (should_bind_actor_session_route (metadata)) {
-                auto bound = bind_actor_route (actor_ref, header, received);
-                if (!bound) {
-                    completion (detail::propagate_failure<zlink::message_t> (
-                      bound, "actor session route binding failed"));
-                    return true;
-                }
-                actor_gateway = std::move (bound.value ());
-            }
             const auto follow_target =
               request.message_follow_hop_count == 0
                 ? std::optional<runtime::protocol::actor_route_fence_t>{}
@@ -365,28 +343,6 @@ bool spot_route_internal_dispatcher_t::dispatch_request_async (
               [completion] {
                   completion (result_t<zlink::message_t>::failure (
                     framework_error_kind_t::unavailable, "target spot is not active locally"));
-              });
-            return true;
-        }
-        if (header.message_name == spot_actor_disconnect_route_request_t::packet_name) {
-            auto request = _serializers->get<spot_actor_disconnect_route_request_t> ().deserialize (
-              detail::encoded_payload_from_raw (body.value ()));
-            auto disconnected = std::make_shared<task_t<void>> (
-              _runtime.notify_actor_disconnected_erased (actor_ref_from_spot_route (request)));
-            ::zlink::framework::detail::observe_task_completion (
-              *disconnected,
-              [disconnected, serializers = _serializers,
-               completion = std::move (completion)] (const result_t<void> &result) mutable {
-                  if (!result) {
-                      completion (result_t<zlink::message_t>::failure (
-                        result.error_kind (), result.error ()
-                                                ? result.error ()->what ()
-                                                : "remote actor disconnect notify failed"));
-                      return;
-                  }
-                  completion (result_t<zlink::message_t>::success (detail::encoded_payload_to_raw (
-                    serializers->get<spot_actor_disconnect_route_reply_t> ().serialize (
-                      spot_actor_disconnect_route_reply_t{}))));
               });
             return true;
         }
@@ -874,8 +830,7 @@ result_t<zlink::message_t> spot_route_internal_dispatcher_t::dispatch_request (
               _serializers->get<actor_bound_session_route_reply_t> ().serialize (
                 actor_bound_session_route_reply_t{.accepted = true})));
         }
-        if (header.message_name == spot_actor_admission_route_request_t::packet_name
-            || header.message_name == spot_actor_disconnect_route_request_t::packet_name) {
+        if (header.message_name == spot_actor_admission_route_request_t::packet_name) {
             /* One implementation (dispatch_request_async); a caller without a
              * deferred record terminal waits for it here. */
             auto completion = std::make_shared<task_completion_source_t<zlink::message_t>> ();

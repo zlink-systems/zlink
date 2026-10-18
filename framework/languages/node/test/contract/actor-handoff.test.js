@@ -85,8 +85,7 @@ for (const origin of ['local', 'remote']) {
     coordinator.beginProvisional('actor-1', 1n);
     const parts = frame('held');
     try {
-      await coordinator.capture(origin, 'actor-1', parts, false, undefined, actorRef( )
-      );
+      await coordinator.capture(origin, 'actor-1', parts, false, undefined, actorRef());
     } finally {
       parts.forEach((part) => part.close());
     }
@@ -292,6 +291,200 @@ function harness(messageFollowDurationMs = 30, requestReply) {
   };
 }
 
+test('Actor ingress lookup does not inspect unrelated actors or departed tenures', async () => {
+  const h = harness(30_000);
+  const reads = new Map();
+  for (let index = 0; index < 128; index++) {
+    const actorId = index < 64 ? `other-${index}` : 'actor-1';
+    const generation = BigInt(index + 1);
+    h.setRequestSource({
+      objectGeneration: generation,
+      ownerId: 'source-owner',
+      ownerLeaseGeneration: 1n,
+      nodeRid: 'source-node',
+      nodeGeneration: 1n,
+      authorityOwnerGeneration: 1n
+    });
+    const ref = {
+      ...targetActorRef('target', generation),
+      get actorId() {
+        reads.set(index, (reads.get(index) ?? 0) + 1);
+        return actorId;
+      }
+    };
+    h.coordinator.begin(actorId, generation);
+    h.coordinator.snapshot(actorId);
+    h.coordinator.complete(actorId, target(), ref, [], ownerFence('target', 2n));
+  }
+  assert.equal(h.coordinator.messageFollowCount(), 128);
+  assert.equal(h.coordinator.messageFollowCount('actor-1'), 64);
+  const parts = frame('indexed-native');
+  const ref = { ...actorRef(128n), nodeRid: 'source-node' };
+  reads.clear();
+  try {
+    await h.coordinator.capture('remote', ref.actorId, parts, false, undefined, ref, undefined, {
+      sourceNodeRid: 'caller',
+      originalOperation: { high: 7n, low: 13n },
+      originalReplyRouteId: 0n,
+      target: {
+        actor: {
+          actorId: ref.actorId,
+          nodeRid: ref.nodeRid,
+          generation: ref.objectGeneration
+        },
+        targetNodeGeneration: 1n,
+        authorityOwnerGeneration: 1n,
+        ownerLeaseGeneration: 1n
+      }
+    });
+    assert.deepEqual(h.followed, ['indexed-native']);
+    assert.deepEqual(
+      [...reads.keys()].filter((index) => index !== 127),
+      []
+    );
+    reads.clear();
+    assert.equal(h.coordinator.hasMessageFollowRouteForStaleRef('missing-actor', ref), false);
+    assert.equal(h.coordinator.hasMessageFollowRouteForStaleRef('actor-1', ref), true);
+    assert.deepEqual(
+      [...reads.keys()].filter((index) => index < 64),
+      []
+    );
+  } finally {
+    parts.forEach((part) => part.close());
+  }
+});
+
+test('native fence lookup preserves contextual owner identity and replacement order', async () => {
+  const h = harness(30_000);
+  const sourceA = sourceOwnerFence();
+  const sourceB = messageFollow.ownerFence({
+    ...sourceA,
+    ownerId: 'other-source-owner'
+  });
+  for (const [source, destination] of [
+    [sourceA, 'first'],
+    [sourceB, 'second'],
+    [sourceA, 'replacement']
+  ]) {
+    h.setRequestSource({ ...source, objectGeneration: 1n });
+    h.coordinator.begin('actor-1', 1n);
+    h.coordinator.snapshot('actor-1');
+    h.coordinator.complete(
+      'actor-1',
+      target(destination),
+      targetActorRef(destination),
+      [],
+      ownerFence(destination, 2n)
+    );
+  }
+  assert.equal(h.coordinator.messageFollowCount('actor-1'), 2);
+  const parts = frame('owner-identity');
+  const ref = { ...actorRef(), nodeRid: 'source-node' };
+  try {
+    await h.coordinator.capture('remote', ref.actorId, parts, false, undefined, ref, undefined, {
+      sourceNodeRid: 'caller',
+      originalOperation: { high: 7n, low: 14n },
+      originalReplyRouteId: 0n,
+      target: {
+        actor: { actorId: ref.actorId, nodeRid: ref.nodeRid, generation: 1n },
+        targetNodeGeneration: 1n,
+        authorityOwnerGeneration: 1n,
+        ownerLeaseGeneration: 1n
+      }
+    });
+    await h.coordinator.capture(
+      'remote',
+      ref.actorId,
+      parts,
+      false,
+      undefined,
+      contextRef(parts, { actorRef: ref, sourceOwner: sourceB })
+    );
+    const contexts = h.messageFollowPayloads.map(
+      (payload) => actorRelayWire.decodeRemoteActorPacketRelayPayload(payload).messageFollowContext
+    );
+    assert.deepEqual(
+      contexts.map((context) => context.targetOwner.ownerId),
+      ['replacement-owner', 'second-owner']
+    );
+    await assert.rejects(
+      h.coordinator.capture(
+        'remote',
+        ref.actorId,
+        parts,
+        false,
+        undefined,
+        contextRef(parts, {
+          actorRef: ref,
+          sourceOwner: { ...sourceA, ownerId: 'missing-owner' }
+        })
+      ),
+      { kind: framework.ZLinkFrameworkErrorKind.Unavailable }
+    );
+  } finally {
+    parts.forEach((part) => part.close());
+  }
+});
+
+test('native Actor ingress retains its exact source fence across a completed Join', async () => {
+  const h = harness(30_000);
+  h.setCurrentGeneration(1n);
+  h.coordinator.begin('actor-1', 1n);
+  h.coordinator.snapshot('actor-1');
+  h.coordinator.complete('actor-1', target(), targetActorRef(), [], ownerFence('target', 2n));
+  const parts = frame('native-after-join');
+  const ref = { ...actorRef(), nodeRid: 'source-node' };
+  const origin = {
+    sourceNodeRid: 'caller', originalOperation: { high: 7n, low: 11n }, originalReplyRouteId: 0n,
+    target: { actor: { actorId: ref.actorId, nodeRid: ref.nodeRid, generation: ref.objectGeneration },
+      targetNodeGeneration: 1n, authorityOwnerGeneration: 1n, ownerLeaseGeneration: 1n }
+  };
+  try {
+    for (const field of ['targetNodeGeneration', 'authorityOwnerGeneration', 'ownerLeaseGeneration']) {
+      await assert.rejects(h.coordinator.capture('remote', ref.actorId, parts, false, undefined, ref,
+        undefined, { ...origin, target: { ...origin.target, [field]: 99n } }),
+      { kind: framework.ZLinkFrameworkErrorKind.Unavailable });
+    }
+    await h.coordinator.capture('remote', ref.actorId, parts, false, undefined, ref, undefined, origin);
+    await h.coordinator.capture('remote', ref.actorId, parts, false, undefined, ref, undefined, origin);
+    assert.deepEqual(h.followed, ['native-after-join']);
+    const context = actorRelayWire.decodeRemoteActorPacketRelayPayload(h.messageFollowPayloads[0]).messageFollowContext;
+    assert.equal(context.operationId, '0000000000000007000000000000000b');
+    assert.equal(context.objectGeneration, '1');
+    assert.equal(context.sourceOwner.authorityOwnerGeneration, '1');
+    assert.equal(context.targetOwner.authorityOwnerGeneration, '2');
+  } finally {
+    parts.forEach(part => part.close());
+  }
+});
+
+test('native ingress for a departed tenure follows that route while a successor Join is active', async () => {
+  const h = harness(30_000);
+  h.setCurrentGeneration(1n);
+  h.coordinator.begin('actor-1', 1n);
+  h.coordinator.snapshot('actor-1');
+  h.coordinator.complete('actor-1', target(), targetActorRef(), [], ownerFence('target', 2n));
+  h.setRequestSource({ meshName: 'mesh', objectGeneration: 1n, ownerId: 'source-owner',
+    ownerLeaseGeneration: 1n, nodeRid: 'source-node', nodeGeneration: 1n, authorityOwnerGeneration: 3n });
+  h.setCurrentNodeRid('source-node');
+  h.setCurrentOwner(sourceOwnerFence(3n));
+  h.coordinator.begin('actor-1', 1n);
+  const parts = frame('departed-tenure');
+  const ref = { ...actorRef(), nodeRid: 'source-node' };
+  try {
+    await h.coordinator.capture('remote', ref.actorId, parts, false, undefined, ref, undefined, {
+      sourceNodeRid: 'caller', originalOperation: { high: 7n, low: 12n }, originalReplyRouteId: 0n,
+      target: { actor: { actorId: ref.actorId, nodeRid: ref.nodeRid, generation: ref.objectGeneration },
+        targetNodeGeneration: 1n, authorityOwnerGeneration: 1n, ownerLeaseGeneration: 1n }
+    });
+    assert.deepEqual(h.followed, ['departed-tenure']);
+    assert.deepEqual(h.coordinator.snapshot(ref.actorId), []);
+  } finally {
+    h.coordinator.cancel(ref.actorId);
+    parts.forEach(part => part.close());
+  }
+});
+
 test('handoff admission requires committed source and target owner fences', () => {
   let sourceLookupCount = 0;
   const invalidGeneration = new framework.ZLinkActorHandoffCoordinator({
@@ -392,7 +585,8 @@ test('provisional Join ingress replays one-way packets through the source mailbo
   for (const value of ['P1', 'P2']) {
     const parts = frame(value);
     await coordinator.capture(
-      'remote', 'actor-1',
+      'remote',
+      'actor-1',
       parts,
       false,
       undefined,
@@ -460,13 +654,17 @@ test('rejected provisional Join releases its current Actor mailbox record before
             operation: (executeChild) =>
               record.drain((...args) => executeChild(() => replayInCurrentActorTurn(...args))),
             preparation: record.preparation,
-            workOptions: { payloadBytes: record.payloadBytes }
+            workOptions: {
+              payloadBytes: record.payloadBytes,
+              onWithdrawable: record.onWithdrawable
+            }
           }))
         );
         return { terminal: Promise.all(terminals).then(() => undefined) };
       },
       dispatchRoutedActorPacket(
-        _origin, _spotId,
+        _origin,
+        _spotId,
         actorId,
         replayedParts,
         returnResponse,
@@ -475,7 +673,8 @@ test('rejected provisional Join releases its current Actor mailbox record before
       ) {
         return (
           coordinator.capture(
-            'remote', actorId,
+            'remote',
+            actorId,
             replayedParts,
             returnResponse,
             remoteBoundSessionTarget,
@@ -523,7 +722,8 @@ test('rejected provisional Join releases its current Actor mailbox record before
           const parts = frame(value);
           try {
             await coordinator.capture(
-              'remote', 'actor-1',
+              'remote',
+              'actor-1',
               parts,
               false,
               undefined,
@@ -544,7 +744,8 @@ test('rejected provisional Join releases its current Actor mailbox record before
         events.push('release:end');
         newerParts = frame('newer');
         const captured = coordinator.capture(
-          'remote', 'actor-1',
+          'remote',
+          'actor-1',
           newerParts,
           false,
           undefined,
@@ -620,7 +821,54 @@ test('rejected provisional Join releases its current Actor mailbox record before
 // still draining its durable prefix starts the next deferred Join. Ingress
 // that arrives after the next Join completes stays behind the remaining
 // durable record under a capacity-one host permit.
-for (const firstJoin of ['accepted', 'rejected']) {
+test('a running last prefix child does not retain later ingress as durable work', async () => {
+  const { coordinator } = harness();
+  const mailbox = new ZLinkActorSerialExecutor('actor-1', 'spot');
+  coordinator.beginProvisional('actor-1', 1n);
+  const first = frame('first');
+  await coordinator.capture('remote', 'actor-1', first, false, undefined, actorRef());
+  first.forEach((part) => part.close());
+  let started;
+  let finish;
+  const running = new Promise((resolve) => {
+    started = resolve;
+  });
+  const terminal = new Promise((resolve) => {
+    finish = resolve;
+  });
+  const admission = coordinator.admitDeferredPrefix('actor-1', (records) => ({
+    terminal: Promise.all(
+      mailbox.admitDurablePrefix(
+        records.map((record) => ({
+          operation: (executeChild) =>
+            record.drain(() =>
+              executeChild(async () => {
+                started();
+                await terminal;
+              })
+            ),
+          preparation: record.preparation,
+          workOptions: { onWithdrawable: record.onWithdrawable }
+        }))
+      )
+    ).then(() => undefined)
+  }));
+  await running;
+  const later = frame('later');
+  try {
+    assert.equal(
+      coordinator.capture('remote', 'actor-1', later, false, undefined, actorRef()),
+      undefined
+    );
+  } finally {
+    later.forEach((part) => part.close());
+    finish();
+  }
+  await admission.terminal;
+  await mailbox.close();
+});
+
+for (const firstJoin of ['accepted', 'rejected', 'transferred']) {
   test(`a record replayed after a ${firstJoin} deferred Join starts the next deferred Join`, async () => {
     const { coordinator } = harness();
     const queue = new ApplicationJobQueue(
@@ -653,7 +901,10 @@ for (const firstJoin of ['accepted', 'rejected']) {
                   return executeChild(() => runHandler(value));
                 }),
               preparation: record.preparation,
-              workOptions: { payloadBytes: record.payloadBytes }
+              workOptions: {
+                payloadBytes: record.payloadBytes,
+                onWithdrawable: record.onWithdrawable
+              }
             }))
           );
           return { terminal: Promise.all(terminals).then(() => undefined) };
@@ -698,17 +949,31 @@ for (const firstJoin of ['accepted', 'rejected']) {
     // accepted with no held ingress.
     handlers.set('next-join', async () => {
       transfer.beginDeferredActorHandoff(actor, state);
+      if (firstJoin !== 'rejected') {
+        assert.deepEqual(
+          coordinator
+            .snapshot('actor-1')
+            .map((packet) => Buffer.from(packet.payload, 'base64').toString()),
+          ['held']
+        );
+      }
       await finishJoin('accepted');
       lateIngress.push(ingress('late'));
     });
 
     try {
       transfer.beginDeferredActorHandoff(actor, state);
-      if (firstJoin === 'accepted') {
+      if (firstJoin !== 'rejected') {
         // #1771: a Spot send held by the first Join replays at the target.
         await ingress('next-join');
         await ingress('held');
-        await finishJoin('accepted');
+        if (firstJoin === 'transferred') {
+          const packets = coordinator.snapshot('actor-1');
+          coordinator.cancel('actor-1');
+          transfer.admitRelocationPrefix(actor, 1n, packets, Promise.resolve(), async () => {});
+        } else {
+          await finishJoin('accepted');
+        }
       } else {
         // #1884: the rejected completion callback sends to its own Actor
         // before the source hold returns to the Actor FIFO.
@@ -765,7 +1030,8 @@ test('provisional Join ingress preserves request completion when replayed locall
   const ref = contextRef(parts, { request: true });
   coordinator.beginProvisional('actor-1', 1n);
   const pending = coordinator.capture(
-    'remote', 'actor-1',
+    'remote',
+    'actor-1',
     parts,
     true,
     undefined,
@@ -811,7 +1077,7 @@ test('deferred Join release uses the direct Spot replay path without recapturing
           })
         };
       },
-      dispatchRoutedActorPacket(_origin ) {
+      dispatchRoutedActorPacket(_origin) {
         ordinaryDispatches += 1;
         throw new Error('release replay re-entered ordinary handoff capture');
       },
@@ -857,7 +1123,8 @@ test('release replay preserves typed request failures and observes one-way failu
   const requestParts = frame('expired-release');
   coordinator.beginProvisional('actor-1', 1n);
   const request = coordinator.capture(
-    'remote', 'actor-1',
+    'remote',
+    'actor-1',
     requestParts,
     true,
     undefined,
@@ -886,7 +1153,8 @@ test('release replay preserves typed request failures and observes one-way failu
   coordinator.beginProvisional('actor-1', 1n);
   const sendParts = frame('failed-release-send');
   await coordinator.capture(
-    'remote', 'actor-1',
+    'remote',
+    'actor-1',
     sendParts,
     false,
     undefined,
@@ -913,7 +1181,8 @@ test('durable request handoff returns its initial permit before capacity-one rep
   initialPermit.markApplicationQueued();
   const ingress = runWithApplicationJobPermit(initialPermit, () =>
     coordinator.capture(
-      'remote', 'actor-1',
+      'remote',
+      'actor-1',
       parts,
       true,
       undefined,
@@ -1022,7 +1291,14 @@ test('Message Follow preserves operation identity and rejects an exhausted hop w
   now += messageFollowDurationMs;
   const expiredParts = frame('expired-route');
   await assert.rejects(
-    coordinator.capture('remote', 'actor-1', expiredParts, false, undefined, contextRef(expiredParts)),
+    coordinator.capture(
+      'remote',
+      'actor-1',
+      expiredParts,
+      false,
+      undefined,
+      contextRef(expiredParts)
+    ),
     (error) => error.kind === framework.ZLinkFrameworkErrorKind.Unavailable
   );
   expiredParts.forEach((part) => part.close());
@@ -1057,19 +1333,26 @@ for (const raw of [false, true]) {
   test(`Message Follow uses a local relay window (raw=${raw})`, async (t) => {
     t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 0 });
     t.mock.method(performance, 'now', () => Date.now());
-    const { DEFAULT_REQUEST_TIMEOUT_MS } = require('../../packages/framework/dist/contracts/Configuration/Registration');
+    const {
+      DEFAULT_REQUEST_TIMEOUT_MS
+    } = require('../../packages/framework/dist/contracts/Configuration/Registration');
     const requestTimeoutMs = raw ? DEFAULT_REQUEST_TIMEOUT_MS / 2 : undefined;
     const relayWindowMs = requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
     const clientTimeoutMs = 80;
     let entered;
-    const admitted = new Promise(resolve => { entered = resolve; });
+    const admitted = new Promise((resolve) => {
+      entered = resolve;
+    });
     const requests = [];
     let completeRelay;
     const coordinator = new framework.ZLinkActorHandoffCoordinator({
       routedTransport: {
         async sendToSpot() {},
         async [raw ? 'requestRawToSpot' : 'requestToSpot'](_target, payload, options) {
-          requests.push({ payload: raw ? JSON.parse(payload.getString('utf8')) : payload, options });
+          requests.push({
+            payload: raw ? JSON.parse(payload.getString('utf8')) : payload,
+            options
+          });
           return await new Promise((resolve) => {
             completeRelay = resolve;
             entered();
@@ -1112,7 +1395,8 @@ for (const raw of [false, true]) {
       zlink.Message.from(Buffer.from(JSON.stringify({ marker: 'deadline' })))
     ];
     const reply = coordinator.capture(
-      'remote', 'actor-1',
+      'remote',
+      'actor-1',
       parts,
       true,
       undefined,
@@ -1125,7 +1409,14 @@ for (const raw of [false, true]) {
     parts.forEach((part) => part.close());
 
     let terminal;
-    const observed = reply.then(value => { terminal = { value }; }, error => { terminal = { error }; });
+    const observed = reply.then(
+      (value) => {
+        terminal = { value };
+      },
+      (error) => {
+        terminal = { error };
+      }
+    );
     try {
       await admitted;
       assert.equal(requests.length, 1);
@@ -1136,20 +1427,22 @@ for (const raw of [false, true]) {
       );
       assert.equal(relayedHeader.correlationId, correlationId);
       t.mock.timers.tick(clientTimeoutMs);
-      await new Promise(resolve => setImmediate(resolve));
+      await new Promise((resolve) => setImmediate(resolve));
       assert.equal(terminal, undefined, 'the original client deadline does not expire a relay hop');
       t.mock.timers.tick(relayWindowMs - clientTimeoutMs - 1);
-      await new Promise(resolve => setImmediate(resolve));
+      await new Promise((resolve) => setImmediate(resolve));
       assert.equal(terminal, undefined, 'the relay remains pending before its local window');
       t.mock.timers.tick(1);
-      await new Promise(resolve => setImmediate(resolve));
+      await new Promise((resolve) => setImmediate(resolve));
       assert.equal(terminal?.error?.kind, framework.ZLinkFrameworkErrorKind.DeadlineExceeded);
     } finally {
-      const late = raw ? zlink.Message.from(JSON.stringify({ ok: true, response: 'late' })) : undefined;
+      const late = raw
+        ? zlink.Message.from(JSON.stringify({ ok: true, response: 'late' }))
+        : undefined;
       const closed = raw ? t.mock.method(late, 'close') : undefined;
       completeRelay(raw ? [late] : { ok: true, response: 'late' });
       await observed;
-      await new Promise(resolve => setImmediate(resolve));
+      await new Promise((resolve) => setImmediate(resolve));
       if (raw) assert.equal(closed.mock.callCount(), 1);
     }
     assert.equal(terminal.error.kind, framework.ZLinkFrameworkErrorKind.DeadlineExceeded);
@@ -1189,7 +1482,8 @@ test('Message Follow admits a request whose client deadline has already expired'
   try {
     assert.equal(
       await coordinator.capture(
-        'remote', 'actor-1',
+        'remote',
+        'actor-1',
         parts,
         true,
         undefined,
@@ -1209,7 +1503,8 @@ test('accepted handoff rejects an expired request before replay queue admission'
   coordinator.begin('actor-1', 1n);
   const parts = frame('expired-accepted');
   const pending = coordinator.capture(
-    'remote', 'actor-1',
+    'remote',
+    'actor-1',
     parts,
     true,
     undefined,
@@ -1249,7 +1544,8 @@ test('Message Follow route has no relocation-specific 1024-message admission cap
   for (let index = 0; index < 1024; index++) {
     const parts = frame(`queued-${index}`);
     void coordinator.capture(
-      'remote', 'actor-1',
+      'remote',
+      'actor-1',
       parts,
       false,
       undefined,
@@ -1261,7 +1557,8 @@ test('Message Follow route has no relocation-specific 1024-message admission cap
   }
   const beyondFormerCap = frame('beyond-former-cap');
   const accepted = coordinator.capture(
-    'remote', 'actor-1',
+    'remote',
+    'actor-1',
     beyondFormerCap,
     false,
     undefined,
@@ -1405,7 +1702,14 @@ test('precommit abort drains appended ingress once through a single release task
 
   coordinator.begin('actor-1', 1n);
   const requestParts = frame('P1');
-  const request = coordinator.capture('remote', 'actor-1', requestParts, true, undefined, actorRef());
+  const request = coordinator.capture(
+    'remote',
+    'actor-1',
+    requestParts,
+    true,
+    undefined,
+    actorRef()
+  );
   requestParts.forEach((part) => part.close());
   const secondParts = frame('P2');
   await coordinator.capture('remote', 'actor-1', secondParts, false, undefined, actorRef());
@@ -1534,7 +1838,8 @@ test('Message Follow notification suppression retries rejection and marks only a
     const parts = frame(value);
     try {
       await coordinator.capture(
-        'remote', 'actor-1',
+        'remote',
+        'actor-1',
         parts,
         false,
         undefined,
@@ -1583,7 +1888,8 @@ test('a returning tenure with a newer authority fence bypasses the departed stal
   const returned = frame('returned-tenure');
   assert.equal(
     coordinator.capture(
-      'remote', 'actor-1',
+      'remote',
+      'actor-1',
       returned,
       false,
       undefined,
@@ -1615,7 +1921,8 @@ test('a returning tenure with a newer authority fence bypasses the departed stal
   });
   const departed = frame('departed-tenure');
   await coordinator.capture(
-    'remote', 'actor-1',
+    'remote',
+    'actor-1',
     departed,
     false,
     undefined,
@@ -1635,7 +1942,10 @@ test('a Core-routed packet owned by the current actor bypasses an older Message 
   coordinator.complete('actor-1', target(), targetActorRef(), [], ownerFence('target', 2n));
 
   const current = frame('current-owner');
-  assert.equal(coordinator.capture('remote', 'actor-1', current, false, undefined, actorRef(2n)), undefined);
+  assert.equal(
+    coordinator.capture('remote', 'actor-1', current, false, undefined, actorRef(2n)),
+    undefined
+  );
   current.forEach((part) => part.close());
 
   assert.deepEqual(followed, []);
@@ -1660,7 +1970,10 @@ test('a current ActorRef bypasses an older same-generation route after returning
   setCurrentNodeRid(String(actorRef(1n).nodeRid));
 
   const current = frame('returned-owner');
-  assert.equal(coordinator.capture('remote', 'actor-1', current, false, undefined, actorRef(1n)), undefined);
+  assert.equal(
+    coordinator.capture('remote', 'actor-1', current, false, undefined, actorRef(1n)),
+    undefined
+  );
   current.forEach((part) => part.close());
 
   assert.deepEqual(followed, []);
@@ -1684,7 +1997,10 @@ test('an exact current-owner context bypasses an older Message Follow route', as
     targetOwner: currentFence,
     actorRef: targetActorRef()
   });
-  assert.equal(coordinator.capture('remote', 'actor-1', current, false, undefined, owner), undefined);
+  assert.equal(
+    coordinator.capture('remote', 'actor-1', current, false, undefined, owner),
+    undefined
+  );
   current.forEach((part) => part.close());
 
   assert.deepEqual(followed, []);
@@ -1880,9 +2196,12 @@ test('positive Message Follow request returns one correlated reply and preserves
     replyRouteId: 'cccccccccccccccccccccccccccccccc',
     deadlineUnixMs: Date.now() + 10_000
   });
-  assert.deepEqual(await coordinator.capture('remote', 'actor-1', request, true, undefined, requestRef), {
-    accepted: true
-  });
+  assert.deepEqual(
+    await coordinator.capture('remote', 'actor-1', request, true, undefined, requestRef),
+    {
+      accepted: true
+    }
+  );
   request.forEach((part) => part.close());
   assert.equal(relays[0].returnResponse, true);
   assert.equal(relays[0].messageFollowContext.correlationId, 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb');
@@ -1961,7 +2280,14 @@ test('in-flight request preserves framing, reply correlation, and the caller tim
     zlink.Message.from(Buffer.from(requestHeader)),
     zlink.Message.from(Buffer.from(JSON.stringify({ marker: 'late' })))
   ];
-  const lateReply = coordinator.capture('remote', 'actor-1', lateParts, true, undefined, actorRef(2n));
+  const lateReply = coordinator.capture(
+    'remote',
+    'actor-1',
+    lateParts,
+    true,
+    undefined,
+    actorRef(2n)
+  );
   lateParts.forEach((part) => part.close());
   const lateBacklog = coordinator.snapshot('actor-1');
   const caller = Promise.race([
@@ -2000,7 +2326,14 @@ test('late terminal uses captured source evidence after Actor removal and reject
   } = harness();
   const request = frame('captured-terminal');
   coordinator.begin('actor-1', 1n);
-  const pendingReply = coordinator.capture('remote', 'actor-1', request, true, undefined, actorRef());
+  const pendingReply = coordinator.capture(
+    'remote',
+    'actor-1',
+    request,
+    true,
+    undefined,
+    actorRef()
+  );
   assert.equal(sourceLookupCount(), 1);
   request.forEach((part) => part.close());
   const [packet] = coordinator.snapshot('actor-1');
@@ -2541,7 +2874,18 @@ for (const phase of ['captured', 'relay']) {
         })
       }),
       handoffCapture: (_mesh, actorId, parts, returnResponse, ref, _deadline, onAdmitted) =>
-        coordinator.capture('local', actorId, parts, returnResponse, undefined, ref, undefined, undefined, undefined, onAdmitted)
+        coordinator.capture(
+          'local',
+          actorId,
+          parts,
+          returnResponse,
+          undefined,
+          ref,
+          undefined,
+          undefined,
+          undefined,
+          onAdmitted
+        )
     });
     class Query {}
     const pending = client.requestToActor('actor-1', new Query()).submit();

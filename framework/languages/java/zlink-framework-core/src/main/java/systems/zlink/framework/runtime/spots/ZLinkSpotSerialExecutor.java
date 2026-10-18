@@ -412,6 +412,60 @@ public final class ZLinkSpotSerialExecutor implements ZLinkActorDispatchTarget {
         return timerQueue(timerName).enqueue(() -> operation.apply(false), null);
     }
 
+    <T> CompletionStage<T> prepareRelocationTarget(Supplier<CompletionStage<T>> operation) {
+        return spotQueue
+                .trySealRelocation()
+                .thenCompose(
+                        seal -> {
+                            if (seal.isEmpty())
+                                return CompletableFuture.failedFuture(
+                                        new IllegalStateException(
+                                                "relocation target preparation could not be sealed"));
+                            return operation.get();
+                        });
+    }
+
+    CompletionStage<ZLinkSerialExecutionQueue.RelocationSeal> relocationPreparationSeal() {
+        return spotQueue
+                .relocationPreparationSeal()
+                .thenApply(
+                        seal ->
+                                seal.orElseThrow(
+                                        () ->
+                                                new IllegalStateException(
+                                                        "target preparation has no staging seal")));
+    }
+
+    CompletionStage<Void> releaseRelocationPreparation() {
+        return spotQueue
+                .relocationPreparationSeal()
+                .thenCompose(
+                        seal ->
+                                seal.isEmpty()
+                                        ? CompletableFuture.completedFuture(null)
+                                        : abortRelocation(seal.orElseThrow())
+                                                .thenAccept(
+                                                        restored -> {
+                                                            if (!restored)
+                                                                throw new IllegalStateException(
+                                                                        "relocation target staging seal was lost");
+                                                        }));
+    }
+
+    <T> CompletionStage<T> prepareActivation(Supplier<CompletionStage<T>> operation) {
+        return spotQueue.prepareActivation(operation);
+    }
+
+    CompletionStage<Void> finishActivationPreparation() {
+        return spotQueue.finishActivationPreparation().thenCompose(ignored -> resumeTimerQueues());
+    }
+
+    private CompletionStage<Void> resumeTimerQueues() {
+        return stateLane
+                .runNowOrQueue(() -> List.copyOf(timerQueues.values()))
+                .thenAccept(queues -> queues.forEach(ZLinkSerialExecutionQueue::resumePending));
+    }
+
     CompletionStage<Void> executeLifecycle(Supplier<CompletionStage<Void>> operation) {
         boolean ownsDependencyTurn =
                 spotQueue.isCurrent()
@@ -526,7 +580,9 @@ public final class ZLinkSpotSerialExecutor implements ZLinkActorDispatchTarget {
     }
 
     CompletionStage<Boolean> abortRelocation(ZLinkSerialExecutionQueue.RelocationSeal seal) {
-        return spotQueue.abortRelocation(seal);
+        return spotQueue
+                .abortRelocation(seal)
+                .thenCompose(restored -> resumeTimerQueues().thenApply(ignored -> restored));
     }
 
     CompletionStage<Optional<List<ZLinkSerialExecutionQueue.QueuedRecord>>> commitRelocation(

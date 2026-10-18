@@ -817,6 +817,15 @@ final class ZLinkUserSpotAggregateStagingOwner {
     interface JournalReplayer {
         CompletionStage<Void> replay(String laneId, ZLinkSerialExecutionQueue.QueuedRecord record);
 
+        default java.util.function.Supplier<CompletionStage<Void>> prepareReplay(
+                String laneId,
+                ZLinkSerialExecutionQueue.QueuedRecord record,
+                CompletionStage<Void> terminal,
+                java.util.function.Consumer<CompletionStage<Void>> observe) {
+            observe.accept(terminal);
+            return () -> replay(laneId, record);
+        }
+
         default CompletionStage<Void> replayFrozen(String laneId, byte[] frozenRecord) {
             return replay(laneId, new ZLinkSerialExecutionQueue.QueuedRecord(1, frozenRecord));
         }

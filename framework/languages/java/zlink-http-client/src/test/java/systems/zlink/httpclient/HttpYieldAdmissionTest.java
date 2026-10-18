@@ -46,11 +46,13 @@ final class HttpYieldAdmissionTest {
         var executor = new ManualExecutor();
         var queue = new ZLinkSerialExecutionQueue(executor, ZLinkExecutionLanePolicy.spot());
         var records = new java.util.concurrent.CopyOnWriteArrayList<java.util.logging.LogRecord>();
+        var failureReported = new CompletableFuture<Void>();
         var logger = java.util.logging.Logger.getLogger("systems.zlink.framework");
         var handler =
                 new java.util.logging.Handler() {
                     public void publish(java.util.logging.LogRecord record) {
                         records.add(record);
+                        failureReported.complete(null);
                     }
 
                     public void flush() {}
@@ -59,33 +61,11 @@ final class HttpYieldAdmissionTest {
                 };
         var failure = new IllegalStateException("callback failed");
         var callbacks = new AtomicInteger();
-        var dispatched = new CompletableFuture<Void>();
+        var callbackInvoked = new CompletableFuture<Void>();
         var frameworkTurn = new ZLinkFrameworkHttpExecutionTurn();
-        var observedTurn =
-                new ZLinkHttpExecutionTurn() {
-                    public <T> CompletionStage<T> async(CompletionStage<T> operation) {
-                        return frameworkTurn.async(operation);
-                    }
-
-                    public <T> CompletionStage<T> yield(
-                            java.util.function.Supplier<CompletionStage<T>> operation) {
-                        return frameworkTurn.yield(operation);
-                    }
-
-                    public java.util.concurrent.Executor callbackScheduler() {
-                        var scheduler = frameworkTurn.callbackScheduler();
-                        return command -> {
-                            try {
-                                scheduler.execute(command);
-                            } finally {
-                                dispatched.complete(null);
-                            }
-                        };
-                    }
-                };
         logger.addHandler(handler);
         try (var server = new HeldServer(release);
-                var client = ZLinkHttpClient.create(server.baseUrl()).buildServer(observedTurn)) {
+                var client = ZLinkHttpClient.create(server.baseUrl()).buildServer(frameworkTurn)) {
             var owner =
                     queue.enqueue(
                             () -> {
@@ -97,6 +77,7 @@ final class HttpYieldAdmissionTest {
                                                     String.class,
                                                     (error, response) -> {
                                                         callbacks.incrementAndGet();
+                                                        callbackInvoked.complete(null);
                                                         throw failure;
                                                     });
                                     return CompletableFuture.completedFuture(null);
@@ -107,9 +88,11 @@ final class HttpYieldAdmissionTest {
             owner.toCompletableFuture().join();
             if (closeBeforeCompletion) queue.sealClosingAdmission();
             release.complete(null);
-            dispatched.get(5, java.util.concurrent.TimeUnit.SECONDS);
+            if (!closeBeforeCompletion) {
+                executor.runUntil(callbackInvoked);
+            }
+            failureReported.get(5, java.util.concurrent.TimeUnit.SECONDS);
             client.close();
-            executor.drain();
             assertEquals(closeBeforeCompletion ? 0 : 1, callbacks.get());
             assertEquals(1, records.size(), "callback failure must reach runtime error reporting");
             var reported = records.getFirst().getThrown();

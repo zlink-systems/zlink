@@ -10,6 +10,7 @@ import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.actors.ZLinkActorJoinOperationId;
+import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.locations.*;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.runtime.InMemoryRelocationStore;
@@ -150,9 +151,11 @@ final class ZLinkActorJoinPrewarmIngressTest {
             //  between Accepted and PREPARE (migrated atomically when the
             //  real stage installed) ahead of the one that landed
             //  straight in the real stage after install.
-            CompletableFuture.allOf(
-                            harness.recordingBackend.queuedTerminals.toArray(
-                                    CompletableFuture[]::new))
+            harness.recordingBackend
+                    .actors
+                    .actorRelocationLaneAsync(harness.actorId)
+                    .thenCompose(ZLinkSerialExecutionQueue::awaitQuiescence)
+                    .toCompletableFuture()
                     .get(5, TimeUnit.SECONDS);
             assertEquals(List.of("EARLY", "AFTER_INSTALL"), harness.recordingBackend.replayed);
         }
@@ -587,13 +590,30 @@ final class ZLinkActorJoinPrewarmIngressTest {
      */
     private static final class RecordingActorBackend
             implements ZLinkStandaloneActorRelocationStagingOwner.Backend {
+        @Override
+        public CompletionStage<List<CompletableFuture<Void>>> admitBacklogPrefix(
+                Object actor,
+                ZLinkStandaloneActorRelocationStagingOwner.Request request,
+                List<ZLinkSerialExecutionQueue.QueuedRecord> records,
+                java.util.function.BiFunction<
+                                ZLinkSerialExecutionQueue.QueuedRecord,
+                                CompletableFuture<Void>,
+                                java.util.function.Supplier<CompletionStage<Void>>>
+                        replay) {
+            return spots.admitActorRelocationPrefix(
+                    actors,
+                    (ZLinkActorRuntime.PreparedTransferredActor) actor,
+                    request.targetSpotId(),
+                    records,
+                    replay);
+        }
+
         private final systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode
                 targetNode;
         private final ZLinkActorSessionCoordinator actors;
         private final ZLinkRelocationAdapterRegistry adapters;
         private final ZLinkSpotRuntime spots;
         final List<String> replayed = new CopyOnWriteArrayList<>();
-        final List<CompletableFuture<Void>> queuedTerminals = new CopyOnWriteArrayList<>();
 
         RecordingActorBackend(
                 systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode targetNode,
@@ -607,35 +627,18 @@ final class ZLinkActorJoinPrewarmIngressTest {
         }
 
         @Override
-        public CompletionStage<QueuedTurn> prepareIngress(
-                Object actor, ZLinkStandaloneActorRelocationStagingOwner.Request request) {
-            return spots.actorSessions()
-                    .runtime()
-                    .prepareTransferredActorDispatch(
-                            (systems.zlink.framework.runtime.actors.ZLinkActorRuntime
-                                            .PreparedTransferredActor)
-                                    actor);
-        }
-
-        @Override
         public CompletionStage<Void> enqueueIngress(
-                QueuedTurn dispatch,
                 ZLinkStandaloneActorRelocationStagingOwner.Request request,
                 byte[] acceptedJournalRecord,
-                java.util.function.Supplier<CompletionStage<Void>> turn,
-                CompletableFuture<Void> admission) {
-            var terminal =
-                    spots.actorSessions()
-                            .runtime()
-                            .submitActorDispatchLazyRecord(
-                                    dispatch,
-                                    () -> acceptedJournalRecord,
-                                    acceptedJournalRecord.length,
-                                    turn,
-                                    () -> {},
-                                    admission);
-            queuedTerminals.add(terminal.toCompletableFuture());
-            return terminal;
+                java.util.function.Supplier<CompletionStage<Void>> turn) {
+            return spots.actorSessions()
+                    .runtime()
+                    .submitActorDispatchLazyRecord(
+                            request.actorId(),
+                            () -> acceptedJournalRecord,
+                            acceptedJournalRecord.length,
+                            turn,
+                            () -> {});
         }
 
         @Override

@@ -8,6 +8,30 @@ public sealed class AutoConnectReconcilerTests
     private static readonly TimeSpan LeaseTtl = TimeSpan.FromSeconds(15);
 
     [Fact]
+    public async Task Immediate_peer_reconcile_refreshes_only_the_requested_connection()
+    {
+        var fixture = await FixtureAsync();
+        await fixture.PublishPeerAsync("r1", "tcp://r:1");
+        await fixture.Reconciler.TickAsync();
+        await fixture.RemovePeerAsync("r1");
+        await fixture.PublishPeerAsync("r2", "tcp://r:2");
+        await fixture.PublishPeerAsync("r3", "tcp://r:3");
+
+        await fixture.Reconciler.ReconcilePeerAsync(RoutingId.From("r2"), CancellationToken.None);
+
+        Assert.Equal(
+            new[] { "r1", "r2" },
+            fixture.Executor.Connected.Select(target => target.NodeRid.ToString())
+        );
+        Assert.Empty(fixture.Executor.Disconnected);
+        await fixture.Reconciler.TickAsync();
+        Assert.Equal("r3", fixture.Executor.Connected.Last().NodeRid.ToString());
+        Assert.Equal("r1", Assert.Single(fixture.Executor.Disconnected).NodeRid.ToString());
+        await fixture.Reconciler.ShutdownAsync();
+        await fixture.Runtime.DisposeAsync();
+    }
+
+    [Fact]
     public void Planner_Excludes_Self_And_Foreign_Meshes()
     {
         var local = Local(

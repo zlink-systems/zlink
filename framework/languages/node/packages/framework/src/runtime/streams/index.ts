@@ -48,7 +48,10 @@ import {
   registerActorSessionBindingRuntimeOwner
 } from './actor-session-binding-runtime-owner';
 import { ZLinkActorSessionLifecycleCoordinator } from './actor-session-lifecycle-coordinator';
-import { ZLinkBoundActorRelaySender } from './bound-actor-relay-sender';
+import {
+  ZLinkBoundActorRelaySender,
+  type ZLinkBoundActorRelaySenderOptions
+} from './bound-actor-relay-sender';
 import {
   DefaultZLinkBoundSessionResponseTarget,
   type ZLinkBoundSessionResponseTarget
@@ -140,7 +143,7 @@ export interface ZLinkStreamBindingRuntimeOptions {
     header: ZLinkStreamFrameHeader,
     payload: Message
   ) => Promise<boolean>;
-  readonly notifyDisconnected?: (actor: ZLinkSessionActor, signal?: AbortSignal) => Promise<void>;
+  readonly notifyDisconnected?: ZLinkBoundActorRelaySenderOptions['notifyDisconnected'];
   readonly flowCreationEnabled?: () => boolean;
   readonly metrics?: import('../diagnostics').ZLinkRuntimeMetrics;
 }

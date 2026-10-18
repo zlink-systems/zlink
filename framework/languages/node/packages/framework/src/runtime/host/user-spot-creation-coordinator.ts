@@ -533,7 +533,7 @@ export class ZLinkUserSpotCreationCoordinator {
     try {
       local = await materialize(requestPayload, current, signal ?? new AbortController().signal);
       if (local.state === ZLinkSpotCreateState.Rejected) {
-        local.publication?.abort();
+        await local.publication?.abort();
         await this.options.store.abort(
           {
             key: { kind: 'user_spot', globalId: record.spotId },
@@ -610,13 +610,15 @@ export class ZLinkUserSpotCreationCoordinator {
         committed.ready.allocation.descriptor.meshName,
         readySpotRoute(record.spotId, committed.ready)
       );
-      local.publication?.publish();
+      await local.publication?.publish();
       return {
         result: { spot: readySpot, state: local.state, reply: local.reply },
         spot: readySpot
       };
     } catch (error) {
-      local?.publication?.abort();
+      const publicationCleanup = await Promise.allSettled([
+        Promise.resolve().then(() => local?.publication?.abort())
+      ]);
       const cleanupDeadline = createDeadline(
         this.options.cleanupTimeoutMs ?? DEFAULT_USER_SPOT_CLEANUP_TIMEOUT_MS
       );
@@ -645,7 +647,7 @@ export class ZLinkUserSpotCreationCoordinator {
         waitForAbort(discard?.(cleanupSignal) ?? Promise.resolve(), cleanupSignal)
       ]);
       cleanupDeadline.close();
-      const cleanupErrors = cleanup
+      const cleanupErrors = [...publicationCleanup, ...cleanup]
         .filter((item): item is PromiseRejectedResult => item.status === 'rejected')
         .map((item) => item.reason);
       if (cleanupErrors.length > 0) {

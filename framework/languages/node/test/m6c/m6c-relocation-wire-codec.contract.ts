@@ -246,6 +246,7 @@ test('commands 30, 31, 34, 40, 52, and 53 match the shared golden vectors', () =
     },
     {
       kind: 'prepare',
+      deadlineUnixMs: 1700000000000n,
       ...base,
       target,
       initiatorRole: 'source',
@@ -348,6 +349,8 @@ test('commands 42, 43, and 44 match the shared Session golden vectors', () => {
     coordinator: sessionCoordinator
   } as const;
   const seal: ServiceSessionRelocationSeal = {
+    targetNodeRid: 'target',
+    targetNodeGeneration: 4n,
     ...sessionBase,
     senderRole: 'source',
     actor: {
@@ -479,6 +482,8 @@ test('batch-3 Session barrier hand/generated codecs are byte-equal and reject th
 
 test('Session relocation result key contains only relocation identity and ActorId', () => {
   const base: ServiceSessionRelocationSeal = {
+    targetNodeRid: 'target',
+    targetNodeGeneration: 4n,
     relocation: { high: 7n, low: 9n },
     coordinator: {
       ownerId: 'coordinator',
@@ -752,4 +757,67 @@ test('command 43 rejects the shared malformed sealResult bytes', () => {
     assert.throws(() => decodeSessionRelocationSealed43(bytes), Error, entry.name);
     assert.throws(() => decodeSessionRelocationSealed(bytes), Error, entry.name);
   }
+});
+
+test('command 40 preserves a mandatory nonzero-u64 source deadline', () => {
+  const prepare = {
+    kind: 'prepare',
+    relocation: { high: 1n, low: 2n },
+    targetAttemptGeneration: 1n,
+    coordinator,
+    target,
+    initiatorRole: 'source',
+    object: relocationObject,
+    sourceNodeRid: 'node-a',
+    sourceNodeGeneration: 11n,
+    payloadTotalLength: 24n,
+    payloadChunkCount: 2,
+    payloadChecksumCrc32c: 0x29bc8795,
+    applicationVersion: 1n,
+    deadlineUnixMs: 0xffffffffffffffffn
+  } as const;
+  const encoded = encodeMaintenanceRelocationControl(prepare);
+  assert.equal(encoded.readBigUInt64BE(encoded.length - 8), prepare.deadlineUnixMs);
+  assert.deepEqual(decodeMaintenanceRelocationControl(encoded), prepare);
+  assert.deepEqual(
+    Buffer.from(encodeRelocationPrepare40(decodeRelocationPrepare40(encoded))),
+    encoded
+  );
+  assert.throws(() => encodeMaintenanceRelocationControl({ ...prepare, deadlineUnixMs: 0n }));
+  assert.throws(() => decodeMaintenanceRelocationControl(encoded.subarray(0, encoded.length - 8)));
+  const zero = Buffer.from(encoded);
+  zero.fill(0, zero.length - 8);
+  assert.throws(() => decodeMaintenanceRelocationControl(zero));
+});
+
+test('command 42 requires the relocation target independently of its source Actor fence', () => {
+  const seal: ServiceSessionRelocationSeal = {
+    relocation: { high: 7n, low: 9n },
+    coordinator,
+    senderRole: 'source',
+    actor: {
+      actor: { nodeRid: 'source', actorId: 'actor', generation: 5n },
+      targetNodeGeneration: 2n,
+      authorityOwnerGeneration: 11n,
+      ownerLeaseGeneration: 13n
+    },
+    session: {
+      sessionOwnerNodeRid: 'session-owner',
+      sessionOwnerNodeGeneration: 4n,
+      sessionOwnerId: 'session-owner',
+      sessionOwnerLeaseGeneration: 8n,
+      sessionRid: 'session',
+      bindingGeneration: 6n
+    },
+    targetNodeRid: 'target',
+    targetNodeGeneration: 0xffffffffffffffffn
+  };
+  const encoded = encodeSessionRelocationSeal(seal);
+  assert.deepEqual(decodeSessionRelocationSeal(encoded), seal);
+  assert.equal(encoded.readBigUInt64BE(encoded.length - 8), seal.targetNodeGeneration);
+  assert.throws(() => encodeSessionRelocationSeal({ ...seal, targetNodeGeneration: 0n }));
+  assert.throws(() => decodeSessionRelocationSeal(encoded.subarray(0, encoded.length - 15)));
+  const zero = Buffer.from(encoded);
+  zero.fill(0, zero.length - 8);
+  assert.throws(() => decodeSessionRelocationSeal(zero));
 });

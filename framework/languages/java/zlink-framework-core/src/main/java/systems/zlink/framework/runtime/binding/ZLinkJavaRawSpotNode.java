@@ -2473,104 +2473,16 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
 
     void registerInstanceSpotType(
             String stableType, ZLinkInternalMeshNode.InstanceSpotActivationHandler handler) {
-        instanceSpots.register(
-                stableType,
-                this::createSpot,
-                new ZLinkJavaInstanceSpotRegistry.ActivationHook() {
-                    @Override
-                    public <T> CompletionStage<T> admit(
-                            java.util.function.Supplier<CompletionStage<T>> work) {
-                        return handler.admit(work);
-                    }
-
-                    @Override
-                    public CompletionStage<Void> activate(
-                            String selectedType,
-                            String spotId,
-                            long generation,
-                            ZLinkBackendSpot backendSpot) {
-                        InstanceAuthority authority = instanceAuthorities.get(spotId);
-                        if (authority == null
-                                || authority.route().objectGeneration() != generation) {
-                            return CompletableFuture.failedFuture(
-                                    new IllegalStateException(
-                                            "Instance Spot authority is missing or stale"));
-                        }
-                        return handler.activate(selectedType, authority.route(), backendSpot);
-                    }
-
-                    @Override
-                    public CompletionStage<Void> activate(
-                            String selectedType,
-                            String spotId,
-                            long generation,
-                            ZLinkBackendSpot backendSpot,
-                            long deadlineUnixMs) {
-                        InstanceAuthority authority = instanceAuthorities.get(spotId);
-                        if (authority == null
-                                || authority.route().objectGeneration() != generation) {
-                            return CompletableFuture.failedFuture(
-                                    new IllegalStateException(
-                                            "Instance Spot authority is missing or stale"));
-                        }
-                        return handler.activate(
-                                selectedType, authority.route(), backendSpot, deadlineUnixMs);
-                    }
-
-                    @Override
-                    public CompletionStage<Void> activate(
-                            String selectedType,
-                            String spotId,
-                            long generation,
-                            ZLinkBackendSpot backendSpot,
-                            long deadlineUnixMs,
-                            java.util.function.Consumer<ZLinkBackendSpot> restoreFirst) {
-                        InstanceAuthority authority = instanceAuthorities.get(spotId);
-                        if (authority == null || authority.route().objectGeneration() != generation)
-                            return CompletableFuture.failedFuture(
-                                    new IllegalStateException(
-                                            "Instance Spot authority is missing or stale"));
-                        return handler.activate(
-                                selectedType,
-                                authority.route(),
-                                backendSpot,
-                                deadlineUnixMs,
-                                restoreFirst);
-                    }
-
-                    @Override
-                    public CompletionStage<ZLinkServiceM6BWireCodec.InstanceRouteFence> reserve(
-                            ZLinkInstanceActivationRecoveryCodec.RecoveryEnvelope envelope,
-                            ZLinkAuthorityReadResult authority) {
-                        return handler.reserve(envelope, authority);
-                    }
-
-                    @Override
-                    public CompletionStage<Void> completed(
-                            ZLinkServiceM6BWireCodec.InstanceSpotMessage message) {
-                        return handler.completed(message);
-                    }
-
-                    @Override
-                    public CompletionStage<Void> admitExisting(
-                            ZLinkServiceM6BWireCodec.InstanceSpotMessage message,
-                            ZLinkBackendReceived received) {
-                        return handler.admitExisting(message, received);
-                    }
-                });
+        instanceSpots.register(stableType, this::createSpot, handler);
     }
 
     CompletionStage<ZLinkJavaInstanceSpotRegistry.Activation> activateInstanceSpot(
-            String spotId, String stableType) {
-        ZLinkJavaRawSpot current = spots.get(spotId);
-        long generation =
-                current == null ? nextGeneration.getAndIncrement() : current.lifecycleGeneration();
-        return instanceSpots.activate(spotId, stableType, generation);
+            ZLinkServiceM6BWireCodec.InstanceRouteFence route, String stableType) {
+        return instanceSpots.activate(route.targetSpotId(), stableType, route);
     }
 
     boolean closeInstanceSpot(String spotId, long generation) {
-        boolean closed = instanceSpots.close(spotId, generation);
-        return closed;
+        return instanceSpots.close(spotId, generation);
     }
 
     ZLinkBackendSpot localSpot(String spotId) {
@@ -2606,6 +2518,14 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
         if (current != null && current.route().equals(route)) {
             instanceAuthorities.remove(route.targetSpotId(), current);
         }
+    }
+
+    CompletionStage<Void> instanceActivationRecoveryCompleted(
+            ZLinkServiceM6BWireCodec.InstanceRouteFence route, Throwable failure) {
+        InstanceAuthority authority = instanceAuthorities.get(route.targetSpotId());
+        if (authority == null || authority.route().objectGeneration() != route.objectGeneration())
+            return CompletableFuture.completedFuture(null);
+        return instanceSpots.recovered(authority.stableType(), route, failure);
     }
 
     CompletionStage<Void> recoverInstanceSpot(
@@ -2655,11 +2575,16 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                     .activate(
                             route.targetSpotId(),
                             envelope.stableType(),
-                            route.objectGeneration(),
+                            route,
                             envelope.deadlineUnixMs(),
-                            spot ->
-                                    ((ZLinkJavaRawSpot) spot)
-                                            .enqueueRoute(received, null)
+                            (spot, admission) ->
+                                    completeRemoteInstanceHandler(
+                                                    (ZLinkJavaRawSpot) spot,
+                                                    received,
+                                                    admission,
+                                                    () ->
+                                                            instanceSpots.completed(
+                                                                    envelope.stableType(), header))
                                             .whenComplete(
                                                     (ignored, failure) -> {
                                                         if (failure == null)
@@ -2758,13 +2683,13 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                                                                         reconcileInstanceSpotAuthority(
                                                                                 cold.stableType(),
                                                                                 route);
-                                                                        return route
-                                                                                .objectGeneration();
+                                                                        return route;
                                                                     }),
-                                            spot ->
+                                            (spot, admission) ->
                                                     completeRemoteInstanceHandler(
                                                             (ZLinkJavaRawSpot) spot,
                                                             received,
+                                                            admission,
                                                             () ->
                                                                     instanceSpots.completed(
                                                                             cold.stableType(),
@@ -2867,9 +2792,8 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                                     instanceSpots.activate(
                                             header.route().targetSpotId(),
                                             authority.stableType(),
-                                            ((ZLinkServiceM6BWireCodec.InstanceRouteFence)
-                                                            header.route())
-                                                    .objectGeneration());
+                                            (ZLinkServiceM6BWireCodec.InstanceRouteFence)
+                                                    header.route());
                         } catch (Throwable activationFailure) {
                             received.close();
                             failure.accept(activationFailure);
@@ -2917,8 +2841,8 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
     private static CompletionStage<Void> completeRemoteInstanceHandler(
             ZLinkJavaRawSpot target,
             ZLinkBackendReceived received,
+            CompletableFuture<Void> admitted,
             java.util.function.Supplier<CompletionStage<Void>> completion) {
-        var admitted = new CompletableFuture<Void>();
         CompletionStage<Void> handler = target.enqueueRoute(received, admitted);
         return admitted.thenCompose(
                         admission ->

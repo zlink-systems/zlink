@@ -486,8 +486,20 @@ public sealed class SpotCloseConformanceTests(Xunit.Abstractions.ITestOutputHelp
                 authority.ObjectGeneration
             );
         Assert.NotNull(activation);
-        var first = QueueRetainedIntent(host, activation, authority, spotId, "pending-first");
-        var second = QueueRetainedIntent(host, activation, authority, spotId, "pending-second");
+        var first = await AdmitRetainedIntentAsync(
+            host,
+            activation,
+            authority,
+            spotId,
+            "pending-first"
+        );
+        var second = await AdmitRetainedIntentAsync(
+            host,
+            activation,
+            authority,
+            spotId,
+            "pending-second"
+        );
         var initialized = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
@@ -597,8 +609,20 @@ public sealed class SpotCloseConformanceTests(Xunit.Abstractions.ITestOutputHelp
                 authority.ObjectGeneration
             );
         Assert.NotNull(activation);
-        var first = QueueRetainedIntent(host, activation, authority, spotId, "pending-close");
-        var second = QueueRetainedIntent(host, activation, authority, spotId, "pending-second");
+        var first = await AdmitRetainedIntentAsync(
+            host,
+            activation,
+            authority,
+            spotId,
+            "pending-close"
+        );
+        var second = await AdmitRetainedIntentAsync(
+            host,
+            activation,
+            authority,
+            spotId,
+            "pending-second"
+        );
         host.State.ReleaseOnClosing.TrySetResult();
         Assert.Equal(RequestResult.Ok, (await first.WaitAsync(Wait)).Result);
         Assert.Equal(RequestResult.Ok, (await second.WaitAsync(Wait)).Result);
@@ -651,8 +675,20 @@ public sealed class SpotCloseConformanceTests(Xunit.Abstractions.ITestOutputHelp
         };
         try
         {
-            var first = QueueRetainedIntent(host, activation, authority, spotId, "pending-hold");
-            var second = QueueRetainedIntent(host, activation, authority, spotId, "pending-second");
+            var first = await AdmitRetainedIntentAsync(
+                host,
+                activation,
+                authority,
+                spotId,
+                "pending-hold"
+            );
+            var second = await AdmitRetainedIntentAsync(
+                host,
+                activation,
+                authority,
+                spotId,
+                "pending-second"
+            );
             host.State.ReleaseOnClosing.TrySetResult();
             await entered.Task.WaitAsync(Wait);
             var successorAuthority = Assert
@@ -689,6 +725,13 @@ public sealed class SpotCloseConformanceTests(Xunit.Abstractions.ITestOutputHelp
     [Fact]
     public async Task Close_reincarnates_an_intent_delivered_while_another_ingress_holds_the_state_lane()
     {
+        var flowPath = Path.Combine(
+            Path.GetTempPath(),
+            "zlink-close-dotnet",
+            $"ingress-admission-{Guid.NewGuid():N}.flow"
+        );
+        using var listener = new TestHostMessageFlowListener(flowPath);
+        output.WriteLine($"Message flow file: {flowPath}");
         await using var host = await SpotCloseHost.StartAsync();
         var spotId = $"close-late-admit-{Guid.NewGuid():N}";
         await host.RequestInstanceAsync(spotId);
@@ -731,10 +774,25 @@ public sealed class SpotCloseConformanceTests(Xunit.Abstractions.ITestOutputHelp
             })
             .AsTask();
         await laneEntered.Task.WaitAsync(Wait);
-        var pending = QueueRetainedIntent(host, activation, authority, spotId, "pending-late");
-        host.State.ReleaseOnClosing.TrySetResult();
-        laneRelease.TrySetResult();
+        Task<Task<InstanceSpotActivationTerminal>> admission;
+        try
+        {
+            admission = AdmitRetainedIntentAsync(
+                host,
+                activation,
+                authority,
+                spotId,
+                "pending-late"
+            );
+            Assert.False(admission.IsCompleted);
+        }
+        finally
+        {
+            host.State.ReleaseOnClosing.TrySetResult();
+            laneRelease.TrySetResult();
+        }
         await busyIngress.WaitAsync(Wait);
+        var pending = await admission.WaitAsync(Wait);
 
         // Spot messaging §7 steps 1 and 3: the intent reached this node before
         // the step 3 decision, so it stays behind Close and runs on the next
@@ -797,7 +855,13 @@ public sealed class SpotCloseConformanceTests(Xunit.Abstractions.ITestOutputHelp
             entered.TrySetResult();
             return Task.CompletedTask;
         };
-        var retained = QueueRetainedIntent(host, activation, oldAuthority, spotId, "pending-hold");
+        var retained = await AdmitRetainedIntentAsync(
+            host,
+            activation,
+            oldAuthority,
+            spotId,
+            "pending-hold"
+        );
         var commit = activation
             .SetSuccessorAsync(
                 successor,
@@ -826,7 +890,7 @@ public sealed class SpotCloseConformanceTests(Xunit.Abstractions.ITestOutputHelp
         Assert.True(entered.Task.IsCompleted);
     }
 
-    private static Task<InstanceSpotActivationTerminal> QueueRetainedIntent(
+    private static async Task<Task<InstanceSpotActivationTerminal>> AdmitRetainedIntentAsync(
         SpotCloseHost host,
         ZLinkSpotActivation activation,
         ZLinkAuthoritySnapshot authority,
@@ -865,8 +929,8 @@ public sealed class SpotCloseConformanceTests(Xunit.Abstractions.ITestOutputHelp
         );
         try
         {
-            return activation
-                .DispatchDurableActivationAsync(
+            return await activation
+                .AdmitDurableActivationAsync(
                     operation.OperationId,
                     operation.SourceNodeRid,
                     operation.SourceSpotId,
@@ -885,7 +949,7 @@ public sealed class SpotCloseConformanceTests(Xunit.Abstractions.ITestOutputHelp
                     CancellationToken.None,
                     operation
                 )
-                .AsTask();
+                .ConfigureAwait(false);
         }
         finally
         {
@@ -931,14 +995,8 @@ public sealed class SpotCloseConformanceTests(Xunit.Abstractions.ITestOutputHelp
         host.State.ReleaseOnClosing.TrySetResult();
         // Step 3 has decided release: its Delete waits in the Store.
         await host.Store.AuthorityDeleteHeld.Task.WaitAsync(Wait);
-        var late = QueueRetainedIntent(host, activation, current, spotId, "late");
-        var deadline = DateTime.UtcNow + Wait;
-        while (!late.IsCompleted && !activation.HasPendingCreationIntent)
-        {
-            if (DateTime.UtcNow > deadline)
-                throw new TimeoutException("The late Instance intent message was not decided.");
-            await Task.Delay(2);
-        }
+        var late = await AdmitRetainedIntentAsync(host, activation, current, spotId, "late");
+
         host.Store.ReleaseAuthorityDelete.TrySetResult();
         Assert.True(await host.State.ContextCloseTask!.WaitAsync(Wait));
         var failure = await Assert.ThrowsAsync<ZLinkFrameworkException>(() => late.WaitAsync(Wait));
@@ -1056,7 +1114,7 @@ public sealed class SpotCloseConformanceTests(Xunit.Abstractions.ITestOutputHelp
             );
         Assert.NotNull(activation);
         var pending = hasIntent
-            ? QueueRetainedIntent(host, activation, current, spotId, "pending")
+            ? await AdmitRetainedIntentAsync(host, activation, current, spotId, "pending")
             : null;
         Assert.Equal(hasIntent, activation.HasPendingCreationIntent);
         var noIntent = await host.RequestAsync(spotId);
@@ -2265,6 +2323,8 @@ internal sealed class SpotCloseProbeState
     internal bool ThrowOnInitialize { get; set; }
     internal ConcurrentQueue<ulong> InitializedGenerations { get; } = new();
     internal Func<ulong, Task>? OnReinitialize { get; set; }
+    internal Action<IZLinkInstanceSpotContext>? OnInstanceInitializing { get; set; }
+    internal Func<CancellationToken, Task>? OnInstanceHandler { get; set; }
     internal ConcurrentQueue<string>? BranchOrder { get; set; }
     internal string? StoredMarker { get; set; }
     internal ConcurrentQueue<ulong> PendingHandlerGenerations { get; } = new();
@@ -2306,6 +2366,7 @@ internal sealed class SpotCloseInstance(
 
     public async ValueTask OnInitializeAsync(CancellationToken cancellationToken)
     {
+        State.OnInstanceInitializing?.Invoke(Context);
         State.InitializedGenerations.Enqueue(Context.ObjectGeneration);
         if (State.OnReinitialize is { } observe)
             await observe(Context.ObjectGeneration);
@@ -2341,6 +2402,8 @@ internal sealed class SpotCloseInstanceHandler
     )
     {
         spot.State.RecordHandlerCall();
+        if (spot.State.OnInstanceHandler is { } onHandler)
+            await onHandler(cancellationToken);
         spot.State.InstanceHandlerMarkers.Enqueue(request.Marker);
         if (request.Marker == "initial")
             spot.State.StoredMarker = request.Marker;

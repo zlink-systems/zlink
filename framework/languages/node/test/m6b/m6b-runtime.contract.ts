@@ -1521,17 +1521,14 @@ test('outbound stateful routes use resolved authority generations and never obje
     payload: Buffer.from('payload')
   };
   const actor = { nodeRid: 'node-b', actorId: 'actor-a', generation: 5n };
-  assert.equal(
-    await runtime.sendToActor(actor, 7n, actor.generation, payload),
-    SubmitResult.NotFound
-  );
+  assert.equal(await runtime.sendToActor(actor, payload), SubmitResult.NotFound);
   runtime.rememberActorRoute({
     actor,
     targetNodeGeneration: 7n,
     authorityOwnerGeneration: 11n,
     ownerLeaseGeneration: 13n
   });
-  assert.equal(await runtime.sendToActor(actor, 7n, actor.generation, payload), SubmitResult.Ok);
+  assert.equal(await runtime.sendToActor(actor, payload), SubmitResult.Ok);
   const actorHeader = decodeStatefulHeader(sent.at(-1)!.parts[0]!);
   assert.equal(actorHeader.kind, 'actorSend');
   if (actorHeader.kind === 'actorSend') {
@@ -2923,7 +2920,7 @@ test('retained peer routes may submit while endpoint convergence reports not rea
     ownerLeaseGeneration: 13n
   });
 
-  const result = await runtime.sendToActor(actor, 7n, 5n, {
+  const result = await runtime.sendToActor(actor, {
     packetName: 'RetainedRoute',
     contentType: 'application/octet-stream',
     payload: Buffer.from('payload')
@@ -6232,12 +6229,37 @@ test('raw backend dispatches Spot requests and Actor sends through M6B owners', 
     closeParts(completion);
 
     const actor = backend.createActor('actor-target');
-    assert.equal(await backend.sendToActor(actor, Buffer.from('actor-send')), SubmitResult.Ok);
+    const actorRoute = {
+      actor,
+      targetNodeGeneration: backend.status().lifecycleGeneration,
+      authorityOwnerGeneration: actor.generation,
+      ownerLeaseGeneration: 43n
+    };
+    assert.equal(
+      await backend.sendToActor(actor, Buffer.from('actor-send'), { routeFence: actorRoute }),
+      SubmitResult.Ok
+    );
     const receivedActor = await drainOne(backend, ReadyDomain.Application);
     assert.equal(receivedActor.kind, ReceiveKind.ActorSend);
     assert.equal(receivedActor.kindData, null);
     assert.equal(receivedActor.parts[0]!.toBytes().toString(), 'actor-send');
+    assert.deepEqual(receivedActor.messageFollowOrigin?.target, actorRoute);
     closeParts(receivedActor);
+
+    const actorRequest = backend.requestToActor(actor, Buffer.from('actor-request'), {
+      routeFence: actorRoute
+    });
+    const receivedRequest = await drainOne(backend, ReadyDomain.Application);
+    assert.equal(receivedRequest.kind, ReceiveKind.ActorRequest);
+    assert.deepEqual(receivedRequest.messageFollowOrigin?.target, actorRoute);
+    assert.equal(receivedRequest.parts[0]!.toBytes().toString(), 'actor-request');
+    assert.equal(receivedRequest.reply(Buffer.from('actor-reply')), SubmitResult.Ok);
+    closeParts(receivedRequest);
+    const actorCompletion = await drainOne(backend, ReadyDomain.Infrastructure);
+    assert.deepEqual(actorCompletion.operationId, actorRequest);
+    assert.equal(actorCompletion.terminalResult, RequestResult.Ok);
+    assert.equal(actorCompletion.parts[0]!.toBytes().toString(), 'actor-reply');
+    closeParts(actorCompletion);
 
     const instanceOperation = backend.requestInstanceSpot(
       instanceRoute,

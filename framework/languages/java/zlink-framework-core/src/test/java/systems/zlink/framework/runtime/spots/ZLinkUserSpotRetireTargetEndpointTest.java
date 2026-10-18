@@ -226,6 +226,7 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
         coordinator.commit(prepared, OPEN).toCompletableFuture().join();
         authority.reads.set(0);
         CompletionStage<Void> publishing = endpoint.publish(request);
+        actorBackend.drain();
 
         var terminal = new CompletableFuture<Void>();
         try {
@@ -1686,6 +1687,54 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
 
     private static class RestartActorBackend
             implements ZLinkStandaloneActorRelocationStagingOwner.Backend {
+        @Override
+        public CompletionStage<List<CompletableFuture<Void>>> admitBacklogPrefix(
+                Object actor,
+                ZLinkStandaloneActorRelocationStagingOwner.Request request,
+                List<ZLinkSerialExecutionQueue.QueuedRecord> records,
+                java.util.function.BiFunction<
+                                ZLinkSerialExecutionQueue.QueuedRecord,
+                                CompletableFuture<Void>,
+                                java.util.function.Supplier<CompletionStage<Void>>>
+                        replay) {
+            if (records.isEmpty()) return CompletableFuture.completedFuture(List.of());
+            var jobs =
+                    new systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue(
+                            systems.zlink.framework.configuration.ZLinkApplicationJobQueueProfile
+                                    .BALANCED,
+                            java.util.OptionalLong.of(1),
+                            new systems.zlink.framework.runtime.internal.dispatch
+                                    .ZLinkApplicationJobQueue.ProcessorCandidates(
+                                    1, null, null, null));
+            return actorRuntime
+                    .prepareTransferredActorDispatch(
+                            (ZLinkActorRuntime.PreparedTransferredActor) actor)
+                    .thenCompose(
+                            dispatch ->
+                                    dispatch.activation()
+                                            .relocationLane()
+                                            .admitDurablePrefix(
+                                                    records,
+                                                    (record, terminal) -> {
+                                                        var operation =
+                                                                replay.apply(record, terminal);
+                                                        return () ->
+                                                                actorRuntime.runActorDispatchTurn(
+                                                                        request.actorId(),
+                                                                        operation);
+                                                    },
+                                                    jobs))
+                    .whenComplete(
+                            (accepted, failure) -> {
+                                if (failure != null) jobs.close();
+                                else
+                                    CompletableFuture.allOf(
+                                                    accepted.toArray(CompletableFuture[]::new))
+                                            .whenComplete(
+                                                    (ignored, terminalFailure) -> jobs.close());
+                            });
+        }
+
         private final List<String> operations;
         private final ZLinkManualExecutor tasks = new ZLinkManualExecutor();
         private ZLinkActorRuntime.PreparedTransferredActor prepared;
@@ -1714,26 +1763,16 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
         }
 
         @Override
-        public CompletionStage<QueuedTurn> prepareIngress(
-                Object actor, ZLinkStandaloneActorRelocationStagingOwner.Request request) {
-            return actorRuntime.prepareTransferredActorDispatch(
-                    (ZLinkActorRuntime.PreparedTransferredActor) actor);
-        }
-
-        @Override
         public CompletionStage<Void> enqueueIngress(
-                QueuedTurn dispatch,
                 ZLinkStandaloneActorRelocationStagingOwner.Request request,
                 byte[] acceptedJournalRecord,
-                java.util.function.Supplier<CompletionStage<Void>> turn,
-                CompletableFuture<Void> admission) {
+                java.util.function.Supplier<CompletionStage<Void>> turn) {
             return actorRuntime.submitActorDispatchLazyRecord(
-                    dispatch,
+                    request.actorId(),
                     () -> acceptedJournalRecord,
                     acceptedJournalRecord.length,
                     turn,
-                    () -> {},
-                    admission);
+                    () -> {});
         }
 
         @Override

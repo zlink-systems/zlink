@@ -60,6 +60,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 final class ZLinkCanonicalRelocationReadySubmissionTest {
+    private static final java.time.Instant STAGE_DEADLINE =
+            java.time.Instant.parse("2100-01-01T00:00:00Z");
     private static final ZLinkStoreCancellation OPEN = () -> false;
 
     @Test
@@ -199,7 +201,11 @@ final class ZLinkCanonicalRelocationReadySubmissionTest {
                         ExecutionException.class,
                         () ->
                                 timedOutSource
-                                        .stage(targetRid, request, Duration.ofMillis(25))
+                                        .stage(
+                                                targetRid,
+                                                request,
+                                                Duration.ofMillis(25),
+                                                STAGE_DEADLINE)
                                         .toCompletableFuture()
                                         .get(250, TimeUnit.MILLISECONDS));
         assertInstanceOf(java.util.concurrent.TimeoutException.class, readyTimeout.getCause());
@@ -219,11 +225,11 @@ final class ZLinkCanonicalRelocationReadySubmissionTest {
                         new CountingEndpoint());
         CompletableFuture<Void> ownerWaiter =
                 overlappingSource
-                        .stage(targetRid, request, Duration.ofMillis(250))
+                        .stage(targetRid, request, Duration.ofMillis(250), STAGE_DEADLINE)
                         .toCompletableFuture();
         CompletableFuture<Void> shortWaiter =
                 overlappingSource
-                        .stage(targetRid, request, Duration.ofMillis(25))
+                        .stage(targetRid, request, Duration.ofMillis(25), STAGE_DEADLINE)
                         .toCompletableFuture();
         assertThrows(ExecutionException.class, () -> shortWaiter.get(200, TimeUnit.MILLISECONDS));
         assertEquals(
@@ -269,7 +275,7 @@ final class ZLinkCanonicalRelocationReadySubmissionTest {
                         new CountingEndpoint());
         CompletableFuture<Void> failedStage =
                 failedSource
-                        .stage(targetRid, request, Duration.ofMillis(500))
+                        .stage(targetRid, request, Duration.ofMillis(500), STAGE_DEADLINE)
                         .toCompletableFuture();
         var failed =
                 ZLinkCanonicalRelocationProtocol.decodePrepare(
@@ -352,7 +358,7 @@ final class ZLinkCanonicalRelocationReadySubmissionTest {
                 CompletionException.class,
                 () ->
                         source.get()
-                                .stage(targetRid, request, Duration.ofMillis(100))
+                                .stage(targetRid, request, Duration.ofMillis(100), STAGE_DEADLINE)
                                 .toCompletableFuture()
                                 .join());
         assertEquals(
@@ -391,7 +397,7 @@ final class ZLinkCanonicalRelocationReadySubmissionTest {
                 CompletionException.class,
                 () ->
                         source.get()
-                                .stage(targetRid, changed, Duration.ofMillis(100))
+                                .stage(targetRid, changed, Duration.ofMillis(100), STAGE_DEADLINE)
                                 .toCompletableFuture()
                                 .join(),
                 "a non-exact retry on the same fence remains a conflict");
@@ -400,7 +406,7 @@ final class ZLinkCanonicalRelocationReadySubmissionTest {
         Throwable retryFailure = null;
         try {
             source.get()
-                    .stage(targetRid, request, Duration.ofMillis(250))
+                    .stage(targetRid, request, Duration.ofMillis(250), STAGE_DEADLINE)
                     .toCompletableFuture()
                     .join();
         } catch (CompletionException failure) {
