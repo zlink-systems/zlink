@@ -11,6 +11,7 @@ namespace Zlink.Framework.Runtime.Service;
 internal sealed class ZLinkCanonicalRelocationTargetOwner(
     RoutingId localNodeRid,
     ulong localNodeGeneration,
+    ZLinkDrainAdmissionGate drainAdmission,
     ZLinkSpotRetireTargetRuntime? targetRuntime = null,
     ZLinkStandaloneActorRelocationRuntime? standaloneActorRuntime = null,
     Func<ZLinkRelocationEnvelope, CancellationToken, ValueTask>? awaitTargetReady = null
@@ -28,6 +29,14 @@ internal sealed class ZLinkCanonicalRelocationTargetOwner(
     )
     {
         ValidateAttempt(prepare, authenticatedSourceNodeRid);
+        // Host relocation §14: one new-owner lease covers Actor and SPOT
+        // staging. Shutdown waits for accepted admissions before closing targets.
+        if (!drainAdmission.TryEnterActorAdmission(out var ownerAdmission))
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.ShuttingDown,
+                "Relocation target admission is sealed for drain."
+            );
+        using var ownerAdmissionLease = ownerAdmission;
         await WaitForTargetReadinessAsync(prepare, envelope, cancellationToken)
             .ConfigureAwait(false);
 
