@@ -524,7 +524,7 @@ TEST (ZLinkFrameworkStatefulDispatch, DispatchFailureReportsCauseAndFailsOrigina
           options.mesh.dispatch, [&errors] (const auto &event) { errors.push_back (event); });
         auto native = std::make_shared<host::public_host_runtime_t> (std::move (options));
         native->configure_stateful_dispatch (
-          [] (stateful::accepted_record_authority_query_t query)
+          [] (const stateful::accepted_record_authority_query_t &query)
             -> framework::task_t<std::optional<stateful::accepted_record_authority_t>> {
               co_return stateful::accepted_record_authority_t{
                 {"local-owner", 1, query.source_node_routing_id, query.source_node_generation}, 1};

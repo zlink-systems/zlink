@@ -6584,7 +6584,7 @@ int local_relay_preserves_handoff_request_route (bool has_original_operation)
         // The caller provides no operation identity. Use the real local host
         // registry and retain its original completion from before submission.
         fixture.reply_host->configure_stateful_dispatch (
-          [] (runtime::stateful::accepted_record_authority_query_t query)
+          [] (const runtime::stateful::accepted_record_authority_query_t &query)
             -> task_t<std::optional<runtime::stateful::accepted_record_authority_t>> {
               co_return runtime::stateful::accepted_record_authority_t{
                 {"native-relay-source-owner", 17, query.source_node_routing_id,
