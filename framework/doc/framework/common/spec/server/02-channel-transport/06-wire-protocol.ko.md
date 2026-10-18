@@ -208,7 +208,7 @@ dequeue되는 시점에 끝나며, decode된 payload는 Framework의 일반 소�
 
 ## 3. Command space
 
-Wire v1은 다음 ID를 사용한다. `7..15`, `32`, `35`, `41`, `45`와 `54..255`는 reserved이며
+Wire v1은 다음 ID를 사용한다. `7..15`, `32`, `35`, `41`, `45`와 `55..255`는 reserved이며
 다른 의미로 재사용하지 않는다. 괄호 안의 이전 command 이름은 호환 진단용 이름일 뿐 decode하거나
 전송하는 command가 아니다.
 
@@ -258,6 +258,7 @@ Wire v1은 다음 ID를 사용한다. `7..15`, `32`, `35`, `41`, `45`와 `54..25
 | 51 | `boundSessionReplaced` | infrastructure | 없음 | — | 새 binding 확정 뒤 이전 session에 보내는 교체 통지 |
 | 52 | `relocationState` | infrastructure | 없음 | — | source memory에서 target으로 직접 전달하는 payload chunk 전송(base·final stage) |
 | 53 | `relocationFailed` | infrastructure | 없음 | — | 대응하는 `relocationPrepare`에 대한 assembly·준비 실패 명시 reply |
+| 54 | `boundSessionClose` | infrastructure | 없음 | — | current binding의 physical connection close를 Session owner에 요청한다 |
 
 표의 "계층"·"application payload"·"사용할 수 있는 flag" 열은 schema 선언을 그대로 옮긴 것이다.
 **application 계층 command만 application handler로 들어간다.** infrastructure command는 runtime이

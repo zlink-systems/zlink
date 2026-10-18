@@ -386,13 +386,9 @@ jobs:
           echo "prefix=${core_prefix}" >> "${GITHUB_OUTPUT}"
 
       - name: Build the checkout Node binding package
-        shell: bash
-        run: |
-          version="${{ steps.core.outputs.binding_version }}"
-          mkdir -p .artifacts/wsl/npm
-          (cd bindings/node && npm ci --ignore-scripts && npm run build)
-          npm pack --silent ./bindings/node --pack-destination .artifacts/wsl/npm
-          test -f ".artifacts/wsl/npm/zlink-systems-zlink-${version}.tgz"
+        uses: ./.github/actions/node-binding-package
+        with:
+          core-prefix: ${{ steps.core.outputs.prefix }}
 
       - name: Build the local-package pin of @zlink-systems/http-client
         shell: bash
@@ -404,27 +400,22 @@ jobs:
           tar tzf .artifacts/wsl/npm/zlink-systems-http-client-*.tgz > "${RUNNER_TEMP}/http-client-files.txt"
           grep -q 'package/dist/index.js' "${RUNNER_TEMP}/http-client-files.txt"
 
-      # Installed from the committed lockfile, so the workspace gets the released
-      # @zlink-systems/zlink and its linux-x64 prebuild.
-      #
-      # framework-node.yml repins this dependency to the checkout-built tarball
-      # because testing that tarball is what that workflow is for. Doing the same
-      # here breaks: the checkout tarball carries no prebuild, npm builds the addon
-      # with node-gyp into build/Release, and loading it from there runs
-      # prepareDevelopmentRuntimeLink, which reads <packageRoot>/../../VERSION -
-      # a path that only resolves in a source checkout, not under node_modules
-      # (bindings/node/src/zlink/runtime/native/native_load_paths.ts). This job
-      # needs a STREAM server that runs, not a binding under test, so it takes the
-      # published consumer path.
       - name: Install and build the Node framework workspace
         working-directory: framework/languages/node
         shell: bash
+        env:
+          BINDING_VERSION: ${{ steps.core.outputs.binding_version }}
         run: |
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const file = 'package.json';
+          const packageJson = JSON.parse(fs.readFileSync(file, 'utf8'));
+          packageJson.dependencies['@zlink-systems/zlink'] = `file:../../../.artifacts/wsl/npm/zlink-systems-zlink-${process.env.BINDING_VERSION}.tgz`;
+          fs.writeFileSync(file, `${JSON.stringify(packageJson, null, 2)}\n`);
+          NODE
+          npm install --package-lock-only --ignore-scripts --no-audit --no-fund
           npm ci
           npm run build
-          # The Unity player talks to a server this binding has to load. Failing
-          # here names the cause; failing later reads as "the STREAM server exited
-          # with 1" from inside the driver.
           node -e "require('@zlink-systems/zlink'); console.log('native addon loads');"
 
       - name: Cache Chromium

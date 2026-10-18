@@ -366,6 +366,20 @@ requests a connection close. It doesn't provide a global proxy that
 specifies an arbitrary session. Disconnect releases the binding but doesn't
 destroy the Actor or change Spot membership.
 
+**The Session owner performs the connection close.** When an Actor requests a close of its current binding, the Actor
+owner preserves the Session owner identity (Node RID and lifecycle generation), SessionRid, binding generation, ActorId
+and ObjectGeneration that the current binding names, and sends them in `boundSessionClose(54)` to the Session owner.
+The same decision applies when the Session owner is in the same process. The Session owner's binding aggregate runs the
+§2 binding check once and starts the physical connection close of that session only when the request's whole identity
+matches the current binding. A mismatch ends with `Unavailable` and never retargets another binding or connection. The
+existing transport and authority boundaries verify the Actor route's sender authority; the Session owner does not look
+up Actor authority again. Relocation seal and route application do not delay the close of a valid current binding.
+
+The close reply carries the transport close terminal and does not wait for the §7 disconnect callback, tombstone or
+local cleanup that this close triggers. Binding cleanup and the Actor notification come once from §7; the close request
+path does not release the binding separately. Command 54's request/reply follows the existing correlation, deadline,
+cancellation and error terminal contract.
+
 The control commands this section and §8.2 use are as follows.
 
 | Command | Name | Direction and use | How it completes |
@@ -374,6 +388,7 @@ The control commands this section and §8.2 use are as follows.
 | 24 | `actorSend` | Session owner → Actor owner: session→Actor payload (includes bound-session tail) | send or request relay — the existing correlation/deadline contract as-is |
 | 36 | `boundSessionSend` | Actor owner → Session owner: Actor→session push | send |
 | 51 | `boundSessionReplaced` | Actor owner → previous Session owner: binding-replacement notification | one-way, at most once |
+| 54 | `boundSessionClose` | Actor owner → Session owner: physical connection close request for the current binding | request/reply, one terminal |
 | 42 | `sessionRelocationSeal` | Relocation coordinator → Session owner: request to install a seal on the relocation-target binding | request |
 | 43 | `sessionRelocationSealed` | Session owner → Relocation coordinator: seal-installation result or exact-binding absence (`sealResult`, §8.3) | reply |
 | 44 | `sessionRelocationRoute` | Target runtime or relocation coordinator → Session owner: route apply or abort | one-way (send), no response |
