@@ -2302,14 +2302,6 @@ public_host_runtime_t::cutover_relocation_remote (const zlink::routing_id_t &tar
     co_return co_await _transport->send_relocation_control (target_node.to_bytes (), cutover);
 }
 
-task_t<stateful::stateful_error_t>
-public_host_runtime_t::ingest_stateful (stateful::object_ref_t owner)
-{
-    if (!_stateful_dispatch)
-        co_return stateful::stateful_error_t::invalid;
-    co_return co_await _stateful_dispatch->ingest (std::move (owner));
-}
-
 task_t<bool>
 public_host_runtime_t::route_session_remote (const zlink::routing_id_t &session_owner_node,
                                              protocol::session_relocation_route_t route)
@@ -7038,7 +7030,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_application_claim (
                     retain_mailbox_reservation ();
                     (void) co_await _stateful_dispatch->ingest_claimed (
                       *native_owner, std::move (mailbox_record),
-                      std::function<void ()> (release_mailbox_reservation), &retained);
+                      std::function<void ()> (release_mailbox_reservation), std::move (retained));
                     (void) co_await dispatch_stateful_owner (*native_owner, dispatch);
                     _transport->signal_activity ();
                     ++count;
@@ -7689,11 +7681,11 @@ public_host_runtime_t::accept_local_application (local_application_dispatch_t di
                                        protocol::actor_message_header_t>)
               return _stateful_dispatch->accepted_actor_authority (
                 *owner, value, dispatch.record.source_node_rid.to_bytes (),
-                _options.mesh.descriptor.lifecycle_generation, false, &retained);
+                _options.mesh.descriptor.lifecycle_generation, false, std::move (retained));
           else
               return _stateful_dispatch->accepted_spot_authority (
                 *owner, value, dispatch.record.source_node_rid.to_bytes (),
-                _options.mesh.descriptor.lifecycle_generation, &retained);
+                _options.mesh.descriptor.lifecycle_generation, std::move (retained));
       },
       header);
     if (validation != stateful::stateful_error_t::none)

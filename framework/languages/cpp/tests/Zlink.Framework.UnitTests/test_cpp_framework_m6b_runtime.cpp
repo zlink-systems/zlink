@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #include "runtime/mesh/mesh_node_host_service.hpp"
 #include "../support/runtime_failure_fixture.hpp"
+#include "../support/stateful_ingress_fixture.hpp"
 #include "runtime/backend/raw_binding_adapter.hpp"
 #include "../support/request_admission_fixture.hpp"
 
@@ -5004,7 +5005,10 @@ void verify_raw_spot_and_actor_routing ()
         assert (spot_pump != mesh::raw_mesh_pump_result_t::protocol_error);
     }
     assert (spot_pump == mesh::raw_mesh_pump_result_t::application);
-    assert (dispatch.ingest (spot).result ().value () == stateful::stateful_error_t::none);
+    assert (zlink::framework::test::ingest_stateful_mailbox_record (objects, target, dispatch, spot)
+              .result ()
+              .value ()
+            == stateful::stateful_error_t::none);
     const auto [spot_delivery_error, spot_delivery] = dispatch.try_claim (spot);
     assert (spot_delivery_error == stateful::stateful_error_t::none);
     assert (spot_delivery);
@@ -5033,7 +5037,10 @@ void verify_raw_spot_and_actor_routing ()
       source_descriptor.node_routing_id, std::nullopt, std::nullopt,
       source_descriptor.lifecycle_generation,
       std::make_pair (relocated_one_way_operation.high, relocated_one_way_operation.low)}));
-    assert (dispatch.ingest (spot).result ().value () == stateful::stateful_error_t::none);
+    assert (zlink::framework::test::ingest_stateful_mailbox_record (objects, target, dispatch, spot)
+              .result ()
+              .value ()
+            == stateful::stateful_error_t::none);
     const auto [relocated_error, relocated_delivery] = dispatch.try_claim (spot);
     assert (relocated_error == stateful::stateful_error_t::none);
     assert (relocated_delivery && !relocated_delivery->request);
@@ -5075,7 +5082,11 @@ void verify_raw_spot_and_actor_routing ()
         assert (actor_pump != mesh::raw_mesh_pump_result_t::protocol_error);
     }
     assert (actor_pump == mesh::raw_mesh_pump_result_t::application);
-    assert (dispatch.ingest (actor).result ().value () == stateful::stateful_error_t::none);
+    assert (
+      zlink::framework::test::ingest_stateful_mailbox_record (objects, target, dispatch, actor)
+        .result ()
+        .value ()
+      == stateful::stateful_error_t::none);
     const auto [actor_delivery_error, actor_delivery] = dispatch.try_claim (actor);
     assert (actor_delivery_error == stateful::stateful_error_t::none);
     assert (actor_delivery && actor_delivery->request);
@@ -5141,7 +5152,11 @@ void verify_raw_spot_and_actor_routing ()
         assert (bound_pump != mesh::raw_mesh_pump_result_t::protocol_error);
     }
     assert (bound_pump == mesh::raw_mesh_pump_result_t::application);
-    assert (dispatch.ingest (actor).result ().value () == stateful::stateful_error_t::none);
+    assert (
+      zlink::framework::test::ingest_stateful_mailbox_record (objects, target, dispatch, actor)
+        .result ()
+        .value ()
+      == stateful::stateful_error_t::none);
     const auto [bound_delivery_error, bound_delivery] = dispatch.try_claim (actor);
     assert (bound_delivery_error == stateful::stateful_error_t::none);
     assert (bound_delivery && bound_delivery->request);
@@ -5205,7 +5220,11 @@ void verify_raw_spot_and_actor_routing ()
       source_descriptor.node_routing_id, std::nullopt, 92, source_descriptor.lifecycle_generation,
       std::make_pair (unfenced_operation.high, unfenced_operation.low),
       mesh::service_bound_session_source_t{bound_session_tail.session_routing_id, 0, 0}}));
-    assert (dispatch.ingest (actor).result ().value () == stateful::stateful_error_t::moving);
+    assert (
+      zlink::framework::test::ingest_stateful_mailbox_record (objects, target, dispatch, actor)
+        .result ()
+        .value ()
+      == stateful::stateful_error_t::moving);
     {
         const auto [unfenced_error, unfenced_delivery] = dispatch.try_claim (actor);
         (void) unfenced_error;
@@ -5227,7 +5246,11 @@ void verify_raw_spot_and_actor_routing ()
       mesh::service_bound_session_source_t{bound_session_tail.session_routing_id,
                                            bound_session_tail.binding_generation,
                                            bound_session_tail.session_sequence}}));
-    assert (dispatch.ingest (actor).result ().value () == stateful::stateful_error_t::moving);
+    assert (
+      zlink::framework::test::ingest_stateful_mailbox_record (objects, target, dispatch, actor)
+        .result ()
+        .value ()
+      == stateful::stateful_error_t::moving);
     {
         const auto [tailless_error, tailless_delivery] = dispatch.try_claim (actor);
         (void) tailless_error;
@@ -5247,7 +5270,11 @@ void verify_raw_spot_and_actor_routing ()
           target.pump_one (mesh::service_liveness_registry_t::clock_t::now ()).result ().value ();
     }
     assert (stale_owner_pump == mesh::raw_mesh_pump_result_t::application);
-    assert (dispatch.ingest (actor).result ().value () == stateful::stateful_error_t::conflict);
+    assert (
+      zlink::framework::test::ingest_stateful_mailbox_record (objects, target, dispatch, actor)
+        .result ()
+        .value ()
+      == stateful::stateful_error_t::conflict);
     authority_live = true;
 
     auto stale_owner_lease_fence = actor_fence;
@@ -5265,7 +5292,11 @@ void verify_raw_spot_and_actor_routing ()
           target.pump_one (mesh::service_liveness_registry_t::clock_t::now ()).result ().value ();
     }
     assert (stale_owner_pump == mesh::raw_mesh_pump_result_t::application);
-    assert (dispatch.ingest (actor).result ().value () == stateful::stateful_error_t::conflict);
+    assert (
+      zlink::framework::test::ingest_stateful_mailbox_record (objects, target, dispatch, actor)
+        .result ()
+        .value ()
+      == stateful::stateful_error_t::conflict);
 
     auto stale_fence = actor_fence;
     ++stale_fence.object_generation;
@@ -5294,7 +5325,11 @@ void verify_raw_spot_and_actor_routing ()
         assert (actor_pump != mesh::raw_mesh_pump_result_t::protocol_error);
     }
     assert (actor_pump == mesh::raw_mesh_pump_result_t::application);
-    assert (dispatch.ingest (actor).result ().value () == stateful::stateful_error_t::none);
+    assert (
+      zlink::framework::test::ingest_stateful_mailbox_record (objects, target, dispatch, actor)
+        .result ()
+        .value ()
+      == stateful::stateful_error_t::none);
     const auto [recreated_delivery_error, recreated_delivery] = dispatch.try_claim (actor);
     assert (recreated_delivery_error == stateful::stateful_error_t::none);
     assert (recreated_delivery && recreated_delivery->request);
@@ -5367,7 +5402,11 @@ void verify_relocated_source_reply_failure_keeps_terminal_record ()
          protocol::encode_application_payload (
            {"ActorPacket", "application/json", bytes ("request")})}),
       unreachable_source, std::nullopt, 99, 1, std::make_pair (operation.high, operation.low)}));
-    assert (dispatch.ingest (actor).result ().value () == stateful::stateful_error_t::none);
+    assert (
+      zlink::framework::test::ingest_stateful_mailbox_record (objects, target, dispatch, actor)
+        .result ()
+        .value ()
+      == stateful::stateful_error_t::none);
 
     const protocol::reply_relay_t relay{operation,
                                         99,
@@ -5456,7 +5495,11 @@ void verify_atomic_raw_stateful_ingress_commit ()
     // Authority rejection is outside the accepted-ingress transaction and
     // cannot allocate sequence 1 or reserve application work.
     enqueue (1, "authority-rejected");
-    assert (dispatch.ingest (actor).result ().value () == stateful::stateful_error_t::conflict);
+    assert (
+      zlink::framework::test::ingest_stateful_mailbox_record (objects, target, dispatch, actor)
+        .result ()
+        .value ()
+      == stateful::stateful_error_t::conflict);
     assert_no_queued_reservation ();
     authority_live = true;
 
@@ -5468,7 +5511,11 @@ void verify_atomic_raw_stateful_ingress_commit ()
     const auto filled_count = objects.pending (actor, stateful::turn_domain_t::application);
     const auto filled_bytes = objects.pending_bytes (actor, stateful::turn_domain_t::application);
     enqueue (2, "accepted-beyond-former-capacity");
-    assert (dispatch.ingest (actor).result ().value () == stateful::stateful_error_t::none);
+    assert (
+      zlink::framework::test::ingest_stateful_mailbox_record (objects, target, dispatch, actor)
+        .result ()
+        .value ()
+      == stateful::stateful_error_t::none);
     assert (objects.pending (actor, stateful::turn_domain_t::application) == filled_count + 1);
     assert (objects.pending_bytes (actor, stateful::turn_domain_t::application) > filled_bytes);
     assert (dispatch.discard_pending (actor, 1) == stateful::stateful_error_t::none);
@@ -5476,7 +5523,11 @@ void verify_atomic_raw_stateful_ingress_commit ()
     assert_no_queued_reservation ();
 
     enqueue (3, "accepted-one");
-    assert (dispatch.ingest (actor).result ().value () == stateful::stateful_error_t::none);
+    assert (
+      zlink::framework::test::ingest_stateful_mailbox_record (objects, target, dispatch, actor)
+        .result ()
+        .value ()
+      == stateful::stateful_error_t::none);
     const auto authority_queries_after_admission = authority_queries;
     authority_live = false;
     const auto [first_error, first] = dispatch.try_claim (actor);
@@ -5499,7 +5550,11 @@ void verify_atomic_raw_stateful_ingress_commit ()
     authority_live = true;
 
     enqueue (4, "accepted-two");
-    assert (dispatch.ingest (actor).result ().value () == stateful::stateful_error_t::none);
+    assert (
+      zlink::framework::test::ingest_stateful_mailbox_record (objects, target, dispatch, actor)
+        .result ()
+        .value ()
+      == stateful::stateful_error_t::none);
     const auto [second_error, second] = dispatch.try_claim (actor);
     assert (second_error == stateful::stateful_error_t::none && second);
     assert (second->turn.sequence == 3);
@@ -5507,7 +5562,11 @@ void verify_atomic_raw_stateful_ingress_commit ()
             == stateful::stateful_error_t::none);
 
     enqueue (6, "accepted-three");
-    assert (dispatch.ingest (actor).result ().value () == stateful::stateful_error_t::none);
+    assert (
+      zlink::framework::test::ingest_stateful_mailbox_record (objects, target, dispatch, actor)
+        .result ()
+        .value ()
+      == stateful::stateful_error_t::none);
     const auto [third_error, third] = dispatch.try_claim (actor);
     assert (third_error == stateful::stateful_error_t::none && third);
     assert (third->turn.sequence == 4);

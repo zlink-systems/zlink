@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #include "runtime/backend/raw_binding_adapter.hpp"
 #include "../support/runtime_failure_fixture.hpp"
+#include "../support/stateful_ingress_fixture.hpp"
 
 #include "runtime/client_server/raw_client_server_owner.hpp"
 #include "runtime/mesh/raw_mesh_node_owner.hpp"
@@ -126,7 +127,11 @@ void verify_stateful_claim_releases_after_one_shot_reply_terminal ()
            {"ActorRequest", "application/json", bytes ("request")})}),
       source_routing_id, std::nullopt, correlation, source_generation,
       std::make_pair (operation.high, operation.low)}));
-    assert (dispatch.ingest (actor).result ().value () == stateful::stateful_error_t::none);
+    assert (
+      zlink::framework::test::ingest_stateful_mailbox_record (objects, target, dispatch, actor)
+        .result ()
+        .value ()
+      == stateful::stateful_error_t::none);
     const auto [claim_error, delivery] = dispatch.try_claim (actor);
     assert (claim_error == stateful::stateful_error_t::none);
     assert (delivery && delivery->request);
@@ -286,7 +291,11 @@ void verify_stateful_ingest_rejection_releases_on_one_shot_terminal ()
       mailbox_owner, mesh::service_mailbox_domain_t::application,
       zlink::framework::detail::backend::materialize_binding_parts ({{0x01}})}));
 
-    assert (dispatch.ingest (actor).result ().value () == stateful::stateful_error_t::invalid);
+    assert (
+      zlink::framework::test::ingest_stateful_mailbox_record (objects, target, dispatch, actor)
+        .result ()
+        .value ()
+      == stateful::stateful_error_t::invalid);
     std::optional<mesh::service_mailbox_claim_t> released;
     const auto deadline = std::chrono::steady_clock::now () + 250ms;
     while (!released && std::chrono::steady_clock::now () < deadline) {

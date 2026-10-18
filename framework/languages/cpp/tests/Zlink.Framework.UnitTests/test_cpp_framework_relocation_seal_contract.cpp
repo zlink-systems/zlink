@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #include "../support/runtime_failure_fixture.hpp"
+#include "../support/stateful_ingress_fixture.hpp"
 #include "runtime/backend/raw_binding_adapter.hpp"
 
 #include "runtime/actors/actor_gateway_runtime.hpp"
@@ -51,14 +52,17 @@ struct public_host_runtime_test_access_t
                               const Header &header,
                               std::vector<std::uint8_t> source)
     {
+        auto retained = zlink::framework::test::retained_ingress_snapshot (host._objects, target);
         if constexpr (std::is_same_v<Header, protocol::actor_message_header_t>)
             return host._stateful_dispatch
-              ->accepted_actor_authority (target, header, std::move (source), 1, false)
+              ->accepted_actor_authority (target, header, std::move (source), 1, false,
+                                          std::move (retained))
               .result ()
               .value ();
         else
             return host._stateful_dispatch
-              ->accepted_spot_authority (target, header, std::move (source), 1)
+              ->accepted_spot_authority (target, header, std::move (source), 1,
+                                         std::move (retained))
               .result ()
               .value ();
     }
@@ -1264,10 +1268,22 @@ TEST (FrameworkRelocationSealContract, retained_follow_rejects_previous_object_g
       });
     protocol::actor_message_header_t header;
     header.target = {object.key, object.object_generation, {1}, 1, 1, 3};
-    EXPECT_EQ (dispatch.accepted_actor_authority (object, header, {1}, 1).result ().value ().first,
+    EXPECT_EQ (dispatch
+                 .accepted_actor_authority (
+                   object, header, {1}, 1, false,
+                   zlink::framework::test::retained_ingress_snapshot (objects, object))
+                 .result ()
+                 .value ()
+                 .first,
                stateful::stateful_error_t::none);
     --header.target.object_generation;
-    EXPECT_EQ (dispatch.accepted_actor_authority (object, header, {1}, 1).result ().value ().first,
+    EXPECT_EQ (dispatch
+                 .accepted_actor_authority (
+                   object, header, {1}, 1, false,
+                   zlink::framework::test::retained_ingress_snapshot (objects, object))
+                 .result ()
+                 .value ()
+                 .first,
                stateful::stateful_error_t::generation_stale);
     host->close ();
 }
@@ -1300,10 +1316,22 @@ TEST (FrameworkRelocationSealContract, retained_spot_rejects_previous_object_gen
       });
     protocol::spot_message_header_t header;
     header.target = {object.key, object.object_generation, {1}, 1, 1, 3};
-    EXPECT_EQ (dispatch.accepted_spot_authority (object, header, {1}, 1).result ().value ().first,
+    EXPECT_EQ (dispatch
+                 .accepted_spot_authority (
+                   object, header, {1}, 1,
+                   zlink::framework::test::retained_ingress_snapshot (objects, object))
+                 .result ()
+                 .value ()
+                 .first,
                stateful::stateful_error_t::none);
     --header.target.object_generation;
-    EXPECT_EQ (dispatch.accepted_spot_authority (object, header, {1}, 1).result ().value ().first,
+    EXPECT_EQ (dispatch
+                 .accepted_spot_authority (
+                   object, header, {1}, 1,
+                   zlink::framework::test::retained_ingress_snapshot (objects, object))
+                 .result ()
+                 .value ()
+                 .first,
                stateful::stateful_error_t::generation_stale);
     host->close ();
 }
@@ -1335,7 +1363,7 @@ TEST (FrameworkRelocationSealContract, local_follow_uses_retained_source_without
     // Ordinary Ready delivery keeps the existing current-object normalization.
     std::optional<stateful::retained_relocation_source_t> retained;
     ASSERT_TRUE (objects.find (object.kind, object.key, std::nullopt, &retained));
-    EXPECT_EQ (dispatch.accepted_actor_authority (object, header, {2}, 1, false, &retained)
+    EXPECT_EQ (dispatch.accepted_actor_authority (object, header, {2}, 1, false, retained)
                  .result ()
                  .value ()
                  .first,
@@ -1353,7 +1381,7 @@ TEST (FrameworkRelocationSealContract, local_follow_uses_retained_source_without
     header.target.object_generation = 7;
     reads = 0;
     const auto accept = [&] {
-        return dispatch.accepted_actor_authority (object, header, {2}, 1, false, &retained)
+        return dispatch.accepted_actor_authority (object, header, {2}, 1, false, retained)
           .result ()
           .value ();
     };

@@ -741,7 +741,6 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
                                std::chrono::milliseconds timeout);
     task_t<bool> cutover_relocation_remote (const zlink::routing_id_t &target_node,
                                             protocol::relocation_cutover_t cutover);
-    task_t<stateful::stateful_error_t> ingest_stateful (stateful::object_ref_t owner);
     task_t<bool> route_session_remote (const zlink::routing_id_t &session_owner_node,
                                        protocol::session_relocation_route_t route);
     std::size_t recover_instance_spot_activations ();

@@ -539,24 +539,11 @@ raw_stateful_dispatch_t::forward_accepted (object_ref_t owner,
     co_return sent;
 }
 
-task_t<stateful_error_t> raw_stateful_dispatch_t::ingest (object_ref_t owner)
-{
-    auto claim =
-      _transport->mailbox ().try_claim_owner (mesh::service_mailbox_domain_t::application,
-                                              mailbox_owner (owner), 1, mailbox_claim_byte_limit);
-    if (!claim)
-        co_return stateful_error_t::not_found;
-
-    auto claim_holder = std::make_shared<mesh::service_mailbox_claim_t> (std::move (*claim));
-    co_return co_await ingest_claimed (owner, std::move (claim_holder->records.front ()),
-                                       claim_holder);
-}
-
-task_t<stateful_error_t> raw_stateful_dispatch_t::ingest_claimed (
-  object_ref_t owner,
-  mesh::service_mailbox_record_t record,
-  accepted_mailbox_reservation_t reservation,
-  const std::optional<retained_relocation_source_t> *retained)
+task_t<stateful_error_t>
+raw_stateful_dispatch_t::ingest_claimed (object_ref_t owner,
+                                         mesh::service_mailbox_record_t record,
+                                         accepted_mailbox_reservation_t reservation,
+                                         std::optional<retained_relocation_source_t> retained)
 {
     mailbox_claim_release_guard_t claim_guard (*_transport, reservation);
     stateful_error_t validation = stateful_error_t::none;
@@ -590,7 +577,7 @@ task_t<stateful_error_t> raw_stateful_dispatch_t::ingest_claimed (
                   protocol::message_bytes (record.parts.front ()), header.kind);
                 auto [error, authority] = co_await accepted_actor_authority (
                   owner, actor, record.source_routing_id, record.source_node_generation,
-                  record.bound_session_source.has_value (), retained);
+                  record.bound_session_source.has_value (), std::move (retained));
                 validation = error;
                 if (validation == stateful_error_t::none) {
                     application_command = header.kind;
@@ -606,7 +593,8 @@ task_t<stateful_error_t> raw_stateful_dispatch_t::ingest_claimed (
                 auto spot = protocol::decode_spot_message_header (
                   protocol::message_bytes (record.parts.front ()), header.kind);
                 auto [error, authority] = co_await accepted_spot_authority (
-                  owner, spot, record.source_routing_id, record.source_node_generation, retained);
+                  owner, spot, record.source_routing_id, record.source_node_generation,
+                  std::move (retained));
                 validation = error;
                 if (validation == stateful_error_t::none) {
                     application_command = header.kind;
@@ -786,7 +774,7 @@ raw_stateful_dispatch_t::accepted_actor_authority (
   std::vector<std::uint8_t> source_node_routing_id,
   std::uint64_t source_node_generation,
   bool bound_session_routed,
-  const std::optional<retained_relocation_source_t> *retained) const
+  std::optional<retained_relocation_source_t> retained) const
 {
     if (!matches_application_route (owner, actor.target))
         return task_t<authority_result_t> (
@@ -816,7 +804,7 @@ raw_stateful_dispatch_t::accepted_actor_authority (
         query.source_session_sequence = actor.bound_session_source->session_sequence;
     }
     return resolve_accepted_authority (std::move (query), actor.target.owner_lease_generation,
-                                       retained);
+                                       std::move (retained));
 }
 
 task_t<std::pair<stateful_error_t, std::optional<accepted_record_authority_t>>>
@@ -825,7 +813,7 @@ raw_stateful_dispatch_t::accepted_spot_authority (
   protocol::spot_message_header_t spot,
   std::vector<std::uint8_t> source_node_routing_id,
   std::uint64_t source_node_generation,
-  const std::optional<retained_relocation_source_t> *retained) const
+  std::optional<retained_relocation_source_t> retained) const
 {
     if (!matches_application_route (owner, spot.target))
         return task_t<authority_result_t> (
@@ -844,20 +832,15 @@ raw_stateful_dispatch_t::accepted_spot_authority (
     if (!spot.source_spot_id.empty ())
         query.source_spot_id = std::move (spot.source_spot_id);
     return resolve_accepted_authority (std::move (query), spot.target.owner_lease_generation,
-                                       retained);
+                                       std::move (retained));
 }
 
 task_t<std::pair<stateful_error_t, std::optional<accepted_record_authority_t>>>
 raw_stateful_dispatch_t::resolve_accepted_authority (
   accepted_record_authority_query_t query,
   std::uint64_t target_owner_lease_generation,
-  const std::optional<retained_relocation_source_t> *retained_snapshot) const
+  std::optional<retained_relocation_source_t> retained) const
 {
-    std::optional<retained_relocation_source_t> retained;
-    if (retained_snapshot)
-        retained = *retained_snapshot;
-    else
-        retained = co_await _objects->retained_relocation_source (query.target);
     std::optional<accepted_record_authority_t> authority;
     if (retained) {
         // Location §7.3: the native source seal owns Follow; no fresh Store proof.
@@ -1206,13 +1189,6 @@ stateful_error_t raw_stateful_dispatch_t::discard_pending (const object_ref_t &o
 bool raw_stateful_dispatch_t::delivery_key_t::operator< (const delivery_key_t &other) const noexcept
 {
     return std::tie (kind, key, sequence) < std::tie (other.kind, other.key, other.sequence);
-}
-
-std::string raw_stateful_dispatch_t::mailbox_owner (const object_ref_t &owner)
-{
-    return mesh::service_mailbox_t::application_owner (
-      owner.kind == object_kind_t::actor ? host::owner_kind_t::actor : host::owner_kind_t::spot,
-      owner.key);
 }
 
 bool raw_stateful_dispatch_t::matches_application_route (const object_ref_t &owner,

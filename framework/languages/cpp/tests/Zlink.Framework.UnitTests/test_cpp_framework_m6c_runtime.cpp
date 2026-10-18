@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #include "../support/runtime_failure_fixture.hpp"
+#include "../support/stateful_ingress_fixture.hpp"
 #include "../support/request_admission_fixture.hpp"
 
 #include "runtime/stateful/maintenance_runtime.hpp"
@@ -4684,11 +4685,16 @@ void test_boundary_application_preserves_original_reply (test_context_t &test,
     test.require (boundary.first == stateful_error_t::none, "late ingress boundary must open");
     std::atomic<int> completed{0};
     bool reply_matches = true;
-    const auto pump_ingress = [&] (raw_stateful_dispatch_t &dispatch, const object_ref_t &owner) {
+    const auto pump_ingress = [&] (stateful_object_runtime_t &runtime,
+                                   mesh::raw_mesh_node_owner_t &transport,
+                                   raw_stateful_dispatch_t &dispatch, const object_ref_t &owner) {
         stateful_error_t error = stateful_error_t::not_found;
         return pump_until ([&] {
                    if (error == stateful_error_t::not_found)
-                       error = dispatch.ingest (owner).result ().value ();
+                       error = zlink::framework::test::ingest_stateful_mailbox_record (
+                                 runtime, transport, dispatch, owner)
+                                 .result ()
+                                 .value ();
                    return error != stateful_error_t::not_found;
                })
                && error == stateful_error_t::none;
@@ -4735,7 +4741,7 @@ void test_boundary_application_preserves_original_reply (test_context_t &test,
             },
             protocol::wire_operation_id_t{0x1087, id}, std::nullopt, id)),
           "original request must submit");
-        const auto accepted = pump_ingress (ingress, actor);
+        const auto accepted = pump_ingress (objects, source, ingress, actor);
         test.require (accepted, "boundary ingress must be accepted with its pending reply route");
         if (!accepted || submissions.size () != submitted_before + 1)
             return false;
@@ -4743,7 +4749,7 @@ void test_boundary_application_preserves_original_reply (test_context_t &test,
                       "accepted ingress must use the application transport");
         if (id == 92)
             return true;
-        const auto delivered = pump_ingress (destination, relocated);
+        const auto delivered = pump_ingress (restored, target, destination, relocated);
         test.require (delivered, "forwarded application must retain the target fence");
         return delivered;
     };
@@ -4771,12 +4777,12 @@ void test_boundary_application_preserves_original_reply (test_context_t &test,
                     {"ActorPacket", "application/json", {80}}, std::nullopt,
                     protocol::wire_operation_id_t{0x1087, 80})),
                   "original one-way send must submit");
-    const auto send_accepted = pump_ingress (ingress, actor);
+    const auto send_accepted = pump_ingress (objects, source, ingress, actor);
     test.require (send_accepted, "source must accept the original one-way send");
     if (!send_accepted)
         return;
     test.require (await_task (std::move (submissions.back ()))
-                    && pump_ingress (destination, relocated),
+                    && pump_ingress (restored, target, destination, relocated),
                   "target must accept the forwarded one-way send");
     test.require (stage (2) == stateful_error_t::none,
                   "verified boundary must stage after late arrival");
@@ -4821,7 +4827,7 @@ void test_boundary_application_preserves_original_reply (test_context_t &test,
                          src.lifecycle_generation, actor.authority_owner_generation, 1},
                         {"ActorPacket", "application/json", {93}}, std::nullopt,
                         protocol::wire_operation_id_t{0x1087, 93}))
-                        && pump_ingress (ingress, actor)
+                        && pump_ingress (objects, source, ingress, actor)
                         && await_task (std::move (submissions.back ())),
                       "late noFollow send must discard only its own accepted record");
     }

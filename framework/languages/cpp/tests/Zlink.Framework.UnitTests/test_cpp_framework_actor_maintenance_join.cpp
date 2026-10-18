@@ -2,6 +2,7 @@
 #include "../support/manual_internal_scheduler.hpp"
 #include <zlink/framework.hpp>
 #include "../support/runtime_failure_fixture.hpp"
+#include "../support/stateful_ingress_fixture.hpp"
 #include "runtime/locations/in_memory_store_providers.hpp"
 #include "runtime/stateful/public_host_runtime.hpp"
 #include "runtime/mesh/mesh_node_runtime.hpp"
@@ -1694,7 +1695,9 @@ TEST (NativeIntake, CoordinatorAdmissionReturnsNativeClaimWithoutLaneReentry)
     ASSERT_EQ (st::stateful_error_t::none, objects.commit_create (created.attempt));
     st::raw_stateful_dispatch_t raw (objects, fixture.host->transport (), fixture.resolver);
     ASSERT_EQ (st::stateful_error_t::none,
-               raw.ingest_claimed (object, fixture.actor_record (1), std::function<void ()> ([] {}))
+               raw
+                 .ingest_claimed (object, fixture.actor_record (1), std::function<void ()> ([] {}),
+                                  fw::test::retained_ingress_snapshot (objects, object))
                  .result ()
                  .value ());
     auto [claim_error, delivery] = raw.try_claim (object);
@@ -1923,10 +1926,12 @@ TEST (NativeIntake, CanonicalAdmissionReportsOnlyActualSuccessWhenEnabled)
         st::raw_stateful_dispatch_t raw (host->objects (), host->transport (), fixture.resolver);
         int releases = 0;
         const auto ingest = [&] (auto record, const st::object_ref_t &target) {
-            const auto result = raw
-                                  .ingest_claimed (target, std::move (record),
-                                                   std::function<void ()> ([&] { ++releases; }))
-                                  .result ();
+            const auto result =
+              raw
+                .ingest_claimed (target, std::move (record),
+                                 std::function<void ()> ([&] { ++releases; }),
+                                 fw::test::retained_ingress_snapshot (host->objects (), target))
+                .result ();
             EXPECT_TRUE (result);
             return result ? result.value () : st::stateful_error_t::invalid;
         };
@@ -2088,7 +2093,9 @@ TEST (NativeIntake, TypedControlMalformedWireAndKernelMetadata)
     EXPECT_EQ (rejected, 1u);
     st::raw_stateful_dispatch_t raw (host->objects (), host->transport (), resolver);
     int releases = 0;
-    EXPECT_EQ (raw.ingest_claimed (object, {}, std::function<void ()> ([&] { ++releases; }))
+    EXPECT_EQ (raw
+                 .ingest_claimed (object, {}, std::function<void ()> ([&] { ++releases; }),
+                                  fw::test::retained_ingress_snapshot (host->objects (), object))
                  .result ()
                  .value (),
                st::stateful_error_t::invalid);
