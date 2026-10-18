@@ -8,6 +8,7 @@
 #include "runtime/mesh/raw_mesh_node_owner.hpp"
 #include "runtime/protocol/service_wire_codec.hpp"
 #include "runtime/stateful/public_host_runtime.hpp"
+#include "runtime/stateful/accepted_actor_record.hpp"
 #include "runtime/streams/stream_runtime.hpp"
 #include "runtime/spots/spot_runtime.hpp"
 #include "runtime/timers/timer_runtime.hpp"
@@ -1016,8 +1017,224 @@ TEST (FrameworkRelocationSealContract, source_fenced_relay_survives_target_autho
     }
 }
 
+TEST (FrameworkRelocationSealContract, native_follow_increments_wire_hop_and_stops_at_eight)
+{
+    mesh::raw_mesh_node_owner_t source (mesh::raw_mesh_node_options_t{
+      .descriptor = test_descriptor ("hop-source"),
+      .runtime_failures = std::make_shared<runtime::runtime_failure_collector_t> ()});
+    mesh::raw_mesh_node_owner_t target (mesh::raw_mesh_node_options_t{
+      .descriptor = test_descriptor ("hop-target"),
+      .runtime_failures = std::make_shared<runtime::runtime_failure_collector_t> ()});
+    source.start ();
+    target.start ();
+    const auto source_node = source.topology ().local_descriptor ();
+    const auto target_node = target.topology ().local_descriptor ();
+    ASSERT_TRUE (source.connect_peer (target.endpoint (), target_node));
+    const auto ready = [&] {
+        const auto one = source.topology ().peer (target_node.node_routing_id);
+        const auto two = target.topology ().peer (source_node.node_routing_id);
+        return one && one->ready && two && two->ready;
+    };
+    const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (5);
+    while (!ready () && std::chrono::steady_clock::now () < deadline) {
+        (void) source.observe_routes ();
+        (void) target.observe_routes ();
+        (void) source.pump_one (std::chrono::steady_clock::now ()).result ().value ();
+        (void) target.pump_one (std::chrono::steady_clock::now ()).result ().value ();
+        std::this_thread::yield ();
+    }
+    ASSERT_TRUE (ready ());
+    stateful::stateful_object_runtime_t objects;
+    stateful::raw_stateful_dispatch_t dispatch (objects, source);
+    const protocol::application_payload_t payload{
+      "hop-test", "application/octet-stream", {1, 2, 3}};
+    std::uint64_t sequence = 1;
+    for (const auto kind :
+         {protocol::frozen_record_kind_t::actor_send, protocol::frozen_record_kind_t::spot_send,
+          protocol::frozen_record_kind_t::actor_request,
+          protocol::frozen_record_kind_t::spot_request}) {
+        SCOPED_TRACE (static_cast<int> (kind));
+        const bool actor = kind == protocol::frozen_record_kind_t::actor_send
+                           || kind == protocol::frozen_record_kind_t::actor_request;
+        const bool request = kind == protocol::frozen_record_kind_t::actor_request
+                             || kind == protocol::frozen_record_kind_t::spot_request;
+        const stateful::object_ref_t owner{actor ? stateful::object_kind_t::actor
+                                                 : stateful::object_kind_t::user_spot,
+                                           "moving",
+                                           7,
+                                           1,
+                                           "mesh",
+                                           "source"};
+        protocol::frozen_application_record_t record;
+        record.kind = kind;
+        record.source_kind =
+          actor ? protocol::frozen_source_kind_t::node : protocol::frozen_source_kind_t::spot;
+        if (!actor)
+            record.source_spot_id = "producer";
+        record.source = {"producer", 3, source_node.node_routing_id,
+                         source_node.lifecycle_generation};
+        record.operation = {33, sequence++};
+        if (request) {
+            record.operation_kind = actor ? 4 : 3;
+            record.reply_route_id = 900 + sequence;
+        }
+        record.message_follow_hop_count = 7;
+        if (actor)
+            record.body = protocol::frozen_actor_application_body_t{
+              {owner.key, 7, source_node.node_routing_id, source_node.lifecycle_generation, 1, 3},
+              payload};
+        else
+            record.body = protocol::frozen_spot_application_body_t{
+              {owner.key, 7, source_node.node_routing_id, source_node.lifecycle_generation, 1, 3},
+              3,
+              payload};
+        stateful::turn_record_t turn;
+        turn.application_record = record;
+        ASSERT_TRUE (dispatch
+                       .forward_accepted (owner, turn, target_node.node_routing_id,
+                                          target_node.lifecycle_generation, 3,
+                                          std::chrono::seconds (1), 2)
+                       .result ()
+                       .value ());
+        std::optional<mesh::service_mailbox_claim_t> claim;
+        const auto receive_deadline = std::chrono::steady_clock::now () + std::chrono::seconds (5);
+        while (!claim && std::chrono::steady_clock::now () < receive_deadline) {
+            (void) target.pump_one (std::chrono::steady_clock::now ()).result ().value ();
+            claim =
+              target.mailbox ().try_claim (mesh::service_mailbox_domain_t::application, 1, 65536);
+            std::this_thread::yield ();
+        }
+        ASSERT_TRUE (claim);
+        ASSERT_EQ (claim->records.size (), 1u);
+        const auto &received = claim->records.front ();
+        const auto bytes = protocol::message_bytes (received.parts.front ());
+        if (actor) {
+            const auto header = protocol::decode_actor_message_header (
+              bytes, request ? protocol::command::actorRequest : protocol::command::actorSend);
+            EXPECT_EQ (header.message_follow_hop_count, 8);
+            EXPECT_EQ (header.operation, record.operation);
+            EXPECT_EQ (header.target.object_generation, 7u);
+        } else {
+            const auto header = protocol::decode_spot_message_header (
+              bytes, request ? protocol::command::spotRequest : protocol::command::spotSend);
+            EXPECT_EQ (header.message_follow_hop_count, 8);
+            EXPECT_EQ (header.operation, record.operation);
+            EXPECT_EQ (header.target.object_generation, 7u);
+        }
+        EXPECT_EQ (
+          protocol::decode_application_payload (protocol::message_bytes (received.parts[1])),
+          payload);
+        if (request)
+            ASSERT_TRUE (target.reply (received, payload));
+        target.mailbox ().release (*claim);
+        turn.application_record->message_follow_hop_count = 8;
+        const auto extra =
+          dispatch
+            .forward_accepted (owner, turn, target_node.node_routing_id,
+                               target_node.lifecycle_generation, 3, std::chrono::seconds (1), 2)
+            .result ()
+            .value ();
+        EXPECT_FALSE (extra);
+        // Drain an unexpected send so each regression row observes its own packet.
+        if (extra) {
+            std::optional<mesh::service_mailbox_claim_t> unexpected;
+            const auto drain_deadline =
+              std::chrono::steady_clock::now () + std::chrono::seconds (5);
+            while (!unexpected && std::chrono::steady_clock::now () < drain_deadline) {
+                (void) target.pump_one (std::chrono::steady_clock::now ()).result ().value ();
+                unexpected = target.mailbox ().try_claim (
+                  mesh::service_mailbox_domain_t::application, 1, 65536);
+            }
+            ASSERT_TRUE (unexpected);
+            if (request)
+                ASSERT_TRUE (target.reply (unexpected->records.front (), payload));
+            target.mailbox ().release (*unexpected);
+        }
+    }
+    source.close ();
+    target.close ();
+}
 
+TEST (FrameworkRelocationSealContract, exhausted_follow_request_settles_original_reply_once)
+{
+    mesh::raw_mesh_node_owner_t transport (mesh::raw_mesh_node_options_t{
+      .descriptor = test_descriptor ("exhausted-follow"),
+      .runtime_failures = std::make_shared<runtime::runtime_failure_collector_t> ()});
+    stateful::stateful_object_runtime_t objects;
+    const stateful::object_ref_t owner{
+      stateful::object_kind_t::actor, "moving", 7, 1, "mesh", "source"};
+    const auto created = objects.begin_reserved_object (owner, "actor", {});
+    ASSERT_EQ (created.error, stateful::stateful_error_t::none);
+    ASSERT_EQ (objects.commit_create (created.attempt), stateful::stateful_error_t::none);
+    stateful::raw_stateful_dispatch_t dispatch (objects, transport);
+    protocol::actor_message_header_t header;
+    header.target = {owner.key, 7, {1}, 1, 1, 3};
+    header.operation = {31, 41};
+    header.correlation = 901;
+    header.message_follow_hop_count = 8;
+    auto accepted = std::make_shared<runtime::serial_application_record_t> ();
+    accepted->payload.emplace ();
+    accepted->payload->application_record = stateful::accepted_actor_record (
+      header, {"producer", 3, {1}, 1}, {"payload", "application/json", {1}}, true);
+    int terminals = 0;
+    ASSERT_EQ (dispatch.accept_local (owner, accepted, {},
+                                      [&] (const auto &reply) {
+                                          ++terminals;
+                                          EXPECT_FALSE (reply);
+                                          return true;
+                                      }),
+               stateful::stateful_error_t::none);
+    const auto sealed = objects.try_seal_relocation_aggregate ({owner}).result ().value ();
+    ASSERT_EQ (sealed.error, stateful::stateful_error_t::none);
+    ASSERT_EQ (sealed.seal.participants.size (), 1u);
+    ASSERT_EQ (sealed.seal.participants.front ().pending_application.size (), 1u);
+    const auto turn = sealed.seal.participants.front ().pending_application.front ();
+    const auto forwarded =
+      dispatch.forward_accepted (owner, turn, {2}, 1, 4, std::chrono::seconds (1), 2).result ();
+    ASSERT_TRUE (forwarded);
+    EXPECT_TRUE (forwarded.value ());
+    EXPECT_EQ (terminals, 1);
+    EXPECT_FALSE (dispatch.forward_accepted (owner, turn, {2}, 1, 4, std::chrono::seconds (1), 2)
+                    .result ()
+                    .value ());
+    EXPECT_EQ (terminals, 1);
+}
 
+TEST (FrameworkRelocationSealContract, accepted_follow_preserves_actor_and_spot_hop)
+{
+    protocol::actor_message_header_t actor;
+    actor.message_follow_hop_count = 7;
+    actor.target = {"actor", 7, {1}, 1, 2, 3};
+    actor.operation = {1, 2};
+    protocol::spot_message_header_t spot;
+    spot.message_follow_hop_count = 8;
+    spot.target = {"spot", 7, {1}, 1, 2, 3};
+    spot.operation = {1, 3};
+    spot.source_spot_id = "producer";
+    const protocol::request_source_fence_t source{"owner", 3, {1}, 1};
+    const protocol::application_payload_t payload{"hop-test", "application/json", {1}};
+    const auto actor_record = stateful::accepted_actor_record (actor, source, payload, false);
+    const auto spot_record = stateful::accepted_spot_record (spot, source, payload, false);
+    EXPECT_EQ (actor_record.message_follow_hop_count, 7);
+    EXPECT_EQ (spot_record.message_follow_hop_count, 8);
+    for (const auto &record : {actor_record, spot_record}) {
+        const auto frozen = protocol::encode_frozen_application_record (record);
+        const auto decoded = protocol::decode_frozen_record (frozen.canonical_bytes);
+        EXPECT_EQ (decoded.message_follow_hop_count,
+                   protocol::summarize_frozen_application_record (record).message_follow_hop_count);
+        EXPECT_EQ (decoded.operation, record.operation);
+        auto oversized = record;
+        oversized.metadata.push_back ({"oversized", std::string (protocol::metadataBytes, 'x')});
+        EXPECT_THROW (protocol::encode_frozen_application_record (oversized),
+                      protocol::service_wire_error_t);
+        auto invalid = record;
+        invalid.message_follow_hop_count = 9;
+        EXPECT_THROW (protocol::encode_frozen_application_record (invalid),
+                      protocol::service_wire_error_t);
+    }
+    actor.message_follow_hop_count = 0;
+    EXPECT_TRUE (stateful::accepted_actor_record (actor, {}, {}, false).metadata.empty ());
+}
 
 TEST (FrameworkRelocationSealContract, retained_follow_rejects_previous_object_generation)
 {

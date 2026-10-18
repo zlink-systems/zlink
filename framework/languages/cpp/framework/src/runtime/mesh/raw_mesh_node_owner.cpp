@@ -1756,10 +1756,12 @@ raw_mesh_node_owner_t::send_to_spot (const std::vector<std::uint8_t> &target_rou
                                      const std::string &source_spot_id,
                                      const protocol::spot_route_fence_t &target,
                                      const protocol::application_payload_t &application_payload,
-                                     std::optional<protocol::wire_operation_id_t> operation)
+                                     std::optional<protocol::wire_operation_id_t> operation,
+                                     std::uint8_t message_follow_hop_count)
 {
     co_return co_await send_to_spot_result (target_routing_id, source_spot_id, target,
-                                            application_payload, operation)
+                                            application_payload, operation,
+                                            message_follow_hop_count)
       == zlink::submit_result_t::ok;
 }
 
@@ -1768,7 +1770,8 @@ task_t<zlink::submit_result_t> raw_mesh_node_owner_t::send_to_spot_result (
   const std::string &source_spot_id,
   const protocol::spot_route_fence_t &target,
   const protocol::application_payload_t &application_payload,
-  std::optional<protocol::wire_operation_id_t> operation)
+  std::optional<protocol::wire_operation_id_t> operation,
+  std::uint8_t message_follow_hop_count)
 {
     const auto sequence = next_operation_sequence ();
     const auto local = _topology.local_descriptor ();
@@ -1776,7 +1779,8 @@ task_t<zlink::submit_result_t> raw_mesh_node_owner_t::send_to_spot_result (
       target_routing_id,
       protocol::encode_spot_message_header (
         protocol::command::spotSend, source_spot_id, target,
-        operation.value_or (protocol::wire_operation_id_t{local.lifecycle_generation, sequence})),
+        operation.value_or (protocol::wire_operation_id_t{local.lifecycle_generation, sequence}),
+        std::nullopt, message_follow_hop_count),
       application_payload);
 }
 
@@ -1788,16 +1792,19 @@ raw_mesh_node_owner_t::request_to_spot (const std::vector<std::uint8_t> &target_
                                         std::chrono::milliseconds timeout,
                                         foundation::operation_registry_t::callback_t callback,
                                         std::optional<protocol::wire_operation_id_t> operation,
-                                        std::optional<std::uint64_t> correlation)
+                                        std::optional<std::uint64_t> correlation,
+                                        std::uint8_t message_follow_hop_count)
 {
     const auto local = _topology.local_descriptor ();
     co_return co_await request_with_header (
       target_routing_id,
-      [source_spot_id, target, local, operation] (std::uint64_t correlation) {
+      [source_spot_id, target, local, operation,
+       message_follow_hop_count] (std::uint64_t correlation) {
           const auto exact = operation.value_or (
             protocol::wire_operation_id_t{local.lifecycle_generation, correlation});
           return protocol::encode_spot_message_header (protocol::command::spotRequest,
-                                                       source_spot_id, target, exact, correlation);
+                                                       source_spot_id, target, exact, correlation,
+                                                       message_follow_hop_count);
       },
       application_payload, timeout, std::move (callback), correlation, false,
       mesh_request_metric_t (_request_metrics, mesh_request_surface_t::spot));
@@ -1809,11 +1816,12 @@ task_t<bool> raw_mesh_node_owner_t::send_to_actor (
   const protocol::actor_route_fence_t &target,
   const protocol::application_payload_t &application_payload,
   std::optional<protocol::actor_message_header_t::bound_session_source_t> bound_session_source,
-  std::optional<protocol::wire_operation_id_t> operation)
+  std::optional<protocol::wire_operation_id_t> operation,
+  std::uint8_t message_follow_hop_count)
 {
     co_return co_await send_to_actor_result (target_routing_id, source_actor, target,
                                              application_payload, std::move (bound_session_source),
-                                             operation)
+                                             operation, message_follow_hop_count)
       == zlink::submit_result_t::ok;
 }
 
@@ -1823,7 +1831,8 @@ task_t<zlink::submit_result_t> raw_mesh_node_owner_t::send_to_actor_result (
   const protocol::actor_route_fence_t &target,
   const protocol::application_payload_t &application_payload,
   std::optional<protocol::actor_message_header_t::bound_session_source_t> bound_session_source,
-  std::optional<protocol::wire_operation_id_t> operation)
+  std::optional<protocol::wire_operation_id_t> operation,
+  std::uint8_t message_follow_hop_count)
 {
     const auto sequence = next_operation_sequence ();
     const auto local = _topology.local_descriptor ();
@@ -1832,7 +1841,7 @@ task_t<zlink::submit_result_t> raw_mesh_node_owner_t::send_to_actor_result (
       protocol::encode_actor_message_header (
         protocol::command::actorSend, source_actor, target,
         operation.value_or (protocol::wire_operation_id_t{local.lifecycle_generation, sequence}),
-        std::nullopt, 0, std::move (bound_session_source)),
+        std::nullopt, message_follow_hop_count, std::move (bound_session_source)),
       application_payload);
 }
 
@@ -1845,18 +1854,19 @@ task_t<bool> raw_mesh_node_owner_t::request_to_actor (
   foundation::operation_registry_t::callback_t callback,
   std::optional<protocol::wire_operation_id_t> operation,
   std::optional<protocol::actor_message_header_t::bound_session_source_t> bound_session_source,
-  std::optional<std::uint64_t> correlation)
+  std::optional<std::uint64_t> correlation,
+  std::uint8_t message_follow_hop_count)
 {
     const auto local = _topology.local_descriptor ();
     co_return co_await request_with_header (
       target_routing_id,
-      [source_actor, target, local, operation,
+      [source_actor, target, local, operation, message_follow_hop_count,
        bound_session_source = std::move (bound_session_source)] (std::uint64_t correlation) {
           const auto exact = operation.value_or (
             protocol::wire_operation_id_t{local.lifecycle_generation, correlation});
-          return protocol::encode_actor_message_header (protocol::command::actorRequest,
-                                                        source_actor, target, exact, correlation, 0,
-                                                        bound_session_source);
+          return protocol::encode_actor_message_header (
+            protocol::command::actorRequest, source_actor, target, exact, correlation,
+            message_follow_hop_count, bound_session_source);
       },
       application_payload, timeout, std::move (callback), correlation, false,
       mesh_request_metric_t (_request_metrics, mesh_request_surface_t::actor));

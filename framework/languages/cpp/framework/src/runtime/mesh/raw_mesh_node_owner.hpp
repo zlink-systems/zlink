@@ -206,13 +206,15 @@ class raw_mesh_node_owner_t
                   const std::string &source_spot_id,
                   const protocol::spot_route_fence_t &target,
                   const protocol::application_payload_t &application_payload,
-                  std::optional<protocol::wire_operation_id_t> operation = std::nullopt);
+                  std::optional<protocol::wire_operation_id_t> operation = std::nullopt,
+                  std::uint8_t message_follow_hop_count = 0);
     task_t<zlink::submit_result_t>
     send_to_spot_result (const std::vector<std::uint8_t> &target_routing_id,
                          const std::string &source_spot_id,
                          const protocol::spot_route_fence_t &target,
                          const protocol::application_payload_t &application_payload,
-                         std::optional<protocol::wire_operation_id_t> operation = std::nullopt);
+                         std::optional<protocol::wire_operation_id_t> operation = std::nullopt,
+                         std::uint8_t message_follow_hop_count = 0);
     task_t<bool>
     request_to_spot (const std::vector<std::uint8_t> &target_routing_id,
                      const std::string &source_spot_id,
@@ -221,7 +223,8 @@ class raw_mesh_node_owner_t
                      std::chrono::milliseconds timeout,
                      foundation::operation_registry_t::callback_t callback,
                      std::optional<protocol::wire_operation_id_t> operation = std::nullopt,
-                     std::optional<std::uint64_t> correlation = std::nullopt);
+                     std::optional<std::uint64_t> correlation = std::nullopt,
+                     std::uint8_t message_follow_hop_count = 0);
     task_t<bool> send_to_actor (
       const std::vector<std::uint8_t> &target_routing_id,
       const std::optional<std::pair<std::string, std::uint64_t>> &source_actor,
@@ -229,7 +232,8 @@ class raw_mesh_node_owner_t
       const protocol::application_payload_t &application_payload,
       std::optional<protocol::actor_message_header_t::bound_session_source_t> bound_session_source =
         std::nullopt,
-      std::optional<protocol::wire_operation_id_t> operation = std::nullopt);
+      std::optional<protocol::wire_operation_id_t> operation = std::nullopt,
+      std::uint8_t message_follow_hop_count = 0);
     task_t<zlink::submit_result_t> send_to_actor_result (
       const std::vector<std::uint8_t> &target_routing_id,
       const std::optional<std::pair<std::string, std::uint64_t>> &source_actor,
@@ -237,7 +241,8 @@ class raw_mesh_node_owner_t
       const protocol::application_payload_t &application_payload,
       std::optional<protocol::actor_message_header_t::bound_session_source_t> bound_session_source =
         std::nullopt,
-      std::optional<protocol::wire_operation_id_t> operation = std::nullopt);
+      std::optional<protocol::wire_operation_id_t> operation = std::nullopt,
+      std::uint8_t message_follow_hop_count = 0);
     task_t<bool> request_to_actor (
       const std::vector<std::uint8_t> &target_routing_id,
       const std::optional<std::pair<std::string, std::uint64_t>> &source_actor,
@@ -248,7 +253,8 @@ class raw_mesh_node_owner_t
       std::optional<protocol::wire_operation_id_t> operation = std::nullopt,
       std::optional<protocol::actor_message_header_t::bound_session_source_t> bound_session_source =
         std::nullopt,
-      std::optional<std::uint64_t> correlation = std::nullopt);
+      std::optional<std::uint64_t> correlation = std::nullopt,
+      std::uint8_t message_follow_hop_count = 0);
     task_t<bool> send_bound_session (const std::vector<std::uint8_t> &session_owner_routing_id,
                                      const protocol::bound_session_send_t &record,
                                      const protocol::application_payload_t &application_payload);

@@ -62,6 +62,7 @@ accepted_actor_record (const protocol::actor_message_header_t &header,
                                                  : protocol::frozen_source_kind_t::node;
         record.source_actor = header.source_actor;
     }
+    record.message_follow_hop_count = header.message_follow_hop_count;
     record.operation = header.operation;
     record.operation_kind = request ? actor_request_operation_kind : 0;
     record.reply_route_id = header.correlation;
@@ -83,6 +84,7 @@ accepted_spot_record (const protocol::spot_message_header_t &header,
                                                         : protocol::frozen_source_kind_t::spot;
     if (!header.source_spot_id.empty ())
         record.source_spot_id = header.source_spot_id;
+    record.message_follow_hop_count = header.message_follow_hop_count;
     record.operation = header.operation;
     record.operation_kind = request ? spot_request_operation_kind : 0;
     record.reply_route_id = header.correlation;

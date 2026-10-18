@@ -1723,8 +1723,16 @@ application_payload_t read_application_payload_envelope (std::span<const std::ui
     return decode_application_payload (bytes.subspan (start, offset - start), capture_flow);
 }
 
-void read_metadata_frame (std::span<const std::uint8_t> bytes, std::size_t &offset)
+std::uint8_t decode_follow_hop_metadata (std::string_view value)
 {
+    if (value.size () != 1 || value.front () < '0' || value.front () > '0' + messageFollowHopCount)
+        throw service_wire_error_t ("invalid Message Follow hop metadata");
+    return static_cast<std::uint8_t> (value.front () - '0');
+}
+
+std::uint8_t read_metadata_frame (std::span<const std::uint8_t> bytes, std::size_t &offset)
+{
+    std::uint8_t hop = 0;
     const auto start = offset;
     if (offset >= bytes.size () || bytes[offset++] != 1)
         throw service_wire_error_t ("metadata frame version must be one");
@@ -1737,11 +1745,14 @@ void read_metadata_frame (std::span<const std::uint8_t> bytes, std::size_t &offs
         auto key = read_text8 (bytes, offset, "metadata key");
         if (std::find (keys.begin (), keys.end (), key) != keys.end ())
             throw service_wire_error_t ("metadata keys must be unique");
+        const auto value = read_text16 (bytes, offset, "metadata value");
+        if (key == message_follow_hop_count_metadata_key)
+            hop = decode_follow_hop_metadata (value);
         keys.push_back (std::move (key));
-        (void) read_text16 (bytes, offset, "metadata value");
         if (offset - start > metadataBytes)
             throw service_wire_error_t ("metadata frame exceeds 1024 encoded bytes");
     }
+    return hop;
 }
 
 void read_membership_snapshot (std::span<const std::uint8_t> bytes, std::size_t &offset)
@@ -1989,27 +2000,38 @@ void append_frozen_source (std::vector<std::uint8_t> &output,
 }
 
 void append_frozen_metadata (std::vector<std::uint8_t> &output,
-                             const std::vector<frozen_metadata_entry_t> &metadata)
+                             const std::vector<frozen_metadata_entry_t> &metadata,
+                             std::uint8_t hop)
 {
-    if (metadata.empty ()) {
+    const auto count = metadata.size () + (hop != 0 ? 1 : 0);
+    if (count == 0) {
         output.push_back (0);
         return;
     }
-    if (metadata.size () > std::numeric_limits<std::uint8_t>::max ())
+    if (count > std::numeric_limits<std::uint8_t>::max ())
         throw service_wire_error_t ("too many frozen metadata entries");
     output.push_back (1);
     const auto start = output.size ();
     output.push_back (1);
-    output.push_back (static_cast<std::uint8_t> (metadata.size ()));
-    std::vector<std::string> keys;
-    for (const auto &entry : metadata) {
-        if (std::find (keys.begin (), keys.end (), entry.key) != keys.end ())
-            throw service_wire_error_t ("frozen metadata keys must be unique");
-        keys.push_back (entry.key);
-        append_text8 (output, entry.key, "metadata key");
-        append_text16 (output, entry.value, "metadata value");
-        if (output.size () - start > metadataBytes)
+    output.push_back (static_cast<std::uint8_t> (count));
+    const auto append_entry = [&] (const std::string &key, const std::string &value) {
+        const auto encoded_size =
+          sizeof (std::uint8_t) + key.size () + sizeof (std::uint16_t) + value.size ();
+        if (encoded_size > metadataBytes || output.size () - start > metadataBytes - encoded_size)
             throw service_wire_error_t ("frozen metadata frame exceeds 1024 encoded bytes");
+        append_text8 (output, key, "metadata key");
+        append_text16 (output, value, "metadata value");
+    };
+    for (auto entry = metadata.begin (); entry != metadata.end (); ++entry) {
+        if (entry->key == message_follow_hop_count_metadata_key
+            || std::any_of (metadata.begin (), entry,
+                            [&] (const auto &prior) { return prior.key == entry->key; }))
+            throw service_wire_error_t ("frozen metadata key is reserved or duplicated");
+        append_entry (entry->key, entry->value);
+    }
+    if (hop != 0) {
+        append_entry (message_follow_hop_count_metadata_key,
+                      std::string (1, static_cast<char> ('0' + hop)));
     }
 }
 
@@ -2097,7 +2119,7 @@ frozen_record_t decode_frozen_record_prefix (std::span<const std::uint8_t> bytes
     if (result.has_metadata) {
         if (!metadata_allowed (result.kind))
             throw service_wire_error_t ("metadata is forbidden for this frozen record kind");
-        read_metadata_frame (bytes, offset);
+        result.message_follow_hop_count = read_metadata_frame (bytes, offset);
     }
     result.operation.high = read_u64 (bytes, offset);
     result.operation.low = read_u64 (bytes, offset);
@@ -2155,7 +2177,10 @@ frozen_record_t build_frozen_application_record (const frozen_application_record
     const auto source_kind = static_cast<std::uint8_t> (record.source_kind);
     if (source_kind < 1 || source_kind > 4)
         throw service_wire_error_t ("invalid frozen source kind");
-    if (!record.metadata.empty () && !metadata_allowed (record.kind))
+    if (record.message_follow_hop_count > messageFollowHopCount)
+        throw service_wire_error_t ("invalid Message Follow hop count");
+    if ((!record.metadata.empty () || record.message_follow_hop_count != 0)
+        && !metadata_allowed (record.kind))
         throw service_wire_error_t ("metadata is forbidden for this frozen record kind");
 
     std::vector<std::uint8_t> bytes;
@@ -2163,7 +2188,7 @@ frozen_record_t build_frozen_application_record (const frozen_application_record
         bytes = {static_cast<std::uint8_t> (record.kind),
                  static_cast<std::uint8_t> (record.source_kind)};
         append_frozen_source (bytes, record);
-        append_frozen_metadata (bytes, record.metadata);
+        append_frozen_metadata (bytes, record.metadata, record.message_follow_hop_count);
         append_u64 (bytes, record.operation.high);
         append_u64 (bytes, record.operation.low);
         append_u32 (bytes, record.operation_kind);
@@ -2201,7 +2226,8 @@ frozen_record_t build_frozen_application_record (const frozen_application_record
     result.source_session_routing_id = record.source_session_routing_id;
     result.source_binding_generation = record.source_binding_generation;
     result.source_session_sequence = record.source_session_sequence;
-    result.has_metadata = !record.metadata.empty ();
+    result.has_metadata = !record.metadata.empty () || record.message_follow_hop_count != 0;
+    result.message_follow_hop_count = record.message_follow_hop_count;
     result.operation = record.operation;
     result.operation_kind = record.operation_kind;
     result.reply_route_id = record.reply_route_id;

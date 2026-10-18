@@ -451,7 +451,14 @@ raw_stateful_dispatch_t::forward_accepted (object_ref_t owner,
     if (!application.application)
         co_return false;
     const auto sequence = turn.sequence;
-    if (!target_authority_generation) {
+    const auto hop = application.message_follow_hop_count
+                     + (target_authority_generation
+                            && *target_authority_generation > owner.authority_owner_generation
+                          ? 1
+                          : 0);
+    if (!target_authority_generation
+        || *target_authority_generation < owner.authority_owner_generation
+        || hop > protocol::messageFollowHopCount) {
         if (!application.reply_route_id) {
             co_return discard_pending (owner, sequence) == stateful_error_t::none;
         }
@@ -508,11 +515,11 @@ raw_stateful_dispatch_t::forward_accepted (object_ref_t owner,
         if (application.reply_route_id.has_value ())
             sent = co_await _transport->request_to_actor (
               target_routing_id, application.source_actor, target, *application.application, window,
-              std::move (complete), application.operation, session);
+              std::move (complete), application.operation, session, std::nullopt, hop);
         else
             sent = co_await _transport->send_to_actor (target_routing_id, application.source_actor,
                                                        target, *application.application, session,
-                                                       application.operation);
+                                                       application.operation, hop);
     } else {
         protocol::spot_route_fence_t target{owner.key, owner.object_generation,      {},
                                             0,         *target_authority_generation, 0};
@@ -522,11 +529,12 @@ raw_stateful_dispatch_t::forward_accepted (object_ref_t owner,
         if (application.reply_route_id.has_value ())
             sent = co_await _transport->request_to_spot (
               target_routing_id, application.source_spot_id.value_or (""), target,
-              *application.application, window, std::move (complete), application.operation);
+              *application.application, window, std::move (complete), application.operation,
+              std::nullopt, hop);
         else
             sent = co_await _transport->send_to_spot (
               target_routing_id, application.source_spot_id.value_or (""), target,
-              *application.application, application.operation);
+              *application.application, application.operation, hop);
     }
     co_return sent;
 }
