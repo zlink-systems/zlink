@@ -45,7 +45,7 @@ class NodeControl final : public fx::hosted_service_t
               else if (observed.status.state != fx::framework_runtime_state_t::preparing)
                   serving->complete (fx::result_t<void>::failure (
                     fx::framework_error_kind_t::internal_failure,
-                    "Runtime observation ended before Serving"));
+                    "Runtime startup failed before Serving"));
           });
         co_await serving->task ();
         lifecycle->close ();

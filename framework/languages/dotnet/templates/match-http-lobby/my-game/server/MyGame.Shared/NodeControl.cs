@@ -11,7 +11,7 @@ public static class NodeControl
 {
     private static async Task WaitForServingAsync(
         IZLinkFrameworkRuntime runtime,
-        CancellationToken cancellationToken = default
+        CancellationToken cancellationToken
     )
     {
         await foreach (var observed in runtime.ObserveAsync(cancellationToken))

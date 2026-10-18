@@ -87,14 +87,13 @@ export async function runHost(
     );
   }
   async function waitServing(): Promise<void> {
-    for await (const observed of runtime.observe()) {
-      if (observed.loss.discardedTerminalCount !== 0n)
-        throw new Error('Startup observation lost');
+    for await (const observed of runtime.observe(AbortSignal.timeout(Limits.startupMs))) {
+      if (observed.loss.discardedTerminalCount !== 0n) throw new Error('Startup observation lost');
       if (observed.status.state === ZLinkFrameworkRuntimeState.Serving) return;
       if (observed.status.state !== ZLinkFrameworkRuntimeState.Preparing)
         throw new Error(`Runtime startup failed: ${observed.status.state}`);
     }
-    throw new Error('Runtime observation ended before Serving');
+    throw new Error('Serving observation deadline expired');
   }
   async function waitReady(): Promise<void> {
     let lastStatus: ZLinkRouteMeshStatus | undefined;
