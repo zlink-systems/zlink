@@ -366,6 +366,15 @@ requests a connection close. It doesn't provide a global proxy that
 specifies an arbitrary session. Disconnect releases the binding but doesn't
 destroy the Actor or change Spot membership.
 
+**The Session owner performs the connection close.** When an Actor requests a close of its current binding, the Actor
+owner sends `boundSessionClose(54)` to the Session owner with the same Actor route fence and binding generation as
+`boundSessionSend(36)`. The same decision applies when the Session owner is in the same process. The Session owner
+starts the physical connection close of that session only when the binding generation matches the current binding,
+and replies after the transport close reaches its terminal. A mismatch is a stale fence: the result is `Unavailable`
+and the connection stays open. Binding cleanup and the Actor notification come once from the §7 physical disconnect
+procedure that this close triggers; the close request path does not release the binding separately. The close
+request's terminal is this reply.
+
 The control commands this section and §8.2 use are as follows.
 
 | Command | Name | Direction and use | How it completes |
@@ -374,6 +383,7 @@ The control commands this section and §8.2 use are as follows.
 | 24 | `actorSend` | Session owner → Actor owner: session→Actor payload (includes bound-session tail) | send or request relay — the existing correlation/deadline contract as-is |
 | 36 | `boundSessionSend` | Actor owner → Session owner: Actor→session push | send |
 | 51 | `boundSessionReplaced` | Actor owner → previous Session owner: binding-replacement notification | one-way, at most once |
+| 54 | `boundSessionClose` | Actor owner → Session owner: physical connection close request for the current binding | request/reply, one terminal |
 | 42 | `sessionRelocationSeal` | Relocation coordinator → Session owner: request to install a seal on the relocation-target binding | request |
 | 43 | `sessionRelocationSealed` | Session owner → Relocation coordinator: seal-installation result or exact-binding absence (`sealResult`, §8.3) | reply |
 | 44 | `sessionRelocationRoute` | Target runtime or relocation coordinator → Session owner: route apply or abort | one-way (send), no response |

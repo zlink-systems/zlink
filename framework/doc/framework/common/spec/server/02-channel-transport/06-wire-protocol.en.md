@@ -287,6 +287,7 @@ is diagnostic compatibility text, not a command that is decoded or sent.
 | 51 | `boundSessionReplaced` | infrastructure | none | — | Notifies the previous session after the new binding becomes current |
 | 52 | `relocationState` | infrastructure | none | — | Direct source-memory-to-target payload chunk transfer (base/final stage) |
 | 53 | `relocationFailed` | infrastructure | none | — | Explicit reply to a matching `relocationPrepare` reporting assembly or preparation failure |
+| 54 | `boundSessionClose` | infrastructure | none | — | Requests the Session owner to close the current binding's physical connection |
 
 The table's Layer, Application payload, and Permitted flags columns reproduce
 the schema declarations. **Only application-layer commands enter an
