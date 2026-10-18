@@ -636,6 +636,7 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
         }
 
         default CompletionStage<Void> admitExisting(
+                ZLinkServiceM6BWireCodec.InstanceRouteFence currentRoute,
                 ZLinkServiceM6BWireCodec.InstanceSpotMessage message,
                 ZLinkBackendReceived received) {
             return null;

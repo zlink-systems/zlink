@@ -315,29 +315,6 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
         return admitRoute(received, null);
     }
 
-    CompletionStage<Void> admitExisting(
-            systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
-                            .InstanceSpotMessage
-                    message,
-            ZLinkBackendReceived received) {
-        var route =
-                (systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
-                                .InstanceRouteFence)
-                        message.route();
-        if (!context.nodeRid().equals(route.targetNodeRid())
-                || !authorityFenceMatches(
-                        route.ownerId(), route.leaseGeneration(), route.authorityOwnerGeneration())
-                || (hasExpectedNodeGeneration()
-                        && expectedNodeGeneration() != route.targetNodeGeneration())) {
-            received.close();
-            return CompletableFuture.failedFuture(
-                    systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorOrigin.framework(
-                            systems.zlink.framework.errors.ZLinkFrameworkErrorKind.UNAVAILABLE,
-                            "Instance Spot owner fence changed"));
-        }
-        return admitRoute(received);
-    }
-
     CompletionStage<Void> admitRoute(
             ZLinkBackendReceived received, CompletableFuture<Void> admission) {
         var hostRejection = host.spotHostAdmissionFailure(context.spotId());

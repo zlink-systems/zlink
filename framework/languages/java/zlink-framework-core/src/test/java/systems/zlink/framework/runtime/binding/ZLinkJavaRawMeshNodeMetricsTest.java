@@ -119,7 +119,7 @@ final class ZLinkJavaRawMeshNodeMetricsTest {
                 Message body = Message.from("body")) {
             var spots = (ZLinkJavaRawSpotNode) pair.target.spotNode();
             spots.setSpotAdmissionResolver(
-                    (spot, generation, instance, activation) ->
+                    (spot, generation, instance, activation, route) ->
                             CompletableFuture.completedFuture(
                                     ownerRefusal
                                             ? systems.zlink.framework.runtime.messaging
