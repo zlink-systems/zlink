@@ -11,6 +11,7 @@
 #include "runtime/messaging/envelope_codec.hpp"
 #include "runtime/stateful/public_host_runtime.hpp"
 #include "runtime/stateful/raw_stateful_dispatch.hpp"
+#include "runtime/backend/raw_binding_adapter.hpp"
 
 #include <gtest/gtest.h>
 
@@ -30,6 +31,19 @@
 #include <typeinfo>
 #include <utility>
 #include <vector>
+
+namespace zlink::framework::runtime::host
+{
+struct public_host_runtime_test_access_t
+{
+    static task_t<std::size_t> dispatch_claim (public_host_runtime_t &host,
+                                               mesh::service_mailbox_claim_t claim)
+    {
+        return host.dispatch_application_claim (std::move (claim),
+                                                [] (const auto &, const auto &, auto) {});
+    }
+};
+} // namespace zlink::framework::runtime::host
 
 namespace
 {
@@ -391,6 +405,98 @@ local_admission_host (const std::shared_ptr<queue_t> &queue)
 }
 
 } // namespace
+
+TEST (ZLinkFrameworkStatefulDispatch, RetainedIngressExceptionLeavesTerminalWithNativeOwner)
+{
+    namespace framework = zlink::framework;
+    namespace host = framework::runtime::host;
+    namespace stateful = framework::runtime::stateful;
+    auto native = std::make_shared<host::public_host_runtime_t> (host::host_options_t{
+      .mesh = {.descriptor = {.mesh_name = "retained-ingress",
+                              .node_routing_id =
+                                zlink::routing_id_t::from ("local-node").to_bytes (),
+                              .lifecycle_generation = 1,
+                              .descriptor_revision = 1,
+                              .advertised_endpoint = "tcp://127.0.0.1:0"},
+               .runtime_failures =
+                 std::make_shared<framework::runtime::runtime_failure_collector_t> ()},
+      .object_stable_types = {"player"}});
+    native->configure_stateful_dispatch (
+      [] (const stateful::accepted_record_authority_query_t &query)
+        -> framework::task_t<std::optional<stateful::accepted_record_authority_t>> {
+          using authority_t = stateful::accepted_record_authority_t;
+          return framework::task_t<std::optional<authority_t>> (
+            framework::result_t<std::optional<authority_t>>::success (authority_t{
+              {"local-owner", 1, query.source_node_routing_id, query.source_node_generation}, 1}));
+      });
+    native->start ();
+    const std::string actor_id = "retained-ingress";
+    auto actor = native->create_actor ("player", actor_id);
+    host::pending_operation_t operation;
+    framework::runtime::messaging::envelope_header_t header;
+    header.channel_name = "actor";
+    header.message_name = "retained-ingress";
+    auto request = framework::runtime::messaging::envelope_codec_t{}.encode_raw_body_parts (
+      header, zlink::message_t::from ("{}"));
+    ASSERT_EQ (zlink::submit_result_t::ok,
+               actor
+                 .request_to (actor.ref (), request.items (), operation, zlink::send_flags_t::none,
+                              std::chrono::seconds (30))
+                 .result ()
+                 .value ());
+    unsigned notifications = 0;
+    native->transport ().mailbox ().bind_application_dispatch (
+      {}, {}, [&] (const auto &, auto) -> framework::task_t<bool> {
+          ++notifications;
+          throw framework::framework_exception_t (framework::framework_error_kind_t::unavailable,
+                                                  "retained owner notification failed");
+      });
+    auto claim = native->transport ().mailbox ().try_claim_owner (
+      framework::runtime::mesh::service_mailbox_domain_t::application,
+      framework::runtime::mesh::service_mailbox_t::application_owner (host::owner_kind_t::actor,
+                                                                      actor_id),
+      1, framework::runtime::dispatch_limits::receive_batch_bytes);
+    ASSERT_TRUE (claim);
+    const auto owner = native->objects ().find (stateful::object_kind_t::actor, actor_id);
+    ASSERT_TRUE (owner);
+    namespace protocol = framework::runtime::protocol;
+    auto &wire = claim->records.front ();
+    ASSERT_TRUE (wire.correlation);
+    wire.parts = framework::detail::backend::materialize_binding_parts (
+      {protocol::encode_actor_message_header (
+         protocol::command::actorRequest, std::nullopt,
+         {owner->key, owner->object_generation, native->status ().routing_id ().to_bytes (),
+          native->status ().lifecycle_generation (), owner->authority_owner_generation, 1},
+         {operation.id.high, operation.id.low}, wire.correlation),
+       protocol::encode_application_payload (
+         protocol::application_payload_t::from_parts (request.items ()))});
+    wire.source_node_generation = native->status ().lifecycle_generation ();
+    wire.application.reset ();
+    const auto dispatched =
+      host::public_host_runtime_test_access_t::dispatch_claim (*native, std::move (*claim))
+        .result ();
+    EXPECT_EQ (1u, notifications);
+    EXPECT_FALSE (dispatched);
+    EXPECT_THROW ((void) dispatched.value (), framework::framework_exception_t);
+    EXPECT_EQ (1u, native->pending_operation_count ());
+    native->transport ().mailbox ().bind_application_dispatch ({}, {});
+    unsigned terminals = 0;
+    (void) native
+      ->dispatch_ready ([&] (const auto &, const auto &record, auto) {
+          ++terminals;
+          ASSERT_TRUE (record.application_record);
+          ASSERT_TRUE (record.application_record->native_reply);
+          EXPECT_TRUE (record.application_record->native_reply (std::nullopt));
+          EXPECT_FALSE (record.application_record->native_reply (std::nullopt));
+      })
+      .result ()
+      .value ();
+    EXPECT_EQ (1u, terminals);
+    EXPECT_EQ (0u, native->pending_operation_count ());
+    if (native->pending_operation_count () == 0)
+        EXPECT_FALSE (operation.completion->task ().result ());
+    native->close ();
+}
 
 TEST (ZLinkFrameworkStatefulDispatch, DispatchFailureReportsCauseAndFailsOriginalRequest)
 {

@@ -7133,7 +7133,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_application_claim (
         }
         catch (const framework_exception_t &error) {
             const auto failure = messaging::request_failure_mapper_t{}.target_failure_reply (error);
-            if (failure)
+            if (failure && !release_state->retained (index))
                 rejection = *failure;
             else
                 rejection = std::current_exception ();
