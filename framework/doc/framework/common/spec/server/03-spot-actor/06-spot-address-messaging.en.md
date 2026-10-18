@@ -230,10 +230,11 @@ If the same caller Spot ID's kind or stable type differs, it's
 `GetOrCreate` returns a Ready object of the same User Spot type as
 `Existing` when its owner lease is valid, and otherwise follows the release
 result of [Location runtime §6.1](../05-location-relocation/01-location-runtime.en.md#61-read-and-cas). A different operation observing an in-progress Creating attempt
-doesn't start a new reservation or factory — it waits for the authority
-change. If the earlier attempt ends Ready, it returns `Existing` and that
+or a Closing authority doesn't start a new reservation or factory — it waits for the authority
+change. If the authority ends Ready (including a Close that ends `false` and keeps the same
+incarnation), it returns `Existing` and that
 incarnation's `SpotRef`. If it becomes Missing via rejection/failure
-cleanup, it competes for a new reservation within the remaining deadline,
+cleanup or a completed Close, it competes for a new reservation within the remaining deadline,
 and the winner runs factory and callback with its own creation request. A
 different operation doesn't share an earlier attempt's `Rejected` state or
 application reply. Only a redelivery of the same operation ID resends the

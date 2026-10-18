@@ -1017,6 +1017,7 @@ in the table below apply only to a record whose owner lease is valid.
 |---|---|---|
 | `Ready` of the same type | `AlreadyExists` | existing ref |
 | `Creating` of the same type | `AlreadyExists` | waits for the in-progress creation result. |
+| `Closing` of the same type | `AlreadyExists` | waits until the Close ends in `Ready` or `Missing`, then follows the matching row. |
 | A different Actor type | `TypeMismatch` | `TypeMismatch` |
 | A different Spot kind or type | `TypeMismatch` | `TypeMismatch` |
 

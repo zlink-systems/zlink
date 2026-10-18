@@ -191,9 +191,9 @@ ObjectGeneration, creation attempt)` 기준으로 한 번 이상 실행될 수 �
 
 `GetOrCreate`는 같은 User Spot type의 Ready object를 owner lease가 유효하면 `Existing`으로 반환하고,
 무효하면 [Location runtime §6.1](../05-location-relocation/01-location-runtime.ko.md#61-read와-cas)의 해제 결과를 따른다. 진행 중인
-Creating attempt를 관찰한 서로 다른 operation은 새 reservation이나 factory를 시작하지 않고
-authority 변경을 기다린다. 앞선 attempt가 Ready로 끝나면 `Existing`과 그 incarnation의
-`SpotRef`를 반환한다. Rejected·failure cleanup으로 Missing이 되면 남은 deadline 안에서 새
+Creating attempt나 Closing authority를 관찰한 서로 다른 operation은 새 reservation이나 factory를 시작하지 않고
+authority 변경을 기다린다. Authority가 Ready로 끝나면(Close가 `false`로 끝나 같은 incarnation이 남은 경우를 포함한다) `Existing`과 그 incarnation의
+`SpotRef`를 반환한다. Rejected·failure cleanup이나 Close 완료로 Missing이 되면 남은 deadline 안에서 새
 reservation을 경쟁하고, winner가 자신의 creation request로 factory와 callback을 실행한다. 서로
 다른 operation은 앞선 attempt의 `Rejected` state와 application reply를 공유하지 않는다. 동일한
 operation ID가 재전달된 경우에만 retained terminal result를 재전송한다.
