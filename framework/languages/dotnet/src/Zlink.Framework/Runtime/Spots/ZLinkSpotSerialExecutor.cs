@@ -1979,8 +1979,10 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
     {
         return RunBarrierStateAsync<ZLinkExecutionBarrierState?>(() =>
         {
-            // Terminal host cleanup owns the final seal. Replacing its generation
-            // fences a cancelled relocation without creating a second gate.
+            // Host shutdown closes every Spot after the relocation units have ended
+            // (host-relocation §14 steps 3-4). A seal left by an uncertain commit has
+            // no live owner, so HostShutdown takes it over; the new generation fences
+            // a late owner without creating a second gate.
             if (
                 _relocationBarrier is not null && closeReason != ZLinkSpotCloseReason.HostShutdown
                 || _nextBarrierGeneration == ulong.MaxValue
