@@ -448,7 +448,7 @@ export class DefaultZLinkSpotManager {
       requestContextClose: (activation, objectGeneration, signal) =>
         this.closeFromContext(activation, objectGeneration, signal),
       stageActivation: (activation) => {
-        this.activations.register(activation);
+        this.activations.registerPreparing(activation);
       },
       discardActivation: (activation) => {
         this.activations.finishClose(activation.meshName, activation.spotId);
@@ -2062,12 +2062,15 @@ export class DefaultZLinkSpotManager {
       throw new ZLinkConfigurationException('MeshNode Actor record is missing its Actor owner.');
     }
     const request = record.kind === ReceiveKind.ActorRequest;
-    const resolvedOwner = this.options.actorDispatchOwnerResolver?.(actor.actorId);
-    const resolvedActorRef = resolvedOwner?.actorRef ?? {
-      actorId: actor.actorId,
-      objectGeneration: actor.generation,
+    const nativeTarget = record.messageFollowOrigin?.target;
+    const ingressActor = nativeTarget?.actor ?? actor;
+    const resolvedActorRef = (nativeTarget === undefined
+      ? this.options.actorDispatchOwnerResolver?.(actor.actorId).actorRef
+      : undefined) ?? {
+      actorId: ingressActor.actorId,
+      objectGeneration: ingressActor.generation,
       meshName,
-      nodeRid: String(actor.nodeRid)
+      nodeRid: ingressActor.nodeRid
     };
     const responseActorRef =
       record.sourceBindingGeneration > 0n

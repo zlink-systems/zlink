@@ -28,7 +28,6 @@ import { ZLinkBufferMessage as RuntimeMessage } from '../backend/runtime-message
 import {
   isZLinkBackendResultError,
   RequestResult,
-  SubmitResult,
   ZLINK_BACKEND_SEND_NONE
 } from '../backend/runtime-values';
 import { ZLinkConfigurationException } from '../configuration';
@@ -204,7 +203,7 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
         );
         return { status: ZLinkSubmitStatus.Submitted };
       }
-      return await this.submitActorSend(meshName, toBackendActorRef(actor), parts);
+      return await this.submitActorSend(meshName, toBackendActorRef(actor), parts, route);
     } catch (error) {
       if (isStaleActorError(error)) {
         this.invalidateActorRoute(actorId);
@@ -415,13 +414,15 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
   private async submitActorSend(
     meshName: string,
     actor: ZLinkBackendActorRef,
-    parts: readonly Message[]
+    parts: readonly Message[],
+    route: ZLinkResolvedActorRoute
   ): Promise<ZLinkSubmitResult> {
     const node = this.requireNode(meshName);
     try {
       return classifySubmitResult(
         await node.sendToActor(actor, toMessageLikeParts(parts), {
-          flags: ZLINK_BACKEND_SEND_NONE
+          flags: ZLINK_BACKEND_SEND_NONE,
+          routeFence: nativeActorRouteFence(route, actor)
         }),
         'Actor send'
       );
@@ -438,16 +439,15 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
     actor: ZLinkBackendActorRef,
     parts: readonly Message[],
     timeoutMs: number | undefined,
-    signal?: AbortSignal,
-    route?: ZLinkResolvedActorRoute,
-    messageFollowContext?: ZLinkActorMessageFollowContext,
+    signal: AbortSignal | undefined,
+    route: ZLinkResolvedActorRoute,
+    messageFollowContext: ZLinkActorMessageFollowContext,
     onAdmitted?: () => void
   ): Promise<TReply> {
     const node = this.requireNode(meshName);
     if (
       this.options.routeTransport !== undefined &&
-      !routingIdsEqual(node.status().routingId, actor.nodeRid) &&
-      route !== undefined
+      !routingIdsEqual(node.status().routingId, actor.nodeRid)
     ) {
       const relay = encodeRemoteActorPacketRelayPayload({
         actorId: actor.actorId,
@@ -499,6 +499,7 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
       () =>
         node.requestToActor(actor, toMessageLikeParts(parts), {
           flags: ZLINK_BACKEND_SEND_NONE,
+          routeFence: nativeActorRouteFence(route, actor),
           timeoutMs,
           onAdmitted
         }),
@@ -526,6 +527,15 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
     }
     return node;
   }
+}
+
+function nativeActorRouteFence(route: ZLinkResolvedActorRoute, actor: ZLinkBackendActorRef) {
+  return {
+    actor,
+    targetNodeGeneration: route.ownerNodeGeneration,
+    authorityOwnerGeneration: route.authorityOwnerGeneration,
+    ownerLeaseGeneration: route.ownerLeaseGeneration
+  };
 }
 
 function remoteActorRouteTarget(route: ZLinkResolvedActorRoute) {
@@ -596,45 +606,6 @@ function requireActorId(actorId: string): void {
       `Actor ID must contain 1..${ZLINK_MAX_ACTOR_ID_BYTES} UTF-8 bytes.`
     );
   }
-}
-
-export async function forwardEncodedActorPacket(
-  node: ZLinkBackendMeshNode,
-  completions: ZLinkMeshCompletionTable,
-  actor: ActorRef,
-  header: Buffer,
-  payload: Buffer,
-  returnResponse: boolean,
-  timeoutMs: number | undefined,
-  serializers?: ReadonlyMap<string, ZLinkMessageSerializer>
-): Promise<unknown> {
-  const target = toBackendActorRef(actor);
-  const parts = [header, payload];
-  const packetName = decodeStreamHeader(header).name;
-  if (!returnResponse) {
-    if (
-      (await node.sendToActor(target, parts, { flags: ZLINK_BACKEND_SEND_NONE })) !==
-      SubmitResult.Ok
-    ) {
-      throw routeNotConnected('Actor handoff send submit was not accepted.');
-    }
-    return undefined;
-  }
-  const completion = await completions.submit(() =>
-    node.requestToActor(target, parts, {
-      flags: ZLINK_BACKEND_SEND_NONE,
-      timeoutMs
-    })
-  );
-  if (completion.terminalResult !== RequestResult.Ok) {
-    closeMeshCompletion(completion);
-    throw mapRequestResult(
-      completion.terminalResult,
-      completion.failureErrno,
-      'Actor handoff request'
-    );
-  }
-  return decodeActorReply(completion.parts, serializers, packetName);
 }
 
 function toBackendActorRef(actor: ActorRef): ZLinkBackendActorRef {

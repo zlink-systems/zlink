@@ -306,9 +306,7 @@ export class ZLinkExecutionBarrier {
     return (this.currentSeal ?? this.committedSeal)?.kind === 'close';
   }
 
-  enter(
-    retainedByLifecycle = false
-  ): ZLinkExecutionBarrierClaim | Promise<ZLinkExecutionBarrierClaim> {
+  enter(): ZLinkExecutionBarrierClaim | Promise<ZLinkExecutionBarrierClaim> {
     if (this.committedSeal !== undefined) {
       throw createInternalFrameworkException(
         this.committedSeal.kind === 'close'
@@ -324,7 +322,6 @@ export class ZLinkExecutionBarrier {
           'ZLink execution barrier is sealed for Close.'
         );
       }
-      if (this.currentSeal.kind === 'activation' && retainedByLifecycle) return this.createClaim();
       return new Promise<ZLinkExecutionBarrierClaim>((resolve, reject) => {
         this.admissionWaiters.push({ resolve, reject });
       });

@@ -186,7 +186,7 @@ internal sealed class ZLinkSessionActorBindingRegistry(ZLinkFrameworkRuntime run
                         new ZLinkDispatchFailure(
                             ZLinkDispatchErrorSurface.StreamSession,
                             ZLinkDispatchMessageKind.Send,
-                            ZLinkDispatchErrorReason.ReplyPathMissing,
+                            ZLinkDispatchErrorReporter.ReasonFrom(failure),
                             ZLinkDispatchErrorAction.Drop,
                             null,
                             ActorId: actor.ActorId,

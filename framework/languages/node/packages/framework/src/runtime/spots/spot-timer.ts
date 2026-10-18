@@ -1,4 +1,3 @@
-import { AsyncLocalStorage } from 'node:async_hooks';
 import type {
   SpotId,
   Type,
@@ -38,9 +37,6 @@ export interface ZLinkTimerClock {
   setTimeout(callback: () => void, delayMs: number): unknown;
   clearTimeout(handle: unknown): void;
 }
-
-// Timer infrastructure starts independently of the turn that registered it.
-const detachedTimerScope = AsyncLocalStorage.snapshot();
 
 const systemTimerClock: ZLinkTimerClock = {
   now: () => performance.now(),
@@ -627,7 +623,7 @@ export class ZLinkManagedTimer implements ZLinkTimer {
         : this.options.overrunPolicy === ZLinkTimerOverrunPolicy.DelayNextTick
           ? this.periodMs
           : Math.max(0, Number(this.lastScheduledIndex + 1n) * this.periodMs - this.elapsedMs());
-    this.timeout = detachedTimerScope(() =>
+    this.timeout = startOutsideStateLane(() =>
       this.clock.setTimeout(() => {
         this.timeout = undefined;
         this.running = this.fire().then(
