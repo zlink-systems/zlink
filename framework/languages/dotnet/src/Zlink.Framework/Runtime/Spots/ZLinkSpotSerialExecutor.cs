@@ -169,6 +169,11 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
                         )
                         .ConfigureAwait(false);
                     return true;
+                },
+                () =>
+                {
+                    Interlocked.CompareExchange(ref _preparation, null, preparation);
+                    SchedulePendingApplications();
                 }
             ) ?? throw new InvalidOperationException("Activation lifecycle admission is closed.");
         await preparation.Prepared.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -186,7 +191,7 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
         }
         preparation.FirstTerminal.TrySetResult(null);
         preparation.Terminal.TrySetResult(null);
-        return CompleteActivationPreparationAsync(preparation);
+        return preparation.Execution;
     }
 
     internal Task RecordActivationTerminalAsync(Func<CancellationToken, ValueTask> terminal)
@@ -194,21 +199,7 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
         if (Volatile.Read(ref _preparation) is not { } preparation)
             return Task.CompletedTask;
         preparation.FirstTerminal.TrySetResult(terminal);
-        return CompleteActivationPreparationAsync(preparation);
-    }
-
-    private async Task CompleteActivationPreparationAsync(ActivationPreparation preparation)
-    {
-        SchedulePendingApplications();
-        try
-        {
-            await preparation.Execution.ConfigureAwait(false);
-        }
-        finally
-        {
-            Interlocked.CompareExchange(ref _preparation, null, preparation);
-            SchedulePendingApplications();
-        }
+        return preparation.Execution;
     }
 
     private sealed class ActivationPreparation
@@ -564,7 +555,8 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
     // first-terminal record) to the lifecycle lane. Only the queue's own
     // admission decides. Null means the lane no longer admits work.
     internal Task<T>? PostLifecycleOperation<T>(
-        Func<ZLinkSpotActivation, CancellationToken, ValueTask<T>> operation
+        Func<ZLinkSpotActivation, CancellationToken, ValueTask<T>> operation,
+        Action? terminalRelease = null
     )
     {
         var outcome = new TaskCompletionSource<T>(
@@ -572,7 +564,10 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
         );
         var admission = _queue.TryPostNextWithAdmission(
             ct =>
-                ExecuteLifecycleOperationAsync(
+            {
+                if (terminalRelease is not null)
+                    ZLinkSerialTurn.Current!.Item.AddTerminalRelease(terminalRelease);
+                return ExecuteLifecycleOperationAsync(
                     async (activation, token) =>
                     {
                         try
@@ -588,7 +583,8 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
                         }
                     },
                     ct
-                ),
+                );
+            },
             out var item
         );
         return admission == ZLinkSerialPostAdmission.Accepted ? CompleteAsync() : null;
