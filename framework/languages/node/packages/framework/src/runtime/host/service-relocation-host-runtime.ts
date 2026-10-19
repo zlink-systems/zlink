@@ -1576,7 +1576,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     if (
       !routingIdsEqual(status.routingId, session.sessionOwnerNodeRid) ||
       status.lifecycleGeneration !== session.sessionOwnerNodeGeneration ||
-      owner?.ownerId !== session.sessionOwnerId ||
+      owner.ownerId !== session.sessionOwnerId ||
       owner.leaseGeneration !== session.sessionOwnerLeaseGeneration
     ) {
       throw new ServiceWireProtocolError(
