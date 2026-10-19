@@ -7,10 +7,6 @@ class RequestAdmission<TReply> {
   private admitted: Promise<void> | undefined;
   private resolveAdmission: (() => void) | undefined;
   private rejectAdmission: ((error: unknown) => void) | undefined;
-  // The admission owner also supplies the descriptor, avoiding a second
-  // object that only forwards the public getter to this owner.
-  readonly get = this.observe.bind(this);
-
   confirm(): void;
   confirm(value: TReply): TReply;
   confirm(value?: TReply): TReply | undefined {
@@ -56,5 +52,7 @@ export function createZLinkRequest<TReply>(
   }
   const observed = pending.then(confirm, admission.fail.bind(admission));
   const reply = deliverReply?.(observed) ?? observed;
-  return Object.defineProperty(reply, 'admitted', admission) as ZLinkRequest<TReply>;
+  return Object.defineProperty(reply, 'admitted', {
+    get: () => admission.observe()
+  }) as ZLinkRequest<TReply>;
 }
