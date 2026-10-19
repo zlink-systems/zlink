@@ -89,6 +89,7 @@ internal sealed class ZLinkStateLane : IAsyncDisposable
         {
             if (!HasQueuedWork)
             {
+                var context = ExecutionContext.Capture();
                 var previous = CurrentLane.Value;
                 try
                 {
@@ -102,7 +103,12 @@ internal sealed class ZLinkStateLane : IAsyncDisposable
                 }
                 finally
                 {
-                    CurrentLane.Value = previous;
+                    // Restore the captured scope without rebuilding its AsyncLocal map.
+                    // Suppressed flow has no captured context, so restore the lane value.
+                    if (context is not null)
+                        ExecutionContext.Restore(context);
+                    else
+                        CurrentLane.Value = previous;
                     if (ReleaseDrain())
                         _ = DrainAsync();
                 }
@@ -231,18 +237,13 @@ internal sealed class ZLinkStateLane : IAsyncDisposable
     private async Task DrainAsync()
     {
         CurrentLane.Value = this;
-        try
+        // The async method builder restores the caller's ExecutionContext on
+        // suspension and return; clearing the value would only rebuild the map.
+        do
         {
-            do
-            {
-                while (_mailbox is { } mailbox && mailbox.TryDequeue(out var work))
-                    await work.RunAsync().ConfigureAwait(false);
-            } while (ReleaseDrain());
-        }
-        finally
-        {
-            CurrentLane.Value = null;
-        }
+            while (_mailbox is { } mailbox && mailbox.TryDequeue(out var work))
+                await work.RunAsync().ConfigureAwait(false);
+        } while (ReleaseDrain());
     }
 
     //  Returns true when the caller has reclaimed the lane for work queued
