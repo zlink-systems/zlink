@@ -423,6 +423,28 @@ public sealed class BoundSessionReplacementLifecycleTests
                 retired.BindingGeneration
             );
         Assert.NotNull(ExactRetiredBinding());
+        var staleClose = new ServiceWireCodec.BoundSessionClose54(
+            0,
+            new(1),
+            new(new("actor-a"), new(1)),
+            new(
+                new(retired.SessionOwnerNodeRid.ToBytes().ToArray()),
+                new(retired.SessionOwnerNodeGeneration),
+                new(retired.SessionOwnerId),
+                new(retired.SessionOwnerLeaseGeneration),
+                new(retired.SessionRid.ToBytes().ToArray()),
+                new(retired.BindingGeneration)
+            )
+        );
+        var rejected = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+            await ((IZLinkBackendBoundSessionClose)retired.Node).CloseBoundSessionAsync(
+                staleClose,
+                TimeSpan.FromSeconds(2),
+                CancellationToken.None
+            )
+        );
+        Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, rejected.Kind);
+        Assert.Equal(0, replacement.Socket.DisconnectCount);
 
         retired.Time.Advance(TimeSpan.FromMilliseconds(99));
         Assert.Equal(0, retired.Socket.DisconnectCount);
