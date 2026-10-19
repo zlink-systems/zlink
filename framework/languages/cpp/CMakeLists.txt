@@ -1028,6 +1028,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   target_compile_definitions(test_cpp_framework_service_wire_codec PRIVATE
     ZLINK_CLIENT_SERVER_METADATA_FIXTURE_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/fixtures/client-server-metadata.json"
+    ZLINK_SESSION_OWNER_IDENTITY_FIXTURE_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/fixtures/session-owner-identity-v1.json"
     ZLINK_SESSION_DISCONNECTED_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/golden/session-disconnected-v1.json"
     ZLINK_BOUND_SESSION_REPLACED_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/golden/bound-session-replaced-v1.json"
     ZLINK_REPLY_RELAY_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/golden/reply-relay-v1.json"

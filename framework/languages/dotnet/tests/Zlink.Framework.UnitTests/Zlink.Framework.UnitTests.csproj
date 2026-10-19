@@ -151,6 +151,7 @@
         <Compile Include="Runtime/GeneratedNodeIdentityTests.cs"/>
         <Compile Include="Runtime/GeneratedRelocationCodecConformanceTests.cs"/>
         <Compile Include="Runtime/GeneratedServiceWireCommandCodecConformanceTests.cs"/>
+        <Compile Include="Runtime/SessionOwnerIdentityContractTests.cs"/>
         <Compile Include="Runtime/GenerationTokenRangeTests.cs"/>
         <Compile Include="Runtime/FrameworkJsonProfileTests.cs"/>
         <Compile Include="Runtime/ConnectorJsonProfileTests.cs"/>
