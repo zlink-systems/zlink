@@ -133,7 +133,12 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
                 && services.GetService<IZLinkMeshNodeLocationResolver>() is { } peers
             )
                 sources.SetRequestSourceAcceptance(
-                    new ZLinkRequestSourceFenceResolver(peers, leases, spotChannelName)
+                    new ZLinkRequestSourceFenceResolver(
+                        peers,
+                        leases,
+                        spotChannelName,
+                        runtime.Flow
+                    )
                 );
         }
         _leaseTracker = leaseTracker;
