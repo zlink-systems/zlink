@@ -91,6 +91,11 @@ struct actor_bound_session_route_t
     //  The first positive sequence admitted on the exact route becomes the
     //  baseline; ordinary initial binds keep the known baseline 0.
     bool session_sequence_baseline_unknown = false;
+    //  Session-Actor binding §4: the Session owner host's descriptor
+    //  (OwnerId, LeaseGeneration), stored at bind and carried unchanged by
+    //  commands 42, 51 and 54. Empty when the route has no binding identity.
+    std::string session_owner_id;
+    std::uint64_t session_owner_lease_generation = 0;
 
     friend bool operator== (const actor_bound_session_route_t &,
                             const actor_bound_session_route_t &) = default;
@@ -396,7 +401,9 @@ class actor_gateway_runtime_t
                                 std::uint64_t binding_generation = 0,
                                 std::uint64_t binding_token = 0,
                                 std::uint64_t session_sequence = 0,
-                                bool session_sequence_baseline_unknown = false);
+                                bool session_sequence_baseline_unknown = false,
+                                std::string session_owner_id = {},
+                                std::uint64_t session_owner_lease_generation = 0);
     result_t<actor_bound_session_transition_t>
     record_bound_session_route_transition (const actor_ref_t &actor_ref,
                                            actor_bound_session_route_t route,

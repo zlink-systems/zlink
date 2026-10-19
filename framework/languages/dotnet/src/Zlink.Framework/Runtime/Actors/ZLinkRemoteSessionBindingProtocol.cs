@@ -22,9 +22,7 @@ internal sealed record ZLinkRemoteSessionBindRequest(
     ulong ObjectGeneration,
     string MeshName,
     ulong SessionOwnerNodeGeneration,
-    ulong AcceptedHighWater,
-    string SessionOwnerId = "",
-    ulong SessionOwnerLeaseGeneration = 0
+    ulong AcceptedHighWater
 );
 
 internal sealed record ZLinkRemoteSessionBindResponse(

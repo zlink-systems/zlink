@@ -1437,17 +1437,10 @@ internal sealed class ZLinkActorBoundSessionCoordinator
     }
 
     internal ValueTask CloseSessionBindingAsync(
-        RoutingId receivingNodeRid,
-        ulong receivingNodeGeneration,
+        ZLinkServiceWireCodec.RequestSourceFence? sessionOwner,
         Systems.Zlink.Framework.Runtime.Protocol.ServiceWireCodec.BoundSessionClose54 request,
         CancellationToken cancellationToken
-    ) =>
-        _sessionBindings.CloseCurrentAsync(
-            receivingNodeRid,
-            receivingNodeGeneration,
-            request,
-            cancellationToken
-        );
+    ) => _sessionBindings.CloseCurrentAsync(sessionOwner, request, cancellationToken);
 
     private IZLinkBackendSpotNode RequireNodeForMesh(
         string meshName,

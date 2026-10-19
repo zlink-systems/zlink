@@ -1830,11 +1830,22 @@ public_host_runtime_t::admit_session_relocation_seal (
   session_seal_local_completion_t local_completion,
   const std::function<void (const std::vector<std::uint8_t> &)> &reconcile)
 {
-    if (session_owner.owner_id != seal.session_owner_id
-        || seal.session_owner_lease_generation
-             > static_cast<std::uint64_t> (std::numeric_limits<std::int64_t>::max ())
-        || session_owner.lease_generation
-             != static_cast<std::int64_t> (seal.session_owner_lease_generation)) {
+    // Session-Actor binding §4: compare with this host's current identity exactly.
+    const auto local = status ();
+    if (session_owner.lease_generation <= 0
+        || !protocol::same_session_owner_identity (
+          {seal.session_owner_node_routing_id,
+           seal.session_owner_node_generation,
+           seal.session_owner_id,
+           seal.session_owner_lease_generation,
+           {},
+           0},
+          {local.routing_id ().to_bytes (),
+           local.lifecycle_generation (),
+           session_owner.owner_id,
+           static_cast<std::uint64_t> (session_owner.lease_generation),
+           {},
+           0})) {
         return {false, std::nullopt};
     }
 
@@ -5396,12 +5407,17 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                     bound_session_bind_operation_result_t operation_result{
                       stateful::stateful_error_t::conflict, std::nullopt};
                     bool terminal_replied = false;
+                    const auto session_owner_rid =
+                      zlink::routing_id_t::from (mailbox_record.source_routing_id);
+                    std::optional<location_owner_token_t> session_owner;
                     if (admission == bound_session_bind_admission_t::ready
-                        && bound_session_operations.bind) {
+                        && bound_session_operations.bind && bound_session_operations.session_owner)
+                        session_owner = co_await bound_session_operations.session_owner (
+                          session_owner_rid, mailbox_record.source_node_generation);
+                    if (admission == bound_session_bind_admission_t::ready && session_owner) {
                         operation_result = bound_session_operations.bind (
-                          bind, zlink::routing_id_t::from (mailbox_record.source_routing_id),
-                          mailbox_record.source_node_generation,
-                          [this, &mailbox_record, &terminal_replied] {
+                          bind, session_owner_rid, mailbox_record.source_node_generation,
+                          *session_owner, [this, &mailbox_record, &terminal_replied] {
                               terminal_replied =
                                 _transport->reply_bound_session_bind (mailbox_record, 0u, 0u);
                               return terminal_replied;
@@ -5438,13 +5454,20 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                     const auto request = protocol::decode_bound_session_close (
                       protocol::message_bytes (mailbox_record.parts.front ()));
                     const auto local = status ();
-                    const auto closed = co_await runtime::await_result (
-                      _sessions.close_current (request, {local.routing_id ().to_bytes (),
-                                                         local.lifecycle_generation (),
-                                                         local.routing_id ().to_string (),
-                                                         local.lifecycle_generation (),
-                                                         {},
-                                                         0}));
+                    // Session-Actor binding §4: compare with this host's current
+                    // descriptor identity.
+                    const auto owner =
+                      session_route_owner_resolver ? session_route_owner_resolver () : std::nullopt;
+                    auto closed = result_t<void>::failure (framework_error_kind_t::unavailable,
+                                                           "Session owner has no live descriptor");
+                    if (owner && owner->lease_generation > 0)
+                        closed = co_await runtime::await_result (_sessions.close_current (
+                          request, {local.routing_id ().to_bytes (),
+                                    local.lifecycle_generation (),
+                                    owner->owner_id,
+                                    static_cast<std::uint64_t> (owner->lease_generation),
+                                    {},
+                                    0}));
                     const auto failure =
                       closed ? std::optional<messaging::request_wire_failure_t>{}
                              : messaging::request_failure_mapper_t{}.target_failure_reply (

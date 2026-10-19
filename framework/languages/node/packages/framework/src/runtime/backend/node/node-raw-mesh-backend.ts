@@ -89,6 +89,7 @@ import {
   type ServiceAsyncInstanceActivationAuthority,
   type ServiceInstanceApplicationLifecycle,
   type ServicePendingInstanceActivation,
+  type ServiceSessionOwnerDescriptors,
   type ServiceSpotMessageFollowSeal,
   type ServiceStatefulMailboxData,
   type ServiceStatefulPendingOperation,
@@ -237,6 +238,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     record: import('../../foundation/service-stateful-wire-codec').ServiceMessageFollowRecord
   ) => void;
   private dispatchErrors?: ZLinkDispatchErrorReporter;
+  private sessionOwnerDescriptors?: ServiceSessionOwnerDescriptors;
   private readonly peerDisconnectedHandlers = new Set<(endpoint: string) => void>();
   constructor(
     private readonly meshName: string,
@@ -291,6 +293,11 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   setDispatchErrorReporter(reporter: ZLinkDispatchErrorReporter): void {
     this.dispatchErrors = reporter;
     this.stateful?.setDispatchErrorReporter(reporter, this.meshName);
+  }
+
+  setSessionOwnerDescriptors(source: ServiceSessionOwnerDescriptors): void {
+    this.sessionOwnerDescriptors = source;
+    this.stateful?.setSessionOwnerDescriptors(source);
   }
 
   setProtocolErrorHandler(
@@ -440,6 +447,9 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     );
     if (this.dispatchErrors !== undefined) {
       this.stateful.setDispatchErrorReporter(this.dispatchErrors, this.meshName);
+    }
+    if (this.sessionOwnerDescriptors !== undefined) {
+      this.stateful.setSessionOwnerDescriptors(this.sessionOwnerDescriptors);
     }
     if (this.mailboxRecordDropped !== undefined) {
       this.stateful.setMailboxDropHandler(this.mailboxRecordDropped);

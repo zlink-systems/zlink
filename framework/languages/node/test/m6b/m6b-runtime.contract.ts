@@ -55,7 +55,8 @@ import {
 import {
   ServiceStatefulRuntime,
   type ServiceAsyncInstanceActivationAuthority,
-  type ServiceInstanceActivationAuthority
+  type ServiceInstanceActivationAuthority,
+  type ServiceSessionOwnerToken
 } from '../../packages/framework/src/runtime/foundation/service-stateful-runtime';
 import {
   ServiceStaleGenerationError,
@@ -188,6 +189,36 @@ function testIngressJobOwner(): ApplicationIngressRecordOwner {
     acquireOrResume: () => permit
   };
   return ApplicationIngressRecordOwner.create(queue, permit, { close() {} });
+}
+
+/**
+ * Session-Actor binding §4: a test host whose MeshNode descriptor publishes an
+ * owner token that differs from its RID and lifecycle generation.
+ */
+function testSessionOwnerToken(nodeRid: string, nodeGeneration: bigint): ServiceSessionOwnerToken {
+  return { ownerId: `owner-of-${nodeRid}`, leaseGeneration: nodeGeneration + 100n };
+}
+
+function testSessionOwnerDescriptors(nodeRid: string, nodeGeneration: bigint) {
+  return {
+    local: () => testSessionOwnerToken(nodeRid, nodeGeneration),
+    peer: async (peerRid: string, peerGeneration: bigint) =>
+      testSessionOwnerToken(peerRid, peerGeneration)
+  };
+}
+
+/** The Actor owner admits command 38 after its asynchronous descriptor lookup. */
+async function settleUntil(condition: () => boolean): Promise<void> {
+  for (let turn = 0; turn < 100 && !condition(); turn += 1) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+}
+
+function withTestSessionOwners(runtime: ServiceStatefulRuntime): ServiceStatefulRuntime {
+  runtime.setSessionOwnerDescriptors(
+    testSessionOwnerDescriptors(runtime.nodeRid, runtime.nodeGeneration)
+  );
+  return runtime;
 }
 
 function withIngressOwner<T>(record: T): T {
@@ -2530,7 +2561,7 @@ test('remote Entry Spot actor join derives the well-known node route fence', asy
       ];
     }
   } as unknown as RawServiceMeshRuntime;
-  const runtime = new ServiceStatefulRuntime(raw, 'actor-node', 3n);
+  const runtime = withTestSessionOwners(new ServiceStatefulRuntime(raw, 'actor-node', 3n));
   const actor = runtime.createActor('remote-entry-actor').ref;
 
   const result = await runtime.joinActorEntrySpot(actor, 'entry-node', undefined, 1_000).promise;
@@ -4780,6 +4811,192 @@ test('boundSessionReplaced command 51 matches its golden and malformed fixtures'
   }
 });
 
+test('a Node Actor owner stores the Session owner descriptor identity at bind and commands 51 and 54 echo it', async () => {
+  type TestIngress = RawServiceIngressRecord & {
+    readonly resolveReply?: (parts: readonly Buffer[]) => void;
+  };
+  const generations = new Map<string, bigint>([
+    ['actor-node', 2n],
+    ['session-node', 5n],
+    ['session-next', 8n]
+  ]);
+  const tokens = new Map<string, ServiceSessionOwnerToken>([
+    ['actor-node', { ownerId: 'actor-host-1c2d', leaseGeneration: 4n }],
+    ['session-node', { ownerId: 'session-host-7f3a', leaseGeneration: 6n }],
+    ['session-next', { ownerId: 'session-host-9b0e', leaseGeneration: 9n }]
+  ]);
+  const ingresses = new Map<string, (record: RawServiceIngressRecord) => unknown>();
+  const sent54: Buffer[] = [];
+  const createRaw = (nodeRid: string): RawServiceMeshRuntime =>
+    ({
+      topology: {
+        peer: (target: string) =>
+          generations.has(target)
+            ? { descriptor: { lifecycleGeneration: generations.get(target)! } }
+            : undefined
+      },
+      mailbox: {
+        tryEnqueue(record: {
+          readonly stateful?: { reply(terminalResult: number, failureCode: number): boolean };
+        }) {
+          // The Actor binding control turn completes after admission.
+          queueMicrotask(() => record.stateful?.reply(RequestResult.Ok, 0));
+          return true;
+        }
+      },
+      observePeerRoute: () => ({ generation: 1n, ready: true }),
+      observePeerRouteChanged: () => () => {},
+      observePeerConnectionIntentRemoved: () => () => {},
+      setServiceIngress(handler: (record: RawServiceIngressRecord) => unknown) {
+        ingresses.set(nodeRid, (record) => handler(withIngressOwner(record)));
+      },
+      async sendService(target: string, parts: readonly Buffer[]) {
+        const result = await ingresses.get(target)?.({
+          command: parts[0]![3]!,
+          flags: parts[0]![4]!,
+          sourceRoutingId: nodeRid,
+          parts
+        });
+        return result === 'infrastructure' || result === 'application';
+      },
+      async requestService(target: string, parts: readonly Buffer[]) {
+        if (parts[0]![3] === M6bServiceWireCommand.boundSessionClose) sent54.push(parts[0]!);
+        return await new Promise<readonly Buffer[]>((resolve) => {
+          void ingresses.get(target)?.({
+            command: parts[0]![3]!,
+            flags: parts[0]![4]!,
+            sourceRoutingId: nodeRid,
+            requestSequence: 1n,
+            parts,
+            resolveReply: resolve
+          } as TestIngress);
+        });
+      },
+      replyService(record: RawServiceIngressRecord, parts: readonly Buffer[]) {
+        (record as TestIngress).resolveReply?.(parts);
+      }
+    }) as unknown as RawServiceMeshRuntime;
+  const createRuntime = (nodeRid: string): ServiceStatefulRuntime => {
+    const runtime = new ServiceStatefulRuntime(
+      createRaw(nodeRid),
+      nodeRid,
+      generations.get(nodeRid)!
+    );
+    runtime.setSessionOwnerDescriptors({
+      local: () => tokens.get(nodeRid),
+      peer: async (peerRid, peerGeneration) =>
+        generations.get(peerRid) === peerGeneration ? tokens.get(peerRid) : undefined
+    });
+    return runtime;
+  };
+  const actorRuntime = createRuntime('actor-node');
+  const sessionRuntime = createRuntime('session-node');
+  const nextSessionRuntime = createRuntime('session-next');
+  try {
+    const actor = actorRuntime.createActor('actor-a').ref;
+    const actorRoute = {
+      actor,
+      targetNodeGeneration: 2n,
+      authorityOwnerGeneration: actorRuntime.actor(actor.actorId)!.authorityOwnerGeneration,
+      ownerLeaseGeneration: 4n
+    };
+    sessionRuntime.rememberActorRoute(actorRoute);
+    nextSessionRuntime.rememberActorRoute(actorRoute);
+    let closed = 0;
+    const replaced: Array<{ readonly ownerId: string; readonly lease: bigint }> = [];
+    const bound = await sessionRuntime.bindSession(
+      'session-a',
+      actor,
+      1_000,
+      async () => true,
+      (_actorId, retired) =>
+        replaced.push({
+          ownerId: retired.sessionOwnerId,
+          lease: retired.sessionOwnerLeaseGeneration
+        }),
+      undefined,
+      async () => {
+        closed += 1;
+      }
+    ).promise;
+    assert.equal(bound.terminalResult, RequestResult.Ok);
+
+    // The Actor owner stores the Session owner's descriptor values, not its RID.
+    const actorBinding = (
+      actorRuntime as unknown as { readonly registry: ServiceStatefulRegistry }
+    ).registry.binding(actor)!;
+    assert.equal(actorBinding.sessionOwnerNodeRid, 'session-node');
+    assert.equal(actorBinding.sessionOwnerNodeGeneration, 5n);
+    assert.equal(actorBinding.sessionOwnerId, 'session-host-7f3a');
+    assert.equal(actorBinding.sessionOwnerLeaseGeneration, 6n);
+
+    // Command 54 echoes the stored identity and the Session owner accepts it.
+    const close = await actorRuntime.closeBoundSession(actor, actorBinding.bindingGeneration, 1_000)
+      .promise;
+    assert.equal(close.terminalResult, RequestResult.Ok);
+    assert.equal(closed, 1);
+    const close54 = decodeStatefulHeader(sent54[0]!);
+    assert.equal(close54.kind, 'boundSessionClose');
+    if (close54.kind === 'boundSessionClose') {
+      assert.equal(close54.session.sessionOwnerId, 'session-host-7f3a');
+      assert.equal(close54.session.sessionOwnerLeaseGeneration, 6n);
+    }
+
+    // A command 54 whose lease generation is the node generation names another owner.
+    const staleReplies: Buffer[][] = [];
+    await ingresses.get('session-node')!({
+      command: M6bServiceWireCommand.boundSessionClose,
+      flags: 0,
+      sourceRoutingId: 'actor-node',
+      requestSequence: 2n,
+      parts: [
+        Buffer.from(
+          encodeBoundSessionCloseCommand(
+            {
+              command: 'boundSessionClose',
+              flags: 0,
+              correlation: 77n,
+              actor: { actorId: actor.actorId, objectGeneration: actor.generation },
+              session: {
+                sessionOwnerNodeRid: Buffer.from('session-node'),
+                sessionOwnerNodeGeneration: 5n,
+                sessionOwnerId: 'session-host-7f3a',
+                sessionOwnerLeaseGeneration: 5n,
+                sessionRid: Buffer.from('session-a'),
+                retiredBindingGeneration: actorBinding.bindingGeneration
+              }
+            },
+            {}
+          )[0]!
+        )
+      ],
+      resolveReply: (parts: readonly Buffer[]) => staleReplies.push([...parts])
+    } as TestIngress);
+    assert.notEqual(
+      decodeStatefulReply(staleReplies[0]![0]!, 77n, 'boundSessionClose').terminalResult,
+      RequestResult.Ok
+    );
+    assert.equal(closed, 1);
+
+    // Command 51 to the retired Session owner echoes the same stored identity.
+    const rebound = await nextSessionRuntime.bindSession(
+      'session-b',
+      actor,
+      1_000,
+      async () => true
+    ).promise;
+    assert.equal(rebound.terminalResult, RequestResult.Ok);
+    for (let turn = 0; turn < 10 && replaced.length === 0; turn += 1) {
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    assert.deepEqual(replaced, [{ ownerId: 'session-host-7f3a', lease: 6n }]);
+  } finally {
+    nextSessionRuntime.close();
+    sessionRuntime.close();
+    actorRuntime.close();
+  }
+});
+
 test('bound-session replacement is one-way, does not retry admission, and fences a late tombstone', async () => {
   type TestIngress = RawServiceIngressRecord & {
     readonly resolveReply?: (parts: readonly Buffer[]) => void;
@@ -4846,7 +5063,7 @@ test('bound-session replacement is one-way, does not retry admission, and fences
         const target = nodes.get(targetNodeRid);
         if (target?.ingress === undefined) throw new Error(`Missing test node '${targetNodeRid}'.`);
         return await new Promise<readonly Buffer[]>((resolve) => {
-          target.ingress?.({
+          const admitted = target.ingress?.({
             command: parts[0]![3]!,
             flags: parts[0]![4]!,
             sourceRoutingId: nodeRid,
@@ -4854,8 +5071,10 @@ test('bound-session replacement is one-way, does not retry admission, and fences
             resolveReply: resolve
           } as TestIngress);
           if (!holdBindingControlOnce.delete(`${nodeRid}->${targetNodeRid}`)) {
-            const control = target.mailbox.shift();
-            control?.stateful?.reply(RequestResult.Ok, 0);
+            void Promise.resolve(admitted).then(() => {
+              const control = target.mailbox.shift();
+              control?.stateful?.reply(RequestResult.Ok, 0);
+            });
           }
         });
       },
@@ -4865,9 +5084,15 @@ test('bound-session replacement is one-way, does not retry admission, and fences
     } as unknown as RawServiceMeshRuntime;
   };
 
-  const actorRuntime = new ServiceStatefulRuntime(createRaw('actor-node'), 'actor-node', 3n);
-  const oldSessionRuntime = new ServiceStatefulRuntime(createRaw('session-old'), 'session-old', 3n);
-  const newSessionRuntime = new ServiceStatefulRuntime(createRaw('session-new'), 'session-new', 3n);
+  const actorRuntime = withTestSessionOwners(
+    new ServiceStatefulRuntime(createRaw('actor-node'), 'actor-node', 3n)
+  );
+  const oldSessionRuntime = withTestSessionOwners(
+    new ServiceStatefulRuntime(createRaw('session-old'), 'session-old', 3n)
+  );
+  const newSessionRuntime = withTestSessionOwners(
+    new ServiceStatefulRuntime(createRaw('session-new'), 'session-new', 3n)
+  );
   const actor = actorRuntime.createActor('actor-rebind').ref;
   const replacementNotices: Array<{
     readonly actorId: string;
@@ -4898,6 +5123,7 @@ test('bound-session replacement is one-way, does not retry admission, and fences
       }
     ).promise;
     assert.equal(oldSessionRuntime.sessionBindings('old-rid').length, 0);
+    await settleUntil(() => nodes.get('actor-node')!.mailbox.length > 0);
     const initialControl = nodes.get('actor-node')!.mailbox.shift();
     assert.equal(initialControl?.stateful?.reply(RequestResult.Ok, 0), true);
     const oldBind = await oldBindPromise;
@@ -4974,8 +5200,8 @@ test('bound-session replacement is one-way, does not retry admission, and fences
       {
         sessionOwnerNodeRid: 'session-old',
         sessionOwnerNodeGeneration: 3n,
-        sessionOwnerId: 'session-old',
-        sessionOwnerLeaseGeneration: 3n,
+        sessionOwnerId: testSessionOwnerToken('session-old', 3n).ownerId,
+        sessionOwnerLeaseGeneration: testSessionOwnerToken('session-old', 3n).leaseGeneration,
         sessionRid: 'old-rid',
         retiredBindingGeneration: oldBinding.bindingGeneration
       }
@@ -5051,7 +5277,7 @@ test('mailbox saturation reports dropped actor binding control records', async (
       replies.push([...parts]);
     }
   } as unknown as RawServiceMeshRuntime;
-  const runtime = new ServiceStatefulRuntime(raw, 'actor-node', 3n);
+  const runtime = withTestSessionOwners(new ServiceStatefulRuntime(raw, 'actor-node', 3n));
   runtime.setMailboxDropHandler((record) => dropped.push(record));
   const actor = runtime.createActor('actor-control-drop');
   const header = encodeBoundSessionBindHeader(
@@ -5112,7 +5338,7 @@ test('active session bind replies only after the Actor binding control turn', as
       replies.push([...parts]);
     }
   } as unknown as RawServiceMeshRuntime;
-  const runtime = new ServiceStatefulRuntime(raw, 'actor-node', 3n);
+  const runtime = withTestSessionOwners(new ServiceStatefulRuntime(raw, 'actor-node', 3n));
   const actor = runtime.createActor('actor-bind-linearization');
   const header = encodeBoundSessionBindHeader(
     43n,
@@ -5171,8 +5397,8 @@ test('active session bind replies only after the Actor binding control turn', as
     sessionNodeRid: 'session-node',
     sessionRid: 'session-linearized',
     sessionOwnerNodeGeneration: 3n,
-    sessionOwnerId: 'session-node',
-    sessionOwnerLeaseGeneration: 3n
+    sessionOwnerId: testSessionOwnerToken('session-node', 3n).ownerId,
+    sessionOwnerLeaseGeneration: testSessionOwnerToken('session-node', 3n).leaseGeneration
   });
 
   assert.equal(mailbox.shift()!.stateful!.reply(RequestResult.Ok, 0), true);
@@ -5228,8 +5454,8 @@ test('active session bind replies only after the Actor binding control turn', as
     sessionNodeRid: 'session-node',
     sessionRid: 'session-linearized',
     sessionOwnerNodeGeneration: 3n,
-    sessionOwnerId: 'session-node',
-    sessionOwnerLeaseGeneration: 3n
+    sessionOwnerId: testSessionOwnerToken('session-node', 3n).ownerId,
+    sessionOwnerLeaseGeneration: testSessionOwnerToken('session-node', 3n).leaseGeneration
   });
   assert.equal(mailbox.shift()!.stateful!.reply(RequestResult.Ok, 0), true);
   assert.equal(runtime.registry.binding(actor.ref), undefined);
@@ -5266,7 +5492,7 @@ test('concurrent remote bind completions publish the newest Session-owner genera
       });
     }
   } as unknown as RawServiceMeshRuntime;
-  const runtime = new ServiceStatefulRuntime(raw, 'session-owner', 3n);
+  const runtime = withTestSessionOwners(new ServiceStatefulRuntime(raw, 'session-owner', 3n));
   const actor: ServiceActorRef = {
     nodeRid: 'actor-node',
     actorId: 'actor-concurrent-session-bind',
@@ -5349,7 +5575,7 @@ test('remote Session bind publishes its exact Location fence for the first Actor
       return true;
     }
   } as unknown as RawServiceMeshRuntime;
-  const runtime = new ServiceStatefulRuntime(raw, 'session-owner', 3n);
+  const runtime = withTestSessionOwners(new ServiceStatefulRuntime(raw, 'session-owner', 3n));
   const actor: ServiceActorRef = {
     nodeRid: 'actor-node',
     actorId: 'actor-exact-session-bind',
@@ -6137,6 +6363,10 @@ test('raw backend dispatches Spot requests and Actor sends through M6B owners', 
   );
   backend.setBind(endpoint);
   backend.addChannelName('events');
+  backend.setSessionOwnerDescriptors({
+    local: () => testSessionOwnerToken('m6b-node', backend.status().lifecycleGeneration),
+    peer: async (peerRid, peerGeneration) => testSessionOwnerToken(peerRid, peerGeneration)
+  });
   backend.start();
   const instanceRoute = {
     targetNodeRid: 'm6b-node',
@@ -7913,7 +8143,7 @@ for (const remote of [false, true]) {
       },
       sendService: async () => true
     } as unknown as RawServiceMeshRuntime;
-    const runtime = new ServiceStatefulRuntime(raw, 'session-owner', 7n);
+    const runtime = withTestSessionOwners(new ServiceStatefulRuntime(raw, 'session-owner', 7n));
     const actor = runtime.createActor('close-actor').ref;
     await runtime.bindSession(
       'session-rid',
@@ -7936,8 +8166,8 @@ for (const remote of [false, true]) {
       session: {
         sessionOwnerNodeRid: Buffer.from('session-owner'),
         sessionOwnerNodeGeneration: 7n,
-        sessionOwnerId: 'session-owner',
-        sessionOwnerLeaseGeneration: 7n,
+        sessionOwnerId: testSessionOwnerToken('session-owner', 7n).ownerId,
+        sessionOwnerLeaseGeneration: testSessionOwnerToken('session-owner', 7n).leaseGeneration,
         sessionRid: Buffer.from('session-rid'),
         retiredBindingGeneration: binding.bindingGeneration
       }

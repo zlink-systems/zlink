@@ -2250,6 +2250,9 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             RoutingId nodeRid = RoutingId.from("jvm-m6b-stream-node");
             RoutingId sessionRid = RoutingId.from("jvm-m6b-session");
             node.setRoutingId(nodeRid);
+            node.setBind("inproc://jvm-m6b-stream-node-" + System.nanoTime());
+            node.start();
+            ZLinkTestSessionOwners.install(node);
             ZLinkBackendSpot entry = node.spotNode().entrySpot();
             CompletableFuture<RoutingId> delivered = new CompletableFuture<>();
             entry.onDispatchEvent(
@@ -2606,6 +2609,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             node.setRoutingId(RoutingId.from("jvm-m6b-two-owners-actor-node"));
             node.setBind("inproc://jvm-m6b-two-owners-" + System.nanoTime());
             node.start();
+            ZLinkTestSessionOwners.install(node);
             ZLinkJavaRawSpotNode target = (ZLinkJavaRawSpotNode) node.spotNode();
             ZLinkBackendActorRef actor;
             try (Message create = Message.from("create")) {

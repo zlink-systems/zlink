@@ -7617,7 +7617,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         {
             var target = _sessionRelocationBarrierTarget;
             _peersByRid.TryGetValue(sourceNodeRid, out var peer);
-            return (Target: target, Peer: peer);
+            return (Target: target, Peer: peer, SessionOwner: _localRequestSourceFence);
         });
         var target = current.Target;
         var peer = current.Peer;
@@ -7627,8 +7627,12 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             || seal.SenderRole != 1
             || seal.Coordinator.NodeRid != sourceNodeRid
             || seal.Coordinator.NodeGeneration != peer.LifecycleGeneration
-            || seal.Session.SessionOwnerNodeRid != _routingId
-            || seal.Session.SessionOwnerNodeGeneration != _lifecycleGeneration
+            || !current.SessionOwner.IdentifiesSessionOwner(
+                seal.Session.SessionOwnerNodeRid,
+                seal.Session.SessionOwnerNodeGeneration,
+                seal.Session.SessionOwnerId,
+                seal.Session.SessionOwnerLeaseGeneration
+            )
         )
         {
             Publish(MeshMonitorEventKind.ProtocolError, peerRid: sourceNodeRid);

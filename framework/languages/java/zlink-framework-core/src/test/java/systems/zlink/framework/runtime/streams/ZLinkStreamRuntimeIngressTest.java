@@ -1140,7 +1140,7 @@ final class ZLinkStreamRuntimeIngressTest {
                             () ->
                                     fixture.runtime()
                                             .handleBoundSessionClose(
-                                                    RoutingId.from("session-owner-node"), 3, stale)
+                                                    RoutingId.from("session-owner-node"), stale)
                                             .toCompletableFuture()
                                             .join());
             assertEquals(
@@ -1385,6 +1385,61 @@ final class ZLinkStreamRuntimeIngressTest {
                 .toCompletableFuture()
                 .get(5, TimeUnit.SECONDS);
         assertEquals(1, disconnectCallbacks.get(), "relocation never repeats the callback");
+    }
+
+    @Test
+    void command42NamingAnotherSessionOwnerIdentityIsRejected() throws Exception {
+        FakeStream stream = new FakeStream();
+        ReplacementFixture fixture = startReplacement(stream);
+        runtimes.add(fixture.runtime());
+        ZLinkBackendActorRef actorRef =
+                new ZLinkBackendActorRef(RoutingId.from("actor-node"), "identity-actor", 7);
+        var exact =
+                sessionSeal(
+                        new ZLinkServiceM6BWireCodec.RelocationIdentity(9, 1), actorRef, PEER_A, 1);
+        assertEquals(
+                ServiceWirePilotCodec.SessionSealResult.BINDING_ABSENT,
+                sealResult(fixture.runtime(), actorRef, exact));
+
+        // Session-Actor binding §4: the Session owner compares the carried owner ID and owner
+        // lease generation with its current values exactly.
+        long low = 2;
+        for (var owner :
+                List.of(
+                        new ZLinkServiceM6BWireCodec.SessionOwnerFence(
+                                RoutingId.from("session-owner-node"),
+                                3,
+                                "other-owner",
+                                5,
+                                PEER_A,
+                                1),
+                        new ZLinkServiceM6BWireCodec.SessionOwnerFence(
+                                RoutingId.from("session-owner-node"),
+                                3,
+                                "session-owner",
+                                3,
+                                PEER_A,
+                                1))) {
+            var seal =
+                    sessionSeal(
+                            new ZLinkServiceM6BWireCodec.RelocationIdentity(9, low++),
+                            actorRef,
+                            PEER_A,
+                            1);
+            var other =
+                    new ZLinkServiceM6BWireCodec.SessionRelocationSeal(
+                            seal.relocation(),
+                            seal.coordinator(),
+                            seal.senderRole(),
+                            seal.actor(),
+                            owner,
+                            seal.targetNodeRid(),
+                            seal.targetNodeGeneration());
+            assertThrows(
+                    CompletionException.class,
+                    () -> sealResult(fixture.runtime(), actorRef, other),
+                    owner.toString());
+        }
     }
 
     @Test
@@ -1744,8 +1799,16 @@ final class ZLinkStreamRuntimeIngressTest {
                                             case "routingId" ->
                                                     RoutingId.from("session-owner-node");
                                             case "lifecycleGeneration" -> 3L;
-                                            case "localAuthorityOwnerId" -> "session-owner";
                                             case "localAuthorityLeaseGeneration" -> 5L;
+                                            case "localSessionOwner" ->
+                                                    java.util.Optional.of(
+                                                            new ZLinkInternalMeshNode
+                                                                    .PeerAuthorityFence(
+                                                                    RoutingId.from(
+                                                                            "session-owner-node"),
+                                                                    3,
+                                                                    "session-owner",
+                                                                    5));
                                             case "requestPeerReconcile" -> {
                                                 requestedPeer.set((RoutingId) arguments[0]);
                                                 requestedGeneration.set((Long) arguments[1]);
