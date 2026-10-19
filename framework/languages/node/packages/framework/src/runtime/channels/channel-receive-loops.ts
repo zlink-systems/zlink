@@ -272,66 +272,64 @@ export class ZLinkChannelReceiveLoop {
         if (!(await this.poller.waitForReadable(capacitySignal))) break;
         continue;
       }
-      this.roundRobin?.setReady(this.receiveOwner, true);
-      if (this.roundRobin?.tryAcquire(this.receiveOwner) === false) {
-        await waitReceiveLoopTurn();
-        continue;
-      }
       try {
         await rotation.acquire(capacitySignal);
-        batch.reset();
-        while (!this.isStopped() && !signalAborted(capacitySignal)) {
-          const applicationJobPermit = rotation.take();
-          if (applicationJobPermit === undefined) break;
-          const releaseRawReceive =
-            this.roundRobin === undefined
-              ? this.rawReceiveReservations.tryAcquire()
-              : this.roundRobin.tryAcquireRawReceiveReservation();
-          if (releaseRawReceive === undefined) {
-            applicationJobPermit.releaseAfterInternalProcessing();
-            break;
-          }
-          try {
-            // Readiness can become stale during admission; recv owns no_data.
-            const received = this.router.recv(1);
-            if (received == null) {
-              this.poller.markDrained();
-              this.roundRobin?.setReady(this.receiveOwner, false);
-              break;
-            }
-            const receivedBytes = messageBytes(received.parts);
-            let classification: ReturnType<ZLinkChannelReceiveLoop['classify']>;
-            try {
-              classification = this.classify(received);
-            } catch (error) {
-              received.close();
-              this.inFlight.track(Promise.reject(error));
-              if (batch.record(receivedBytes)) break;
-              continue;
-            }
-            if (classification.kind === 'consumed') {
+        this.roundRobin?.setReady(this.receiveOwner, true);
+        if (this.roundRobin?.tryAcquire(this.receiveOwner) !== false) {
+          batch.reset();
+          while (!this.isStopped() && !signalAborted(capacitySignal)) {
+            const applicationJobPermit = rotation.take();
+            if (applicationJobPermit === undefined) break;
+            const releaseRawReceive =
+              this.roundRobin === undefined
+                ? this.rawReceiveReservations.tryAcquire()
+                : this.roundRobin.tryAcquireRawReceiveReservation();
+            if (releaseRawReceive === undefined) {
               applicationJobPermit.releaseAfterInternalProcessing();
-              if (classification.closeReceived) received.close();
-            } else if (this.isStopped() || signalAborted(capacitySignal)) {
-              received.close();
               break;
-            } else {
-              applicationJobPermit.markApplicationQueued();
-              const task = runWithApplicationJobPermit(applicationJobPermit, () =>
-                this.applicationDispatchQueue.submitPreAdmitted(
-                  bindApplicationJobPermit(() =>
-                    this.dispatchAndClose(received, signal, classification.decodedHeader, true)
-                  )
-                )
-              );
-              this.inFlight.track(task);
             }
-            if (batch.record(receivedBytes)) break;
-          } finally {
-            releaseRawReceive();
-            // A queued record owns its lease until its dispatch turn ends.
-            // Reserved leases (no_data, control, failure, stop) return here.
-            applicationJobPermit.releaseUnqueued();
+            try {
+              // Readiness can become stale during admission; recv owns no_data.
+              const received = this.router.recv(1);
+              if (received == null) {
+                this.poller.markDrained();
+                this.roundRobin?.setReady(this.receiveOwner, false);
+                break;
+              }
+              const receivedBytes = messageBytes(received.parts);
+              let classification: ReturnType<ZLinkChannelReceiveLoop['classify']>;
+              try {
+                classification = this.classify(received);
+              } catch (error) {
+                received.close();
+                this.inFlight.track(Promise.reject(error));
+                if (batch.record(receivedBytes)) break;
+                continue;
+              }
+              if (classification.kind === 'consumed') {
+                applicationJobPermit.releaseAfterInternalProcessing();
+                if (classification.closeReceived) received.close();
+              } else if (this.isStopped() || signalAborted(capacitySignal)) {
+                received.close();
+                break;
+              } else {
+                applicationJobPermit.markApplicationQueued();
+                const task = runWithApplicationJobPermit(applicationJobPermit, () =>
+                  this.applicationDispatchQueue.submitPreAdmitted(
+                    bindApplicationJobPermit(() =>
+                      this.dispatchAndClose(received, signal, classification.decodedHeader, true)
+                    )
+                  )
+                );
+                this.inFlight.track(task);
+              }
+              if (batch.record(receivedBytes)) break;
+            } finally {
+              releaseRawReceive();
+              // A queued record owns its lease until its dispatch turn ends.
+              // Reserved leases (no_data, control, failure, stop) return here.
+              applicationJobPermit.releaseUnqueued();
+            }
           }
         }
       } catch (error) {

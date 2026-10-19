@@ -2,7 +2,7 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const { ZLinkMeshCompletionTable } = require('../../packages/framework/dist/runtime/backend/mesh-completion-table');
-const { ZLinkChannelReceiveLoop } = require('../../packages/framework/dist/runtime/channels/channel-receive-loops');
+const { ZLinkChannelReceiveLoop, ZLinkReceiveRoundRobinCoordinator } = require('../../packages/framework/dist/runtime/channels/channel-receive-loops');
 const { ApplicationJobQueue, resolveApplicationJobQueueConfiguration } = require('../../packages/framework/dist/runtime/host/application-job-queue');
 
 function queueWithLimit(limit) {
@@ -32,7 +32,6 @@ test('one readiness reserves one count for two ordinary claims', async t => {
   } finally {
     await loop.stop();
   }
-  console.log(JSON.stringify({ claims: claims - 1, beforeSecond, closed, snapshot: queue.snapshot() }, (_, value) => typeof value === 'bigint' ? String(value) : value));
   assert.equal(beforeSecond.length, 1, 'reservation calls before second claim');
   assert.deepEqual(beforeSecond, [64]);
   assert.equal(closed, 2);
@@ -62,7 +61,7 @@ function fixture(queue, actions, options = {}) {
   }, { flowEnabled: () => false, dispatch: options.dispatch ?? (async () => {}) }, undefined,
   options.infrastructure,
   { wait: () => ready, markDrained() { ready = false; }, waitForReadable: async () => false, dispose() {} },
-  queue, error => errors.push(error));
+  queue, error => errors.push(error), options.roundRobin);
   return { loop, claims, closes, errors };
 }
 
@@ -99,6 +98,63 @@ test('zero permits waits once without claiming; independent completion and stop 
   await f.loop.stop();
   await running;
   held.releaseAfterInternalProcessing();
+  empty(queue);
+});
+
+test('saturated owners wait for capacity without repeated round-robin attempts', async t => {
+  const queue = queueWithLimit(1);
+  const held = await queue.acquire(undefined, 'local');
+  const roundRobin = new ZLinkReceiveRoundRobinCoordinator();
+  const attempts = new Map();
+  const tryAcquire = roundRobin.tryAcquire.bind(roundRobin);
+  t.mock.method(roundRobin, 'tryAcquire', owner => {
+    attempts.set(owner, (attempts.get(owner) ?? 0) + 1);
+    return tryAcquire(owner);
+  });
+  const owners = [fixture(queue, ['first'], { roundRobin }), fixture(queue, ['second'], { roundRobin })];
+  const running = owners.map(owner => owner.loop.run());
+  try {
+    for (let turn = 0; turn < 4; turn++) await new Promise(resolve => setImmediate(resolve));
+    const before = [...attempts.values()];
+    for (let turn = 0; turn < 4; turn++) await new Promise(resolve => setImmediate(resolve));
+    const after = [...attempts.values()];
+    t.diagnostic(JSON.stringify({ turns: [4, 8], before, after, capacityWaiters: String(queue.snapshot().capacityWaiters), claims: owners.map(owner => owner.claims.length) }));
+    assert.deepEqual(after, before, 'capacity wait must suspend round-robin attempts');
+    assert.deepEqual(after, [], 'no owner acquires a receive turn before capacity');
+    assert.equal(queue.snapshot().capacityWaiters, 2n);
+    assert.deepEqual(owners.map(owner => owner.claims.length), [0, 0]);
+  } finally {
+    await Promise.all(owners.map(owner => owner.loop.stop()));
+    await Promise.all(running);
+    held.releaseAfterInternalProcessing();
+  }
+  empty(queue);
+});
+
+test('denied receive turn returns its reserved count before yielding', async t => {
+  const queue = queueWithLimit(64);
+  const counts = unusedReturns(t, queue);
+  const roundRobin = new ZLinkReceiveRoundRobinCoordinator();
+  const active = roundRobin.register();
+  roundRobin.setReady(active, true);
+  assert.equal(roundRobin.tryAcquire(active), true);
+  const f = fixture(queue, [], { roundRobin });
+  const running = f.loop.run();
+  try {
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(counts, [64]);
+    assert.equal(queue.snapshot().reservedSupplyPermits, 0n);
+    assert.equal(f.claims.length, 0);
+    roundRobin.setReady(active, false);
+    roundRobin.release(active);
+    await running;
+    assert.deepEqual(counts, [64, 63]);
+    assert.equal(f.claims.length, 1, 'the owner proceeds after the active turn is released');
+  } finally {
+    await f.loop.stop();
+    await running;
+    roundRobin.unregister(active);
+  }
   empty(queue);
 });
 
