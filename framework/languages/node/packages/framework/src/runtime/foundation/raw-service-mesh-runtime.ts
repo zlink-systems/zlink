@@ -839,9 +839,19 @@ export class RawServiceMeshRuntime {
   }
 
   /** Returns whether a receive budget ended before no-data; idle ticks only maintain peers. */
-  async pumpBatch(receiveReady = true, routeReady = false): Promise<boolean> {
-    this.observeInfrastructureFailure();
-    if (routeReady) await this.observeSelectedRoutes();
+  pumpBatch(receiveReady = true, routeReady = false): boolean | Promise<boolean> {
+    try {
+      this.observeInfrastructureFailure();
+      if (routeReady) {
+        return this.observeSelectedRoutes().then(() => this.receiveBatch(receiveReady));
+      }
+      return this.receiveBatch(receiveReady);
+    } catch (error) {
+      return Promise.reject(error);
+    }
+  }
+
+  private receiveBatch(receiveReady: boolean): boolean | Promise<boolean> {
     const startedAtMs = performance.now();
     let messages = 0;
     let bytes = 0;
@@ -853,30 +863,49 @@ export class RawServiceMeshRuntime {
       'remote'
     ));
     if (receiveReady) rotation.reserve();
-    try {
-      while (receiveReady && messages < RAW_MESH_RECEIVE_RECORD_BUDGET && !this.closed) {
-        const received = this.receiveOne(performance.now(), observe, rotation);
-        const result = received instanceof Promise ? await received : received;
-        if (result === 'noData') {
-          receiveReady = false;
-          break;
+    // The same loop owns both immediate receives and a suspended receive's
+    // continuation; only the latter needs a Promise and retains this frame.
+    const drain = (received?: RawServicePumpResult): boolean | Promise<boolean> => {
+      try {
+        while (
+          received !== undefined ||
+          (receiveReady && messages < RAW_MESH_RECEIVE_RECORD_BUDGET && !this.closed)
+        ) {
+          if (received === undefined) {
+            const pending = this.receiveOne(performance.now(), observe, rotation);
+            if (pending instanceof Promise) {
+              return pending.then(drain, (error) => {
+                rotation.releaseUnused();
+                throw error;
+              });
+            }
+            received = pending;
+          }
+          if (received === 'noData') {
+            receiveReady = false;
+            break;
+          }
+          messages += 1;
+          received = undefined;
+          // Core owns the per-peer fair-queue cursor. The Framework limit bounds
+          // the entire round, so changing peers does not renew its byte/count budget.
+          if (
+            bytes >= RAW_MESH_RECEIVE_BYTE_BUDGET ||
+            performance.now() - startedAtMs >= RAW_MESH_RECEIVE_TIME_BUDGET_MS
+          )
+            break;
         }
-        messages += 1;
-        // Core owns the per-peer fair-queue cursor. The Framework limit bounds
-        // the entire round, so changing peers does not renew its byte/count budget.
-        if (
-          bytes >= RAW_MESH_RECEIVE_BYTE_BUDGET ||
-          performance.now() - startedAtMs >= RAW_MESH_RECEIVE_TIME_BUDGET_MS
-        )
-          break;
+      } catch (error) {
+        rotation.releaseUnused();
+        throw error;
       }
-    } finally {
       rotation.releaseUnused();
-    }
-    if (!this.closed) {
-      this.tickLiveness();
-    }
-    return receiveReady && messages > 0;
+      if (!this.closed) {
+        this.tickLiveness();
+      }
+      return receiveReady && messages > 0;
+    };
+    return drain();
   }
 
   private receiveOne(
