@@ -77,14 +77,9 @@ export class ZLinkRequestSourceResolver {
     nodeRid: RoutingId,
     nodeGeneration: bigint
   ): Promise<ZLinkRequestSourceFence | undefined> {
-    let descriptors: readonly ZLinkMeshNodeDescriptor[];
-    try {
-      descriptors = await this.options.listLiveMeshNodes(meshName);
-    } catch {
-      // A Store read that cannot show a live descriptor leaves the request without source owner
-      // values; the accepting owner ends it Unavailable (binding §4).
-      return undefined;
-    }
+    // The Store boundary already classifies provider failures as Unavailable. Preserve their
+    // cause for the ingress error reporter, and let programming errors propagate unchanged.
+    const descriptors = await this.options.listLiveMeshNodes(meshName);
     const descriptor = descriptors.find(
       (value) => value.rid === nodeRid && value.lifecycleGeneration === nodeGeneration
     );

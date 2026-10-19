@@ -1246,18 +1246,45 @@ export class ServiceStatefulRuntime {
    * polled descriptors answer without a promise; only a Store read returns one.
    */
   private acceptRequestSource(ingress: RawServiceIngressRecord): Promise<void> | undefined {
+    if (ingress.requestSource !== undefined) return undefined;
     const acceptance = this.requestSourceAcceptance;
     if (acceptance === undefined) return undefined;
     const generation = this.tryPeerGeneration(ingress.sourceRoutingId);
     const source =
       generation === undefined ? undefined : acceptance(ingress.sourceRoutingId, generation);
     if (source instanceof Promise) {
-      return source.then((read) => {
-        if (read === undefined) throw requestSourceUnavailable(ingress.sourceRoutingId);
-      });
+      return source.then(
+        (read) => this.recordRequestSource(ingress, read),
+        (error: unknown) => {
+          if (
+            error instanceof ZLinkFrameworkException &&
+            error.kind === ZLinkFrameworkErrorKind.Unavailable &&
+            this.dispatchErrors?.captureEnabled() === true
+          ) {
+            this.dispatchErrors.report({
+              surface: ZLinkDispatchErrorSurface.Node,
+              messageKind: ZLinkDispatchMessageKind.Request,
+              reason: ZLinkDispatchErrorReason.StaleTarget,
+              action: ZLinkDispatchErrorAction.ReplyError,
+              meshName: this.dispatchErrorMeshName,
+              sourceRid: ingress.sourceRoutingId,
+              error
+            });
+          }
+          throw error;
+        }
+      );
     }
-    if (source === undefined) throw requestSourceUnavailable(ingress.sourceRoutingId);
+    this.recordRequestSource(ingress, source);
     return undefined;
+  }
+
+  private recordRequestSource(
+    ingress: RawServiceIngressRecord,
+    source: import('../locations/request-source-resolver').ZLinkRequestSourceFence | undefined
+  ): void {
+    if (source === undefined) throw requestSourceUnavailable(ingress.sourceRoutingId);
+    ingress.requestSource = source;
   }
 
   sealSpotMessageFollowIngress(
