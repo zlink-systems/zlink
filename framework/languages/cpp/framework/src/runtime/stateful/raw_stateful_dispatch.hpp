@@ -71,10 +71,11 @@ make_location_store_authority_resolver (zlink::framework::location_repository_t 
 using accepted_mailbox_reservation_t = mesh::service_mailbox_settlement_t;
 
 // Immutable values of a claimed original that survive the authority suspension.
-// The header frame is shared; the body stays in the canonical slot until take.
+// Header and body frames are shared; the original stays in the canonical slot until take.
 struct claimed_ingress_t
 {
     std::optional<zlink::message_t> header;
+    std::optional<zlink::message_t> body;
     std::vector<std::uint8_t> source_routing_id;
     std::uint64_t source_node_generation = 0;
     std::optional<mesh::request_source_t> source_original;
@@ -117,8 +118,12 @@ class raw_stateful_dispatch_t
         _flow_capture = std::move (provider);
     }
 
+    // An accepted original: its canonical mailbox slot, taken in the lane turn that places
+    // it, or an original a relocation cut already took before its owner's seal bound.
+    using ingress_original_t =
+      std::variant<mesh::service_mailbox_t::claim_handle_t, mesh::service_mailbox_record_t>;
     task_t<stateful_error_t> ingest_claimed (object_ref_t owner,
-                                             mesh::service_mailbox_t::claim_handle_t slot,
+                                             ingress_original_t original,
                                              std::optional<retained_relocation_source_t> retained,
                                              std::optional<claimed_ingress_t> prepared = {});
     task_t<std::pair<stateful_error_t, std::optional<accepted_record_authority_t>>>
@@ -147,10 +152,13 @@ class raw_stateful_dispatch_t
     try_claim (const object_ref_t &owner,
                std::function<void ()> *before_application_handler = nullptr,
                std::string *stable_type = nullptr);
-    stateful_error_t accept_local (
+    // taken receives the original when this admission takes it; its caller replies from
+    // it when the turn is not accepted. The original's mailbox credit returns here.
+    task_t<stateful_error_t> accept_local (
       const object_ref_t &owner,
       std::shared_ptr<runtime::serial_application_record_t> application_record,
-      std::function<void ()> before_application_handler,
+      ingress_original_t original,
+      std::optional<mesh::service_mailbox_record_t> &taken,
       std::function<bool (const std::optional<protocol::application_payload_t> &)> terminal);
     task_t<stateful_error_t>
     complete_async (const stateful_delivery_t &delivery,
@@ -218,12 +226,44 @@ class raw_stateful_dispatch_t
     static bool matches_application_route (const object_ref_t &owner,
                                            const protocol::spot_route_fence_t &route);
     static delivery_key_t delivery_key (const object_ref_t &owner, std::uint64_t sequence);
-    stateful_error_t commit_accepted_ingress (const object_ref_t &owner,
-                                              turn_record_t turn,
-                                              pending_delivery_t pending,
-                                              bool allocate_sequence,
-                                              stateful_error_t collision_error,
-                                              bool restored = false);
+    // Values the lane turn of one ingress admission returns to its caller.
+    struct ingress_admission_t
+    {
+        bool registered = false;
+        delivery_key_t pending_key{};
+        bool inserted_sequence = false;
+        bool trace_admitted = false;
+        std::optional<protocol::application_payload_t> admitted_application;
+        protocol::frozen_record_kind_t admitted_kind{};
+        protocol::wire_operation_id_t admitted_operation{};
+        // The pending entry of a taken original this admission did not accept.
+        std::optional<pending_delivery_t> rejected;
+    };
+    // Relocation flow §4.2: take moves the original into pending in the state-lane turn
+    // that places the turn and reports whether its owner's seal cut preceded the take; it
+    // returns false when the original is gone.
+    template <class Take>
+    auto admit_accepted_ingress (const object_ref_t &owner,
+                                 turn_record_t &turn,
+                                 pending_delivery_t &pending,
+                                 Take &take,
+                                 stateful_error_t collision_error,
+                                 ingress_admission_t &admission);
+    template <class Take>
+    task_t<stateful_error_t> commit_accepted_ingress (const object_ref_t &owner,
+                                                      turn_record_t turn,
+                                                      pending_delivery_t pending,
+                                                      Take take,
+                                                      stateful_error_t collision_error,
+                                                      ingress_admission_t &admission);
+    stateful_error_t register_accepted_ingress (const object_ref_t &owner,
+                                                turn_record_t &turn,
+                                                pending_delivery_t &pending,
+                                                stateful_error_t collision_error,
+                                                ingress_admission_t &admission) noexcept;
+    stateful_error_t finish_accepted_ingress (const object_ref_t &owner,
+                                              stateful_object_runtime_t::enqueue_outcome_t outcome,
+                                              ingress_admission_t &admission);
 
     bool capture_flow () const { return !_flow_capture || _flow_capture (); }
 

@@ -58,8 +58,9 @@ struct service_bound_session_source_t
 struct service_mailbox_claim_t;
 class service_mailbox_t;
 
-// Claim credit of one transferred original. Only a successful take mints it; a
-// completion that lost the take holds none and cannot settle.
+// Claim credit of one claimed original. The claim mints it into the slot, so only the
+// take that moves the original out holds it; a completion that lost the take holds none
+// and cannot settle.
 class service_mailbox_settlement_t
 {
   public:
@@ -172,9 +173,30 @@ class service_mailbox_t
             return std::move (*kept);
         if (!next_locked (handle))
             return std::monostate{};
-        return transfer_locked (handle, *slot);
+        return transfer_locked (*slot);
     }
     std::optional<service_mailbox_record_t> take (const claim_handle_t &handle);
+    // Relocation flow §4.2: observe runs in the producer step that transfers the original,
+    // so a seal cut of its owner is wholly before or after this take.
+    template <class Observe>
+    std::optional<service_mailbox_record_t> take (const claim_handle_t &handle, Observe observe)
+    {
+        std::lock_guard lock (_state->mutex);
+        auto *slot = slot_locked (handle);
+        if (!slot || !next_locked (handle))
+            return std::nullopt;
+        observe ();
+        return transfer_locked (*slot);
+    }
+    // Relocation flow §4.2 producer cut: in one producer step, takes every original of the
+    // owners not taken yet, claimed or not, in FIFO order, then runs cut. A claimed original
+    // carries its claim credit. A record enqueued afterwards stays for the ordinary claim.
+    // Nothing is taken and cut does not run when admits refuses one of the originals.
+    using cut_admits_t = std::function<bool (const service_mailbox_record_t &)>;
+    std::optional<std::vector<std::vector<service_mailbox_record_t>>>
+    cut_owners (const std::vector<std::string> &owners,
+                const cut_admits_t &admits,
+                const std::function<void ()> &cut);
     // Settles every credit of the claim still outstanding under one lock. Originals not
     // yet taken are discarded.
     bool release (service_mailbox_claim_t &claim);
@@ -228,8 +250,7 @@ class service_mailbox_t
     static std::size_t retained_bytes (const service_mailbox_record_t &record);
     static service_mailbox_record_t *slot_locked (const claim_handle_t &handle);
     static bool next_locked (const claim_handle_t &handle);
-    static service_mailbox_record_t transfer_locked (const claim_handle_t &handle,
-                                                     service_mailbox_record_t &slot);
+    static service_mailbox_record_t transfer_locked (service_mailbox_record_t &slot);
 
     void notify_application_ready ();
 

@@ -165,6 +165,9 @@ service_mailbox_t::claim_owner_locked (domain_t &source,
     claim->_mailbox = _state;
     claim->_settled = std::make_unique<std::atomic_bool[]> (claim->claimed_messages);
     claim->_remaining.store (claim->claimed_messages, std::memory_order_relaxed);
+    // Each slot holds its own credit; whichever take moves the original out holds it.
+    for (std::size_t index = 0; index != claim->claimed_messages; ++index)
+        claim->records[index]->transferred = service_mailbox_settlement_t (claim, index);
     queue.bytes -= claim->claimed_bytes;
     queue.messages -= claim->claimed_messages;
     source.bytes -= claim->claimed_bytes;
@@ -197,13 +200,63 @@ bool service_mailbox_t::next_locked (const claim_handle_t &handle)
     return previous->parts.empty () && !previous->application;
 }
 
-service_mailbox_record_t service_mailbox_t::transfer_locked (const claim_handle_t &handle,
-                                                             service_mailbox_record_t &slot)
+service_mailbox_record_t service_mailbox_t::transfer_locked (service_mailbox_record_t &slot)
 {
-    // Moving out leaves the slot without parts or application: the taken mark.
-    auto original = std::move (slot);
-    original.transferred = service_mailbox_settlement_t (handle.claim, handle.index);
-    return original;
+    // Moving out leaves the slot without parts or application: the taken mark. The
+    // slot's claim credit moves with the original.
+    return std::move (slot);
+}
+
+std::optional<std::vector<std::vector<service_mailbox_record_t>>>
+service_mailbox_t::cut_owners (const std::vector<std::string> &owners,
+                               const cut_admits_t &admits,
+                               const std::function<void ()> &cut)
+{
+    std::vector<std::vector<service_mailbox_record_t>> taken (owners.size ());
+    std::unique_lock lock (_state->mutex);
+    auto &source = _state->application;
+    const auto untaken = [] (const service_mailbox_record_t &slot) {
+        return !slot.parts.empty () || slot.application;
+    };
+    for (const auto &owner : owners) {
+        const auto found = source.owners.find (owner);
+        if (found == source.owners.end ())
+            continue;
+        for (const auto &slot : found->second.records)
+            if (untaken (slot) && admits && !admits (slot))
+                return std::nullopt;
+    }
+    for (std::size_t index = 0; index != owners.size (); ++index) {
+        const auto found = source.owners.find (owners[index]);
+        if (found == source.owners.end ())
+            continue;
+        auto &queue = found->second;
+        auto &records = taken[index];
+        records.reserve (queue.records.size ());
+        // The claimed prefix keeps its slots until the claim settles; the remaining
+        // unclaimed records leave the FIFO now.
+        const auto claimed = std::min (queue.active_messages, queue.records.size ());
+        for (std::size_t slot = 0; slot != claimed; ++slot)
+            if (untaken (queue.records[slot]))
+                records.push_back (std::move (queue.records[slot]));
+        for (auto slot = queue.records.begin () + static_cast<std::ptrdiff_t> (claimed);
+             slot != queue.records.end (); ++slot) {
+            const auto bytes = retained_bytes (*slot);
+            queue.bytes -= bytes;
+            source.bytes -= bytes;
+            --queue.messages;
+            --source.messages;
+            records.push_back (std::move (*slot));
+        }
+        queue.records.erase (queue.records.begin () + static_cast<std::ptrdiff_t> (claimed),
+                             queue.records.end ());
+        if (queue.records.empty () && queue.active_messages == 0
+            && queue.phase != owner_phase_t::draining)
+            source.owners.erase (found);
+    }
+    if (cut)
+        cut ();
+    return taken;
 }
 
 std::optional<service_mailbox_record_t> service_mailbox_t::take (const claim_handle_t &handle)
@@ -212,7 +265,7 @@ std::optional<service_mailbox_record_t> service_mailbox_t::take (const claim_han
     auto *slot = slot_locked (handle);
     if (!slot || !next_locked (handle))
         return std::nullopt;
-    return transfer_locked (handle, *slot);
+    return transfer_locked (*slot);
 }
 
 std::size_t service_mailbox_t::retained_bytes (const service_mailbox_record_t &record)

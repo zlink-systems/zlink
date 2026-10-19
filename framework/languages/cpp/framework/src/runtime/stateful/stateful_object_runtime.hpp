@@ -11,6 +11,7 @@
 #include <zlink/framework/contracts/dispatch/task.hpp>
 
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -27,6 +28,7 @@
 namespace zlink::framework::runtime
 {
 struct serial_application_record_t;
+class serial_execution_queue_t;
 }
 
 namespace zlink::framework::runtime::stateful
@@ -254,6 +256,14 @@ struct retained_relocation_source_t
     protocol::request_source_fence_t fence;
 };
 
+// Relocation flow §4.2: the existing seal attempt as the actual execution owner binds it.
+// Preparing the attempt does not activate it; the owner sets bound in the producer cut that
+// takes the participants' accepted, unstarted originals. Abort clears it on the state lane.
+struct relocation_seal_binding_t
+{
+    std::atomic_bool bound{false};
+};
+
 struct stateful_object_runtime_test_access_t;
 
 class stateful_object_runtime_t
@@ -277,6 +287,14 @@ class stateful_object_runtime_t
                                   std::stop_token)>;
     using relocation_state_commit_t = std::function<bool (const std::vector<object_ref_t> &)>;
     using relocation_state_abort_t = std::function<void (const std::vector<object_ref_t> &)>;
+    // Relocation flow §4.2 cut S of the participants' actual execution owner. In one producer
+    // step it binds the attempt and takes the accepted, unstarted originals; it returns after
+    // those originals entered their source FIFOs ahead of later ingress. The result holds the
+    // owner's exported native suffix per participant, merged like the Actor suffix, or nullopt
+    // when the attempt did not bind. Without a configured owner the attempt binds on the lane.
+    using relocation_source_cut_t =
+      std::function<task_t<std::optional<std::vector<std::vector<turn_record_t>>>> (
+        std::vector<object_ref_t>, std::shared_ptr<relocation_seal_binding_t>, std::stop_token)>;
 
     stateful_object_runtime_t ();
     const std::shared_ptr<detail::actor_transfer_coordinator_t> &actor_transfers () const noexcept
@@ -290,6 +308,7 @@ class stateful_object_runtime_t
     void configure_relocation_materialization (relocation_state_materialize_t materialize,
                                                relocation_state_commit_t commit,
                                                relocation_state_abort_t abort);
+    void configure_relocation_cut (relocation_source_cut_t cut);
 
     void replace_placement_candidates (std::vector<placement_candidate_t> candidates);
     create_result_t begin_create (const create_request_t &request);
@@ -366,6 +385,32 @@ class stateful_object_runtime_t
                                    turn_domain_t domain,
                                    turn_record_t record,
                                    bool restored);
+    struct admitted_turn_t
+    {
+        stateful_error_t error = stateful_error_t::none;
+        turn_record_t turn;
+        // Relocation flow §4.2: admitted after the cut S of its owner's bound seal.
+        bool after_cut = false;
+    };
+    // Places one application turn in the lane turn that admits it. admit receives the binding
+    // of the owner's seal attempt, or null, and may take the canonical mailbox original there,
+    // so no accepted original is between its take and its FIFO when a later turn reads it.
+    // The caller keeps owner alive until it reads the outcome.
+    template <class Admit>
+    task_t<enqueue_outcome_t>
+    enqueue_admitted (const object_ref_t &owner, Admit admit, bool restored)
+    {
+        return _lane.run_task ([this, &owner, admit = std::move (admit), restored] () mutable {
+            return admit_on_lane (owner, admit, restored);
+        });
+    }
+    template <class Admit>
+    posted_enqueue_t post_admitted (const object_ref_t &owner, Admit admit, bool restored)
+    {
+        return _lane.run ([this, &owner, admit = std::move (admit), restored] () mutable {
+            return admit_on_lane (owner, admit, restored);
+        });
+    }
     std::pair<stateful_error_t, std::optional<turn_record_t>>
     try_claim (const object_ref_t &owner, turn_domain_t domain, std::string *stable_type = nullptr);
     stateful_error_t complete_claim (const object_ref_t &owner, turn_domain_t domain);
@@ -463,6 +508,7 @@ class stateful_object_runtime_t
         queue_t queue;
         std::map<std::uint64_t, logical_timer_t> timers;
         std::set<std::pair<std::string, std::string>> subscriptions;
+        // Handle of the source seal attempt in _relocation_seals; zero without one.
         std::uint64_t barrier_generation = 0;
     };
 
@@ -477,6 +523,8 @@ class stateful_object_runtime_t
         std::vector<object_key_t> keys;
         std::vector<object_ref_t> sources;
         std::vector<frozen_object_state_t> frozen;
+        // The only authority on whether the actual execution owner has cut S.
+        std::shared_ptr<relocation_seal_binding_t> binding;
         relocation_ingress_phase_t ingress_phase = relocation_ingress_phase_t::holding;
         std::vector<std::vector<turn_record_t>> boundary_application;
         std::function<void (const object_ref_t &, const turn_record_t &)> deliver;
@@ -488,6 +536,32 @@ class stateful_object_runtime_t
     bool finalized_relocation_source_on_lane (const object_record_t &object) const;
     std::optional<std::uint64_t>
     relocation_source_seal_on_lane (const object_record_t &object) const;
+    // The object's state as its owners observe it (relocation flow §4.2): an existing
+    // source seal attempt reads as moving; the record keeps creation, membership move and
+    // restore. Ingress follows the attempt's binding instead.
+    object_state_t state_on_lane (const object_record_t &object) const;
+    bool sealed_by_on_lane (const object_record_t &object, std::uint64_t token) const;
+    const relocation_seal_binding_t *seal_binding_on_lane (const object_record_t &object) const;
+    template <class Admit>
+    enqueue_outcome_t admit_on_lane (const object_ref_t &owner, Admit &admit, bool restored)
+    {
+        enqueue_outcome_t outcome;
+        auto *object = find_record_locked (owner, outcome.error);
+        if (object == nullptr)
+            return outcome;
+        auto admitted = admit (seal_binding_on_lane (*object));
+        if (admitted.error != stateful_error_t::none) {
+            outcome.error = admitted.error;
+            return outcome;
+        }
+        return place_application_on_lane (*object, owner, std::move (admitted.turn),
+                                          admitted.after_cut, restored);
+    }
+    enqueue_outcome_t place_application_on_lane (object_record_t &object,
+                                                 const object_ref_t &owner,
+                                                 turn_record_t record,
+                                                 bool after_cut,
+                                                 bool restored);
     void activate_object_on_lane (object_record_t &object);
     void finalize_relocation_source_on_lane (relocation_seal_state_t &seal);
     static bool valid_text (const std::string &value);
@@ -498,8 +572,8 @@ class stateful_object_runtime_t
      * relocates back here the incoming restore carries a strictly newer,
      * Store-validated authority generation, so that leftover is a replaceable
      * local remnant and must never veto the restore. */
-    static bool replaceable_relocation_remnant (const object_record_t &record,
-                                                const object_ref_t &target);
+    bool replaceable_relocation_remnant (const object_record_t &record,
+                                         const object_ref_t &target) const;
     static object_key_t key_for (const object_ref_t &reference);
     const object_record_t *find_closeable_spot_locked (const object_ref_t &spot,
                                                        stateful_error_t &error) const;
@@ -535,6 +609,7 @@ class stateful_object_runtime_t
     relocation_state_materialize_t _relocation_state_materialize;
     relocation_state_commit_t _relocation_state_commit;
     relocation_state_abort_t _relocation_state_abort;
+    relocation_source_cut_t _relocation_cut;
     // Protects the object set after preceding Join claims have terminalized.
     bool _maintenance_inventory_active = false;
     std::uint64_t _next_attempt = 1;

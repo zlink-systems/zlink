@@ -387,7 +387,8 @@ void verify_source_wait_original (bool seal_first, bool reject, bool restore)
       target.mailbox ().try_claim_owner (mesh::service_mailbox_domain_t::application, key, 1, 4096);
     assert (value);
     auto claim = value;
-    auto pending = dispatch.ingest_claimed (owner, {claim, 0}, std::nullopt);
+    auto pending = dispatch.ingest_claimed (
+      owner, mesh::service_mailbox_t::claim_handle_t{claim, 0}, std::nullopt);
     assert (queries == 1 && !pending.await_ready ());
     // The source resolver is now suspended at an explicit completion-source barrier.
     std::optional<mesh::service_mailbox_record_t> sealed;

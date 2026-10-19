@@ -10528,6 +10528,66 @@ bool verify_async_capture_releases_state_owner ()
     return passed;
 }
 
+// Relocation flow §4.2 cut S at a SpotWide gate: the started handler (A) stays, the imported
+// unstarted record (B) and one published but not imported at the cut (P) leave once, and a
+// later import does not queue P again. A record published after the cut (E) still runs.
+bool verify_seal_cut_takes_gate_and_publications ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::runtime;
+    test::manual_internal_scheduler_t worker;
+    auto gate = std::make_shared<serial_execution_queue_t> (
+      worker, serial_execution_queue_options_t{}, serial_execution_queue_t::error_handler_t{},
+      serial_lane_policy_t::spot_wide ());
+    const auto record = [] {
+        auto value = std::make_shared<serial_application_record_t> ();
+        value->payload ().emplace ();
+        return value;
+    };
+    std::vector<std::string> ran;
+    serial_execution_queue_t::async_completion_t finish_a;
+    const auto post = [&] (std::string name, std::shared_ptr<serial_application_record_t> owner,
+                           bool hold) {
+        serial_work_options_t options;
+        options.application_record = std::move (owner);
+        return gate->try_post_async (
+          name,
+          [&, name, hold] (serial_execution_queue_t::async_completion_t complete) {
+              ran.push_back (name);
+              if (hold)
+                  finish_a = std::move (complete);
+              else
+                  complete ([] {});
+          },
+          std::move (options));
+    };
+    const auto a = record (), b = record (), p = record (), e = record ();
+    bool passed = post ("a", a, true);
+    worker.run_all ();
+    passed = passed && ran == std::vector<std::string>{"a"} && finish_a && post ("b", b, false);
+    worker.run_all ();
+    bool sealed = false;
+    auto cut = gate->take_application_suffix ([&] { sealed = true; },
+                                              [&] (const std::function<void ()> &step) {
+                                                  passed = post ("p", p, false) && passed;
+                                                  step ();
+                                                  return true;
+                                              });
+    worker.run_all ();
+    std::vector<std::shared_ptr<serial_application_record_t>> exported;
+    if (cut.await_ready () && cut.result ())
+        exported = cut.result ().value ();
+    passed = passed && sealed && exported.size () == 2 && exported[0] == b && exported[1] == p;
+    passed = post ("e", e, false) && passed;
+    finish_a ([] {});
+    worker.run_all ();
+    gate->drain ();
+    worker.run_all ();
+    std::cout << "seal-cut-gate exported=" << exported.size () << " sealed=" << sealed
+              << " ran=" << ran.size () << " pending=" << gate->pending_count () << '\n';
+    return passed && ran == std::vector<std::string>{"a", "e"} && gate->pending_count () == 0;
+}
+
 int main (int argc, char **argv)
 {
     if (argc == 2 && std::string_view (argv[1]) == "--handler-origin-terminals")
@@ -10539,6 +10599,10 @@ int main (int argc, char **argv)
     if (argc == 2 && std::string_view (argv[1]) == "--async-capture-owner")
         return verify_async_capture_releases_state_owner () ? EXIT_SUCCESS : EXIT_FAILURE;
     if (argc == 1 && !verify_async_capture_releases_state_owner ())
+        return EXIT_FAILURE;
+    if (argc == 2 && std::string_view (argv[1]) == "--seal-cut-gate")
+        return verify_seal_cut_takes_gate_and_publications () ? EXIT_SUCCESS : EXIT_FAILURE;
+    if (argc == 1 && !verify_seal_cut_takes_gate_and_publications ())
         return EXIT_FAILURE;
     if (argc == 2 && std::string_view (argv[1]) == "--seal-yield-terminal")
         return verify_seal_waits_for_yielded_handler_terminal () ? EXIT_SUCCESS : EXIT_FAILURE;

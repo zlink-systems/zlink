@@ -34,6 +34,11 @@ namespace zlink::framework::runtime::host
 {
 struct public_host_runtime_test_access_t
 {
+    static stateful::raw_stateful_dispatch_t &dispatch (public_host_runtime_t &host)
+    {
+        return *host._stateful_dispatch;
+    }
+
     static void stage_relay (public_host_runtime_t &host,
                              const protocol::relocation_prepare_t &prepare,
                              const stateful::object_ref_t &source,
@@ -111,6 +116,58 @@ mesh::service_node_descriptor_t test_descriptor (std::string routing_id)
             "tcp://127.0.0.1:0",
             {},
             mesh::service_node_state_t::preparing};
+}
+
+// Waits for an observation another thread makes true.
+template <typename Predicate> bool eventually (Predicate predicate)
+{
+    using namespace std::chrono_literals;
+    const auto deadline = std::chrono::steady_clock::now () + 5s;
+    while (!predicate ()) {
+        if (std::chrono::steady_clock::now () >= deadline)
+            return false;
+        std::this_thread::sleep_for (5ms);
+    }
+    return true;
+}
+
+mesh::service_mailbox_record_t spot_send (host::public_host_runtime_t &host,
+                                          const stateful::object_ref_t &spot,
+                                          std::uint64_t operation,
+                                          std::uint8_t source,
+                                          std::optional<std::uint64_t> correlation = std::nullopt)
+{
+    mesh::service_mailbox_record_t record;
+    record.owner = mesh::service_mailbox_t::application_owner (host::owner_kind_t::spot, spot.key);
+    record.domain = mesh::service_mailbox_domain_t::application;
+    record.source_routing_id = {source};
+    record.source_node_generation = 1;
+    record.correlation = correlation;
+    record.parts = detail::backend::materialize_binding_parts (
+      {protocol::encode_spot_message_header (
+         correlation ? protocol::command::spotRequest : protocol::command::spotSend, "source-spot",
+         protocol::spot_route_fence_t{spot.key, spot.object_generation, {1}, 1, 1, 3},
+         {1, operation}, correlation),
+       protocol::encode_application_payload ({"Probe", "application/json", {'{', '}'}})});
+    record.source_original = mesh::raw_mesh_node_owner_t::accepted_source (
+      record.source_routing_id, record.source_node_generation, {},
+      host.transport ().topology ().peer (record.source_routing_id).get ());
+    return record;
+}
+
+std::uint64_t operation_of (const stateful::turn_record_t &turn)
+{
+    if (turn.frozen_record)
+        return turn.frozen_record->operation.low;
+    return turn.application_record ? turn.application_record->operation.low : 0;
+}
+
+std::vector<std::uint64_t> operations_of (const std::vector<stateful::turn_record_t> &turns)
+{
+    std::vector<std::uint64_t> operations;
+    for (const auto &turn : turns)
+        operations.push_back (operation_of (turn));
+    return operations;
 }
 
 } // namespace
@@ -1205,12 +1262,16 @@ TEST (FrameworkRelocationSealContract, exhausted_follow_request_settles_original
     accepted->payload ()->application_record = stateful::accepted_actor_record (
       header, {"producer", 3, {1}, 1}, {"payload", "application/json", {1}}, true);
     int terminals = 0;
-    ASSERT_EQ (dispatch.accept_local (owner, accepted, {},
-                                      [&] (const auto &reply) {
-                                          ++terminals;
-                                          EXPECT_FALSE (reply);
-                                          return true;
-                                      }),
+    std::optional<mesh::service_mailbox_record_t> taken_original;
+    ASSERT_EQ (dispatch
+                 .accept_local (owner, accepted, mesh::service_mailbox_record_t{}, taken_original,
+                                [&] (const auto &reply) {
+                                    ++terminals;
+                                    EXPECT_FALSE (reply);
+                                    return true;
+                                })
+                 .result ()
+                 .value (),
                stateful::stateful_error_t::none);
     const auto sealed = objects.try_seal_relocation_aggregate ({owner}).result ().value ();
     ASSERT_EQ (sealed.error, stateful::stateful_error_t::none);
@@ -1363,6 +1424,217 @@ TEST (FrameworkRelocationSealContract, retained_spot_rejects_previous_object_gen
 // Location §7.3 and relocation §10 require native Follow without a fresh Store read.
 // A raw ingress or claim waits for the object state lane without holding the raw dispatch
 // mutex, so pending-entry work for another owner continues meanwhile.
+// Relocation flow §4.2 producer cut at the mailbox: a claimed original not taken yet leaves with
+// its claim credit and an unclaimed one leaves the FIFO; a late take finds nothing, a refused
+// original leaves the owner FIFO untouched, and a record enqueued afterwards waits for a claim.
+TEST (FrameworkRelocationSealContract, mailbox_cut_takes_each_untaken_original_once)
+{
+    const auto domain = mesh::service_mailbox_domain_t::application;
+    mesh::service_mailbox_t mailbox;
+    const auto record = [domain] (std::uint8_t id) {
+        mesh::service_mailbox_record_t value;
+        value.owner = "spot:cut";
+        value.domain = domain;
+        value.parts = detail::backend::materialize_binding_parts ({{id}});
+        return value;
+    };
+    const auto id_of = [] (const mesh::service_mailbox_record_t &value) {
+        return value.parts.front ().to_bytes ().front ();
+    };
+    for (const std::uint8_t id : {1, 2, 3})
+        ASSERT_TRUE (mailbox.try_enqueue (record (id)));
+    const auto claim = mailbox.try_claim_owner (domain, "spot:cut", 2, 4096);
+    ASSERT_TRUE (claim);
+    ASSERT_EQ (claim->claimed_messages, 2u);
+    auto first = mailbox.take ({claim, 0});
+    ASSERT_TRUE (first);
+    bool cut = false;
+    EXPECT_FALSE (mailbox.cut_owners (
+      {"spot:cut"}, [&] (const auto &value) { return id_of (value) != 3; }, [&] { cut = true; }));
+    EXPECT_FALSE (cut);
+    EXPECT_EQ (mailbox.pending_messages (domain), 1u);
+    auto taken = mailbox.cut_owners ({"spot:cut", "spot:other"}, {}, [&] { cut = true; });
+    ASSERT_TRUE (taken);
+    EXPECT_TRUE (cut);
+    ASSERT_EQ (taken->size (), 2u);
+    ASSERT_EQ ((*taken)[0].size (), 2u);
+    EXPECT_TRUE ((*taken)[1].empty ());
+    EXPECT_EQ (id_of ((*taken)[0][0]), 2);
+    EXPECT_EQ (id_of ((*taken)[0][1]), 3);
+    EXPECT_TRUE ((*taken)[0][0].transferred);
+    EXPECT_FALSE ((*taken)[0][1].transferred);
+    EXPECT_FALSE (mailbox.take ({claim, 1}));
+    EXPECT_EQ (mailbox.pending_messages (domain), 0u);
+    ASSERT_TRUE (mailbox.try_enqueue (record (4)));
+    EXPECT_FALSE (mailbox.try_claim_owner (domain, "spot:cut", 8, 4096));
+    EXPECT_TRUE (first->transferred ());
+    EXPECT_TRUE ((*taken)[0][0].transferred ());
+    EXPECT_FALSE ((*taken)[0][0].transferred ());
+    EXPECT_EQ (claim->outstanding (), 0u);
+    const auto next = mailbox.try_claim_owner (domain, "spot:cut", 8, 4096);
+    ASSERT_TRUE (next);
+    ASSERT_EQ (next->claimed_messages, 1u);
+    EXPECT_EQ (id_of (*next->records.front ()), 4);
+}
+
+// Relocation flow §4.2 cut S: an accepted, unstarted original is saved exactly once wherever it
+// waits — the source FIFO (B), a claim suspended on its source authority (C) or the mailbox
+// (D). The started turn (A) reaches its terminal on the source first, and a record published
+// after the cut (E) takes the ingress hold.
+TEST (FrameworkRelocationSealContract, seal_cut_saves_each_unstarted_original_once)
+{
+    using namespace std::chrono_literals;
+    using access_t = host::public_host_runtime_test_access_t;
+    auto host = std::make_shared<host::public_host_runtime_t> (
+      host::host_options_t{mesh::raw_mesh_node_options_t{
+        .descriptor = test_descriptor ("cut-owner"),
+        .runtime_failures = std::make_shared<runtime::runtime_failure_collector_t> ()}});
+    const protocol::request_source_fence_t fence{"source-owner", 3, {2}, 1};
+    const auto claim_authority = std::make_shared<task_completion_source_t<void>> ();
+    const auto suspended = std::make_shared<std::atomic_int> (0);
+    host->configure_stateful_dispatch (
+      [fence, claim_authority, suspended] (const stateful::accepted_record_authority_query_t &query)
+        -> task_t<std::optional<stateful::accepted_record_authority_t>> {
+          // C's claim, the first query from source 3, waits at an explicit barrier.
+          if (query.source_node_routing_id == std::vector<std::uint8_t>{3}
+              && suspended->fetch_add (1) == 0)
+              co_await claim_authority->task ();
+          co_return stateful::accepted_record_authority_t{fence, 3};
+      });
+    auto &objects = host->objects ();
+    auto &dispatch = access_t::dispatch (*host);
+    auto &mailbox = host->transport ().mailbox ();
+    const stateful::object_ref_t spot{
+      stateful::object_kind_t::user_spot, "cut-spot", 1, 1, "mesh", "source"};
+    const auto created = objects.begin_reserved_object (spot, "room", {});
+    ASSERT_EQ (created.error, stateful::stateful_error_t::none);
+    ASSERT_EQ (objects.commit_create (created.attempt), stateful::stateful_error_t::none);
+    std::vector<mesh::service_mailbox_record_t> claimed;
+    claimed.push_back (spot_send (*host, spot, 1, 2));
+    claimed.push_back (spot_send (*host, spot, 2, 2));
+    claimed.push_back (spot_send (*host, spot, 3, 3));
+    const auto claim = zlink::framework::test::publish_stateful_claims (host->transport (), spot,
+                                                                        std::move (claimed));
+    const auto retained = zlink::framework::test::retained_ingress_snapshot (objects, spot);
+    const auto slot = [&] (std::size_t index) {
+        return mesh::service_mailbox_t::claim_handle_t{claim, index};
+    };
+    ASSERT_EQ (dispatch.ingest_claimed (spot, slot (0), retained).result ().value (),
+               stateful::stateful_error_t::none);
+    // A starts: the state lane hands its turn to the execution owner.
+    const auto [started_error, started] = dispatch.try_claim (spot);
+    ASSERT_EQ (started_error, stateful::stateful_error_t::none);
+    ASSERT_TRUE (started);
+    // B waits in the source FIFO, C in its claim, D in the mailbox behind that claim.
+    ASSERT_EQ (dispatch.ingest_claimed (spot, slot (1), retained).result ().value (),
+               stateful::stateful_error_t::none);
+    auto late = dispatch.ingest_claimed (spot, slot (2), retained);
+    ASSERT_FALSE (late.await_ready ());
+    ASSERT_TRUE (mailbox.try_enqueue (spot_send (*host, spot, 4, 2)));
+    auto sealing = std::async (std::launch::async, [&] {
+        return objects.try_seal_relocation_aggregate ({spot}).result ().value ();
+    });
+    // The cut moves C and D behind B in the source FIFO; the seal then waits for A.
+    EXPECT_TRUE (eventually (
+      [&] { return objects.pending (spot, stateful::turn_domain_t::application) == 3u; }));
+    EXPECT_EQ (mailbox.pending_messages (mesh::service_mailbox_domain_t::application), 0u);
+    ASSERT_TRUE (mailbox.try_enqueue (spot_send (*host, spot, 5, 2)));
+    EXPECT_EQ (sealing.wait_for (100ms), std::future_status::timeout);
+    // C's claim lost its take: no second admission and no settlement of the cut credit.
+    const auto outstanding = claim->outstanding ();
+    claim_authority->complete (result_t<void>::success ());
+    EXPECT_EQ (late.result ().value (), stateful::stateful_error_t::not_found);
+    EXPECT_EQ (claim->outstanding (), outstanding);
+    // A's terminal releases the seal.
+    ASSERT_EQ (dispatch.complete (*started, std::nullopt), stateful::stateful_error_t::none);
+    const auto sealed = sealing.get ();
+    ASSERT_EQ (sealed.error, stateful::stateful_error_t::none);
+    ASSERT_EQ (sealed.seal.participants.size (), 1u);
+    EXPECT_EQ (operations_of (sealed.seal.participants.front ().pending_application),
+               (std::vector<std::uint64_t>{2, 3, 4}));
+    // The saved credits return once relocation owns their payloads; E is claimed next and
+    // takes the ingress hold.
+    dispatch.release_relocated_payloads (spot);
+    EXPECT_EQ (zlink::framework::test::ingest_stateful_mailbox_record (objects, host->transport (),
+                                                                       dispatch, spot)
+                 .result ()
+                 .value (),
+               stateful::stateful_error_t::none);
+    const auto [boundary_error, batch] = objects.begin_relocation_boundary (sealed.seal.token);
+    ASSERT_EQ (boundary_error, stateful::stateful_error_t::none);
+    ASSERT_EQ (batch.participants.size (), 1u);
+    EXPECT_EQ (operations_of (batch.participants.front ().records),
+               (std::vector<std::uint64_t>{5}));
+    host->close ();
+}
+
+// Relocation flow §4.2 step 10: when the second saved record fails its conversion, the attempt
+// aborts and every original returns to the same source FIFO in order, with no reply and with
+// its own mailbox credit still outstanding.
+TEST (FrameworkRelocationSealContract, seal_conversion_failure_restores_fifo_once)
+{
+    using access_t = host::public_host_runtime_test_access_t;
+    auto host = std::make_shared<host::public_host_runtime_t> (
+      host::host_options_t{mesh::raw_mesh_node_options_t{
+        .descriptor = test_descriptor ("cut-restore"),
+        .runtime_failures = std::make_shared<runtime::runtime_failure_collector_t> ()}});
+    const protocol::request_source_fence_t fence{"source-owner", 3, {2}, 1};
+    host->configure_stateful_dispatch (
+      [fence] (const auto &) -> task_t<std::optional<stateful::accepted_record_authority_t>> {
+          co_return stateful::accepted_record_authority_t{fence, 3};
+      });
+    auto &objects = host->objects ();
+    auto &dispatch = access_t::dispatch (*host);
+    auto &mailbox = host->transport ().mailbox ();
+    const stateful::object_ref_t spot{
+      stateful::object_kind_t::user_spot, "restore-spot", 1, 1, "mesh", "source"};
+    const auto created = objects.begin_reserved_object (spot, "room", {});
+    ASSERT_EQ (created.error, stateful::stateful_error_t::none);
+    ASSERT_EQ (objects.commit_create (created.attempt), stateful::stateful_error_t::none);
+    std::vector<mesh::service_mailbox_record_t> claimed;
+    claimed.push_back (spot_send (*host, spot, 1, 2, 11));
+    const auto claim = zlink::framework::test::publish_stateful_claims (host->transport (), spot,
+                                                                        std::move (claimed));
+    ASSERT_EQ (dispatch
+                 .ingest_claimed (spot, mesh::service_mailbox_t::claim_handle_t{claim, 0},
+                                  zlink::framework::test::retained_ingress_snapshot (objects, spot))
+                 .result ()
+                 .value (),
+               stateful::stateful_error_t::none);
+    // The second record has no canonical form: its reply route ID is zero.
+    protocol::spot_message_header_t header;
+    header.target = {spot.key, spot.object_generation, {1}, 1, 1, 3};
+    header.operation = {1, 2};
+    header.correlation = 12;
+    auto invalid = stateful::accepted_spot_record (header, fence,
+                                                   {"Probe", "application/json", {'{', '}'}}, true);
+    invalid.reply_route_id = 0;
+    ASSERT_EQ (objects.enqueue (spot, stateful::turn_domain_t::application,
+                                stateful::turn_record_t{1000, {}, 1, std::move (invalid)}),
+               stateful::stateful_error_t::none);
+    // D waits in the mailbox behind the active claim.
+    ASSERT_TRUE (mailbox.try_enqueue (spot_send (*host, spot, 3, 2, 13)));
+    const auto outstanding = claim->outstanding ();
+    const auto sealed = objects.try_seal_relocation_aggregate ({spot}).result ().value ();
+    EXPECT_EQ (sealed.error, stateful::stateful_error_t::conflict);
+    // Abort restored the source FIFO with the cut original after the earlier ones; the claim
+    // credit of B is still outstanding and the binding no longer holds new ingress.
+    EXPECT_EQ (claim->outstanding (), outstanding);
+    EXPECT_EQ (mailbox.pending_messages (mesh::service_mailbox_domain_t::application), 0u);
+    std::vector<std::uint64_t> order;
+    while (true) {
+        const auto [error, turn] = objects.try_claim (spot, stateful::turn_domain_t::application);
+        ASSERT_EQ (error, stateful::stateful_error_t::none);
+        if (!turn)
+            break;
+        order.push_back (operation_of (*turn));
+        ASSERT_EQ (objects.complete_claim (spot, stateful::turn_domain_t::application),
+                   stateful::stateful_error_t::none);
+    }
+    EXPECT_EQ (order, (std::vector<std::uint64_t>{1, 2, 3}));
+    host->close ();
+}
+
 TEST (FrameworkRelocationSealContract, raw_dispatch_waits_for_state_lane_outside_its_mutex)
 {
     using namespace std::chrono_literals;

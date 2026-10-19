@@ -14,6 +14,7 @@
 #include <runtime/locations/location_repository.hpp>
 #include "runtime/stateful/raw_stateful_dispatch.hpp"
 #include "runtime/execution/serial_application_record.hpp"
+#include "runtime/execution/serial_execution_queue.hpp"
 #include "runtime/stateful/accepted_actor_record.hpp"
 #include "runtime/spots/activation_admission.hpp"
 #include "runtime/locations/pending_creation_projection.hpp"
@@ -1012,6 +1013,12 @@ void public_host_runtime_t::configure_stateful_dispatch (
           _stateful_dispatch->set_flow_capture_provider ([this] { return capture_flow (); });
       })
       .get ();
+    // The source seal cut takes accepted originals through this stateful dispatch.
+    _objects.configure_relocation_cut (
+      [this] (std::vector<stateful::object_ref_t> participants,
+              std::shared_ptr<stateful::relocation_seal_binding_t> binding, std::stop_token) {
+          return cut_relocation_source (std::move (participants), std::move (binding));
+      });
 }
 
 void public_host_runtime_t::configure_stateful_dispatch (
@@ -7004,8 +7011,12 @@ task_t<std::size_t> public_host_runtime_t::dispatch_application_claim (
 {
     // Stateful originals stay in their slot across the authority suspension; every
     // other original transfers in the same boundary step that classifies it.
-    using kept_local_t =
-      std::pair<local_application_dispatch_t, std::optional<mesh::request_source_t>>;
+    struct kept_local_t
+    {
+        local_application_dispatch_t query;
+        std::shared_ptr<const local_application_dispatch_t> application;
+        std::optional<mesh::request_source_t> source_original;
+    };
     using kept_t = std::variant<stateful::claimed_ingress_t, kept_local_t>;
     std::size_t count = 0;
     trace_mesh_host ("mailbox-claim",
@@ -7029,7 +7040,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_application_claim (
                       if (record.application_record || !is_stateful_application (record.kind))
                           return std::nullopt;
                       return kept_t{kept_local_t{local_application_query (*original.application),
-                                                 original.source_original}};
+                                                 original.application, original.source_original}};
                   }
                   const auto kind = record_kind (
                     protocol::decode_header (protocol::message_bytes (original.parts.front ()))
@@ -7043,7 +7054,8 @@ task_t<std::size_t> public_host_runtime_t::dispatch_application_claim (
             if (auto *kept = std::get_if<kept_t> (&step)) {
                 if (auto *local = std::get_if<kept_local_t> (kept)) {
                     const auto object = co_await accept_local_application (
-                      slot, std::move (local->first), std::move (local->second), entry.original);
+                      slot, std::move (local->query), std::move (local->application),
+                      std::move (local->source_original), entry.original);
                     if (object) {
                         (void) co_await dispatch_stateful_owner (*object, dispatch);
                         ++count;
@@ -7777,12 +7789,126 @@ void public_host_runtime_t::publish_local_application (local_application_dispatc
         throw protocol::service_wire_error_t ("local application mailbox is closed");
 }
 
+void public_host_runtime_t::configure_relocation_gate (relocation_gate_t gate)
+{
+    _lifecycle_configuration_lane.run ([&] { _relocation_gate = std::move (gate); }).get ();
+}
+
+task_t<std::optional<std::vector<std::vector<stateful::turn_record_t>>>>
+public_host_runtime_t::cut_relocation_source (
+  std::vector<stateful::object_ref_t> participants,
+  std::shared_ptr<stateful::relocation_seal_binding_t> binding)
+{
+    const auto locate =
+      co_await _lifecycle_configuration_lane.run_task ([this] { return _relocation_gate; });
+    std::shared_ptr<runtime::serial_execution_queue_t> gate;
+    if (locate && !participants.empty ())
+        gate = co_await locate (participants.front ());
+    std::vector<std::string> owners;
+    owners.reserve (participants.size ());
+    for (const auto &participant : participants)
+        owners.push_back (mesh::service_mailbox_t::application_owner (
+          participant.kind == stateful::object_kind_t::actor ? owner_kind_t::actor
+                                                             : owner_kind_t::spot,
+          participant.key));
+    // The cut takes only originals the stateful ingress places in a source FIFO.
+    const auto admits = [] (const mesh::service_mailbox_record_t &original) {
+        if (original.application) {
+            const auto &record = original.application->record;
+            return !record.application_record && is_stateful_application (record.kind);
+        }
+        if (original.parts.size () != 2)
+            return false;
+        try {
+            const auto kind = record_kind (
+              protocol::decode_header (protocol::message_bytes (original.parts.front ())).kind);
+            return kind && is_stateful_application (*kind);
+        }
+        catch (...) {
+            return false;
+        }
+    };
+    std::optional<std::vector<std::vector<mesh::service_mailbox_record_t>>> taken;
+    const auto bind = [&binding] { binding->bound.store (true, std::memory_order_release); };
+    // Producer order: the mailbox, then the owner's own producer boundary inside step.
+    const auto cut = [&] (const std::function<void ()> &step) {
+        taken = _transport->mailbox ().cut_owners (owners, admits, step);
+        return taken.has_value ();
+    };
+    std::vector<std::shared_ptr<runtime::serial_application_record_t>> suffix;
+    if (gate)
+        suffix = co_await gate->take_application_suffix (bind, cut);
+    else
+        (void) cut (bind);
+    if (!taken)
+        co_return std::nullopt;
+    // Originals accepted before the cut enter their source FIFOs in mailbox order, ahead of
+    // the ingress held after it; each keeps its reply route and mailbox credit.
+    for (std::size_t index = 0; index != participants.size (); ++index)
+        for (auto &original : (*taken)[index])
+            co_await ingest_cut_original (participants[index], std::move (original));
+    // The owner's exported suffix keeps its accepted owner, like the Actor suffix.
+    std::vector<std::vector<stateful::turn_record_t>> exported (participants.size ());
+    for (auto &record : suffix) {
+        if (!record->payload ())
+            continue;
+        exported.front ().push_back (std::move (*record->payload ()));
+        record->payload ().reset ();
+        exported.front ().back ().accepted_owner = std::move (record);
+    }
+    co_return exported;
+}
+
+task_t<void> public_host_runtime_t::ingest_cut_original (stateful::object_ref_t owner,
+                                                         mesh::service_mailbox_record_t original)
+{
+    if (!original.application) {
+        auto retained = co_await _objects.retained_relocation_source (owner);
+        (void) co_await _stateful_dispatch->ingest_claimed (std::move (owner), std::move (original),
+                                                            std::move (retained));
+        co_return;
+    }
+    std::optional<mesh::service_mailbox_record_t> taken;
+    std::optional<messaging::request_wire_failure_t> failure;
+    try {
+        auto query = local_application_query (*original.application);
+        std::shared_ptr<const local_application_dispatch_t> application = original.application;
+        auto source = original.source_original;
+        (void) co_await accept_local_application (std::move (original), std::move (query),
+                                                  std::move (application), std::move (source),
+                                                  taken);
+        co_return;
+    }
+    catch (const protocol::service_wire_error_t &) {
+        failure = messaging::request_wire_failure_t{
+          static_cast<std::uint32_t> (protocol::request_terminal_result::protocolError),
+          static_cast<std::uint32_t> (protocol::framework_error_code::requestProtocolError)};
+    }
+    catch (const framework_exception_t &error) {
+        failure = messaging::request_failure_mapper_t{}.target_failure_reply (error);
+    }
+    catch (...) {
+    }
+    // A rejected original is answered once from the record this ingress still owns.
+    if (!taken)
+        co_return;
+    const auto credit = std::exchange (taken->transferred, {});
+    if (failure && !taken->source_routing_id.empty () && taken->correlation)
+        (void) _transport->reply_failure (*taken, failure->terminal_result, failure->failure_code);
+    if (credit)
+        (void) credit ();
+}
+
 task_t<std::optional<stateful::object_ref_t>> public_host_runtime_t::accept_local_application (
-  mesh::service_mailbox_t::claim_handle_t slot,
+  stateful::raw_stateful_dispatch_t::ingress_original_t ingress,
   local_application_dispatch_t dispatch,
+  std::shared_ptr<const local_application_dispatch_t> application,
   std::optional<mesh::request_source_t> source_original,
   std::optional<mesh::service_mailbox_record_t> &original)
 {
+    // An owned original stays with the caller until the state lane takes it.
+    if (auto *const owned = std::get_if<mesh::service_mailbox_record_t> (&ingress))
+        original.emplace (std::move (*owned));
     const bool actor = is_actor_application (dispatch.record.kind);
     std::optional<stateful::retained_relocation_source_t> retained;
     const auto owner = actor
@@ -7828,67 +7954,68 @@ task_t<std::optional<stateful::object_ref_t>> public_host_runtime_t::accept_loca
                 std::move (retained));
       },
       header);
-    original = _transport->mailbox ().take (slot);
-    if (!original)
-        co_return std::nullopt;
-    dispatch = std::move (*original->application);
-    dispatch.record.before_application_handler = std::move (original->before_application_handler);
-    runtime::serial_application_admission_t reservation;
-    reservation.retain_initial (std::exchange (original->transferred, {}));
     if (validation != stateful::stateful_error_t::none) {
+        if (auto *const slot = std::get_if<mesh::service_mailbox_t::claim_handle_t> (&ingress))
+            original = _transport->mailbox ().take (*slot);
+        if (!original)
+            co_return std::nullopt;
+        // The rejected original returns its mailbox credit at this accept boundary.
+        if (const auto credit = std::exchange (original->transferred, {}))
+            (void) credit ();
         throw framework_exception_t (validation == stateful::stateful_error_t::generation_stale
                                        ? framework_error_kind_t::invalid_operation
                                        : framework_error_kind_t::unavailable,
                                      "local accepted object source authority is unavailable");
     }
-    co_await _local_dispatch_completion_lane.run_task (
-      [this, owner, header = std::move (header), authority,
-       dispatch = std::move (dispatch)] () mutable {
-          dispatch.record.application_record =
-            std::make_shared<runtime::serial_application_record_t> ();
-          dispatch.record.application_record->admission.jobs = _options.mesh.application_jobs;
-          dispatch.record.application_record->payload ().emplace ();
-          dispatch.record.application_record->payload ()->application_record = std::visit (
-            [&] (auto &value) {
-                value.target.owner_lease_generation = authority->target_owner_lease_generation;
-                if constexpr (std::is_same_v<std::decay_t<decltype (value)>,
-                                             protocol::actor_message_header_t>)
-                    return stateful::accepted_actor_record (value, authority->source,
-                                                            encode_application (dispatch.parts),
-                                                            is_request (dispatch.record.kind));
-                else
-                    return stateful::accepted_spot_record (value, authority->source,
-                                                           encode_application (dispatch.parts),
-                                                           is_request (dispatch.record.kind));
-            },
-            header);
-          auto reply = std::move (dispatch.record.reply_token.local_reply);
-          std::function<bool (const std::optional<protocol::application_payload_t> &)> terminal;
-          if (reply) {
-              terminal = [weak = weak_from_this (),
-                          source = dispatch.record.source_node_rid.to_bytes (),
-                          correlation = dispatch.record.reply_route_id, reply = std::move (reply)] (
-                           const std::optional<protocol::application_payload_t> &application) {
-                  if (application)
-                      return reply (protocol::decode_application_parts (*application));
-                  const auto host = weak.lock ();
-                  if (!host)
-                      return false;
-                  mesh::service_mailbox_record_t request;
-                  request.source_routing_id = source;
-                  request.correlation = correlation;
-                  return host->_transport->reply_failure (
-                    request,
-                    static_cast<std::uint32_t> (protocol::request_terminal_result::internalError),
-                    static_cast<std::uint32_t> (protocol::framework_error_code::requestFailed));
-              };
-          }
-          const auto accepted = _stateful_dispatch->accept_local (
-            *owner, std::move (dispatch.record.application_record),
-            std::move (dispatch.record.before_application_handler), std::move (terminal));
-          if (accepted != stateful::stateful_error_t::none)
-              throw protocol::service_wire_error_t ("local accepted Actor enqueue failed");
-      });
+    // The accepted record reads the shared original; the state lane takes it.
+    auto accepted_record = std::make_shared<runtime::serial_application_record_t> ();
+    accepted_record->admission.jobs = _options.mesh.application_jobs;
+    accepted_record->payload ().emplace ();
+    accepted_record->payload ()->application_record = std::visit (
+      [&] (auto &value) {
+          value.target.owner_lease_generation = authority->target_owner_lease_generation;
+          if constexpr (std::is_same_v<std::decay_t<decltype (value)>,
+                                       protocol::actor_message_header_t>)
+              return stateful::accepted_actor_record (value, authority->source,
+                                                      encode_application (application->parts),
+                                                      is_request (dispatch.record.kind));
+          else
+              return stateful::accepted_spot_record (value, authority->source,
+                                                     encode_application (application->parts),
+                                                     is_request (dispatch.record.kind));
+      },
+      header);
+    std::function<bool (const std::optional<protocol::application_payload_t> &)> terminal;
+    if (application->record.reply_token.local_reply) {
+        // The original application keeps its local reply route until the terminal.
+        terminal = [weak = weak_from_this (), source = dispatch.record.source_node_rid.to_bytes (),
+                    correlation = dispatch.record.reply_route_id,
+                    application] (const std::optional<protocol::application_payload_t> &reply) {
+            if (reply)
+                return application->record.reply_token.local_reply (
+                  protocol::decode_application_parts (*reply));
+            const auto host = weak.lock ();
+            if (!host)
+                return false;
+            mesh::service_mailbox_record_t request;
+            request.source_routing_id = source;
+            request.correlation = correlation;
+            return host->_transport->reply_failure (
+              request,
+              static_cast<std::uint32_t> (protocol::request_terminal_result::internalError),
+              static_cast<std::uint32_t> (protocol::framework_error_code::requestFailed));
+        };
+    }
+    if (original) {
+        ingress = std::move (*original);
+        original.reset ();
+    }
+    const auto accepted = co_await _stateful_dispatch->accept_local (
+      *owner, std::move (accepted_record), std::move (ingress), original, std::move (terminal));
+    if (!original)
+        co_return std::nullopt;
+    if (accepted != stateful::stateful_error_t::none)
+        throw protocol::service_wire_error_t ("local accepted Actor enqueue failed");
     co_return *owner;
 }
 

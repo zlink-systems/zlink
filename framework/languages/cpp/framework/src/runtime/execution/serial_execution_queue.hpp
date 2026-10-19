@@ -171,8 +171,14 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
     void notify_control (std::string name, std::function<void ()> control);
     task_t<bool>
     adopt_application_prefix (std::function<std::vector<serial_prefix_work_t> ()> take);
+    // Takes the accepted, unstarted application records. seal runs in the step that fixes
+    // the producer boundary. A relocation cut (relocation flow §4.2) passes producer_cut,
+    // which encloses that step in its own producer boundary (mailbox before this queue's
+    // producer mutex) and returns false when it does not run it; published records not yet
+    // imported are taken from their nodes too.
+    using producer_cut_t = std::function<bool (const std::function<void ()> &)>;
     task_t<std::vector<std::shared_ptr<serial_application_record_t>>>
-    take_application_suffix (std::function<void ()> seal = {});
+    take_application_suffix (std::function<void ()> seal = {}, producer_cut_t producer_cut = {});
     bool try_post (std::string name, std::function<void ()> work);
     bool try_post (std::string name, std::function<void ()> work, serial_work_options_t options);
     bool try_post_async (std::string name, async_work_t work);

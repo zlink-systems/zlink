@@ -7434,6 +7434,19 @@ spot_node_runtime_t::capture_relocation_state (const runtime::stateful::object_r
     return capture_relocation_state_async (_state, object, stable_type, cancellation);
 }
 
+task_t<std::shared_ptr<runtime::serial_execution_queue_t>>
+spot_node_runtime_t::spot_execution_queue (std::string spot_key) const
+{
+    return _state->lane.run_task ([state = _state, key = std::move (spot_key)] {
+        const auto found = state->spot_contexts_by_id.find (key);
+        const auto context = found == state->spot_contexts_by_id.end ()
+                               ? nullptr
+                               : spot_context_access_t::state (found->second);
+        return context ? context->serial_queue
+                       : std::shared_ptr<runtime::serial_execution_queue_t>{};
+    });
+}
+
 bool spot_node_runtime_t::restore_spot_relocation_state (
   const runtime::stateful::frozen_object_state_t &frozen,
   const runtime::stateful::object_ref_t &target,

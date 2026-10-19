@@ -72,7 +72,8 @@ ingest_stateful_mailbox_record (runtime::stateful::stateful_object_runtime_t &ob
                                             key, 1, runtime::dispatch_limits::receive_batch_bytes);
     if (!claim)
         co_return runtime::stateful::stateful_error_t::not_found;
-    co_return co_await dispatch.ingest_claimed (owner, {claim, 0},
-                                                retained_ingress_snapshot (objects, owner));
+    co_return co_await dispatch.ingest_claimed (
+      owner, runtime::mesh::service_mailbox_t::claim_handle_t{claim, 0},
+      retained_ingress_snapshot (objects, owner));
 }
 } // namespace zlink::framework::test

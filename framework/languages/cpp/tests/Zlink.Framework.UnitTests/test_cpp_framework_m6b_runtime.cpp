@@ -5894,7 +5894,12 @@ void verify_atomic_raw_stateful_ingress_commit ()
     accepted->payload ()->application_record = stateful::accepted_actor_record (
       local_header, {"atomic-source-owner", 23, source_routing_id, source_generation},
       std::move (local_payload), false);
-    assert (dispatch.accept_local (actor, accepted, {}, {}) == stateful::stateful_error_t::none);
+    std::optional<mesh::service_mailbox_record_t> taken_original;
+    assert (
+      dispatch.accept_local (actor, accepted, mesh::service_mailbox_record_t{}, taken_original, {})
+        .result ()
+        .value ()
+      == stateful::stateful_error_t::none);
     assert (!accepted->payload ());
     const auto [flat_error, flat] = dispatch.try_claim (actor);
     assert (flat_error == stateful::stateful_error_t::none && flat);

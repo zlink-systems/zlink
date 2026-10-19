@@ -841,8 +841,19 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
 
     std::optional<stateful::object_ref_t> resolve_actor (const actor_ref_t &actor) const;
     std::optional<stateful::object_ref_t> resolve_spot (const std::string &spot_id) const;
+    // Relocation flow §4.2: the execution queue that owns a participant's application turns,
+    // where its source seal cut runs; without it the cut runs at the mailbox alone.
+    using relocation_gate_t =
+      std::function<task_t<std::shared_ptr<runtime::serial_execution_queue_t>> (
+        const stateful::object_ref_t &)>;
+    void configure_relocation_gate (relocation_gate_t gate);
 
   private:
+    // Relocation flow §4.2 cut S of a source seal (stateful_object_runtime_t
+    // relocation_source_cut_t), run in the first participant's execution queue.
+    task_t<std::optional<std::vector<std::vector<stateful::turn_record_t>>>>
+    cut_relocation_source (std::vector<stateful::object_ref_t> participants,
+                           std::shared_ptr<stateful::relocation_seal_binding_t> binding);
     std::optional<stateful::object_ref_t> resolve_actor (std::string_view actor_id) const;
     void attach_relocation_terminals (stateful::maintenance_runtime_t &maintenance);
 
@@ -1252,10 +1263,16 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     mutable runtime::state_lane_t _local_dispatch_completion_lane{
       _local_dispatch_completion_lane_executor};
     std::deque<local_application_dispatch_t> _local_application_dispatches;
+    relocation_gate_t _relocation_gate;
     void publish_local_application (local_application_dispatch_t dispatch);
+    task_t<void> ingest_cut_original (stateful::object_ref_t owner,
+                                      mesh::service_mailbox_record_t original);
+    // dispatch is the query of the shared original application, which stays read-only until
+    // the state lane takes the original; original receives the taken record.
     task_t<std::optional<stateful::object_ref_t>>
-    accept_local_application (mesh::service_mailbox_t::claim_handle_t slot,
+    accept_local_application (stateful::raw_stateful_dispatch_t::ingress_original_t ingress,
                               local_application_dispatch_t dispatch,
+                              std::shared_ptr<const local_application_dispatch_t> application,
                               std::optional<mesh::request_source_t> source_original,
                               std::optional<mesh::service_mailbox_record_t> &original);
     void

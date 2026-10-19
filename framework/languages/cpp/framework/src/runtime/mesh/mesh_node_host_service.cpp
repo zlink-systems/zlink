@@ -2526,6 +2526,16 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                   detail::spot_node_runtime_t (registration->spot_state)
                     .abort_relocation_materialization (targets);
               });
+            node->native_node ().configure_relocation_gate (
+              [registration] (const stateful::object_ref_t &participant)
+                -> task_t<std::shared_ptr<runtime::serial_execution_queue_t>> {
+                  if (participant.kind == stateful::object_kind_t::actor)
+                      return task_t<std::shared_ptr<runtime::serial_execution_queue_t>> (
+                        result_t<std::shared_ptr<runtime::serial_execution_queue_t>>::success (
+                          nullptr));
+                  return detail::spot_node_runtime_t (registration->spot_state)
+                    .spot_execution_queue (participant.key);
+              });
         }
         _published_mesh_nodes.clear ();
         _published_mesh_descriptors.clear ();

@@ -285,116 +285,138 @@ raw_stateful_dispatch_t::raw_stateful_dispatch_t (
 {
 }
 
-stateful_error_t raw_stateful_dispatch_t::commit_accepted_ingress (const object_ref_t &owner,
-                                                                   turn_record_t turn,
-                                                                   pending_delivery_t pending,
-                                                                   bool allocate_sequence,
-                                                                   stateful_error_t collision_error,
-                                                                   bool restored)
+template <class Take>
+auto raw_stateful_dispatch_t::admit_accepted_ingress (const object_ref_t &owner,
+                                                      turn_record_t &turn,
+                                                      pending_delivery_t &pending,
+                                                      Take &take,
+                                                      stateful_error_t collision_error,
+                                                      ingress_admission_t &admission)
 {
-    const auto owner_key = delivery_key (owner, 0);
-    const auto sequence_key = std::pair{owner.kind, owner.key};
-    std::unique_lock lock (_mutex);
-
-    const auto discarding = _discarding_owners.find (owner_key);
-    if (discarding != _discarding_owners.end () && discarding->second == owner) {
-        return collision_error;
-    }
-
-    std::map<std::pair<object_kind_t, std::string>, std::uint64_t>::iterator next_sequence;
-    bool inserted_sequence = false;
-    if (allocate_sequence) {
-        try {
-            const auto inserted = _next_sequence.try_emplace (sequence_key, std::uint64_t{1});
-            next_sequence = inserted.first;
-            inserted_sequence = inserted.second;
+    admission.trace_admitted = detail::message_flow_tracer_t (_transport->dispatch_options ())
+                                 .enabled_for (message_flow_outcome_t::admitted);
+    // The state lane places the turn in the same turn that takes its original, so a cut
+    // of the owner's seal is wholly before or after both (relocation flow §4.2).
+    return [this, &owner, &turn, &pending, &take, &admission,
+            collision_error] (const relocation_seal_binding_t *binding) {
+        stateful_object_runtime_t::admitted_turn_t admitted;
+        if (!take (binding, pending, admitted.after_cut)) {
+            admitted.error = stateful_error_t::not_found;
+            return admitted;
         }
-        catch (...) {
-            return stateful_error_t::backpressured;
-        }
-        if (next_sequence->second == 0
-            || next_sequence->second == std::numeric_limits<std::uint64_t>::max ()) {
-            if (inserted_sequence)
-                _next_sequence.erase (next_sequence);
-            return stateful_error_t::conflict;
-        }
-        turn.sequence = next_sequence->second;
-    }
-    if (turn.sequence == 0) {
-        if (inserted_sequence)
-            _next_sequence.erase (next_sequence);
-        return stateful_error_t::invalid;
-    }
+        admitted.error =
+          register_accepted_ingress (owner, turn, pending, collision_error, admission);
+        if (admitted.error == stateful_error_t::none)
+            admitted.turn = std::move (turn);
+        return admitted;
+    };
+}
 
-    detail::message_flow_tracer_t tracer (_transport->dispatch_options ());
-    auto admitted_application = tracer.enabled_for (message_flow_outcome_t::admitted)
-                                  ? std::move (pending.frozen.application)
-                                  : std::optional<protocol::application_payload_t>{};
-    const auto admitted_kind = pending.frozen.kind;
-    const auto admitted_operation = pending.frozen.operation;
-    // Pending owns terminal identity and reply routing; the native turn owns body bytes.
-    pending.frozen.application.reset ();
-    pending.frozen.canonical_bytes.clear ();
-    pending.transport.parts.clear ();
-    const auto pending_key = delivery_key (owner, turn.sequence);
-    if (_pending.contains (pending_key)) {
-        if (inserted_sequence)
-            _next_sequence.erase (next_sequence);
-        return collision_error;
-    }
-
-    std::map<delivery_key_t, pending_delivery_t>::iterator pending_entry;
-    try {
-        auto inserted = _pending.emplace (pending_key, std::move (pending));
-        if (!inserted.second) {
-            if (inserted_sequence)
-                _next_sequence.erase (next_sequence);
-            return collision_error;
-        }
-        pending_entry = inserted.first;
-    }
-    catch (...) {
-        if (inserted_sequence)
-            _next_sequence.erase (next_sequence);
-        return stateful_error_t::backpressured;
-    }
-
-    // The state lane takes posted turns in order, so the sequence order holds without
-    // waiting for the lane under this mutex.
-    std::optional<stateful_object_runtime_t::posted_enqueue_t> posted;
-    try {
-        posted.emplace (
-          _objects->post_enqueue (owner, turn_domain_t::application, std::move (turn), restored));
-    }
-    catch (...) {
-        _pending.erase (pending_entry);
-        if (inserted_sequence)
-            _next_sequence.erase (next_sequence);
-        return stateful_error_t::backpressured;
-    }
-    if (allocate_sequence)
-        ++next_sequence->second;
-    lock.unlock ();
-
+template <class Take>
+task_t<stateful_error_t>
+raw_stateful_dispatch_t::commit_accepted_ingress (const object_ref_t &owner,
+                                                  turn_record_t turn,
+                                                  pending_delivery_t pending,
+                                                  Take take,
+                                                  stateful_error_t collision_error,
+                                                  ingress_admission_t &admission)
+{
     stateful_object_runtime_t::enqueue_outcome_t outcome;
     try {
-        outcome = posted->get ();
+        outcome = co_await _objects->enqueue_admitted (
+          owner, admit_accepted_ingress (owner, turn, pending, take, collision_error, admission),
+          false);
     }
     catch (...) {
         outcome.error = stateful_error_t::backpressured;
     }
+    co_return finish_accepted_ingress (owner, std::move (outcome), admission);
+}
+
+stateful_error_t
+raw_stateful_dispatch_t::register_accepted_ingress (const object_ref_t &owner,
+                                                    turn_record_t &turn,
+                                                    pending_delivery_t &pending,
+                                                    stateful_error_t collision_error,
+                                                    ingress_admission_t &admission) noexcept
+{
+    const auto reject = [&] (stateful_error_t error) {
+        admission.rejected.emplace (std::move (pending));
+        return error;
+    };
+    const auto owner_key = delivery_key (owner, 0);
+    std::lock_guard lock (_mutex);
+    const auto discarding = _discarding_owners.find (owner_key);
+    if (discarding != _discarding_owners.end () && discarding->second == owner)
+        return reject (collision_error);
+
+    std::map<std::pair<object_kind_t, std::string>, std::uint64_t>::iterator next_sequence;
+    try {
+        const auto inserted =
+          _next_sequence.try_emplace ({owner.kind, owner.key}, std::uint64_t{1});
+        next_sequence = inserted.first;
+        admission.inserted_sequence = inserted.second;
+    }
+    catch (...) {
+        return reject (stateful_error_t::backpressured);
+    }
+    const auto unregister_sequence = [&] {
+        if (admission.inserted_sequence)
+            _next_sequence.erase (next_sequence);
+    };
+    if (next_sequence->second == 0
+        || next_sequence->second == std::numeric_limits<std::uint64_t>::max ()) {
+        unregister_sequence ();
+        return reject (stateful_error_t::conflict);
+    }
+    turn.sequence = next_sequence->second;
+    admission.pending_key = delivery_key (owner, turn.sequence);
+    if (_pending.contains (admission.pending_key)) {
+        unregister_sequence ();
+        return reject (collision_error);
+    }
+    if (admission.trace_admitted)
+        admission.admitted_application = std::move (pending.frozen.application);
+    admission.admitted_kind = pending.frozen.kind;
+    admission.admitted_operation = pending.frozen.operation;
+    // Pending owns terminal identity and reply routing; the native turn owns body bytes.
+    pending.frozen.application.reset ();
+    pending.frozen.canonical_bytes.clear ();
+    pending.transport.parts.clear ();
+    try {
+        _pending.emplace (admission.pending_key, std::move (pending));
+    }
+    catch (...) {
+        unregister_sequence ();
+        return reject (stateful_error_t::backpressured);
+    }
+    ++next_sequence->second;
+    admission.registered = true;
+    return stateful_error_t::none;
+}
+
+stateful_error_t raw_stateful_dispatch_t::finish_accepted_ingress (
+  const object_ref_t &owner,
+  stateful_object_runtime_t::enqueue_outcome_t outcome,
+  ingress_admission_t &admission)
+{
+    if (!admission.registered)
+        return outcome.error;
+    detail::message_flow_tracer_t tracer (_transport->dispatch_options ());
     accepted_mailbox_reservation_t claim;
     if (outcome.error != stateful_error_t::none || outcome.relocation_handoff) {
-        lock.lock ();
-        const auto entry = _pending.find (pending_key);
+        std::lock_guard lock (_mutex);
+        const auto entry = _pending.find (admission.pending_key);
         if (outcome.error != stateful_error_t::none) {
-            if (entry != _pending.end ())
+            if (entry != _pending.end ()) {
+                admission.rejected.emplace (std::move (entry->second));
                 _pending.erase (entry);
+            }
             // A rejected turn returns its sequence while it is still the latest one.
-            const auto next = _next_sequence.find (sequence_key);
-            if (allocate_sequence && next != _next_sequence.end ()
-                && next->second == pending_key.sequence + 1) {
-                if (inserted_sequence)
+            const auto next = _next_sequence.find ({owner.kind, owner.key});
+            if (next != _next_sequence.end ()
+                && next->second == admission.pending_key.sequence + 1) {
+                if (admission.inserted_sequence)
                     _next_sequence.erase (next);
                 else
                     --next->second;
@@ -403,20 +425,20 @@ stateful_error_t raw_stateful_dispatch_t::commit_accepted_ingress (const object_
         }
         if (entry != _pending.end ())
             claim = std::move (entry->second.mailbox_claim);
-        lock.unlock ();
     }
     {
         // Relocation owns the accepted record; _pending keeps the original
         // reply token while the ordinary mailbox permit is returned.
         mailbox_claim_release_guard_t release (std::move (claim));
     }
-    if (admitted_application) {
+    if (admission.admitted_application) {
         tracer.trace (message_flow_outcome_t::admitted, [&] {
             message_flow_event_t event{};
             event.outcome = message_flow_outcome_t::admitted;
             const bool actor = owner.kind == object_kind_t::actor;
-            const bool request = admitted_kind == protocol::frozen_record_kind_t::actor_request
-                                 || admitted_kind == protocol::frozen_record_kind_t::spot_request;
+            const bool request =
+              admission.admitted_kind == protocol::frozen_record_kind_t::actor_request
+              || admission.admitted_kind == protocol::frozen_record_kind_t::spot_request;
             event.surface =
               actor ? dispatch_error_surface_t::spot_actor : dispatch_error_surface_t::spot_route;
             event.message_kind =
@@ -427,13 +449,14 @@ stateful_error_t raw_stateful_dispatch_t::commit_accepted_ingress (const object_
                 event.actor_id = owner.key;
             else
                 event.spot_id = owner.key;
-            event.packet_name = admitted_application->packet_name;
-            event.flow_id = admitted_application->flow_id;
-            event.flow_origin = admitted_application->flow_origin;
-            if (admitted_application->packet_name == protocol::framework_multipart_packet_name
-                && admitted_application->content_type
+            event.packet_name = admission.admitted_application->packet_name;
+            event.flow_id = admission.admitted_application->flow_id;
+            event.flow_origin = admission.admitted_application->flow_origin;
+            if (admission.admitted_application->packet_name
+                  == protocol::framework_multipart_packet_name
+                && admission.admitted_application->content_type
                      == protocol::framework_multipart_content_type) {
-                auto parts = protocol::decode_application_parts (*admitted_application);
+                auto parts = protocol::decode_application_parts (*admission.admitted_application);
                 if (!parts.empty ()) {
                     const auto header = messaging::envelope_codec_t{}.decode_header (
                       parts.front (), tracer.capture_enabled ());
@@ -450,9 +473,9 @@ stateful_error_t raw_stateful_dispatch_t::commit_accepted_ingress (const object_
             if (tracer.enabled (message_flow_log_mode_t::detailed)) {
                 event.detail_stage = "canonical_application.commit_accepted_ingress";
                 event.detail_result =
-                  "sequence=" + std::to_string (pending_key.sequence)
-                  + " operation_high=" + std::to_string (admitted_operation.high)
-                  + " operation_low=" + std::to_string (admitted_operation.low);
+                  "sequence=" + std::to_string (admission.pending_key.sequence)
+                  + " operation_high=" + std::to_string (admission.admitted_operation.high)
+                  + " operation_low=" + std::to_string (admission.admitted_operation.low);
             }
             return event;
         });
@@ -576,6 +599,7 @@ claimed_ingress_t claimed_ingress_t::prepare (const mesh::service_mailbox_record
     query.bound_session = original.bound_session_source.has_value ();
     if (original.parts.size () == 2) {
         query.header.emplace (original.parts.front ().copy ());
+        query.body.emplace (original.parts[1].copy ());
         try {
             query.body_bytes =
               protocol::application_payload_hwm_bytes (protocol::message_bytes (original.parts[1]));
@@ -589,16 +613,24 @@ claimed_ingress_t claimed_ingress_t::prepare (const mesh::service_mailbox_record
 
 task_t<stateful_error_t>
 raw_stateful_dispatch_t::ingest_claimed (object_ref_t owner,
-                                         mesh::service_mailbox_t::claim_handle_t slot,
+                                         ingress_original_t original,
                                          std::optional<retained_relocation_source_t> retained,
                                          std::optional<claimed_ingress_t> prepared)
 {
-    // Only immutable header/source values survive authority suspension. The body
-    // stays in the canonical mailbox slot until the handoff wins its take.
+    // Only immutable header/source values and shared frames survive authority suspension.
+    // The original stays in the canonical mailbox slot until the handoff wins its take.
+    auto *const slot = std::get_if<mesh::service_mailbox_t::claim_handle_t> (&original);
+    auto *const owned = std::get_if<mesh::service_mailbox_record_t> (&original);
     if (!prepared)
-        prepared = _transport->mailbox ().prepare (slot, claimed_ingress_t::prepare);
+        prepared = slot ? _transport->mailbox ().prepare (*slot, claimed_ingress_t::prepare)
+                        : std::optional{claimed_ingress_t::prepare (*owned)};
     if (!prepared)
         co_return stateful_error_t::not_found;
+    const auto take_original = [&] () -> std::optional<mesh::service_mailbox_record_t> {
+        if (slot)
+            return _transport->mailbox ().take (*slot);
+        return std::move (*owned);
+    };
     stateful_error_t validation = stateful_error_t::none;
     protocol::frozen_application_record_t frozen;
     protocol::application_payload_t payload;
@@ -675,13 +707,55 @@ raw_stateful_dispatch_t::ingest_claimed (object_ref_t owner,
         validation = stateful_error_t::conflict;
     }
 
-    auto original = _transport->mailbox ().take (slot);
-    if (!original)
-        co_return stateful_error_t::not_found;
-    auto record = std::move (*original);
-    accepted_mailbox_reservation_t reservation = std::exchange (record.transferred, {});
-    mailbox_claim_release_guard_t claim_guard (reservation);
-    if (validation != stateful_error_t::none) {
+    // The accepted record reads the shared body; the original is not taken for it.
+    bool malformed = false;
+    if (validation == stateful_error_t::none) {
+        try {
+            /* flow-correlation §4: at Off the wire flow pair is neither validated
+             * nor materialized at this ingress (structural skip only). */
+            payload = protocol::decode_application_payload (
+              protocol::message_bytes (*prepared->body), capture_flow ());
+            if (actor_header) {
+                auto accepted_target = actor_header->target;
+                accepted_target.object_generation = owner.object_generation;
+                accepted_target.owner_lease_generation =
+                  accepted_authority->target_owner_lease_generation;
+                actor_header->target = std::move (accepted_target);
+                frozen =
+                  accepted_actor_record (*actor_header, accepted_authority->source, payload,
+                                         *application_command == protocol::command::actorRequest);
+            } else {
+                auto accepted_target = spot_header->target;
+                accepted_target.owner_lease_generation =
+                  accepted_authority->target_owner_lease_generation;
+                spot_header->target = std::move (accepted_target);
+                frozen =
+                  accepted_spot_record (*spot_header, accepted_authority->source, payload,
+                                        *application_command == protocol::command::spotRequest);
+            }
+        }
+        catch (const protocol::service_wire_error_t &) {
+            malformed = true;
+        }
+    }
+    if (validation != stateful_error_t::none || malformed) {
+        auto taken = take_original ();
+        if (!taken)
+            co_return stateful_error_t::not_found;
+        auto record = std::move (*taken);
+        accepted_mailbox_reservation_t reservation = std::exchange (record.transferred, {});
+        mailbox_claim_release_guard_t claim_guard (reservation);
+        if (malformed) {
+            if (record.reply_token && record.correlation) {
+                claim_guard.dismiss ();
+                reply_failure_then_release_claim (
+                  *_transport, std::move (record),
+                  static_cast<std::uint32_t> (protocol::request_terminal_result::protocolError),
+                  static_cast<std::uint32_t> (protocol::framework_error_code::requestProtocolError),
+                  reservation);
+            }
+            co_return stateful_error_t::invalid;
+        }
         if (record.reply_token && record.correlation) {
             // moving replies with the retryable relocation terminal
             // (conflict + spotMoving maps to a retryable unavailable on the
@@ -708,72 +782,58 @@ raw_stateful_dispatch_t::ingest_claimed (object_ref_t owner,
         co_return validation;
     }
 
-    try {
-        /* flow-correlation §4: at Off the wire flow pair is neither validated
-         * nor materialized at this ingress (structural skip only). */
-        payload = protocol::decode_application_payload (protocol::message_bytes (record.parts[1]),
-                                                        capture_flow ());
-        if (actor_header) {
-            auto accepted_target = actor_header->target;
-            accepted_target.object_generation = owner.object_generation;
-            accepted_target.owner_lease_generation =
-              accepted_authority->target_owner_lease_generation;
-            actor_header->target = std::move (accepted_target);
-            frozen =
-              accepted_actor_record (*actor_header, accepted_authority->source, payload,
-                                     *application_command == protocol::command::actorRequest);
-        } else {
-            auto accepted_target = spot_header->target;
-            accepted_target.owner_lease_generation =
-              accepted_authority->target_owner_lease_generation;
-            spot_header->target = std::move (accepted_target);
-            frozen = accepted_spot_record (*spot_header, accepted_authority->source, payload,
-                                           *application_command == protocol::command::spotRequest);
-        }
-    }
-    catch (const protocol::service_wire_error_t &) {
-        if (record.reply_token && record.correlation) {
-            claim_guard.dismiss ();
-            reply_failure_then_release_claim (
-              *_transport, std::move (record),
-              static_cast<std::uint32_t> (protocol::request_terminal_result::protocolError),
-              static_cast<std::uint32_t> (protocol::framework_error_code::requestProtocolError),
-              reservation);
-        }
-        co_return stateful_error_t::invalid;
-    }
-
     protocol::frozen_record_t accepted_frozen;
     try {
         accepted_frozen = protocol::summarize_frozen_application_record (frozen);
     }
     catch (...) {
+        if (auto taken = take_original ())
+            mailbox_claim_release_guard_t release (std::exchange (taken->transferred, {}));
         co_return stateful_error_t::backpressured;
     }
     const auto request = frozen.reply_route_id.has_value ();
-    stateful_error_t enqueued;
-    try {
-        enqueued = commit_accepted_ingress (
-          owner, turn_record_t{0, {}, application_payload_bytes, std::move (frozen)},
-          pending_delivery_t{owner, std::move (accepted_frozen), record, request, {}, reservation},
-          true, stateful_error_t::conflict);
-    }
-    catch (...) {
-        enqueued = stateful_error_t::backpressured;
-    }
-    if (enqueued != stateful_error_t::none) {
-        if (record.reply_token && record.correlation) {
-            claim_guard.dismiss ();
-            reply_failure_then_release_claim (
-              *_transport, std::move (record),
-              static_cast<std::uint32_t> (protocol::request_terminal_result::rejected),
-              static_cast<std::uint32_t> (protocol::framework_error_code::requestRejected),
-              reservation);
-        }
+    // A cut-taken original was accepted before its owner's seal bound; it keeps the source
+    // FIFO position after the ingress already there.
+    auto take = [&] (const relocation_seal_binding_t *binding, pending_delivery_t &pending,
+                     bool &after_cut) {
+        auto taken =
+          slot ? _transport->mailbox ().take (
+                   *slot,
+                   [&] { after_cut = binding && binding->bound.load (std::memory_order_acquire); })
+               : std::optional{std::move (*owned)};
+        if (!taken)
+            return false;
+        pending.mailbox_claim = std::exchange (taken->transferred, {});
+        pending.transport = std::move (*taken);
+        return true;
+    };
+    ingress_admission_t admission;
+    const auto enqueued = co_await commit_accepted_ingress (
+      owner, turn_record_t{0, {}, application_payload_bytes, std::move (frozen)},
+      pending_delivery_t{owner, std::move (accepted_frozen), {}, request, {}, {}}, take,
+      stateful_error_t::conflict, admission);
+    if (enqueued == stateful_error_t::none)
         co_return enqueued;
+    // A turn the owner did not accept is answered once by whoever holds its original: the
+    // admission that took it, or this ingress when the owner refused before the take.
+    std::optional<mesh::service_mailbox_record_t> rejected;
+    accepted_mailbox_reservation_t reservation;
+    if (admission.rejected) {
+        reservation = std::move (admission.rejected->mailbox_claim);
+        rejected.emplace (std::move (admission.rejected->transport));
+    } else if (auto taken = take_original ()) {
+        reservation = std::exchange (taken->transferred, {});
+        rejected.emplace (std::move (*taken));
     }
-    claim_guard.dismiss ();
-    co_return stateful_error_t::none;
+    if (rejected && rejected->reply_token && rejected->correlation)
+        reply_failure_then_release_claim (
+          *_transport, std::move (*rejected),
+          static_cast<std::uint32_t> (protocol::request_terminal_result::rejected),
+          static_cast<std::uint32_t> (protocol::framework_error_code::requestRejected),
+          reservation);
+    else
+        mailbox_claim_release_guard_t release (std::move (reservation));
+    co_return enqueued;
 }
 std::pair<stateful_error_t, std::optional<stateful_delivery_t>>
 raw_stateful_dispatch_t::try_claim (const object_ref_t &owner,
@@ -804,29 +864,65 @@ raw_stateful_dispatch_t::try_claim (const object_ref_t &owner,
                                 pending->second.request, std::move (accepted_owner)}};
 }
 
-stateful_error_t raw_stateful_dispatch_t::accept_local (
+task_t<stateful_error_t> raw_stateful_dispatch_t::accept_local (
   const object_ref_t &owner,
   std::shared_ptr<runtime::serial_application_record_t> application_record,
-  std::function<void ()> before_application_handler,
+  ingress_original_t original,
+  std::optional<mesh::service_mailbox_record_t> &taken,
   std::function<bool (const std::optional<protocol::application_payload_t> &)> terminal)
 {
     if (!application_record || !application_record->payload ()
         || !application_record->payload ()->application_record)
-        return stateful_error_t::invalid;
+        co_return stateful_error_t::invalid;
     auto frozen = protocol::summarize_frozen_application_record (
       *application_record->payload ()->application_record);
     const auto request = frozen.reply_route_id.has_value ();
     auto turn = std::move (*application_record->payload ());
     turn.application_payload_bytes = protocol::application_payload_hwm_bytes (*frozen.application);
     application_record->payload ().reset ();
-    mesh::service_mailbox_record_t transport;
-    transport.before_application_handler = std::move (before_application_handler);
-    pending_delivery_t pending{owner,   std::move (frozen),   std::move (transport),
-                               request, std::move (terminal), {}};
     if (owner.kind == object_kind_t::actor)
         turn.accepted_owner = std::move (application_record);
-    return commit_accepted_ingress (owner, std::move (turn), std::move (pending), true,
-                                    stateful_error_t::conflict);
+    auto *const slot = std::get_if<mesh::service_mailbox_t::claim_handle_t> (&original);
+    auto *const owned = std::get_if<mesh::service_mailbox_record_t> (&original);
+    // The local original's mailbox credit returns at this accept boundary; the accepted
+    // owner keeps the application permit and native terminal (payload ownership §4).
+    accepted_mailbox_reservation_t credit;
+    auto take = [&] (const relocation_seal_binding_t *binding, pending_delivery_t &pending,
+                     bool &after_cut) {
+        if (slot)
+            taken = _transport->mailbox ().take (*slot, [&] {
+                after_cut = binding && binding->bound.load (std::memory_order_acquire);
+            });
+        else
+            taken.emplace (std::move (*owned));
+        if (!taken)
+            return false;
+        credit = std::exchange (taken->transferred, {});
+        pending.transport.before_application_handler =
+          std::move (taken->before_application_handler);
+        // The accepted record owns the body now; the original keeps its reply route only.
+        // A slot take is its only reader from here; a cut-taken original may still be read
+        // by the claim that lost its take, so it keeps its parts.
+        if (slot && taken->application)
+            taken->application->parts.clear ();
+        return true;
+    };
+    ingress_admission_t admission;
+    const auto accepted = co_await commit_accepted_ingress (
+      owner, std::move (turn),
+      pending_delivery_t{owner, std::move (frozen), {}, request, std::move (terminal), {}}, take,
+      stateful_error_t::conflict, admission);
+    // An owner that refused before the take leaves the original for its caller's reply.
+    if (accepted != stateful_error_t::none && !taken) {
+        if (slot)
+            taken = _transport->mailbox ().take (*slot);
+        else
+            taken.emplace (std::move (*owned));
+        if (taken)
+            credit = std::exchange (taken->transferred, {});
+    }
+    mailbox_claim_release_guard_t release (std::move (credit));
+    co_return accepted;
 }
 
 task_t<std::pair<stateful_error_t, std::optional<accepted_record_authority_t>>>
@@ -1038,11 +1134,22 @@ stateful_error_t raw_stateful_dispatch_t::stage_relocated (
         return stateful_error_t::invalid;
     }
     const auto request = frozen.reply_route_id.has_value ();
+    pending_delivery_t pending{owner, std::move (frozen), {}, request, std::move (terminal), {}};
+    auto take = [] (const relocation_seal_binding_t *binding, pending_delivery_t &,
+                    bool &after_cut) {
+        after_cut = binding && binding->bound.load (std::memory_order_acquire);
+        return true;
+    };
+    ingress_admission_t admission;
     try {
-        return commit_accepted_ingress (
-          owner, std::move (turn),
-          pending_delivery_t{owner, std::move (frozen), {}, request, std::move (terminal), {}},
-          true, stateful_error_t::already_exists, true);
+        auto outcome =
+          _objects
+            ->post_admitted (owner,
+                             admit_accepted_ingress (owner, turn, pending, take,
+                                                     stateful_error_t::already_exists, admission),
+                             true)
+            .get ();
+        return finish_accepted_ingress (owner, std::move (outcome), admission);
     }
     catch (...) {
         return stateful_error_t::backpressured;

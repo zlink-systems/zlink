@@ -1358,37 +1358,67 @@ task_t<bool> serial_execution_queue_t::adopt_application_prefix (
 }
 
 task_t<std::vector<std::shared_ptr<serial_application_record_t>>>
-serial_execution_queue_t::take_application_suffix (std::function<void ()> seal)
+serial_execution_queue_t::take_application_suffix (std::function<void ()> seal,
+                                                   producer_cut_t producer_cut)
 {
     return control_async<std::vector<std::shared_ptr<serial_application_record_t>>> (
-      [this, seal = std::move (seal)] {
+      [this, seal = std::move (seal), producer_cut = std::move (producer_cut)] {
+          // Controls of imported publications run here, outside any producer boundary.
           if (owns_shared_gate ())
               import_publications ();
-          std::unique_lock lock (_mutex, std::defer_lock);
-          if (!owns_shared_gate ())
-              lock.lock ();
-          if (seal)
-              seal ();
           std::vector<std::shared_ptr<serial_application_record_t>> suffix;
-          suffix.reserve (_application.queue.size ());
-          mutate_fifo_locked (_application, [&] {
-              for (auto it = _application.queue.begin (); it != _application.queue.end ();) {
-                  if (!it->application_record) {
-                      ++it;
-                      continue;
+          const auto take = [&] {
+              // A cut fixes the publication tail with the queue; a shared gate's FIFO is
+              // otherwise consumer-owned and needs no lock.
+              std::unique_lock lock (_mutex, std::defer_lock);
+              if (!owns_shared_gate () || producer_cut)
+                  lock.lock ();
+              if (seal)
+                  seal ();
+              suffix.reserve (_application.queue.size ());
+              mutate_fifo_locked (_application, [&] {
+                  for (auto it = _application.queue.begin (); it != _application.queue.end ();) {
+                      if (!it->application_record) {
+                          ++it;
+                          continue;
+                      }
+                      suffix.push_back (std::move (it->application_record));
+                      --_application.messages;
+                      _application.bytes -= it->byte_cost;
+                      it = _application.queue.erase (it);
                   }
-                  it->application_record->take_over ();
-                  auto &owned = std::get<serial_application_admission_t::durable_t> (
-                    it->application_record->admission.reservation);
-                  owned.supply.emplace<serial_application_admission_t::initial_t> ();
-                  if (auto retire = std::exchange (it->application_record->retire_invocation, {}))
-                      retire (result_t<void>::success ());
-                  suffix.push_back (std::move (it->application_record));
+              });
+              if (!producer_cut || !owns_shared_gate ())
+                  return;
+              // Published before the cut but not imported: the node keeps its control and
+              // cursor; only its record leaves, so a later import finds nothing to queue.
+              for (auto *node = _publication_cursor->next.load (std::memory_order_acquire); node;
+                   node = node->next.load (std::memory_order_acquire)) {
+                  auto &item = node->item;
+                  if (!item || item->lane != serial_work_lane_t::application
+                      || !item->application_record)
+                      continue;
+                  suffix.push_back (std::move (item->application_record));
                   --_application.messages;
-                  _application.bytes -= it->byte_cost;
-                  it = _application.queue.erase (it);
+                  _application.bytes -= item->byte_cost;
+                  item.reset ();
               }
-          });
+          };
+          if (producer_cut) {
+              if (!producer_cut (take))
+                  return suffix;
+          } else {
+              take ();
+          }
+          // Ownership changes and callbacks follow the producer boundary.
+          for (auto &record : suffix) {
+              record->take_over ();
+              auto &owned =
+                std::get<serial_application_admission_t::durable_t> (record->admission.reservation);
+              owned.supply.emplace<serial_application_admission_t::initial_t> ();
+              if (auto retire = std::exchange (record->retire_invocation, {}))
+                  retire (result_t<void>::success ());
+          }
           if (shared_spot_gate ())
               _spot_gate->disconnect_actor_head (shared_from_this ());
           return suffix;
