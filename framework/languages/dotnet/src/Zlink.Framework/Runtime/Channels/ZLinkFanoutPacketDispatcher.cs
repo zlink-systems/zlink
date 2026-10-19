@@ -90,6 +90,9 @@ internal sealed class ZLinkFanoutPacketDispatcher
         IReadOnlyList<Message> parts
     )
     {
+        if (parts.Count == 0)
+            return (null, ZLinkEnvelopeCodec.MissingHeader());
+
         try
         {
             var header = ZLinkEnvelopeCodec.DecodeHeader(

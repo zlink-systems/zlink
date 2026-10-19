@@ -199,6 +199,81 @@ public sealed class ChannelEnvelopeHandoffTests
         }
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Empty_fanout_reports_missing_header_once_without_throwing(bool readAtIngress)
+    {
+        var registration = new ZLinkFrameworkRegistration();
+        registration.DispatchOptions.Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
+        var logger = new DispatchLogger();
+        var dispatcher = new ZLinkFanoutPacketDispatcher(
+            new ZLinkHandlerRegistry([]),
+            null!,
+            registration,
+            null,
+            logger
+        );
+        using var received = new TopicMessage();
+        Assert.Empty(received.Parts);
+        if (readAtIngress)
+        {
+            // The receive loop reads the header and passes the result to dispatch.
+            var envelope = dispatcher.ReadHeader(received.Parts);
+            Assert.Null(envelope.Header);
+            Assert.NotNull(envelope.Error);
+            Assert.Equal(ZLinkEnvelopeCodec.MissingHeader().Message, envelope.Error.Message);
+            Assert.Empty(logger.Messages);
+            await dispatcher.DispatchEventMessageAsync(
+                "work",
+                received,
+                CancellationToken.None,
+                envelope
+            );
+        }
+        else
+        {
+            await dispatcher.DispatchEventMessageAsync("work", received, CancellationToken.None);
+        }
+        var report = Assert.Single(logger.Messages);
+        Assert.Contains(ZLinkEnvelopeCodec.MissingHeader().Message, report);
+        Assert.Contains(nameof(ZLinkEnvelopeProtocolException), report);
+        Assert.Contains("invalid_frame", report);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Empty_ClientServer_preserves_the_original_missing_part_exception(
+        bool readAtIngress
+    )
+    {
+        var registration = new ZLinkFrameworkRegistration();
+        var dispatcher = new ZLinkClientServerDispatcher(
+            null!,
+            null!,
+            registration.Codecs,
+            static () => false
+        );
+        using var received = Received.Create();
+        Assert.Empty(received.Parts);
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+        {
+            if (readAtIngress)
+                dispatcher.ReadHeader(received.Parts);
+            else
+                await dispatcher.DispatchAsync(
+                    "work",
+                    null!,
+                    received,
+                    new ZLinkChannelReplyGate(),
+                    uint.MaxValue,
+                    CancellationToken.None
+                );
+        });
+        Assert.Equal("ZLink envelope header part is missing.", error.Message);
+    }
+
     private sealed record PublishPayload(int Value);
 
     private sealed class PublishHandler(PublishProbe probe)
