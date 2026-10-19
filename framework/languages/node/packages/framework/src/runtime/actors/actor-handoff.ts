@@ -11,6 +11,7 @@ import {
   type MessageFollowSuppressionFence
 } from '../foundation/message-follow-suppression-registry';
 import type { ZLinkMessageFollowOrigin } from '../foundation/service-runtime-contracts';
+import { RELOCATION_REPLY_RETENTION_MS } from '../foundation/service-stateful-registry';
 import type { ServiceActorRouteFence } from '../foundation/service-stateful-wire-codec';
 import { OPERATION_IDENTITY_BYTES } from '../foundation/operation-identity';
 import { UINT64_BYTES } from '@zlink-systems/stream-wire';
@@ -20,7 +21,12 @@ import {
   ZLinkFrameworkInternalErrorKind
 } from '../framework-errors-internal';
 import { waitRequestReply } from '../messaging/request-deadline';
-import { encodeRoutingIdStorageHex, routingIdsEqual } from '../routing-id';
+import {
+  decodeRoutingId,
+  encodeRoutingIdStorageHex,
+  routingIdsEqual,
+  routingIdWireHex
+} from '../routing-id';
 import type { ZLinkSpotRouteTarget } from '../spots/spot-routing-internal';
 import { decodeActorRequestDeadlineUnixMs, decodeStreamHeader } from '../streams/protocol';
 import {
@@ -48,7 +54,7 @@ import type { ZLinkRemoteBoundSessionTarget } from './actor-runtime-state';
 
 export const DEFAULT_MESSAGE_FOLLOW_DURATION_MS =
   zlinkDefaultLocationOptions.messageFollowDurationMs;
-const RELOCATION_REPLY_RETENTION_MS = 24 * 60 * 60 * 1_000;
+export const RELOCATED_REQUEST_OWNED_BY_REQUESTER = Symbol('relocated request owned by requester');
 
 export interface ZLinkActorHandoffPacket {
   readonly index: number;
@@ -79,6 +85,7 @@ export interface ZLinkActorHandoffRequestSource {
   readonly ownerId: string;
   readonly ownerLeaseGeneration: string;
   readonly nodeRid: string;
+  readonly nodeRidHex?: string;
   readonly nodeGeneration: string;
   readonly replyRouteId: string;
 }
@@ -502,7 +509,11 @@ export class ZLinkActorHandoffCoordinator {
       handoff.pending.push({
         packet,
         origin: 'remote',
-        resolve: (response) => onResult(packet, { index: packet.index, ok: true, response }),
+        resolve: (response) => {
+          if (response !== RELOCATED_REQUEST_OWNED_BY_REQUESTER) {
+            onResult(packet, { index: packet.index, ok: true, response });
+          }
+        },
         reject: (error) =>
           onResult(packet, {
             index: packet.index,
@@ -943,8 +954,25 @@ export class ZLinkActorHandoffCoordinator {
         return Promise.resolve(undefined);
       }
       const result = new Promise((resolve, reject) => {
-        const source = this.captureRequestSource(handoff.sourceEvidence, context.replyRouteId);
+        const original = messageFollowOrigin?.requestSource;
+        const originalRidHex =
+          original === undefined ? undefined : routingIdWireHex(original.nodeRid);
+        const source =
+          original === undefined
+            ? this.captureRequestSource(handoff.sourceEvidence, context.replyRouteId)
+            : {
+                ownerId: original.ownerId,
+                ownerLeaseGeneration: original.leaseGeneration.toString(),
+                nodeRid: String(original.nodeRid),
+                ...(originalRidHex === undefined ? {} : { nodeRidHex: originalRidHex }),
+                nodeGeneration: original.nodeGeneration.toString(),
+                replyRouteId: messageFollowOrigin!.originalReplyRouteId.toString()
+              };
         const requestPacket = { ...packet, source };
+        if (original !== undefined) {
+          handoff.pending.push({ packet: requestPacket, origin, resolve, reject });
+          return;
+        }
         const route: ReplyRoute = {
           actorId,
           operationId: requestPacket.messageFollowContext.operationId,
@@ -1115,6 +1143,10 @@ export class ZLinkActorHandoffCoordinator {
     const byIndex = new Map(results.map((result) => [result.index, result]));
     for (let i = 0; i <= handoff.snapshotIndex; i++) {
       const pending = handoff.pending[i];
+      if (pending.packet.messageFollowOrigin?.requestSource !== undefined) {
+        pending.resolve?.(RELOCATED_REQUEST_OWNED_BY_REQUESTER);
+        continue;
+      }
       if (pending.packet.source !== undefined) continue;
       const result = byIndex.get(pending.packet.index);
       if (result?.ok === false) {
@@ -1987,7 +2019,10 @@ function requestSourcesEqual(
     expected.replyRouteId === actual.replyRouteId &&
     expected.ownerId === actual.ownerId &&
     expected.ownerLeaseGeneration === actual.ownerLeaseGeneration &&
-    expected.nodeRid === actual.nodeRid &&
+    routingIdsEqual(
+      decodeRoutingId(expected.nodeRid, expected.nodeRidHex),
+      decodeRoutingId(actual.nodeRid, actual.nodeRidHex)
+    ) &&
     expected.nodeGeneration === actual.nodeGeneration &&
     /^[1-9][0-9]*$/.test(actual.ownerLeaseGeneration) &&
     /^[1-9][0-9]*$/.test(actual.nodeGeneration)

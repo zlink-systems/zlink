@@ -1426,6 +1426,14 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     );
   }
 
+  acceptRelocatedActorTerminal(
+    operation: { readonly high: bigint; readonly low: bigint },
+    replyRouteId: bigint,
+    result: import('../../foundation/service-stateful-runtime').ServiceStatefulResult
+  ): 'terminalReceived' | 'alreadyTerminal' | undefined {
+    return this.requireStateful().acceptRelocatedActorTerminal(operation, replyRouteId, result);
+  }
+
   async actorSendToActor(
     source: ZLinkBackendActorRef,
     target: ZLinkBackendActorRef,
@@ -2473,6 +2481,7 @@ function decodeStatefulRecord(
   const ingressLifecycle = receiveIngressLifecycle(record);
   return {
     kind: stateful.receiveKind,
+    requestSource: record.requestSource,
     domain: readyDomain(record.domain),
     sourceNodeRid: (record.sourceRoutingId as RoutingId | undefined) ?? null,
     sourceSpotId: (stateful.sourceSpotId as RoutingId | undefined) ?? null,

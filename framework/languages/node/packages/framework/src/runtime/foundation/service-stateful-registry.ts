@@ -629,6 +629,8 @@ function createSpotState(
   }
 }
 
+export const RELOCATION_REPLY_RETENTION_MS = 24 * 60 * 60 * 1_000;
+
 export class ServiceTerminalOperationRegistry<T, Context = unknown> {
   private readonly operations: OperationRegistry<T, Context>;
 
@@ -644,8 +646,8 @@ export class ServiceTerminalOperationRegistry<T, Context = unknown> {
     return this.operations.register(timeoutMs, timeoutOwner, context);
   }
 
-  reply(id: bigint, value: T): boolean {
-    return this.operations.complete(id, value);
+  reply(id: bigint, value: T, terminalContextRetentionMs = 0): boolean {
+    return this.operations.complete(id, value, terminalContextRetentionMs);
   }
 
   fail(id: bigint, error: unknown): boolean {

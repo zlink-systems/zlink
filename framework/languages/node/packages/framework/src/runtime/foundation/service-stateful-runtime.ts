@@ -60,6 +60,7 @@ import {
   ServiceStaleGenerationError,
   ServiceStatefulRegistry,
   ServiceTerminalOperationRegistry,
+  RELOCATION_REPLY_RETENTION_MS,
   type ServiceActorRef,
   type ServiceActorState,
   type ServiceSessionBinding,
@@ -385,7 +386,7 @@ export class ServiceStatefulRuntime {
 
   readonly registry: ServiceStatefulRegistry;
 
-  private readonly operations: ServiceTerminalOperationRegistry<ServiceStatefulResult>;
+  private readonly operations: ServiceTerminalOperationRegistry<ServiceStatefulResult, bigint>;
   private readonly sessionDeliveries = new Map<string, ServiceSessionDelivery>();
   /**
    * A local Actor owner can replace its own session binding before the
@@ -1449,7 +1450,8 @@ export class ServiceStatefulRuntime {
     onAdmitted?: () => void,
     routeFence?: ServiceActorRouteFence
   ): ServiceStatefulPendingOperation {
-    const pending = this.operations.register(timeoutMs);
+    const operationLow = this.nextMessageFollowOperation++;
+    const pending = this.operations.register(timeoutMs, 'registry', operationLow);
     const route = routeFence ?? this.tryActorFence(target);
     if (route === undefined) {
       this.operations.reply(
@@ -1469,7 +1471,7 @@ export class ServiceStatefulRuntime {
             ...boundSession,
             sequence: this.nextSessionSequence++
           },
-      { high: this.nodeGeneration, low: this.nextMessageFollowOperation++ }
+      { high: this.nodeGeneration, low: operationLow }
     );
     this.submitRequest(
       pending,
@@ -1481,6 +1483,21 @@ export class ServiceStatefulRuntime {
       onAdmitted
     );
     return pending;
+  }
+
+  acceptRelocatedActorTerminal(
+    operation: { readonly high: bigint; readonly low: bigint },
+    replyRouteId: bigint,
+    result: ServiceStatefulResult
+  ): 'terminalReceived' | 'alreadyTerminal' | undefined {
+    if (
+      operation.high !== this.nodeGeneration ||
+      this.operations.context(replyRouteId) !== operation.low
+    )
+      return undefined;
+    return this.operations.reply(replyRouteId, result, RELOCATION_REPLY_RETENTION_MS)
+      ? 'terminalReceived'
+      : 'alreadyTerminal';
   }
 
   async sendToInstanceSpot(
@@ -2408,10 +2425,11 @@ export class ServiceStatefulRuntime {
               : { sourceBindingGeneration: record.boundSession.bindingGeneration }),
             targetActor: actor.ref,
             messageFollowOrigin: {
+              requestSource: ingress.requestSource,
               target: record.target,
               sourceNodeRid: ingress.sourceRoutingId,
               originalOperation: record.operation,
-              originalReplyRouteId: ingress.requestSequence ?? 0n
+              originalReplyRouteId: record.correlation ?? 0n
             },
             ...(record.kind === 'actorRequest'
               ? { reply: this.replyPort(ingress, record.correlation) }
@@ -3957,6 +3975,7 @@ export class ServiceStatefulRuntime {
       domain,
       parts: [ingress.parts[0]!, payloadFrame],
       sourceRoutingId: ingress.sourceRoutingId,
+      requestSource: ingress.requestSource,
       sourceRoute: ingress.sourceRoute,
       ...(ingress.reply === undefined ? {} : { reply: ingress.reply }),
       ...(ingress.requestSequence === undefined
@@ -4699,6 +4718,8 @@ export class ServiceStatefulRuntime {
       return;
     }
     if (decoded.kind === 'actorRequest') {
+      const sourcePending = this.acceptRequestSource(ingress);
+      if (sourcePending !== undefined) await sourcePending;
       const current =
         decoded.boundSession === undefined
           ? this.validateActorMessageFence(decoded.target)
@@ -4713,10 +4734,11 @@ export class ServiceStatefulRuntime {
           correlation: decoded.correlation,
           targetActor: current.ref,
           messageFollowOrigin: {
+            requestSource: ingress.requestSource,
             target: decoded.target,
             sourceNodeRid: ingress.sourceRoutingId,
             originalOperation: decoded.operation,
-            originalReplyRouteId: ingress.requestSequence ?? 0n
+            originalReplyRouteId: decoded.correlation ?? 0n
           },
           ...(decoded.sourceActor === undefined
             ? {}
