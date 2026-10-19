@@ -518,3 +518,127 @@ test('host capacity metrics use the repository observation rather than the publi
   assert.equal(snapshot.actorCapacity.reserved, 2);
   assert.equal(descriptor.populationCapacity.actors.active, 0);
 });
+
+
+test('Store operation metrics classify owner claims and exclude normal conflicts', async () => {
+  const sink = collector();
+  const metrics = new framework.ZLinkRuntimeMetrics(sink.provider);
+  const { ZLinkLocationStoreRepository } = require('../../packages/framework/dist/runtime/locations/location-store-repository');
+  const { ZLinkInMemoryProviderLocationStore } = require('../../packages/framework/dist/runtime/locations/in-memory-provider-location-store');
+  const provider = new ZLinkInMemoryProviderLocationStore();
+  const repository = new ZLinkLocationStoreRepository({
+    read: provider.read.bind(provider), scan: provider.scan.bind(provider),
+    async write() { throw new Error('backend unavailable'); }
+  }, undefined, metrics);
+  const runtime = new framework.ZLinkLocationRuntime({
+    stores: { locationStore: repository, ownerLeaseStore: repository }, metrics,
+    setTimer: () => 0, clearTimer() {}
+  });
+  await runtime.start('metric-owner');
+  const operations = sink.records.filter(row => row.name === 'zlink.location.store.errors').map(row => row.attributes.operation);
+  assert.deepEqual(operations, ['compare_exchange']);
+  const fixture = require('../../../../runtime/protocol/fixtures/runtime-metrics-v1.json');
+  const allowed = fixture.metrics.find(row => row.name === 'zlink.location.store.errors').labelValues.operation;
+  for (const operation of operations) assert.ok(allowed.includes(operation), operation);
+});
+
+
+function assertStoreOperations(sink, expected) {
+  const operations = sink.records.filter(row => row.name === 'zlink.location.store.errors').map(row => row.attributes.operation);
+  assert.deepEqual(operations, expected);
+  const allowed = require('../../../../runtime/protocol/fixtures/runtime-metrics-v1.json').metrics
+    .find(row => row.name === 'zlink.location.store.errors').labelValues.operation;
+  for (const operation of operations) assert.ok(allowed.includes(operation), operation);
+}
+
+for (const [method, args, operation] of [
+  ['readOwnerLease', ['owner'], 'read'],
+  ['claimOwnerLease', ['owner', 15000], 'compare_exchange'],
+  ['renewOwnerLease', [{ ownerId: 'owner', leaseGeneration: 1n }, 15000], 'lease_renew'],
+  ['releaseOwnerLease', [{ ownerId: 'owner', leaseGeneration: 1n }], 'release'],
+  ['removeMeshNode', [{ meshName: 'mesh', rid: 'node' }, { ownerId: 'owner', leaseGeneration: 1n }], 'release'],
+  ['removeAllByOwner', [{ ownerId: 'owner', leaseGeneration: 1n }], 'release'],
+  ['readAuthority', [{ value: 'zla1:a:9:authority' }], 'read']
+]) {
+  test(`Store backend failure ${method} records ${operation} once`, async () => {
+    const sink = collector();
+    const { ZLinkLocationStoreRepository } = require('../../packages/framework/dist/runtime/locations/location-store-repository');
+    const fail = async () => { throw new Error('backend unavailable'); };
+    const repository = new ZLinkLocationStoreRepository({ read: fail, write: fail, scan: fail }, undefined, new framework.ZLinkRuntimeMetrics(sink.provider));
+    await assert.rejects(() => repository[method](...args));
+    assertStoreOperations(sink, [operation]);
+  });
+}
+
+for (const [method, args, operation] of [
+  ['put', [{ value: 'reference' }, Buffer.from([1]), 15000], 'relocation_put'],
+  ['read', [{ value: 'reference' }], 'relocation_get'],
+  ['renew', [{ value: 'reference' }, 15000], 'relocation_put'],
+  ['delete', [{ value: 'reference' }], 'relocation_delete'],
+  ['putNew', [Buffer.from([1]), 15000], 'relocation_put']
+]) {
+  test(`Relocation backend failure ${method} records ${operation} once`, async () => {
+    const sink = collector();
+    const { ZLinkProviderRelocationRepository } = require('../../packages/framework/dist/runtime/locations/relocation-blob');
+    const fail = async () => { throw new Error('backend unavailable'); };
+    const repository = new ZLinkProviderRelocationRepository({ put: fail, read: fail, renew: fail, delete: fail }, new framework.ZLinkRuntimeMetrics(sink.provider));
+    await assert.rejects(() => repository[method](...args));
+    assertStoreOperations(sink, [operation]);
+  });
+  for (const Failure of [TypeError, RangeError]) {
+    test(`Relocation ${method} ${Failure.name} does not count`, async () => {
+      const sink = collector();
+      const { ZLinkProviderRelocationRepository } = require('../../packages/framework/dist/runtime/locations/relocation-blob');
+      const fail = async () => { throw new Failure('input'); };
+      const repository = new ZLinkProviderRelocationRepository({ put: fail, read: fail, renew: fail, delete: fail }, new framework.ZLinkRuntimeMetrics(sink.provider));
+      await assert.rejects(() => repository[method](...args), Failure);
+      assertStoreOperations(sink, []);
+    });
+  }
+}
+
+test('Location input, codec, normal conflicts, expiry and recovery health do not count as backend errors', async () => {
+  const sink = collector();
+  const metrics = new framework.ZLinkRuntimeMetrics(sink.provider);
+  const { ZLinkLocationStoreRepository } = require('../../packages/framework/dist/runtime/locations/location-store-repository');
+  const { ZLinkInMemoryProviderLocationStore } = require('../../packages/framework/dist/runtime/locations/in-memory-provider-location-store');
+  const provider = new ZLinkInMemoryProviderLocationStore();
+  const repository = new ZLinkLocationStoreRepository(provider, undefined, metrics);
+  await repository.claimOwnerLease('owner', 15000);
+  assert.equal((await repository.claimOwnerLease('owner', 15000)).kind, 'conflict');
+  await assert.rejects(() => repository.listAuthorities('', undefined, 0), RangeError);
+  const corrupt = new ZLinkLocationStoreRepository({
+    async read() { return { kind: 'found', value: { bytes: Buffer.from('{'), version: { value: '1' }, storeNow: new Date() } }; },
+    write: provider.write.bind(provider), scan: provider.scan.bind(provider)
+  }, undefined, metrics);
+  await assert.rejects(() => corrupt.readOwnerLease('owner'));
+  const runtime = new framework.ZLinkLocationRuntime({ stores: { locationStore: repository, ownerLeaseStore: repository }, metrics });
+  runtime.closeOwnerLeaseAdmission(new Error('recovery handler failed'));
+  runtime.notifyIfStale({ status: framework.ZLinkLocationWriteStatus.RejectedConflict }, 'actor', 'key');
+  assertStoreOperations(sink, []);
+});
+
+
+test('owner claim confirmation is a read and is counted once', async () => {
+  const sink = collector();
+  const metrics = new framework.ZLinkRuntimeMetrics(sink.provider);
+  const { ZLinkLocationStoreRepository } = require('../../packages/framework/dist/runtime/locations/location-store-repository');
+  const { ZLinkInMemoryProviderLocationStore } = require('../../packages/framework/dist/runtime/locations/in-memory-provider-location-store');
+  const provider = new ZLinkInMemoryProviderLocationStore();
+  await new ZLinkLocationStoreRepository(provider).claimOwnerLease('owner', 15000);
+  let reads = 0;
+  const repository = new ZLinkLocationStoreRepository({
+    read(key, signal) {
+      if (++reads === 3) throw new Error('confirmation backend unavailable');
+      return provider.read(key, signal);
+    }, write: provider.write.bind(provider), scan: provider.scan.bind(provider)
+  }, undefined, metrics);
+  const runtime = new framework.ZLinkLocationRuntime({ stores: { locationStore: repository, ownerLeaseStore: repository }, metrics, ownerId: 'owner', setTimer: () => 0, clearTimer() {} });
+  await runtime.start('node');
+  assertStoreOperations(sink, ['read']);
+});
+
+test('shared Store label fixture rejects an undeclared operation', () => {
+  const sink = { records: [{ name: 'zlink.location.store.errors', attributes: { operation: 'owner_lease_claim' } }] };
+  assert.throws(() => assertStoreOperations(sink, ['owner_lease_claim']), assert.AssertionError);
+});
