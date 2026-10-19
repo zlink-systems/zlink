@@ -170,6 +170,12 @@ member만 ready 계기에 포함한다. Remote MeshNode가 identity, endpoint, C
 | `source` | `manual`, `redis`, `manual_and_redis` |
 | Selection failure `reason` | `no_member`, `not_ready`, `draining` |
 | `surface` | `node`, `channel`, `spot`, `instance_spot`, `actor` |
+| Request `outcome` | `completed`, `timed_out`, `cancelled`, `shutdown`, `failed` |
+
+Request `outcome`은 request의 terminal 결과 하나를 값 하나로 기록한다. 성공 reply를 받으면
+`completed`, deadline이 지나면 `timed_out`, 호출자가 취소하면 `cancelled`, runtime 종료가 끝내면
+`shutdown`이고, 그 밖의 terminal 실패(오류 reply, 대상 없음, transport 실패 등)는 모두 `failed`다.
+`zlink.mesh_node.request.timeouts`는 `outcome=timed_out`으로 끝난 request만 센다.
 
 ## 5. One-way message drop
 
