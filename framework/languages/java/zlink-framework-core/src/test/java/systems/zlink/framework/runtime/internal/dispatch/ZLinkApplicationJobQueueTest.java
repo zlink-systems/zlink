@@ -29,6 +29,43 @@ import java.util.concurrent.atomic.AtomicReference;
 
 final class ZLinkApplicationJobQueueTest {
     @Test
+    void rotationCountAndResumedSourceRespectOlderFifoWaiters() {
+        try (var queue = queue(1)) {
+            assertEquals(
+                    1, queue.reserveRotationBudget(ZLinkReceiveBatchBudget.DEFAULT_MAX_MESSAGES));
+            var older = queue.acquire(ZLinkApplicationJobQueue.Origin.LOCAL).toCompletableFuture();
+            var tasks = new java.util.ArrayDeque<Runnable>();
+            var pending = new AtomicReference<CompletableFuture<ZLinkApplicationJobQueue.Permit>>();
+            var resumed = new AtomicReference<ZLinkApplicationJobQueue.Permit>();
+            assertNull(
+                    queue.acquireOrResume(
+                            tasks::add,
+                            resumed::set,
+                            pending,
+                            ZLinkApplicationJobQueue.Origin.REMOTE));
+            assertEquals(2, queue.snapshot().capacityWaiters());
+            assertEquals(
+                    0, queue.reserveRotationBudget(ZLinkReceiveBatchBudget.DEFAULT_MAX_MESSAGES));
+            queue.abandonRotationBudget(1);
+            assertTrue(older.isDone());
+            assertTrue(tasks.isEmpty());
+            assertEquals(1, queue.snapshot().capacityWaiters());
+            assertEquals(
+                    0, queue.reserveRotationBudget(ZLinkReceiveBatchBudget.DEFAULT_MAX_MESSAGES));
+            older.join().close();
+            assertEquals(1, tasks.size());
+            tasks.removeFirst().run();
+            assertNull(pending.get());
+            assertEquals(0, queue.snapshot().capacityWaiters());
+            assertEquals(
+                    0,
+                    queue.reserveRotationBudget(ZLinkReceiveBatchBudget.DEFAULT_MAX_MESSAGES - 1));
+            resumed.get().abandonReservation();
+            assertEquals(0, queue.snapshot().permitsInUse());
+        }
+    }
+
+    @Test
     void rotationBudgetReservesFreeCapacityOnceAndReturnsTheRestToWaiters() {
         try (var queue = queue(4)) {
             var first =

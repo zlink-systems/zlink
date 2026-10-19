@@ -171,6 +171,31 @@ final class ZLinkStreamRuntimeIngressTest {
     }
 
     @Test
+    void ordinaryReceiveDoesNotPostAnAdditionalStateOwnerTask() throws Exception {
+        FakeStream stream = new FakeStream();
+        ZLinkStreamRuntime runtime =
+                startDeterministic(stream, new java.util.concurrent.atomic.AtomicLong());
+        stream.errorHandler.handle(PEER_A, MonitorEventType.CONNECTION_READY, 0, "ready");
+        AtomicInteger postedTasks = new AtomicInteger();
+        var laneField = ZLinkStreamRuntime.class.getDeclaredField("stateLane");
+        laneField.setAccessible(true);
+        laneField.set(
+                runtime,
+                new systems.zlink.framework.runtime.internal.execution.ZLinkStateLane(
+                        command -> {
+                            postedTasks.incrementAndGet();
+                            command.run();
+                        }));
+
+        dispatchDeterministic(runtime, "ordinary", false);
+
+        assertEquals(
+                0,
+                postedTasks.get(),
+                "an idle receive-state owner must not add a task before the handler queue");
+    }
+
+    @Test
     void heartbeatContractConstructionRunsOutsideStateLane() throws Exception {
         FakeStream stream = new FakeStream();
         var clock = new java.util.concurrent.atomic.AtomicLong();
@@ -221,18 +246,47 @@ final class ZLinkStreamRuntimeIngressTest {
         AtomicReference<Thread> readyThread = new AtomicReference<>();
         var laneField = ZLinkStreamRuntime.class.getDeclaredField("stateLane");
         laneField.setAccessible(true);
-        laneField.set(
-                runtime,
+        var lane =
                 new systems.zlink.framework.runtime.internal.execution.ZLinkStateLane(
                         command -> {
                             command.run();
                             if (Thread.currentThread() == readyThread.get()
-                                    && TestSession.createdCount.get() == 1) {
+                                    && TestSession.createdCount.get() == 2) {
                                 // Hold the creator after publication has released the state lane.
-                                published.complete(null);
                                 releaseReady.join();
                             }
-                        }));
+                        });
+        laneField.set(runtime, lane);
+        var mailboxField = lane.getClass().getDeclaredField("mailbox");
+        mailboxField.setAccessible(true);
+        var sessionsField = ZLinkStreamRuntime.class.getDeclaredField("sessions");
+        sessionsField.setAccessible(true);
+        sessionsField.set(
+                runtime,
+                new java.util.HashMap<String, Object>() {
+                    @Override
+                    public Object putIfAbsent(String key, Object state) {
+                        Object current = super.putIfAbsent(key, state);
+                        if (current == null && Thread.currentThread() == readyThread.get()) {
+                            published.complete(null);
+                            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+                            Queue<?> mailbox = null;
+                            do {
+                                try {
+                                    mailbox = (Queue<?>) mailboxField.get(lane);
+                                } catch (IllegalAccessException failure) {
+                                    throw new AssertionError(failure);
+                                }
+                                if (mailbox != null && !mailbox.isEmpty()) break;
+                                Thread.onSpinWait();
+                            } while (System.nanoTime() < deadline);
+                            assertTrue(
+                                    mailbox != null && !mailbox.isEmpty(),
+                                    "data registration must queue behind the published Session");
+                        }
+                        return current;
+                    }
+                });
         TestSession.constructionHook =
                 () -> {
                     if (Thread.currentThread() == readyThread.get()) {
