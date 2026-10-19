@@ -437,5 +437,4 @@ export function consumeSubmittedMessage(message: Message): void {
   markMessageConsumed(message);
 }
 
-/** @internal Refill caller-provided receive storage with the next native frame. */
 export type MessageLike = Message | BufferLike;
