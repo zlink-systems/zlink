@@ -871,12 +871,15 @@ raw_mesh_node_owner_t::peer_reconcile_t raw_mesh_node_owner_t::peer_reconcile ()
     return _peer_reconcile;
 }
 
-void raw_mesh_node_owner_t::configure_request_sources (live_location_reader_t *sources)
+void raw_mesh_node_owner_t::configure_request_sources (
+  live_location_reader_t *sources,
+  std::function<std::shared_ptr<const location_owner_token_t> ()> local_lease)
 {
     std::lock_guard lifecycle_lock (_lifecycle_mutex);
-    if (_router || _request_sources)
+    if (_router || _request_sources || _local_request_lease)
         throw std::logic_error ("request source reader must be configured once before start");
     _request_sources = sources;
+    _local_request_lease = std::move (local_lease);
 }
 
 std::optional<request_source_t>
@@ -1141,7 +1144,8 @@ task_t<bool> raw_mesh_node_owner_t::request_with_header (
   std::optional<std::uint64_t> requested_correlation,
   bool target_claimed,
   mesh_request_metric_t request_metric,
-  service_liveness_registry_t::connection_t admission)
+  service_liveness_registry_t::connection_t admission,
+  std::optional<foundation::operation_registry_t::request_identity_t> request)
 {
     if (timeout <= std::chrono::milliseconds::zero ()) {
         throw std::invalid_argument ("raw mesh request timeout must be positive");
@@ -1164,8 +1168,9 @@ task_t<bool> raw_mesh_node_owner_t::request_with_header (
     };
     auto start =
       _lane
-        .run ([this, &header, &request_metric, requested_correlation, timeout,
-               callback = std::move (callback), target_routing_id = std::move (target_routing_id),
+        .run ([this, &header, &request_metric, request = std::move (request), requested_correlation,
+               timeout, callback = std::move (callback),
+               target_routing_id = std::move (target_routing_id),
                encoded_payload = std::move (encoded_payload),
                admission = std::move (admission)] () mutable {
             std::shared_ptr<detail::backend::raw_route_port_t> port;
@@ -1183,9 +1188,11 @@ task_t<bool> raw_mesh_node_owner_t::request_with_header (
             wire.reserve (2);
             wire.push_back (header (value.correlation));
             wire.push_back (std::move (encoded_payload));
+            if (request && request->operation == foundation::call_id_t{})
+                request->operation = value.operation;
             value.registered = _operations->register_operation (
               value.operation, foundation::operation_registry_t::clock_t::now () + timeout,
-              std::move (callback), {}, std::move (request_metric));
+              std::move (callback), {}, std::move (request_metric), std::move (request));
             if (value.registered) {
                 try {
                     trace_mesh ("request-submit correlation=" + std::to_string (value.correlation)
@@ -1722,7 +1729,11 @@ std::optional<foundation::call_id_t> raw_mesh_node_owner_t::register_local_opera
           }
           if (!_operations->register_operation (
                 operation, deadline, std::move (callback), {},
-                mesh_request_metric_t (_request_metrics, request_surface)))
+                mesh_request_metric_t (_request_metrics, request_surface),
+                request_surface == mesh_request_surface_t::spot
+                    || request_surface == mesh_request_surface_t::actor
+                  ? request_identity (protocol::wire_operation_id_t{operation.high, operation.low})
+                  : std::nullopt))
               return std::nullopt;
           signal_activity ();
           return operation;
@@ -1754,6 +1765,58 @@ bool raw_mesh_node_owner_t::unregister_local_operation (
     catch (...) {
         return false;
     }
+}
+
+std::optional<foundation::operation_registry_t::request_identity_t>
+raw_mesh_node_owner_t::request_identity (
+  std::optional<protocol::wire_operation_id_t> operation) const
+{
+    const auto lease = _local_request_lease ? _local_request_lease () : nullptr;
+    if (!lease || lease->owner_id.empty () || lease->lease_generation <= 0)
+        return std::nullopt;
+    return foundation::operation_registry_t::request_identity_t{
+      operation ? foundation::call_id_t{operation->high, operation->low} : foundation::call_id_t{},
+      lease};
+}
+
+std::optional<protocol::request_source_fence_t>
+raw_mesh_node_owner_t::relocated_request_source (const protocol::wire_operation_id_t &operation,
+                                                 std::uint64_t reply_route_id) const
+{
+    const auto identity = _operations->request_identity (
+      {_options.descriptor.lifecycle_generation, reply_route_id}, {operation.high, operation.low});
+    if (!identity)
+        return std::nullopt;
+    return protocol::request_source_fence_t{
+      identity->lease->owner_id, static_cast<std::uint64_t> (identity->lease->lease_generation),
+      _options.descriptor.node_routing_id, _options.descriptor.lifecycle_generation};
+}
+
+bool raw_mesh_node_owner_t::owns_request_source (const protocol::request_source_fence_t &source,
+                                                 const service_node_descriptor_t &local) noexcept
+{
+    return source.node_routing_id == local.node_routing_id
+           && source.node_generation == local.lifecycle_generation;
+}
+
+bool raw_mesh_node_owner_t::complete_relocated_request (
+  const protocol::reply_relay_t &relay, const std::optional<protocol::application_payload_t> &reply)
+{
+    if (!relocated_request_source (relay.operation, relay.reply_route_id))
+        return false;
+    if (relay.terminal_result == 0 && !reply)
+        return false;
+    const foundation::call_id_t id{_options.descriptor.lifecycle_generation, relay.reply_route_id};
+    if (relay.terminal_result == 0 && reply)
+        return _operations->complete (id, detail::backend::materialize_binding_part (
+                                            protocol::encode_application_payload (*reply)));
+    const protocol::reply_header_t failure{relay.reply_route_id, relay.terminal_result,
+                                           static_cast<std::uint32_t> (relay.failure_code)};
+    return _operations->fail (
+      id, foundation::operation_terminal_t::transport_failed,
+      detail::backend::materialize_binding_part (protocol::encode_reply_header (
+        failure.correlation, failure.terminal_result, failure.failure_code)),
+      {}, request_metric_terminal (failure));
 }
 
 bool raw_mesh_node_owner_t::operation_pending (const foundation::call_id_t &operation) const
@@ -1842,7 +1905,8 @@ raw_mesh_node_owner_t::request_to_spot (const std::vector<std::uint8_t> &target_
                                                        message_follow_hop_count);
       },
       application_payload, timeout, std::move (callback), correlation, false,
-      mesh_request_metric_t (_request_metrics, mesh_request_surface_t::spot));
+      mesh_request_metric_t (_request_metrics, mesh_request_surface_t::spot), {},
+      request_identity (operation));
 }
 
 task_t<bool> raw_mesh_node_owner_t::send_to_actor (
@@ -1904,7 +1968,8 @@ task_t<bool> raw_mesh_node_owner_t::request_to_actor (
             message_follow_hop_count, bound_session_source);
       },
       application_payload, timeout, std::move (callback), correlation, false,
-      mesh_request_metric_t (_request_metrics, mesh_request_surface_t::actor));
+      mesh_request_metric_t (_request_metrics, mesh_request_surface_t::actor), {},
+      request_identity (operation));
 }
 
 task_t<bool> raw_mesh_node_owner_t::request_user_spot_create (

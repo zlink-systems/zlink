@@ -185,7 +185,8 @@ class raw_stateful_dispatch_t
                                      const protocol::reply_relay_t &relay,
                                      const std::optional<protocol::application_payload_t> &reply);
     stateful_error_t discard_pending (const object_ref_t &owner);
-    void release_relocated_payloads (const object_ref_t &owner);
+    void release_relocated_payloads (const object_ref_t &owner,
+                                     const std::vector<turn_record_t> &committed);
     /* The expired-owner relocation terminal (28 §4.4): each pending request
      * of the owner gets one Unavailable terminal on its original reply
      * route, then every pending record is dropped as by discard_pending. */
@@ -365,6 +366,7 @@ class raw_relocation_replay_coordinator_t
                             std::uint64_t target_attempt_generation,
                             const protocol::relocation_object_t &object);
     bool register_terminal_source (raw_relocation_terminal_source_registration_t registration);
+    bool owns_request_source (const protocol::request_source_fence_t &source) const;
     task_t<void> unregister_terminal_sources (const protocol::relocation_id_t &relocation);
     bool unregister_terminal_source (const protocol::relocation_id_t &,
                                      const protocol::wire_operation_id_t &);

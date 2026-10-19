@@ -469,6 +469,8 @@ class maintenance_runtime_t
 {
   public:
     using observer_t = std::function<void (const relocation_result_t &)>;
+    using committed_terminal_t =
+      std::function<void (const object_ref_t &, const std::vector<turn_record_t> &)>;
 
     maintenance_runtime_t (stateful_object_runtime_t &objects,
                            std::shared_ptr<authority_relocation_port_t> authority,
@@ -518,7 +520,7 @@ class maintenance_runtime_t
     /* Expired-owner terminal (28 §4.4): replies Unavailable once to each
      * pending request of the object and drops its accepted records. */
     void attach_unavailable_terminal (std::function<void (const object_ref_t &)> terminal) noexcept;
-    void attach_committed_terminal (std::function<void (const object_ref_t &)> terminal) noexcept;
+    void attach_committed_terminal (committed_terminal_t terminal) noexcept;
 
     relocation_gate_snapshot_t gate_snapshot () const;
 
@@ -666,7 +668,7 @@ class maintenance_runtime_t
     raw_relocation_replay_coordinator_t *_relocation_wire = nullptr;
     std::function<raw_stateful_dispatch_t *()> _relocation_dispatch;
     std::function<void (const object_ref_t &)> _unavailable_terminal;
-    std::function<void (const object_ref_t &)> _committed_terminal;
+    committed_terminal_t _committed_terminal;
     /* route_convergence metric + SafeToShutdown obligation count, held
      * separately from `this` in a shared_ptr: the retention coroutine in
      * retain_message_follow is detached (self-keeping via

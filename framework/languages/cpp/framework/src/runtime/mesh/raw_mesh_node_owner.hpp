@@ -158,7 +158,9 @@ class raw_mesh_node_owner_t
     using peer_reconcile_t = std::function<void (const std::vector<std::uint8_t> &)>;
     void configure_peer_reconcile (peer_reconcile_t request);
     peer_reconcile_t peer_reconcile () const;
-    void configure_request_sources (live_location_reader_t *sources);
+    void configure_request_sources (
+      live_location_reader_t *sources,
+      std::function<std::shared_ptr<const location_owner_token_t> ()> local_lease = {});
     live_location_reader_t *request_sources () const noexcept { return _request_sources; }
     // A local publication keeps its own node and lease observation (Location §9.3).
     static std::optional<request_source_t>
@@ -212,6 +214,13 @@ class raw_mesh_node_owner_t
                           foundation::operation_terminal_t terminal,
                           foundation::operation_registry_t::before_dispatch_t before_dispatch = {});
     bool unregister_local_operation (const foundation::call_id_t &operation) noexcept;
+    std::optional<protocol::request_source_fence_t>
+    relocated_request_source (const protocol::wire_operation_id_t &operation,
+                              std::uint64_t reply_route_id) const;
+    static bool owns_request_source (const protocol::request_source_fence_t &source,
+                                     const service_node_descriptor_t &local) noexcept;
+    bool complete_relocated_request (const protocol::reply_relay_t &relay,
+                                     const std::optional<protocol::application_payload_t> &reply);
     bool operation_pending (const foundation::call_id_t &operation) const;
     std::size_t pending_operation_count () const;
     task_t<bool> send_to_channel (const std::string &channel_name,
@@ -470,16 +479,17 @@ class raw_mesh_node_owner_t
                                 std::vector<std::uint8_t> header);
     void send_descriptor_update_on_lane (const service_node_descriptor_t &descriptor,
                                          const std::vector<admitted_peer_t> &peers);
-    task_t<bool>
-    request_with_header (std::vector<std::uint8_t> target_routing_id,
-                         const std::function<std::vector<std::uint8_t> (std::uint64_t)> &header,
-                         const protocol::application_payload_t &application_payload,
-                         std::chrono::milliseconds timeout,
-                         foundation::operation_registry_t::callback_t callback,
-                         std::optional<std::uint64_t> correlation = std::nullopt,
-                         bool target_claimed = false,
-                         mesh_request_metric_t request_metric = {},
-                         service_liveness_registry_t::connection_t admission = {});
+    task_t<bool> request_with_header (
+      std::vector<std::uint8_t> target_routing_id,
+      const std::function<std::vector<std::uint8_t> (std::uint64_t)> &header,
+      const protocol::application_payload_t &application_payload,
+      std::chrono::milliseconds timeout,
+      foundation::operation_registry_t::callback_t callback,
+      std::optional<std::uint64_t> correlation = std::nullopt,
+      bool target_claimed = false,
+      mesh_request_metric_t request_metric = {},
+      service_liveness_registry_t::connection_t admission = {},
+      std::optional<foundation::operation_registry_t::request_identity_t> request = {});
     task_t<bool> request_infrastructure (
       const std::vector<std::uint8_t> &target_routing_id,
       const std::function<std::vector<std::uint8_t> (std::uint64_t)> &header,
@@ -552,6 +562,9 @@ class raw_mesh_node_owner_t
       _expected_peers;
     peer_reconcile_t _peer_reconcile;
     live_location_reader_t *_request_sources = nullptr;
+    std::function<std::shared_ptr<const location_owner_token_t> ()> _local_request_lease;
+    std::optional<foundation::operation_registry_t::request_identity_t>
+    request_identity (std::optional<protocol::wire_operation_id_t> operation) const;
     struct selected_route_t
     {
         std::uint64_t generation;

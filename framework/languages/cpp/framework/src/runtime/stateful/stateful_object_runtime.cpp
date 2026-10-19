@@ -1728,7 +1728,8 @@ stateful_object_runtime_t::abort_relocation_before_cutover (std::uint64_t token)
 
 stateful_error_t stateful_object_runtime_t::finalize_relocation_cutover (
   std::uint64_t token,
-  std::optional<std::function<void (const object_ref_t &, const turn_record_t &)>> deliver)
+  std::optional<std::function<void (const object_ref_t &, const turn_record_t &)>> deliver,
+  relocation_ingress_batch_t *committed)
 {
     return _lane
       .run ([&, this] () -> stateful_error_t {
@@ -1744,9 +1745,37 @@ stateful_error_t stateful_object_runtime_t::finalize_relocation_cutover (
                   return stateful_error_t::conflict;
               }
           }
+          relocation_ingress_batch_t released;
+          if (committed) {
+              released.token = token;
+              released.participants.resize (seal->second.sources.size ());
+              // Allocate the output before moving any of the source's originals.
+              for (std::size_t index = 0; index != released.participants.size (); ++index) {
+                  auto &participant = released.participants[index];
+                  participant.owner = seal->second.sources[index];
+                  const auto saved = index < seal->second.frozen.size ()
+                                       ? seal->second.frozen[index].pending_application.size ()
+                                       : 0;
+                  participant.records.reserve (saved
+                                               + seal->second.boundary_application[index].size ());
+              }
+              for (std::size_t index = 0; index != released.participants.size (); ++index) {
+                  auto &records = released.participants[index].records;
+                  if (index < seal->second.frozen.size ()) {
+                      auto &saved = seal->second.frozen[index].pending_application;
+                      records.insert (records.end (), std::make_move_iterator (saved.begin ()),
+                                      std::make_move_iterator (saved.end ()));
+                  }
+                  auto &boundary = seal->second.boundary_application[index];
+                  records.insert (records.end (), std::make_move_iterator (boundary.begin ()),
+                                  std::make_move_iterator (boundary.end ()));
+              }
+          }
           if (deliver)
               seal->second.deliver = std::move (*deliver);
           finalize_relocation_source_on_lane (seal->second);
+          if (committed)
+              *committed = std::move (released);
           return stateful_error_t::none;
       })
       .get ();

@@ -18,6 +18,11 @@
 #include <unordered_map>
 #include <vector>
 
+namespace zlink::framework
+{
+struct location_owner_token_t;
+}
+
 namespace zlink::framework::runtime::foundation
 {
 
@@ -34,6 +39,13 @@ class operation_registry_t
     // The management budget reads this clock; tests inject a deterministic one.
     using now_t = clock_t::time_point (*) ();
 
+    struct request_identity_t
+    {
+        call_id_t operation;
+        std::shared_ptr<const location_owner_token_t> lease;
+    };
+    std::optional<request_identity_t> request_identity (call_id_t id, call_id_t operation) const;
+
     operation_registry_t ();
     explicit operation_registry_t (now_t now);
     ~operation_registry_t () noexcept;
@@ -42,7 +54,8 @@ class operation_registry_t
                              clock_t::time_point deadline,
                              callback_t callback,
                              std::vector<std::uint8_t> target_routing_id = {},
-                             mesh_request_metric_t request_metric = {});
+                             mesh_request_metric_t request_metric = {},
+                             std::optional<request_identity_t> request = {});
     bool contains (const call_id_t &id) const;
     std::size_t fail_target (const std::vector<std::uint8_t> &target_routing_id,
                              operation_terminal_t terminal);
@@ -83,6 +96,7 @@ class operation_registry_t
         std::size_t deadline_slot = 0;
         pending_t *deadline_previous = nullptr;
         pending_t *deadline_next = nullptr;
+        std::optional<request_identity_t> request;
     };
 
     bool take (const call_id_t &id, std::unique_ptr<operation_completion_item_t> &completion);

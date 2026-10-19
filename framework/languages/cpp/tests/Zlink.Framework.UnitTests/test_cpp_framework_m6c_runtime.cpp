@@ -4006,7 +4006,8 @@ void test_source_settlement_after_subsequent_moves (test_context_t &test)
         int unavailable = 0;
         int cutover_calls = 0;
         std::vector<std::uint64_t> forwarded_generations;
-        relocation.attach_committed_terminal ([&] (const object_ref_t &) { ++committed; });
+        relocation.attach_committed_terminal (
+          [&] (const object_ref_t &, const auto &) { ++committed; });
         relocation.attach_unavailable_terminal ([&] (const object_ref_t &) { ++unavailable; });
         eligible_relocation_unit_t::canonical_wire_context_t wire{
           .relocation = {0x1878, 1},
@@ -4818,6 +4819,7 @@ void test_boundary_application_preserves_original_reply (test_context_t &test,
     test.require (restored.try_claim (relocated, turn_domain_t::application).first
                     == stateful_error_t::moving,
                   "late ingress before owner commit must remain gated");
+    relocation_ingress_batch_t committed;
     test.require (
       restored.commit_relocation_restore (relocated, identity) == stateful_error_t::none
         && objects.finalize_relocation_cutover (
@@ -4827,10 +4829,14 @@ void test_boundary_application_preserves_original_reply (test_context_t &test,
                    owner, turn, dst.node_routing_id, dst.lifecycle_generation, 1, 5s,
                    no_follow ? std::nullopt
                              : std::optional<std::uint64_t>{relocated.authority_owner_generation}));
-             })
+             },
+             &committed)
              == stateful_error_t::none,
       "owner commit must release the target queue and source retained copy");
-    ingress.release_relocated_payloads (actor);
+    test.require (committed.participants.size () == 1, "source must return its committed prefix");
+    if (committed.participants.empty ())
+        return;
+    ingress.release_relocated_payloads (actor, committed.participants.front ().records);
     if (source_expired) {
         test.require (completed.load () == 0,
                       "source expiry must precede the original request terminal");

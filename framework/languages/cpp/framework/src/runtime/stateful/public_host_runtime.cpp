@@ -978,8 +978,8 @@ void public_host_runtime_t::configure_stateful_dispatch (
           if (_started || _stateful_dispatch)
               throw std::logic_error (
                 "stateful dispatch must be configured once before host start");
-          if (sources)
-              _transport->configure_request_sources (sources);
+          if (sources || _local_lease_observation)
+              _transport->configure_request_sources (sources, _local_lease_observation);
           _stateful_dispatch = std::make_unique<stateful::raw_stateful_dispatch_t> (
             _objects, *_transport,
             [this, resolver = std::move (resolver)] (
@@ -7804,10 +7804,20 @@ void public_host_runtime_t::register_local_completion (pending_operation_t &oper
         const auto result = operation.local_result;
         const auto registered = _transport->register_local_operation (
           foundation::operation_registry_t::clock_t::now () + timeout,
-          [source, result, completion = std::move (completion),
-           incomplete] (foundation::operation_terminal_t terminal, zlink::message_t) mutable {
+          [source, result, completion = std::move (completion), incomplete] (
+            foundation::operation_terminal_t terminal, zlink::message_t payload) mutable {
               std::string terminal_message;
-              if (terminal != foundation::operation_terminal_t::completed)
+              if (terminal == foundation::operation_terminal_t::completed && payload.size () != 0) {
+                  try {
+                      result->parts = protocol::decode_application_parts (std::move (payload));
+                  }
+                  catch (const protocol::service_wire_error_t &error) {
+                      terminal = foundation::operation_terminal_t::transport_failed;
+                      terminal_message = error.what ();
+                  }
+              }
+              if (terminal != foundation::operation_terminal_t::completed
+                  && terminal_message.empty ())
                   terminal_message = "Local operation did not complete";
               if (terminal != foundation::operation_terminal_t::completed && incomplete) {
                   try {
@@ -7853,6 +7863,10 @@ void public_host_runtime_t::register_local_completion (pending_operation_t &oper
             throw framework_exception_t (framework_error_kind_t::shutting_down,
                                          "Operation completion registry is closed");
         operation.id = *registered;
+        result->record.kind = record_kind_t::completion;
+        result->record.domain = ready_domain_t::infrastructure;
+        result->record.operation_id = operation.id;
+        result->record.source_node_rid = status ().routing_id ();
     }
     catch (...) {
         if (incomplete)

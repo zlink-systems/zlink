@@ -316,8 +316,7 @@ void maintenance_runtime_t::attach_relocation_wire (
     _relocation_dispatch = std::move (dispatch);
 }
 
-void maintenance_runtime_t::attach_committed_terminal (
-  std::function<void (const object_ref_t &)> terminal) noexcept
+void maintenance_runtime_t::attach_committed_terminal (committed_terminal_t terminal) noexcept
 {
     _committed_terminal = std::move (terminal);
 }
@@ -425,6 +424,8 @@ bool maintenance_runtime_t::register_terminal_source (
                         : turn.frozen_record ? *turn.frozen_record
                                              : protocol::decode_frozen_record (turn.payload);
     if (!record.application || !record.reply_route_id)
+        return true;
+    if (!_relocation_wire->owns_request_source (record.source))
         return true;
     auto terminal = terminal_identity (context.relocation, context.target_attempt_generation,
                                        context.coordinator, participant_id, record);
@@ -734,12 +735,14 @@ maintenance_runtime_t::apply_relocation_settlement (
                                           : std::optional<std::uint64_t>{found->second});
     };
     switch (settled.outcome) {
-        case relocation_authority_t::target_committed:
-            (void) _objects.finalize_relocation_cutover (token, deliver);
+        case relocation_authority_t::target_committed: {
+            relocation_ingress_batch_t committed;
+            (void) _objects.finalize_relocation_cutover (token, deliver, &committed);
             if (_committed_terminal)
-                for (const auto &participant : participants)
-                    _committed_terminal (participant);
+                for (const auto &participant : committed.participants)
+                    _committed_terminal (participant.owner, participant.records);
             co_return std::pair{relocation_terminal_t::completed, relocation_reason_t::none};
+        }
         case relocation_authority_t::source_preserved:
             /* The captured queue and timers, then the retained boundary and
              * post-boundary records, return to the source queue in original
@@ -1843,10 +1846,12 @@ void public_host_runtime_t::attach_relocation_terminals (
         maintenance.bind_delay_owner (*_delay_owner);
     maintenance.attach_relocation_wire (*_relocation_wire,
                                         [this] { return _stateful_dispatch.get (); });
-    maintenance.attach_committed_terminal ([this] (const stateful::object_ref_t &owner) {
-        if (_stateful_dispatch)
-            _stateful_dispatch->release_relocated_payloads (owner);
-    });
+    maintenance.attach_committed_terminal (
+      [this] (const stateful::object_ref_t &owner,
+              const std::vector<stateful::turn_record_t> &committed) {
+          if (_stateful_dispatch)
+              _stateful_dispatch->release_relocated_payloads (owner, committed);
+      });
     maintenance.attach_unavailable_terminal ([this] (const stateful::object_ref_t &owner) {
         if (_stateful_dispatch)
             (void) _stateful_dispatch->fail_pending_unavailable (owner);

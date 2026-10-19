@@ -1222,7 +1222,7 @@ task_t<bool> raw_stateful_dispatch_t::complete_relocated_source_async (
     pending_delivery_t pending;
     delivery_key_t pending_key{owner.kind, owner.key, sequence};
     {
-        std::lock_guard lock (_mutex);
+        std::unique_lock lock (_mutex);
         const auto matches = [&] (const auto &entry) {
             return entry.second.owner == owner && entry.second.request
                    && entry.second.frozen.operation == relay.operation
@@ -1234,8 +1234,11 @@ task_t<bool> raw_stateful_dispatch_t::complete_relocated_source_async (
         auto found = _pending.find (pending_key);
         if (found == _pending.end () || !matches (*found))
             found = std::find_if (_pending.begin (), _pending.end (), matches);
-        if (found == _pending.end ())
-            co_return false;
+        if (found == _pending.end ()) {
+            lock.unlock ();
+            // Native originals complete through the requester's existing registry.
+            co_return _transport->complete_relocated_request (relay, reply);
+        }
         if (found->second.relocated_completing)
             co_return false;
         pending_key = found->first;
@@ -1282,25 +1285,23 @@ task_t<bool> raw_stateful_dispatch_t::complete_relocated_source_async (
     co_return true;
 }
 
-void raw_stateful_dispatch_t::release_relocated_payloads (const object_ref_t &owner)
+void raw_stateful_dispatch_t::release_relocated_payloads (
+  const object_ref_t &owner, const std::vector<turn_record_t> &committed)
 {
     std::vector<std::pair<accepted_mailbox_reservation_t, std::function<void ()>>> reservations;
     {
         std::lock_guard lock (_mutex);
-        reservations.reserve (
-          std::count_if (_pending.begin (), _pending.end (),
-                         [&] (const auto &entry) { return entry.second.owner == owner; }));
-        for (auto entry = _pending.begin (); entry != _pending.end ();) {
-            auto &pending = entry->second;
-            if (pending.owner != owner) {
-                ++entry;
+        reservations.reserve (committed.size ());
+        for (const auto &turn : committed) {
+            const auto entry = _pending.find (delivery_key (owner, turn.sequence));
+            if (entry == _pending.end () || entry->second.owner != owner)
                 continue;
-            }
+            auto &pending = entry->second;
             reservations.emplace_back (
               std::move (pending.mailbox_claim),
               std::exchange (pending.transport.before_application_handler, {}));
             if (!pending.request) {
-                entry = _pending.erase (entry);
+                _pending.erase (entry);
                 continue;
             }
             // Completion needs the original reply token and operation, not
@@ -1308,7 +1309,6 @@ void raw_stateful_dispatch_t::release_relocated_payloads (const object_ref_t &ow
             pending.frozen.application.reset ();
             pending.frozen.canonical_bytes.clear ();
             pending.transport.parts.clear ();
-            ++entry;
         }
     }
     for (auto &[claim, initial_reservation] : reservations) {
@@ -1746,6 +1746,12 @@ bool raw_relocation_replay_coordinator_t::register_terminal_source (
       .get ();
 }
 
+bool raw_relocation_replay_coordinator_t::owns_request_source (
+  const protocol::request_source_fence_t &source) const
+{
+    return mesh::raw_mesh_node_owner_t::owns_request_source (
+      source, _transport->topology ().local_descriptor ());
+}
 
 bool raw_relocation_replay_coordinator_t::unregister_terminal_source (
   const protocol::relocation_id_t &relocation, const protocol::wire_operation_id_t &operation)
@@ -1870,6 +1876,19 @@ task_t<raw_relocation_replay_result_t> raw_relocation_replay_coordinator_t::proc
         || (relay.terminal_result != 0
             && relay.failure_code == protocol::framework_error_code::none))
         co_return raw_relocation_replay_result_t::invalid;
+
+    // The original requester owns its pending operation. The previous execution
+    // owner cannot register this terminal on the requester's behalf.
+    if (auto source =
+          _transport->relocated_request_source (relay.operation, relay.reply_route_id)) {
+        (void) register_terminal_source (
+          {relay.relocation, relay.coordinator, relay.operation, std::move (*source),
+           record.source_routing_id, record.source_node_generation, relay.target_attempt_generation,
+           relay.participant_id, relay.sequence, relay.reply_route_id,
+           [transport = _transport] (const auto &terminal, const auto &payload) {
+               return transport->complete_relocated_request (terminal, payload);
+           }});
+    }
 
     std::vector<std::uint8_t> fingerprint = protocol::encode_reply_relay (relay);
     if (reply) {

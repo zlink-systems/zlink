@@ -459,7 +459,8 @@ class stateful_object_runtime_t
     stateful_error_t finalize_relocation_cutover (
       std::uint64_t token,
       std::optional<std::function<void (const object_ref_t &, const turn_record_t &)>> deliver =
-        std::nullopt);
+        std::nullopt,
+      relocation_ingress_batch_t *committed = nullptr);
     std::pair<stateful_error_t, std::vector<object_ref_t>>
     commit_relocation_aggregate (std::uint64_t token, std::string target_node_id);
     task_t<stateful_error_t>
