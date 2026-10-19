@@ -459,6 +459,17 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                     .values()
                     .forEach(
                             node ->
+                                    node.setBoundSessionCloseHandler(
+                                            request ->
+                                                    this.streams.handleBoundSessionClose(
+                                                            node.routingId(),
+                                                            node.lifecycleGeneration(),
+                                                            request)));
+            this.meshNodes
+                    .nodesByName()
+                    .values()
+                    .forEach(
+                            node ->
                                     node.setBoundSessionReplacedHandler(
                                             this.streams::handleBoundSessionReplaced));
         }
@@ -1014,7 +1025,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
         if (streams == null) {
             throw new ZLinkConfigurationException("Stream runtime is not configured");
         }
-        return streams.sessionActors(streamNodeName, sessionRid, actors);
+        return streams.sessionActors(streamNodeName, sessionRid);
     }
 
     ZLinkFrameworkRuntimeState state() {

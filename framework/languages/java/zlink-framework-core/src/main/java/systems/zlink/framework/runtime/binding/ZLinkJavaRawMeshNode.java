@@ -3557,6 +3557,124 @@ final class ZLinkJavaRawMeshNode
         return port.send(requireStarted(), targetNodeRid, List.of(record));
     }
 
+    private volatile java.util.function.Function<
+                    ZLinkServiceM6BWireCodec.BoundSessionClose, CompletionStage<Void>>
+            boundSessionCloseHandler;
+
+    @Override
+    public void setBoundSessionCloseHandler(
+            java.util.function.Function<
+                            ZLinkServiceM6BWireCodec.BoundSessionClose, CompletionStage<Void>>
+                    handler) {
+        boundSessionCloseHandler = Objects.requireNonNull(handler);
+    }
+
+    @Override
+    public CompletionStage<Void> requestBoundSessionClose(
+            ZLinkServiceM6BWireCodec.BoundSessionClose request, Duration timeout) {
+        byte[] encoded = statefulWire.encodeBoundSessionClose(request);
+        if (request.session().sessionOwnerNodeRid().equals(routingId))
+            return acceptBoundSessionClose(statefulWire.decodeBoundSessionClose(encoded))
+                    .toCompletableFuture()
+                    .orTimeout(timeout.toNanos(), TimeUnit.NANOSECONDS)
+                    .handle(
+                            (ignored, failure) -> {
+                                if (failure != null) {
+                                    var result =
+                                            canonicalActorJoinFailurePair(
+                                                    unwrapCompletionFailure(failure));
+                                    throw ZLinkRequestFailureMapping.receivedFailure(
+                                            ZLinkBackendRequestResult.fromWireTerminal(result[0])
+                                                    .toFrameworkErrorKind(result[1]),
+                                            "Bound Session close failed",
+                                            result[1],
+                                            Map.of());
+                                }
+                                return (Void) null;
+                            });
+        var submitted =
+                port.request(
+                        requireStarted(),
+                        request.session().sessionOwnerNodeRid(),
+                        List.of(encoded),
+                        timeout,
+                        null);
+        var terminal =
+                submitted.thenApply(
+                        frames -> {
+                            if (frames.size() != 1)
+                                throw new ZLinkFrameworkException(
+                                        ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                                        "Invalid Session close reply");
+                            final ZLinkServiceM6AWireCodec.Reply reply;
+                            try {
+                                reply =
+                                        statefulWire.decodeBoundSessionCloseReply(
+                                                frames.getFirst());
+                            } catch (IllegalArgumentException failure) {
+                                throw new ZLinkFrameworkException(
+                                        ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                                        "Session close reply could not be processed",
+                                        failure);
+                            }
+                            if (reply.correlation() != request.correlation())
+                                throw new ZLinkFrameworkException(
+                                        ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                                        "Session close correlation mismatch");
+                            if (reply.terminalResult() != RequestResult.OK.value()
+                                    || reply.failureCode()
+                                            != ServiceWireConstants.FRAMEWORK_ERROR_NONE)
+                                throw ZLinkRequestFailureMapping.receivedFailure(
+                                        ZLinkBackendRequestResult.fromWireTerminal(
+                                                        reply.terminalResult())
+                                                .toFrameworkErrorKind(reply.failureCode()),
+                                        "Bound Session close failed",
+                                        reply.failureCode(),
+                                        Map.of());
+                            return (Void) null;
+                        });
+        ZLinkCompletionBridge.forwardCancellation(terminal.toCompletableFuture(), submitted);
+        return terminal;
+    }
+
+    private CompletionStage<Void> acceptBoundSessionClose(
+            ZLinkServiceM6BWireCodec.BoundSessionClose request) {
+        var handler = boundSessionCloseHandler;
+        if (handler == null)
+            return CompletableFuture.failedFuture(
+                    new ZLinkFrameworkException(
+                            ZLinkFrameworkErrorKind.UNAVAILABLE, "Session owner is unavailable"));
+        try {
+            return handler.apply(request);
+        } catch (RuntimeException failure) {
+            return CompletableFuture.failedFuture(failure);
+        }
+    }
+
+    private void dispatchBoundSessionClose(ZLinkJavaRawServicePort.Inbound inbound) {
+        if (inbound.frames().size() != 1 || inbound.requestSequence() == null) return;
+        var request = statefulWire.decodeBoundSessionClose(inbound.frames().getFirst());
+        acceptBoundSessionClose(request)
+                .whenComplete(
+                        (ignored, failure) -> {
+                            int[] result =
+                                    failure == null
+                                            ? new int[] {
+                                                RequestResult.OK.value(),
+                                                (int) ServiceWireConstants.FRAMEWORK_ERROR_NONE
+                                            }
+                                            : canonicalActorJoinFailurePair(
+                                                    unwrapCompletionFailure(failure));
+                            port.reply(
+                                    requireStarted(),
+                                    inbound.source(),
+                                    inbound.requestSequence(),
+                                    List.of(
+                                            wire.encodeReplyHeader(
+                                                    request.correlation(), result[0], result[1])));
+                        });
+    }
+
     @Override
     public void setBoundSessionReplacedHandler(
             ZLinkInternalMeshNode.BoundSessionReplacedHandler handler) {
@@ -4874,6 +4992,7 @@ final class ZLinkJavaRawMeshNode
                 || command == ServiceWireConstants.COMMAND_REPLY_RELAY_ACK
                 || command == ServiceWireConstants.COMMAND_MESSAGE_FOLLOW
                 || command == ServiceWireConstants.COMMAND_BOUND_SESSION_REPLACED
+                || command == ServiceWireConstants.COMMAND_BOUND_SESSION_CLOSE
                 || command == ServiceWireConstants.COMMAND_SESSION_RELOCATION_SEAL
                 || command == ServiceWireConstants.COMMAND_SESSION_RELOCATION_SEALED
                 || command == ServiceWireConstants.COMMAND_SESSION_RELOCATION_ROUTE;
@@ -4981,6 +5100,10 @@ final class ZLinkJavaRawMeshNode
             }
             if (command == ServiceWireConstants.COMMAND_SESSION_RELOCATION_SEAL) {
                 dispatchSessionRelocationSeal(inbound);
+                return;
+            }
+            if (command == ServiceWireConstants.COMMAND_BOUND_SESSION_CLOSE) {
+                dispatchBoundSessionClose(inbound);
                 return;
             }
             if (command == ServiceWireConstants.COMMAND_BOUND_SESSION_REPLACED) {

@@ -431,6 +431,12 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
         return Optional.empty();
     }
 
+    default CompletionStage<Void> closeActorBoundSessionAsync(
+            ZLinkBackendActorRef actor, Duration timeout) {
+        return java.util.concurrent.CompletableFuture.failedFuture(
+                new UnsupportedOperationException("Session close is unavailable"));
+    }
+
     void closeActorBoundSession(ZLinkBackendActorRef actor, Duration timeout);
 
     /** Closes only the binding of the supplied source stay and, when supplied, Session. */

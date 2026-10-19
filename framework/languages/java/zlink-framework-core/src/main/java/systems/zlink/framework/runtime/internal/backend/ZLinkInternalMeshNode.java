@@ -505,6 +505,17 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
      * Installs the one-way command 51 endpoint. The record is infrastructure state and must not
      * enter the application mailbox.
      */
+    default void setBoundSessionCloseHandler(
+            java.util.function.Function<
+                            ZLinkServiceM6BWireCodec.BoundSessionClose, CompletionStage<Void>>
+                    handler) {}
+
+    default CompletionStage<Void> requestBoundSessionClose(
+            ZLinkServiceM6BWireCodec.BoundSessionClose request, Duration timeout) {
+        return CompletableFuture.failedFuture(
+                new UnsupportedOperationException("Session close is unavailable"));
+    }
+
     default void setBoundSessionReplacedHandler(BoundSessionReplacedHandler handler) {
         // Alternate backends may not support bound-session replacement.
     }
