@@ -70,10 +70,7 @@ stream_session_registry_t::close_current (protocol::bound_session_close_t reques
           const auto found =
             _connections.find (zlink::routing_id_t::from (session.session_routing_id).to_hex ());
           const auto indexed = _actor_bindings.find (request.actor_id);
-          if (session.session_owner_node_routing_id != owner.session_owner_node_routing_id
-              || session.session_owner_node_generation != owner.session_owner_node_generation
-              || session.session_owner_id != owner.session_owner_id
-              || session.session_owner_lease_generation != owner.session_owner_lease_generation
+          if (!protocol::same_session_owner_identity (session, owner)
               || found == _connections.end () || indexed == _actor_bindings.end ()
               || indexed->second.connection != found->second.connection
               || indexed->second.binding_generation != session.retired_binding_generation

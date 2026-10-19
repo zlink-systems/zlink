@@ -1810,8 +1810,7 @@ internal sealed class ZLinkSessionActorBindingTable
         });
 
     internal async ValueTask CloseCurrentAsync(
-        RoutingId receivingNodeRid,
-        ulong receivingNodeGeneration,
+        ZLinkServiceWireCodec.RequestSourceFence? sessionOwner,
         ServiceWireCodec.BoundSessionClose54 request,
         CancellationToken cancellationToken
     )
@@ -1823,22 +1822,24 @@ internal sealed class ZLinkSessionActorBindingTable
             .RunAsync(() =>
             {
                 var session = request.Session;
+                var sessionOwnerNodeRid = RoutingId.From(session.SessionOwnerNodeRid.Value);
                 if (
-                    !TryGetCurrentEntry(
+                    sessionOwner is not { } owner
+                    || !owner.IdentifiesSessionOwner(
+                        sessionOwnerNodeRid,
+                        session.SessionOwnerNodeGeneration.Value,
+                        session.SessionOwnerId.Value,
+                        session.SessionOwnerLeaseGeneration.Value
+                    )
+                    || !TryGetCurrentEntry(
                         ZLinkActorId.FromBoundary(request.Actor.ActorId.Value, nameof(request)),
                         out var entry
                     )
-                    || entry.SessionOwnerNodeRid != receivingNodeRid
-                    || entry.SessionOwnerNodeGeneration != receivingNodeGeneration
                     || entry.ObjectGeneration != request.Actor.ObjectGeneration.Value
                     || entry.BindingGeneration != session.RetiredBindingGeneration.Value
-                    || entry.SessionOwnerNodeRid
-                        != RoutingId.From(session.SessionOwnerNodeRid.Value)
+                    || entry.SessionOwnerNodeRid != sessionOwnerNodeRid
                     || entry.SessionOwnerNodeGeneration != session.SessionOwnerNodeGeneration.Value
                     || entry.ActorRef.SessionRid != RoutingId.From(session.SessionRid.Value)
-                    || entry.SessionOwnerId != session.SessionOwnerId.Value
-                    || entry.SessionOwnerLeaseGeneration
-                        != session.SessionOwnerLeaseGeneration.Value
                 )
                     throw new ZLinkFrameworkException(
                         ZLinkFrameworkErrorKind.Unavailable,

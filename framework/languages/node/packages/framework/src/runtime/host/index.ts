@@ -722,13 +722,6 @@ export class ZLinkFrameworkRuntimeHost
       actorHandoff: this.actorHandoff,
       authorityStore: () => this.locationOwner.currentStores?.locationStore,
       currentOwner: () => this.locationOwner.currentRuntime?.currentOwnerToken,
-      liveDescriptors: (meshName, signal) => {
-        const runtime = this.locationOwner.currentRuntime;
-        if (runtime === undefined) {
-          throw new Error('Session owner liveness is unavailable without a Location runtime.');
-        }
-        return runtime.listLiveMeshNodes(meshName, signal);
-      },
       sessionRelocationWire: () => this.serviceRelocation,
       clearRemoteActorPacketTarget: (actorId) =>
         this.boundSessionRelay.clearRemoteActorPacketTarget(actorId),

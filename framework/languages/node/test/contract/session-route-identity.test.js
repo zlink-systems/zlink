@@ -6,12 +6,13 @@ const {
   ServiceStatefulRuntime
 } = require('../../packages/framework/dist/runtime/foundation/service-stateful-runtime');
 const wire = require('../../packages/framework/dist/runtime/foundation/service-stateful-wire-codec');
+const { withTestSessionOwners } = require('./fixtures/session-owner-descriptors');
 
 test('command 44 cross-node route preserves the binding for the next Actor Join command 42', async (t) => {
   const actorId = 'actor-consecutive-join';
   let nativeBinds = 0;
   let lookupActor;
-  const serviceRuntime = new ServiceStatefulRuntime(
+  const serviceRuntime = withTestSessionOwners(new ServiceStatefulRuntime(
     {
       observePeerRoute: () => ({ generation: 1n, ready: true }),
       observePeerRouteChanged: () => () => {},
@@ -30,7 +31,7 @@ test('command 44 cross-node route preserves the binding for the next Actor Join 
     },
     'session-owner',
     4n
-  );
+  ));
   t.after(() => serviceRuntime.close());
   const service = {
     status: () => ({ state: 2 }),

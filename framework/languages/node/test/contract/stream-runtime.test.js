@@ -71,6 +71,7 @@ const {
   ServiceWireProtocolError
 } = require('../../packages/framework/dist/runtime/foundation/service-wire-m6a-codec');
 const zlink = require('@zlink-systems/zlink');
+const { withTestSessionOwners } = require('./fixtures/session-owner-descriptors');
 
 const detachedTaskRunner = new ZLinkRuntimeTaskRunner(
   new ZLinkRuntimeTaskErrorSink(),
@@ -388,7 +389,7 @@ test('managed stream binds Session Actors through the Framework service without 
   const bindAuthorities = [];
   let bindAttempts = 0;
   const transportAttempts = [];
-  const serviceRuntime = new ServiceStatefulRuntime(
+  const serviceRuntime = withTestSessionOwners(new ServiceStatefulRuntime(
     {
       observePeerRoute: () => ({ generation: 1n, ready: true }),
       observePeerRouteChanged: () => () => {},
@@ -413,7 +414,7 @@ test('managed stream binds Session Actors through the Framework service without 
     },
     'session-owner',
     3n
-  );
+  ));
   t.after(() => serviceRuntime.close());
   let nextOperation = 1n;
   const operation = (kind, promise) => {
@@ -4455,7 +4456,7 @@ test('production command 36 is sent by binding identity after owner lifecycle fi
       return result === 'application';
     }
   };
-  const serviceRuntime = new ServiceStatefulRuntime(raw, 'actor-node', 4n);
+  const serviceRuntime = withTestSessionOwners(new ServiceStatefulRuntime(raw, 'actor-node', 4n));
   const serviceActor = serviceRuntime.restoreActorAuthority(
     actorId,
     'actor',
@@ -4578,7 +4579,7 @@ test('production command 36 is sent by binding identity after owner lifecycle fi
 
 test('M1 actorJoin actual command 36 reaches the current Session binding during relocation seal', async () => {
   let serviceIngress;
-  const serviceRuntime = new ServiceStatefulRuntime(
+  const serviceRuntime = withTestSessionOwners(new ServiceStatefulRuntime(
     {
       observePeerRoute: () => ({ generation: 1n, ready: true }),
       observePeerRouteChanged: () => () => {},
@@ -4591,7 +4592,7 @@ test('M1 actorJoin actual command 36 reaches the current Session binding during 
     },
     'session-owner',
     4n
-  );
+  ));
   const serviceActor = serviceRuntime.restoreActorAuthority(
     'actor-fifo-terminal',
     'actor',
@@ -4758,7 +4759,7 @@ test('M1 actorJoin actual command 36 reaches the current Session binding during 
 
 test('command 36 refused as not current is traced with the closed flow vocabulary', async () => {
   let serviceIngress;
-  const serviceRuntime = new ServiceStatefulRuntime(
+  const serviceRuntime = withTestSessionOwners(new ServiceStatefulRuntime(
     {
       observePeerRoute: () => ({ generation: 1n, ready: true }),
       observePeerRouteChanged: () => () => {},
@@ -4771,7 +4772,7 @@ test('command 36 refused as not current is traced with the closed flow vocabular
     },
     'session-owner',
     4n
-  );
+  ));
   const serviceActor = serviceRuntime.restoreActorAuthority(
     'actor-command36-stale-trace',
     'actor',
@@ -4859,7 +4860,7 @@ test('actual raw command 36 from an authenticated peer is admitted by the curren
   });
   assert.equal(raw.admitPeer(testServiceNodeDescriptor('source', 4n), 1n, 0), 'admitted');
   assert.equal(raw.admitPeer(testServiceNodeDescriptor('target', 5n), 2n, 0), 'admitted');
-  const serviceRuntime = new ServiceStatefulRuntime(raw, 'session-owner', 4n);
+  const serviceRuntime = withTestSessionOwners(new ServiceStatefulRuntime(raw, 'session-owner', 4n));
   const serviceActor = serviceRuntime.restoreActorAuthority(
     actorId,
     'actor',
@@ -4936,7 +4937,7 @@ test('source and target command 36 push reach the client before command 44', asy
   };
   const aggregate = await testActorRouteAggregate(sourceRef, 8, 'session');
   let serviceIngress;
-  const serviceRuntime = new ServiceStatefulRuntime(
+  const serviceRuntime = withTestSessionOwners(new ServiceStatefulRuntime(
     {
       observePeerRoute: () => ({ generation: 1n, ready: true }),
       observePeerRouteChanged: () => () => {},
@@ -4949,7 +4950,7 @@ test('source and target command 36 push reach the client before command 44', asy
     },
     'session-owner',
     4n
-  );
+  ));
   const serviceActor = serviceRuntime.restoreActorAuthority(
     actorId,
     'actor',
@@ -6737,7 +6738,7 @@ test('Actor binding owner turn uses the three-value Actor fence independently of
 
 test('bound-session replacement accepts an authenticated notice despite a stale Actor route projection', async () => {
   let serviceIngress;
-  const serviceRuntime = new ServiceStatefulRuntime(
+  const serviceRuntime = withTestSessionOwners(new ServiceStatefulRuntime(
     {
       observePeerRoute: () => ({ generation: 1n, ready: true }),
       observePeerRouteChanged: () => () => {},
@@ -6750,7 +6751,7 @@ test('bound-session replacement accepts an authenticated notice despite a stale 
     },
     'session-owner',
     7n
-  );
+  ));
   const actor = serviceRuntime.restoreActorAuthority(
     'actor-replaced-projection',
     'actor',
@@ -6789,8 +6790,8 @@ test('bound-session replacement accepts an authenticated notice despite a stale 
       {
         sessionOwnerNodeRid: 'session-owner',
         sessionOwnerNodeGeneration: 7n,
-        sessionOwnerId: 'session-owner',
-        sessionOwnerLeaseGeneration: 7n,
+        sessionOwnerId: binding.sessionOwnerId,
+        sessionOwnerLeaseGeneration: binding.sessionOwnerLeaseGeneration,
         sessionRid: 'session-rid',
         retiredBindingGeneration
       }

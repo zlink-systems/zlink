@@ -1442,7 +1442,6 @@ final class ZLinkSessionActorBindingContractTest {
                                 switch (method.getName()) {
                                     case "routingId" -> NODE_A;
                                     case "localNodeGeneration" -> 3L;
-                                    case "localAuthorityOwnerId" -> "session-owner";
                                     case "localAuthorityLeaseGeneration" -> 4L;
                                     case "actorNodeGeneration" ->
                                             authorities

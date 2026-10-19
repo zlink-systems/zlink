@@ -299,6 +299,24 @@ export class ZLinkSpotNodeRuntimeManager {
       if (this.options.dispatchErrors !== undefined) {
         node.setDispatchErrorReporter?.(this.options.dispatchErrors, spotNodeName);
       }
+      // Session-Actor binding §4: the Session owner identity comes from the
+      // host's own descriptor or from a peer descriptor that passed the
+      // Location runtime §4.1 owner lease check.
+      node.setSessionOwnerDescriptors?.({
+        local: () => this.locationAutoConnect?.runtime.currentOwnerToken,
+        peer: async (peerRid, peerGeneration) => {
+          const location = this.locationAutoConnect;
+          if (location === undefined) return undefined;
+          const descriptor = (await location.runtime.listLiveMeshNodes(spotNodeName)).find(
+            (candidate) =>
+              routingIdsEqual(candidate.rid, peerRid) &&
+              candidate.lifecycleGeneration === peerGeneration
+          );
+          return descriptor === undefined
+            ? undefined
+            : { ownerId: descriptor.ownerId, leaseGeneration: descriptor.leaseGeneration };
+        }
+      });
       node.setMailboxRecordDroppedHandler?.((record) =>
         this.options.dispatchErrors?.report({
           surface: ZLinkDispatchErrorSurface.RouteMeshChannel,

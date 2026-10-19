@@ -146,11 +146,6 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
     }
 
     @Override
-    public String localAuthorityOwnerId() {
-        return owner.localAuthorityOwnerId();
-    }
-
-    @Override
     public long actorNodeGeneration(ZLinkBackendActorRef actor) {
         return owner.nodeLifecycleGeneration(actor.nodeRid());
     }
@@ -2196,14 +2191,23 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
      */
     private CompletionStage<Void> bindLocalSession(
             RoutingId sessionRid, ZLinkBackendActorRef actor, long bindingGeneration) {
-        // This node's owner lifecycle values are read when a replacement notice is sent, as a
-        // stream-only node may bind before its mesh lifecycle starts.
+        // Session-Actor binding §4: a same-node Session owner identity is this host's own
+        // descriptor value, stored with the binding. Without a live descriptor there is no
+        // identity and the bind is rejected.
+        Optional<ZLinkInternalMeshNode.PeerAuthorityFence> local = owner.localSessionOwner();
+        if (local.isEmpty()) {
+            return CompletableFuture.failedFuture(
+                    new systems.zlink.framework.errors.ZLinkFrameworkException(
+                            systems.zlink.framework.errors.ZLinkFrameworkErrorKind.UNAVAILABLE,
+                            "Session owner has no live MeshNode descriptor"));
+        }
+        ZLinkInternalMeshNode.PeerAuthorityFence sessionOwner = local.orElseThrow();
         ActorSessionBinding candidate =
                 new ActorSessionBinding(
-                        routingId(),
-                        0,
-                        "",
-                        0,
+                        sessionOwner.sourceNodeRid(),
+                        sessionOwner.sourceNodeGeneration(),
+                        sessionOwner.ownerId(),
+                        sessionOwner.ownerLeaseGeneration(),
                         sessionRid,
                         actor,
                         0,
@@ -2365,13 +2369,9 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
             ActorSessionBinding binding) {
         return new ZLinkServiceM6BWireCodec.RetiredSessionRouteFence(
                 binding.sessionOwnerNodeRid(),
-                binding.remote()
-                        ? binding.sessionOwnerNodeGeneration()
-                        : ownerLifecycleGeneration(),
-                binding.remote() ? binding.sessionOwnerId() : owner.localAuthorityOwnerId(),
-                binding.remote()
-                        ? binding.sessionOwnerLeaseGeneration()
-                        : owner.localAuthorityLeaseGeneration(),
+                binding.sessionOwnerNodeGeneration(),
+                binding.sessionOwnerId(),
+                binding.sessionOwnerLeaseGeneration(),
                 binding.sessionRid(),
                 binding.bindingGeneration());
     }
@@ -3188,11 +3188,11 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                     sessionOwnerNodeRid, sessionOwnerNodeGeneration, sessionRid, bindingGeneration);
         }
 
+        // Session-Actor binding §4: the binding identity uses the Session owner RID and
+        // lifecycle generation only; owner ID and lease generation are command fence values.
         boolean sameSessionOwnerEpoch(ActorSessionBinding other) {
             return sessionOwnerNodeRid.equals(other.sessionOwnerNodeRid)
-                    && sessionOwnerNodeGeneration == other.sessionOwnerNodeGeneration
-                    && sessionOwnerId.equals(other.sessionOwnerId)
-                    && sessionOwnerLeaseGeneration == other.sessionOwnerLeaseGeneration;
+                    && sessionOwnerNodeGeneration == other.sessionOwnerNodeGeneration;
         }
     }
 
