@@ -145,7 +145,8 @@ import {
 import {
   createInternalFrameworkException,
   ZLinkFrameworkInternalErrorKind,
-  internalFrameworkErrorKind
+  internalFrameworkErrorKind,
+  wireReplyFailureException
 } from '../../packages/framework/src/runtime/framework-errors-internal';
 import { ZLinkSubmitStatus } from '../../packages/framework/src/runtime/messaging/submission-result';
 import {
@@ -8000,6 +8001,36 @@ for (const remote of [false, true]) {
     assert.equal(malformed, 'protocolError');
     assert.equal(physicalCloses, 1);
 
+    let replacementCloses = 0;
+    await runtime.bindSession(
+      'replacement-rid',
+      actor,
+      1_000,
+      async () => true,
+      undefined,
+      undefined,
+      async () => {
+        replacementCloses++;
+      }
+    ).promise;
+    const current = runtime.registry.binding(actor)!;
+    const stale = await send(request);
+    assert.equal(
+      wireReplyFailureException(stale.terminalResult, stale.failureCode, 'stale close').kind,
+      ZLinkFrameworkErrorKind.Unavailable
+    );
+    assert.equal(replacementCloses, 0);
+    assert.equal(physicalCloses, 1);
+    const currentReply = await send({
+      ...request,
+      session: {
+        ...request.session,
+        sessionRid: Buffer.from('replacement-rid'),
+        retiredBindingGeneration: current.bindingGeneration
+      }
+    });
+    assert.equal(currentReply.terminalResult, RequestResult.Ok);
+    assert.equal(replacementCloses, 1);
     runtime.close();
   });
 }
