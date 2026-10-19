@@ -7352,10 +7352,73 @@ int close_exact_session_binding_uses_physical_terminal ()
     return sessions.current_binding (actor.key) ? 11 : 0;
 }
 
+int relocation_prepare_preserves_runtime_failure ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+    namespace protocol = zlink::framework::runtime::protocol;
+    auto state = std::make_shared<actor_gateway_state_t> ();
+    actor_gateway_runtime_t gateway (state);
+    const protocol::session_relocation_route_t route{
+      .sender_role = protocol::relocation_role_t::target,
+      .actor = {"actor", 7},
+      .session_owner_node_routing_id = zlink::routing_id_t::from ("owner").to_bytes (),
+      .session_owner_node_generation = 11,
+      .session_owner_id = "owner-id",
+      .session_owner_lease_generation = 13,
+      .session_routing_id = zlink::routing_id_t::from ("session").to_bytes (),
+      .binding_generation = 17,
+      .route = {protocol::session_relocation_route_action_t::commit, 19, 23,
+                zlink::routing_id_t::from ("target").to_bytes (), 29, 0, 31}};
+    for (int field = 0; field < 3; ++field) {
+        auto malformed = route;
+        auto &rid = field == 0   ? malformed.session_owner_node_routing_id
+                    : field == 1 ? malformed.session_routing_id
+                                 : malformed.route.target_node_routing_id;
+        rid.assign (protocol::ridBytes + 1, 1);
+        if (gateway.prepare_session_relocation_target_route (malformed, 31))
+            return 1;
+        rid.clear ();
+        if (gateway.prepare_session_relocation_target_route (malformed, 31))
+            return 2;
+    }
+    state->lane.close ();
+    try {
+        (void) gateway.prepare_session_relocation_target_route (route, 31);
+    }
+    catch (const std::runtime_error &error) {
+        return std::string_view (error.what ()) == "state lane is closed" ? 0 : 3;
+    }
+    return 4;
+}
+
+int join_completion_callback_failure_propagates ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+    auto state = std::make_shared<actor_gateway_state_t> ();
+    actor_gateway_runtime_t gateway (state);
+    auto actor = test_actor_ref ("node", "player", "callback-failure", 7);
+    auto fence = gateway.begin_join_completion_delivery_fence (actor);
+    try {
+        gateway.settle_join_completion_delivery_fence (
+          actor, fence, result_t<void>::success (),
+          [] (result_t<void>) { throw std::runtime_error ("completion failure"); });
+    }
+    catch (const std::runtime_error &error) {
+        return std::string_view (error.what ()) == "completion failure" ? 0 : 1;
+    }
+    return 2;
+}
+
 int main (int argc, char **argv)
 {
     if (argc == 2) {
         const std::string test (argv[1]);
+        if (test == "--prepare-runtime-failure")
+            return relocation_prepare_preserves_runtime_failure ();
+        if (test == "--join-completion-callback")
+            return join_completion_callback_failure_propagates ();
         if (test == "--close-unbound")
             return close_unbound_session_reports_invalid_operation ();
         if (test == "--close-binding")
@@ -7503,6 +7566,10 @@ int main (int argc, char **argv)
         cross_node_terminal != 0) {
         return 380 + cross_node_terminal;
     }
+    if (const auto prepare = relocation_prepare_preserves_runtime_failure (); prepare != 0)
+        return prepare;
+    if (const auto callback = join_completion_callback_failure_propagates (); callback != 0)
+        return callback;
     if (const auto capacity = session_relay_waiter_accepts_beyond_former_capacity ();
         capacity != 0) {
         return 290 + capacity;

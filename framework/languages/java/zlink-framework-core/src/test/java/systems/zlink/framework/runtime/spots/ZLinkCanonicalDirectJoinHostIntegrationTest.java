@@ -1857,7 +1857,7 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
             return actorRuntime
                     .bindNativeSession(
                             prepared.actor(),
-                            pushSpotNode(),
+                            pushSpotNode(session),
                             actorRoute.actor(),
                             session.nodeRid(),
                             session.sessionRid(),
@@ -1890,13 +1890,23 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                                             request.targetSpotId(), prepared.actorId()));
         }
 
-        private static ZLinkInternalSpotNode pushSpotNode() {
+        private static ZLinkInternalSpotNode pushSpotNode(
+                ZLinkServiceM6BWireCodec.SessionOwnerFence session) {
+            var binding =
+                    new ZLinkInternalSpotNode.BoundSessionRoute(
+                            session.nodeRid(),
+                            session.nodeGeneration(),
+                            session.ownerId(),
+                            session.ownerLeaseGeneration(),
+                            session.sessionRid(),
+                            session.bindingGeneration());
             return (ZLinkInternalSpotNode)
                     Proxy.newProxyInstance(
                             ZLinkInternalSpotNode.class.getClassLoader(),
                             new Class<?>[] {ZLinkInternalSpotNode.class},
                             (proxy, method, arguments) ->
                                     switch (method.getName()) {
+                                        case "boundSessionRoute" -> Optional.of(binding);
                                         case "hasRemoteActorBoundSessionRoute" -> true;
                                         case "sendRemoteActorBoundSession" -> {
                                             @SuppressWarnings("unchecked")

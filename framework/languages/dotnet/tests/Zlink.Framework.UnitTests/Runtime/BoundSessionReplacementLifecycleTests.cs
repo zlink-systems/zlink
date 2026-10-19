@@ -12,6 +12,7 @@ using Zlink.Framework.Runtime.Actors;
 using Zlink.Framework.Runtime.Backend.Contracts;
 using Zlink.Framework.Runtime.Backend.DotNet;
 using Zlink.Framework.Runtime.Configuration;
+using Zlink.Framework.Runtime.Diagnostics;
 using Zlink.Framework.Runtime.Dispatch;
 using Zlink.Framework.Runtime.Identifiers;
 using Zlink.Framework.Runtime.Locations;
@@ -395,9 +396,29 @@ public sealed class BoundSessionReplacementLifecycleTests
             )
         );
 
+        var activities = new ConcurrentQueue<Activity>();
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == ZLinkTelemetry.ActivitySourceName,
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) =>
+                ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStopped = activities.Enqueue,
+        };
+        ActivitySource.AddActivityListener(listener);
         Assert.False(
             retired.Runtime.TryHandleBoundSessionReplacedNotification(nodeRid, nodeRid, record)
         );
+        var drop = Assert.Single(
+            activities.Where(item =>
+                Equals(item.GetTagItem("packet_name"), "boundSessionReplaced")
+                && Equals(item.GetTagItem("source_rid"), nodeRid.ToHex())
+            )
+        );
+        Assert.Equal("dropped", drop.GetTagItem("phase"));
+        Assert.Equal("dropped", drop.GetTagItem("outcome"));
+        Assert.Equal("stream", drop.GetTagItem("surface"));
+        Assert.Equal("control", drop.GetTagItem("message_kind"));
+        Assert.Equal("location_unavailable", drop.GetTagItem("reason"));
     }
 
     [Theory]

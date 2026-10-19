@@ -66,6 +66,10 @@ import {
 } from '../diagnostics';
 
 import { METRIC_NAMES, MILLISECONDS_PER_SECOND } from '../diagnostics/runtime-metrics';
+import {
+  traceSessionBindingControlDrop,
+  type ZLinkMessageFlowTracer
+} from '../diagnostics/message-flow';
 import { isStructuralGuardEnabled, trackDiagnosticCompletion } from '../execution/state-lane';
 import {
   RECREATE_RELOCATION_CONTENT_TYPE,
@@ -231,6 +235,7 @@ const SERVICE_CONTROL_TERMINAL_CAPACITY = 4096;
 const INITIAL_MEMBERSHIP_EPOCH = 1n;
 
 interface ZLinkHostRelocationOptions {
+  readonly messageFlow?: () => ZLinkMessageFlowTracer | undefined;
   readonly registration: ZLinkFrameworkRegistration;
   readonly providerResolver?: ZLinkProviderResolver;
   readonly locationStore: () => ZLinkLocationStore | undefined;
@@ -931,12 +936,28 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     }
     if (command === M6bServiceWireCommand.sessionRelocationSeal) {
       const request = decodeSessionRelocationSeal(payload);
-      const response = await this.handleSessionRelocationSeal(
-        meshName,
-        request,
-        record.sourceNodeRid,
-        signal
-      );
+      let response: ServiceSessionRelocationSealed | undefined;
+      try {
+        response = await this.handleSessionRelocationSeal(
+          meshName,
+          request,
+          record.sourceNodeRid,
+          signal
+        );
+      } catch (error) {
+        traceSessionBindingControlDrop(
+          this.options.messageFlow?.(),
+          record.sourceNodeRid ?? '',
+          request.actor.actor.actorId,
+          'sessionRelocationSeal',
+          error instanceof ZLinkFrameworkException &&
+            error.kind === ZLinkFrameworkErrorKind.Unavailable
+            ? 'location_unavailable'
+            : 'stale_target',
+          error
+        );
+        throw error;
+      }
       if (response !== undefined) {
         await this.sendSessionRelocationResponse(
           meshName,

@@ -7621,6 +7621,16 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         });
         var target = current.Target;
         var peer = current.Peer;
+        if (string.IsNullOrEmpty(current.SessionOwner.OwnerId))
+        {
+            _flow?.TraceSessionBindingControlDrop(
+                sourceNodeRid,
+                seal.Actor.Actor.ActorId,
+                "sessionRelocationSeal",
+                ZLinkMessageFlowReason.LocationUnavailable
+            );
+            return;
+        }
         if (
             target is null
             || peer is null
@@ -7635,7 +7645,12 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             )
         )
         {
-            Publish(MeshMonitorEventKind.ProtocolError, peerRid: sourceNodeRid);
+            _flow?.TraceSessionBindingControlDrop(
+                sourceNodeRid,
+                seal.Actor.Actor.ActorId,
+                "sessionRelocationSeal",
+                ZLinkMessageFlowReason.StaleTarget
+            );
             return;
         }
         RunInboundOperation(async () =>
@@ -7646,7 +7661,15 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     .SealAsync(seal, sourceNodeRid, _stop?.Token ?? CancellationToken.None)
                     .ConfigureAwait(false);
                 if (response is null)
+                {
+                    _flow?.TraceSessionBindingControlDrop(
+                        sourceNodeRid,
+                        seal.Actor.Actor.ActorId,
+                        "sessionRelocationSeal",
+                        ZLinkMessageFlowReason.StaleTarget
+                    );
                     return;
+                }
                 await SendCanonicalRelocationRecordAsync(
                         peer,
                         ZLinkServiceWireCodec.EncodeSessionRelocationSealed(response.Value),
@@ -7657,7 +7680,16 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             catch (Exception exception)
             {
                 ZLinkFrameworkDebugLog.TaskFailure("session-relocation-seal", exception);
-                Publish(MeshMonitorEventKind.ProtocolError, peerRid: sourceNodeRid);
+                _flow?.TraceSessionBindingControlDrop(
+                    sourceNodeRid,
+                    seal.Actor.Actor.ActorId,
+                    "sessionRelocationSeal",
+                    exception is ZLinkFrameworkException failure
+                    && failure.Kind == ZLinkFrameworkErrorKind.Unavailable
+                        ? ZLinkMessageFlowReason.LocationUnavailable
+                        : ZLinkMessageFlowReason.StaleTarget,
+                    exception
+                );
             }
         });
     }

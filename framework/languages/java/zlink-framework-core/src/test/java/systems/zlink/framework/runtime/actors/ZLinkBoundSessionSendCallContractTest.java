@@ -43,6 +43,52 @@ import java.util.function.Supplier;
 
 final class ZLinkBoundSessionSendCallContractTest {
     @Test
+    void acceptedRetirementClearsTheContextAfterTheOwnerRemovesItsRecord() {
+        var available = new AtomicBoolean(true);
+        var node = spotNode(new AtomicInteger(), available);
+        var actors =
+                new ZLinkActorRuntime(
+                        node,
+                        Map.of("probe", ProbeFactory.class),
+                        Map.of(),
+                        Duration.ofSeconds(1),
+                        Duration.ofSeconds(1),
+                        new ZLinkJsonMessageSerializer(),
+                        ZLinkHandlerActivator.reflection(),
+                        ZLinkStreamCodec.RAW,
+                        unusedAdmission());
+        var actor =
+                actors.getOrCreateLocalActor("retired-binding", ZLinkActor.class)
+                        .toCompletableFuture()
+                        .join()
+                        .orElseThrow();
+        var ref = actors.currentRef(actor);
+        var route = node.boundSessionRoute(ref).orElseThrow();
+        actors.bindNativeSession(
+                        actor,
+                        node,
+                        ref,
+                        route.sessionOwnerNodeRid(),
+                        route.sessionRid(),
+                        route.bindingGeneration(),
+                        route.sessionOwnerNodeGeneration())
+                .toCompletableFuture()
+                .join();
+        assertTrue(actors.hasBoundSession(actor));
+        actors.applyRemoteSessionBinding(
+                        node,
+                        ref,
+                        transition -> {
+                            available.set(false);
+                            transition.retire(route);
+                            return true;
+                        })
+                .toCompletableFuture()
+                .join();
+        assertFalse(actors.hasBoundSession(actor));
+    }
+
+    @Test
     void acceptedHandlerSendSurvivesRelocationSeal() throws Exception {
         acceptedHandlerSendSurvivesSeal(false);
     }

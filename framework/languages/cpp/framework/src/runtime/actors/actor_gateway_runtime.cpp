@@ -56,11 +56,7 @@ class bound_session_delivery_fence_t
             take_terminal_unlocked (settled, terminal);
         }
         if (settled) {
-            try {
-                settled (std::move (*terminal));
-            }
-            catch (...) {
-            }
+            settled (std::move (*terminal));
         }
     }
 
@@ -77,11 +73,7 @@ class bound_session_delivery_fence_t
             take_terminal_unlocked (ready, terminal);
         }
         if (ready) {
-            try {
-                ready (std::move (*terminal));
-            }
-            catch (...) {
-            }
+            ready (std::move (*terminal));
         }
     }
 
@@ -3172,8 +3164,11 @@ bool actor_gateway_runtime_t::prepare_session_relocation_target_route (
 {
     if (route.route.action != runtime::protocol::session_relocation_route_action_t::commit
         || route.sender_role != runtime::protocol::relocation_role_t::target
-        || route.actor.actor_id.empty () || route.actor.object_generation == 0
+        || !is_valid_actor_id (route.actor.actor_id) || route.actor.object_generation == 0
         || route.session_owner_node_routing_id.empty () || route.session_routing_id.empty ()
+        || route.session_owner_node_routing_id.size () > runtime::protocol::ridBytes
+        || route.session_routing_id.size () > runtime::protocol::ridBytes
+        || route.route.target_node_routing_id.size () > runtime::protocol::ridBytes
         || route.session_owner_node_generation == 0 || route.binding_generation == 0
         || route.route.previous_authority_owner_generation == 0
         || route.route.target_authority_owner_generation
@@ -3183,99 +3178,92 @@ bool actor_gateway_runtime_t::prepare_session_relocation_target_route (
         return false;
     }
 
-    try {
-        const auto target_node = zlink::routing_id_t::from (route.route.target_node_routing_id);
-        const auto session_owner = zlink::routing_id_t::from (route.session_owner_node_routing_id);
-        const auto session_rid = zlink::routing_id_t::from (route.session_routing_id);
-        return _state->sync ([&] {
-            auto found = _state->actors_by_id.find (route.actor.actor_id);
-            if (found == _state->actors_by_id.end ()) {
-                const auto target_actor =
-                  actor_ref_access_t::make (node_rid_t::from_string (target_node.to_string ()), {},
-                                            route.actor.actor_id, route.actor.object_generation);
-                actor_bound_session_route_t target_route{
-                  session_owner,
-                  session_rid,
-                  route.actor.object_generation,
-                  route.session_owner_node_generation,
-                  route.route.target_authority_owner_generation,
-                  target_owner_lease_generation,
-                  route.binding_generation,
-                  0,
-                  0,
-                  true,
-                  route.session_owner_id,
-                  route.session_owner_lease_generation};
-                found = _state->actors_by_id
-                          .emplace (route.actor.actor_id,
-                                    actor_record_t{.ref = target_actor,
-                                                   .bound = true,
-                                                   .disconnected = {},
-                                                   .bound_session_route = target_route})
-                          .first;
-                if (_state->bound_session_sender) {
-                    _state->bound_session_sinks[route.actor.actor_id] =
-                      make_session_owner_sink (_state, target_actor, std::move (target_route));
-                }
-                return true;
-            }
-            if (!found->second.bound || found->second.disconnected
-                || found->second.ref.object_generation () != route.actor.object_generation
-                || !found->second.bound_session_route) {
-                return false;
-            }
-
-            auto &gateway_route = *found->second.bound_session_route;
-            if (!gateway_route.session_rid
-                || gateway_route.node_rid.to_bytes () != session_owner.to_bytes ()
-                || gateway_route.session_rid->to_bytes () != session_rid.to_bytes ()
-                || gateway_route.node_generation != route.session_owner_node_generation
-                || gateway_route.object_generation != route.actor.object_generation
-                || gateway_route.binding_generation != route.binding_generation) {
-                return false;
-            }
-
-            const bool already_prepared =
-              found->second.ref.node_rid ().value () == target_node.to_string ()
-              && gateway_route.authority_owner_generation
-                   == route.route.target_authority_owner_generation
-              && gateway_route.owner_lease_generation == target_owner_lease_generation;
-            // This target-local binding record is a cache, not the Store authority
-            // owner. A node that did not participate in an intervening move can
-            // legitimately trail the Store-confirmed previous generation. The
-            // post-CAS caller supplies both committed fences, so advance a lagging
-            // cache but never overwrite an equal/conflicting or newer tenure.
-            if (!already_prepared
-                && gateway_route.authority_owner_generation
-                     > route.route.previous_authority_owner_generation) {
-                return false;
-            }
-
-            const auto target_actor = actor_ref_access_t::make (
-              node_rid_t::from_string (target_node.to_string ()),
-              std::string (actor_ref_access_t::actor_type (found->second.ref)),
-              route.actor.actor_id, route.actor.object_generation);
-            found->second.ref = target_actor;
-            if (!already_prepared) {
-                // Commands 43/44 deliberately carry no numeric relay high-water.
-                // A new target tenure learns its baseline from the first exact
-                // relay; an idempotent prepare preserves an already learned one.
-                gateway_route.session_sequence = 0;
-                gateway_route.session_sequence_baseline_unknown = true;
-            }
-            gateway_route.authority_owner_generation =
-              route.route.target_authority_owner_generation;
-            gateway_route.owner_lease_generation = target_owner_lease_generation;
-            if (_state->bound_session_sender && !found->second.bound_session_stream_sink) {
+    const auto target_node = zlink::routing_id_t::from (route.route.target_node_routing_id);
+    const auto session_owner = zlink::routing_id_t::from (route.session_owner_node_routing_id);
+    const auto session_rid = zlink::routing_id_t::from (route.session_routing_id);
+    return _state->sync ([&] {
+        auto found = _state->actors_by_id.find (route.actor.actor_id);
+        if (found == _state->actors_by_id.end ()) {
+            const auto target_actor =
+              actor_ref_access_t::make (node_rid_t::from_string (target_node.to_string ()), {},
+                                        route.actor.actor_id, route.actor.object_generation);
+            actor_bound_session_route_t target_route{session_owner,
+                                                     session_rid,
+                                                     route.actor.object_generation,
+                                                     route.session_owner_node_generation,
+                                                     route.route.target_authority_owner_generation,
+                                                     target_owner_lease_generation,
+                                                     route.binding_generation,
+                                                     0,
+                                                     0,
+                                                     true,
+                                                     route.session_owner_id,
+                                                     route.session_owner_lease_generation};
+            found =
+              _state->actors_by_id
+                .emplace (route.actor.actor_id, actor_record_t{.ref = target_actor,
+                                                               .bound = true,
+                                                               .disconnected = {},
+                                                               .bound_session_route = target_route})
+                .first;
+            if (_state->bound_session_sender) {
                 _state->bound_session_sinks[route.actor.actor_id] =
-                  make_session_owner_sink (_state, target_actor, gateway_route);
+                  make_session_owner_sink (_state, target_actor, std::move (target_route));
             }
             return true;
-        });
-    }
-    catch (...) {
-        return false;
-    }
+        }
+        if (!found->second.bound || found->second.disconnected
+            || found->second.ref.object_generation () != route.actor.object_generation
+            || !found->second.bound_session_route) {
+            return false;
+        }
+
+        auto &gateway_route = *found->second.bound_session_route;
+        if (!gateway_route.session_rid
+            || gateway_route.node_rid.to_bytes () != session_owner.to_bytes ()
+            || gateway_route.session_rid->to_bytes () != session_rid.to_bytes ()
+            || gateway_route.node_generation != route.session_owner_node_generation
+            || gateway_route.object_generation != route.actor.object_generation
+            || gateway_route.binding_generation != route.binding_generation) {
+            return false;
+        }
+
+        const bool already_prepared =
+          found->second.ref.node_rid ().value () == target_node.to_string ()
+          && gateway_route.authority_owner_generation
+               == route.route.target_authority_owner_generation
+          && gateway_route.owner_lease_generation == target_owner_lease_generation;
+        // This target-local binding record is a cache, not the Store authority
+        // owner. A node that did not participate in an intervening move can
+        // legitimately trail the Store-confirmed previous generation. The
+        // post-CAS caller supplies both committed fences, so advance a lagging
+        // cache but never overwrite an equal/conflicting or newer tenure.
+        if (!already_prepared
+            && gateway_route.authority_owner_generation
+                 > route.route.previous_authority_owner_generation) {
+            return false;
+        }
+
+        const auto target_actor = actor_ref_access_t::make (
+          node_rid_t::from_string (target_node.to_string ()),
+          std::string (actor_ref_access_t::actor_type (found->second.ref)), route.actor.actor_id,
+          route.actor.object_generation);
+        found->second.ref = target_actor;
+        if (!already_prepared) {
+            // Commands 43/44 deliberately carry no numeric relay high-water.
+            // A new target tenure learns its baseline from the first exact
+            // relay; an idempotent prepare preserves an already learned one.
+            gateway_route.session_sequence = 0;
+            gateway_route.session_sequence_baseline_unknown = true;
+        }
+        gateway_route.authority_owner_generation = route.route.target_authority_owner_generation;
+        gateway_route.owner_lease_generation = target_owner_lease_generation;
+        if (_state->bound_session_sender && !found->second.bound_session_stream_sink) {
+            _state->bound_session_sinks[route.actor.actor_id] =
+              make_session_owner_sink (_state, target_actor, gateway_route);
+        }
+        return true;
+    });
 }
 
 void actor_gateway_runtime_t::unbind_session_stream (std::string actor_id,

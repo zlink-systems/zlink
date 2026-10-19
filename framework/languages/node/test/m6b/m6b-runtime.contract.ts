@@ -8233,6 +8233,48 @@ for (const remote of [false, true]) {
     assert.equal(physicalCloses, 1);
 
     const actorState = runtime.actor(actor.actorId)!;
+    const controlDrops: Array<{ outcome: string; errorReason: string }> = [];
+    runtime.setDispatchErrorReporter(
+      {
+        flow: {
+          accepts: () => true,
+          trace: (event: { outcome: string; errorReason: string }) => controlDrops.push(event)
+        }
+      } as never,
+      'mesh'
+    );
+    runtime.setSessionOwnerDescriptors({ local: () => undefined, peer: async () => undefined });
+    await ingress!(
+      withIngressOwner({
+        command: M6bServiceWireCommand.boundSessionReplaced,
+        flags: 0,
+        sourceRoutingId: actor.nodeRid,
+        sourceNodeGeneration: 7n,
+        parts: [
+          encodeBoundSessionReplacedHeader(
+            {
+              actor,
+              targetNodeGeneration: 7n,
+              authorityOwnerGeneration: actorState.authorityOwnerGeneration,
+              ownerLeaseGeneration: 7n
+            },
+            {
+              sessionOwnerNodeRid: binding.sessionOwnerNodeRid,
+              sessionOwnerNodeGeneration: binding.sessionOwnerNodeGeneration!,
+              sessionOwnerId: binding.sessionOwnerId!,
+              sessionOwnerLeaseGeneration: binding.sessionOwnerLeaseGeneration!,
+              sessionRid: binding.sessionRid,
+              retiredBindingGeneration: binding.bindingGeneration
+            }
+          )
+        ]
+      })
+    );
+    assert.equal(controlDrops.length, 1);
+    assert.equal(controlDrops[0]!.outcome, 'dropped');
+    assert.equal(controlDrops[0]!.errorReason, 'location_unavailable');
+    assert.ok(runtime.registry.binding(actor), 'descriptor rejection preserves the binding');
+    withTestSessionOwners(runtime);
     const replaced = await ingress!(
       withIngressOwner({
         command: M6bServiceWireCommand.boundSessionReplaced,

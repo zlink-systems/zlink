@@ -498,6 +498,38 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
      */
     public CompletionStage<byte[]> handleSessionRelocationSeal(
             RoutingId transportSource, byte[] command42) {
+        if (flow.begin(ZLinkMessageFlowOutcome.DROPPED) == null) {
+            return receiveSessionRelocationSeal(transportSource, command42);
+        }
+        return receiveSessionRelocationSeal(transportSource, command42)
+                .whenComplete(
+                        (reply, failure) -> {
+                            if (failure != null || reply == null) {
+                                Throwable cause =
+                                        failure instanceof java.util.concurrent.CompletionException
+                                                ? failure.getCause()
+                                                : failure;
+                                flow.traceBindingControlDrop(
+                                        transportSource,
+                                        new ZLinkServiceM6BWireCodec()
+                                                .decodeSessionRelocationSeal(command42)
+                                                .actor()
+                                                .actor()
+                                                .actorId(),
+                                        "sessionRelocationSeal",
+                                        cause instanceof ZLinkFrameworkException error
+                                                        && error.kind()
+                                                                == ZLinkFrameworkErrorKind
+                                                                        .UNAVAILABLE
+                                                ? ZLinkDispatchErrorReason.LOCATION_UNAVAILABLE
+                                                : ZLinkDispatchErrorReason.STALE_TARGET,
+                                        cause);
+                            }
+                        });
+    }
+
+    private CompletionStage<byte[]> receiveSessionRelocationSeal(
+            RoutingId transportSource, byte[] command42) {
         var codec = new systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec();
         var command = codec.decodeSessionRelocationSeal(command42);
         RoutingId expectedSource =
@@ -788,6 +820,28 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             return;
         }
         SessionState state = findSessionForReplacement(retired);
+        if (state != null) {
+            var owner =
+                    state.ownerNode == null
+                            ? null
+                            : state.ownerNode.localSessionOwner().orElse(null);
+            if (owner == null
+                    || !owner.identifies(
+                            retired.sessionOwnerNodeRid(),
+                            retired.sessionOwnerNodeGeneration(),
+                            retired.sessionOwnerId(),
+                            retired.sessionOwnerLeaseGeneration())) {
+                flow.traceBindingControlDrop(
+                        transportSource,
+                        actor.actorId(),
+                        "boundSessionReplaced",
+                        owner == null
+                                ? ZLinkDispatchErrorReason.LOCATION_UNAVAILABLE
+                                : ZLinkDispatchErrorReason.STALE_TARGET,
+                        null);
+                return;
+            }
+        }
         if (state == null
                 || state.actorRuntime() == null
                 || state.actorRuntime()
@@ -866,11 +920,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         return inStateLane(
                 () ->
                         sessions.values().stream()
-                                .filter(
-                                        state ->
-                                                state.matchesOwner(retired)
-                                                        && state.routingId()
-                                                                .equals(retired.sessionRid()))
+                                .filter(state -> state.routingId().equals(retired.sessionRid()))
                                 .findFirst()
                                 .orElse(null));
     }

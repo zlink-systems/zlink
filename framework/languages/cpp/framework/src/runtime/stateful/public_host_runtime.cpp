@@ -3,6 +3,7 @@
 #include "runtime/execution/task_result.hpp"
 #include "runtime/diagnostics/mesh_trace.hpp"
 #include "runtime/diagnostics/dispatch_error_reporter.hpp"
+#include "runtime/diagnostics/session_binding_diagnostics.hpp"
 
 #include "runtime/stateful/public_host_runtime.hpp"
 #include "runtime/mesh/service_channel_membership.hpp"
@@ -665,6 +666,7 @@ spot_handle_t::request_to_spot (const zlink::routing_id_t &target_node_rid,
                   completion (terminal, std::move (decoded));
               }
               catch (...) {
+                  host->_options.mesh.runtime_failures->report (std::current_exception ());
               }
           },
           protocol::wire_operation_id_t{operation.id.high, operation.id.low}, std::nullopt);
@@ -1055,6 +1057,7 @@ void public_host_runtime_t::close () noexcept
             maintenance_closing ();
         }
         catch (...) {
+            _options.mesh.runtime_failures->report (std::current_exception ());
         }
     }
     const auto already_sealed =
@@ -3054,6 +3057,7 @@ void public_host_runtime_t::discard_relocation_target_attempts (
                 _aggregate_relocation_authority->abort (*attempt.authority_fence);
             }
             catch (...) {
+                _options.mesh.runtime_failures->report (std::current_exception ());
             }
         }
         for (const auto &object : attempt.wire_objects) {
@@ -3062,6 +3066,7 @@ void public_host_runtime_t::discard_relocation_target_attempts (
                   attempt.prepare.relocation, attempt.prepare.target_attempt_generation, object);
             }
             catch (...) {
+                _options.mesh.runtime_failures->report (std::current_exception ());
             }
         }
         try {
@@ -3073,6 +3078,7 @@ void public_host_runtime_t::discard_relocation_target_attempts (
                                                                     attempt.restore_identity);
         }
         catch (...) {
+            _options.mesh.runtime_failures->report (std::current_exception ());
         }
         if (_stateful_dispatch)
             for (const auto &target : attempt.targets) {
@@ -3080,6 +3086,7 @@ void public_host_runtime_t::discard_relocation_target_attempts (
                     (void) _stateful_dispatch->discard_pending (target);
                 }
                 catch (...) {
+                    _options.mesh.runtime_failures->report (std::current_exception ());
                 }
             }
         const relocation_attempt_key_t key{attempt.prepare.relocation.high,
@@ -3369,6 +3376,7 @@ task_t<void> public_host_runtime_t::submit_relocation_session_routes (relocation
                 journal_store.cleanup (*completed_journal);
             }
             catch (...) {
+                _options.mesh.runtime_failures->report (std::current_exception ());
             }
         }
     }
@@ -3547,6 +3555,7 @@ bool public_host_runtime_t::submit_relocation_target_authority (
         return true;
     }
     catch (...) {
+        _options.mesh.runtime_failures->report (std::current_exception ());
         return false;
     }
 }
@@ -3789,6 +3798,7 @@ void public_host_runtime_t::rollback_actor_join_recoveries (
             _actor_join_recovery_rollback (stable_type, target);
         }
         catch (...) {
+            _options.mesh.runtime_failures->report (std::current_exception ());
         }
     }
 }
@@ -3812,6 +3822,7 @@ void public_host_runtime_t::unregister_relocation_wire_targets (
                                                         wire_object);
         }
         catch (...) {
+            _options.mesh.runtime_failures->report (std::current_exception ());
         }
     }
 }
@@ -4464,6 +4475,7 @@ void public_host_runtime_t::complete_relocation_assembly (
                       wire_objects[index]);
                 }
                 catch (...) {
+                    _options.mesh.runtime_failures->report (std::current_exception ());
                 }
             }
             // Target relocation-wire registration failed (e.g. an existing
@@ -4547,6 +4559,7 @@ bool public_host_runtime_t::register_relocation_target_queue (
            [] (const protocol::relocation_data_t &) {}});
     }
     catch (...) {
+        _options.mesh.runtime_failures->report (std::current_exception ());
         return false;
     }
 }
@@ -5378,6 +5391,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                             message_follow_handler (notice);
                         }
                         catch (...) {
+                            _options.mesh.runtime_failures->report (std::current_exception ());
                         }
                     }
                     continue;
@@ -5766,19 +5780,30 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                       "unsupported infrastructure mailbox command");
 
                 if (wire.kind == protocol::command::sessionRelocationSeal) {
-                    if (mailbox_record.parts.size () != 1 || !session_route_owner_resolver)
+                    if (mailbox_record.parts.size () != 1)
                         continue;
                     const auto seal = protocol::decode_session_relocation_seal (
                       protocol::message_bytes (mailbox_record.parts.front ()));
-                    const auto owner = session_route_owner_resolver ();
-                    if (!owner)
+                    const auto owner =
+                      session_route_owner_resolver ? session_route_owner_resolver () : std::nullopt;
+                    if (!owner) {
+                        detail::trace_session_binding_control_drop (
+                          _options.mesh.dispatch, mailbox_record.source_routing_id,
+                          seal.actor.actor_id, "sessionRelocationSeal",
+                          message_flow_reason_t::location_unavailable);
                         continue;
+                    }
                     const auto reconcile = co_await _lifecycle_configuration_lane.run_task (
                       [this] { return _peer_reconcile; });
                     const auto [accepted, immediate] = admit_session_relocation_seal (
                       seal, *owner, mailbox_record.source_routing_id, {}, reconcile);
-                    if (!accepted)
+                    if (!accepted) {
+                        detail::trace_session_binding_control_drop (
+                          _options.mesh.dispatch, mailbox_record.source_routing_id,
+                          seal.actor.actor_id, "sessionRelocationSeal",
+                          message_flow_reason_t::stale_target);
                         continue;
+                    }
                     if (immediate)
                         (void) co_await _transport->send_session_relocation_sealed (
                           mailbox_record.source_routing_id, *immediate);
@@ -5856,6 +5881,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                                 late_session_route_update_reporter (route);
                             }
                             catch (...) {
+                                _options.mesh.runtime_failures->report (std::current_exception ());
                             }
                         }
                         continue;
@@ -5941,6 +5967,8 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                                   std::move (result.application_reply));
                             }
                             catch (...) {
+                                host->_options.mesh.runtime_failures->report (
+                                  std::current_exception ());
                             }
                         };
                         try {
@@ -5992,6 +6020,8 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                               std::move (result.application_reply));
                         }
                         catch (...) {
+                            host->_options.mesh.runtime_failures->report (
+                              std::current_exception ());
                         }
                     };
                     try {
@@ -6721,6 +6751,8 @@ task_t<std::size_t> public_host_runtime_t::dispatch_ready (
                                   return true;
                               }
                               catch (...) {
+                                  host->_options.mesh.runtime_failures->report (
+                                    std::current_exception ());
                                   return false;
                               }
                           };
@@ -6738,6 +6770,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_ready (
                           *pending, [pending] (const result_t<stateful::stateful_error_t> &) {});
                     }
                     catch (...) {
+                        _options.mesh.runtime_failures->report (std::current_exception ());
                     }
                 }
                 catch (...) {
@@ -6748,6 +6781,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_ready (
                           *pending, [pending] (const result_t<stateful::stateful_error_t> &) {});
                     }
                     catch (...) {
+                        _options.mesh.runtime_failures->report (std::current_exception ());
                     }
                 }
             }
@@ -7016,6 +7050,7 @@ bool public_host_runtime_t::wait_for_dispatch_activity (
         return _transport->wait_for_activity (timeout, accept_application_receive);
     }
     catch (...) {
+        _options.mesh.runtime_failures->report (std::current_exception ());
         return false;
     }
 }
