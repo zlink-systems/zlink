@@ -221,7 +221,7 @@ capacity 집계에 사용한다.
 **Capacity 계기는 local MeshNode마다 마지막으로 Location Store에서 확인한 capacity record 값 하나를 읽는다.**
 Active와 reserved는 그 MeshNode의 capacity record([Location runtime §6.1](../05-location-relocation/01-location-runtime.ko.md#61-read와-cas))의
 active와 pending이고, limit은 그 MeshNode에 등록한 descriptor의 limit이다. 이 값은 capacity record를 읽거나
-바꾼 Store 요청이 성공할 때와, 기존 descriptor polling의 주기마다 local capacity record를 한 번 읽을 때 바뀐다.
+바꾼 Store 요청이 성공할 때와, [Location runtime §4](../05-location-relocation/01-location-runtime.ko.md#4-실행-중인-node와-제공-기능을-찾는다)의 descriptor polling 주기마다 local capacity record를 한 번 읽을 때 바뀐다.
 Observable 수집과 application 요청은 이 계기 때문에 Store를 읽지 않는다. 처음 확인하기 전에는 이 계기를
 관측하지 않고, 읽기가 실패하면 마지막 확인값을 유지한다.
 
