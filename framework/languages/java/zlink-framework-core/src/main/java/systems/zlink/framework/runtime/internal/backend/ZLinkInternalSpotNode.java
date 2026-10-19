@@ -461,9 +461,15 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
         return CompletableFuture.completedFuture(null);
     }
 
+    /**
+     * The Actor's current binding record as this node stores it, including the Session owner
+     * identity taken from its descriptor at bind (Session-Actor binding §4).
+     */
     record BoundSessionRoute(
             RoutingId sessionOwnerNodeRid,
             long sessionOwnerNodeGeneration,
+            String sessionOwnerId,
+            long sessionOwnerLeaseGeneration,
             RoutingId sessionRid,
             long bindingGeneration) {}
 

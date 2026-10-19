@@ -437,6 +437,8 @@ final class ZLinkBoundSessionSendCallContractTest {
                                                                     .BoundSessionRoute(
                                                                     RoutingId.from("session-node"),
                                                                     1,
+                                                                    "session-owner",
+                                                                    1,
                                                                     RoutingId.from("session-1"),
                                                                     1))
                                                     : Optional.empty();

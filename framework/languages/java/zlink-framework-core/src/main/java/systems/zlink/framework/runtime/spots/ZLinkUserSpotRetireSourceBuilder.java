@@ -268,8 +268,7 @@ final class ZLinkUserSpotRetireSourceBuilder {
                                                             selectTarget(
                                                                     inventory,
                                                                     descriptors,
-                                                                    targetPolicy),
-                                                            descriptors));
+                                                                    targetPolicy)));
                         });
     }
 
@@ -394,7 +393,6 @@ final class ZLinkUserSpotRetireSourceBuilder {
                                                     current,
                                                     seal,
                                                     admission.target(),
-                                                    admission.descriptors(),
                                                     cancellation));
                         })
                 .thenCompose(
@@ -540,7 +538,6 @@ final class ZLinkUserSpotRetireSourceBuilder {
             Inventory inventory,
             ZLinkUserSpotRelocationBarrier.Seal seal,
             ZLinkMeshNodeDescriptor target,
-            List<ZLinkMeshNodeDescriptor> descriptors,
             ZLinkStoreCancellation cancellation) {
         ZLinkRelocationCancellation relocationCancellation = cancellation::isCancellationRequested;
         CompletionStage<byte[]> spotState =
@@ -624,16 +621,12 @@ final class ZLinkUserSpotRetireSourceBuilder {
                                                     seal.timerEnvelope(),
                                                     participants,
                                                     seal.capturedRecords()),
-                                            sessionRoutes(
-                                                    inventory,
-                                                    descriptors,
-                                                    seal.capturedRecords())));
+                                            sessionRoutes(inventory, seal.capturedRecords())));
                 });
     }
 
     private List<ZLinkSpotRetireControl.SessionRouteFence> sessionRoutes(
             Inventory inventory,
-            List<ZLinkMeshNodeDescriptor> descriptors,
             Map<
                             String,
                             List<
@@ -642,38 +635,23 @@ final class ZLinkUserSpotRetireSourceBuilder {
                     acceptedRecords) {
         List<ZLinkSpotRetireControl.SessionRouteFence> routes = new ArrayList<>();
         for (Owned actor : inventory.actors()) {
-            var knownRoute = actors.boundSessionRoute(actor.id());
-            knownRoute.ifPresent(
-                    route -> {
-                        ZLinkMeshNodeDescriptor owner =
-                                descriptors.stream()
-                                        .filter(
-                                                value ->
-                                                        value.rid()
-                                                                .equals(
-                                                                        route
-                                                                                .sessionOwnerNodeRid()))
-                                        .findFirst()
-                                        .orElseThrow(
-                                                () ->
-                                                        new IllegalStateException(
-                                                                "bound Session owner descriptor is"
-                                                                        + " unavailable: "
-                                                                        + route
-                                                                                .sessionOwnerNodeRid()));
-                        routes.add(
-                                new ZLinkSpotRetireControl.SessionRouteFence(
-                                        actor.id(),
-                                        actor.snapshot().objectGeneration(),
-                                        actor.snapshot().authorityOwnerGeneration(),
-                                        actor.snapshot().storeVersion(),
-                                        route.sessionOwnerNodeRid(),
-                                        owner.lifecycleGeneration(),
-                                        owner.ownerId(),
-                                        owner.leaseGeneration(),
-                                        route.sessionRid(),
-                                        route.bindingGeneration()));
-                    });
+            // Session-Actor binding §4: command 42 carries the Session owner identity stored
+            // with the binding at bind; the retire does not read the descriptor again.
+            actors.boundSessionRoute(actor.id())
+                    .ifPresent(
+                            route ->
+                                    routes.add(
+                                            new ZLinkSpotRetireControl.SessionRouteFence(
+                                                    actor.id(),
+                                                    actor.snapshot().objectGeneration(),
+                                                    actor.snapshot().authorityOwnerGeneration(),
+                                                    actor.snapshot().storeVersion(),
+                                                    route.sessionOwnerNodeRid(),
+                                                    route.sessionOwnerNodeGeneration(),
+                                                    route.sessionOwnerId(),
+                                                    route.sessionOwnerLeaseGeneration(),
+                                                    route.sessionRid(),
+                                                    route.bindingGeneration())));
         }
         for (byte[] encoded :
                 acceptedRecords.values().stream()
@@ -1694,14 +1672,7 @@ final class ZLinkUserSpotRetireSourceBuilder {
         }
     }
 
-    private record Admission(
-            Inventory inventory,
-            ZLinkMeshNodeDescriptor target,
-            List<ZLinkMeshNodeDescriptor> descriptors) {
-        private Admission {
-            descriptors = List.copyOf(descriptors);
-        }
-    }
+    private record Admission(Inventory inventory, ZLinkMeshNodeDescriptor target) {}
 
     private record Inventory(Owned spot, List<Owned> actors) {
         private Inventory {
