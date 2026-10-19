@@ -32,13 +32,33 @@ import java.io.PushbackInputStream;
 import java.io.Reader;
 import java.lang.annotation.Annotation;
 import java.util.Base64;
-import java.util.regex.Pattern;
 
 /** Owns the framework-json-v1 mapper decisions shared by JVM transports. */
 public final class ZLinkFrameworkJsonProfile {
     public static final String CONTENT_TYPE = "application/json";
     private static final String KOTLIN_METADATA_CLASS_NAME = "kotlin.Metadata";
-    private static final Pattern CANONICAL_DECIMAL_INTEGER = Pattern.compile("(?:0|-?[1-9][0-9]*)");
+
+    private static boolean isCanonicalDecimalInteger(String value) {
+        if (value.isEmpty()) {
+            return false;
+        }
+        if (value.equals("0")) {
+            return true;
+        }
+        int firstDigit = value.charAt(0) == '-' ? 1 : 0;
+        if (firstDigit == value.length()
+                || value.charAt(firstDigit) < '1'
+                || value.charAt(firstDigit) > '9') {
+            return false;
+        }
+        for (int index = firstDigit + 1; index < value.length(); index++) {
+            char digit = value.charAt(index);
+            if (digit < '0' || digit > '9') {
+                return false;
+            }
+        }
+        return true;
+    }
 
     private ZLinkFrameworkJsonProfile() {}
 
@@ -186,7 +206,7 @@ public final class ZLinkFrameworkJsonProfile {
                                     parser, "64-bit integers must be decimal JSON strings");
                         }
                         String value = parser.getText();
-                        if (!CANONICAL_DECIMAL_INTEGER.matcher(value).matches()) {
+                        if (!isCanonicalDecimalInteger(value)) {
                             throw JsonMappingException.from(
                                     parser, "64-bit integer is not a canonical decimal string");
                         }
