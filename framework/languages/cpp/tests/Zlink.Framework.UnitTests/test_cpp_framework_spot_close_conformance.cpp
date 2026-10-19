@@ -2,6 +2,7 @@
 // Runs framework/runtime/conformance/spot-close-v1.json against an in-process
 // app with a Location Store (Spot address messaging §7, §9; gate §7).
 
+#include "../support/committed_authority_fixture.hpp"
 #include "runtime/diagnostics/dispatch_options_access.hpp"
 #include "runtime/locations/actor_authority_payload.hpp"
 #include "runtime/locations/authority_key_codec.hpp"
@@ -292,6 +293,8 @@ void verify_target_staging_commit (bool initialize_throws)
                                            .key = "staged-timer-spot",
                                            .object_generation = 1,
                                            .authority_owner_generation = 1};
+    owner.bind_relocation_authority (
+      std::make_shared<zlink::framework::test::committed_authority_fixture_t> (target));
     frozen.owner = target;
     ASSERT_TRUE (owner.restore_spot_relocation_state (frozen, target));
     const auto initializes_before_commit = initializes->load ();

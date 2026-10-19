@@ -498,6 +498,40 @@ TEST (ZLinkStateLane, CallerDrainedVoidAndFailureTasksLeaveTheLaneBeforeCompleti
     });
 }
 
+TEST (ZLinkStateLane, RunTaskPreservesFrameworkFailureFacets)
+{
+    using namespace zlink::framework;
+    for (const bool asynchronous : {false, true}) {
+        SCOPED_TRACE (asynchronous);
+        offload_executor_t executor (1);
+        state_lane_t lane (executor);
+        std::promise<void> entered, release;
+        auto held = release.get_future ().share ();
+        if (asynchronous) {
+            ASSERT_TRUE (lane.try_post ([&] {
+                entered.set_value ();
+                held.wait ();
+            }));
+            entered.get_future ().wait ();
+        }
+        const auto code =
+          static_cast<std::uint32_t> (runtime::protocol::framework_error_code::spotMoving);
+        auto failed = lane.run_task ([code] () -> int {
+            throw detail::with_failure_code (
+              detail::make_framework_origin_exception (framework_error_kind_t::unavailable,
+                                                       "state owner refused the operation"),
+              code);
+        });
+        release.set_value ();
+        const auto result = failed.result ();
+        ASSERT_FALSE (result);
+        ASSERT_NE (result.error (), nullptr);
+        EXPECT_EQ (result.error_kind (), framework_error_kind_t::unavailable);
+        EXPECT_EQ (detail::error_origin (*result.error ()), detail::error_origin_t::framework);
+        EXPECT_EQ (detail::failure_code (*result.error ()), code);
+    }
+}
+
 TEST (ZLinkStateLane, StandaloneTaskCompletionAllowsLaneReentry)
 {
     constexpr auto completion_timeout = std::chrono::seconds (5);

@@ -2537,6 +2537,10 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                           nullptr));
                   return detail::spot_node_runtime_t (registration->spot_state)
                     .spot_execution_queue (participant.key);
+              },
+              [registration] (std::string key, std::optional<protocol::spot_route_fence_t> route) {
+                  return detail::spot_node_runtime_t (registration->spot_state)
+                    .prepare_spot_dispatch (std::move (key), std::move (route));
               });
         }
         _published_mesh_nodes.clear ();

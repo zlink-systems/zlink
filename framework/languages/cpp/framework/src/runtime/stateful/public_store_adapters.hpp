@@ -214,14 +214,14 @@ class public_authority_store_adapter_t final : public authority_relocation_port_
                         continue;
                     const auto &snapshot = entry.snapshot;
                     relocation_participant_identity_t identity;
-                    identity.owner.key = decoded_key->object_id;
-                    identity.owner.object_generation = snapshot.object_generation;
-                    identity.owner.authority_owner_generation = snapshot.authority_owner_generation;
-                    identity.owner.mesh_name = snapshot.allocation.target.mesh_name;
-                    identity.owner.node_id = snapshot.allocation.target.node_rid.value ();
+                    const auto kind =
+                      decoded_key->kind == 'a' ? object_kind_t::actor
+                      : snapshot.allocation.object_kind == placement_object_kind_t::instance_spot
+                        ? object_kind_t::instance_spot
+                        : object_kind_t::user_spot;
+                    identity.owner = current_owner (snapshot, kind, decoded_key->object_id);
                     identity.stable_type = snapshot.allocation.stable_type;
-                    if (decoded_key->kind == 'a') {
-                        identity.owner.kind = object_kind_t::actor;
+                    if (kind == object_kind_t::actor) {
                         const auto projection = runtime::decode_actor_authority_payload (
                           snapshot.payload, snapshot.object_generation);
                         if (projection) {
@@ -232,11 +232,6 @@ class public_authority_store_adapter_t final : public authority_relocation_port_
                                   ::zlink::framework::detail::actor_ref_access_t::actor_type (
                                     projection->actor);
                         }
-                    } else {
-                        identity.owner.kind =
-                          snapshot.allocation.object_kind == placement_object_kind_t::instance_spot
-                            ? object_kind_t::instance_spot
-                            : object_kind_t::user_spot;
                     }
                     output.push_back (std::move (identity));
                 }
@@ -351,7 +346,20 @@ class public_authority_store_adapter_t final : public authority_relocation_port_
                                 return _store->read_authority (
                                   authority_key (object_ref_t{.kind = kind, .key = key}));
                             }).value ();
-        return decode_current (result);
+        if (auto relocation = decode_current (result))
+            return relocation;
+        const auto *snapshot = std::get_if<authority_snapshot_t> (&result);
+        if (!snapshot || kind != object_kind_t::user_spot)
+            return std::nullopt;
+        const auto ready = authority_relocation_payload_codec_t::decode_ready_user_spot (*snapshot);
+        if (!ready || ready->spot_id != key)
+            return std::nullopt;
+        const auto current = current_owner (*snapshot, kind, key);
+        // Steady authority names the current owner; it carries no predecessor claim.
+        return authority_relocation_reference_t{.source = current,
+                                                .target = current,
+                                                .target_owner = snapshot->owner,
+                                                .application_payload = snapshot->payload};
     }
 
     authority_publish_result_t publish_completion (object_kind_t kind,
@@ -553,6 +561,17 @@ class public_authority_store_adapter_t final : public authority_relocation_port_
     }
 
   private:
+    static object_ref_t
+    current_owner (const authority_snapshot_t &snapshot, object_kind_t kind, const std::string &key)
+    {
+        return {kind,
+                key,
+                snapshot.object_generation,
+                snapshot.authority_owner_generation,
+                snapshot.allocation.target.mesh_name,
+                std::string (snapshot.allocation.target.node_rid.value ())};
+    }
+
     static std::optional<authority_relocation_reference_t>
     decode_current (const authority_read_result_t &current)
     {

@@ -149,6 +149,12 @@ class raw_stateful_dispatch_t
     try_claim (const object_ref_t &owner,
                std::function<void ()> *before_application_handler = nullptr,
                std::string *stable_type = nullptr);
+    task_t<std::pair<stateful_error_t, std::optional<stateful_delivery_t>>>
+    try_claim_async (object_ref_t owner,
+                     std::function<void ()> *before_application_handler = nullptr,
+                     std::string *stable_type = nullptr);
+    task_t<stateful_error_t> transfer_application_claim_async (object_ref_t owner,
+                                                               std::uint64_t sequence);
     // taken receives the original when this admission takes it; its caller replies from
     // it when the turn is not accepted. The original's mailbox credit returns here.
     task_t<stateful_error_t> accept_local (
@@ -210,6 +216,12 @@ class raw_stateful_dispatch_t
         bool relocated_completing = false;
     };
 
+    std::pair<stateful_error_t, std::optional<stateful_delivery_t>>
+    claim_turn (const object_ref_t &owner,
+                turn_record_t turn,
+                std::function<void ()> *before_application_handler);
+    accepted_mailbox_reservation_t take_claim_reservation (const object_ref_t &owner,
+                                                           std::uint64_t sequence);
     stateful_error_t complete_with_claim (const stateful_delivery_t &delivery,
                                           std::optional<protocol::application_payload_t> reply,
                                           const std::function<stateful_error_t ()> &release_claim);

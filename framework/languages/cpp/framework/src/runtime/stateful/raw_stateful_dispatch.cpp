@@ -693,16 +693,6 @@ raw_stateful_dispatch_t::ingest_claimed (object_ref_t owner,
                 }
             }
         }
-        if (validation == stateful_error_t::none) {
-            if (actor_header) {
-                // Actor metadata and accepted target are normalized together below.
-                frozen.operation = actor_header->operation;
-            } else if (spot_header) {
-                frozen.operation = spot_header->operation;
-            }
-            if (!nonzero (frozen.operation))
-                validation = stateful_error_t::invalid;
-        }
     }
     catch (const protocol::service_wire_error_t &) {
         validation = stateful_error_t::invalid;
@@ -851,16 +841,57 @@ raw_stateful_dispatch_t::try_claim (const object_ref_t &owner,
                                     std::function<void ()> *before_application_handler,
                                     std::string *stable_type)
 {
-    // The claim is the state lane's decision; this mutex guards only the pending entry.
     auto [error, turn] = _objects->try_claim (owner, turn_domain_t::application, stable_type);
-    if (error != stateful_error_t::none || !turn) {
+    if (error != stateful_error_t::none || !turn)
         return {error, std::nullopt};
-    }
+    auto result = claim_turn (owner, std::move (*turn), before_application_handler);
+    if (!result.second)
+        (void) release_application_claim (owner);
+    return result;
+}
+
+task_t<std::pair<stateful_error_t, std::optional<stateful_delivery_t>>>
+raw_stateful_dispatch_t::try_claim_async (object_ref_t owner,
+                                          std::function<void ()> *before_application_handler,
+                                          std::string *stable_type)
+{
+    auto [error, turn] =
+      co_await _objects->try_claim_async (owner, turn_domain_t::application, stable_type);
+    if (error != stateful_error_t::none || !turn)
+        co_return std::make_pair (error, std::optional<stateful_delivery_t>{});
+    auto result = claim_turn (owner, std::move (*turn), before_application_handler);
+    if (!result.second)
+        (void) co_await _objects->complete_claim_async (owner, turn_domain_t::application);
+    co_return result;
+}
+
+std::pair<stateful_error_t, std::optional<stateful_delivery_t>>
+raw_stateful_dispatch_t::claim_turn (const object_ref_t &owner,
+                                     turn_record_t turn,
+                                     std::function<void ()> *before_application_handler)
+{
     std::unique_lock lock (_mutex);
-    auto pending = _pending.find (delivery_key (owner, turn->sequence));
+    auto pending = _pending.find (delivery_key (owner, turn.sequence));
+    if (pending == _pending.end () && owner.kind != object_kind_t::actor && turn.accepted_owner) {
+        lock.unlock ();
+        auto accepted = std::exchange (turn.accepted_owner, {});
+        if (!turn.application_record && !turn.frozen_record) {
+            auto &materialized = accepted->payload ();
+            if (!materialized)
+                throw std::runtime_error ("native source original has no payload");
+            turn = std::move (*materialized);
+            materialized.reset ();
+        }
+        auto frozen = turn.application_record
+                        ? protocol::summarize_frozen_application_record (*turn.application_record)
+                        : *turn.frozen_record;
+        const auto request = frozen.reply_route_id.has_value ();
+        return {stateful_error_t::none,
+                stateful_delivery_t{owner, std::move (turn), std::move (frozen), request,
+                                    std::move (accepted)}};
+    }
     if (pending == _pending.end ()) {
         lock.unlock ();
-        (void) release_application_claim (owner);
         return {stateful_error_t::conflict, std::nullopt};
     }
     // Terminal completion still reads the retained operation/source identity.
@@ -869,9 +900,9 @@ raw_stateful_dispatch_t::try_claim (const object_ref_t &owner,
     if (before_application_handler)
         *before_application_handler =
           std::move (pending->second.transport.before_application_handler);
-    auto accepted_owner = std::exchange (turn->accepted_owner, {});
+    auto accepted_owner = std::exchange (turn.accepted_owner, {});
     return {stateful_error_t::none,
-            stateful_delivery_t{owner, std::move (*turn), std::move (frozen),
+            stateful_delivery_t{owner, std::move (turn), std::move (frozen),
                                 pending->second.request, std::move (accepted_owner)}};
 }
 
@@ -1054,20 +1085,29 @@ stateful_error_t raw_stateful_dispatch_t::release_application_claim (const objec
     return _objects->complete_claim (owner, turn_domain_t::application);
 }
 
+accepted_mailbox_reservation_t
+raw_stateful_dispatch_t::take_claim_reservation (const object_ref_t &owner, std::uint64_t sequence)
+{
+    std::lock_guard lock (_mutex);
+    const auto pending = _pending.find (delivery_key (owner, sequence));
+    return pending == _pending.end () ? accepted_mailbox_reservation_t{}
+                                      : std::exchange (pending->second.mailbox_claim, {});
+}
+
 stateful_error_t raw_stateful_dispatch_t::transfer_application_claim (const object_ref_t &owner,
                                                                       std::uint64_t sequence)
 {
-    accepted_mailbox_reservation_t reservation;
-    {
-        std::lock_guard lock (_mutex);
-        const auto pending = _pending.find (delivery_key (owner, sequence));
-        if (pending != _pending.end ())
-            reservation = std::exchange (pending->second.mailbox_claim, {});
-    }
-    // A terminal may already have consumed the pending entry. The actual
-    // claim carrier still owns this Kernel claim until this transfer runs.
-    mailbox_claim_release_guard_t mailbox (std::move (reservation));
+    mailbox_claim_release_guard_t mailbox (take_claim_reservation (owner, sequence));
     return release_application_claim (owner);
+}
+
+task_t<stateful_error_t>
+raw_stateful_dispatch_t::transfer_application_claim_async (object_ref_t owner,
+                                                           std::uint64_t sequence)
+{
+    mailbox_claim_release_guard_t mailbox (take_claim_reservation (owner, sequence));
+    co_return co_await _objects->complete_claim_async (std::move (owner),
+                                                       turn_domain_t::application);
 }
 
 task_t<stateful_error_t>
@@ -1705,6 +1745,7 @@ bool raw_relocation_replay_coordinator_t::register_terminal_source (
       })
       .get ();
 }
+
 
 bool raw_relocation_replay_coordinator_t::unregister_terminal_source (
   const protocol::relocation_id_t &relocation, const protocol::wire_operation_id_t &operation)

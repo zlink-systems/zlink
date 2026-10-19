@@ -205,6 +205,12 @@ TEST (ZLinkFrameworkInMemoryLocationStore, ActorCanJoinRelocatedSingleSpot)
     public_authority_store_adapter_t relocation (store);
     const object_ref_t source{object_kind_t::user_spot,        "room-1", spot.object_generation,
                               spot.authority_owner_generation, "play",   "node-a"};
+    const auto current_spot = relocation.read (source.kind, source.key);
+    ASSERT_TRUE (current_spot);
+    EXPECT_EQ (current_spot->target, source);
+    EXPECT_EQ (current_spot->target_owner.owner_id, owner_a.owner_id);
+    EXPECT_EQ (current_spot->target_owner.lease_generation, owner_a.lease_generation);
+    EXPECT_FALSE (relocation.read (source.kind, "missing-spot"));
     auto target = source;
     target.node_id = "node-b";
     ASSERT_EQ (

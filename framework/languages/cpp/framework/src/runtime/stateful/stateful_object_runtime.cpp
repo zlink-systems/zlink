@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 
 #include "runtime/stateful/stateful_object_runtime.hpp"
+#include "runtime/execution/serial_application_record.hpp"
 
 #include <zlink/framework/contracts/placement.hpp>
 
@@ -980,72 +981,117 @@ std::pair<stateful_error_t, std::optional<turn_record_t>> stateful_object_runtim
   const object_ref_t &owner, turn_domain_t domain, std::string *stable_type)
 {
     return _lane
-      .run ([&, this] () -> std::pair<stateful_error_t, std::optional<turn_record_t>> {
-          stateful_error_t error = stateful_error_t::none;
-          auto *object = find_record_locked (owner, error);
-          if (object == nullptr) {
-              return {error, std::nullopt};
-          }
-          if (stable_type)
-              *stable_type = object->stable_type;
-          if (domain == turn_domain_t::application && object->queue.application_active
-              && object->queue.yielded_continuation) {
-              auto continuation = std::move (*object->queue.yielded_continuation);
-              object->queue.yielded_continuation.reset ();
-              object->queue.application_active_bytes = retained_bytes (continuation);
-              return {stateful_error_t::none, std::move (continuation)};
-          }
-          if (state_on_lane (*object) == object_state_t::moving
-              || object->state == object_state_t::recovering) {
-              return {stateful_error_t::moving, std::nullopt};
-          }
-          auto &queue = domain == turn_domain_t::application ? object->queue.application
-                                                             : object->queue.infrastructure;
-          auto &active = domain == turn_domain_t::application ? object->queue.application_active
-                                                              : object->queue.infrastructure_active;
-          if (active || queue.empty ()) {
-              return {stateful_error_t::none, std::nullopt};
-          }
-          const auto bytes = retained_bytes (queue.front ());
-          auto record = std::move (queue.front ());
-          queue.pop_front ();
-          if (domain == turn_domain_t::application) {
-              object->queue.application_bytes -= bytes;
-              object->queue.application_active_bytes = bytes;
-          } else {
-              object->queue.infrastructure_bytes -= bytes;
-              object->queue.infrastructure_active_bytes = bytes;
-          }
-          active = true;
-          return {stateful_error_t::none, std::move (record)};
-      })
+      .run (
+        [this, &owner, domain, stable_type] { return claim_on_lane (owner, domain, stable_type); })
       .get ();
+}
+
+std::pair<stateful_error_t, std::optional<turn_record_t>> stateful_object_runtime_t::claim_on_lane (
+  const object_ref_t &owner, turn_domain_t domain, std::string *stable_type)
+{
+    stateful_error_t error = stateful_error_t::none;
+    auto *object = find_record_locked (owner, error);
+    if (object == nullptr) {
+        return {error, std::nullopt};
+    }
+    if (stable_type)
+        *stable_type = object->stable_type;
+    if (domain == turn_domain_t::application && object->queue.application_active
+        && object->queue.yielded_continuation) {
+        auto continuation = std::move (*object->queue.yielded_continuation);
+        object->queue.yielded_continuation.reset ();
+        object->queue.application_active_bytes = retained_bytes (continuation);
+        return {stateful_error_t::none, std::move (continuation)};
+    }
+    if (state_on_lane (*object) == object_state_t::moving
+        || object->state == object_state_t::recovering) {
+        return {stateful_error_t::moving, std::nullopt};
+    }
+    auto &queue = domain == turn_domain_t::application ? object->queue.application
+                                                       : object->queue.infrastructure;
+    auto &active = domain == turn_domain_t::application ? object->queue.application_active
+                                                        : object->queue.infrastructure_active;
+    if (active || queue.empty ()) {
+        return {stateful_error_t::none, std::nullopt};
+    }
+    const auto bytes = retained_bytes (queue.front ());
+    auto record = std::move (queue.front ());
+    queue.pop_front ();
+    if (domain == turn_domain_t::application) {
+        object->queue.application_bytes -= bytes;
+        object->queue.application_active_bytes = bytes;
+    } else {
+        object->queue.infrastructure_bytes -= bytes;
+        object->queue.infrastructure_active_bytes = bytes;
+    }
+    active = true;
+    return {stateful_error_t::none, std::move (record)};
+}
+
+task_t<std::pair<stateful_error_t, std::optional<turn_record_t>>>
+stateful_object_runtime_t::try_claim_async (object_ref_t owner,
+                                            turn_domain_t domain,
+                                            std::string *stable_type)
+{
+    using claim_t = std::pair<stateful_error_t, std::optional<turn_record_t>>;
+    using wait_t = std::shared_ptr<task_completion_source_t<void>>;
+    for (;;) {
+        auto next = co_await _lane.run_task (
+          [this, &owner, domain, stable_type] () -> std::variant<claim_t, wait_t> {
+              auto claim = claim_on_lane (owner, domain, stable_type);
+              if (claim.first != stateful_error_t::none || claim.second)
+                  return claim;
+              stateful_error_t error = stateful_error_t::none;
+              const auto *object = find_record_locked (owner, error);
+              const bool active = domain == turn_domain_t::application
+                                    ? object->queue.application_active
+                                    : object->queue.infrastructure_active;
+              if (!active)
+                  return claim;
+              auto waiter = std::make_shared<task_completion_source_t<void>> ();
+              _quiescence_waiters.push_back (waiter);
+              return waiter;
+          });
+        if (auto *claim = std::get_if<claim_t> (&next))
+            co_return std::move (*claim);
+        co_await std::get<wait_t> (next)->task ();
+    }
 }
 
 stateful_error_t stateful_object_runtime_t::complete_claim (const object_ref_t &owner,
                                                             turn_domain_t domain)
 {
-    return _lane
-      .run ([&, this] () -> stateful_error_t {
-          stateful_error_t error = stateful_error_t::none;
-          auto *object = find_record_locked (owner, error);
-          if (object == nullptr) {
-              return error;
-          }
-          auto &active = domain == turn_domain_t::application ? object->queue.application_active
-                                                              : object->queue.infrastructure_active;
-          if (!active) {
-              return stateful_error_t::conflict;
-          }
-          active = false;
-          if (domain == turn_domain_t::application)
-              object->queue.application_active_bytes = 0;
-          else
-              object->queue.infrastructure_active_bytes = 0;
-          notify_quiescence ();
-          return stateful_error_t::none;
-      })
+    return _lane.run ([this, &owner, domain] { return complete_claim_on_lane (owner, domain); })
       .get ();
+}
+
+task_t<stateful_error_t> stateful_object_runtime_t::complete_claim_async (object_ref_t owner,
+                                                                          turn_domain_t domain)
+{
+    return _lane.run_task (
+      [this, owner = std::move (owner), domain] { return complete_claim_on_lane (owner, domain); });
+}
+
+stateful_error_t stateful_object_runtime_t::complete_claim_on_lane (const object_ref_t &owner,
+                                                                    turn_domain_t domain)
+{
+    stateful_error_t error = stateful_error_t::none;
+    auto *object = find_record_locked (owner, error);
+    if (object == nullptr) {
+        return error;
+    }
+    auto &active = domain == turn_domain_t::application ? object->queue.application_active
+                                                        : object->queue.infrastructure_active;
+    if (!active) {
+        return stateful_error_t::conflict;
+    }
+    active = false;
+    if (domain == turn_domain_t::application)
+        object->queue.application_active_bytes = 0;
+    else
+        object->queue.infrastructure_active_bytes = 0;
+    notify_quiescence ();
+    return stateful_error_t::none;
 }
 
 stateful_error_t stateful_object_runtime_t::yield_claim (const object_ref_t &owner,
@@ -1438,15 +1484,23 @@ stateful_object_runtime_t::try_seal_relocation_aggregate (
         return _lane.run_task ([this, &plan, &pending, index] {
             if (pending.empty ())
                 return;
+            auto &object = _objects.at (plan.keys[index]);
+            auto &queue = object.queue.application;
+            for (const auto &turn : pending)
+                object.queue.application_bytes += retained_bytes (turn);
+            if (object.reference.kind != object_kind_t::actor) {
+                // The actual Spot FIFO precedes the mailbox suffix taken at the same cut.
+                // Ordinary native messages have no raw sequence to reconstruct this order.
+                queue.insert (queue.begin (), std::make_move_iterator (pending.begin ()),
+                              std::make_move_iterator (pending.end ()));
+                pending.clear ();
+                return;
+            }
             std::stable_sort (pending.begin (), pending.end (),
                               [] (const turn_record_t &left, const turn_record_t &right) {
                                   return left.sequence < right.sequence;
                               });
-            auto &object = _objects.at (plan.keys[index]);
-            auto &queue = object.queue.application;
             const auto boundary = queue.size ();
-            for (const auto &turn : pending)
-                object.queue.application_bytes += retained_bytes (turn);
             queue.insert (queue.end (), std::make_move_iterator (pending.begin ()),
                           std::make_move_iterator (pending.end ()));
             std::inplace_merge (queue.begin (), queue.begin () + boundary, queue.end (),
@@ -1553,6 +1607,13 @@ stateful_object_runtime_t::try_seal_relocation_aggregate (
                 frozen.pending_application.reserve (object.queue.application.size ());
                 for (const auto &pending : object.queue.application) {
                     auto saved = pending;
+                    if (!saved.application_record && !saved.frozen_record && saved.accepted_owner) {
+                        const auto &materialized = saved.accepted_owner->payload ();
+                        if (materialized) {
+                            saved = *materialized;
+                            saved.accepted_owner = pending.accepted_owner;
+                        }
+                    }
                     if (saved.application_record) {
                         saved.frozen_record =
                           protocol::encode_frozen_application_record (*saved.application_record);

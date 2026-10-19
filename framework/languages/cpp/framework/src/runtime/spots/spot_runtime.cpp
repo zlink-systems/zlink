@@ -4868,8 +4868,9 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
             transfer_owner_reservation ();
         report_actor_dispatch_stage_trace_lazy (
           trace_owner,
-          posted && !application_record ? message_flow_outcome_t::admitted
-                                        : message_flow_outcome_t::received,
+          posted && (kind == spot_handler_kind_t::packet || !application_record)
+            ? message_flow_outcome_t::admitted
+            : message_flow_outcome_t::received,
           trace_message_kind, trace_packet_name, trace_spot_id, trace_actor_id,
           "invoke_erased.post_serial", [&] {
               return std::string ("posted=") + (posted ? "true" : "false")
@@ -7447,6 +7448,47 @@ spot_node_runtime_t::spot_execution_queue (std::string spot_key) const
     });
 }
 
+task_t<std::shared_ptr<runtime::serial_application_target_t>>
+spot_node_runtime_t::prepare_spot_dispatch (
+  std::string key, std::optional<runtime::protocol::spot_route_fence_t> route) const
+{
+    auto state = _state;
+    co_return co_await state->lane.run_task ([state, key = std::move (key),
+                                              route = std::move (route)] {
+        const auto found = state->spot_contexts_by_id.find (key);
+        const auto context = found == state->spot_contexts_by_id.end ()
+                               ? nullptr
+                               : spot_context_access_t::state (found->second);
+        if (!context)
+            throw detail::make_framework_origin_exception (
+              framework_error_kind_t::unavailable, "Spot route owner is no longer registered");
+        if (route) {
+            const auto lifecycle = context->node ? context->node->location_lifecycle : nullptr;
+            const auto lease = lifecycle ? lifecycle->current_owner_token ()
+                                         : std::optional<location_owner_token_t>{};
+            if (!context->accepts_route_fence (*route, lease))
+                throw detail::make_framework_origin_exception (framework_error_kind_t::unavailable,
+                                                               "Spot route fence is stale");
+        }
+        (void) context->ensure_spot_serial_executor ();
+        auto target = std::make_shared<runtime::serial_application_target_t> ();
+        if (!context->admit (true))
+            throw context->admission_error ();
+        target->queue = context->serial_queue;
+        target->context = context;
+        target->instance = context->spot_instance;
+        target->terminal = [state, context] {
+            if (state->lane.is_on_lane ()) {
+                context->leave_callback ();
+            } else if (!state->lane.try_post ([context] { context->leave_callback (); })) {
+                state->runtime_failures ()->report (std::make_exception_ptr (
+                  std::runtime_error ("Spot admission owner lane is closed")));
+            }
+        };
+        return target;
+    });
+}
+
 bool spot_node_runtime_t::restore_spot_relocation_state (
   const runtime::stateful::frozen_object_state_t &frozen,
   const runtime::stateful::object_ref_t &target,
@@ -8236,7 +8278,7 @@ bool spot_node_runtime_t::commit_relocation_materialization (
 {
     end_relocation_activation_admissions (targets);
     std::vector<std::shared_ptr<spot_context_state_t>> ready;
-    std::vector<std::pair<std::string, runtime::stateful::object_ref_t>> actor_fences;
+    std::vector<std::pair<std::string, runtime::stateful::object_ref_t>> owner_fences;
     struct actor_join_completion_record_t
     {
         std::string handoff_id;
@@ -8269,7 +8311,7 @@ bool spot_node_runtime_t::commit_relocation_materialization (
                     const auto fence = _state->actor_authority_fences.find (key);
                     if (fence == _state->actor_authority_fences.end ())
                         return false;
-                    actor_fences.emplace_back (key, target);
+                    owner_fences.emplace_back (key, target);
                     const auto recovery = _state->actor_join_relocation_recoveries.find (key);
                     if (recovery != _state->actor_join_relocation_recoveries.end ()) {
                         const auto context = _state->spot_contexts_by_id.find (
@@ -8302,17 +8344,19 @@ bool spot_node_runtime_t::commit_relocation_materialization (
                 if (target.kind != runtime::stateful::object_kind_t::user_spot)
                     continue;
                 const auto context = _state->spot_contexts_by_id.find (target.key);
-                if (context != _state->spot_contexts_by_id.end () && context->second._state)
+                if (context != _state->spot_contexts_by_id.end () && context->second._state) {
                     ready.push_back (context->second._state);
+                    owner_fences.emplace_back (target.key, target);
+                }
             }
             return true;
         })
         .get ();
     if (!prepared)
         return false;
-    if (!actor_fences.empty () && !authority_store)
+    if (!owner_fences.empty () && !authority_store)
         return false;
-    for (const auto &[key, target] : actor_fences) {
+    for (const auto &[key, target] : owner_fences) {
         const auto authority = authority_store->read (target.kind, target.key);
         if (!authority || authority->target.kind != target.kind
             || authority->target.key != target.key
@@ -8326,6 +8370,15 @@ bool spot_node_runtime_t::commit_relocation_materialization (
         const auto updated =
           _state->lane
             .run ([&] {
+                if (target.kind != runtime::stateful::object_kind_t::actor) {
+                    const auto context = _state->spot_contexts_by_id.find (key);
+                    if (context == _state->spot_contexts_by_id.end () || !context->second._state)
+                        return false;
+                    // Restore predicted a generation; admission uses the committed authority.
+                    context->second._state->authority_owner_generation =
+                      authority->target.authority_owner_generation;
+                    return true;
+                }
                 const auto fence = _state->actor_authority_fences.find (key);
                 if (fence == _state->actor_authority_fences.end ())
                     return false;
@@ -15015,53 +15068,25 @@ bool spot_node_runtime_t::dispatch_mesh_record (
                   zlink::message_t::from (""));
                 (void) service::reply (record.reply_token, reply.items ());
             };
-            struct spot_route_dispatch_state_snapshot_t
-            {
-                std::shared_ptr<spot_context_state_t> context_state;
-                std::shared_ptr<void> spot_instance;
-                runtime::location_lifecycle_t *location_lifecycle = nullptr;
-                spot_id_t spot_id;
-                std::uint64_t authority_owner_generation = 0;
-            };
-            const auto dispatch_snapshot =
-              _state->lane
-                .run ([&] {
-                    spot_route_dispatch_state_snapshot_t result;
-                    // A registered activation without an instance has been
-                    // detached after its seal; admission refuses it (admit).
-                    const auto context = find_context_core (spot_id_t (owner.spot_id));
-                    if (!context || !context->_state)
-                        return result;
-                    result.context_state = context->_state;
-                    result.spot_instance = context->_state->spot_instance;
-                    result.location_lifecycle =
-                      context->_state->node ? context->_state->node->location_lifecycle : nullptr;
-                    result.spot_id = context->_state->spot_id;
-                    result.authority_owner_generation = context->_state->authority_owner_generation;
-                    return result;
-                })
-                .get ();
-            if (!dispatch_snapshot.context_state) {
-                reply_error (detail::make_framework_origin_exception (
-                  framework_error_kind_t::unavailable, "Spot route owner is no longer registered"));
-                return true;
-            }
-            if (record.spot_route) {
-                const auto &target = *record.spot_route;
-                std::optional<location_owner_token_t> owner_token;
-                if (dispatch_snapshot.location_lifecycle) {
-                    owner_token = dispatch_snapshot.location_lifecycle->current_owner_token ();
-                }
-                if (target.spot_id != dispatch_snapshot.spot_id
-                    || target.authority_owner_generation
-                         != dispatch_snapshot.authority_owner_generation
-                    || !owner_token
-                    || owner_token->lease_generation != target.owner_lease_generation) {
-                    reply_error (detail::make_framework_origin_exception (
-                      framework_error_kind_t::unavailable, "Spot route fence is stale"));
+            auto target = record.application_record ? record.application_record->target : nullptr;
+            if (!target) {
+                const auto prepared =
+                  prepare_spot_dispatch (owner.spot_id, record.spot_route).result ();
+                if (!prepared) {
+                    reply_error (prepared.error ()
+                                   ? *prepared.error ()
+                                   : framework_exception_t (prepared.error_kind (),
+                                                            "Spot dispatch target unavailable"));
                     return true;
                 }
+                target = prepared.value ();
             }
+            if (const auto error = std::get_if<framework_exception_t> (&target->context)) {
+                reply_error (*error);
+                return true;
+            }
+            const auto context_state = std::static_pointer_cast<spot_context_state_t> (
+              std::get<std::shared_ptr<void>> (target->context));
             try {
                 /* Complete route admission before creating the typed body. */
                 auto body = codec.decode_body (encoded);
@@ -15077,45 +15102,84 @@ bool spot_node_runtime_t::dispatch_mesh_record (
                                               ? dispatch_message_kind_t::request
                                               : dispatch_message_kind_t::send,
                                             header.message_name, {}, owner.spot_id);
+                using terminal_t = std::function<void (const result_t<zlink::message_t> &)>;
+                std::shared_ptr<terminal_t> terminal;
+                if (record.kind == service::record_kind_t::spot_request
+                    || runtime::flow_context_t::tracing (flow_mode)) {
+                    terminal = std::make_shared<terminal_t> (
+                      [state = _state, header, spot_id = owner.spot_id, kind = record.kind,
+                       reply_token =
+                         record.reply_token] (const result_t<zlink::message_t> &result) {
+                          if (kind == service::record_kind_t::spot_request) {
+                              detail::channel_reply_writer_t writer;
+                              auto reply =
+                                result ? writer.reply_raw_envelope (
+                                           writer.create_reply_header (
+                                             runtime::messaging::message_kind_t::response,
+                                             header.channel_name, header),
+                                           result.value ().copy ())
+                                       : writer.reply_raw_envelope (
+                                           writer.create_error_header (
+                                             header.channel_name, header,
+                                             result.error ()
+                                               ? *result.error ()
+                                               : framework_exception_t (result.error_kind (),
+                                                                        "Spot handler failed")),
+                                           zlink::message_t::from (""));
+                              (void) service::reply (reply_token, reply.items ());
+                          }
+                          report_spot_dispatch_trace (state,
+                                                      kind == service::record_kind_t::spot_request
+                                                        ? message_flow_outcome_t::replied
+                                                        : message_flow_outcome_t::dispatched,
+                                                      dispatch_error_surface_t::spot_route,
+                                                      kind == service::record_kind_t::spot_request
+                                                        ? dispatch_message_kind_t::response
+                                                        : dispatch_message_kind_t::send,
+                                                      header.message_name, {}, spot_id);
+                      });
+                }
+                const auto release_target = [weak = std::weak_ptr (record.application_record)] {
+                    if (const auto accepted = weak.lock ())
+                        accepted->target.reset ();
+                };
+                std::function<void ()> on_export = release_target;
+                if (terminal)
+                    on_export = [terminal, release_target] {
+                        *terminal = {};
+                        release_target ();
+                    };
                 auto handled =
-                  spot_handler_registry_t (dispatch_snapshot.context_state)
+                  spot_handler_registry_t (context_state)
                     .invoke_erased (
                       spot_handler_kind_t::packet, header.message_name, {},
-                      std::type_index (typeid (void)), dispatch_snapshot.spot_instance.get (),
-                      nullptr, services, serializers, body.value (),
+                      std::type_index (typeid (void)), target->instance.get (), nullptr, services,
+                      serializers, body.value (),
                       spot_inbound_message_t{.content_type = header.content_type,
                                              .values = header.metadata},
                       true, {}, {}, {}, spot_handler_registry_t::actor_queue_dispatch_t::acquire,
-                      std::move (before_application_handler), {},
-                      record.release_mailbox_reservation, record.transferred_owner_byte_cost)
-                    .result ();
-                if (!handled) {
-                    /* Copy the failure as-is: registry/admission failures are
-                     * already marked framework-origin at construction, while
-                     * application handler failures stay unmarked, so the reply
-                     * carries the zlink.origin marker only for the former. */
-                    const auto *error = handled.error ();
-                    reply_error (error != nullptr ? *error
-                                                  : framework_exception_t (handled.error_kind (),
-                                                                           "Spot handler failed"));
-                    return true;
-                }
-                if (record.kind == service::record_kind_t::spot_request) {
-                    auto reply = replies.reply_raw_envelope (
-                      replies.create_reply_header (runtime::messaging::message_kind_t::response,
-                                                   header.channel_name, header),
-                      std::move (handled.value ()));
-                    (void) service::reply (record.reply_token, reply.items ());
-                }
-                report_spot_dispatch_trace (_state,
-                                            record.kind == service::record_kind_t::spot_request
-                                              ? message_flow_outcome_t::replied
-                                              : message_flow_outcome_t::dispatched,
-                                            dispatch_error_surface_t::spot_route,
-                                            record.kind == service::record_kind_t::spot_request
-                                              ? dispatch_message_kind_t::response
-                                              : dispatch_message_kind_t::send,
-                                            header.message_name, {}, owner.spot_id);
+                      std::move (before_application_handler), [target] { target->release (); },
+                      record.release_mailbox_reservation, record.transferred_owner_byte_cost, {},
+                      {}, {}, record.application_record, std::move (on_export));
+                if (terminal_deferred)
+                    *terminal_deferred = true;
+                detail::observe_task_completion (
+                  handled, [terminal, deferred_terminal = std::move (deferred_terminal)] (
+                             const result_t<zlink::message_t> &result) mutable {
+                      try {
+                          if (terminal) {
+                              if (auto complete = std::exchange (*terminal, {}))
+                                  complete (result);
+                          }
+                      }
+                      catch (...) {
+                          if (deferred_terminal)
+                              deferred_terminal ();
+                          throw;
+                      }
+                      if (deferred_terminal)
+                          deferred_terminal ();
+                  });
                 return true;
             }
             catch (const framework_exception_t &error) {

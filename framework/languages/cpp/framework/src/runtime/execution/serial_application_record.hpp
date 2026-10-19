@@ -87,9 +87,42 @@ struct serial_application_admission_t
     }
 };
 
+// A process-local accepted target. Its linear terminal returns the existing
+// activation admission on completion, export, or a lost mailbox publication.
+struct serial_application_target_t
+{
+    serial_application_target_t () = default;
+    serial_application_target_t (const serial_application_target_t &) = delete;
+    serial_application_target_t &operator= (const serial_application_target_t &) = delete;
+    std::shared_ptr<serial_execution_queue_t> queue;
+    std::variant<std::shared_ptr<void>, framework_exception_t> context;
+    std::shared_ptr<void> instance;
+    std::function<void ()> terminal;
+    ~serial_application_target_t () { release (); }
+    void release ()
+    {
+        if (auto complete = std::exchange (terminal, {}))
+            complete ();
+    }
+};
+
 struct serial_application_record_t
 {
     using invocation_t = std::pair<zlink::message_t, spot_inbound_message_t>;
+
+    struct spot_identity_t
+    {
+        protocol::spot_message_header_t header;
+        protocol::request_source_fence_t source;
+    };
+
+    void set_spot_identity (spot_identity_t identity, zlink::message_t header)
+    {
+        native_t native;
+        native.identity = std::move (identity);
+        native.header = std::move (header);
+        _storage = std::move (native);
+    }
 
     invocation_t *invocation () noexcept
     {
@@ -100,7 +133,10 @@ struct serial_application_record_t
     const stateful::turn_record_t *identity () const noexcept
     {
         const auto *native = std::get_if<native_t> (&_storage);
-        const auto &owned = native ? native->identity : std::get<frozen_t> (_storage);
+        const auto *owned_native = native ? std::get_if<frozen_t> (&native->identity) : nullptr;
+        if (native && !owned_native)
+            return nullptr;
+        const auto &owned = native ? *owned_native : std::get<frozen_t> (_storage);
         return owned ? &*owned : nullptr;
     }
 
@@ -130,7 +166,7 @@ struct serial_application_record_t
                 turn.frozen_record = protocol::decode_frozen_record (turn.payload);
             native.header = application_header ();
             native.identity = std::move (frozen);
-            auto &owned = *native.identity;
+            auto &owned = *std::get<frozen_t> (native.identity);
             // The accepted routing identity survives; the invocation is the sole body owner.
             owned.payload = std::vector<std::uint8_t>{};
             const auto discard_body = [] (protocol::application_payload_t &application) {
@@ -158,13 +194,25 @@ struct serial_application_record_t
     std::optional<stateful::turn_record_t> &payload ()
     {
         if (auto *native = std::get_if<native_t> (&_storage)) {
-            if (!native->identity)
-                return native->identity;
+            auto *owned = std::get_if<frozen_t> (&native->identity);
+            if (owned && !*owned)
+                return *owned;
             std::vector<zlink::message_t> parts;
             parts.push_back (native->header.copy ());
             parts.push_back (native->invocation.first.copy ());
             auto application = protocol::application_payload_t::from_parts (std::move (parts));
-            auto turn = std::move (native->identity);
+            if (const auto *spot = std::get_if<spot_identity_t> (&native->identity)) {
+                stateful::turn_record_t turn;
+                turn.application_record = stateful::accepted_spot_record (
+                  spot->header, spot->source, std::move (application),
+                  spot->header.correlation.has_value ());
+                turn.application_payload_bytes = protocol::application_payload_hwm_bytes (
+                  std::get<protocol::frozen_spot_application_body_t> (turn.application_record->body)
+                    .application);
+                _storage = frozen_t{std::move (turn)};
+                return std::get<frozen_t> (_storage);
+            }
+            auto turn = std::move (*owned);
             const auto restore_body = [&] (protocol::application_payload_t &identity) {
                 application.flow_id = std::move (identity.flow_id);
                 application.flow_origin = identity.flow_origin;
@@ -179,6 +227,7 @@ struct serial_application_record_t
         }
         return std::get<frozen_t> (_storage);
     }
+    std::shared_ptr<serial_application_target_t> target;
     serial_application_admission_t admission;
     std::function<void (result_t<void>)> retire_invocation;
     // Original native terminal follows the accepted payload across local
@@ -215,7 +264,7 @@ struct serial_application_record_t
     using frozen_t = std::optional<stateful::turn_record_t>;
     struct native_t
     {
-        frozen_t identity;
+        std::variant<frozen_t, spot_identity_t> identity;
         zlink::message_t header;
         invocation_t invocation;
     };

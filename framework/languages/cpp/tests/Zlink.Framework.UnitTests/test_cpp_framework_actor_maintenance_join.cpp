@@ -3148,6 +3148,7 @@ TEST_P (NativeIntakePendingStore, ProductionResolverUsesNoStoreDuringAcceptance)
     ASSERT_TRUE (ready (peer));
     ASSERT_TRUE (peer_ready (services.get_required<fw::route_mesh_runtime_t> (), second_rid));
     auto peer_services = peer.app.advanced ().services ().build_provider ();
+    ASSERT_TRUE (peer_ready (peer_services.get_required<fw::route_mesh_runtime_t> (), first_rid));
     auto &local = services.get_required<fw::actor_client_t> ();
     auto &native = peer_services.get_required<fw::actor_client_t> ();
     auto registration =

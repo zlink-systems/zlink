@@ -25,6 +25,10 @@
 namespace zlink::framework::runtime
 {
 
+namespace stateful
+{
+struct relocation_seal_binding_t;
+}
 struct serial_application_record_t;
 class serial_handler_participant_t;
 class serial_turn_handle_impl_t;
@@ -106,6 +110,11 @@ class serial_lane_policy_t
         return spot && spot->execution == spot_lane_execution_t::spot_wide;
     }
 
+    bool owns_spot_gate () const noexcept
+    {
+        return std::holds_alternative<spot_lane_policy_t> (_value);
+    }
+
     const value_t &value () const noexcept { return _value; }
 
   private:
@@ -178,7 +187,13 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
     // imported are taken from their nodes too.
     using producer_cut_t = std::function<bool (const std::function<void ()> &)>;
     task_t<std::vector<std::shared_ptr<serial_application_record_t>>>
-    take_application_suffix (std::function<void ()> seal = {}, producer_cut_t producer_cut = {});
+    take_application_suffix (std::function<void ()> seal = {},
+                             producer_cut_t producer_cut = {},
+                             std::shared_ptr<stateful::relocation_seal_binding_t> binding = {});
+    // The native handoff and relocation cut share the actual execution owner.
+    task_t<std::shared_ptr<stateful::relocation_seal_binding_t>>
+    admit_native_application (std::function<void (bool)> publish,
+                              std::shared_ptr<stateful::relocation_seal_binding_t> restored = {});
     bool try_post (std::string name, std::function<void ()> work);
     bool try_post (std::string name, std::function<void ()> work, serial_work_options_t options);
     bool try_post_async (std::string name, async_work_t work);
@@ -433,6 +448,7 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
     // Derived FIFO membership indexes; mutable barrier phases are read by
     // the readiness decision and never copied here.
     std::weak_ptr<serial_application_record_t> _application_tail_record;
+    std::shared_ptr<stateful::relocation_seal_binding_t> _relocation_seal;
     std::size_t _application_barriers = 0;
     // P changes tail; the shared-gate consumer changes cursor. The cursor
     // node is retained while the producer tail can still point to it.

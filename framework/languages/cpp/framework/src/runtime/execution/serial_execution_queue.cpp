@@ -1074,7 +1074,7 @@ serial_execution_queue_t::serial_execution_queue_t (offload_executor_t &executor
         || _options.owner_time_budget < std::chrono::milliseconds::zero ()) {
         throw std::invalid_argument ("serial execution queue limits are invalid");
     }
-    if (_lane_policy.allows_turn_yield ())
+    if (_lane_policy.owns_spot_gate ())
         _publication_cursor = _publication_tail = new publication_node_t ();
 }
 
@@ -1091,7 +1091,7 @@ serial_execution_queue_t::~serial_execution_queue_t ()
 
 bool serial_execution_queue_t::owns_shared_gate () const noexcept
 {
-    return _lane_policy.allows_turn_yield () || shared_spot_gate ();
+    return _lane_policy.owns_spot_gate () || shared_spot_gate ();
 }
 
 serial_execution_queue_t *serial_execution_queue_t::shared_spot_gate () const noexcept
@@ -1358,11 +1358,14 @@ task_t<bool> serial_execution_queue_t::adopt_application_prefix (
 }
 
 task_t<std::vector<std::shared_ptr<serial_application_record_t>>>
-serial_execution_queue_t::take_application_suffix (std::function<void ()> seal,
-                                                   producer_cut_t producer_cut)
+serial_execution_queue_t::take_application_suffix (
+  std::function<void ()> seal,
+  producer_cut_t producer_cut,
+  std::shared_ptr<stateful::relocation_seal_binding_t> binding)
 {
     return control_async<std::vector<std::shared_ptr<serial_application_record_t>>> (
-      [this, seal = std::move (seal), producer_cut = std::move (producer_cut)] {
+      [this, seal = std::move (seal), producer_cut = std::move (producer_cut),
+       binding = std::move (binding)] {
           // Controls of imported publications run here, outside any producer boundary.
           if (owns_shared_gate ())
               import_publications ();
@@ -1373,6 +1376,8 @@ serial_execution_queue_t::take_application_suffix (std::function<void ()> seal,
               std::unique_lock lock (_mutex, std::defer_lock);
               if (!owns_shared_gate () || producer_cut)
                   lock.lock ();
+              if (binding)
+                  _relocation_seal = binding;
               if (seal)
                   seal ();
               suffix.reserve (_application.queue.size ());
@@ -1422,6 +1427,35 @@ serial_execution_queue_t::take_application_suffix (std::function<void ()> seal,
           if (shared_spot_gate ())
               _spot_gate->disconnect_actor_head (shared_from_this ());
           return suffix;
+      });
+}
+
+task_t<std::shared_ptr<stateful::relocation_seal_binding_t>>
+serial_execution_queue_t::admit_native_application (
+  std::function<void (bool)> publish, std::shared_ptr<stateful::relocation_seal_binding_t> restored)
+{
+    return control_async<std::shared_ptr<stateful::relocation_seal_binding_t>> (
+      [this, publish = std::move (publish), restored = std::move (restored)] {
+          if (owns_shared_gate ())
+              import_publications ();
+          std::unique_lock lock (_mutex, std::defer_lock);
+          if (!owns_shared_gate ())
+              lock.lock ();
+          if (restored && _relocation_seal == restored
+              && !restored->bound.load (std::memory_order_acquire))
+              _relocation_seal.reset ();
+          if (_relocation_seal && !_relocation_seal->bound.load (std::memory_order_acquire))
+              return _relocation_seal;
+          const bool sealed = bool (_relocation_seal);
+          if (lock.owns_lock ()) {
+              (void) schedule_drain_locked ();
+              lock.unlock ();
+          }
+          if (publish)
+              publish (sealed);
+          if (owns_shared_gate ())
+              import_publications ();
+          return std::shared_ptr<stateful::relocation_seal_binding_t>{};
       });
 }
 
@@ -1905,7 +1939,7 @@ serial_execution_queue_t::observe_handler_terminal ()
           framework_error_kind_t::shutting_down, "Actor mailbox is closed");
     auto handler = std::make_shared<task_completion_source_t<void>> ();
     auto observer = std::make_shared<serial_handler_observer_t> (handler);
-    if (!_lane_policy.allows_turn_yield ()) {
+    if (!_lane_policy.owns_spot_gate ()) {
         auto retained =
           retain_mailbox_until (observer->terminal (), [observer] { observer->cancel (); });
         if (!retained) {
@@ -1928,9 +1962,9 @@ serial_execution_queue_t::observe_handler_terminal ()
                   const auto current = current_turn_locked ();
                   for (const auto &entry : _handler_turns)
                       if (!entry.turn->is_barrier ()
-                          && (_lane_policy.allows_turn_yield () || &entry == current))
+                          && (_lane_policy.owns_spot_gate () || &entry == current))
                           terminals.push_back (entry.turn->observe_handler ());
-                  if (_lane_policy.allows_turn_yield () && _suspended_lifecycle
+                  if (_lane_policy.owns_spot_gate () && _suspended_lifecycle
                       && _suspended_lifecycle->turn && !_suspended_lifecycle->turn->is_barrier ())
                       terminals.push_back (_suspended_lifecycle->turn->observe_handler ());
               }
@@ -2148,7 +2182,7 @@ void serial_execution_queue_t::cancel_pending_owned () noexcept
                       // Their closed-Spot rejection or lifecycle
                       // terminal is decided by the Actor mailbox.
                       if (item.turn->accepted_continuation ()
-                          || (_lane_policy.allows_turn_yield () && item.actor_mailbox))
+                          || (_lane_policy.owns_spot_gate () && item.actor_mailbox))
                           return false;
                       queued_bytes += item.byte_cost;
                       ++removed;
@@ -2241,7 +2275,7 @@ bool serial_execution_queue_t::schedule_drain_locked ()
     }
     if (!owns_shared_gate () && _active == 0)
         prepare_application_head_locked ();
-    if (_lane_policy.allows_turn_yield ()) {
+    if (_lane_policy.owns_spot_gate ()) {
         auto idle = gate_state_t::idle;
         if (!_gate_state.compare_exchange_strong (idle, gate_state_t::scheduled,
                                                   std::memory_order_acq_rel))
@@ -2309,7 +2343,7 @@ void serial_execution_queue_t::import_publications_until (publication_node_t *cu
         _publication_cursor = next;
         if (control)
             control ();
-        if (_lane_policy.allows_turn_yield () && current_shared_gate != this)
+        if (_lane_policy.owns_spot_gate () && current_shared_gate != this)
             break;
     }
 }
@@ -2401,7 +2435,7 @@ void serial_execution_queue_t::run_shared_gate ()
 
 void serial_execution_queue_t::release_shared_gate ()
 {
-    if (current_shared_gate != this || !_lane_policy.allows_turn_yield ())
+    if (current_shared_gate != this || !_lane_policy.owns_spot_gate ())
         return;
     std::lock_guard producer (_mutex);
     current_shared_gate = nullptr;
@@ -2503,11 +2537,15 @@ bool serial_execution_queue_t::has_ready_locked () noexcept
 serial_execution_queue_t::application_selection_t
 serial_execution_queue_t::next_application_locked () noexcept
 {
-    auto next = std::find_if (_application.queue.begin (), _application.queue.end (),
-                              [this] (const work_item_t &item) {
-                                  return item.turn->is_resume () || !_application_start_policy
-                                         || _application_start_policy (item.retained_message);
-                              });
+    auto next = std::find_if (
+      _application.queue.begin (), _application.queue.end (), [this] (const work_item_t &item) {
+          if (item.turn->is_resume ())
+              return true;
+          const auto *owner = shared_spot_gate ();
+          if ((owner ? owner : this)->_relocation_seal)
+              return item.actor_mailbox && item.actor_mailbox->next_application_locked ().ready;
+          return !_application_start_policy || _application_start_policy (item.retained_message);
+      });
     const bool ready =
       next != _application.queue.end ()
       && (!next->application_record || next->application_record->admission.ready ())

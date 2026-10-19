@@ -51,6 +51,7 @@
 namespace zlink::framework::runtime
 {
 class live_location_reader_t;
+struct serial_application_target_t;
 }
 
 namespace zlink::framework::runtime::stateful
@@ -249,7 +250,7 @@ struct host_options_t
     std::chrono::milliseconds owner_lease_fencing_margin{5'000};
     std::shared_ptr<zlink::context_t> core_context;
     std::chrono::milliseconds session_relocation_seal_timeout =
-      location_options_t().session_relocation_seal_timeout;
+      location_options_t ().session_relocation_seal_timeout;
     std::chrono::milliseconds user_spot_operation_replay_retention = std::chrono::minutes (5);
 };
 
@@ -852,7 +853,10 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     using relocation_gate_t =
       std::function<task_t<std::shared_ptr<runtime::serial_execution_queue_t>> (
         const stateful::object_ref_t &)>;
-    void configure_relocation_gate (relocation_gate_t gate);
+    using native_spot_target_t =
+      std::function<task_t<std::shared_ptr<runtime::serial_application_target_t>> (
+        std::string, std::optional<protocol::spot_route_fence_t>)>;
+    void configure_relocation_gate (relocation_gate_t gate, native_spot_target_t target = {});
 
   private:
     // Relocation flow §4.2 cut S of a source seal (stateful_object_runtime_t
@@ -962,6 +966,13 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
       std::shared_ptr<mesh::service_mailbox_claim_t> claim,
       const std::function<void (
         const ready_record_t &, const receive_record_t &, std::vector<zlink::message_t>)> dispatch);
+    task_t<bool>
+    dispatch_native_spot (stateful::object_ref_t object,
+                          mesh::service_mailbox_t::claim_handle_t slot,
+                          stateful::claimed_ingress_t query,
+                          std::shared_ptr<const local_application_dispatch_t> application,
+                          std::optional<stateful::retained_relocation_source_t> retained,
+                          mesh::service_mailbox_t::application_dispatch_t dispatch);
     task_t<bool> notify_stateful_owner (const stateful::object_ref_t &owner);
     bool claim_stateful_owner (const stateful::object_ref_t &object,
                                const mesh::service_mailbox_t::application_dispatch_t &dispatch);
@@ -970,6 +981,12 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
                              const std::function<void (const ready_record_t &,
                                                        const receive_record_t &,
                                                        std::vector<zlink::message_t>)> &dispatch);
+    bool
+    dispatch_stateful_delivery (const stateful::object_ref_t &object,
+                                stateful::stateful_delivery_t delivery,
+                                std::function<void ()> before_application_handler,
+                                std::string actor_type,
+                                const mesh::service_mailbox_t::application_dispatch_t &dispatch);
     bool dispatch_bound_session_send (const mesh::service_mailbox_record_t &record);
 
     host_options_t _options;
@@ -1270,6 +1287,7 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
       _local_dispatch_completion_lane_executor};
     std::deque<local_application_dispatch_t> _local_application_dispatches;
     relocation_gate_t _relocation_gate;
+    native_spot_target_t _native_spot_target;
     void publish_local_application (local_application_dispatch_t dispatch);
     task_t<void> ingest_cut_original (stateful::object_ref_t owner,
                                       mesh::service_mailbox_record_t original);

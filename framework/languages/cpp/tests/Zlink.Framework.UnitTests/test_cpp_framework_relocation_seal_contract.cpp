@@ -63,6 +63,19 @@ struct public_host_runtime_test_access_t
         return *host._stateful_dispatch;
     }
 
+    static auto dispatch_claim (public_host_runtime_t &host,
+                                std::shared_ptr<mesh::service_mailbox_claim_t> claim,
+                                mesh::service_mailbox_t::application_dispatch_t dispatch)
+    {
+        return host.dispatch_application_claim (std::move (claim), std::move (dispatch));
+    }
+    static auto dispatch_owner (public_host_runtime_t &host,
+                                stateful::object_ref_t owner,
+                                mesh::service_mailbox_t::application_dispatch_t dispatch)
+    {
+        return host.dispatch_stateful_owner (owner, dispatch);
+    }
+
     static auto cut (public_host_runtime_t &host, std::vector<stateful::object_ref_t> owners)
     {
         return host.cut_relocation_source (
@@ -188,6 +201,25 @@ mesh::service_mailbox_record_t spot_send (host::public_host_runtime_t &host,
     record.source_original = mesh::raw_mesh_node_owner_t::local_accepted_source (
       record.source_routing_id, record.source_node_generation, {});
     return record;
+}
+
+mesh::service_mailbox_record_t native_spot_record (host::public_host_runtime_t &host,
+                                                   const stateful::object_ref_t &spot,
+                                                   std::uint64_t operation,
+                                                   std::optional<std::uint64_t> correlation)
+{
+    auto wire = spot_send (host, spot, operation, 2, correlation);
+    runtime::messaging::envelope_header_t envelope;
+    envelope.kind = correlation ? runtime::messaging::message_kind_t::request
+                                : runtime::messaging::message_kind_t::command;
+    envelope.channel_name = "mesh";
+    envelope.message_name = "NativeProbe";
+    std::vector<zlink::message_t> parts;
+    parts.push_back (runtime::messaging::envelope_codec_t{}.encode_header (envelope));
+    parts.push_back (zlink::message_t::from ("{}"));
+    wire.parts.back () = detail::backend::materialize_binding_part (
+      protocol::encode_application_payload (protocol::application_payload_t::from_parts (parts)));
+    return wire;
 }
 
 std::uint64_t operation_of (const stateful::turn_record_t &turn)
@@ -1857,6 +1889,312 @@ TEST (FrameworkRelocationSealContract, seal_cut_saves_each_unstarted_original_on
 // Relocation flow §4.2 step 10: when the second saved record fails its conversion, the attempt
 // aborts and every original returns to the same source FIFO in order, with no reply and with
 // its own mailbox credit still outstanding.
+void verify_native_spot_seal (bool fail_second, bool per_actor = false, bool detached = false)
+{
+    using namespace zlink::framework::runtime;
+    using access_t = host::public_host_runtime_test_access_t;
+    auto host = std::make_shared<host::public_host_runtime_t> (
+      host::host_options_t{mesh::raw_mesh_node_options_t{
+        .descriptor = test_descriptor ("native-cut"),
+        .runtime_failures = std::make_shared<runtime::runtime_failure_collector_t> ()}});
+    const protocol::request_source_fence_t source{"requester-A", 3, {2}, 1};
+    host->configure_stateful_dispatch (
+      [source] (const auto &) -> task_t<std::optional<stateful::accepted_record_authority_t>> {
+          co_return stateful::accepted_record_authority_t{source, 3};
+      });
+    const stateful::object_ref_t spot{
+      stateful::object_kind_t::user_spot, "native-spot", 1, 1, "mesh", "source"};
+    auto &objects = host->objects ();
+    const auto created = objects.begin_reserved_object (spot, "room", {});
+    ASSERT_EQ (created.error, stateful::stateful_error_t::none);
+    ASSERT_EQ (objects.commit_create (created.attempt), stateful::stateful_error_t::none);
+    offload_executor_t worker (1, "native-cut-test");
+    auto gate = std::make_shared<serial_execution_queue_t> (
+      worker, serial_execution_queue_options_t{}, serial_execution_queue_t::error_handler_t{},
+      per_actor ? serial_lane_policy_t::per_actor_spot () : serial_lane_policy_t::spot_wide ());
+    gate->set_application_start_policy ([] (const auto &) { return false; });
+    auto located_gate = std::make_shared<std::shared_ptr<serial_execution_queue_t>> (gate);
+    host->configure_relocation_gate (
+      [located_gate] (const auto &) -> task_t<std::shared_ptr<serial_execution_queue_t>> {
+          co_return *located_gate;
+      },
+      [located_gate] (std::string, std::optional<protocol::spot_route_fence_t>)
+        -> task_t<std::shared_ptr<serial_application_target_t>> {
+          if (!*located_gate)
+              throw detail::make_framework_origin_exception (framework_error_kind_t::not_found,
+                                                             "source activation was retired");
+          co_return nullptr;
+      });
+    std::vector<std::shared_ptr<serial_application_record_t>> accepted;
+    int handlers = 0;
+    std::vector<std::uint64_t> executed;
+    const auto native_wire = [&] (std::uint64_t operation,
+                                  std::optional<std::uint64_t> correlation) {
+        return native_spot_record (*host, spot, operation, correlation);
+    };
+    const mesh::service_mailbox_t::application_dispatch_t publish =
+      [&] (const auto &, const host::receive_record_t &record,
+           std::vector<zlink::message_t> parts) {
+          ASSERT_TRUE (record.application_record);
+          auto owner = record.application_record;
+          if (fail_second && record.operation_id.low == 2) {
+              auto invalid = protocol::decode_spot_message_header (
+                protocol::message_bytes (native_wire (2, 77).parts.front ()),
+                protocol::command::spotRequest);
+              invalid.correlation = 0;
+              owner->set_spot_identity ({std::move (invalid), source}, parts.front ().copy ());
+          }
+          owner->set_invocation (parts.back ().copy (), {});
+          accepted.push_back (owner);
+          serial_work_options_t options;
+          options.application_record = owner;
+          ASSERT_TRUE (gate->try_post (
+            "typed-native",
+            [&, owner, operation = record.operation_id.low] {
+                ++handlers;
+                executed.push_back (operation);
+                (void) owner->complete_native (std::nullopt);
+            },
+            std::move (options)));
+      };
+    for (std::uint64_t operation : {1u, 2u}) {
+        const auto claim = zlink::framework::test::publish_stateful_claim (
+          host->transport (), spot,
+          native_wire (operation,
+                       operation == 2 ? std::optional<std::uint64_t>{77} : std::nullopt));
+        ASSERT_EQ (access_t::dispatch_claim (*host, claim.claim, publish).result ().value (), 1u);
+    }
+    ASSERT_EQ (accepted.size (), 2u);
+    for (const auto &record : accepted)
+        EXPECT_EQ (record->identity (), nullptr);
+    EXPECT_EQ (objects.pending (spot, stateful::turn_domain_t::application), 0u);
+    EXPECT_EQ (handlers, 0);
+    const auto sealed = objects.try_seal_relocation_aggregate ({spot}).result ().value ();
+    if (fail_second) {
+        EXPECT_EQ (sealed.error, stateful::stateful_error_t::conflict);
+    } else {
+        ASSERT_EQ (sealed.error, stateful::stateful_error_t::none);
+        ASSERT_EQ (sealed.seal.participants.size (), 1u);
+        const auto &saved = sealed.seal.participants.front ().pending_application;
+        ASSERT_EQ (saved.size (), 2u);
+        EXPECT_EQ (operations_of (saved), (std::vector<std::uint64_t>{1, 2}));
+        for (const auto &turn : saved) {
+            ASSERT_TRUE (turn.frozen_record);
+            EXPECT_FALSE (turn.payload.empty ());
+            EXPECT_EQ (turn.frozen_record->source, source);
+        }
+        EXPECT_EQ (saved.back ().frozen_record->reply_route_id, 77u);
+        std::vector<std::uint64_t> forwarded;
+        if (detached) {
+            const protocol::request_source_fence_t retained{"source-owner", 3, {1}, 1};
+            ASSERT_EQ (objects
+                         .begin_relocation_boundary (
+                           sealed.seal.token,
+                           [&] (const auto &, const auto &turn) {
+                               forwarded.push_back (operation_of (turn));
+                           },
+                           retained)
+                         .first,
+                       stateful::stateful_error_t::none);
+            located_gate->reset ();
+        }
+        const auto late = zlink::framework::test::publish_stateful_claim (host->transport (), spot,
+                                                                          native_wire (3, 78));
+        ASSERT_EQ (access_t::dispatch_claim (*host, late.claim, publish).result ().value (), 1u);
+        EXPECT_EQ (accepted.size (), 2u);
+        if (detached) {
+            EXPECT_EQ (forwarded, (std::vector<std::uint64_t>{3}));
+            *located_gate = gate;
+        } else {
+            const auto [error, boundary] = objects.begin_relocation_boundary (sealed.seal.token);
+            ASSERT_EQ (error, stateful::stateful_error_t::none);
+            EXPECT_EQ (operations_of (boundary.participants.front ().records),
+                       (std::vector<std::uint64_t>{3}));
+        }
+        EXPECT_EQ (handlers, 0);
+        ASSERT_EQ (objects.abort_relocation_before_cutover (sealed.seal.token).result ().value (),
+                   stateful::stateful_error_t::none);
+    }
+    // Fresh native ingress may not pass the originals restored by this abort.
+    const auto fresh = zlink::framework::test::publish_stateful_claim (
+      host->transport (), spot, native_wire (4, std::nullopt));
+    ASSERT_EQ (access_t::dispatch_claim (*host, fresh.claim, publish).result ().value (), 1u);
+    while (access_t::dispatch_owner (*host, spot, publish).result ().value ()) {
+    }
+    gate->set_application_start_policy ([] (const auto &) { return true; });
+    gate->drain ();
+    EXPECT_EQ (executed, fail_second ? (std::vector<std::uint64_t>{1, 2, 4})
+                                     : (std::vector<std::uint64_t>{1, 2, 3, 4}));
+    EXPECT_EQ (objects.pending (spot, stateful::turn_domain_t::application), 0u);
+    gate->close ();
+    gate->drain ();
+    worker.request_stop ();
+    worker.drain ();
+    host->close ();
+}
+
+TEST (FrameworkRelocationSealContract,
+      native_spot_materializes_only_at_seal_and_holds_later_ingress)
+{
+    verify_native_spot_seal (false);
+}
+
+TEST (FrameworkRelocationSealContract,
+      native_spot_retained_ingress_survives_activation_gate_removal)
+{
+    verify_native_spot_seal (false, false, true);
+    verify_native_spot_seal (false, true, true);
+}
+
+TEST (FrameworkRelocationSealContract, native_spot_second_conversion_failure_restores_originals)
+{
+    verify_native_spot_seal (true);
+}
+
+TEST (FrameworkRelocationSealContract, per_actor_spot_abort_restores_originals_before_fresh_native)
+{
+    verify_native_spot_seal (false, true);
+    verify_native_spot_seal (true, true);
+}
+
+TEST (FrameworkRelocationSealContract, native_spot_target_wait_keeps_original_and_gate_free)
+{
+    using namespace zlink::framework::runtime;
+    auto host = std::make_shared<host::public_host_runtime_t> (
+      host::host_options_t{mesh::raw_mesh_node_options_t{
+        .descriptor = test_descriptor ("native-target"),
+        .runtime_failures = std::make_shared<runtime::runtime_failure_collector_t> ()}});
+    const protocol::request_source_fence_t source{"requester", 3, {2}, 1};
+    host->configure_stateful_dispatch (
+      [source] (const auto &) -> task_t<std::optional<stateful::accepted_record_authority_t>> {
+          co_return stateful::accepted_record_authority_t{source, 3};
+      });
+    const stateful::object_ref_t spot{
+      stateful::object_kind_t::user_spot, "target-spot", 1, 1, "mesh", "source"};
+    const auto created = host->objects ().begin_reserved_object (spot, "room", {});
+    ASSERT_EQ (created.error, stateful::stateful_error_t::none);
+    ASSERT_EQ (host->objects ().commit_create (created.attempt), stateful::stateful_error_t::none);
+    offload_executor_t worker (1, "target-owner");
+    auto gate = std::make_shared<serial_execution_queue_t> (
+      worker, serial_execution_queue_options_t{}, serial_execution_queue_t::error_handler_t{},
+      serial_lane_policy_t::spot_wide ());
+    task_completion_source_t<void> entered;
+    task_completion_source_t<std::shared_ptr<serial_application_target_t>> release;
+    host->configure_relocation_gate (
+      [gate] (const auto &) -> task_t<std::shared_ptr<serial_execution_queue_t>> {
+          co_return gate;
+      },
+      [&] (std::string, std::optional<protocol::spot_route_fence_t>)
+        -> task_t<std::shared_ptr<serial_application_target_t>> {
+          entered.complete (result_t<void>::success ());
+          co_return co_await release.task ();
+      });
+    const auto slot = zlink::framework::test::publish_stateful_claim (
+      host->transport (), spot, native_spot_record (*host, spot, 1, std::nullopt));
+    int dispatched = 0;
+    auto pending = host::public_host_runtime_test_access_t::dispatch_claim (
+      *host, slot.claim,
+      [&] (const auto &, const host::receive_record_t &record, std::vector<zlink::message_t>) {
+          ++dispatched;
+          record.release_mailbox_reservation ();
+      });
+    entered.task ().result ().value ();
+    EXPECT_FALSE (pending.await_ready ());
+    EXPECT_TRUE (host->transport ()
+                   .mailbox ()
+                   .prepare (slot, [] (const auto &original) { return !original.parts.empty (); })
+                   .value_or (false));
+    auto pulse = gate->admit_native_application ({});
+    // A pending target projection must not retain the execution gate.
+    EXPECT_TRUE (pulse.result ());
+    EXPECT_EQ (dispatched, 0);
+    release.complete (result_t<std::shared_ptr<serial_application_target_t>>::success (nullptr));
+    EXPECT_EQ (pending.result ().value (), 1u);
+    EXPECT_EQ (dispatched, 1);
+    EXPECT_EQ (slot.claim->outstanding (), 0u);
+    gate->close ();
+    gate->drain ();
+    worker.request_stop ();
+    worker.drain ();
+    host->close ();
+}
+
+TEST (FrameworkRelocationSealContract, per_actor_native_publication_and_cut_share_one_owner)
+{
+    using namespace zlink::framework::runtime;
+    using namespace std::chrono_literals;
+    auto host = std::make_shared<host::public_host_runtime_t> (
+      host::host_options_t{mesh::raw_mesh_node_options_t{
+        .descriptor = test_descriptor ("native-publication"),
+        .runtime_failures = std::make_shared<runtime::runtime_failure_collector_t> ()}});
+    const protocol::request_source_fence_t source{"requester", 3, {2}, 1};
+    host->configure_stateful_dispatch (
+      [source] (const auto &) -> task_t<std::optional<stateful::accepted_record_authority_t>> {
+          co_return stateful::accepted_record_authority_t{source, 3};
+      });
+    const stateful::object_ref_t spot{
+      stateful::object_kind_t::user_spot, "publication-spot", 1, 1, "mesh", "source"};
+    const auto created = host->objects ().begin_reserved_object (spot, "room", {});
+    ASSERT_EQ (created.error, stateful::stateful_error_t::none);
+    ASSERT_EQ (host->objects ().commit_create (created.attempt), stateful::stateful_error_t::none);
+    offload_executor_t worker (1, "publication-owner");
+    auto gate = std::make_shared<serial_execution_queue_t> (
+      worker, serial_execution_queue_options_t{}, serial_execution_queue_t::error_handler_t{},
+      serial_lane_policy_t::per_actor_spot ());
+    gate->set_application_start_policy ([] (const auto &) { return false; });
+    host->configure_relocation_gate (
+      [gate] (const auto &) -> task_t<std::shared_ptr<serial_execution_queue_t>> {
+          co_return gate;
+      });
+    std::promise<void> entered, release;
+    auto entering = entered.get_future ();
+    auto held = release.get_future ().share ();
+    const auto slot = zlink::framework::test::publish_stateful_claim (
+      host->transport (), spot, native_spot_record (*host, spot, 1, std::nullopt));
+    auto publishing = std::async (std::launch::async, [&] {
+        return host::public_host_runtime_test_access_t::dispatch_claim (
+                 *host, slot.claim,
+                 [&] (const auto &, const host::receive_record_t &record,
+                      std::vector<zlink::message_t> parts) {
+                     auto original = record.application_record;
+                     original->set_invocation (parts.back ().copy (), {});
+                     entered.set_value ();
+                     held.wait ();
+                     serial_work_options_t options;
+                     options.application_record = std::move (original);
+                     EXPECT_TRUE (gate->try_post ("accepted-native", [] {}, std::move (options)));
+                 })
+          .result ()
+          .value ();
+    });
+    const auto observed = entering.wait_for (5s) == std::future_status::ready;
+    EXPECT_TRUE (observed);
+    if (!observed) {
+        release.set_value ();
+        (void) publishing.get ();
+        return;
+    }
+    auto binding = std::make_shared<stateful::relocation_seal_binding_t> ();
+    auto cut = gate->take_application_suffix (
+      [binding] { binding->bound.store (true, std::memory_order_release); },
+      [] (const std::function<void ()> &step) {
+          step ();
+          return true;
+      },
+      binding);
+    EXPECT_FALSE (cut.await_ready ());
+    release.set_value ();
+    EXPECT_EQ (publishing.get (), 1u);
+    const auto saved = cut.result ().value ();
+    EXPECT_EQ (saved.size (), 1u);
+    gate->cancel_pending ();
+    gate->close ();
+    gate->drain ();
+    worker.request_stop ();
+    worker.drain ();
+    host->close ();
+}
+
 TEST (FrameworkRelocationSealContract, seal_conversion_failure_restores_fifo_once)
 {
     using access_t = host::public_host_runtime_test_access_t;

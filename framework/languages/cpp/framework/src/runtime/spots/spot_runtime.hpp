@@ -2175,6 +2175,9 @@ class spot_node_runtime_t
     // The execution queue that owns the Spot's application turns; null if not materialized.
     task_t<std::shared_ptr<runtime::serial_execution_queue_t>>
     spot_execution_queue (std::string spot_key) const;
+    task_t<std::shared_ptr<runtime::serial_application_target_t>>
+    prepare_spot_dispatch (std::string spot_key,
+                           std::optional<runtime::protocol::spot_route_fence_t> route) const;
     bool restore_spot_relocation_state (const runtime::stateful::frozen_object_state_t &frozen,
                                         const runtime::stateful::object_ref_t &target,
                                         std::stop_token cancellation = {});

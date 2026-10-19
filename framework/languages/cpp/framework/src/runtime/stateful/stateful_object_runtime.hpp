@@ -422,6 +422,9 @@ class stateful_object_runtime_t
     }
     std::pair<stateful_error_t, std::optional<turn_record_t>>
     try_claim (const object_ref_t &owner, turn_domain_t domain, std::string *stable_type = nullptr);
+    task_t<std::pair<stateful_error_t, std::optional<turn_record_t>>>
+    try_claim_async (object_ref_t owner, turn_domain_t domain, std::string *stable_type = nullptr);
+    task_t<stateful_error_t> complete_claim_async (object_ref_t owner, turn_domain_t domain);
     stateful_error_t complete_claim (const object_ref_t &owner, turn_domain_t domain);
     stateful_error_t yield_claim (const object_ref_t &owner, turn_record_t continuation);
     std::size_t pending (const object_ref_t &owner, turn_domain_t domain) const;
@@ -548,6 +551,9 @@ class stateful_object_runtime_t
     // The object's state as its owners observe it (relocation flow §4.2): an existing
     // source seal attempt reads as moving; the record keeps creation, membership move and
     // restore. Ingress follows the attempt's binding instead.
+    std::pair<stateful_error_t, std::optional<turn_record_t>>
+    claim_on_lane (const object_ref_t &owner, turn_domain_t domain, std::string *stable_type);
+    stateful_error_t complete_claim_on_lane (const object_ref_t &owner, turn_domain_t domain);
     object_state_t state_on_lane (const object_record_t &object) const;
     bool sealed_by_on_lane (const object_record_t &object, std::uint64_t token) const;
     const relocation_seal_binding_t *seal_binding_on_lane (const object_record_t &object) const;

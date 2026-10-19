@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+#include "../support/committed_authority_fixture.hpp"
 #include "../support/runtime_failure_fixture.hpp"
 #include "../support/stateful_ingress_fixture.hpp"
 #include "../support/request_admission_fixture.hpp"
@@ -2618,6 +2619,11 @@ void test_spot_restore_stages_before_publication (test_context_t &test)
                               .mesh_name = "mesh",
                               .node_id = "target"};
 
+    auto committed_target = target;
+    committed_target.authority_owner_generation = 12;
+    runtime.bind_relocation_authority (
+      std::make_shared<zlink::framework::test::committed_authority_fixture_t> (committed_target));
+
     auto oversized = frozen;
     oversized.application_state.assign (64u * 1024u * 1024u + 1u, 0x5a);
     test.require (!runtime.restore_spot_relocation_state (oversized, target)
@@ -2652,6 +2658,9 @@ void test_spot_restore_stages_before_publication (test_context_t &test)
                                      owner->spot_contexts_by_id.at ("staged-spot"));
                                })
                                .get ();
+        test.require (
+          context->authority_owner_generation == committed_target.authority_owner_generation,
+          "Spot admission must use the committed authority, not its staging prediction");
         context
           ->run_serial_task ("after-restored-target-commit",
                              [] () -> zlink::framework::task_t<void> { co_return; })
