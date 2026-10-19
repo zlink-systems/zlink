@@ -51,8 +51,8 @@ export interface ZLinkRuntimeMetricMeshSnapshot {
     readonly channelName: string;
     readonly readyMembers: number;
   }>;
-  readonly actorCapacity: ZLinkRuntimeMetricCapacity;
-  readonly spotCapacity: ZLinkRuntimeMetricCapacity;
+  readonly actorCapacity?: ZLinkRuntimeMetricCapacity;
+  readonly spotCapacity?: ZLinkRuntimeMetricCapacity;
   readonly spotTypeCapacities: ReadonlyArray<ZLinkRuntimeMetricSpotTypeCapacity>;
   readonly activation: { readonly active: number; readonly limit: number };
   readonly instanceSpots: ReadonlyArray<{
@@ -383,14 +383,16 @@ class MetricRegistry {
       }
     } else if (name.startsWith('zlink.object.capacity.')) {
       const field = metricSuffix(name);
-      result.observe(capacityValue(snapshot.actorCapacity, field), {
-        ...mesh,
-        capacity_scope: 'actor'
-      });
-      result.observe(capacityValue(snapshot.spotCapacity, field), {
-        ...mesh,
-        capacity_scope: 'spot'
-      });
+      if (snapshot.actorCapacity !== undefined)
+        result.observe(capacityValue(snapshot.actorCapacity, field), {
+          ...mesh,
+          capacity_scope: 'actor'
+        });
+      if (snapshot.spotCapacity !== undefined)
+        result.observe(capacityValue(snapshot.spotCapacity, field), {
+          ...mesh,
+          capacity_scope: 'spot'
+        });
     } else if (name.startsWith('zlink.spot.type.capacity.')) {
       const field = metricSuffix(name);
       for (const capacity of snapshot.spotTypeCapacities) {

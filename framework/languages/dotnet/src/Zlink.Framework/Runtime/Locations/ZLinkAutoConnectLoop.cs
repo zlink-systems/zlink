@@ -17,6 +17,7 @@ internal sealed class ZLinkAutoConnectLoop : IAsyncDisposable
     private readonly IZLinkRuntimeFailureReporter _errorSink;
     private readonly ZLinkLocationOptions _options;
     private readonly ZLinkMeshName _meshName;
+    private readonly ZLinkMeshNodeDescriptorKey? _capacityKey;
     private readonly IZLinkLocationRepository _store;
     private readonly IZLinkLocationWatchStore? _watchStore;
     private readonly ZLinkOwnerLeaseTracker? _leaseTracker;
@@ -44,6 +45,13 @@ internal sealed class ZLinkAutoConnectLoop : IAsyncDisposable
         _errorSink = errorSink;
         _options = options;
         _meshName = local.MeshName;
+        _capacityKey =
+            local.AutoConnectType
+                is ZLinkLocationAutoConnectType.SpotMesh
+                    or ZLinkLocationAutoConnectType.RouteMesh
+            && local.NodeRid is { } rid
+                ? new(local.MeshName.Value, rid)
+                : null;
         _store = store;
         _watchStore = watchStore;
         _leaseTracker = leaseTracker;
@@ -150,6 +158,21 @@ internal sealed class ZLinkAutoConnectLoop : IAsyncDisposable
     /// read only when no owner-lease join is part of the target set.</summary>
     internal async ValueTask TickAsync(CancellationToken cancellationToken = default)
     {
+        if (_store is ZLinkProviderLocationRepository repository && _capacityKey is { } key)
+        {
+            try
+            {
+                await repository.RefreshCapacityAsync(key, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception failure)
+            {
+                _errorSink.ReportRuntimeTaskException(nameof(TickAsync), failure);
+            }
+        }
         if (!_lastTickFailed)
         {
             try

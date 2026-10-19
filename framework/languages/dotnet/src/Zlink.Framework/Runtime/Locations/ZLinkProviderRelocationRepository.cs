@@ -22,7 +22,7 @@ internal sealed class ZLinkProviderRelocationRepository(IZLinkRelocationStore pr
         {
             throw;
         }
-        catch
+        catch (Exception exception) when (IsProviderFailure(exception))
         {
             ZLinkRuntimeMetrics.RecordLocationStoreError("relocation_put");
             throw;
@@ -51,7 +51,7 @@ internal sealed class ZLinkProviderRelocationRepository(IZLinkRelocationStore pr
         {
             throw;
         }
-        catch
+        catch (Exception exception) when (IsProviderFailure(exception))
         {
             ZLinkRuntimeMetrics.RecordLocationStoreError("relocation_put");
             throw;
@@ -78,7 +78,8 @@ internal sealed class ZLinkProviderRelocationRepository(IZLinkRelocationStore pr
                     .ConfigureAwait(false);
             }
             catch (Exception failure)
-                when (failure
+                when (IsProviderFailure(failure)
+                    && failure
                         is not OutOfMemoryException
                             and not StackOverflowException
                             and not AccessViolationException
@@ -131,7 +132,7 @@ internal sealed class ZLinkProviderRelocationRepository(IZLinkRelocationStore pr
         {
             throw;
         }
-        catch
+        catch (Exception exception) when (IsProviderFailure(exception))
         {
             ZLinkRuntimeMetrics.RecordLocationStoreError("relocation_get");
             throw;
@@ -161,7 +162,7 @@ internal sealed class ZLinkProviderRelocationRepository(IZLinkRelocationStore pr
         {
             throw;
         }
-        catch
+        catch (Exception exception) when (IsProviderFailure(exception))
         {
             ZLinkRuntimeMetrics.RecordLocationStoreError("relocation_put");
             throw;
@@ -192,13 +193,18 @@ internal sealed class ZLinkProviderRelocationRepository(IZLinkRelocationStore pr
         {
             throw;
         }
-        catch
+        catch (Exception exception) when (IsProviderFailure(exception))
         {
             ZLinkRuntimeMetrics.RecordLocationStoreError("relocation_delete");
             throw;
         }
         return ZLinkRelocationDeleteResult.Deleted;
     }
+
+    private static bool IsProviderFailure(Exception exception) =>
+        exception is not ArgumentException and not System.Text.Json.JsonException
+        && exception
+            is not ZLinkFrameworkException { Kind: not ZLinkFrameworkErrorKind.Unavailable };
 
     private static ZLinkRelocationStored Stored(
         ZLinkBlobReference reference,
