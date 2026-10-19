@@ -13,7 +13,8 @@ namespace Zlink.Framework.Runtime.Locations;
 internal sealed class ZLinkRequestSourceFenceResolver(
     IZLinkMeshNodeLocationResolver peers,
     ZLinkOwnerLeaseTracker leases,
-    string meshName
+    string meshName,
+    ZLinkMessageFlowTracer? flow = null
 ) : IZLinkBackendRequestSourceAcceptance
 {
     public async ValueTask<ZLinkServiceWireCodec.RequestSourceFence?> AcceptAsync(
@@ -57,10 +58,24 @@ internal sealed class ZLinkRequestSourceFenceResolver(
                     );
             return null;
         }
-        catch (Exception) when (!cancellationToken.IsCancellationRequested)
+        catch (ZLinkFrameworkException error)
+            when (error.Kind == ZLinkFrameworkErrorKind.Unavailable
+                && !cancellationToken.IsCancellationRequested
+            )
         {
-            // A Store read that cannot show a live descriptor leaves the request without
-            // source owner values; the accepting owner ends it Unavailable (binding §4).
+            if (flow?.DispatchErrorsEnabled == true)
+                flow.TraceDispatchError(
+                    new ZLinkDispatchFailure(
+                        ZLinkDispatchErrorSurface.Node,
+                        ZLinkDispatchMessageKind.Request,
+                        ZLinkDispatchErrorReason.StaleTarget,
+                        ZLinkDispatchErrorAction.ReplyError,
+                        null,
+                        SourceRid: sourceNodeRid.ToString(),
+                        Exception: error.InnerException ?? error,
+                        MeshName: meshName
+                    )
+                );
             return null;
         }
     }

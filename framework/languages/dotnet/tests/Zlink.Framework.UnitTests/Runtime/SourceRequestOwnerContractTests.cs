@@ -1,6 +1,9 @@
 using System.Reflection;
 using System.Text.Json;
+using Microsoft.Extensions.Logging;
 using Zlink.Framework.Runtime.Backend.DotNet;
+using Zlink.Framework.Runtime.Diagnostics;
+using Zlink.Framework.Runtime.Dispatch;
 using Zlink.Framework.Runtime.Locations;
 using Zlink.Framework.Runtime.Service;
 
@@ -16,6 +19,94 @@ public sealed class SourceRequestOwnerContractTests
 {
     private static readonly TimeSpan PollingInterval = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan LeaseTtl = TimeSpan.FromSeconds(1);
+
+    [Fact]
+    public async Task SourceRequestOwnerReportsStoreUnavailable()
+    {
+        var error = new ZLinkFrameworkException(
+            ZLinkFrameworkErrorKind.Unavailable,
+            "descriptor Store offline",
+            innerException: new IOException("connection closed")
+        );
+        var store = SourceOwnerStore.Create(
+            [],
+            new ZLinkLocationOwnerToken("owner", 1),
+            TimeProvider.System
+        );
+        ((SourceOwnerStore)(object)store).DescriptorError = error;
+        var options = new ZLinkLocationOptions();
+        var leases = new ZLinkOwnerLeaseTracker(store, options);
+        var logger = new SourceLogger();
+        var flow = new ZLinkMessageFlowTracer(new ZLinkDispatchOptionsModel(), logger);
+        var resolver = new ZLinkRequestSourceFenceResolver(
+            new ZLinkStoreLocationResolvers(store, leases, options: options),
+            leases,
+            "mesh",
+            flow
+        );
+        Assert.Null(
+            await resolver.AcceptAsync(null, RoutingId.From("sender"), 1, CancellationToken.None)
+        );
+        Assert.Contains(
+            logger.Fields,
+            field => field.Key == "error_type" && (string?)field.Value == nameof(IOException)
+        );
+        Assert.Contains(
+            logger.Fields,
+            field => field.Key == "error_message" && (string?)field.Value == "connection closed"
+        );
+    }
+
+    private sealed class SourceLogger : ILogger
+    {
+        internal IReadOnlyList<KeyValuePair<string, object?>> Fields { get; private set; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state)
+            where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter
+        ) =>
+            Fields = state is IEnumerable<KeyValuePair<string, object?>> fields
+                ? fields.ToArray()
+                : [];
+    }
+
+    [Fact]
+    public async Task SourceRequestOwnerPropagatesProgrammingError()
+    {
+        var error = new InvalidOperationException("broken descriptor reader");
+        var store = SourceOwnerStore.Create(
+            [],
+            new ZLinkLocationOwnerToken("owner", 1),
+            TimeProvider.System
+        );
+        ((SourceOwnerStore)(object)store).DescriptorError = error;
+        var options = new ZLinkLocationOptions();
+        var leases = new ZLinkOwnerLeaseTracker(store, options);
+        var resolver = new ZLinkRequestSourceFenceResolver(
+            new ZLinkStoreLocationResolvers(store, leases, options: options),
+            leases,
+            "mesh"
+        );
+        Assert.Same(
+            error,
+            await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+                await resolver.AcceptAsync(
+                    null,
+                    RoutingId.From("sender"),
+                    1,
+                    CancellationToken.None
+                )
+            )
+        );
+    }
 
     public static TheoryData<string> Cases()
     {
@@ -129,6 +220,7 @@ public sealed class SourceRequestOwnerContractTests
         private DateTimeOffset _issuedAt;
 
         internal int DescriptorReads { get; set; }
+        internal Exception? DescriptorError { get; set; }
 
         internal static IZLinkLocationRepository Create(
             IReadOnlyList<ZLinkMeshNodeDescriptor> descriptors,
@@ -151,6 +243,8 @@ public sealed class SourceRequestOwnerContractTests
             {
                 case nameof(IZLinkLocationRepository.ListMeshNodesAsync):
                     DescriptorReads++;
+                    if (DescriptorError is { } error)
+                        throw error;
                     return ValueTask.FromResult(
                         new ZLinkLocationPage<ZLinkMeshNodeDescriptor>(_descriptors, null)
                     );
