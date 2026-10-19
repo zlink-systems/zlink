@@ -85,3 +85,73 @@ test('one request admission failure does not alter a completed or waiting siblin
   left.resolve('first reply');
   assert.equal(await first, 'first reply');
 });
+
+test('admission notification and reply success reuse one callback', async () => {
+  const pending = deferred();
+  let markAdmitted;
+  let completeReply;
+  const then = pending.promise.then;
+  pending.promise.then = function (success, failure) {
+    completeReply = success;
+    return then.call(this, success, failure);
+  };
+  const request = createZLinkRequest((admitted) => {
+    markAdmitted = admitted;
+    return pending.promise;
+  });
+  markAdmitted();
+  pending.resolve('reply');
+  assert.equal(await request, 'reply');
+  assert.equal(completeReply, markAdmitted);
+});
+
+test('reply delivery retains its Promise identity and admission getter attributes', async () => {
+  const pending = deferred();
+  let delivered;
+  let deliveries = 0;
+  const request = createZLinkRequest(
+    () => pending.promise,
+    (reply) => {
+      deliveries++;
+      delivered = reply.then((value) => value);
+      return delivered;
+    }
+  );
+  const descriptor = Object.getOwnPropertyDescriptor(request, 'admitted');
+  assert.equal(request, delivered);
+  assert.equal(request.constructor, Promise);
+  assert.equal(Object.getPrototypeOf(request), Promise.prototype);
+  assert.equal(deliveries, 1);
+  assert.equal(descriptor.enumerable, false);
+  assert.equal(descriptor.configurable, false);
+  assert.equal(descriptor.set, undefined);
+  assert.equal(Object.hasOwn(pending.promise, 'admitted'), false);
+  const admitted = request.admitted;
+  pending.resolve(undefined);
+  assert.equal(await request, undefined);
+  await admitted;
+  assert.equal(request.admitted, admitted);
+});
+
+test('reply-only failure is observed before a later admission read', async () => {
+  const failure = new DOMException('cancelled before admission', 'AbortError');
+  const request = createZLinkRequest(() => Promise.reject(failure));
+  await assert.rejects(request, (error) => error === failure);
+  // Give unhandled rejection reporting a turn before observing admission.
+  await new Promise((resolve) => setImmediate(resolve));
+  const admitted = request.admitted;
+  await assert.rejects(admitted, (error) => error === failure);
+  assert.equal(request.admitted, admitted);
+});
+
+test('a synchronous failure after admission preserves the completed admission', async () => {
+  const failure = new Error('failed after admission');
+  const request = createZLinkRequest((admitted) => {
+    admitted();
+    throw failure;
+  });
+  await assert.rejects(request, (error) => error === failure);
+  const admitted = request.admitted;
+  await admitted;
+  assert.equal(request.admitted, admitted);
+});
