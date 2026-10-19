@@ -114,6 +114,7 @@ struct application_payload_t
 
 // Shared inverse of application_payload_t::from_parts; used by dispatch and diagnostics.
 application_payload_t::multipart_t decode_application_parts (const application_payload_t &payload);
+zlink::message_t decode_application_header (const application_payload_t &payload);
 
 struct spot_route_fence_t
 {

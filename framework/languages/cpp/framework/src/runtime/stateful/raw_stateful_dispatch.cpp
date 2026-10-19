@@ -34,41 +34,23 @@ constexpr std::size_t mailbox_claim_byte_limit = 16u * 1024u * 1024u;
 class mailbox_claim_release_guard_t final
 {
   public:
-    mailbox_claim_release_guard_t (mesh::raw_mesh_node_owner_t &transport,
-                                   accepted_mailbox_reservation_t claim) :
-        _transport (&transport), _claim (std::move (claim))
+    explicit mailbox_claim_release_guard_t (accepted_mailbox_reservation_t claim) :
+        _claim (std::move (claim))
     {
     }
 
     ~mailbox_claim_release_guard_t () noexcept
     {
-        if (!_transport)
-            return;
-        std::visit (
-          [this] (auto &claim) {
-              using claim_t = std::decay_t<decltype (claim)>;
-              if constexpr (std::is_same_v<claim_t,
-                                           std::shared_ptr<mesh::service_mailbox_claim_t>>) {
-                  if (claim)
-                      (void) _transport->mailbox ().release (*claim);
-              } else if (claim) {
-                  claim ();
-              }
-          },
-          _claim);
+        if (_claim)
+            _claim ();
     }
 
     mailbox_claim_release_guard_t (const mailbox_claim_release_guard_t &) = delete;
     mailbox_claim_release_guard_t &operator= (const mailbox_claim_release_guard_t &) = delete;
 
-    void dismiss () noexcept
-    {
-        _transport = nullptr;
-        _claim = {};
-    }
+    void dismiss () noexcept { _claim = {}; }
 
   private:
-    mesh::raw_mesh_node_owner_t *_transport;
     accepted_mailbox_reservation_t _claim;
 };
 
@@ -105,7 +87,7 @@ void reply_failure_then_release_claim (mesh::raw_mesh_node_owner_t &transport,
                                        std::uint32_t failure_code,
                                        accepted_mailbox_reservation_t claim)
 {
-    mailbox_claim_release_guard_t release (transport, std::move (claim));
+    mailbox_claim_release_guard_t release (std::move (claim));
     try {
         (void) transport.reply_failure (request, terminal_result, failure_code);
     }
@@ -402,7 +384,7 @@ stateful_error_t raw_stateful_dispatch_t::commit_accepted_ingress (const object_
     {
         // Relocation owns the accepted record; _pending keeps the original
         // reply token while the ordinary mailbox permit is returned.
-        mailbox_claim_release_guard_t release (*_transport, std::move (claim));
+        mailbox_claim_release_guard_t release (std::move (claim));
     }
     if (admitted_application) {
         tracer.trace (message_flow_outcome_t::admitted, [&] {
@@ -563,11 +545,39 @@ raw_stateful_dispatch_t::forward_accepted (object_ref_t owner,
 
 task_t<stateful_error_t>
 raw_stateful_dispatch_t::ingest_claimed (object_ref_t owner,
-                                         mesh::service_mailbox_record_t record,
-                                         accepted_mailbox_reservation_t reservation,
+                                         mesh::service_mailbox_t::claim_handle_t slot,
                                          std::optional<retained_relocation_source_t> retained)
 {
-    mailbox_claim_release_guard_t claim_guard (*_transport, reservation);
+    // Only immutable header/source values survive authority suspension. The body
+    // stays in the canonical mailbox slot until the handoff wins its take.
+    struct query_t
+    {
+        mesh::service_mailbox_record_t header;
+        std::size_t body_bytes = 0;
+        std::exception_ptr error;
+    };
+    auto prepared = _transport->mailbox ().prepare (slot, [] (const auto &original) {
+        query_t query;
+        query.header.owner = original.owner;
+        query.header.domain = original.domain;
+        query.header.source_routing_id = original.source_routing_id;
+        query.header.source_node_generation = original.source_node_generation;
+        query.header.bound_session_source = original.bound_session_source;
+        if (original.parts.size () == 2) {
+            query.header.parts.push_back (original.parts.front ().copy ());
+            try {
+                query.body_bytes = protocol::application_payload_hwm_bytes (
+                  protocol::message_bytes (original.parts[1]));
+            }
+            catch (...) {
+                query.error = std::current_exception ();
+            }
+        }
+        return query;
+    });
+    if (!prepared)
+        co_return stateful_error_t::not_found;
+    auto record = std::move (prepared->header);
     stateful_error_t validation = stateful_error_t::none;
     protocol::frozen_application_record_t frozen;
     protocol::application_payload_t payload;
@@ -577,12 +587,13 @@ raw_stateful_dispatch_t::ingest_claimed (object_ref_t owner,
     std::optional<protocol::spot_message_header_t> spot_header;
     std::optional<accepted_record_authority_t> accepted_authority;
     try {
-        if (record.parts.size () != 2 || !_authority_resolver || record.source_routing_id.empty ()
+        if (prepared->error)
+            std::rethrow_exception (prepared->error);
+        if (record.parts.size () != 1 || !_authority_resolver || record.source_routing_id.empty ()
             || !record.source_node_generation)
             validation = stateful_error_t::invalid;
         else {
-            application_payload_bytes =
-              protocol::application_payload_hwm_bytes (protocol::message_bytes (record.parts[1]));
+            application_payload_bytes = prepared->body_bytes;
         }
 
         if (validation != stateful_error_t::none)
@@ -643,6 +654,12 @@ raw_stateful_dispatch_t::ingest_claimed (object_ref_t owner,
         validation = stateful_error_t::conflict;
     }
 
+    auto original = _transport->mailbox ().take (slot);
+    if (!original)
+        co_return stateful_error_t::not_found;
+    record = std::move (*original);
+    accepted_mailbox_reservation_t reservation = std::exchange (record.transferred, {});
+    mailbox_claim_release_guard_t claim_guard (reservation);
     if (validation != stateful_error_t::none) {
         if (record.reply_token && record.correlation) {
             // moving replies with the retryable relocation terminal
@@ -770,15 +787,15 @@ stateful_error_t raw_stateful_dispatch_t::accept_local (
   std::function<void ()> before_application_handler,
   std::function<bool (const std::optional<protocol::application_payload_t> &)> terminal)
 {
-    if (!application_record || !application_record->payload
-        || !application_record->payload->application_record)
+    if (!application_record || !application_record->payload ()
+        || !application_record->payload ()->application_record)
         return stateful_error_t::invalid;
     auto frozen = protocol::summarize_frozen_application_record (
-      *application_record->payload->application_record);
+      *application_record->payload ()->application_record);
     const auto request = frozen.reply_route_id.has_value ();
-    auto turn = std::move (*application_record->payload);
+    auto turn = std::move (*application_record->payload ());
     turn.application_payload_bytes = protocol::application_payload_hwm_bytes (*frozen.application);
-    application_record->payload.reset ();
+    application_record->payload ().reset ();
     mesh::service_mailbox_record_t transport;
     transport.before_application_handler = std::move (before_application_handler);
     pending_delivery_t pending{owner,   std::move (frozen),   std::move (transport),
@@ -907,7 +924,7 @@ stateful_error_t raw_stateful_dispatch_t::transfer_application_claim (const obje
     }
     // A terminal may already have consumed the pending entry. The actual
     // claim carrier still owns this Kernel claim until this transfer runs.
-    mailbox_claim_release_guard_t mailbox (*_transport, std::move (reservation));
+    mailbox_claim_release_guard_t mailbox (std::move (reservation));
     return release_application_claim (owner);
 }
 
@@ -953,7 +970,7 @@ stateful_error_t raw_stateful_dispatch_t::complete_with_claim (
         _pending.erase (found);
     }
     application_claim_release_guard_t application_guard (release_claim);
-    mailbox_claim_release_guard_t mailbox_guard (*_transport, std::move (pending.mailbox_claim));
+    mailbox_claim_release_guard_t mailbox_guard (std::move (pending.mailbox_claim));
     bool completed = true;
     if (pending.relocated_terminal) {
         completed = pending.relocated_terminal (reply);
@@ -1070,7 +1087,7 @@ task_t<bool> raw_stateful_dispatch_t::complete_relocated_source_async (
         _pending.erase (found);
     }
     (void) _objects->discard_application (owner, pending_key.sequence);
-    mailbox_claim_release_guard_t mailbox_guard (*_transport, std::move (claim));
+    mailbox_claim_release_guard_t mailbox_guard (std::move (claim));
     co_return true;
 }
 
@@ -1105,7 +1122,7 @@ void raw_stateful_dispatch_t::release_relocated_payloads (const object_ref_t &ow
     }
     for (auto &[claim, initial_reservation] : reservations) {
         {
-            mailbox_claim_release_guard_t release (*_transport, std::move (claim));
+            mailbox_claim_release_guard_t release (std::move (claim));
         }
         if (initial_reservation)
             initial_reservation ();
@@ -1175,7 +1192,7 @@ stateful_error_t raw_stateful_dispatch_t::discard_owner_pending (const object_re
                                               failure.terminal_result, failure.failure_code,
                                               std::move (item.claim));
         } else {
-            mailbox_claim_release_guard_t release (*_transport, std::move (item.claim));
+            mailbox_claim_release_guard_t release (std::move (item.claim));
         }
     }
     {
@@ -1204,7 +1221,7 @@ stateful_error_t raw_stateful_dispatch_t::discard_pending (const object_ref_t &o
         _pending.erase (found);
         object_error = _objects->discard_application (owner, sequence);
     }
-    mailbox_claim_release_guard_t release (*_transport, std::move (claim));
+    mailbox_claim_release_guard_t release (std::move (claim));
     return object_error == stateful_error_t::not_found ? stateful_error_t::none : object_error;
 }
 
@@ -1392,8 +1409,10 @@ task_t<raw_relocation_replay_result_t> raw_relocation_replay_coordinator_t::pump
       mailbox_claim_byte_limit);
     if (!claim)
         co_return raw_relocation_replay_result_t::no_data;
-    auto record = std::move (claim->records.front ());
-    const auto result = co_await process (record);
+    auto record = _transport->mailbox ().take (claim->records.front ());
+    auto result = raw_relocation_replay_result_t::no_data;
+    if (record)
+        result = co_await process (*record);
     (void) _transport->mailbox ().release (*claim);
     co_return result;
 }

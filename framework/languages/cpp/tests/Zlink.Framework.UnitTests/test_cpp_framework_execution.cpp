@@ -4902,7 +4902,7 @@ bool verify_wire_actor_join_admission_is_approval_only_and_later_attempt_wins ()
         }
         bool replied = false;
         if (claim && claim->records.size () == 1) {
-            const auto &record = claim->records.front ();
+            const auto &record = (*claim->records.front ());
             first = admit_wire_actor_join (node, local_rid, request, std::nullopt, &serializers);
             replied = target_owner.reply_actor_join (
               record, first.join_result, first.spot, first.membership_epoch,
@@ -8634,7 +8634,7 @@ bool verify_durable_head_owner_transitions ()
         return false;
     held->mark_queued ();
     auto record = std::make_shared<serial_application_record_t> ();
-    record->payload.emplace ();
+    record->payload ().emplace ();
     record->admission.jobs = jobs;
     std::atomic_int started{0}, cancelled{0}, native_returns{0};
     std::promise<void> handler_done;
@@ -8706,7 +8706,7 @@ bool verify_durable_head_rejection_and_close ()
         std::atomic_int started{0}, cancelled{0}, initial_returns{0};
         bool terminal = false;
         auto record = std::make_shared<serial_application_record_t> ();
-        record->payload.emplace ();
+        record->payload ().emplace ();
         record->admission.jobs = jobs;
         record->admission.retain_initial ([&] { ++initial_returns; });
         const auto adopted = queue
@@ -8759,7 +8759,7 @@ bool verify_durable_head_rejection_and_close ()
     auto held = jobs->try_reserve_supply ();
     held->mark_queued ();
     auto record = std::make_shared<serial_application_record_t> ();
-    record->payload.emplace ();
+    record->payload ().emplace ();
     record->admission.jobs = jobs;
     auto queue = serial.actor_executor ("waiting-actor")->queue ();
     bool cancelled = false;
@@ -9788,7 +9788,7 @@ bool verify_durable_policy_late_grant (bool transfer)
     held->mark_queued ();
     const auto make_record = [&] {
         auto record = std::make_shared<rt::serial_application_record_t> ();
-        record->payload.emplace ();
+        record->payload ().emplace ();
         record->admission.jobs = jobs;
         return record;
     };

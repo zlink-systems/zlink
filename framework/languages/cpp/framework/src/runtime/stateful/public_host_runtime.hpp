@@ -1251,7 +1251,9 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
       _local_dispatch_completion_lane_executor};
     std::deque<local_application_dispatch_t> _local_application_dispatches;
     void publish_local_application (local_application_dispatch_t dispatch);
-    task_t<stateful::object_ref_t> accept_local_application (local_application_dispatch_t dispatch);
+    task_t<std::optional<stateful::object_ref_t>>
+    accept_local_application (mesh::service_mailbox_t::claim_handle_t slot,
+                              std::optional<mesh::service_mailbox_record_t> &original);
     void
     admit_local_application (local_application_dispatch_t dispatch,
                              const std::shared_ptr<application_job_queue_t::waiter_t> &waiter = {},

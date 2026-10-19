@@ -1381,7 +1381,11 @@ boost::asio::awaitable<result_t<void>> client_server_location_runtime_t::drain_s
                                        dispatch_limits::receive_batch_bytes);
             if (!active_claim)
                 break;
-            for (auto &record : active_claim->records) {
+            for (auto &slot : active_claim->records) {
+                auto original = mailbox.take (slot);
+                if (!original)
+                    continue;
+                auto &record = *original;
                 if (_stop->load (std::memory_order_acquire)) {
                     if (record.reply_token) {
                         const framework_exception_t error (

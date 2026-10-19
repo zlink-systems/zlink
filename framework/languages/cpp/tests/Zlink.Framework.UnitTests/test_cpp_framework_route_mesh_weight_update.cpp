@@ -240,7 +240,7 @@ void expect_successful_channel_request (mesh::raw_mesh_node_owner_t &source,
     ASSERT_TRUE (claim);
     ASSERT_EQ (1u, claim->records.size ());
     const protocol::application_payload_t reply{"WeightReply", "application/json", bytes ("reply")};
-    ASSERT_TRUE (target.reply (claim->records.front (), reply));
+    ASSERT_TRUE (target.reply ((*claim->records.front ()), reply));
     ASSERT_TRUE (target.mailbox ().release (*claim));
 
     const auto reply_deadline = std::chrono::steady_clock::now () + 2s;

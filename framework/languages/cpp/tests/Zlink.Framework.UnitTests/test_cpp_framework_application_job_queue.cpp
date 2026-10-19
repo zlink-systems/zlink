@@ -460,7 +460,7 @@ TEST (ZLinkFrameworkStatefulDispatch, RetainedIngressExceptionLeavesTerminalWith
     const auto owner = native->objects ().find (stateful::object_kind_t::actor, actor_id);
     ASSERT_TRUE (owner);
     namespace protocol = framework::runtime::protocol;
-    auto &wire = claim->records.front ();
+    auto &wire = (*claim->records.front ());
     ASSERT_TRUE (wire.correlation);
     wire.parts = framework::detail::backend::materialize_binding_parts (
       {protocol::encode_actor_message_header (

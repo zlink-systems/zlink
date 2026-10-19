@@ -4067,10 +4067,10 @@ std::shared_ptr<zlink::framework::runtime::serial_application_record_t> accepted
     if (request)
         header.correlation = sequence;
     auto record = std::make_shared<runtime::serial_application_record_t> ();
-    record->payload.emplace ();
-    record->payload->sequence = sequence;
-    record->payload->application_payload_bytes = payload.size ();
-    record->payload->application_record = runtime::stateful::accepted_actor_record (
+    record->payload ().emplace ();
+    record->payload ()->sequence = sequence;
+    record->payload ()->application_payload_bytes = payload.size ();
+    record->payload ()->application_record = runtime::stateful::accepted_actor_record (
       header,
       {"fence-source-owner", 1, source_fence.target_node_routing_id,
        source_fence.target_node_generation},
@@ -4470,7 +4470,7 @@ int relocation_barrier_fences_late_actor_request_without_deadlock ()
     }
     bool payload_preserved = false;
     runtime::stateful::with_accepted_application (
-      *request_record->payload, [&] (auto kind, const auto &application) {
+      *request_record->payload (), [&] (auto kind, const auto &application) {
           const runtime::messaging::message_parts_t parts (
             runtime::protocol::decode_application_parts (application));
           const auto body = runtime::messaging::envelope_codec_t{}.decode_body (parts);

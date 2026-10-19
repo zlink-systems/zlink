@@ -672,13 +672,8 @@ task_t<bool> settle_handoff_packet (std::shared_ptr<detail::spot_node_builder_st
     if (record && record->native_reply) {
         if (!request)
             co_return record->complete_native (std::nullopt);
-        auto header = runtime::stateful::with_accepted_application (
-          *record->payload, [] (auto, const auto &application) {
-              return runtime::messaging::envelope_codec_t{}.decode_header (
-                runtime::messaging::message_parts_t (
-                  runtime::protocol::decode_application_parts (application)),
-                false);
-          });
+        auto header = runtime::messaging::envelope_codec_t{}.decode_header (
+          record->application_header (), false);
         if (!header)
             std::rethrow_exception (header.exception ());
         auto terminal = handoff_reply_envelope (header.value (), completed);
@@ -4501,9 +4496,8 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
                 detail::callback_context_scope_t callback_scope (state.get ());
                 std::shared_ptr<std::pair<zlink::message_t, spot_inbound_message_t>> carrier;
                 if (application_record) {
-                    application_record->invocation.emplace (std::move (message),
-                                                            std::move (metadata));
-                    carrier = {application_record, &*application_record->invocation};
+                    application_record->set_invocation (std::move (message), std::move (metadata));
+                    carrier = {application_record, &*application_record->invocation ()};
                 } else
                     carrier =
                       std::make_shared<std::pair<zlink::message_t, spot_inbound_message_t>> (
@@ -4578,8 +4572,8 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
         work_options.retained_message = retained_message;
         std::shared_ptr<std::pair<zlink::message_t, spot_inbound_message_t>> carrier;
         if (application_record) {
-            application_record->invocation.emplace (std::move (message), std::move (metadata));
-            carrier = {application_record, &*application_record->invocation};
+            application_record->set_invocation (std::move (message), std::move (metadata));
+            carrier = {application_record, &*application_record->invocation ()};
         } else
             carrier = std::make_shared<std::pair<zlink::message_t, spot_inbound_message_t>> (
               std::move (message), std::move (metadata));
@@ -6230,8 +6224,8 @@ task_t<void> spot_node_runtime_t::replay_actor_handoff_batch (actor_ref_t actor_
                                                        transfer_id, *location);
         }
         spot_inbound_message_t metadata;
-        if (packet.application_record && packet.application_record->invocation)
-            metadata = std::move (packet.application_record->invocation->second);
+        if (packet.application_record && packet.application_record->invocation ())
+            metadata = std::move (packet.application_record->invocation ()->second);
         else {
             metadata.content_type = std::move (packet.content_type);
             metadata.values = std::move (packet.metadata);
@@ -6252,32 +6246,32 @@ task_t<void> spot_node_runtime_t::replay_actor_handoff_batch (actor_ref_t actor_
           framework_error_kind_t::internal_failure, "Actor handoff replay did not complete");
         std::exception_ptr replay_exception;
         try {
-            if (packet.application_record && !packet.application_record->invocation) {
+            if (packet.application_record && !packet.application_record->invocation ()) {
                 runtime::stateful::with_accepted_application (
-                  *packet.application_record->payload, [&] (auto, const auto &application) {
+                  *packet.application_record->payload (), [&] (auto, const auto &application) {
                       const runtime::messaging::message_parts_t parts (
                         runtime::protocol::decode_application_parts (application));
                       const auto body = runtime::messaging::envelope_codec_t{}.decode_body (parts);
                       if (!body)
                           std::rethrow_exception (body.exception ());
-                      packet.application_record->invocation.emplace (body.value (),
-                                                                     std::move (metadata));
+                      packet.application_record->set_invocation (body.value (),
+                                                                 std::move (metadata));
                   });
-                metadata = std::move (packet.application_record->invocation->second);
+                metadata = std::move (packet.application_record->invocation ()->second);
             }
             result = result_t<zlink::message_t>::success (
               co_await spot_handler_registry_t (context_state)
-                .invoke_erased (kind, packet.packet_name, {}, actor_type,
-                                context_state->spot_instance.get (), actor_instance.get (),
-                                services, *context_state->channel_runtime->serializers,
-                                packet.application_record && packet.application_record->invocation
-                                  ? packet.application_record->invocation->first
-                                  : zlink::message_t::from (std::move (packet.payload)),
-                                std::move (metadata), true, key, std::string (*location), {},
-                                reuse_active_actor_queue
-                                  ? spot_handler_registry_t::actor_queue_dispatch_t::current_turn
-                                  : spot_handler_registry_t::actor_queue_dispatch_t::acquire,
-                                {}, {}, {}, 0, {}, {}, {}, packet.application_record));
+                .invoke_erased (
+                  kind, packet.packet_name, {}, actor_type, context_state->spot_instance.get (),
+                  actor_instance.get (), services, *context_state->channel_runtime->serializers,
+                  packet.application_record && packet.application_record->invocation ()
+                    ? packet.application_record->invocation ()->first
+                    : zlink::message_t::from (std::move (packet.payload)),
+                  std::move (metadata), true, key, std::string (*location), {},
+                  reuse_active_actor_queue
+                    ? spot_handler_registry_t::actor_queue_dispatch_t::current_turn
+                    : spot_handler_registry_t::actor_queue_dispatch_t::acquire,
+                  {}, {}, {}, 0, {}, {}, {}, packet.application_record));
         }
         catch (const framework_exception_t &error) {
             replay_exception = std::current_exception ();
@@ -7404,14 +7398,13 @@ capture_relocation_state_async (std::shared_ptr<spot_node_builder_state_t> state
     std::vector<handoff_packet_t> legacy;
     captured.pending_application.reserve (backlog.size ());
     for (auto &packet : backlog) {
-        if (!packet.application_record || !packet.application_record->payload) {
+        if (!packet.application_record || !packet.application_record->payload ()) {
             legacy.push_back (std::move (packet));
             continue;
         }
         auto &record = packet.application_record;
-        captured.pending_application.push_back (std::move (*record->payload));
-        record->payload.reset ();
-        record->invocation.reset ();
+        captured.pending_application.push_back (std::move (*record->payload ()));
+        record->payload ().reset ();
         captured.pending_application.back ().accepted_owner = std::move (record);
     }
     state->actor_transfer_coordinator->prepend_source_suffix (stable_type + ":" + object.key,
@@ -9282,8 +9275,11 @@ task_t<void> spot_node_runtime_t::seal_actor_application_suffix (const actor_ref
     preserved.reserve (suffix.size ());
     for (auto &record : suffix) {
         handoff_packet_t packet;
+        std::optional<spot_inbound_message_t> invocation_metadata;
+        if (auto *invocation = record->invocation ())
+            invocation_metadata = std::move (invocation->second);
         runtime::stateful::with_accepted_application (
-          *record->payload, [&] (auto kind, const auto &application) {
+          *record->payload (), [&] (auto kind, const auto &application) {
               const runtime::messaging::message_parts_t parts (
                 runtime::protocol::decode_application_parts (application));
               const auto header =
@@ -9291,15 +9287,13 @@ task_t<void> spot_node_runtime_t::seal_actor_application_suffix (const actor_ref
               if (!header)
                   std::rethrow_exception (header.exception ());
               packet.packet_name = header.value ().message_name;
-              packet.content_type = header.value ().content_type;
-              packet.metadata = header.value ().metadata;
+              packet.content_type = invocation_metadata
+                                      ? std::move (invocation_metadata->content_type)
+                                      : header.value ().content_type;
+              packet.metadata = invocation_metadata ? std::move (invocation_metadata->values)
+                                                    : header.value ().metadata;
               packet.is_request = kind == runtime::protocol::frozen_record_kind_t::actor_request;
           });
-        if (record->invocation) {
-            packet.content_type = std::move (record->invocation->second.content_type);
-            packet.metadata = std::move (record->invocation->second.values);
-            record->invocation.reset ();
-        }
         packet.application_record = std::move (record);
         preserved.push_back (std::move (packet));
     }
@@ -9418,11 +9412,11 @@ spot_node_runtime_t::open_local_actor_handoff (const actor_ref_t &actor_ref,
                     item.name = "actor-handoff-prefix";
                     item.options.application_record = packet.application_record;
                     item.cancel = [owner, packet] () mutable {
-                        if (packet.application_record && packet.application_record->invocation) {
+                        if (packet.application_record && packet.application_record->invocation ()) {
                             packet.content_type = std::move (
-                              packet.application_record->invocation->second.content_type);
+                              packet.application_record->invocation ()->second.content_type);
                             packet.metadata =
-                              std::move (packet.application_record->invocation->second.values);
+                              std::move (packet.application_record->invocation ()->second.values);
                         }
                         std::vector<handoff_packet_t> rejected;
                         rejected.push_back (std::move (packet));

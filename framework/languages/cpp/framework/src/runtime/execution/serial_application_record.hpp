@@ -4,6 +4,7 @@
 #include <zlink/framework/contracts/spots/spot.hpp>
 #include "runtime/dispatch/application_job_queue.hpp"
 #include "runtime/stateful/stateful_object_runtime.hpp"
+#include "runtime/stateful/accepted_actor_record.hpp"
 
 #include <functional>
 #include <memory>
@@ -88,9 +89,97 @@ struct serial_application_admission_t
 
 struct serial_application_record_t
 {
-    std::optional<stateful::turn_record_t> payload;
+    using invocation_t = std::pair<zlink::message_t, spot_inbound_message_t>;
+
+    invocation_t *invocation () noexcept
+    {
+        auto *native = std::get_if<native_t> (&_storage);
+        return native ? &native->invocation : nullptr;
+    }
+
+    const stateful::turn_record_t *identity () const noexcept
+    {
+        const auto *native = std::get_if<native_t> (&_storage);
+        const auto &owned = native ? native->identity : std::get<frozen_t> (_storage);
+        return owned ? &*owned : nullptr;
+    }
+
+    zlink::message_t application_header () const
+    {
+        if (const auto *native = std::get_if<native_t> (&_storage))
+            return native->header.copy ();
+        const auto *frozen = identity ();
+        if (!frozen)
+            throw protocol::service_wire_error_t ("accepted record has no payload identity");
+        return stateful::with_accepted_application (*frozen, [] (auto, const auto &application) {
+            return protocol::decode_application_header (application);
+        });
+    }
+
+    void set_invocation (zlink::message_t body, spot_inbound_message_t metadata)
+    {
+        if (auto *native = std::get_if<native_t> (&_storage)) {
+            native->invocation = {std::move (body), std::move (metadata)};
+            return;
+        }
+        native_t native;
+        auto &frozen = std::get<frozen_t> (_storage);
+        if (frozen) {
+            auto &turn = *frozen;
+            if (!turn.application_record && !turn.frozen_record && !turn.payload.empty ())
+                turn.frozen_record = protocol::decode_frozen_record (turn.payload);
+            native.header = application_header ();
+            native.identity = std::move (frozen);
+            auto &owned = *native.identity;
+            // The accepted routing identity survives; the invocation is the sole body owner.
+            owned.payload = std::vector<std::uint8_t>{};
+            const auto discard_body = [] (protocol::application_payload_t &application) {
+                application = protocol::application_payload_t{std::move (application.packet_name),
+                                                              std::move (application.content_type),
+                                                              {},
+                                                              std::move (application.flow_id),
+                                                              application.flow_origin};
+            };
+            if (owned.application_record) {
+                std::visit ([&] (auto &value) { discard_body (value.application); },
+                            owned.application_record->body);
+                owned.frozen_record.reset ();
+            }
+            if (owned.frozen_record) {
+                if (owned.frozen_record->application)
+                    discard_body (*owned.frozen_record->application);
+                owned.frozen_record->canonical_bytes = std::vector<std::uint8_t>{};
+            }
+        }
+        native.invocation = {std::move (body), std::move (metadata)};
+        _storage = std::move (native);
+    }
+
+    std::optional<stateful::turn_record_t> &payload ()
+    {
+        if (auto *native = std::get_if<native_t> (&_storage)) {
+            if (!native->identity)
+                return native->identity;
+            std::vector<zlink::message_t> parts;
+            parts.push_back (native->header.copy ());
+            parts.push_back (native->invocation.first.copy ());
+            auto application = protocol::application_payload_t::from_parts (std::move (parts));
+            auto turn = std::move (native->identity);
+            const auto restore_body = [&] (protocol::application_payload_t &identity) {
+                application.flow_id = std::move (identity.flow_id);
+                application.flow_origin = identity.flow_origin;
+                identity = std::move (application);
+            };
+            if (turn->application_record)
+                std::visit ([&] (auto &value) { restore_body (value.application); },
+                            turn->application_record->body);
+            else
+                restore_body (*turn->frozen_record->application);
+            _storage = std::move (turn);
+        }
+        return std::get<frozen_t> (_storage);
+    }
     serial_application_admission_t admission;
-    std::optional<std::pair<zlink::message_t, spot_inbound_message_t>> invocation;
     std::function<void (result_t<void>)> retire_invocation;
     // Original native terminal follows the accepted payload across local
     // handoffs; the raw dispatcher remains its sole reply owner.
@@ -107,8 +196,9 @@ struct serial_application_record_t
 
     bool saved_work () const noexcept
     {
+        const auto *owned = identity ();
         return admission.durable ()
-               || (payload && (payload->application_record || payload->frozen_record));
+               || (owned && (owned->application_record || owned->frozen_record));
     }
     void release_native_claim ()
     {
@@ -120,5 +210,15 @@ struct serial_application_record_t
         admission.take_over ();
         release_native_claim ();
     }
+
+  private:
+    using frozen_t = std::optional<stateful::turn_record_t>;
+    struct native_t
+    {
+        frozen_t identity;
+        zlink::message_t header;
+        invocation_t invocation;
+    };
+    std::variant<frozen_t, native_t> _storage;
 };
 } // namespace zlink::framework::runtime

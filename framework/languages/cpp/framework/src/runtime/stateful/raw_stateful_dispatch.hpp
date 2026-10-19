@@ -65,10 +65,8 @@ read_accepted_record_sources (zlink::framework::location_repository_t &store,
 accepted_record_authority_resolver_t
 make_location_store_authority_resolver (zlink::framework::location_repository_t &store);
 
-// A pending record owns either a native claim or one indexed share of an
-// existing generic batch. The mailbox remains the byte-credit owner.
-using accepted_mailbox_reservation_t =
-  std::variant<std::shared_ptr<mesh::service_mailbox_claim_t>, std::function<void ()>>;
+// The original carries the mailbox slot credit across each ownership transfer.
+using accepted_mailbox_reservation_t = std::function<void ()>;
 
 struct stateful_delivery_t
 {
@@ -103,8 +101,7 @@ class raw_stateful_dispatch_t
     }
 
     task_t<stateful_error_t> ingest_claimed (object_ref_t owner,
-                                             mesh::service_mailbox_record_t record,
-                                             accepted_mailbox_reservation_t reservation,
+                                             mesh::service_mailbox_t::claim_handle_t slot,
                                              std::optional<retained_relocation_source_t> retained);
     task_t<std::pair<stateful_error_t, std::optional<accepted_record_authority_t>>>
     accepted_actor_authority (object_ref_t owner,

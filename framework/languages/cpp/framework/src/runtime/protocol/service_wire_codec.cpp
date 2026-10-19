@@ -2704,21 +2704,41 @@ decode_application_parts_bytes (std::span<const std::uint8_t> encoded, CreatePar
 }
 } // namespace
 
-application_payload_t::multipart_t decode_application_parts (const application_payload_t &payload)
+namespace
+{
+application_payload_t::multipart_t retained_application_parts (const application_payload_t &payload,
+                                                               bool header_only)
 {
     if (payload.packet_name != framework_multipart_packet_name
-        || payload.content_type != framework_multipart_content_type) {
+        || payload.content_type != framework_multipart_content_type)
         throw service_wire_error_t ("framework application payload profile is unsupported");
-    }
     if (const auto *parts = payload.parts ()) {
         application_payload_t::multipart_t result;
-        result.reserve (parts->size ());
-        for (const auto &part : *parts)
-            result.push_back (part.copy ());
+        const auto count = header_only ? std::min (parts->size (), std::size_t{1}) : parts->size ();
+        result.reserve (count);
+        for (std::size_t index = 0; index < count; ++index)
+            result.push_back ((*parts)[index].copy ());
         return result;
     }
-    return decode_application_parts_bytes (
-      payload.payload_bytes (), [] (auto bytes) { return zlink::message_t::from (bytes); });
+    std::size_t index = 0;
+    return decode_application_parts_bytes (payload.payload_bytes (), [&] (auto bytes) {
+        // Validate the whole frame stream, retaining only the requested header bytes.
+        return !header_only || index++ == 0 ? zlink::message_t::from (bytes) : zlink::message_t{};
+    });
+}
+} // namespace
+
+application_payload_t::multipart_t decode_application_parts (const application_payload_t &payload)
+{
+    return retained_application_parts (payload, false);
+}
+
+zlink::message_t decode_application_header (const application_payload_t &payload)
+{
+    auto parts = retained_application_parts (payload, true);
+    if (parts.empty ())
+        throw service_wire_error_t ("framework application payload has no header");
+    return std::move (parts.front ());
 }
 
 bool operator== (const application_payload_t &left, const application_payload_t &right)

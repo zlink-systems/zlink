@@ -1112,7 +1112,7 @@ TEST (FrameworkRelocationSealContract, native_follow_increments_wire_hop_and_sto
         }
         ASSERT_TRUE (claim);
         ASSERT_EQ (claim->records.size (), 1u);
-        const auto &received = claim->records.front ();
+        const auto &received = (*claim->records.front ());
         const auto bytes = protocol::message_bytes (received.parts.front ());
         if (actor) {
             const auto header = protocol::decode_actor_message_header (
@@ -1153,7 +1153,7 @@ TEST (FrameworkRelocationSealContract, native_follow_increments_wire_hop_and_sto
             }
             ASSERT_TRUE (unexpected);
             if (request)
-                ASSERT_TRUE (target.reply (unexpected->records.front (), payload));
+                ASSERT_TRUE (target.reply ((*unexpected->records.front ()), payload));
             target.mailbox ().release (*unexpected);
         }
     }
@@ -1179,8 +1179,8 @@ TEST (FrameworkRelocationSealContract, exhausted_follow_request_settles_original
     header.correlation = 901;
     header.message_follow_hop_count = 8;
     auto accepted = std::make_shared<runtime::serial_application_record_t> ();
-    accepted->payload.emplace ();
-    accepted->payload->application_record = stateful::accepted_actor_record (
+    accepted->payload ().emplace ();
+    accepted->payload ()->application_record = stateful::accepted_actor_record (
       header, {"producer", 3, {1}, 1}, {"payload", "application/json", {1}}, true);
     int terminals = 0;
     ASSERT_EQ (dispatch.accept_local (owner, accepted, {},

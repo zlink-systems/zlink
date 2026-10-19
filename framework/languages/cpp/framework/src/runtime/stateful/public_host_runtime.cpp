@@ -121,14 +121,16 @@ void report_stateful_dispatch_error (
         else
             event.spot_id = delivery.owner.key;
         try {
-            const auto &turn = accepted && accepted->payload ? *accepted->payload : delivery.turn;
+            const auto *identity = accepted ? accepted->identity () : nullptr;
+            const auto &turn = identity ? *identity : delivery.turn;
             stateful::with_accepted_application (turn, [&] (auto, const auto &application) {
                 event.packet_name = application.packet_name;
                 event.flow_id = application.flow_id;
                 event.flow_origin = application.flow_origin;
-                const auto header = messaging::envelope_codec_t{}.decode_header (
-                  messaging::message_parts_t (protocol::decode_application_parts (application)),
-                  true);
+                const auto header_part = identity
+                                           ? accepted->application_header ()
+                                           : protocol::decode_application_header (application);
+                const auto header = messaging::envelope_codec_t{}.decode_header (header_part, true);
                 if (header) {
                     event.packet_name = header.value ().message_name;
                     event.correlation_id = header.value ().correlation_id;
@@ -417,7 +419,7 @@ zlink::submit_result_t submitted (bool accepted)
     return accepted ? zlink::submit_result_t::ok : zlink::submit_result_t::not_connected;
 }
 
-record_kind_t record_kind (protocol::command command)
+std::optional<record_kind_t> record_kind (protocol::command command)
 {
     switch (command) {
         case protocol::command::nodeSend:
@@ -437,7 +439,7 @@ record_kind_t record_kind (protocol::command command)
         case protocol::command::actorRequest:
             return record_kind_t::actor_request;
         default:
-            throw protocol::service_wire_error_t ("mailbox record is not application messaging");
+            return std::nullopt;
     }
 }
 
@@ -547,54 +549,6 @@ public_fence (const protocol::user_spot_reservation_fence_t &wire,
        spot_type_capacity_delta_t{placement_object_kind_t::user_spot, stable_type,
                                   wire.pending_capacity_delta}}};
 }
-
-class application_claim_release_state_t
-{
-  public:
-    application_claim_release_state_t (std::size_t record_count,
-                                       std::function<void ()> release_claim) :
-        _remaining (record_count),
-        _records (record_count),
-        _release_claim (std::move (release_claim))
-    {
-    }
-
-    void retain (std::size_t index) noexcept
-    {
-        _records[index].retained.store (true, std::memory_order_release);
-    }
-
-    bool retained (std::size_t index) const noexcept
-    {
-        return _records[index].retained.load (std::memory_order_acquire);
-    }
-
-    void release (std::size_t index)
-    {
-        if (!_records[index].released.exchange (true, std::memory_order_acq_rel))
-            release_records (1);
-    }
-
-    void release_records (std::size_t count)
-    {
-        if (count == 0)
-            return;
-        const auto previous = _remaining.fetch_sub (count, std::memory_order_acq_rel);
-        if (previous == count)
-            _release_claim ();
-    }
-
-  private:
-    struct record_state_t
-    {
-        std::atomic_bool retained{false};
-        std::atomic_bool released{false};
-    };
-
-    std::atomic_size_t _remaining;
-    std::vector<record_state_t> _records;
-    std::function<void ()> _release_claim;
-};
 
 } // namespace
 
@@ -5530,7 +5484,11 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
              mesh::service_mailbox_domain_t::infrastructure,
              dispatch_limits::receive_batch_messages, dispatch_limits::receive_batch_bytes)) {
         load_configuration ();
-        for (auto &mailbox_record : claim->records) {
+        for (auto &slot : claim->records) {
+            auto original = _transport->mailbox ().take (slot);
+            if (!original)
+                continue;
+            auto &mailbox_record = *original;
             std::size_t record_bytes = 0;
             for (const auto &part : mailbox_record.parts)
                 record_bytes =
@@ -6912,7 +6870,7 @@ bool public_host_runtime_t::claim_stateful_owner (
                 application_record = std::make_shared<runtime::serial_application_record_t> ();
             }
             application_record->admission.jobs = _options.mesh.application_jobs;
-            application_record->payload = std::move (delivery->turn);
+            application_record->payload () = std::move (delivery->turn);
             application_record->transferred = [weak = weak_from_this (), owner = delivery->owner,
                                                sequence] {
                 if (const auto host = weak.lock ()) {
@@ -7005,26 +6963,97 @@ task_t<std::size_t> public_host_runtime_t::dispatch_application_claim (
   const std::function<void (
     const ready_record_t &, const receive_record_t &, std::vector<zlink::message_t>)> dispatch)
 {
+    enum class input_t
+    {
+        wire,
+        local,
+        accepted
+    };
+    struct query_t
+    {
+        std::string owner;
+        std::optional<record_kind_t> kind;
+        input_t input;
+    };
     std::size_t count = 0;
     trace_mesh_host ("mailbox-claim",
                      std::string ("records=") + std::to_string (claim.records.size ()));
     auto claim_holder = std::make_shared<mesh::service_mailbox_claim_t> (std::move (claim));
-    auto release_state = std::make_shared<application_claim_release_state_t> (
-      claim_holder->records.size (), [weak = weak_from_this (), claim_holder] {
-          if (const auto host = weak.lock ())
-              (void) host->_transport->mailbox ().release (*claim_holder);
-      });
+    std::shared_ptr<std::vector<std::atomic_bool>> retained_states;
     for (std::size_t index = 0; index < claim_holder->records.size (); ++index) {
-        auto &mailbox_record = claim_holder->records[index];
-        const auto retain_mailbox_reservation = [release_state, index] {
-            release_state->retain (index);
-        };
-        const auto release_mailbox_reservation = [release_state, index] {
-            release_state->release (index);
-        };
+        const auto slot = claim_holder->records[index];
+        std::atomic_bool *retained_reservation = nullptr;
+        std::function<void ()> release_mailbox_reservation;
+        std::function<void ()> retain_mailbox_reservation;
         std::variant<std::monostate, messaging::request_wire_failure_t, std::exception_ptr>
           rejection;
+        std::optional<mesh::service_mailbox_record_t> original;
         try {
+            auto query = _transport->mailbox ().prepare (slot, [] (const auto &original) {
+                if (original.application)
+                    return query_t{original.owner, original.application->record.kind,
+                                   original.application->record.application_record
+                                     ? input_t::accepted
+                                     : input_t::local};
+                return query_t{original.owner,
+                               record_kind (protocol::decode_header (
+                                              protocol::message_bytes (original.parts.front ()))
+                                              .kind),
+                               input_t::wire};
+            });
+            if (!query)
+                continue;
+            if (_stateful_dispatch && query->kind && is_stateful_application (*query->kind)
+                && query->input == input_t::wire) {
+                std::optional<stateful::object_ref_t> native_owner;
+                std::optional<stateful::retained_relocation_source_t> retained;
+                if (query->owner.starts_with (detail::activation_admission_t::actor_key_prefix))
+                    native_owner =
+                      _objects.find (stateful::object_kind_t::actor,
+                                     query->owner.substr (
+                                       detail::activation_admission_t::actor_key_prefix.size ()),
+                                     std::nullopt, &retained);
+                else if (query->owner.starts_with (
+                           detail::activation_admission_t::spot_key_prefix)) {
+                    const auto key =
+                      query->owner.substr (detail::activation_admission_t::spot_key_prefix.size ());
+                    native_owner = _objects.find (stateful::object_kind_t::user_spot, key,
+                                                  std::nullopt, &retained);
+                    if (!native_owner)
+                        native_owner = _objects.find (stateful::object_kind_t::instance_spot, key,
+                                                      std::nullopt, &retained);
+                }
+                if (native_owner) {
+                    const auto accepted = co_await _stateful_dispatch->ingest_claimed (
+                      *native_owner, slot, std::move (retained));
+                    if (accepted == stateful::stateful_error_t::none)
+                        (void) co_await dispatch_stateful_owner (*native_owner, dispatch);
+                    _transport->signal_activity ();
+                    ++count;
+                    continue;
+                }
+            }
+            if (_stateful_dispatch && query->kind && is_stateful_application (*query->kind)
+                && query->input == input_t::local) {
+                const auto object = co_await accept_local_application (slot, original);
+                if (object) {
+                    (void) co_await dispatch_stateful_owner (*object, dispatch);
+                    ++count;
+                }
+                continue;
+            }
+            original = _transport->mailbox ().take (slot);
+            if (!original)
+                continue;
+            auto &mailbox_record = *original;
+            if (!retained_states)
+                retained_states =
+                  std::make_shared<std::vector<std::atomic_bool>> (claim_holder->records.size ());
+            retained_reservation = &(*retained_states)[index];
+            release_mailbox_reservation = std::exchange (mailbox_record.transferred, {});
+            retain_mailbox_reservation = [states = retained_states, index] {
+                (*states)[index].store (true, std::memory_order_release);
+            };
             if (mailbox_record.application) {
                 auto application = std::move (*mailbox_record.application);
                 application.record.before_application_handler =
@@ -7032,15 +7061,9 @@ task_t<std::size_t> public_host_runtime_t::dispatch_application_claim (
                 application.record.release_mailbox_reservation = release_mailbox_reservation;
                 application.record.retain_mailbox_reservation = retain_mailbox_reservation;
                 application.record.transferred_owner_byte_cost = claim_holder->record_bytes[index];
-                if (_stateful_dispatch && is_stateful_application (application.record.kind)
-                    && !application.record.application_record) {
-                    const auto object = co_await accept_local_application (std::move (application));
-                    (void) co_await dispatch_stateful_owner (object, dispatch);
-                } else {
-                    dispatch (application.owner, application.record, std::move (application.parts));
-                }
+                dispatch (application.owner, application.record, std::move (application.parts));
                 ++count;
-                if (!release_state->retained (index))
+                if (!retained_reservation->load (std::memory_order_acquire))
                     release_mailbox_reservation ();
                 continue;
             }
@@ -7074,7 +7097,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_application_claim (
                 detail::observe_task_completion (
                   *pending, [self = shared_from_this (), pending] (const result_t<void> &) {});
                 ++count;
-                if (!release_state->retained (index))
+                if (!retained_reservation->load (std::memory_order_acquire))
                     release_mailbox_reservation ();
                 continue;
             }
@@ -7085,42 +7108,14 @@ task_t<std::size_t> public_host_runtime_t::dispatch_application_claim (
                 mailbox_record.before_application_handler = {};
                 (void) dispatch_bound_session_send (mailbox_record);
                 ++count;
-                if (!release_state->retained (index))
+                if (!retained_reservation->load (std::memory_order_acquire))
                     release_mailbox_reservation ();
                 continue;
             }
-            const auto kind = record_kind (wire.kind);
-            if (_stateful_dispatch && is_stateful_application (kind)) {
-                std::optional<stateful::object_ref_t> native_owner;
-                std::optional<stateful::retained_relocation_source_t> retained;
-                if (mailbox_record.owner.starts_with (
-                      detail::activation_admission_t::actor_key_prefix))
-                    native_owner =
-                      _objects.find (stateful::object_kind_t::actor,
-                                     mailbox_record.owner.substr (
-                                       detail::activation_admission_t::actor_key_prefix.size ()),
-                                     std::nullopt, &retained);
-                else if (mailbox_record.owner.starts_with (
-                           detail::activation_admission_t::spot_key_prefix)) {
-                    const auto key = mailbox_record.owner.substr (
-                      detail::activation_admission_t::spot_key_prefix.size ());
-                    native_owner = _objects.find (stateful::object_kind_t::user_spot, key,
-                                                  std::nullopt, &retained);
-                    if (!native_owner)
-                        native_owner = _objects.find (stateful::object_kind_t::instance_spot, key,
-                                                      std::nullopt, &retained);
-                }
-                if (native_owner) {
-                    retain_mailbox_reservation ();
-                    (void) co_await _stateful_dispatch->ingest_claimed (
-                      *native_owner, std::move (mailbox_record),
-                      std::function<void ()> (release_mailbox_reservation), std::move (retained));
-                    (void) co_await dispatch_stateful_owner (*native_owner, dispatch);
-                    _transport->signal_activity ();
-                    ++count;
-                    continue;
-                }
-            }
+            if (!query->kind)
+                throw protocol::service_wire_error_t (
+                  "mailbox record is not application messaging");
+            const auto kind = *query->kind;
             ready_record_t owner;
             owner.domain = ready_domain_t::application;
             receive_record_t record;
@@ -7137,9 +7132,15 @@ task_t<std::size_t> public_host_runtime_t::dispatch_application_claim (
                                        *mailbox_record.correlation};
             }
             if (is_request (kind)) {
-                record.reply_token = {
-                  weak_from_this (),
-                  std::shared_ptr<mesh::service_mailbox_record_t> (claim_holder, &mailbox_record)};
+                record.reply_token = {weak_from_this (), [&] {
+                                          auto reply =
+                                            std::make_shared<mesh::service_mailbox_record_t> ();
+                                          reply->source_routing_id =
+                                            mailbox_record.source_routing_id;
+                                          reply->reply_token = mailbox_record.reply_token;
+                                          reply->correlation = mailbox_record.correlation;
+                                          return reply;
+                                      }()};
             }
             if (kind == record_kind_t::channel_send || kind == record_kind_t::channel_request) {
                 owner.owner_kind = owner_kind_t::channel;
@@ -7208,8 +7209,12 @@ task_t<std::size_t> public_host_runtime_t::dispatch_application_claim (
               static_cast<std::uint32_t> (protocol::framework_error_code::requestProtocolError)};
         }
         catch (const framework_exception_t &error) {
+            if (!original)
+                original = _transport->mailbox ().take (slot);
             const auto failure = messaging::request_failure_mapper_t{}.target_failure_reply (error);
-            if (failure && !release_state->retained (index))
+            if (failure && original
+                && (!retained_reservation
+                    || !retained_reservation->load (std::memory_order_acquire)))
                 rejection = *failure;
             else
                 rejection = std::current_exception ();
@@ -7218,16 +7223,31 @@ task_t<std::size_t> public_host_runtime_t::dispatch_application_claim (
             rejection = std::current_exception ();
         }
         if (const auto unhandled = std::get_if<std::exception_ptr> (&rejection)) {
-            release_mailbox_reservation ();
-            release_state->release_records (claim_holder->records.size () - index - 1);
+            if (release_mailbox_reservation)
+                release_mailbox_reservation ();
+            for (std::size_t remaining = index; remaining < claim_holder->records.size ();
+                 ++remaining) {
+                if (auto abandoned = _transport->mailbox ().take (claim_holder->records[remaining]))
+                    if (abandoned->transferred)
+                        abandoned->transferred ();
+            }
             std::rethrow_exception (*unhandled);
         }
+        if (!original)
+            original = _transport->mailbox ().take (slot);
+        if (!original)
+            continue;
+        auto &mailbox_record = *original;
+        if (!release_mailbox_reservation)
+            release_mailbox_reservation = std::exchange (mailbox_record.transferred, {});
         const auto failure = std::get_if<messaging::request_wire_failure_t> (&rejection);
         if (failure && !mailbox_record.source_routing_id.empty () && mailbox_record.correlation)
             (void) _transport->reply_failure (mailbox_record, failure->terminal_result,
                                               failure->failure_code);
-        if (failure || !release_state->retained (index))
-            release_mailbox_reservation ();
+        if (failure
+            || (!retained_reservation || !retained_reservation->load (std::memory_order_acquire)))
+            if (release_mailbox_reservation)
+                release_mailbox_reservation ();
     }
     co_return count;
 }
@@ -7726,9 +7746,29 @@ void public_host_runtime_t::publish_local_application (local_application_dispatc
         throw protocol::service_wire_error_t ("local application mailbox is closed");
 }
 
-task_t<stateful::object_ref_t>
-public_host_runtime_t::accept_local_application (local_application_dispatch_t dispatch)
+task_t<std::optional<stateful::object_ref_t>> public_host_runtime_t::accept_local_application (
+  mesh::service_mailbox_t::claim_handle_t slot,
+  std::optional<mesh::service_mailbox_record_t> &original)
 {
+    auto query = _transport->mailbox ().prepare (slot, [] (const auto &original) {
+        local_application_dispatch_t query;
+        const auto &application = *original.application;
+        query.owner = application.owner;
+        query.record.kind = application.record.kind;
+        query.record.actor_route = application.record.actor_route;
+        query.record.spot_route = application.record.spot_route;
+        query.record.operation_id = application.record.operation_id;
+        query.record.reply_route_id = application.record.reply_route_id;
+        query.record.source_node_rid = application.record.source_node_rid;
+        query.record.source_session_rid = application.record.source_session_rid;
+        query.record.source_binding_generation = application.record.source_binding_generation;
+        query.record.source_session_sequence = application.record.source_session_sequence;
+        query.source_spot_id = application.source_spot_id;
+        return query;
+    });
+    if (!query)
+        co_return std::nullopt;
+    auto dispatch = std::move (*query);
     const bool actor = is_actor_application (dispatch.record.kind);
     std::optional<stateful::retained_relocation_source_t> retained;
     const auto owner = actor
@@ -7772,19 +7812,27 @@ public_host_runtime_t::accept_local_application (local_application_dispatch_t di
                 _options.mesh.descriptor.lifecycle_generation, std::move (retained));
       },
       header);
-    if (validation != stateful::stateful_error_t::none)
+    original = _transport->mailbox ().take (slot);
+    if (!original)
+        co_return std::nullopt;
+    dispatch = std::move (*original->application);
+    dispatch.record.before_application_handler = std::move (original->before_application_handler);
+    runtime::serial_application_admission_t reservation;
+    reservation.retain_initial (std::exchange (original->transferred, {}));
+    if (validation != stateful::stateful_error_t::none) {
         throw framework_exception_t (validation == stateful::stateful_error_t::generation_stale
                                        ? framework_error_kind_t::invalid_operation
                                        : framework_error_kind_t::unavailable,
                                      "local accepted object source authority is unavailable");
+    }
     co_await _local_dispatch_completion_lane.run_task (
       [this, owner, header = std::move (header), authority,
        dispatch = std::move (dispatch)] () mutable {
           dispatch.record.application_record =
             std::make_shared<runtime::serial_application_record_t> ();
           dispatch.record.application_record->admission.jobs = _options.mesh.application_jobs;
-          dispatch.record.application_record->payload.emplace ();
-          dispatch.record.application_record->payload->application_record = std::visit (
+          dispatch.record.application_record->payload ().emplace ();
+          dispatch.record.application_record->payload ()->application_record = std::visit (
             [&] (auto &value) {
                 value.target.owner_lease_generation = authority->target_owner_lease_generation;
                 if constexpr (std::is_same_v<std::decay_t<decltype (value)>,

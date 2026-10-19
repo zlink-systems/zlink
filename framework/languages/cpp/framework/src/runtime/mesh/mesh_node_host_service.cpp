@@ -2776,7 +2776,7 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                                   application_dispatch_terminal_owner_t terminal (
                                     node, record.complete_stateful_dispatch, {});
                                   auto parts = stateful::with_accepted_application (
-                                    *record.application_record->payload,
+                                    *record.application_record->payload (),
                                     [] (auto, const auto &application) {
                                         return protocol::decode_application_parts (application);
                                     });

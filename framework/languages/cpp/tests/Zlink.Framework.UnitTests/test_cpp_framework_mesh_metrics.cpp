@@ -436,7 +436,7 @@ void complete_remote_request (mesh::raw_mesh_node_owner_t &source,
     const labels_t inflight_labels{{"mesh_name", "metrics-requests"}, {"surface", surface}};
     require_metric (provider, "zlink.mesh_node.requests.inflight", "updown", "{request}",
                     inflight_labels, 1);
-    require (reply (claim->records.front ()), surface + " request reply failed");
+    require (reply ((*claim->records.front ())), surface + " request reply failed");
     require (target.mailbox ().release (*claim), surface + " request mailbox release failed");
 
     const auto deadline = std::chrono::steady_clock::now () + 2s;
@@ -578,8 +578,8 @@ void verify_request_metrics_all_surfaces_and_late_reply ()
              "failed instance activation was not delivered");
     require_metric (provider, "zlink.mesh_node.requests.inflight", "updown", "{request}",
                     {{"mesh_name", "metrics-requests"}, {"surface", "instance_spot"}}, 1);
-    require (target.reply_instance_spot_activation (failed_activation_claim->records.front (), 104,
-                                                    16, std::nullopt),
+    require (target.reply_instance_spot_activation ((*failed_activation_claim->records.front ()),
+                                                    104, 16, std::nullopt),
              "failed instance activation reply could not be sent");
     require (target.mailbox ().release (*failed_activation_claim),
              "failed instance activation mailbox release failed");
@@ -636,7 +636,7 @@ void verify_request_metrics_all_surfaces_and_late_reply ()
     require_metric (provider, "zlink.mesh_node.requests.inflight", "updown", "{request}",
                     {{"mesh_name", "metrics-requests"}, {"surface", "node"}}, 1);
     require (target.reply_failure (
-               failed_claim->records.front (),
+               (*failed_claim->records.front ()),
                static_cast<std::uint32_t> (protocol::request_terminal_result::internalError),
                static_cast<std::uint32_t> (protocol::framework_error_code::requestFailed)),
              "failed request reply could not be sent");
@@ -694,7 +694,7 @@ void verify_request_metrics_all_surfaces_and_late_reply ()
     require_metric (provider, "zlink.mesh_node.request.timeouts", "counter", "{request}",
                     {{"mesh_name", "metrics-requests"}, {"surface", "node"}}, 1);
 
-    require (target.reply (late_claim->records.front (), reply_payload),
+    require (target.reply ((*late_claim->records.front ()), reply_payload),
              "late reply could not be sent");
     require (target.mailbox ().release (*late_claim), "late request mailbox release failed");
 
@@ -715,7 +715,7 @@ void verify_request_metrics_all_surfaces_and_late_reply ()
              "wire timeout request was not delivered");
     require_metric (provider, "zlink.mesh_node.requests.inflight", "updown", "{request}",
                     {{"mesh_name", "metrics-requests"}, {"surface", "node"}}, 1);
-    require (target.reply_failure (wire_timeout_claim->records.front (), 101, 0),
+    require (target.reply_failure ((*wire_timeout_claim->records.front ()), 101, 0),
              "wire timeout reply could not be sent");
     require (target.mailbox ().release (*wire_timeout_claim),
              "wire timeout mailbox release failed");

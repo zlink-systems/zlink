@@ -5070,7 +5070,7 @@ void test_cutover_replays_over_selected_network_route (test_context_t &test)
                           continue;
                       }
                       const auto control = protocol::decode_relocation_control (
-                        protocol::message_bytes (claim->records.front ().parts.front ()));
+                        protocol::message_bytes (claim->records.front ()->parts.front ()));
                       if (const auto *data = std::get_if<protocol::relocation_data_t> (&control)) {
                           received_batch.push_back (protocol::encode_relocation_control (*data));
                       } else {

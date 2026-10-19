@@ -47,6 +47,7 @@ struct service_mailbox_record_t
     std::function<void ()> before_application_handler;
     std::shared_ptr<host::local_application_dispatch_t> application;
     messaging::envelope_header_t envelope_header;
+    std::function<void ()> transferred;
 };
 
 struct service_mailbox_claim_t
@@ -54,7 +55,7 @@ struct service_mailbox_claim_t
     std::string owner;
     service_mailbox_domain_t domain;
     std::uint64_t serial;
-    std::vector<service_mailbox_record_t> records;
+    std::vector<std::shared_ptr<service_mailbox_record_t>> records;
     std::vector<std::size_t> record_bytes;
     std::size_t claimed_messages = 0;
     std::size_t claimed_bytes = 0;
@@ -64,6 +65,8 @@ class service_mailbox_t
 {
   public:
     service_mailbox_t () = default;
+    service_mailbox_t (const service_mailbox_t &) = delete;
+    service_mailbox_t &operator= (const service_mailbox_t &) = delete;
 
     static std::string application_owner (host::owner_kind_t kind, std::string_view id = {});
     static std::string application_owner (const host::ready_record_t &owner);
@@ -95,6 +98,18 @@ class service_mailbox_t
                                                             const std::string &owner,
                                                             std::size_t message_budget,
                                                             std::size_t byte_budget);
+    using claim_handle_t = std::shared_ptr<service_mailbox_record_t>;
+    // Query preparation and original transfer share the existing producer boundary.
+    template <class Prepare>
+    auto prepare (const claim_handle_t &handle, Prepare prepare) const
+      -> std::optional<std::invoke_result_t<Prepare, const service_mailbox_record_t &>>
+    {
+        std::lock_guard lock (_state->mutex);
+        if (!handle || (handle->parts.empty () && !handle->application))
+            return std::nullopt;
+        return prepare (*handle);
+    }
+    std::optional<service_mailbox_record_t> take (const claim_handle_t &handle);
     bool release (const service_mailbox_claim_t &claim);
     void close ();
 
@@ -112,7 +127,7 @@ class service_mailbox_t
 
     struct owner_queue_t
     {
-        std::deque<service_mailbox_record_t> records;
+        std::deque<std::shared_ptr<service_mailbox_record_t>> records;
         std::size_t messages = 0;
         std::size_t bytes = 0;
         std::size_t active_messages = 0;
@@ -143,15 +158,28 @@ class service_mailbox_t
 
     void notify_application_ready ();
 
-    mutable std::mutex _mutex;
-    domain_t _application;
-    domain_t _infrastructure;
-    std::uint64_t _next_claim_serial = 1;
-    bool _closed = false;
-    application_prepare_t _application_prepare;
-    application_ready_t _application_ready;
-    stateful_ready_t _stateful_ready;
-    bool _application_receive_turn = false;
+    struct state_t
+    {
+        mutable std::mutex mutex;
+        domain_t application;
+        domain_t infrastructure;
+        std::uint64_t next_claim_serial = 1;
+        bool closed = false;
+        application_prepare_t application_prepare;
+        application_ready_t application_ready;
+        stateful_ready_t stateful_ready;
+        bool application_receive_turn = false;
+    };
+    static bool release_owned (const std::shared_ptr<state_t> &state,
+                               const service_mailbox_claim_t &claim);
+    static bool release_record (const std::shared_ptr<state_t> &state,
+                                service_mailbox_domain_t domain,
+                                const std::string &owner,
+                                std::uint64_t serial,
+                                const claim_handle_t &slot,
+                                std::size_t bytes);
+    static void notify_application_ready_owned (const std::shared_ptr<state_t> &state);
+    std::shared_ptr<state_t> _state = std::make_shared<state_t> ();
 };
 
 inline std::string service_mailbox_t::application_owner (const host::ready_record_t &owner)

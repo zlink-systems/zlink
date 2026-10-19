@@ -85,6 +85,14 @@ namespace zlink::framework::runtime::host
 // Reproduce a superseded assembly at the activation boundary without timing races.
 struct public_host_runtime_test_access_t
 {
+    static task_t<std::size_t>
+    dispatch_claim (public_host_runtime_t &host,
+                    mesh::service_mailbox_claim_t claim,
+                    const mesh::service_mailbox_t::application_dispatch_t &dispatch)
+    {
+        return host.dispatch_application_claim (std::move (claim), dispatch);
+    }
+
     static std::array<std::size_t, 3> spot_records (public_host_runtime_t &host)
     {
         return stateful::raw_stateful_dispatch_test_access_t::spot_records (
@@ -1406,9 +1414,9 @@ void local_join_backlog (backlog_case_t scenario)
         std::vector<std::pair<std::uint64_t, std::uint64_t>> durable_operations;
         for (const auto &packet : backlog) {
             ASSERT_TRUE (packet.application_record);
-            ASSERT_TRUE (packet.application_record->payload);
+            ASSERT_TRUE (packet.application_record->payload ());
             EXPECT_TRUE (packet.application_record->saved_work ());
-            const auto &turn = *packet.application_record->payload;
+            const auto &turn = *packet.application_record->payload ();
             ASSERT_TRUE (turn.application_record || turn.frozen_record);
             const auto canonical = turn.application_record
                                      ? fw::runtime::protocol::summarize_frozen_application_record (
@@ -1707,7 +1715,9 @@ struct native_intake_fixture_t
     std::vector<std::uint8_t> rid = zlink::routing_id_t::from ("intake-boundary").to_bytes ();
     fw::runtime::stateful::accepted_record_authority_resolver_t resolver;
     std::shared_ptr<fw::runtime::host::public_host_runtime_t> host;
-    explicit native_intake_fixture_t (fw::dispatch_options_t dispatch = {})
+    explicit native_intake_fixture_t (
+      fw::dispatch_options_t dispatch = {},
+      fw::runtime::stateful::accepted_record_authority_resolver_t authority = {})
     {
         fw::runtime::host::host_options_t options;
         options.mesh.descriptor = {mesh_name,
@@ -1728,7 +1738,10 @@ struct native_intake_fixture_t
                     lease] (fw::runtime::stateful::accepted_record_authority_query_t query) {
             return host->accepted_record_authority (std::move (query), lease);
         };
-        host->configure_stateful_dispatch ([lease] { return lease; });
+        if (authority)
+            host->configure_stateful_dispatch (std::move (authority));
+        else
+            host->configure_stateful_dispatch ([lease] { return lease; });
         auto peer = host->transport ().topology ().local_descriptor ();
         peer.node_routing_id = zlink::routing_id_t::from (source_id).to_bytes ();
         peer.advertised_endpoint = "tcp://127.0.0.1:1";
@@ -1818,7 +1831,9 @@ TEST (NativeIntake, CoordinatorAdmissionReturnsNativeClaimWithoutLaneReentry)
     st::raw_stateful_dispatch_t raw (objects, fixture.host->transport (), fixture.resolver);
     ASSERT_EQ (st::stateful_error_t::none,
                raw
-                 .ingest_claimed (object, fixture.actor_record (1), std::function<void ()> ([] {}),
+                 .ingest_claimed (object,
+                                  fw::test::publish_stateful_claim (
+                                    fixture.host->transport (), object, fixture.actor_record (1)),
                                   fw::test::retained_ingress_snapshot (objects, object))
                  .result ()
                  .value ());
@@ -2071,6 +2086,127 @@ TEST (NativeIntake, LocalAcceptedRecordReleasesAfterNativeTerminal)
     EXPECT_TRUE (accepted.expired ());
 }
 
+TEST (NativeIntake, LocalSourceAwaitKeepsCanonicalOriginalAndIgnoresStaleCompletion)
+{
+    namespace rt = fw::runtime;
+    namespace st = rt::stateful;
+    fw::task_completion_source_t<std::optional<st::accepted_record_authority_t>> authority;
+    int queries = 0;
+    std::vector<std::uint8_t> observed_source;
+    native_intake_fixture_t fixture ({}, [&] (st::accepted_record_authority_query_t query) {
+        ++queries;
+        observed_source = query.source_node_routing_id;
+        return authority.task ();
+    });
+    struct release_t
+    {
+        fw::task_completion_source_t<std::optional<st::accepted_record_authority_t>> &source;
+        ~release_t ()
+        {
+            source.complete (
+              fw::result_t<std::optional<st::accepted_record_authority_t>>::success (std::nullopt));
+        }
+    } release{authority};
+    auto host = fixture.host;
+    auto actor = host->create_actor (actor_type, actor_id);
+    auto wire = fixture.actor_record (1);
+    auto parts = rt::protocol::decode_application_parts (std::move (wire.parts.back ()));
+    ASSERT_TRUE (actor.send_to (actor.ref (), parts).result ());
+    auto &mailbox = host->transport ().mailbox ();
+    const auto key =
+      rt::mesh::service_mailbox_t::application_owner (rt::host::owner_kind_t::actor, actor_id);
+    auto claim =
+      mailbox.try_claim_owner (rt::mesh::service_mailbox_domain_t::application, key, 1, 4096);
+    ASSERT_TRUE (claim);
+    auto old = *claim;
+    int dispatched = 0;
+    auto pending = rt::host::public_host_runtime_test_access_t::dispatch_claim (
+      *host, std::move (*claim), [&] (const auto &, const auto &record, auto) {
+          ++dispatched;
+          ASSERT_TRUE (record.complete_stateful_dispatch);
+          record.complete_stateful_dispatch ();
+      });
+    ASSERT_EQ (queries, 1);
+    EXPECT_EQ (observed_source, fixture.rid);
+    ASSERT_FALSE (pending.await_ready ());
+    auto sealed = mailbox.take (old.records.front ());
+    ASSERT_TRUE (sealed);
+    ASSERT_TRUE (sealed->application);
+    EXPECT_EQ (sealed->application->parts.size (), parts.size ());
+    ASSERT_TRUE (mailbox.release (old));
+    ASSERT_TRUE (mailbox.try_enqueue (std::move (*sealed)));
+    authority.complete (fw::result_t<std::optional<st::accepted_record_authority_t>>::success (
+      st::accepted_record_authority_t{{fixture.source_id, 1, fixture.rid, 1}, 1}));
+    ASSERT_EQ (pending.result ().value (), 0u);
+    EXPECT_EQ (dispatched, 0);
+    EXPECT_EQ (queries, 1);
+    EXPECT_FALSE (mailbox.take (old.records.front ()));
+    EXPECT_FALSE (mailbox.release (old));
+    auto restored =
+      mailbox.try_claim_owner (rt::mesh::service_mailbox_domain_t::application, key, 1, 4096);
+    ASSERT_TRUE (restored);
+    EXPECT_EQ (rt::host::public_host_runtime_test_access_t::dispatch_claim (
+                 *host, std::move (*restored),
+                 [&] (const auto &, const auto &record, auto) {
+                     ++dispatched;
+                     ASSERT_TRUE (record.complete_stateful_dispatch);
+                     record.complete_stateful_dispatch ();
+                 })
+                 .result ()
+                 .value (),
+               1u);
+    EXPECT_EQ (dispatched, 1);
+    EXPECT_EQ (queries, 2);
+    host->close ();
+}
+
+TEST (NativeIntake, LocalSourceRejectionSettlesOnlyOwnedOriginal)
+{
+    namespace rt = fw::runtime;
+    namespace st = rt::stateful;
+    native_intake_fixture_t fixture ({}, [] (st::accepted_record_authority_query_t) {
+        return fw::task_t<std::optional<st::accepted_record_authority_t>> (
+          fw::result_t<std::optional<st::accepted_record_authority_t>>::success (std::nullopt));
+    });
+    auto host = fixture.host;
+    auto actor = host->create_actor (actor_type, actor_id);
+    auto wire = fixture.actor_record (1);
+    auto parts = rt::protocol::decode_application_parts (std::move (wire.parts.back ()));
+    rt::host::pending_operation_t operation;
+    ASSERT_EQ (
+      actor.request_to (actor.ref (), parts, operation, zlink::send_flags_t::none, wait_budget)
+        .result ()
+        .value (),
+      zlink::submit_result_t::ok);
+    auto &mailbox = host->transport ().mailbox ();
+    auto claim = mailbox.try_claim_owner (
+      rt::mesh::service_mailbox_domain_t::application,
+      rt::mesh::service_mailbox_t::application_owner (rt::host::owner_kind_t::actor, actor_id), 1,
+      4096);
+    ASSERT_TRUE (claim);
+    const auto old = *claim;
+    int dispatched = 0;
+    ASSERT_EQ (
+      rt::host::public_host_runtime_test_access_t::dispatch_claim (
+        *host, std::move (*claim), [&] (const auto &, const auto &, auto) { ++dispatched; })
+        .result ()
+        .value (),
+      0u);
+    EXPECT_EQ (dispatched, 0);
+    EXPECT_FALSE (host->transport ().operation_pending (operation.id));
+    auto terminal = operation.completion->task ();
+    auto observed = std::make_shared<std::promise<bool>> ();
+    auto ready = observed->get_future ();
+    fw::detail::observe_task_completion (terminal, [observed] (const auto &result) {
+        observed->set_value (static_cast<bool> (result));
+    });
+    ASSERT_EQ (ready.wait_for (wait_budget), std::future_status::ready);
+    EXPECT_FALSE (ready.get ());
+    EXPECT_FALSE (mailbox.take (old.records.front ()));
+    EXPECT_FALSE (mailbox.release (old));
+    host->close ();
+}
+
 TEST (NativeIntake, CanonicalAdmissionReportsOnlyActualSuccessWhenEnabled)
 {
     namespace rt = fw::runtime;
@@ -2096,21 +2232,26 @@ TEST (NativeIntake, CanonicalAdmissionReportsOnlyActualSuccessWhenEnabled)
         ASSERT_EQ (host->objects ().commit_create (created.attempt), st::stateful_error_t::none);
         st::raw_stateful_dispatch_t raw (host->objects (), host->transport (), fixture.resolver);
         int releases = 0;
-        const auto ingest = [&] (auto record, const st::object_ref_t &target) {
+        std::vector<rt::mesh::service_mailbox_record_t> records;
+        records.push_back (fixture.actor_record (1, 2));
+        records.push_back (fixture.actor_record (2));
+        records.push_back (fixture.actor_record (3));
+        auto claim = fw::test::publish_stateful_claims (host->transport (), object,
+                                                        std::move (records), [&] { ++releases; });
+        const auto ingest = [&] (auto slot, const st::object_ref_t &target) {
             const auto result =
               raw
-                .ingest_claimed (target, std::move (record),
-                                 std::function<void ()> ([&] { ++releases; }),
+                .ingest_claimed (target, std::move (slot),
                                  fw::test::retained_ingress_snapshot (host->objects (), target))
                 .result ();
             EXPECT_TRUE (result);
             return result ? result.value () : st::stateful_error_t::invalid;
         };
-        EXPECT_NE (ingest (fixture.actor_record (1, 2), object), st::stateful_error_t::none);
+        EXPECT_NE (ingest (claim.records[0], object), st::stateful_error_t::none);
         EXPECT_EQ (releases, 1);
         EXPECT_TRUE (events.empty ());
         EXPECT_EQ (host->objects ().pending (object, st::turn_domain_t::application), 0u);
-        EXPECT_EQ (ingest (fixture.actor_record (2), object), st::stateful_error_t::none);
+        EXPECT_EQ (ingest (claim.records[1], object), st::stateful_error_t::none);
         EXPECT_EQ (events.size (), mode == fw::message_flow_log_mode_t::normal ? 1u : 0u);
         if (!events.empty ()) {
             EXPECT_EQ (events.front ().outcome, fw::message_flow_outcome_t::admitted);
@@ -2122,8 +2263,7 @@ TEST (NativeIntake, CanonicalAdmissionReportsOnlyActualSuccessWhenEnabled)
         auto stale_object = object;
         ++stale_object.object_generation;
         // The valid route/body reaches commit; the actual Kernel owner rejects enqueue.
-        EXPECT_EQ (ingest (fixture.actor_record (3), stale_object),
-                   st::stateful_error_t::generation_stale);
+        EXPECT_EQ (ingest (claim.records[2], stale_object), st::stateful_error_t::generation_stale);
         EXPECT_EQ (releases, 2);
         EXPECT_EQ (events.size (), mode == fw::message_flow_log_mode_t::normal ? 1u : 0u);
         EXPECT_EQ (host->objects ().pending (object, st::turn_domain_t::application), 1u);
@@ -2136,7 +2276,11 @@ TEST (NativeIntake, CanonicalAdmissionReportsOnlyActualSuccessWhenEnabled)
             EXPECT_EQ (raw.complete (*delivery), st::stateful_error_t::none);
         }
         EXPECT_EQ (releases, 3);
-        EXPECT_EQ (ingest (fixture.actor_record (4), object), st::stateful_error_t::none);
+        EXPECT_EQ (
+          ingest (fw::test::publish_stateful_claim (host->transport (), object,
+                                                    fixture.actor_record (4), [&] { ++releases; }),
+                  object),
+          st::stateful_error_t::none);
         auto [following_error, following] = raw.try_claim (object);
         EXPECT_EQ (following_error, st::stateful_error_t::none);
         EXPECT_TRUE (following);
@@ -2292,8 +2436,15 @@ TEST (NativeIntake, TypedControlMalformedWireAndKernelMetadata)
     EXPECT_EQ (rejected, 1u);
     st::raw_stateful_dispatch_t raw (host->objects (), host->transport (), resolver);
     int releases = 0;
+    EXPECT_THROW (mailbox.try_enqueue ({owner, mesh::service_mailbox_domain_t::application, {}}),
+                  std::invalid_argument);
+    mesh::service_mailbox_record_t invalid_accepted{
+      owner, mesh::service_mailbox_domain_t::application, {zlink::message_t::from ("invalid")}};
     EXPECT_EQ (raw
-                 .ingest_claimed (object, {}, std::function<void ()> ([&] { ++releases; }),
+                 .ingest_claimed (object,
+                                  fw::test::publish_stateful_claim (host->transport (), object,
+                                                                    std::move (invalid_accepted),
+                                                                    [&] { ++releases; }),
                                   fw::test::retained_ingress_snapshot (host->objects (), object))
                  .result ()
                  .value (),
@@ -2319,20 +2470,20 @@ TEST (NativeIntake, CanonicalPrivateFifoReturnsNativeClaimBeforeTerminal)
         fw::test::manual_internal_scheduler_t worker;
         auto queue = std::make_shared<rt::serial_execution_queue_t> (worker);
         auto record = std::make_shared<rt::serial_application_record_t> ();
-        record->payload.emplace ();
+        record->payload ().emplace ();
         wire::application_payload_t::multipart_t parts;
         parts.push_back (zlink::message_t::from ("1"));
         wire::actor_message_header_t header;
         const auto rid = zlink::routing_id_t::from (first_rid).to_bytes ();
         header.target = {actor_id, 1, rid, 1, 1, 1};
         header.operation = {1, 1};
-        record->payload->application_record = rt::stateful::accepted_actor_record (
+        record->payload ()->application_record = rt::stateful::accepted_actor_record (
           header, {"source", 1, rid, 1},
           wire::application_payload_t::from_parts (std::move (parts)), false);
         if (restored) {
-            record->payload->frozen_record =
-              wire::summarize_frozen_application_record (*record->payload->application_record);
-            record->payload->application_record.reset ();
+            record->payload ()->frozen_record =
+              wire::summarize_frozen_application_record (*record->payload ()->application_record);
+            record->payload ()->application_record.reset ();
         }
         int native_returns = 0, handlers = 0;
         record->transferred = [&] { ++native_returns; };
@@ -5280,11 +5431,11 @@ accepted_record (const std::shared_ptr<rt::application_job_queue_t> &jobs, std::
     header.operation = {1, sequence};
     header.target = {"actor", 1, routing_id, 1, 1, 1};
     auto record = std::make_shared<rt::serial_application_record_t> ();
-    record->payload.emplace ();
-    record->payload->sequence = sequence;
-    record->payload->application_payload_bytes = 2;
+    record->payload ().emplace ();
+    record->payload ()->sequence = sequence;
+    record->payload ()->application_payload_bytes = 2;
     // This isolated fixture injects the accepted authority and journal input.
-    record->payload->application_record = rt::stateful::accepted_actor_record (
+    record->payload ()->application_record = rt::stateful::accepted_actor_record (
       header, {"probe-owner", 1, routing_id, 1},
       rt::protocol::application_payload_t::from_parts (std::move (parts).take_items ()), false);
     record->admission.jobs = jobs;
@@ -5948,8 +6099,8 @@ TEST (ActorMaintenanceJoin, CanonicalReplayMaterializesBodyWithoutInvocationCach
     frozen.body = wire::frozen_actor_application_body_t{
       {}, wire::application_payload_t::from_parts (std::move (parts))};
     auto record = std::make_shared<fw::runtime::serial_application_record_t> ();
-    record->payload.emplace ();
-    record->payload->application_record = std::move (frozen);
+    record->payload ().emplace ();
+    record->payload ()->application_record = std::move (frozen);
     int terminals = 0;
     record->native_reply = [&] (auto) {
         ++terminals;
@@ -5959,7 +6110,7 @@ TEST (ActorMaintenanceJoin, CanonicalReplayMaterializesBodyWithoutInvocationCach
     packet.packet_name = record_t::packet_name;
     packet.content_type = header.content_type;
     packet.application_record = record;
-    ASSERT_FALSE (record->invocation);
+    ASSERT_FALSE (record->invocation ());
     ASSERT_TRUE (packet.payload.empty ());
     fw::detail::spot_node_runtime_t runtime (state);
     ASSERT_TRUE (fw::detail::spot_node_runtime_test_access_t::replay (
@@ -6013,8 +6164,8 @@ TEST (ActorMaintenanceJoin, MalformedCanonicalReplaySettlesNativeTerminal)
     frozen.body = wire::frozen_actor_application_body_t{
       {}, wire::application_payload_t::from_parts (std::move (parts))};
     auto record = std::make_shared<fw::runtime::serial_application_record_t> ();
-    record->payload.emplace ();
-    record->payload->application_record = std::move (frozen);
+    record->payload ().emplace ();
+    record->payload ()->application_record = std::move (frozen);
     int terminals = 0;
     record->native_reply = [&] (auto) {
         ++terminals;
@@ -6024,7 +6175,7 @@ TEST (ActorMaintenanceJoin, MalformedCanonicalReplaySettlesNativeTerminal)
     packet.packet_name = record_t::packet_name;
     packet.content_type = header.content_type;
     packet.application_record = record;
-    ASSERT_FALSE (record->invocation);
+    ASSERT_FALSE (record->invocation ());
     ASSERT_TRUE (packet.payload.empty ());
     fw::detail::spot_node_runtime_t runtime (state);
     ASSERT_TRUE (fw::detail::spot_node_runtime_test_access_t::replay (

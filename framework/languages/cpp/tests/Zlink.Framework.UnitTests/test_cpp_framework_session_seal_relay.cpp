@@ -604,10 +604,10 @@ TEST (FrameworkSessionSealRelay, different_sessions_do_not_share_replies_for_sam
           if (record.kind != host::record_kind_t::actor_request)
               return;
           ASSERT_TRUE (record.application_record);
-          ASSERT_TRUE (record.application_record->payload);
-          ASSERT_TRUE (record.application_record->payload->application_record);
+          ASSERT_TRUE (record.application_record->payload ());
+          ASSERT_TRUE (record.application_record->payload ()->application_record);
           const auto *accepted_body = std::get_if<protocol::frozen_actor_application_body_t> (
-            &record.application_record->payload->application_record->body);
+            &record.application_record->payload ()->application_record->body);
           ASSERT_NE (accepted_body, nullptr);
           if (record.actor_route)
               EXPECT_EQ (*record.actor_route, accepted_body->target);
@@ -735,12 +735,13 @@ TEST (FrameworkSessionSealRelay, different_sessions_do_not_share_replies_for_sam
                 original_session->to_bytes (), original_binding_generation,
                 original_session_sequence};
         record.application_record = std::make_shared<runtime::serial_application_record_t> ();
-        record.application_record->payload.emplace ();
-        record.application_record->payload->application_record = stateful::accepted_actor_record (
-          actor_header,
-          {"seal-dedup-source-owner", 17, record.source_node_rid.to_bytes (),
-           source.status ().lifecycle_generation ()},
-          protocol::application_payload_t::from_parts (parts), true);
+        record.application_record->payload ().emplace ();
+        record.application_record->payload ()->application_record =
+          stateful::accepted_actor_record (
+            actor_header,
+            {"seal-dedup-source-owner", 17, record.source_node_rid.to_bytes (),
+             source.status ().lifecycle_generation ()},
+            protocol::application_payload_t::from_parts (parts), true);
         auto replied = std::make_shared<std::promise<std::vector<zlink::message_t>>> ();
         auto reply = replied->get_future ();
         auto reply_calls = std::make_shared<std::atomic_uint32_t> (0);
