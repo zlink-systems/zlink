@@ -746,7 +746,13 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                         request,
                         () ->
                                 state.matchesOwner(request.session())
-                                        && state.ownerNodeGeneration == receivingNodeGeneration,
+                                        && state.ownerNodeGeneration == receivingNodeGeneration
+                                        && !state.matchesReplacement(
+                                                new ReplacementIdentity(
+                                                        request.actorId(),
+                                                        request.session().sessionRid(),
+                                                        request.session()
+                                                                .retiredBindingGeneration())),
                         () -> {
                             state.stream().disconnectPeer(state.routingId());
                             return CompletableFuture.completedFuture(null);
@@ -1840,7 +1846,6 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         private final long ownerLeaseGeneration;
         private final ZLinkSessionActorsRuntime actorRuntime;
         private final Set<ReplacementIdentity> replacements = ConcurrentHashMap.newKeySet();
-        private final AtomicBoolean replacementClosing = new AtomicBoolean();
         private final AtomicBoolean closeScheduled = new AtomicBoolean();
         private final AtomicBoolean closeMetricRecorded = new AtomicBoolean();
         private long lastApplicationNanos;
@@ -1901,7 +1906,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         }
 
         boolean replacementClosing() {
-            return replacementClosing.get();
+            return !replacements.isEmpty();
         }
 
         AtomicBoolean closeScheduled() {
@@ -1929,15 +1934,11 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         }
 
         boolean beginReplacement(ReplacementIdentity identity) {
-            if (!replacements.add(identity)) {
-                return false;
-            }
-            replacementClosing.set(true);
-            return true;
+            return replacements.add(identity);
         }
 
         boolean matchesReplacement(ReplacementIdentity identity) {
-            return replacementClosing.get() && replacements.contains(identity);
+            return replacements.contains(identity);
         }
 
         long lastApplicationNanos() {
