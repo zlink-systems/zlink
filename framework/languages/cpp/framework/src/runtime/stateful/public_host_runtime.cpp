@@ -5434,6 +5434,29 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                     }
                     continue;
                 }
+                if (wire.kind == protocol::command::boundSessionClose) {
+                    const auto request = protocol::decode_bound_session_close (
+                      protocol::message_bytes (mailbox_record.parts.front ()));
+                    const auto local = status ();
+                    const auto closed = co_await runtime::await_result (
+                      _sessions.close_current (request, {local.routing_id ().to_bytes (),
+                                                         local.lifecycle_generation (),
+                                                         local.routing_id ().to_string (),
+                                                         local.lifecycle_generation (),
+                                                         {},
+                                                         0}));
+                    const auto failure =
+                      closed ? std::optional<messaging::request_wire_failure_t>{}
+                             : messaging::request_failure_mapper_t{}.target_failure_reply (
+                                 *closed.error ());
+                    _transport->reply_bound_session_bind (
+                      mailbox_record,
+                      failure ? failure->terminal_result
+                              : static_cast<std::uint32_t> (protocol::request_terminal_result::ok),
+                      failure ? failure->failure_code
+                              : static_cast<std::uint32_t> (protocol::framework_error_code::none));
+                    continue;
+                }
                 if (wire.kind == protocol::command::boundSessionReplaced) {
                     const auto replacement = protocol::decode_bound_session_replaced (
                       protocol::message_bytes (mailbox_record.parts.front ()));

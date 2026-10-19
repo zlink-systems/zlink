@@ -2329,6 +2329,18 @@ void app_t::_apply_zlink_framework ()
             // and binding generation, so it performs the remote bind.
             return result_t<void>::success ();
         });
+        actor_gateway_runtime.on_bound_session_close (
+          [application_mesh] (actor_ref_t actor, detail::actor_bound_session_route_t route) {
+              return application_mesh->native_node ().transport ().request_bound_session_close (
+                runtime::protocol::bound_session_close_t{
+                  0,
+                  std::string (actor.actor_id ().value ()),
+                  actor.object_generation (),
+                  {route.node_rid.to_bytes (), route.node_generation, route.node_rid.to_string (),
+                   route.node_generation, route.session_rid->to_bytes (),
+                   route.binding_generation}},
+                application_mesh->default_request_timeout ());
+          });
         actor_gateway_runtime.on_bound_session_send (
           [application_mesh, actor_gateway_runtime, stream_runtime] (
             const actor_ref_t &actor, std::uint64_t expected_binding_generation,

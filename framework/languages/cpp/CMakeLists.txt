@@ -1751,6 +1751,13 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     COMMAND test_cpp_framework_actor_gateway --infrastructure-store-wait
     LABELS "framework-unit;framework-regression;framework-actor"
     TIMEOUT 30)
+  foreach(close_case unbound binding)
+    zlink_framework_cpp_add_test(
+      NAME test_cpp_framework_bound_session_close_${close_case}
+      COMMAND test_cpp_framework_actor_gateway --close-${close_case}
+      LABELS "framework-unit;framework-regression;framework-actor"
+      TIMEOUT 30)
+  endforeach()
   target_link_libraries(test_cpp_framework_app_host PRIVATE zlink::http_client)
   if(ZLINK_FRAMEWORK_CPP_ENABLE_COVERAGE)
     set(ZLINK_FRAMEWORK_HTTP_TEST_HTTP_ENDPOINT "http://127.0.0.1:18180")
