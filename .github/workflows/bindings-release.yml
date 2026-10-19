@@ -268,12 +268,10 @@ jobs:
             --platform linux-x64 \
             --cache-dir "${ZLINK_CORE_CACHE_DIR}")
           mkdir -p bindings/node/prebuilds/linux-x64
+          abi_soversion="${{ needs.resolve.outputs.core_abi_soversion }}"
           install -m755 \
             "${core_prefix}/lib/libzlink.so.${ZLINK_CORE_RELEASE_VERSION}" \
-            bindings/node/prebuilds/linux-x64/libzlink.so.${{ needs.resolve.outputs.core_version }}
-          abi_soversion="${{ needs.resolve.outputs.core_abi_soversion }}"
-          ln -sfn libzlink.so.${{ needs.resolve.outputs.core_version }} "bindings/node/prebuilds/linux-x64/libzlink.so.${abi_soversion}"
-          ln -sfn "libzlink.so.${abi_soversion}" bindings/node/prebuilds/linux-x64/libzlink.so
+            "bindings/node/prebuilds/linux-x64/libzlink.so.${abi_soversion}"
           cp "${core_prefix}/share/zlink/core-package-provenance.json" \
             bindings/node/provenance/core-package-provenance.json
           echo "prefix=${core_prefix}" >> "${GITHUB_OUTPUT}"
@@ -300,7 +298,6 @@ jobs:
         run: |
           cd bindings/node
           npm ci
-          cp prebuilds/linux-x64/libzlink.so build/Release/libzlink.so
           abi_soversion="${{ needs.resolve.outputs.core_abi_soversion }}"
           cp "prebuilds/linux-x64/libzlink.so.${abi_soversion}" "build/Release/libzlink.so.${abi_soversion}"
           npm test

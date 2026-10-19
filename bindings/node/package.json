@@ -33,7 +33,7 @@
   "files": [
     "dist/**/*",
     "prebuilds/**/zlink.node",
-    "prebuilds/linux-*/libzlink.so.*.*.*",
+    "prebuilds/linux-*/libzlink.so.0",
     "prebuilds/darwin-*/*.dylib",
     "prebuilds/win32-*/*.dll",
     "provenance/core-package-provenance.json",
