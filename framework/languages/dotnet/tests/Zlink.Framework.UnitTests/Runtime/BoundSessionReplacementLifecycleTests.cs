@@ -331,6 +331,7 @@ public sealed class BoundSessionReplacementLifecycleTests
         retired.Time.Advance(TimeSpan.FromMilliseconds(99));
         Assert.Equal(0, retired.Socket.DisconnectCount);
         retired.Time.Advance(TimeSpan.FromMilliseconds(1));
+        await retired.Socket.DisconnectStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
         Assert.Equal(1, retired.Socket.DisconnectCount);
         Assert.Equal(0, replacement.Socket.DisconnectCount);
     }
@@ -449,6 +450,7 @@ public sealed class BoundSessionReplacementLifecycleTests
         retired.Time.Advance(TimeSpan.FromMilliseconds(99));
         Assert.Equal(0, retired.Socket.DisconnectCount);
         retired.Time.Advance(TimeSpan.FromMilliseconds(1));
+        await retired.Socket.DisconnectStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
         Assert.Equal(1, retired.Socket.DisconnectCount);
         Assert.Equal(0, replacement.Socket.DisconnectCount);
         await retired.Session.DisposeAsync();
