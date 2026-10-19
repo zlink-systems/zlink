@@ -14,6 +14,30 @@ public sealed class GeneratedServiceWireCommandCodecConformanceTests
     );
 
     [Fact]
+    public void Bound_session_close_uses_the_shared_cross_language_bytes()
+    {
+        using var fixture = ReadJson("golden/bound-session-close-v1.json");
+        var bytes = Convert.FromHexString(
+            fixture.RootElement.GetProperty("canonical").GetProperty("hex").GetString()!
+        );
+        var decoded = ServiceWireCodec.DecodeBoundSessionClose54([bytes], Context);
+        Assert.Equal("player", decoded.Actor.ActorId.Value);
+        Assert.Equal(bytes, ServiceWireCodec.EncodeBoundSessionClose54(decoded, Context)[0]);
+        foreach (var malformed in fixture.RootElement.GetProperty("malformed").EnumerateArray())
+            Assert.NotNull(
+                Record.Exception(() =>
+                    ServiceWireCodec.DecodeBoundSessionClose54(
+                        [Convert.FromHexString(malformed.GetProperty("hex").GetString()!)],
+                        Context
+                    )
+                )
+            );
+        Assert.NotNull(
+            Record.Exception(() => ServiceWireCodec.DecodeBoundSessionClose54([bytes, []], Context))
+        );
+    }
+
+    [Fact]
     public void Generated_codec_conforms_to_every_indexed_vector()
     {
         using var index = ReadJson("generated/fixtures/index.json");

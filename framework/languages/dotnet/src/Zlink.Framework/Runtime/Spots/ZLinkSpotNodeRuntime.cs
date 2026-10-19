@@ -108,6 +108,16 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
                     )
             );
         }
+        if (node is IZLinkBackendBoundSessionClose boundSessionClose)
+            boundSessionClose.SetBoundSessionCloseHandler(
+                (request, cancellationToken) =>
+                    runtime.CloseSessionBindingAsync(
+                        Node.RoutingId,
+                        Node.MeshStatus().LifecycleGeneration,
+                        request,
+                        cancellationToken
+                    )
+            );
         if (locationLifecycle is not null)
         {
             if (node is not IZLinkBackendAuthorityObserver)

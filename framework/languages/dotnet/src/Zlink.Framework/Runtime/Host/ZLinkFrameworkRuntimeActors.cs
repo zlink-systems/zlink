@@ -5260,6 +5260,19 @@ internal sealed partial class ZLinkFrameworkRuntime
         );
     }
 
+    internal ValueTask CloseSessionBindingAsync(
+        RoutingId receivingNodeRid,
+        ulong receivingNodeGeneration,
+        Systems.Zlink.Framework.Runtime.Protocol.ServiceWireCodec.BoundSessionClose54 request,
+        CancellationToken cancellationToken
+    ) =>
+        _actorBoundSessionCoordinator.CloseSessionBindingAsync(
+            receivingNodeRid,
+            receivingNodeGeneration,
+            request,
+            cancellationToken
+        );
+
     internal ValueTask CloseActorBoundSessionAsync(
         string actorId,
         CancellationToken cancellationToken
