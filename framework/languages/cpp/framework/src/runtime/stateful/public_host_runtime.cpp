@@ -1079,10 +1079,12 @@ public_host_runtime_t::accepted_record_authority (
     if (!query.source_original && sources) {
         auto cached = sources->cached_request_source (local.mesh_name, query.source_node_routing_id,
                                                       query.source_node_generation);
-        auto descriptor =
-          cached ? std::move (*cached)
-                 : co_await sources->request_source (local.mesh_name, query.source_node_routing_id,
-                                                     query.source_node_generation);
+        std::shared_ptr<const mesh_node_descriptor_t> descriptor;
+        if (cached)
+            descriptor = std::move (*cached);
+        else
+            descriptor = co_await sources->request_source (
+              local.mesh_name, query.source_node_routing_id, query.source_node_generation);
         if (descriptor)
             query.source_original = mesh::request_source_t{std::move (descriptor)};
     }
@@ -4745,7 +4747,9 @@ public_host_runtime_t::stage_relocation_record (const stateful::object_ref_t &ta
                                                 std::uint64_t participant_id)
 {
     const auto frozen_record = data.record;
-    co_return _stateful_dispatch &&co_await _stateful_dispatch->stage_relocated (
+    if (!_stateful_dispatch)
+        co_return false;
+    const auto staged = co_await _stateful_dispatch->stage_relocated (
       target, {0, protocol::encode_frozen_record (frozen_record)},
       [this, data, participant_id,
        frozen_record] (const std::optional<protocol::application_payload_t> &reply) {
@@ -4763,8 +4767,8 @@ public_host_runtime_t::stage_relocation_record (const stateful::object_ref_t &ta
             {relay, frozen_record.source, reply,
              [] (protocol::reply_relay_ack_status_t) { return true; }, [] { return true; },
              data.coordinator.node_routing_id});
-      })
-      == stateful::stateful_error_t::none;
+      });
+    co_return staged == stateful::stateful_error_t::none;
 }
 
 task_t<void> public_host_runtime_t::dispatch_instance_spot_activation (
@@ -5869,9 +5873,9 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                     if (verified) {
                         bool staged = true;
                         for (const auto &[target, data, participant_id] : *verified)
-                            staged =
-                              staged
-                              && co_await stage_relocation_record (target, data, participant_id);
+                            if (staged)
+                                staged =
+                                  co_await stage_relocation_record (target, data, participant_id);
                         _relocation_session_terminal_lane
                           .run ([&] {
                               const auto found = _relocation_target_attempts.find (key);
@@ -7919,12 +7923,13 @@ task_t<std::optional<stateful::object_ref_t>> public_host_runtime_t::accept_loca
         original.emplace (std::move (*owned));
     const bool actor = is_actor_application (dispatch.record.kind);
     std::optional<stateful::retained_relocation_source_t> retained;
-    const auto owner =
-      actor
-        ? co_await _objects.find_async (stateful::object_kind_t::actor,
-                                        std::string (dispatch.owner.actor->actor_id ().value ()),
-                                        std::nullopt, &retained)
-        : co_await _objects.resolve_spot_async (dispatch.owner.spot_id, &retained);
+    std::optional<stateful::object_ref_t> owner;
+    if (actor)
+        owner = co_await _objects.find_async (
+          stateful::object_kind_t::actor, std::string (dispatch.owner.actor->actor_id ().value ()),
+          std::nullopt, &retained);
+    else
+        owner = co_await _objects.resolve_spot_async (dispatch.owner.spot_id, &retained);
     if (!owner)
         throw protocol::service_wire_error_t ("local accepted owner is unavailable");
     std::variant<protocol::actor_message_header_t, protocol::spot_message_header_t> header;

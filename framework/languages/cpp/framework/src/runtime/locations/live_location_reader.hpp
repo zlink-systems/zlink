@@ -169,14 +169,20 @@ class live_location_reader_t final
                                                   const std::vector<std::uint8_t> &rid,
                                                   std::uint64_t generation)
     {
-        const auto identity = zlink::routing_id_t::from (rid);
-        auto source = std::lower_bound (sources.begin (), sources.end (), identity,
-                                        [] (const auto &candidate, const auto &rid) {
-                                            return rid_less (candidate.descriptor.rid, rid);
-                                        });
-        for (; source != sources.end () && source->descriptor.rid == identity; ++source)
+        auto source = std::lower_bound (
+          sources.begin (), sources.end (), rid, [] (const auto &candidate, const auto &identity) {
+              const auto &value = candidate.descriptor.rid;
+              return std::lexicographical_compare (value.data (), value.data () + value.size (),
+                                                   identity.begin (), identity.end ());
+          });
+        for (; source != sources.end (); ++source) {
+            const auto &identity = source->descriptor.rid;
+            if (identity.size () != rid.size ()
+                || !std::equal (rid.begin (), rid.end (), identity.data ()))
+                break;
             if (source->descriptor.lifecycle_generation == generation)
                 return &*source;
+        }
         return nullptr;
     }
 

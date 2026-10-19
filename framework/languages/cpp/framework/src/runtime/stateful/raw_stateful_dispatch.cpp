@@ -220,11 +220,13 @@ accepted_record_authority_resolver_t make_store_authority_resolver (location_rep
             }
             const auto cached = reader->cached_request_source (
               query.target.mesh_name, query.source_node_routing_id, query.source_node_generation);
-            const auto source = cached
-                                  ? *cached
-                                  : co_await reader->request_source (query.target.mesh_name,
-                                                                     query.source_node_routing_id,
-                                                                     query.source_node_generation);
+            std::shared_ptr<const mesh_node_descriptor_t> source;
+            if (cached)
+                source = *cached;
+            else
+                source = co_await reader->request_source (query.target.mesh_name,
+                                                          query.source_node_routing_id,
+                                                          query.source_node_generation);
             if (!source)
                 co_return std::nullopt;
             co_return accepted_record_authority_t{

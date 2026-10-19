@@ -5,6 +5,7 @@
 #include "runtime/mesh/mesh_node_runtime.hpp"
 #include <runtime/locations/location_repository.hpp>
 #include "runtime/locations/in_memory_location_store.hpp"
+#include "runtime/locations/live_location_reader.hpp"
 #include "runtime/locations/location_runtime.hpp"
 #include "runtime/locations/store_location_resolvers.hpp"
 #include "runtime/dispatch/dispatch_limits.hpp"
@@ -646,7 +647,7 @@ void verify_route_internal_packets_precede_application_dispatch ()
     runtime::mesh_node_host_service_t service (
       std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> (), {registration},
       serializers, {}, {}, application_jobs);
-    service.start (provider);
+    service.start (provider).result ().value ();
     const auto node = service.nodes ().front ();
     auto native_spot = std::make_shared<host::spot_handle_t> (
       node->native_node ().get_or_create_spot (std::string (context->spot_id)));
@@ -788,6 +789,12 @@ void verify_local_join_timeout_releases_membership ()
 
 void register_mesh_location_resolvers (zlink::framework::service_collection_t &services)
 {
+    services.add_factory<zlink::framework::runtime::live_location_reader_t> (
+      [] (zlink::framework::service_provider_t &provider) {
+          return std::make_unique<zlink::framework::runtime::live_location_reader_t> (
+            provider.get_required<zlink::framework::location_repository_t> ());
+      },
+      zlink::framework::service_lifetime_t::singleton);
     services.add_factory<zlink::framework::runtime::store_location_resolvers_t> (
       [] (zlink::framework::service_provider_t &provider) {
           return std::make_unique<zlink::framework::runtime::store_location_resolvers_t> (
@@ -888,7 +895,7 @@ void verify_actor_route_resolver_preserves_unavailable ()
     runtime::mesh_node_host_service_t service (
       std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> (), {registration},
       serializers);
-    service.start (provider);
+    service.start (provider).result ().value ();
     const auto claimed = store.claim_owner_lease ("expired-actor-owner", 200ms).result ().value ();
     const auto *owner = std::get_if<owner_lease_claimed_t> (&claimed);
     assert (owner);
@@ -1031,7 +1038,7 @@ void verify_server_descriptor_publishes_framework_entry_spot_without_application
     zlink::framework::runtime::mesh_node_host_service_t service (
       std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> (), {registration},
       serializers);
-    service.start (provider);
+    service.start (provider).result ().value ();
     const auto nodes = store.list_mesh_nodes ("descriptor-entry").result ().value ();
     assert (nodes.items.size () == 1);
     const auto &descriptor = nodes.items.front ();
@@ -1063,7 +1070,7 @@ void verify_descriptor_retire_order_and_pre_seal_rollback ()
     zlink::framework::runtime::mesh_node_host_service_t service (
       std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> (), {first, second},
       serializers);
-    service.start (provider);
+    service.start (provider).result ().value ();
 
     assert (read_mesh_state (store, "vertical-order", *first->routing_id)
             == framework_runtime_state_t::serving);
@@ -1205,7 +1212,7 @@ void verify_local_node_submit_bridge ()
     zlink::framework::runtime::mesh_node_host_service_t service (
       std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> (),
       {registration, independent_registration}, serializers, {}, {}, application_jobs);
-    service.start (provider);
+    service.start (provider).result ().value ();
     const auto node = service.nodes ().front ();
     const auto independent_node = service.nodes ().back ();
 
@@ -1365,7 +1372,7 @@ void verify_direct_target_falls_through_absent_location_store_entry ()
     zlink::framework::runtime::mesh_node_host_service_t service (
       std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> (), {registration},
       serializers, {}, {}, application_jobs);
-    service.start (provider);
+    service.start (provider).result ().value ();
     const auto node = service.nodes ().front ();
 
     const auto descriptors = location_store.list_mesh_nodes ("vertical-mesh").result ().value ();
@@ -1426,7 +1433,7 @@ void verify_request_to_never_admitted_target_reports_not_found ()
     zlink::framework::runtime::mesh_node_host_service_t service (
       std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> (), {registration},
       serializers, {}, {}, application_jobs);
-    service.start (provider);
+    service.start (provider).result ().value ();
     const auto node = service.nodes ().front ();
 
     const std::vector<zlink::message_t> parts{zlink::message_t::from (std::string ("request"))};
@@ -2218,7 +2225,7 @@ void verify_accepted_handler_push_after_host_seal (bool shutdown)
     locations.start (*registration->routing_id);
     runtime::mesh_node_host_service_t service (
       std::make_shared<runtime::runtime_failure_collector_t> (), {registration}, serializers);
-    service.start (provider);
+    service.start (provider).result ().value ();
     const auto node = service.nodes ().front ();
     auto gateway_state = std::make_shared<detail::actor_gateway_state_t> ();
     detail::actor_gateway_runtime_t gateway (gateway_state);
