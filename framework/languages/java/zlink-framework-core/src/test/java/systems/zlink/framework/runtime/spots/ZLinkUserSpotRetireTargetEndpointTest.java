@@ -6,7 +6,6 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.RepeatedTest;
@@ -321,9 +320,11 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
             normalization.complete(null);
             actorBackend.drain();
             var closed = actorBackend.actorRuntime.closeAsync().toCompletableFuture();
-            actorBackend.drain();
-            closed.join();
-            actorBackend.rawSession.close();
+            try {
+                actorBackend.tasks.drainUntil(closed);
+            } finally {
+                actorBackend.rawSession.close();
+            }
         }
     }
 
@@ -427,9 +428,11 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
             if (!backend.operations.contains("open")) backend.openAdmission(backend.prepared);
             backend.drain();
             var closed = backend.actorRuntime.closeAsync().toCompletableFuture();
-            backend.drain();
-            closed.join();
-            backend.rawSession.close();
+            try {
+                backend.tasks.drainUntil(closed);
+            } finally {
+                backend.rawSession.close();
+            }
         }
     }
 
@@ -488,7 +491,7 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
         owner.publishHidden(backlog, 8);
         try {
             var publication = owner.drainDurableBacklog(backlog).toCompletableFuture();
-            publication.join();
+            var replay = publication.join().toCompletableFuture();
             assertFalse(registered.isDone());
             owner.openAdmission(staged);
             var outside =
@@ -496,23 +499,26 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                             systems.zlink.framework.errors.ZLinkFrameworkException.class,
                             () -> backend.prepared.actor().context().joinSpot("outside").defer());
             assertTrue(outside.getMessage().contains("open Framework handler scope"));
-            backend.drain();
+            backend.tasks.drainUntil(CompletableFuture.anyOf(registered, replay));
             assertTrue(
                     registered.isDone(),
                     "adopted record must retain the actual Actor handler scope");
             assertFalse(handler.isDone());
             var failure = new IllegalStateException("handler terminal after deferred registration");
             handler.completeExceptionally(failure);
-            backend.drain();
+            backend.tasks.drainUntil(replay.handle((ignored, error) -> null));
+            assertTrue(replay.isCompletedExceptionally());
             assertSame(failure, observed.get());
         } finally {
             handler.completeExceptionally(new IllegalStateException("test cleanup"));
             if (!backend.operations.contains("open")) backend.openAdmission(backend.prepared);
             backend.drain();
             var closed = backend.actorRuntime.closeAsync().toCompletableFuture();
-            backend.drain();
-            closed.join();
-            backend.rawSession.close();
+            try {
+                backend.tasks.drainUntil(closed);
+            } finally {
+                backend.rawSession.close();
+            }
         }
     }
 
@@ -945,20 +951,7 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
             recoveredBackend.executor.drain();
             var closed = recoveredBackend.actorRuntime.closeAsync().toCompletableFuture();
             try {
-                assertTimeoutPreemptively(
-                        Duration.ofSeconds(5),
-                        () -> {
-                            // State-lane completions can submit lifecycle work after a drain
-                            // returns.
-                            // The fixture owns this executor until the runtime's terminal
-                            // completion.
-                            while (!closed.isDone() && !Thread.currentThread().isInterrupted()) {
-                                recoveredBackend.executor.drain();
-                                Thread.yield();
-                            }
-                            assertTrue(closed.isDone(), "Actor runtime cleanup did not complete");
-                            closed.join();
-                        });
+                recoveredBackend.executor.drainUntil(closed);
             } finally {
                 recoveredBackend.rawSession.close();
             }
