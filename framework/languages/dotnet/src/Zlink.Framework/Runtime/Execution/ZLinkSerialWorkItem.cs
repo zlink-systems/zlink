@@ -149,10 +149,10 @@ internal sealed class ZLinkSerialWorkItem
         }
         catch (Exception exception)
         {
+            onUnhandledException(exception);
             ReleaseTerminal();
             _completion!.TrySetException(exception);
             _ = _completion!.Task.Exception;
-            onUnhandledException(exception);
         }
     }
 
@@ -209,10 +209,12 @@ internal sealed class ZLinkSerialWorkItem
         }
         catch (Exception ex)
         {
+            // The failure report precedes the terminal on every path, so the caller that
+            // observes the terminal also observes the report.
+            onUnhandledException(ex);
             ReleaseTerminal();
             _completion!.TrySetException(ex);
             _ = _completion!.Task.Exception;
-            onUnhandledException(ex);
             return ZLinkSerialWorkItemResult.Completed;
         }
     }
@@ -298,11 +300,11 @@ internal sealed class ZLinkSerialWorkItem
         }
         catch (Exception ex)
         {
+            if (ex is not OperationCanceledException)
+                onUnhandledException(ex);
             await ReleaseSuspendedTerminalAsync().ConfigureAwait(false);
             _completion!.TrySetException(ex);
             _ = _completion!.Task.Exception;
-            if (ex is not OperationCanceledException)
-                onUnhandledException(ex);
         }
     }
 

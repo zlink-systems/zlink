@@ -697,20 +697,23 @@ task_t<void> bound_session_t::disconnect ()
         return task_t<void> (result_t<void>::failure (framework_error_kind_t::not_configured,
                                                       "bound session does not reference an actor"));
     }
-    const auto disconnected = _state->sync ([&] () -> result_t<void> {
+    std::optional<detail::actor_bound_session_route_t> route;
+    std::function<task_t<void> (actor_ref_t, detail::actor_bound_session_route_t)> close;
+    _state->sync ([&] {
         const auto found =
           _state->actors_by_id.find (std::string (_actor_ref->actor_id ().value ()));
-        if (found != _state->actors_by_id.end ()) {
-            if (found->second.ref.object_generation () != _actor_ref->object_generation ()) {
-                return result_t<void>::failure (framework_error_kind_t::invalid_operation,
-                                                "actor generation is stale");
-            }
-            found->second.bound = false;
-            found->second.disconnected = actor_disconnect_terminal (found->second.disconnected);
-        }
-        return result_t<void>::success ();
+        if (found != _state->actors_by_id.end () && found->second.bound
+            && found->second.ref.object_generation () == _actor_ref->object_generation ())
+            route = found->second.bound_session_route;
+        close = _state->bound_session_closer;
     });
-    return task_t<void> (disconnected);
+    if (!route || !route->session_rid)
+        return task_t<void> (result_t<void>::failure (framework_error_kind_t::invalid_operation,
+                                                      "Actor has no current session binding"));
+    if (!close)
+        return task_t<void> (result_t<void>::failure (framework_error_kind_t::unavailable,
+                                                      "Session close transport is unavailable"));
+    return close (*_actor_ref, std::move (*route));
 }
 
 bound_session_send_call_t bound_session_t::send_erased (std::string packet_name,
@@ -3583,6 +3586,14 @@ void actor_gateway_runtime_t::on_bound_session (
 {
     _state->sync ([this, registrar = std::move (registrar)] () mutable {
         _state->bound_session_registrar = std::move (registrar);
+    });
+}
+
+void actor_gateway_runtime_t::on_bound_session_close (
+  std::function<task_t<void> (actor_ref_t, actor_bound_session_route_t)> close)
+{
+    _state->sync ([this, close = std::move (close)] () mutable {
+        _state->bound_session_closer = std::move (close);
     });
 }
 

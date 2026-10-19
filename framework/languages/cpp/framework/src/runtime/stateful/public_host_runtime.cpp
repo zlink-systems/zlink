@@ -4822,10 +4822,19 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation_core (
            std::optional<instance_spot_authority_payload_t> ready_state) -> task_t<bool> {
         const auto *snapshot = std::get_if<authority_snapshot_t> (&current);
         if (request.target.authority_owner_generation != 0) {
-            // Ready Instance direct의 object generation은 target 판정에 쓰지 않는다.
-            // authority가 없으면 owner fence가 다른 것이다(Spot address messaging §9).
+            // Authority generations identify owner changes within one incarnation.
+            if (snapshot && snapshot->allocation.state == placement_allocation_state_t::active
+                && snapshot->object_generation < request.target.object_generation) {
+                const auto failure = messaging::request_failure_mapper_t{}.target_failure_reply (
+                  framework_error_kind_t::invalid_operation,
+                  static_cast<std::uint32_t> (protocol::framework_error_code::spotGenerationStale));
+                reply_terminal ({failure->terminal_result, failure->failure_code, std::nullopt});
+                co_return true;
+            }
             if (!snapshot || snapshot->allocation.state != placement_allocation_state_t::active
-                || snapshot->authority_owner_generation != request.target.authority_owner_generation
+                || (snapshot->object_generation == request.target.object_generation
+                    && snapshot->authority_owner_generation
+                         != request.target.authority_owner_generation)
                 || snapshot->owner.owner_id != request.target.owner_id
                 || static_cast<std::uint64_t> (snapshot->owner.lease_generation)
                      != request.target.owner_lease_generation
@@ -5423,6 +5432,29 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                             .session_owner_node_routing_id,
                           *operation_result.replacement);
                     }
+                    continue;
+                }
+                if (wire.kind == protocol::command::boundSessionClose) {
+                    const auto request = protocol::decode_bound_session_close (
+                      protocol::message_bytes (mailbox_record.parts.front ()));
+                    const auto local = status ();
+                    const auto closed = co_await runtime::await_result (
+                      _sessions.close_current (request, {local.routing_id ().to_bytes (),
+                                                         local.lifecycle_generation (),
+                                                         local.routing_id ().to_string (),
+                                                         local.lifecycle_generation (),
+                                                         {},
+                                                         0}));
+                    const auto failure =
+                      closed ? std::optional<messaging::request_wire_failure_t>{}
+                             : messaging::request_failure_mapper_t{}.target_failure_reply (
+                                 *closed.error ());
+                    _transport->reply_bound_session_bind (
+                      mailbox_record,
+                      failure ? failure->terminal_result
+                              : static_cast<std::uint32_t> (protocol::request_terminal_result::ok),
+                      failure ? failure->failure_code
+                              : static_cast<std::uint32_t> (protocol::framework_error_code::none));
                     continue;
                 }
                 if (wire.kind == protocol::command::boundSessionReplaced) {

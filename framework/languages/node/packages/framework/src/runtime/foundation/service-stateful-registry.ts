@@ -679,6 +679,10 @@ export class ServiceTerminalOperationRegistry<T, Context = unknown> {
   close(): void {
     this.operations.close('Stateful runtime closed.');
   }
+
+  failAll(reason: unknown): void {
+    this.operations.failAll(reason);
+  }
 }
 
 function actorKey(actor: ServiceActorRef): string {

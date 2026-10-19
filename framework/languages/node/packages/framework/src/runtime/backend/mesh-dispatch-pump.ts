@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { awaitWithAbort } from '../abort';
 import { availableParallelism } from 'node:os';
 import {
   enterApplicationJobPermitScope,
@@ -93,7 +94,7 @@ export class ZLinkMeshDispatchPump {
     });
   }
 
-  async dispose(): Promise<void> {
+  async dispose(signal?: AbortSignal): Promise<void> {
     if (this.disposed) {
       return;
     }
@@ -103,7 +104,7 @@ export class ZLinkMeshDispatchPump {
     for (const wake of this.idleApplicationWorkers) wake();
     this.idleApplicationWorkers.clear();
     while (this.activeDrains.size > 0) {
-      await Promise.all([...this.activeDrains]);
+      await awaitWithAbort(Promise.all([...this.activeDrains]), signal);
     }
   }
 

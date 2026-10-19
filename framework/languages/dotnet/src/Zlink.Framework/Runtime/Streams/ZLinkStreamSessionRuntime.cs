@@ -450,27 +450,20 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
 
     public async ValueTask CloseAsync()
     {
-        if (
-            !TryScheduleTerminal(
-                ZlinkStreamCloseReason.ClientClose,
-                () => CompleteAfterTransportClosedAsync(notifyDisconnected: true)
-            )
-        )
-            return;
-
+        TryScheduleTerminal(
+            ZlinkStreamCloseReason.ClientClose,
+            () => CompleteAfterTransportClosedAsync(notifyDisconnected: true)
+        );
         await CloseTransportAsync().ConfigureAwait(false);
     }
 
     public async ValueTask CloseByProxyAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (
-            !TryScheduleTerminal(
-                ZlinkStreamCloseReason.ClientClose,
-                () => CompleteAfterTransportClosedAsync(notifyDisconnected: false)
-            )
-        )
-            return;
+        TryScheduleTerminal(
+            ZlinkStreamCloseReason.ClientClose,
+            () => CompleteAfterTransportClosedAsync(notifyDisconnected: false)
+        );
 
         await CloseTransportAsync().WaitAsync(cancellationToken).ConfigureAwait(false);
     }

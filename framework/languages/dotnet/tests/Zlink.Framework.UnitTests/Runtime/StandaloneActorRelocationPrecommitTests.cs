@@ -10,6 +10,8 @@ namespace Zlink.Framework.UnitTests;
 
 public sealed class StandaloneActorRelocationPrecommitTests
 {
+    private static readonly TimeSpan ReadBarrierTimeout = TimeSpan.FromSeconds(5);
+
     [Fact]
     public async Task Precommit_commits_through_owner_lease_heartbeat()
     {
@@ -1061,6 +1063,50 @@ public sealed class StandaloneActorRelocationPrecommitTests
             );
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Source_settlement_preserves_when_deadline_cancels_an_authority_read(
+        bool cancelInsideRead
+    )
+    {
+        var inner = new ZLinkInMemoryLocationStore();
+        var source = await PrepareCapturedSourceAsync(inner);
+        var store = new SettlementReadBarrierStore(inner);
+        using var deadline = new CancellationTokenSource();
+        if (cancelInsideRead)
+            store.Arm();
+        else
+            deadline.Cancel();
+        var settlement = ZLinkStandaloneActorRelocationRuntime
+            .SettleSourceAsync(
+                store,
+                source.Key,
+                source.Steady,
+                source.RelocationId,
+                source.Target,
+                TimeSpan.MaxValue,
+                static () => true,
+                static _ => ValueTask.CompletedTask,
+                TimeSpan.Zero,
+                deadline.Token,
+                ReadyRoute
+            )
+            .AsTask();
+        try
+        {
+            if (cancelInsideRead)
+                await store.ReadStarted.Task.WaitAsync(ReadBarrierTimeout);
+        }
+        finally
+        {
+            deadline.Cancel();
+            store.ReleaseRead.TrySetResult();
+        }
+
+        Assert.Equal(ZLinkSourceSettlement.SourcePreserved, (await settlement).Outcome);
+    }
+
     private sealed class SettlementReadBarrierStore(IZLinkLocationRepository inner)
         : ZLinkLocationStoreTestDouble
     {
@@ -1085,6 +1131,19 @@ public sealed class StandaloneActorRelocationPrecommitTests
             }
             return await inner.ReadAuthorityAsync(key, cancellationToken);
         }
+
+        public override ValueTask<ZLinkAuthorityCompareExchangeResult> CompareExchangeAuthorityAsync(
+            ZLinkAuthorityKey key,
+            string expectedStoreVersion,
+            ZLinkAuthorityMutation mutation,
+            CancellationToken cancellationToken = default
+        ) =>
+            inner.CompareExchangeAuthorityAsync(
+                key,
+                expectedStoreVersion,
+                mutation,
+                cancellationToken
+            );
     }
 
     [Theory]

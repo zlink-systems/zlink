@@ -1809,6 +1809,47 @@ internal sealed class ZLinkSessionActorBindingTable
                 : null;
         });
 
+    internal async ValueTask CloseCurrentAsync(
+        RoutingId receivingNodeRid,
+        ulong receivingNodeGeneration,
+        ServiceWireCodec.BoundSessionClose54 request,
+        CancellationToken cancellationToken
+    )
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        // Admission and the start of close share the binding aggregate's turn.
+        // The returned terminal excludes disconnect callbacks and their cleanup.
+        var terminal = await _lane
+            .RunAsync(() =>
+            {
+                var session = request.Session;
+                if (
+                    !TryGetCurrentEntry(
+                        ZLinkActorId.FromBoundary(request.Actor.ActorId.Value, nameof(request)),
+                        out var entry
+                    )
+                    || entry.SessionOwnerNodeRid != receivingNodeRid
+                    || entry.SessionOwnerNodeGeneration != receivingNodeGeneration
+                    || entry.ObjectGeneration != request.Actor.ObjectGeneration.Value
+                    || entry.BindingGeneration != session.RetiredBindingGeneration.Value
+                    || entry.SessionOwnerNodeRid
+                        != RoutingId.From(session.SessionOwnerNodeRid.Value)
+                    || entry.SessionOwnerNodeGeneration != session.SessionOwnerNodeGeneration.Value
+                    || entry.ActorRef.SessionRid != RoutingId.From(session.SessionRid.Value)
+                    || entry.SessionOwnerId != session.SessionOwnerId.Value
+                    || entry.SessionOwnerLeaseGeneration
+                        != session.SessionOwnerLeaseGeneration.Value
+                )
+                    throw new ZLinkFrameworkException(
+                        ZLinkFrameworkErrorKind.Unavailable,
+                        "The requested session binding is no longer current."
+                    );
+                return entry.Context.CloseAsync().AsTask();
+            })
+            .ConfigureAwait(false);
+        await terminal.WaitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
     public ValueTask<ZLinkSessionBindingEntry?> GetExactRetiredBindingAsync(
         string actorId,
         RoutingId sessionOwnerNodeRid,

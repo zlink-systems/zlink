@@ -10,7 +10,7 @@ const {
 test('completion table growth rebuilds buckets only when they double', async (t) => {
   let bucketArrays = 0;
   const NativeInt32Array = globalThis.Int32Array;
-  t.mock.property(
+  t.mock.method(
     globalThis,
     'Int32Array',
     class extends NativeInt32Array {

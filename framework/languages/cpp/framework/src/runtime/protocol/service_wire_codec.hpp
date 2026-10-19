@@ -185,6 +185,16 @@ struct retired_bound_session_route_fence_t
                             const retired_bound_session_route_fence_t &) = default;
 };
 
+struct bound_session_close_t
+{
+    std::uint64_t correlation = 0;
+    std::string actor_id;
+    std::uint64_t object_generation = 0;
+    retired_bound_session_route_fence_t session;
+};
+std::vector<std::uint8_t> encode_bound_session_close (const bound_session_close_t &record);
+bound_session_close_t decode_bound_session_close (std::span<const std::uint8_t> bytes);
+
 struct bound_session_replaced_t
 {
     actor_route_fence_t actor_authority;

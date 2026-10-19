@@ -7278,10 +7278,88 @@ int session_disconnect_uses_actor_slot_issue_order ()
     return disconnected == std::vector<std::string>{"z-issued-first", "a-issued-second"} ? 0 : 2;
 }
 
+int close_unbound_session_reports_invalid_operation ()
+{
+    using namespace zlink::framework;
+    detail::actor_gateway_runtime_t gateway;
+    const auto actor = test_actor_ref ("actor-owner", "player", "unbound-close", 1);
+    const auto result = gateway.actor_context (actor).bound_session ().disconnect ().result ();
+    return !result && result.error_kind () == framework_error_kind_t::invalid_operation ? 0 : 1;
+}
+
+int close_exact_session_binding_uses_physical_terminal ()
+{
+    using namespace zlink::framework;
+    namespace sf = runtime::stateful;
+    namespace wire = runtime::protocol;
+    const sf::object_ref_t actor{
+      sf::object_kind_t::actor, "close-actor", 7, 11, "game", "actor-owner"};
+    sf::stream_session_registry_t sessions (
+      [&] (const std::string &) { return std::optional (actor); });
+    const auto rid = zlink::routing_id_t::from ("session-rid");
+    const auto owner = zlink::routing_id_t::from ("session-owner");
+    unsigned closes = 0;
+    const auto connection = sessions.open (rid.to_hex (), {}, owner, 13, [&] { ++closes; });
+    const auto [error, binding] = sessions.bind (connection, actor, 17, 19);
+    if (error != sf::stateful_error_t::none)
+        return 1;
+    const wire::retired_bound_session_route_fence_t fence{
+      owner.to_bytes (), 13, owner.to_string (), 13, rid.to_bytes (), binding.binding_generation};
+    const wire::bound_session_close_t request{23, actor.key, actor.object_generation, fence};
+    const auto decoded =
+      wire::decode_bound_session_close (wire::encode_bound_session_close (request));
+    if (decoded.actor_id != request.actor_id || decoded.session != fence)
+        return 2;
+    auto stale = request;
+    ++stale.session.retired_binding_generation;
+    auto denied = sessions.close_current (stale, fence).result ();
+    if (denied || denied.error_kind () != framework_error_kind_t::unavailable || closes != 0)
+        return 3;
+    stale = request;
+    ++stale.object_generation;
+    denied = sessions.close_current (stale, fence).result ();
+    if (denied || denied.error_kind () != framework_error_kind_t::unavailable || closes != 0)
+        return 4;
+    stale = request;
+    ++stale.session.session_owner_node_generation;
+    denied = sessions.close_current (stale, fence).result ();
+    if (denied || denied.error_kind () != framework_error_kind_t::unavailable || closes != 0)
+        return 5;
+    auto closed = sessions.close_current (request, fence).result ();
+    if (!closed || closes != 1 || !sessions.current_binding (actor.key))
+        return 6;
+    const auto replacement_rid = zlink::routing_id_t::from ("replacement-session");
+    unsigned replacement_closes = 0;
+    const auto replacement =
+      sessions.open (replacement_rid.to_hex (), {}, owner, 13, [&] { ++replacement_closes; });
+    const auto [replacement_error, current] = sessions.bind (replacement, actor, 17, 19);
+    if (replacement_error != sf::stateful_error_t::none)
+        return 7;
+    denied = sessions.close_current (request, fence).result ();
+    if (denied || denied.error_kind () != framework_error_kind_t::unavailable
+        || replacement_closes != 0 || closes != 1)
+        return 8;
+    auto current_request = request;
+    current_request.session.session_routing_id = replacement_rid.to_bytes ();
+    current_request.session.retired_binding_generation = current.binding_generation;
+    closed = sessions.close_current (current_request, fence).result ();
+    if (!closed || replacement_closes != 1)
+        return 9;
+    sessions.close (connection);
+    if (!sessions.current_binding (actor.key))
+        return 10;
+    sessions.close (replacement);
+    return sessions.current_binding (actor.key) ? 11 : 0;
+}
+
 int main (int argc, char **argv)
 {
     if (argc == 2) {
         const std::string test (argv[1]);
+        if (test == "--close-unbound")
+            return close_unbound_session_reports_invalid_operation ();
+        if (test == "--close-binding")
+            return close_exact_session_binding_uses_physical_terminal ();
         if (test == "--known-generation-source-leave") {
             const auto result = known_generation_source_leave_claims_transfer ();
             std::cerr << "Known generation source leave result=" << result << '\n';

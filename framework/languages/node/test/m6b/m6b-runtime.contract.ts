@@ -1,3 +1,4 @@
+import { encodeBoundSessionCloseCommand } from '../../packages/framework/src/runtime/protocol/service_wire_codec.generated';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
@@ -144,7 +145,8 @@ import {
 import {
   createInternalFrameworkException,
   ZLinkFrameworkInternalErrorKind,
-  internalFrameworkErrorKind
+  internalFrameworkErrorKind,
+  wireReplyFailureException
 } from '../../packages/framework/src/runtime/framework-errors-internal';
 import { ZLinkSubmitStatus } from '../../packages/framework/src/runtime/messaging/submission-result';
 import {
@@ -7886,5 +7888,203 @@ test('an unbound actor session fails at the send terminal, not while building th
   await assert.rejects(
     () => context.boundSession.disconnect(),
     (error: Error) => /not bound/i.test(error.message)
+  );
+});
+
+for (const remote of [false, true]) {
+  test(`bound Session close uses the physical close terminal and exact identity (remote=${remote})`, async () => {
+    let ingress: ((record: RawServiceIngressRecord) => Promise<unknown>) | undefined;
+    let physicalCloses = 0;
+    let resolveClose!: () => void;
+    const closeTerminal = new Promise<void>((resolve) => {
+      resolveClose = resolve;
+    });
+    const raw = {
+      topology: { peer: () => ({ descriptor: { lifecycleGeneration: 7n } }) },
+      observePeerRoute: () => ({ generation: 1n, ready: true }),
+      observePeerRouteChanged: () => () => {},
+      observePeerConnectionIntentRemoved: () => () => {},
+      setServiceIngress(handler: typeof ingress) {
+        ingress = handler;
+      },
+      reserveLocalIngress: async () => testIngressJobOwner(),
+      replyService(record: RawServiceIngressRecord, parts: readonly Buffer[]) {
+        record.reply?.(parts);
+      },
+      sendService: async () => true
+    } as unknown as RawServiceMeshRuntime;
+    const runtime = new ServiceStatefulRuntime(raw, 'session-owner', 7n);
+    const actor = runtime.createActor('close-actor').ref;
+    await runtime.bindSession(
+      'session-rid',
+      actor,
+      1_000,
+      async () => true,
+      undefined,
+      undefined,
+      async () => {
+        physicalCloses++;
+        await closeTerminal;
+      }
+    ).promise;
+    const binding = runtime.registry.binding(actor)!;
+    const request = {
+      command: 'boundSessionClose' as const,
+      flags: 0,
+      correlation: 17n,
+      actor: { actorId: actor.actorId, objectGeneration: actor.generation },
+      session: {
+        sessionOwnerNodeRid: Buffer.from('session-owner'),
+        sessionOwnerNodeGeneration: 7n,
+        sessionOwnerId: 'session-owner',
+        sessionOwnerLeaseGeneration: 7n,
+        sessionRid: Buffer.from('session-rid'),
+        retiredBindingGeneration: binding.bindingGeneration
+      }
+    };
+    async function send(value: typeof request): Promise<ReturnType<typeof decodeStatefulReply>> {
+      const frame = Buffer.from(encodeBoundSessionCloseCommand(value, {})[0]!);
+      return await new Promise((resolve, reject) => {
+        void ingress!(
+          withIngressOwner({
+            command: M6bServiceWireCommand.boundSessionClose,
+            flags: 0,
+            sourceRoutingId: remote ? 'actor-owner' : 'session-owner',
+            sourceNodeGeneration: 7n,
+            requestSequence: value.correlation,
+            parts: [frame],
+            reply: (parts: readonly Uint8Array[]) =>
+              resolve(decodeStatefulReply(parts[0]!, value.correlation, 'streamUnbind', false))
+          })
+        ).then((result) => {
+          if (result !== 'infrastructure') reject(new Error(`Close ingress rejected: ${result}`));
+        }, reject);
+      });
+    }
+    for (const session of [
+      { ...request.session, sessionOwnerNodeRid: Buffer.from('other-owner') },
+      { ...request.session, sessionOwnerNodeGeneration: 8n },
+      { ...request.session, sessionOwnerId: 'other-owner' },
+      { ...request.session, sessionOwnerLeaseGeneration: 8n },
+      { ...request.session, sessionRid: Buffer.from('other-session') },
+      { ...request.session, retiredBindingGeneration: binding.bindingGeneration + 1n }
+    ]) {
+      const result = await send({ ...request, session });
+      assert.notEqual(result.terminalResult, RequestResult.Ok);
+      assert.equal(physicalCloses, 0);
+    }
+    let replied = false;
+    const terminal = send(request).then((reply) => {
+      replied = true;
+      return reply;
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(physicalCloses, 1);
+    assert.equal(replied, false, 'reply must follow transport close terminal');
+    resolveClose();
+    assert.equal((await terminal).terminalResult, RequestResult.Ok);
+    assert.notEqual(runtime.registry.binding(actor), undefined, 'close does not separately unbind');
+    const malformed = await ingress!(
+      withIngressOwner({
+        command: M6bServiceWireCommand.boundSessionClose,
+        flags: 0,
+        sourceRoutingId: remote ? 'actor-owner' : 'session-owner',
+        sourceNodeGeneration: 7n,
+        requestSequence: request.correlation,
+        parts: [
+          Buffer.from(encodeBoundSessionCloseCommand(request, {})[0]!),
+          Buffer.from('forbidden')
+        ],
+        reply: () => assert.fail('malformed close must not reach the Session aggregate')
+      })
+    );
+    assert.equal(malformed, 'protocolError');
+    assert.equal(physicalCloses, 1);
+
+    const actorState = runtime.actor(actor.actorId)!;
+    const replaced = await ingress!(
+      withIngressOwner({
+        command: M6bServiceWireCommand.boundSessionReplaced,
+        flags: 0,
+        sourceRoutingId: actor.nodeRid,
+        sourceNodeGeneration: 7n,
+        parts: [
+          encodeBoundSessionReplacedHeader(
+            {
+              actor,
+              targetNodeGeneration: 7n,
+              authorityOwnerGeneration: actorState.authorityOwnerGeneration,
+              ownerLeaseGeneration: 7n
+            },
+            {
+              sessionOwnerNodeRid: binding.sessionOwnerNodeRid,
+              sessionOwnerNodeGeneration: binding.sessionOwnerNodeGeneration!,
+              sessionOwnerId: binding.sessionOwnerId!,
+              sessionOwnerLeaseGeneration: binding.sessionOwnerLeaseGeneration!,
+              sessionRid: binding.sessionRid,
+              retiredBindingGeneration: binding.bindingGeneration
+            }
+          )
+        ]
+      })
+    );
+    assert.equal(replaced, 'infrastructure');
+    const retiredClose = await send(request);
+    assert.equal(
+      wireReplyFailureException(
+        retiredClose.terminalResult,
+        retiredClose.failureCode,
+        'retired close'
+      ).kind,
+      ZLinkFrameworkErrorKind.Unavailable
+    );
+    assert.equal(
+      physicalCloses,
+      1,
+      'a replacement notice retires close admission before its callback'
+    );
+
+    let replacementCloses = 0;
+    await runtime.bindSession(
+      'replacement-rid',
+      actor,
+      1_000,
+      async () => true,
+      undefined,
+      undefined,
+      async () => {
+        replacementCloses++;
+      }
+    ).promise;
+    const current = runtime.registry.binding(actor)!;
+    const stale = await send(request);
+    assert.equal(
+      wireReplyFailureException(stale.terminalResult, stale.failureCode, 'stale close').kind,
+      ZLinkFrameworkErrorKind.Unavailable
+    );
+    assert.equal(replacementCloses, 0);
+    assert.equal(physicalCloses, 1);
+    const currentReply = await send({
+      ...request,
+      session: {
+        ...request.session,
+        sessionRid: Buffer.from('replacement-rid'),
+        retiredBindingGeneration: current.bindingGeneration
+      }
+    });
+    assert.equal(currentReply.terminalResult, RequestResult.Ok);
+    assert.equal(replacementCloses, 1);
+    runtime.close();
+  });
+}
+
+test('bound Session close rejects a payload on its terminal reply', () => {
+  assert.throws(() =>
+    decodeStatefulReply(
+      encodeStatefulReply(17n, RequestResult.Ok, 0),
+      17n,
+      'boundSessionClose',
+      true
+    )
   );
 });

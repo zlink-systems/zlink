@@ -197,7 +197,17 @@ function decodeSessionRelocationBarrier(hex) {
   if (command === 42) {
     const senderRole = byte();
     if (senderRole !== 1) fail("invalid-field");
-    result = { command, relocation, coordinator, senderRole: "source", actor: actorFence(), session: session() };
+    // Command 42 also carries the relocation target node (wire-protocol §command 42).
+    result = {
+      command,
+      relocation,
+      coordinator,
+      senderRole: "source",
+      actor: actorFence(),
+      session: session(),
+      targetNodeRid: text8(),
+      targetNodeGeneration: u64(),
+    };
   } else if (command === 43) {
     // Command 43 returns only the exact seal result and carries no
     // Session-message sequence or high-water (internal-service-wire-protocol).

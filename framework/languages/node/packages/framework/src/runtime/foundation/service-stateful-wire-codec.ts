@@ -1,3 +1,5 @@
+import { decodeRoutingId } from '../routing-id';
+import { decodeBoundSessionCloseCommand } from '../protocol/service_wire_codec.generated';
 import { UINT64_MAX, ZlinkStreamContentType } from '@zlink-systems/stream-wire';
 import { RELOCATION_STATE_CHUNK_DATA_MAX_BYTES } from '../../contracts/Configuration/InternalDefaults';
 import { isCanonicalWireReplyTerminal } from '../framework-errors-internal';
@@ -1091,6 +1093,12 @@ export type ServiceStatefulWireRecord =
       readonly binding: ServiceBoundSessionTransition;
     }
   | {
+      readonly kind: 'boundSessionClose';
+      readonly correlation: bigint;
+      readonly actor: { readonly actorId: string; readonly generation: bigint };
+      readonly session: ServiceRetiredBoundSessionRouteFence;
+    }
+  | {
       readonly kind: 'boundSessionReplaced';
       readonly actorAuthority: ServiceBoundSessionActorAuthority;
       readonly retiredSession: ServiceRetiredBoundSessionRouteFence;
@@ -1721,6 +1729,25 @@ export function decodeStatefulHeader(
             : { state: 'tombstone', retiredGeneration: generation }
       };
     }
+    case M6bServiceWireCommand.boundSessionClose: {
+      const decoded = decodeBoundSessionCloseCommand([frame], {});
+      return {
+        kind: 'boundSessionClose',
+        correlation: decoded.correlation,
+        actor: { actorId: decoded.actor.actorId, generation: decoded.actor.objectGeneration },
+        session: {
+          ...decoded.session,
+          sessionOwnerNodeRid: decodeRoutingId(
+            Buffer.from(decoded.session.sessionOwnerNodeRid).toString('utf8'),
+            Buffer.from(decoded.session.sessionOwnerNodeRid).toString('hex')
+          ),
+          sessionRid: decodeRoutingId(
+            Buffer.from(decoded.session.sessionRid).toString('utf8'),
+            Buffer.from(decoded.session.sessionRid).toString('hex')
+          )
+        }
+      };
+    }
     case M6bServiceWireCommand.boundSessionReplaced: {
       requireFlags(command.flags, 0);
       const actor = reader.actorRef('actorAuthority.actor');
@@ -2018,6 +2045,7 @@ export function decodeStatefulReply(
     | 'actorJoin'
     | 'streamBind'
     | 'streamUnbind'
+    | 'boundSessionClose'
     | 'instanceSpotRequest'
     | 'userSpotCreate'
     | 'userSpotClose'
@@ -2032,6 +2060,8 @@ export function decodeStatefulReply(
   const terminalResult = reader.u32('terminalResult');
   const failureCode = reader.u32('failureCode');
   validateReplyTerminal(terminalResult, failureCode, hasPayload);
+  if (operationKind === 'boundSessionClose' && hasPayload)
+    fail('A bound Session close reply cannot carry application payload.');
   let tail: ServiceStatefulReplyTail | undefined;
   if (terminalResult === 0) {
     if (operationKind === 'actorLookup') {
