@@ -29,7 +29,6 @@ final class ZLinkNativeBoundSessionRuntime implements ZLinkBoundSession {
     private final Duration timeout;
     private final ZLinkStreamCodec defaultCodec;
     private final ZLinkRelayMetadataPolicy metadataPolicy;
-    private long bindingToken;
 
     ZLinkNativeBoundSessionRuntime(
             ZLinkInternalSpotNode spotNode,
@@ -53,10 +52,6 @@ final class ZLinkNativeBoundSessionRuntime implements ZLinkBoundSession {
         this.defaultCodec = defaultCodec == null ? ZLinkStreamCodec.JSON : defaultCodec;
         this.metadataPolicy =
                 metadataPolicy == null ? ZLinkRelayMetadataPolicy.EMPTY : metadataPolicy;
-    }
-
-    void setBindingToken(long bindingToken) {
-        this.bindingToken = bindingToken;
     }
 
     void updateActorRef(ZLinkBackendActorRef actorRef) {
@@ -92,9 +87,7 @@ final class ZLinkNativeBoundSessionRuntime implements ZLinkBoundSession {
 
     @Override
     public CompletionStage<Void> disconnect() {
-        return actorRuntime
-                .retireNativeSessionBinding(actor, bindingToken, spotNode, timeout)
-                .thenApply(ignored -> null);
+        return actorRuntime.closeNativeSessionBinding(actor, spotNode, timeout);
     }
 
     private ZLinkBackendActorRef currentActorRef() {

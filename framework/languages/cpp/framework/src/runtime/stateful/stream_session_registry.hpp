@@ -3,6 +3,7 @@
 
 #include <zlink/framework/contracts/dispatch/execution.hpp>
 #include "runtime/execution/state_lane.hpp"
+#include "runtime/protocol/service_wire_codec.hpp"
 #include "runtime/diagnostics/dispatch_events.hpp"
 #include "runtime/stateful/stateful_object_runtime.hpp"
 
@@ -108,8 +109,12 @@ class stream_session_registry_t
     stream_connection_t open (std::string connection_id,
                               std::function<void ()> close_connection = {},
                               std::optional<zlink::routing_id_t> owner_node_rid = {},
-                              std::uint64_t owner_node_generation = 0);
+                              std::uint64_t owner_node_generation = 0,
+                              std::function<void ()> physical_close = {});
     stream_close_result_t close (const stream_connection_t &connection);
+    task_t<void> close_current (protocol::bound_session_close_t request,
+                                protocol::retired_bound_session_route_fence_t owner);
+
     std::vector<stream_binding_t> bindings (const stream_connection_t &connection) const;
     std::pair<stateful_error_t, stream_binding_t> bind (const stream_connection_t &connection,
                                                         const object_ref_t &actor,
@@ -196,6 +201,7 @@ class stream_session_registry_t
         stream_connection_t connection;
         std::map<std::string, session_binding_aggregate_t> bindings;
         std::function<void ()> close_connection;
+        std::function<void ()> physical_close;
     };
 
     struct actor_binding_locator_t

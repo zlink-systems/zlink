@@ -431,10 +431,12 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
         {
             if (!committed)
             {
+                // The failed submission ends waiting, not authority cleanup.
+                // Complete the source fence even when its deadline is cancelled.
                 var authority = await authorityStore
                     .ReadAuthorityAsync(
                         ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorState.ActorId),
-                        cancellationToken
+                        CancellationToken.None
                     )
                     .ConfigureAwait(false);
                 var restoredPrecommit = false;
@@ -450,7 +452,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                         .AbortSourceAsync(
                             ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorState.ActorId),
                             relocationId,
-                            cancellationToken
+                            CancellationToken.None
                         )
                         .ConfigureAwait(false);
                     authority = new ZLinkAuthorityReadResult.Found(restored);
@@ -568,6 +570,12 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                 read = await authorityStore
                     .ReadAuthorityAsync(authorityKey, token)
                     .ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
+            {
+                // Re-enter the existing settlement loop with its deadline reached.
+                // Authority and Preserve, rather than read cancellation, decide.
+                continue;
             }
             catch (Exception error) when (ZLinkLocationStoreFailure.IsIndeterminate(error, token))
             {

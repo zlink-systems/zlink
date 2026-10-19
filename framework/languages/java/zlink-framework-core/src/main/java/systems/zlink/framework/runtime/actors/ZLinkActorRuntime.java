@@ -2815,20 +2815,21 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         return inOwnerTurn(() -> clearSessionBindingOnLane(actor, bindingToken));
     }
 
-    /**
-     * Retires a native bound Session in one owner turn: the Actor context is cleared only for the
-     * exact binding token, and only then the node's route for it is closed.
-     */
-    CompletionStage<Boolean> retireNativeSessionBinding(
-            ZLinkActor actor, long bindingToken, ZLinkInternalSpotNode node, Duration timeout) {
-        return inOwnerTurn(
-                () -> {
-                    boolean cleared = clearSessionBindingOnLane(actor, bindingToken);
-                    if (cleared) {
-                        node.closeActorBoundSession(requireContext(actor).actorRef(), timeout);
-                    }
-                    return cleared;
-                });
+    CompletionStage<Void> closeNativeSessionBinding(
+            ZLinkActor actor, ZLinkInternalSpotNode node, Duration timeout) {
+        var started =
+                inOwnerTurn(
+                        () ->
+                                node.closeActorBoundSessionAsync(
+                                        requireContext(actor).actorRef(), timeout));
+        var terminal = started.thenCompose(request -> request).toCompletableFuture();
+        systems.zlink.framework.runtime.internal.ZLinkCompletionBridge.forwardCancellation(
+                terminal, started);
+        started.thenAccept(
+                request ->
+                        systems.zlink.framework.runtime.internal.ZLinkCompletionBridge
+                                .forwardCancellation(terminal, request));
+        return terminal;
     }
 
     private boolean clearSessionBindingOnLane(ZLinkActor actor, long bindingToken) {
@@ -4272,7 +4273,6 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                         sourceSessionRid,
                         bindingGeneration,
                         sessionOwnerNodeGeneration);
-        boundSession.setBindingToken(bindingToken);
         return bindingToken;
     }
 

@@ -324,6 +324,75 @@ public final class ZLinkServiceM6BWireCodec {
                 generation);
     }
 
+    public record BoundSessionClose(
+            long correlation,
+            String actorId,
+            long objectGeneration,
+            RetiredSessionRouteFence session) {}
+
+    public ZLinkServiceM6AWireCodec.Reply decodeBoundSessionCloseReply(byte[] frame) {
+        try {
+            if (!(ServiceWireCodec.decodeCommand(List.of(frame), generatedContext())
+                    instanceof ServiceWireCodec.ReplyCommand reply))
+                throw protocol("command is not a Session close reply");
+            return new ZLinkServiceM6AWireCodec.Reply(
+                    reply.correlation().value(),
+                    (int) reply.terminalResult().wire,
+                    (int) reply.failureCode().wire);
+        } catch (IOException failure) {
+            throw protocol("invalid boundSessionClose reply: " + failure.getMessage());
+        }
+    }
+
+    public byte[] encodeBoundSessionClose(BoundSessionClose close) {
+        var session = close.session();
+        try {
+            return ServiceWireCodec.encodeCommand(
+                    new ServiceWireCodec.BoundSessionCloseCommand(
+                            0,
+                            new ServiceWireCodec.NonzeroU64(close.correlation()),
+                            new ServiceWireCodec.ActorRef(
+                                    new ServiceWireCodec.Text8(close.actorId()),
+                                    new ServiceWireCodec.NonzeroU64(close.objectGeneration())),
+                            new ServiceWireCodec.RetiredBoundSessionRouteFence(
+                                    new ServiceWireCodec.Rid(
+                                            session.sessionOwnerNodeRid().toBytes()),
+                                    new ServiceWireCodec.NonzeroU64(
+                                            session.sessionOwnerNodeGeneration()),
+                                    new ServiceWireCodec.Text8(session.sessionOwnerId()),
+                                    new ServiceWireCodec.NonzeroU64(
+                                            session.sessionOwnerLeaseGeneration()),
+                                    new ServiceWireCodec.Rid(session.sessionRid().toBytes()),
+                                    new ServiceWireCodec.NonzeroU64(
+                                            session.retiredBindingGeneration()))),
+                    generatedContext());
+        } catch (IOException failure) {
+            throw protocol("invalid boundSessionClose: " + failure.getMessage());
+        }
+    }
+
+    public BoundSessionClose decodeBoundSessionClose(byte[] frame) {
+        try {
+            if (!(ServiceWireCodec.decodeCommand(List.of(frame), generatedContext())
+                    instanceof ServiceWireCodec.BoundSessionCloseCommand close))
+                throw protocol("command is not boundSessionClose");
+            var session = close.session();
+            return new BoundSessionClose(
+                    close.correlation().value(),
+                    close.actor().actorId().value(),
+                    close.actor().objectGeneration().value(),
+                    new RetiredSessionRouteFence(
+                            RoutingId.from(session.sessionOwnerNodeRid().value()),
+                            session.sessionOwnerNodeGeneration().value(),
+                            session.sessionOwnerId().value(),
+                            session.sessionOwnerLeaseGeneration().value(),
+                            RoutingId.from(session.sessionRid().value()),
+                            session.retiredBindingGeneration().value()));
+        } catch (IOException failure) {
+            throw protocol("invalid boundSessionClose: " + failure.getMessage());
+        }
+    }
+
     public byte[] encodeBoundSessionReplaced(BoundSessionReplaced replacement) {
         Objects.requireNonNull(replacement, "replacement");
         Writer writer = prefix(ServiceWireConstants.COMMAND_BOUND_SESSION_REPLACED, 0);

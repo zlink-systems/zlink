@@ -451,7 +451,7 @@ test('local Session disconnect uses the same Actor-turn identity comparison', as
   await mailbox.close();
 });
 
-test('both disconnect senders use the shared body and preserve a captured binding through rebind', async () => {
+test('physical disconnect preserves its captured binding while close uses the current native owner', async () => {
   const sent = [];
   const target = {
     routerChannelId: 'route',
@@ -478,17 +478,38 @@ test('both disconnect senders use the shared body and preserve a captured bindin
     bindingGeneration: 7n
   });
   assert.equal(Buffer.from(sent[0].payload, 'base64').toString('hex'), fixtures.canonical[0].hex);
+  const currentActor = {
+    actorId: 'actor',
+    objectGeneration: 3n,
+    nodeRid: 'actor-node',
+    meshName: 'game',
+    bindingGeneration: 8n
+  };
+  const owner = {};
+  const closes = [];
   const fallback = new ZLinkNativeFallbackBoundSession({
     actorId: 'actor',
+    actorRefProvider: () => currentActor,
+    nativeActorNodeProvider: () => owner,
     remoteBoundSessionTargetProvider: () => target,
+    requestTimeoutMs: 1234,
+    runtime: {
+      async disconnectNativeBoundSession(...args) {
+        closes.push(args);
+      }
+    },
     routedTransport: {
-      sendToSpot: async (_address, payload) => {
-        sent.push(payload);
+      sendToSpot() {
+        assert.fail('close must not forge a disconnect notification');
       }
     }
   });
   await fallback.disconnect();
-  assert.equal(Buffer.from(sent[1].payload, 'base64').toString('hex'), fixtures.canonical[0].hex);
+  assert.equal(sent.length, 1);
+  assert.equal(closes.length, 1);
+  assert.equal(closes[0][0], owner);
+  assert.equal(closes[0][1], currentActor);
+  assert.equal(closes[0][2], 1234);
 });
 
 test('malformed disconnect records a ProtocolError Warning at Errors level', async () => {

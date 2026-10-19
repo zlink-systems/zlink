@@ -66,6 +66,72 @@ final class ZLinkSessionActorBindingContractTest {
     private static final int MIXED_PARALLEL_RELAYS = 64;
 
     @Test
+    void closeCurrentBindingUsesOnlyExactIdentityAndTransportTerminal() {
+        FakeStream stream = new FakeStream();
+        var runtime = runtime(stream);
+        runtime.bind(new ActorRef("actor-1", 7, MESH, NODE_A)).toCompletableFuture().join();
+        long generation = stream.nativeBindingGeneration;
+        var session =
+                new ZLinkServiceM6BWireCodec.RetiredSessionRouteFence(
+                        RoutingId.from("session-owner"),
+                        3,
+                        "session-owner",
+                        3,
+                        SESSION,
+                        generation);
+        var request = new ZLinkServiceM6BWireCodec.BoundSessionClose(17, "actor-1", 7, session);
+        var transport = new CompletableFuture<Void>();
+        var closes = new java.util.concurrent.atomic.AtomicInteger();
+        var closeStarted = new CompletableFuture<Void>();
+        java.util.function.Supplier<CompletionStage<Void>> close =
+                () -> {
+                    closes.incrementAndGet();
+                    closeStarted.complete(null);
+                    return transport;
+                };
+        for (var stale :
+                List.of(
+                        new ZLinkServiceM6BWireCodec.BoundSessionClose(17, "other", 7, session),
+                        new ZLinkServiceM6BWireCodec.BoundSessionClose(17, "actor-1", 8, session),
+                        new ZLinkServiceM6BWireCodec.BoundSessionClose(
+                                17,
+                                request.actorId(),
+                                request.objectGeneration(),
+                                new ZLinkServiceM6BWireCodec.RetiredSessionRouteFence(
+                                        session.sessionOwnerNodeRid(),
+                                        3,
+                                        session.sessionOwnerId(),
+                                        3,
+                                        SESSION,
+                                        generation + 1)))) {
+            var error =
+                    assertThrows(
+                            CompletionException.class,
+                            () ->
+                                    runtime.closeCurrentBinding(stale, () -> true, close)
+                                            .toCompletableFuture()
+                                            .join());
+            assertEquals(
+                    ZLinkFrameworkErrorKind.UNAVAILABLE,
+                    assertInstanceOf(ZLinkFrameworkException.class, error.getCause()).kind());
+            assertEquals(0, closes.get());
+        }
+        assertThrows(
+                CompletionException.class,
+                () ->
+                        runtime.closeCurrentBinding(request, () -> false, close)
+                                .toCompletableFuture()
+                                .join());
+        var pending = runtime.closeCurrentBinding(request, () -> true, close).toCompletableFuture();
+        closeStarted.orTimeout(2, java.util.concurrent.TimeUnit.SECONDS).join();
+        assertEquals(1, closes.get());
+        assertFalse(pending.isDone());
+        transport.complete(null);
+        pending.join();
+        assertTrue(runtime.find("actor-1").isPresent(), "close request must not separately unbind");
+    }
+
+    @Test
     void sameSessionMixedSendAndRequestPreserveAcceptedSequence() {
         FakeStream stream = new FakeStream();
         ZLinkSessionActorsRuntime runtime = runtime(stream);

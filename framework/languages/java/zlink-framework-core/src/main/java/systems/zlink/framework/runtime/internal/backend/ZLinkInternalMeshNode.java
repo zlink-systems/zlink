@@ -29,6 +29,8 @@ import java.util.function.Consumer;
 import java.util.function.Function;
 
 public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
+    default void cancelPendingOperations() {}
+
     /** Installs the host-owned dispatch-error sink used by transport completion observers. */
     default void setDispatchErrorReporter(ZLinkDispatchErrorReporter reporter) {
         // Alternate backends may report transport failures through their own diagnostics path.
@@ -503,6 +505,17 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
      * Installs the one-way command 51 endpoint. The record is infrastructure state and must not
      * enter the application mailbox.
      */
+    default void setBoundSessionCloseHandler(
+            java.util.function.Function<
+                            ZLinkServiceM6BWireCodec.BoundSessionClose, CompletionStage<Void>>
+                    handler) {}
+
+    default CompletionStage<Void> requestBoundSessionClose(
+            ZLinkServiceM6BWireCodec.BoundSessionClose request, Duration timeout) {
+        return CompletableFuture.failedFuture(
+                new UnsupportedOperationException("Session close is unavailable"));
+    }
+
     default void setBoundSessionReplacedHandler(BoundSessionReplacedHandler handler) {
         // Alternate backends may not support bound-session replacement.
     }
@@ -634,6 +647,7 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
         }
 
         default CompletionStage<Void> admitExisting(
+                ZLinkServiceM6BWireCodec.InstanceRouteFence currentRoute,
                 ZLinkServiceM6BWireCodec.InstanceSpotMessage message,
                 ZLinkBackendReceived received) {
             return null;

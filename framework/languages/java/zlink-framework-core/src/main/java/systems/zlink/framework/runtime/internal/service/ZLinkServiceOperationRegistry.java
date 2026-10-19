@@ -228,13 +228,21 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
 
     @Override
     public void close() {
+        synchronized (gate) {
+            if (closed) return;
+            closed = true;
+        }
+        try {
+            if (maintenance != null) maintenance.cancel(false);
+        } finally {
+            cancelPendingOperations();
+        }
+    }
+
+    public void cancelPendingOperations() {
         Entry<?> detachedHead;
         Entry<?> detachedTail;
         synchronized (gate) {
-            if (closed) {
-                return;
-            }
-            closed = true;
             detachedHead = activeHead;
             detachedTail = activeTail;
             Entry<?> current = detachedHead;
@@ -246,11 +254,7 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
                 current = next;
             }
         }
-        try {
-            if (maintenance != null) maintenance.cancel(false);
-        } finally {
-            completions.postChain(detachedHead, detachedTail);
-        }
+        completions.postChain(detachedHead, detachedTail);
     }
 
     private Entry<?> take(UUID id) {

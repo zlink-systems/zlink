@@ -3,8 +3,11 @@ package systems.zlink.framework.runtime.messaging;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.fasterxml.jackson.databind.JsonMappingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.exc.InvalidFormatException;
 
 import org.junit.jupiter.api.Test;
 
@@ -12,6 +15,7 @@ import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.ZLinkEncodedPayload;
 import systems.zlink.framework.actors.ActorRef;
 import systems.zlink.framework.actors.ActorRefSnapshot;
+import systems.zlink.framework.runtime.internal.json.ZLinkFrameworkJsonProfile;
 import systems.zlink.framework.spots.SpotRef;
 
 import java.io.InputStream;
@@ -21,6 +25,64 @@ import java.util.Map;
 import java.util.stream.IntStream;
 
 final class ZLinkJsonMessageSerializerTest {
+    @Test
+    void signed64AcceptsCanonicalBoundariesAndEscapedAscii() throws Exception {
+        ObjectMapper mapper = ZLinkFrameworkJsonProfile.mapper();
+        for (long expected : new long[] {0, 1, -1, Long.MIN_VALUE, Long.MAX_VALUE}) {
+            String json = "\"" + expected + "\"";
+            assertEquals(expected, mapper.readValue(json, Long.class).longValue());
+            assertEquals(expected, mapper.readValue(json, Long.TYPE).longValue());
+        }
+        assertEquals(12L, mapper.readValue("\"\\u0031\\u0032\"", Long.class).longValue());
+        assertEquals(0L, mapper.readValue("\"\\u0030\"", Long.class).longValue());
+    }
+
+    @Test
+    void signed64PreservesTokenCanonicalAndRangeErrorCategories() throws Exception {
+        ObjectMapper mapper = ZLinkFrameworkJsonProfile.mapper();
+        for (String invalid :
+                List.of(
+                        "-0", "+1", "00", "", " ", " 1", "1 ", "1e2", "-", "１", "١", "1\n",
+                        "1.0")) {
+            JsonMappingException failure =
+                    assertThrows(
+                            JsonMappingException.class,
+                            () -> mapper.readValue(mapper.writeValueAsString(invalid), Long.class),
+                            invalid);
+            assertEquals(JsonMappingException.class, failure.getClass(), invalid);
+            assertEquals(
+                    "64-bit integer is not a canonical decimal string",
+                    failure.getOriginalMessage(),
+                    invalid);
+        }
+        for (String overflow : List.of("9223372036854775808", "-9223372036854775809")) {
+            InvalidFormatException failure =
+                    assertThrows(
+                            InvalidFormatException.class,
+                            () -> mapper.readValue("\"" + overflow + "\"", Long.class),
+                            overflow);
+            assertTrue(
+                    failure.getOriginalMessage()
+                            .contains("64-bit integer is outside its supported range"));
+        }
+        for (String token : List.of("0", "1.0", "true", "{}", "[]")) {
+            JsonMappingException failure =
+                    assertThrows(
+                            JsonMappingException.class,
+                            () -> mapper.readValue(token, Long.class),
+                            token);
+            assertEquals(
+                    "64-bit integers must be decimal JSON strings", failure.getOriginalMessage());
+        }
+        JsonMappingException escapedNoncanonical =
+                assertThrows(
+                        JsonMappingException.class,
+                        () -> mapper.readValue("\"-\\u0030\"", Long.class));
+        assertEquals(
+                "64-bit integer is not a canonical decimal string",
+                escapedNoncanonical.getOriginalMessage());
+    }
+
     @Test
     void consumesEveryFrameworkJsonV1GoldenCase() throws Exception {
         ObjectMapper fixtureMapper = new ObjectMapper();

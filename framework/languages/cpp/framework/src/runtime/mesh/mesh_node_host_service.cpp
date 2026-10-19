@@ -21,6 +21,7 @@
 #include "runtime/messaging/request_failure_mapper.hpp"
 #include "runtime/locations/pending_creation_projection.hpp"
 #include "runtime/utils/poll_interval_wait.hpp"
+#include "runtime/timers/async_delay.hpp"
 #include "runtime/locations/location_runtime.hpp"
 #include "runtime/locations/live_location_reader.hpp"
 #include "runtime/locations/spot_address_resolvers.hpp"
@@ -207,6 +208,8 @@ void application_dispatch_terminal_owner_t::invoke (const std::function<void ()>
 
 namespace
 {
+constexpr auto creation_authority_poll_interval = std::chrono::milliseconds (10);
+
 namespace terminal_codec = zlink::framework::runtime::protocol::generated::detail;
 
 std::atomic_uint64_t next_user_spot_operation{1};
@@ -1565,7 +1568,6 @@ task_t<spot_create_result_t> mesh_node_host_service_t::create_user_spot (
     }
     const object_creation_key_t key{placement_object_kind_t::user_spot, *spot_id};
     object_reservation_fence_t fence;
-    bool source_created_reservation = false;
     const std::string creating_text =
       "zlink:user-spot:creating:v1\n" + stable_type + "\n" + *spot_id;
     std::vector<std::byte> creating_payload;
@@ -1609,7 +1611,55 @@ task_t<spot_create_result_t> mesh_node_host_service_t::create_user_spot (
                                   target.lifecycle_generation,
                                   {target.owner_id, target.lease_generation}};
         reserved = co_await _location_store->reserve (reserve_request);
-        const auto *conflict = std::get_if<object_reserve_conflict_t> (&reserved);
+        auto *existing = std::get_if<object_already_exists_t> (&reserved);
+        auto *conflict = std::get_if<object_reserve_conflict_t> (&reserved);
+        auto *observed = existing   ? &existing->current
+                         : conflict ? std::get_if<authority_snapshot_t> (&conflict->current)
+                                    : nullptr;
+        if (exclusive && observed)
+            co_return result_t<spot_create_result_t>::failure (
+              framework_error_kind_t::already_exists,
+              "Framework-generated User SpotId already has an authority claim");
+        if (observed && observed->allocation.stable_type == stable_type) {
+            auto current = std::move (*observed);
+            while (true) {
+                if (current.allocation.object_kind != placement_object_kind_t::user_spot
+                    || current.allocation.stable_type != stable_type)
+                    co_return result_t<spot_create_result_t>::failure (
+                      framework_error_kind_t::type_mismatch,
+                      "User Spot stable type does not match");
+                const auto authority = decode_direct_user_spot_authority_payload (current.payload);
+                if (current.allocation.state == placement_allocation_state_t::active && authority
+                    && authority->state == user_spot_authority_state_t::ready)
+                    co_return result_t<spot_create_result_t>::success (
+                      {spot_ref_t{*spot_id, current.object_generation,
+                                  current.allocation.target.mesh_name,
+                                  current.allocation.target.node_rid},
+                       spot_create_state_t::existing, std::nullopt});
+                if (!(current.allocation.state == placement_allocation_state_t::reserved
+                      && current.pending_creation)
+                    && !(current.allocation.state == placement_allocation_state_t::active
+                         && authority && authority->state == user_spot_authority_state_t::closing))
+                    co_return result_t<spot_create_result_t>::failure (
+                      framework_error_kind_t::unavailable, "User Spot creation authority changed");
+                if (std::chrono::steady_clock::now () >= deadline)
+                    co_return result_t<spot_create_result_t>::failure (
+                      framework_error_kind_t::deadline_exceeded,
+                      "Timed out waiting for User Spot authority");
+                co_await detail::delay (
+                  _services->get_required<detail::delay_owner_t> (),
+                  std::min (creation_authority_poll_interval,
+                            std::chrono::duration_cast<std::chrono::milliseconds> (
+                              deadline - std::chrono::steady_clock::now ())));
+                auto read =
+                  co_await _location_store->read_authority (spot_authority_key (*spot_id));
+                auto *snapshot = std::get_if<authority_snapshot_t> (&read);
+                if (!snapshot)
+                    break;
+                current = std::move (*snapshot);
+            }
+            continue;
+        }
         const bool target_unavailable =
           conflict && std::holds_alternative<authority_missing_t> (conflict->current);
         if (!std::holds_alternative<object_placement_capacity_exhausted_t> (reserved)
@@ -1628,17 +1678,6 @@ task_t<spot_create_result_t> mesh_node_host_service_t::create_user_spot (
               framework_error_kind_t::unavailable, "User Spot placement candidates were exhausted");
         target = choose_target ();
     }
-    if (const auto *ready = std::get_if<object_already_exists_t> (&reserved)) {
-        if (exclusive)
-            co_return result_t<spot_create_result_t>::failure (
-              framework_error_kind_t::already_exists,
-              "Framework-generated User SpotId already exists");
-        co_return result_t<spot_create_result_t>::success (
-          {spot_ref_t{*spot_id, ready->current.object_generation,
-                      ready->current.allocation.target.mesh_name,
-                      ready->current.allocation.target.node_rid},
-           spot_create_state_t::existing, std::nullopt});
-    }
     if (const auto *mismatch = std::get_if<object_type_mismatch_t> (&reserved)) {
         if (exclusive && mismatch->current.allocation.state == placement_allocation_state_t::active)
             co_return result_t<spot_create_result_t>::failure (
@@ -1652,33 +1691,16 @@ task_t<spot_create_result_t> mesh_node_host_service_t::create_user_spot (
           framework_error_kind_t::unavailable, "User Spot placement capacity is exhausted");
     if (const auto *created = std::get_if<object_reserved_t> (&reserved)) {
         fence = created->fence;
-        source_created_reservation = true;
-    } else if (const auto *conflict = std::get_if<object_reserve_conflict_t> (&reserved)) {
-        if (exclusive)
-            co_return result_t<spot_create_result_t>::failure (
-              framework_error_kind_t::already_exists,
-              "Framework-generated User SpotId already has an authority claim");
-        const auto *snapshot = std::get_if<authority_snapshot_t> (&conflict->current);
-        if (!snapshot || !snapshot->pending_creation
-            || snapshot->allocation.stable_type != stable_type)
-            co_return result_t<spot_create_result_t>::failure (
-              framework_error_kind_t::internal_failure,
-              "User Spot Creating attempt cannot be joined");
-        fence = {snapshot->pending_creation->reservation_id,
-                 snapshot->store_version,
-                 snapshot->object_generation,
-                 snapshot->authority_owner_generation,
-                 {snapshot->allocation.target.mesh_name, snapshot->allocation.target.node_rid,
-                  snapshot->allocation.target.node_lifecycle_generation, snapshot->owner},
-                 snapshot->allocation.capacity_bundle};
-        target.mesh_name = fence.target.mesh_name;
-        target.rid = zlink::routing_id_t::from (std::string (fence.target.node_rid.value ()));
-        target.lifecycle_generation = fence.target.node_lifecycle_generation;
-        target.owner_id = fence.target.owner.owner_id;
-        target.lease_generation = fence.target.owner.lease_generation;
     } else {
         co_return result_t<spot_create_result_t>::failure (framework_error_kind_t::internal_failure,
                                                            "User Spot reservation failed");
+    }
+    timeout = std::chrono::duration_cast<std::chrono::milliseconds> (
+      deadline - std::chrono::steady_clock::now ());
+    if (timeout <= std::chrono::milliseconds::zero ()) {
+        (void) co_await await_result (_location_store->abort ({key, fence}));
+        co_return result_t<spot_create_result_t>::failure (
+          framework_error_kind_t::deadline_exceeded, "User Spot creation deadline elapsed");
     }
     const auto source_status = source->native_node ().status ();
     protocol::user_spot_create_header_t command{
@@ -1695,74 +1717,72 @@ task_t<spot_create_result_t> mesh_node_host_service_t::create_user_spot (
        static_cast<std::uint64_t> (fence.target.owner.lease_generation),
        fence.capacity_bundle.spot_slots},
       static_cast<std::uint64_t> (std::chrono::duration_cast<std::chrono::milliseconds> (
-                                    std::chrono::system_clock::now ().time_since_epoch () + timeout)
+                                    reserve_request.operation_deadline.time_since_epoch ())
                                     .count ())};
     auto completion = std::make_shared<task_completion_source_t<spot_create_result_t>> ();
     auto output = completion->task ();
-    auto on_complete = [completion, target, serializers = _serializers, store = _location_store,
-                        key, fence, source_created_reservation] (
-                         foundation::operation_terminal_t terminal,
-                         protocol::user_spot_create_reply_t reply,
-                         std::optional<protocol::application_payload_t> application_reply) {
-        if (terminal != foundation::operation_terminal_t::completed
-            || reply.header.terminal_result != 0) {
-            if (terminal == foundation::operation_terminal_t::completed)
-                (void) cleanup_source_created_reservation (store, key, fence,
-                                                           source_created_reservation);
-            //  Spec 16 §9 / 26 — preserve the mapped kind and the exact
-            //  operation/wire terminal in the message instead of
-            //  collapsing every failure into one opaque string.
-            const auto mapped_kind =
-              user_spot_terminal::map_user_spot_operation_failure (terminal, reply.header, true);
-            completion->complete (result_t<spot_create_result_t>::failure (
-              mapped_kind, "Remote User Spot creation failed (kind="
-                             + std::to_string (static_cast<int> (mapped_kind))
-                             + ", operationTerminal=" + std::to_string (static_cast<int> (terminal))
-                             + ", terminalResult=" + std::to_string (reply.header.terminal_result)
-                             + ", failureCode=" + std::to_string (reply.header.failure_code)
-                             + ")"));
-            return;
-        }
-        if (reply.result == protocol::user_spot_create_result_t::rejected)
-            (void) cleanup_source_created_reservation (store, key, fence,
-                                                       source_created_reservation);
-        std::optional<message_t> decoded_reply;
-        if (application_reply)
-            decoded_reply = message_t::from_raw (
-              zlink::message_t::from (application_reply->payload_bytes ()), serializers);
-        completion->complete (result_t<spot_create_result_t>::success (
-          {{spot_id_t (reply.spot_id), reply.object_generation, target.mesh_name,
-            node_rid_t::from_string (target.rid.to_string ())},
-           reply.result == protocol::user_spot_create_result_t::existing
-             ? spot_create_state_t::existing
-           : reply.result == protocol::user_spot_create_result_t::created
-             ? spot_create_state_t::created
-             : spot_create_state_t::rejected,
-           std::move (decoded_reply)}));
-    };
+    auto on_complete =
+      [completion, target, serializers = _serializers, store = _location_store, key,
+       fence] (foundation::operation_terminal_t terminal, protocol::user_spot_create_reply_t reply,
+               std::optional<protocol::application_payload_t> application_reply) {
+          if (terminal != foundation::operation_terminal_t::completed
+              || reply.header.terminal_result != 0) {
+              if (terminal == foundation::operation_terminal_t::completed)
+                  (void) cleanup_source_created_reservation (store, key, fence, true);
+              //  Spec 16 §9 / 26 — preserve the mapped kind and the exact
+              //  operation/wire terminal in the message instead of
+              //  collapsing every failure into one opaque string.
+              const auto mapped_kind =
+                user_spot_terminal::map_user_spot_operation_failure (terminal, reply.header, true);
+              completion->complete (result_t<spot_create_result_t>::failure (
+                mapped_kind,
+                "Remote User Spot creation failed (kind="
+                  + std::to_string (static_cast<int> (mapped_kind))
+                  + ", operationTerminal=" + std::to_string (static_cast<int> (terminal))
+                  + ", terminalResult=" + std::to_string (reply.header.terminal_result)
+                  + ", failureCode=" + std::to_string (reply.header.failure_code) + ")"));
+              return;
+          }
+          if (reply.result == protocol::user_spot_create_result_t::rejected)
+              (void) cleanup_source_created_reservation (store, key, fence, true);
+          std::optional<message_t> decoded_reply;
+          if (application_reply)
+              decoded_reply = message_t::from_raw (
+                zlink::message_t::from (application_reply->payload_bytes ()), serializers);
+          completion->complete (result_t<spot_create_result_t>::success (
+            {{spot_id_t (reply.spot_id), reply.object_generation, target.mesh_name,
+              node_rid_t::from_string (target.rid.to_string ())},
+             reply.result == protocol::user_spot_create_result_t::existing
+               ? spot_create_state_t::existing
+             : reply.result == protocol::user_spot_create_result_t::created
+               ? spot_create_state_t::created
+               : spot_create_state_t::rejected,
+             std::move (decoded_reply)}));
+      };
     try {
         auto accepted = source->native_node ().create_user_spot_remote (target.rid, command,
                                                                         timeout, on_complete);
-        detail::observe_task_completion (
-          accepted, [completion, store = _location_store, key, fence,
-                     source_created_reservation] (const result_t<bool> &result) mutable {
-              if (result && result.value ())
-                  return;
-              (void) cleanup_source_created_reservation (store, key, fence,
-                                                         source_created_reservation);
-              completion->complete (result_t<spot_create_result_t>::failure (
-                result ? framework_error_kind_t::rejected : result.error_kind (),
-                result && !result.value ()
-                  ? "User Spot create operation was not admitted"
-                  : (result.error () ? result.error ()->what ()
-                                     : "User Spot create submission failed")));
-          });
+        detail::observe_task_completion (accepted, [completion, store = _location_store, key,
+                                                    fence] (const result_t<bool> &result) mutable {
+            if (result && result.value ())
+                return;
+            (void) cleanup_source_created_reservation (store, key, fence, true);
+            completion->complete (result_t<spot_create_result_t>::failure (
+              result ? framework_error_kind_t::rejected : result.error_kind (),
+              result && !result.value ()
+                ? "User Spot create operation was not admitted"
+                : (result.error () ? result.error ()->what ()
+                                   : "User Spot create submission failed")));
+        });
     }
-    catch (...) {
-        (void) cleanup_source_created_reservation (_location_store, key, fence,
-                                                   source_created_reservation);
+    catch (const framework_exception_t &error) {
+        (void) cleanup_source_created_reservation (_location_store, key, fence, true);
+        completion->complete (detail::result_access_t::failure<spot_create_result_t> (error));
+    }
+    catch (const std::exception &error) {
+        (void) cleanup_source_created_reservation (_location_store, key, fence, true);
         completion->complete (result_t<spot_create_result_t>::failure (
-          framework_error_kind_t::internal_failure, "User Spot create submission failed"));
+          framework_error_kind_t::internal_failure, error.what ()));
     }
     co_return co_await await_result (std::move (output));
 }

@@ -1318,6 +1318,10 @@ export class RawServiceMeshRuntime {
     return this.operations.size;
   }
 
+  cancelPendingOperations(reason: unknown): void {
+    this.operations.failAll(reason);
+  }
+
   /**
    * The next management deadline of this node (spec 08 §4.2): request expiry,
    * liveness probe or timeout, or an owned HELLO exchange still awaiting

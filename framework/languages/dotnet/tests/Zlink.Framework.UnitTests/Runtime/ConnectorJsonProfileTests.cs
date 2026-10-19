@@ -280,6 +280,19 @@ public sealed class ConnectorJsonProfileTests
     [InlineData("comment", "{/*comment*/\"x\":1}", true)]
     [InlineData("empty-key-duplicate", "{\"\":1,\"\":2}", true)]
     [InlineData("trailing-data", "{} {}", true)]
+    [InlineData("empty-object", "{}", false)]
+    [InlineData("empty-object-array", "[{},{}]", false)]
+    [InlineData("nested-empty-object", "{\"a\":{}}", false)]
+    [InlineData("empty-array", "[]", false)]
+    [InlineData("root-null", "null", false)]
+    [InlineData("root-string", "\"value\"", false)]
+    [InlineData("root-bool", "true", false)]
+    [InlineData("array-before-parent-duplicate", "{\"a\":[{},{}],\"a\":{}}", true)]
+    [InlineData("escaped-empty-child-duplicate", "{\"a\":{},\"\\u0061\":{}}", true)]
+    [InlineData("unknown-empty-child-duplicate", "{\"unknown\":{},\"unknown\":{}}", true)]
+    [InlineData("ordinal-empty-children", "{\"a\":{},\"A\":{}}", false)]
+    [InlineData("nonfinite-after-empty", "[{},1e400]", true)]
+    [InlineData("empty-object-trailing", "{} []", true)]
     [InlineData("root-scalar", "123", false)]
     [InlineData("root-array", "[1,[2],{\"x\":3}]", false)]
     [InlineData("sibling-properties", "{\"a\":{\"x\":1},\"b\":{\"x\":2},\"x\":3}", false)]
@@ -308,6 +321,28 @@ public sealed class ConnectorJsonProfileTests
             );
             Assert.Equal(json, connector.GetRawText());
             Assert.Equal(json, server.GetRawText());
+        }
+    }
+
+    [Theory]
+    [InlineData("{}", "0")]
+    [InlineData("[{},{}]", "0")]
+    [InlineData("{\"a\":{}}", "{\"a\":0}")]
+    public void Empty_objects_do_not_allocate_property_sets(string json, string control)
+    {
+        var payload = Encoding.UTF8.GetBytes(json);
+        var baseline = Encoding.UTF8.GetBytes(control);
+        Assert.Equal(CountAllocations(baseline), CountAllocations(payload));
+
+        static long CountAllocations(byte[] bytes)
+        {
+            const int iterations = 1000;
+            for (var i = 0; i < iterations; i++)
+                ZLinkFrameworkJsonDocument.ValidateDocument(bytes);
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            for (var i = 0; i < iterations; i++)
+                ZLinkFrameworkJsonDocument.ValidateDocument(bytes);
+            return GC.GetAllocatedBytesForCurrentThread() - before;
         }
     }
 

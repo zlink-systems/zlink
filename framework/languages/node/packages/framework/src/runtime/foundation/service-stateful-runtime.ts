@@ -1,3 +1,4 @@
+import { encodeBoundSessionCloseCommand } from '../protocol/service_wire_codec.generated';
 import { encodeRoutingIdStorageHex, routingIdsEqual } from '../routing-id';
 import { ZlinkStreamContentType } from '@zlink-systems/stream-wire';
 import { AsyncLocalStorage } from 'node:async_hooks';
@@ -213,6 +214,7 @@ export interface ServiceSessionDelivery {
    * been validated. The stream adapter owns multipart decoding at that point.
    */
   readonly deliver: (sessionRid: string, payloadFrame: Uint8Array) => Promise<boolean>;
+  readonly close?: () => Promise<void>;
   /** Enqueues the replacement lifecycle callback on the owning STREAM session. */
   readonly onBindingReplaced?: (
     actorId: string,
@@ -1762,7 +1764,8 @@ export class ServiceStatefulRuntime {
     timeoutMs: number,
     deliver: ServiceSessionDelivery['deliver'],
     onBindingReplaced?: ServiceSessionDelivery['onBindingReplaced'],
-    actorAuthority?: StreamSessionActorAuthorityFence
+    actorAuthority?: StreamSessionActorAuthorityFence,
+    close?: () => Promise<void>
   ): ServiceStatefulPendingOperation {
     const deadlineMs = performance.now() + timeoutMs;
     const pending = this.operations.register(timeoutMs, 'sender');
@@ -1780,6 +1783,7 @@ export class ServiceStatefulRuntime {
     const delivery: ServiceSessionDelivery = {
       binding: localBinding,
       deliver,
+      ...(close === undefined ? {} : { close }),
       ...(onBindingReplaced === undefined ? {} : { onBindingReplaced })
     };
     const deliveryKey = actorKey(actor);
@@ -1905,6 +1909,59 @@ export class ServiceStatefulRuntime {
         return result;
       })
     };
+  }
+
+  closeBoundSession(
+    actor: ServiceActorRef,
+    expectedBindingGeneration: bigint,
+    timeoutMs: number
+  ): ServiceStatefulPendingOperation {
+    const pending = this.operations.register(timeoutMs);
+    const binding = this.registry.binding(actor);
+    if (binding === undefined) {
+      this.operations.reply(
+        pending.id,
+        internalFrameworkWireReply(ZLinkFrameworkInternalErrorKind.ActorSessionNotBound)
+      );
+      return pending;
+    }
+    const header = Buffer.from(
+      encodeBoundSessionCloseCommand(
+        {
+          command: 'boundSessionClose',
+          flags: 0,
+          correlation: pending.id,
+          actor: { actorId: actor.actorId, objectGeneration: actor.generation },
+          session: {
+            sessionOwnerNodeRid: Buffer.from(
+              encodeRoutingIdStorageHex(binding.sessionOwnerNodeRid),
+              'hex'
+            ),
+            sessionOwnerNodeGeneration: binding.sessionOwnerNodeGeneration!,
+            sessionOwnerId: binding.sessionOwnerId!,
+            sessionOwnerLeaseGeneration: binding.sessionOwnerLeaseGeneration!,
+            sessionRid: Buffer.from(encodeRoutingIdStorageHex(binding.sessionRid), 'hex'),
+            retiredBindingGeneration: expectedBindingGeneration
+          }
+        },
+        {}
+      )[0]!
+    );
+    const reply = routingIdsEqual(binding.sessionOwnerNodeRid, this.nodeRid)
+      ? this.requestLocalInfrastructure(header, pending.id, timeoutMs)
+      : this.raw.requestService(binding.sessionOwnerNodeRid, [header], timeoutMs);
+    void reply.then(
+      (parts) =>
+        this.completeRemoteReply(
+          pending,
+          binding.sessionOwnerNodeRid,
+          'boundSessionClose',
+          undefined,
+          parts
+        ),
+      (error) => this.operations.fail(pending.id, error)
+    );
+    return pending;
   }
 
   unbindSession(
@@ -2039,6 +2096,10 @@ export class ServiceStatefulRuntime {
     this.spotMessageFollow.clear();
   }
 
+  cancelPendingOperations(reason: unknown): void {
+    this.operations.failAll(reason);
+  }
+
   private async ingress(
     record: RawServiceIngressRecord
   ): Promise<RawServicePumpResult | undefined> {
@@ -2088,7 +2149,8 @@ export class ServiceStatefulRuntime {
         decoded.kind === 'userSpotClose' ||
         decoded.kind === 'actorCreate' ||
         decoded.kind === 'messageFollow' ||
-        decoded.kind === 'boundSessionReplaced';
+        decoded.kind === 'boundSessionReplaced' ||
+        decoded.kind === 'boundSessionClose';
       if (
         record.parts.length < 1 ||
         record.parts.length > (instanceMetadata || statefulMetadata ? 3 : 2) ||
@@ -2330,6 +2392,8 @@ export class ServiceStatefulRuntime {
         );
       case 'boundSessionBind':
         return this.replySessionBind(ingress, record);
+      case 'boundSessionClose':
+        return await this.handleBoundSessionClose(ingress, record);
       case 'boundSessionReplaced':
         return this.handleBoundSessionReplaced(ingress, record);
       case 'boundSessionSend':
@@ -3510,6 +3574,33 @@ export class ServiceStatefulRuntime {
     return 'infrastructure';
   }
 
+  private async handleBoundSessionClose(
+    ingress: RawServiceIngressRecord,
+    record: Extract<ServiceStatefulWireRecord, { readonly kind: 'boundSessionClose' }>
+  ): Promise<RawServicePumpResult> {
+    if (ingress.requestSequence === undefined) return 'protocolError';
+    try {
+      const delivery = this.sessionDeliveries.get(actorKey(record.actor));
+      if (
+        delivery === undefined ||
+        delivery.binding.actor.generation !== record.actor.generation ||
+        !exactRetiredDelivery(delivery.binding, record.session) ||
+        delivery.close === undefined
+      ) {
+        throw createInternalFrameworkException(
+          ZLinkFrameworkInternalErrorKind.RouteNotConnected,
+          'The requested session binding is no longer current.'
+        );
+      }
+      await delivery.close();
+      this.replyWire(ingress, record.correlation, RequestResult.Ok, 0);
+    } catch (error) {
+      const result = failure(error);
+      this.replyWire(ingress, record.correlation, result.terminalResult, result.failureCode);
+    }
+    return 'infrastructure';
+  }
+
   /**
    * Handles the replacement notice at the retired session owner.  This path
    * intentionally never calls validateActorFence(): the notice is authorized
@@ -3564,6 +3655,9 @@ export class ServiceStatefulRuntime {
           : undefined;
     if (delivery === undefined) return 'infrastructure';
     this.appliedReplacementNotices.add(key);
+    if (delivery === current) {
+      this.sessionDeliveries.delete(deliveryKey);
+    }
     delivery.onBindingReplaced?.(actor.actorId, record.retiredSession, actor);
     if (retired !== undefined) {
       this.retiredSessionDeliveries.delete(sessionDeliveryKey(retired.binding));
@@ -4716,6 +4810,7 @@ export class ServiceStatefulRuntime {
       | 'actorJoin'
       | 'streamBind'
       | 'streamUnbind'
+      | 'boundSessionClose'
       | 'instanceSpotRequest',
     actor: ServiceActorRef | undefined,
     reply: readonly Buffer[]
@@ -5423,7 +5518,7 @@ function failure(error: unknown): ServiceStatefulResult {
   return internalFrameworkWireReply(ZLinkFrameworkInternalErrorKind.RequestFailed);
 }
 
-function actorKey(actor: ServiceActorRef): string {
+function actorKey(actor: Pick<ServiceActorRef, 'actorId' | 'generation'>): string {
   return `${actor.actorId}\0${actor.generation}`;
 }
 
@@ -5516,7 +5611,7 @@ function exactRetiredDelivery(
 ): boolean {
   return (
     routingIdsEqual(binding.sessionRid, retired.sessionRid) &&
-    binding.sessionOwnerNodeRid === retired.sessionOwnerNodeRid &&
+    routingIdsEqual(binding.sessionOwnerNodeRid, retired.sessionOwnerNodeRid) &&
     binding.sessionOwnerNodeGeneration === retired.sessionOwnerNodeGeneration &&
     binding.sessionOwnerId === retired.sessionOwnerId &&
     binding.sessionOwnerLeaseGeneration === retired.sessionOwnerLeaseGeneration &&
@@ -5882,7 +5977,8 @@ function acceptsStatefulIngress(command: number): boolean {
       command !== M6bServiceWireCommand.userSpotClose &&
       command !== M6bServiceWireCommand.actorCreate &&
       command !== M6bServiceWireCommand.messageFollow &&
-      command !== M6bServiceWireCommand.boundSessionReplaced)
+      command !== M6bServiceWireCommand.boundSessionReplaced &&
+      command !== M6bServiceWireCommand.boundSessionClose)
   ) {
     return false;
   }

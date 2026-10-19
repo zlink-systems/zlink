@@ -214,6 +214,7 @@ import { ZLinkInstanceActivationAuthority } from './instance-activation-authorit
 import { ZLinkLocationRuntimeOwner } from './location-runtime-owner';
 import { MeshRouterResolver } from './mesh-router-resolver';
 import {
+  type ZLinkDrainForceReason,
   ZLinkDrainingStatePublishError,
   ZLinkRetiringRollbackError,
   ZLinkRouteMeshRuntimeCoordinator
@@ -861,7 +862,8 @@ export class ZLinkFrameworkRuntimeHost
         this.performMeshDrain(meshName, signal, stopStartingSignal),
       shutdownResources: (meshName, signal) => this.performMeshShutdown(meshName, signal),
       cleanupHostResources: (signal) => this.cleanupOwnerForDrain(signal),
-      forceStopResources: (meshName) => this.forceStopMesh(meshName)
+      forceStopResources: (meshName, reason, signal) =>
+        this.performMeshShutdown(meshName, signal, reason)
     });
     this.metricRegistrations.push(
       this.metrics.registerHostState(() => runtimeStateMetricName(this.runtimeState)),
@@ -1880,8 +1882,24 @@ export class ZLinkFrameworkRuntimeHost
     );
   }
 
-  private async performMeshShutdown(meshName: string, signal: AbortSignal): Promise<void> {
-    await awaitWithDrainSignal(this.serviceRelocation.drainActorJoinSources(meshName), signal);
+  private async performMeshShutdown(
+    meshName: string,
+    signal: AbortSignal,
+    forceReason?: ZLinkDrainForceReason
+  ): Promise<void> {
+    if (forceReason !== undefined) {
+      this.spotNodeRuntime
+        ?.meshNode(meshName)
+        ?.cancelPendingOperations?.(
+          createInternalFrameworkException(
+            ZLinkFrameworkInternalErrorKind.RuntimeShutdown,
+            'The host stopped before the request completed.'
+          )
+        );
+      await waitForForcedSessionNotification(this.streamRuntime?.notifyServerDrain(meshName));
+    } else {
+      await awaitWithDrainSignal(this.serviceRelocation.drainActorJoinSources(meshName), signal);
+    }
     await this.spotManager?.drainForShutdown(meshName, signal, this.runtimeDeadline);
     await awaitWithDrainSignal(this.streamRuntime?.notifyServerDrain(meshName), signal);
   }
@@ -2033,11 +2051,6 @@ export class ZLinkFrameworkRuntimeHost
     } catch (error) {
       throw new ZLinkOwnerCleanupError(error);
     }
-  }
-
-  private async forceStopMesh(meshName: string): Promise<void> {
-    await waitForForcedSessionNotification(this.streamRuntime?.notifyServerDrain(meshName));
-    await this.spotManager?.drainForShutdown(meshName, undefined, this.runtimeDeadline);
   }
 
   private registerInstanceApplicationLifecycle(

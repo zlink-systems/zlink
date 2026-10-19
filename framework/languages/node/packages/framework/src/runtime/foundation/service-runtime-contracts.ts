@@ -379,7 +379,8 @@ export interface StreamSessionService {
       retiredSession: ServiceRetiredBoundSessionRouteFence,
       actor: ServiceActorRef
     ) => void,
-    actorAuthority?: StreamSessionActorAuthorityFence
+    actorAuthority?: StreamSessionActorAuthorityFence,
+    close?: () => Promise<void>
   ): MeshOperationId;
   unbindActor(
     sessionRid: RoutingId,

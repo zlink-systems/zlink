@@ -299,3 +299,19 @@ internal readonly record struct ZLinkBackendSocketMonitorEvent(
     ulong Value,
     MonitorEventFlags Flags = MonitorEventFlags.None
 );
+
+internal interface IZLinkBackendBoundSessionClose
+{
+    void SetBoundSessionCloseHandler(
+        Func<
+            Systems.Zlink.Framework.Runtime.Protocol.ServiceWireCodec.BoundSessionClose54,
+            CancellationToken,
+            ValueTask
+        > handler
+    );
+    ValueTask CloseBoundSessionAsync(
+        Systems.Zlink.Framework.Runtime.Protocol.ServiceWireCodec.BoundSessionClose54 request,
+        TimeSpan timeout,
+        CancellationToken cancellationToken
+    );
+}

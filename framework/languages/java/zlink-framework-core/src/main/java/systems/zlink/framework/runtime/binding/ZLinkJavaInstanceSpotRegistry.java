@@ -255,10 +255,11 @@ final class ZLinkJavaInstanceSpotRegistry {
 
     CompletionStage<Void> admitExisting(
             String stableType,
+            ZLinkServiceM6BWireCodec.InstanceRouteFence currentRoute,
             ZLinkServiceM6BWireCodec.InstanceSpotMessage message,
             ZLinkBackendReceived received) {
         InstanceSpotActivationHandler hook = hooks.get(stableType);
-        return hook == null ? null : hook.admitExisting(message, received);
+        return hook == null ? null : hook.admitExisting(currentRoute, message, received);
     }
 
     CompletionStage<ZLinkServiceM6BWireCodec.InstanceRouteFence> reserve(

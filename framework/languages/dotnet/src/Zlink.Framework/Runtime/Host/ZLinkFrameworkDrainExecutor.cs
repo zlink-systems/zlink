@@ -533,7 +533,12 @@ internal sealed class ZLinkFrameworkDrainExecutor : IZLinkDrainExecutor
             {
                 try
                 {
-                    await _operations.CleanupOwner(_shutdownDeadline.Token).ConfigureAwait(false);
+                    await _operations.CleanupOwner(cancellationToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException error)
+                    when (cancellationToken.IsCancellationRequested)
+                {
+                    failures.Add(error);
                 }
                 catch (Exception error)
                 {
@@ -544,7 +549,7 @@ internal sealed class ZLinkFrameworkDrainExecutor : IZLinkDrainExecutor
             }
             await CaptureAsync(
                     "stop_location",
-                    () => _operations.StopLocation(_shutdownDeadline.Token),
+                    () => _operations.StopLocation(cancellationToken),
                     failures
                 )
                 .ConfigureAwait(false);

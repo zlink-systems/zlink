@@ -64,6 +64,160 @@ final class SessionActorsRuntimeIntegrationTest {
     private static final LinkedBlockingQueue<RoutingId> connectedSessions =
             new LinkedBlockingQueue<>();
 
+    private static java.util.logging.FileHandler closeFlow;
+
+    @org.junit.jupiter.api.BeforeAll
+    static void captureCloseFlow() throws Exception {
+        closeFlow = new java.util.logging.FileHandler("build/bound-session-close.flow");
+        closeFlow.setFormatter(new java.util.logging.SimpleFormatter());
+        java.util.logging.Logger.getLogger(
+                        "systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer")
+                .addHandler(closeFlow);
+    }
+
+    @org.junit.jupiter.api.AfterAll
+    static void closeCloseFlow() {
+        java.util.logging.Logger.getLogger(
+                        "systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer")
+                .removeHandler(closeFlow);
+        closeFlow.close();
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource({
+        "false,false",
+        "false,true",
+        "true,false",
+        "true,true"
+    })
+    void actorHandlerClosesPhysicalBoundSession(boolean remote, boolean join) throws Exception {
+        var locations = new ZLinkInMemoryLocationStore();
+        var ownerOptions = new DefaultZLinkFrameworkOptions();
+        ownerOptions
+                .configureDispatch()
+                .messageFlow(systems.zlink.framework.configuration.ZLinkMessageFlowLogMode.NORMAL);
+        ownerOptions.addLocationStore(locations);
+        var ownerNode = ownerOptions.addRouteMesh("game");
+        ownerNode.listen("tcp://127.0.0.1:0");
+        ownerNode
+                .objects()
+                .server()
+                .addEntrySpot(GameEntrySpot.class)
+                .addActorFactory(
+                        "player",
+                        PlayerActor.class,
+                        PlayerActorFactory.class,
+                        factory -> factory.disableRelocation())
+                .addSpotFactory("GameSpot", GameSpot.class, factory -> factory.disableRelocation());
+        if (!remote) {
+            var stream = ownerOptions.addStreamNode("gateway");
+            stream.bind("tcp://127.0.0.1:0");
+            stream.enableActorDispatch();
+            stream.registerSession(GameSession.class);
+        }
+        try (var owner =
+                RuntimeTestSupport.startFramework(
+                        ownerOptions, new ZLinkJavaBackendAdapterFactory())) {
+            ZLinkFrameworkRuntime sessionOwner = owner;
+            if (remote) {
+                var sessionOptions = new DefaultZLinkFrameworkOptions();
+                sessionOptions
+                        .configureDispatch()
+                        .messageFlow(
+                                systems.zlink.framework.configuration.ZLinkMessageFlowLogMode
+                                        .NORMAL);
+                sessionOptions.addLocationStore(locations);
+                var node = sessionOptions.addRouteMesh("game");
+                node.listen("tcp://127.0.0.1:0");
+                node.objects().client();
+                node.peerConnections()
+                        .connect(
+                                owner.listenerStatus(ZLinkListenerKind.ROUTE_MESH, "game")
+                                        .endpoint());
+                var stream = sessionOptions.addStreamNode("gateway");
+                stream.bind("tcp://127.0.0.1:0");
+                stream.enableActorDispatch();
+                stream.registerSession(GameSession.class);
+                sessionOwner =
+                        RuntimeTestSupport.startFramework(
+                                sessionOptions, new ZLinkJavaBackendAdapterFactory());
+            }
+            try (Socket client = connectStream(sessionOwner, "gateway")) {
+                client.setSoTimeout(3000);
+                var created =
+                        assertInstanceOf(
+                                ZLinkActorCreateResult.Created.class,
+                                owner.actorManager()
+                                        .getOrCreate("close-player", "player")
+                                        .submit()
+                                        .toCompletableFuture()
+                                        .get(3, TimeUnit.SECONDS));
+                var watched = (PlayerActor) managedActor(owner, "close-player", "player");
+                var sessionActors = sessionOwner.sessionActors("gateway", connectedSession());
+                sessionActors
+                        .bindOrGet(created.actor())
+                        .toCompletableFuture()
+                        .get(3, TimeUnit.SECONDS);
+                var input = client.getInputStream();
+                var prefix = ByteBuffer.wrap(input.readNBytes(6));
+                input.readNBytes(Short.toUnsignedInt(prefix.getShort()) + prefix.getInt());
+                if (join) {
+                    owner.spotManager()
+                            .getOrCreate("close-room", "GameSpot")
+                            .submit()
+                            .toCompletableFuture()
+                            .get(3, TimeUnit.SECONDS);
+                    owner.actorClient()
+                            .requestToActor("close-player", new CloseJoinRequest())
+                            .submit(String.class)
+                            .toCompletableFuture()
+                            .get(3, TimeUnit.SECONDS);
+                    assertEquals(
+                            "close-room",
+                            owner.actorClient()
+                                    .requestToActor("close-player", new CloseWhereRequest())
+                                    .submit(String.class)
+                                    .toCompletableFuture()
+                                    .get(3, TimeUnit.SECONDS));
+                }
+                assertEquals(
+                        "closed",
+                        owner.actorClient()
+                                .requestToActor("close-player", new CloseRequest())
+                                .submit(String.class)
+                                .toCompletableFuture()
+                                .get(3, TimeUnit.SECONDS));
+                assertEquals(
+                        -1,
+                        input.read(),
+                        "Actor disconnect must close the physical client connection");
+                watched.disconnected.get(3, TimeUnit.SECONDS);
+                assertEquals(1, watched.disconnectCount.get());
+                long cleanupDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
+                while (sessionActors.find("close-player").isPresent()
+                        && System.nanoTime() < cleanupDeadline) Thread.sleep(10);
+                org.junit.jupiter.api.Assertions.assertTrue(
+                        sessionActors.find("close-player").isEmpty());
+                var unbound =
+                        org.junit.jupiter.api.Assertions.assertThrows(
+                                java.util.concurrent.ExecutionException.class,
+                                () ->
+                                        owner.actorClient()
+                                                .requestToActor("close-player", new CloseRequest())
+                                                .submit(String.class)
+                                                .toCompletableFuture()
+                                                .get(3, TimeUnit.SECONDS));
+                assertEquals(
+                        systems.zlink.framework.errors.ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                        ((systems.zlink.framework.errors.ZLinkFrameworkException)
+                                        unbound.getCause())
+                                .kind());
+            } finally {
+                if (remote) sessionOwner.close();
+            }
+        }
+    }
+
     @Test
     void remoteBindingAcknowledgesSessionContext() throws Exception {
         var locations = new ZLinkInMemoryLocationStore();
@@ -387,6 +541,16 @@ final class SessionActorsRuntimeIntegrationTest {
     }
 
     public static final class PlayerActor implements ZLinkActor {
+        final CompletableFuture<Void> disconnected = new CompletableFuture<>();
+        final java.util.concurrent.atomic.AtomicInteger disconnectCount =
+                new java.util.concurrent.atomic.AtomicInteger();
+
+        CompletionStage<Void> observeDisconnect() {
+            disconnectCount.incrementAndGet();
+            disconnected.complete(null);
+            return CompletableFuture.completedFuture(null);
+        }
+
         private final ZLinkActorContext context;
 
         PlayerActor(ZLinkActorContext context) {
@@ -421,12 +585,26 @@ final class SessionActorsRuntimeIntegrationTest {
         @Override
         public void configure() {
             context.handlers().addHandler(ActorEchoHandler.class);
+            context.handlers().addHandler(CloseHandler.class);
+            context.handlers().addHandler(CloseWhereHandler.class);
             context.handlers().addHandler(ActorNotifyHandler.class);
+        }
+
+        @Override
+        public CompletionStage<systems.zlink.framework.spots.ZLinkSpotActorJoinResult> onActorJoin(
+                String actorId, ZLinkMessage request) {
+            return CompletableFuture.completedFuture(
+                    systems.zlink.framework.spots.ZLinkSpotActorJoinResult.accept());
         }
 
         @Override
         public CompletionStage<Void> onJoinedActor(PlayerActor actor) {
             return CompletableFuture.completedFuture(null);
+        }
+
+        @Override
+        public CompletionStage<Void> onDisconnectActor(PlayerActor actor) {
+            return actor.observeDisconnect();
         }
 
         @Override
@@ -450,6 +628,9 @@ final class SessionActorsRuntimeIntegrationTest {
         @Override
         public void configure() {
             context.handlers().addHandler(ActorEchoHandler.class);
+            context.handlers().addHandler(CloseHandler.class);
+            context.handlers().addHandler(CloseJoinHandler.class);
+            context.handlers().addHandler(CloseWhereHandler.class);
             context.handlers().addHandler(ActorNotifyHandler.class);
         }
 
@@ -459,8 +640,41 @@ final class SessionActorsRuntimeIntegrationTest {
         }
 
         @Override
+        public CompletionStage<Void> onDisconnectActor(PlayerActor actor) {
+            return actor.observeDisconnect();
+        }
+
+        @Override
         public CompletionStage<Void> onLeaveActor(PlayerActor actor) {
             return CompletableFuture.completedFuture(null);
+        }
+    }
+
+    public record CloseRequest() {}
+
+    public record CloseJoinRequest() {}
+
+    public record CloseWhereRequest() {}
+
+    public static final class CloseHandler {
+        @ZLinkSpotActorRequest
+        public CompletionStage<String> handle(PlayerActor actor, CloseRequest request) {
+            return actor.context().boundSession().disconnect().thenApply(ignored -> "closed");
+        }
+    }
+
+    public static final class CloseJoinHandler {
+        @ZLinkSpotActorRequest
+        public CompletionStage<String> handle(PlayerActor actor, CloseJoinRequest request) {
+            actor.context().joinSpot("close-room").defer();
+            return CompletableFuture.completedFuture("joined");
+        }
+    }
+
+    public static final class CloseWhereHandler {
+        @ZLinkSpotActorRequest
+        public CompletionStage<String> handle(PlayerActor actor, CloseWhereRequest request) {
+            return CompletableFuture.completedFuture(actor.context().spotId().orElse("entry"));
         }
     }
 

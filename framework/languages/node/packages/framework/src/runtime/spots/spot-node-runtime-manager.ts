@@ -34,7 +34,7 @@ import {
 import { ZLinkLocationWriteIntent, ZLinkLocationWriteStatus } from '../../contracts/Locations';
 import type { ZLinkLocationOptionOverrides } from '../../contracts/Locations/Options';
 import type { ZLinkLocationOwnerToken } from '../../contracts/Locations/Writes';
-import { createAbortError } from '../abort';
+import { awaitWithAbort, createAbortError } from '../abort';
 import type { ZLinkActivationConcurrency } from '../activation-admission';
 import type { ZLinkRemoteBoundSessionTarget } from '../actors';
 import type { ZLinkActorHandoffPacket } from '../actors/actor-handoff';
@@ -861,8 +861,12 @@ export class ZLinkSpotNodeRuntimeManager {
     };
     await settle(publishers.map(async (publisher) => publisher.close()));
     await settle(autoConnectLoops.map((loop) => loop.prepareTransportShutdown()));
-    await settle(entryActivations.reverse().map((activation) => activation.dispose(deadline)));
-    await settle(meshPumps.reverse().map((pump) => pump.dispose()));
+    await settle(
+      entryActivations
+        .reverse()
+        .map((activation) => awaitWithAbort(activation.dispose(deadline), signal))
+    );
+    await settle(meshPumps.reverse().map((pump) => pump.dispose(signal)));
     await settle(
       meshNodes.reverse().map(async (node) => {
         await node.shutdown(DEFAULT_SPOT_NODE_SHUTDOWN_TIMEOUT_MS);
