@@ -222,8 +222,9 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                 .ConfigureAwait(false);
             ValidateRelocationStateBound(actorState.ActorId, applicationState);
             // Switch ingress to the bounded final hold while the immutable
-            // journal is built. The exact commit boundary is frozen only
-            // after the source fences in the initial journal are verified.
+            // journal is built. Accepted records keep the source owner values
+            // recorded at acceptance; relocation does not read them again
+            // (Location runtime §9.3).
             var sourceNode = runtime.GetSpotNodeRuntime(sourceRef.Value.NodeRid);
             //  Spec 30 §11: the SafeToShutdown obligation starts at
             //  seal, not at cutover — waiting until cutover
@@ -234,17 +235,6 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
             //  abort could race the attach.
             actorState.Handoff.SealCapture(runtime.BeginPendingRelocationUnit());
             var semanticSealRecords = CreateAcceptedRecords(actorState.Handoff.SnapshotFrames());
-            await ZLinkActorRequestSourceFenceValidator
-                .ValidateAsync(
-                    authorityStore,
-                    sourceAuthority.MeshName,
-                    sourceNode.Node.MeshStatus(),
-                    sourceNode.Node.MeshPeers(),
-                    semanticSealRecords,
-                    RemainingTimeout(deadline),
-                    cancellationToken
-                )
-                .ConfigureAwait(false);
             precommitSnapshot = await precommit
                 .BeginPreparingAsync(
                     found.Snapshot,
@@ -325,17 +315,6 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
             var commitBoundary = actorState.Handoff.FreezeCaptureCommitBoundary();
             var acceptedRecords = CreateAcceptedRecords(commitBoundary.Frames);
             acceptedCount = acceptedRecords.Count;
-            await ZLinkActorRequestSourceFenceValidator
-                .ValidateAsync(
-                    authorityStore,
-                    sourceAuthority.MeshName,
-                    sourceNode.Node.MeshStatus(),
-                    sourceNode.Node.MeshPeers(),
-                    acceptedRecords,
-                    RemainingTimeout(deadline),
-                    cancellationToken
-                )
-                .ConfigureAwait(false);
             var data = acceptedRecords
                 .Skip(semanticSealRecords.Count)
                 .Select(accepted => new ZLinkServiceWireCodec.RelocationDataRecord(

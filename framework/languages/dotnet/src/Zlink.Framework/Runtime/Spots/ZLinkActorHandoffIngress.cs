@@ -152,6 +152,12 @@ internal static class ZLinkActorHandoffIngress
             {
                 continue;
             }
+            // An unaccepted frame is not captured; the inbound pipeline ends it Unavailable.
+            if (ZLinkRequestSourceFenceResolver.LacksRecordedSource(runtime, frame.RequestSource))
+            {
+                dispatchable.Add(frame);
+                continue;
+            }
             try
             {
                 var state = runtime.GetOrCreateActorState(frame.Actor.ActorId);

@@ -60,6 +60,7 @@ import {
   ServiceStaleGenerationError,
   ServiceStatefulRegistry,
   ServiceTerminalOperationRegistry,
+  RELOCATION_REPLY_RETENTION_MS,
   type ServiceActorRef,
   type ServiceActorState,
   type ServiceSessionBinding,
@@ -437,7 +438,7 @@ export class ServiceStatefulRuntime {
 
   readonly registry: ServiceStatefulRegistry;
 
-  private readonly operations: ServiceTerminalOperationRegistry<ServiceStatefulResult>;
+  private readonly operations: ServiceTerminalOperationRegistry<ServiceStatefulResult, bigint>;
   private readonly sessionDeliveries = new Map<string, ServiceSessionDelivery>();
   /**
    * A local Actor owner can replace its own session binding before the
@@ -470,6 +471,7 @@ export class ServiceStatefulRuntime {
   private asyncInstanceAuthority?: ServiceAsyncInstanceActivationAuthority;
   private instanceApplicationLifecycle?: ServiceInstanceApplicationLifecycle;
   private userSpotOperationHandler?: ServiceUserSpotOperationHandler;
+  private requestSourceAcceptance?: import('../backend/contracts').ZLinkBackendRequestSourceAcceptance;
   private messageFollowHandler?: (
     record: import('./service-stateful-wire-codec').ServiceMessageFollowRecord
   ) => void;
@@ -1233,6 +1235,59 @@ export class ServiceStatefulRuntime {
     this.messageFollowHandler = handler;
   }
 
+  setRequestSourceAcceptance(
+    acceptance: import('../backend/contracts').ZLinkBackendRequestSourceAcceptance
+  ): void {
+    this.requestSourceAcceptance = acceptance;
+  }
+
+  /**
+   * Location runtime §9.3: the first accepting owner reads the sender's owner values once. A
+   * sender without a live descriptor ends the request Unavailable (Session·Actor binding §4). The
+   * polled descriptors answer without a promise; only a Store read returns one.
+   */
+  private acceptRequestSource(ingress: RawServiceIngressRecord): Promise<void> | undefined {
+    if (ingress.requestSource !== undefined) return undefined;
+    const acceptance = this.requestSourceAcceptance;
+    if (acceptance === undefined) return undefined;
+    const generation = this.tryPeerGeneration(ingress.sourceRoutingId);
+    const source =
+      generation === undefined ? undefined : acceptance(ingress.sourceRoutingId, generation);
+    if (source instanceof Promise) {
+      return source.then(
+        (read) => this.recordRequestSource(ingress, read),
+        (error: unknown) => {
+          if (
+            error instanceof ZLinkFrameworkException &&
+            error.kind === ZLinkFrameworkErrorKind.Unavailable &&
+            this.dispatchErrors?.captureEnabled() === true
+          ) {
+            this.dispatchErrors.report({
+              surface: ZLinkDispatchErrorSurface.Node,
+              messageKind: ZLinkDispatchMessageKind.Request,
+              reason: ZLinkDispatchErrorReason.StaleTarget,
+              action: ZLinkDispatchErrorAction.ReplyError,
+              meshName: this.dispatchErrorMeshName,
+              sourceRid: ingress.sourceRoutingId,
+              error
+            });
+          }
+          throw error;
+        }
+      );
+    }
+    this.recordRequestSource(ingress, source);
+    return undefined;
+  }
+
+  private recordRequestSource(
+    ingress: RawServiceIngressRecord,
+    source: import('../locations/request-source-resolver').ZLinkRequestSourceFence | undefined
+  ): void {
+    if (source === undefined) throw requestSourceUnavailable(ingress.sourceRoutingId);
+    ingress.requestSource = source;
+  }
+
   sealSpotMessageFollowIngress(
     source: ServiceDirectSpotRouteFence
   ): ServiceSpotMessageFollowSeal | undefined {
@@ -1494,7 +1549,8 @@ export class ServiceStatefulRuntime {
     onAdmitted?: () => void,
     routeFence?: ServiceActorRouteFence
   ): ServiceStatefulPendingOperation {
-    const pending = this.operations.register(timeoutMs);
+    const operationLow = this.nextMessageFollowOperation++;
+    const pending = this.operations.register(timeoutMs, 'registry', operationLow);
     const route = routeFence ?? this.tryActorFence(target);
     if (route === undefined) {
       this.operations.reply(
@@ -1514,7 +1570,7 @@ export class ServiceStatefulRuntime {
             ...boundSession,
             sequence: this.nextSessionSequence++
           },
-      { high: this.nodeGeneration, low: this.nextMessageFollowOperation++ }
+      { high: this.nodeGeneration, low: operationLow }
     );
     this.submitRequest(
       pending,
@@ -1526,6 +1582,21 @@ export class ServiceStatefulRuntime {
       onAdmitted
     );
     return pending;
+  }
+
+  acceptRelocatedActorTerminal(
+    operation: { readonly high: bigint; readonly low: bigint },
+    replyRouteId: bigint,
+    result: ServiceStatefulResult
+  ): 'terminalReceived' | 'alreadyTerminal' | undefined {
+    if (
+      operation.high !== this.nodeGeneration ||
+      this.operations.context(replyRouteId) !== operation.low
+    )
+      return undefined;
+    return this.operations.reply(replyRouteId, result, RELOCATION_REPLY_RETENTION_MS)
+      ? 'terminalReceived'
+      : 'alreadyTerminal';
   }
 
   async sendToInstanceSpot(
@@ -2410,6 +2481,8 @@ export class ServiceStatefulRuntime {
         const followed = this.holdOrRelaySpotMessage(ingress, record);
         if (followed !== undefined) return followed;
         this.validateDirectSpotFence(record.target);
+        const sourcePending = this.acceptRequestSource(ingress);
+        if (sourcePending !== undefined) await sourcePending;
         return this.enqueueApplicationFrame(
           ingress,
           `spot:${record.target.spot.spotId}`,
@@ -2429,6 +2502,8 @@ export class ServiceStatefulRuntime {
       }
       case 'actorSend':
       case 'actorRequest': {
+        const sourcePending = this.acceptRequestSource(ingress);
+        if (sourcePending !== undefined) await sourcePending;
         const actor =
           record.boundSession === undefined
             ? this.validateActorMessageFence(record.target)
@@ -2462,10 +2537,11 @@ export class ServiceStatefulRuntime {
               : { sourceBindingGeneration: record.boundSession.bindingGeneration }),
             targetActor: actor.ref,
             messageFollowOrigin: {
+              requestSource: ingress.requestSource,
               target: record.target,
               sourceNodeRid: ingress.sourceRoutingId,
               originalOperation: record.operation,
-              originalReplyRouteId: ingress.requestSequence ?? 0n
+              originalReplyRouteId: record.correlation ?? 0n
             },
             ...(record.kind === 'actorRequest'
               ? { reply: this.replyPort(ingress, record.correlation) }
@@ -4019,6 +4095,7 @@ export class ServiceStatefulRuntime {
       domain,
       parts: [ingress.parts[0]!, payloadFrame],
       sourceRoutingId: ingress.sourceRoutingId,
+      requestSource: ingress.requestSource,
       sourceRoute: ingress.sourceRoute,
       ...(ingress.reply === undefined ? {} : { reply: ingress.reply }),
       ...(ingress.requestSequence === undefined
@@ -4761,6 +4838,8 @@ export class ServiceStatefulRuntime {
       return;
     }
     if (decoded.kind === 'actorRequest') {
+      const sourcePending = this.acceptRequestSource(ingress);
+      if (sourcePending !== undefined) await sourcePending;
       const current =
         decoded.boundSession === undefined
           ? this.validateActorMessageFence(decoded.target)
@@ -4775,10 +4854,11 @@ export class ServiceStatefulRuntime {
           correlation: decoded.correlation,
           targetActor: current.ref,
           messageFollowOrigin: {
+            requestSource: ingress.requestSource,
             target: decoded.target,
             sourceNodeRid: ingress.sourceRoutingId,
             originalOperation: decoded.operation,
-            originalReplyRouteId: ingress.requestSequence ?? 0n
+            originalReplyRouteId: decoded.correlation ?? 0n
           },
           ...(decoded.sourceActor === undefined
             ? {}
@@ -5623,6 +5703,13 @@ function actorLocation(actor: ServiceActorState): ActorLocation {
     spotGeneration: actor.spot.generation,
     membershipEpoch: actor.membershipEpoch
   };
+}
+
+function requestSourceUnavailable(nodeRid: string): ZLinkFrameworkException {
+  return new ZLinkFrameworkException(
+    ZLinkFrameworkErrorKind.Unavailable,
+    `Request source '${nodeRid}' has no live MeshNode descriptor.`
+  );
 }
 
 function activationRefused(): ZLinkFrameworkException {

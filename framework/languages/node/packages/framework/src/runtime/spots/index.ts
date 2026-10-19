@@ -1,3 +1,5 @@
+import { encodeActorReply } from '../actors/actor-reply';
+import { RELOCATED_REQUEST_OWNED_BY_REQUESTER } from '../actors/actor-handoff';
 import { routingIdsEqual } from '../routing-id';
 import type { ApplicationJobOrigin } from '../application-jobs/contracts';
 import { dispatchReasonFromError } from '../diagnostics/dispatch-error-details';
@@ -82,7 +84,6 @@ import {
 } from '../actors';
 import type { ZLinkLocationLifecycle } from '../locations';
 import {
-  encodeFrameworkPayload,
   encodeFrameworkPayloadMessage,
   frameworkPayloadContentType,
   wrapFrameworkPayloadMessage
@@ -93,13 +94,7 @@ import {
   encodeChannelErrorReplyParts,
   encodeChannelReplyParts
 } from '../channels/channel-envelope';
-import {
-  decodeStreamHeader,
-  encodeStreamHeader,
-  streamCodecForContentType,
-  ZLinkStreamHeaderFlags,
-  ZLinkStreamMessageKind
-} from '../streams/protocol';
+import { ZLinkStreamMessageKind } from '../streams/protocol';
 import {
   REMOTE_ACTOR_JOIN_PACKET,
   REMOTE_ACTOR_JOIN_ABORT,
@@ -2144,6 +2139,7 @@ export class DefaultZLinkSpotManager {
           'MeshNode Entry Spot Actor dispatch is not configured.'
         );
       }
+      if (response === RELOCATED_REQUEST_OWNED_BY_REQUESTER) return;
       if (request && !requestTerminalState.submitted) {
         requireMeshSpotReply(
           record.reply(
@@ -3323,35 +3319,13 @@ export class DefaultZLinkSpotManager {
     kind: ZLinkStreamMessageKind.Response | ZLinkStreamMessageKind.Error,
     payload: unknown
   ): readonly Buffer[] {
-    // Spec 27 §4/§7: the decode gate strips the observation-only flow pair at
-    // Off (and skips its validation); when tracing is on the reply preserves
-    // the request's flow pair alongside its correlation.
-    const requestHeader = decodeStreamHeader(
+    return encodeActorReply(
       requestHeaderPart.data(),
+      kind,
+      payload,
+      this.options.messageSerializers,
       this.options.dispatchErrors?.flow.flowCreationEnabled() ?? true
     );
-    const encoded = encodeFrameworkPayload(payload, this.options.messageSerializers);
-    try {
-      //  encodeStreamHeader returns a fresh, unaliased array; view it without
-      //  re-copying. The payload copy stays: encoded.message closes below.
-      const replyHeader = encodeStreamHeader({
-        kind,
-        codec: streamCodecForContentType(encoded.contentType),
-        flags: ZLinkStreamHeaderFlags.None,
-        requestSeq: requestHeader.requestSeq,
-        name: '',
-        metadata: new Map(),
-        correlationId: requestHeader.correlationId,
-        flowId: requestHeader.flowId,
-        flowOrigin: requestHeader.flowOrigin
-      });
-      return [
-        Buffer.from(replyHeader.buffer, replyHeader.byteOffset, replyHeader.byteLength),
-        Buffer.from(encoded.message.data())
-      ];
-    } finally {
-      encoded.message.close();
-    }
   }
 
   private async createActivation<TSpot extends ZLinkSpot>(

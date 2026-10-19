@@ -238,6 +238,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     record: import('../../foundation/service-stateful-wire-codec').ServiceMessageFollowRecord
   ) => void;
   private dispatchErrors?: ZLinkDispatchErrorReporter;
+  private requestSourceAcceptance?: import('../contracts').ZLinkBackendRequestSourceAcceptance;
   private sessionOwnerDescriptors?: ServiceSessionOwnerDescriptors;
   private readonly peerDisconnectedHandlers = new Set<(endpoint: string) => void>();
   constructor(
@@ -455,6 +456,9 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       this.stateful.setMailboxDropHandler(this.mailboxRecordDropped);
     }
     this.stateful.setMessageFollowHandler((record) => this.messageFollowHandler?.(record));
+    if (this.requestSourceAcceptance !== undefined) {
+      this.stateful.setRequestSourceAcceptance(this.requestSourceAcceptance);
+    }
     this.runtime = runtime;
     try {
       runtime.setReadableHandler(this.onReadable);
@@ -567,6 +571,13 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
           })
     });
     return intent;
+  }
+
+  setRequestSourceAcceptance(
+    acceptance: import('../contracts').ZLinkBackendRequestSourceAcceptance
+  ): void {
+    this.requestSourceAcceptance = acceptance;
+    this.stateful?.setRequestSourceAcceptance(acceptance);
   }
 
   expectPeer(peer: {
@@ -1423,6 +1434,14 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
         options?.routeFence
       )
     );
+  }
+
+  acceptRelocatedActorTerminal(
+    operation: { readonly high: bigint; readonly low: bigint },
+    replyRouteId: bigint,
+    result: import('../../foundation/service-stateful-runtime').ServiceStatefulResult
+  ): 'terminalReceived' | 'alreadyTerminal' | undefined {
+    return this.requireStateful().acceptRelocatedActorTerminal(operation, replyRouteId, result);
   }
 
   async actorSendToActor(
@@ -2489,6 +2508,7 @@ function decodeStatefulRecord(
   const ingressLifecycle = receiveIngressLifecycle(record);
   return {
     kind: stateful.receiveKind,
+    requestSource: record.requestSource,
     domain: readyDomain(record.domain),
     sourceNodeRid: (record.sourceRoutingId as RoutingId | undefined) ?? null,
     sourceSpotId: (stateful.sourceSpotId as RoutingId | undefined) ?? null,

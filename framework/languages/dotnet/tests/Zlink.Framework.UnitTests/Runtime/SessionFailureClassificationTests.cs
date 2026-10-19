@@ -207,6 +207,7 @@ public sealed partial class EntrySpotActorDispatchTests
                             7
                         )
                     ),
+                    requestSource: AcceptedRequestSource(actorRef.NodeRid),
                     directReply: parts =>
                     {
                         Assert.True(

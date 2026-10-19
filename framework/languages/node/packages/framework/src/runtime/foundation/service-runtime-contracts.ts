@@ -243,6 +243,7 @@ export interface ReceiveRequirements {
 }
 
 export interface ZLinkMessageFollowOrigin {
+  readonly requestSource?: import('../locations/request-source-resolver').ZLinkRequestSourceFence;
   readonly sourceNodeRid: RoutingId;
   readonly originalOperation: MeshOperationId;
   readonly originalReplyRouteId: bigint;
@@ -251,6 +252,7 @@ export interface ZLinkMessageFollowOrigin {
 }
 
 export interface ReceiveRecord {
+  readonly requestSource?: import('../locations/request-source-resolver').ZLinkRequestSourceFence;
   readonly kind: number;
   readonly domain: number;
   readonly sourceNodeRid: RoutingId | null;

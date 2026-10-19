@@ -1581,7 +1581,10 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                                 .toCompletableFuture();
             }
             try (ZLinkBackendReceived received = stale.get(2, TimeUnit.SECONDS)) {
-                assertEquals(ZLinkBackendRequestResult.CONFLICT, received.result());
+                // Session·Actor binding §4: a sender without a live descriptor ends Unavailable.
+                assertEquals(
+                        ZLinkFrameworkErrorKind.UNAVAILABLE,
+                        received.result().toFrameworkErrorKind(received.failureCode()));
             }
             assertEquals(3, handlerCalls.get());
         }
@@ -2732,7 +2735,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
         AtomicInteger unbindAttempts = new AtomicInteger();
         var ended =
                 new systems.zlink.framework.errors.ZLinkFrameworkException(
-                        systems.zlink.framework.errors.ZLinkFrameworkErrorKind.UNAVAILABLE,
+                        ZLinkFrameworkErrorKind.UNAVAILABLE,
                         "durable request target lifecycle ended");
         try (var context = Zlink.createContext();
                 var node = new ZLinkJavaRawMeshNode(context, "mesh")) {

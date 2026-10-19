@@ -8,6 +8,7 @@ export interface ServiceMailboxRecord {
   readonly domain: ServiceMailboxDomain;
   parts: readonly Uint8Array[];
   readonly sourceRoutingId?: string;
+  readonly requestSource?: import('../locations/request-source-resolver').ZLinkRequestSourceFence;
   readonly sourceRoute?: Uint8Array;
   readonly requestSequence?: bigint;
   readonly reply?: (parts: readonly Uint8Array[]) => void;
