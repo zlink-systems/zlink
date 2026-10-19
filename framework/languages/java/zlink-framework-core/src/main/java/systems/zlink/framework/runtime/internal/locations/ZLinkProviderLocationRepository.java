@@ -29,7 +29,8 @@ public final class ZLinkProviderLocationRepository implements ZLinkLocationRepos
         this.authority = new ZLinkProviderAuthorityRepository(this.provider, this.descriptors);
     }
 
-    public AutoCloseable registerCapacityObservation() {
+    public systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics.Registration
+            registerCapacityObservation() {
         return authority.registerCapacityObservation();
     }
 
@@ -69,11 +70,24 @@ public final class ZLinkProviderLocationRepository implements ZLinkLocationRepos
     public CompletionStage<ZLinkLocationPage<ZLinkMeshNodeDescriptor>> listMeshNodes(
             String meshName, ZLinkPageRequest page) {
         return observeStore(
-                LocationOperation.READ,
-                () ->
-                        descriptors
-                                .listMeshNodes(meshName, page)
-                                .thenCompose(authority::refreshCapacityMetrics));
+                LocationOperation.READ, () -> descriptors.listMeshNodes(meshName, page));
+    }
+
+    @Override
+    public CompletionStage<Void> refreshCapacityMetrics(ZLinkMeshNodeDescriptorKey local) {
+        CompletionStage<Void> read;
+        try {
+            read = authority.refreshCapacityMetrics(local);
+        } catch (RuntimeException failure) {
+            if (!recordStoreFailure(LocationOperation.READ, failure)) throw failure;
+            return CompletableFuture.completedFuture(null);
+        }
+        return read.handle(
+                (ignored, failure) -> {
+                    if (failure != null && !recordStoreFailure(LocationOperation.READ, failure))
+                        throw new CompletionException(failure);
+                    return null;
+                });
     }
 
     @Override
@@ -355,7 +369,7 @@ public final class ZLinkProviderLocationRepository implements ZLinkLocationRepos
                 });
     }
 
-    private static void recordStoreFailure(LocationOperation operation, Throwable failure) {
+    private static boolean recordStoreFailure(LocationOperation operation, Throwable failure) {
         while (!(failure instanceof ZLinkLocationStoreFailure)
                 && (failure instanceof CompletionException
                         || failure instanceof ExecutionException
@@ -364,7 +378,9 @@ public final class ZLinkProviderLocationRepository implements ZLinkLocationRepos
                 && failure.getCause() != null) failure = failure.getCause();
         if (failure instanceof ZLinkLocationStoreFailure) {
             operation.failure();
+            return true;
         }
+        return false;
     }
 
     private ZLinkProviderAuthorityRepository authority() {

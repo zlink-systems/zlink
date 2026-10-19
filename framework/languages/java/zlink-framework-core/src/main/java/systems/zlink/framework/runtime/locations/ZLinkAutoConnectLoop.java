@@ -9,10 +9,12 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Supplier;
 
 final class ZLinkAutoConnectLoop implements AutoCloseable {
     private final ZLinkAutoConnectReconciler reconciler;
     private final ZLinkLocationOptions options;
+    private final Supplier<CompletionStage<Void>> refreshCapacity;
     private final ScheduledExecutorService executor;
     private final Object lifecycleGate = new Object();
     private ScheduledFuture<?> task;
@@ -21,6 +23,14 @@ final class ZLinkAutoConnectLoop implements AutoCloseable {
     private volatile boolean running;
 
     ZLinkAutoConnectLoop(ZLinkAutoConnectReconciler reconciler, ZLinkLocationOptions options) {
+        this(reconciler, options, () -> CompletableFuture.completedFuture(null));
+    }
+
+    ZLinkAutoConnectLoop(
+            ZLinkAutoConnectReconciler reconciler,
+            ZLinkLocationOptions options,
+            Supplier<CompletionStage<Void>> refreshCapacity) {
+        this.refreshCapacity = Objects.requireNonNull(refreshCapacity, "refreshCapacity");
         this.reconciler = Objects.requireNonNull(reconciler, "reconciler");
         this.options = Objects.requireNonNull(options, "options");
         this.executor =
@@ -106,7 +116,7 @@ final class ZLinkAutoConnectLoop implements AutoCloseable {
     }
 
     private CompletionStage<Void> tick() {
-        return reconciler.tick();
+        return reconciler.tick().thenCompose(ignored -> refreshCapacity.get());
     }
 
     private void tickOnLoop() {

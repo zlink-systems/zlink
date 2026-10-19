@@ -6,7 +6,6 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
-import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -68,45 +67,6 @@ final class ZLinkProviderAuthorityRepositoryTest {
         public CompletionStage<systems.zlink.framework.actors.ZLinkActor> create(
                 systems.zlink.framework.actors.ZLinkActorContext context) {
             return CompletableFuture.completedFuture(new ReclaimActor(context));
-        }
-    }
-
-    @ParameterizedTest
-    @ValueSource(booleans = {false, true})
-    void metricRefreshFailurePreservesTheDescriptorPage(boolean synchronous) throws Exception {
-        var underlying = new ZLinkInMemoryProviderLocationStore();
-        var owner =
-                assertInstanceOf(
-                                ZLinkOwnerLeaseClaimed.class,
-                                new ZLinkProviderLocationRepository(underlying)
-                                        .claimOwnerLease(
-                                                "metric-failure-owner", Duration.ofHours(1))
-                                        .toCompletableFuture()
-                                        .join())
-                        .token();
-        var provider =
-                (ZLinkLocationStore)
-                        java.lang.reflect.Proxy.newProxyInstance(
-                                ZLinkLocationStore.class.getClassLoader(),
-                                new Class<?>[] {ZLinkLocationStore.class},
-                                (proxy, method, arguments) -> {
-                                    if (method.getName().equals("read")) {
-                                        var failure =
-                                                new IllegalStateException(
-                                                        "metric-only capacity read failed");
-                                        if (synchronous) throw failure;
-                                        return CompletableFuture.failedFuture(failure);
-                                    }
-                                    return method.invoke(underlying, arguments);
-                                });
-        var repository = new ZLinkProviderAuthorityRepository(provider);
-        var descriptor = capacityDescriptor(owner);
-        var page =
-                new systems.zlink.framework.locations.ZLinkLocationPage<>(
-                        List.of(descriptor), "next");
-        try (var observation = repository.registerCapacityObservation()) {
-            repository.registerCapacityMetrics(descriptor);
-            assertSame(page, repository.refreshCapacityMetrics(page).toCompletableFuture().join());
         }
     }
 

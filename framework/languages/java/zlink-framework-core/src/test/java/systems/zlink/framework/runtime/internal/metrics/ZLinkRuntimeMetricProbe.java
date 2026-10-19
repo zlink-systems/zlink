@@ -66,6 +66,10 @@ public final class ZLinkRuntimeMetricProbe implements ZLinkRuntimeMetrics.Sink, 
         observables.put(new Key(metric.metricName(), tags), value);
     }
 
+    public boolean hasObservable(String name, Map<String, String> tags) {
+        return observables.containsKey(new Key(name, tags));
+    }
+
     public long observable(String name, Map<String, String> tags) {
         return observables.get(new Key(name, tags)).getAsLong();
     }
