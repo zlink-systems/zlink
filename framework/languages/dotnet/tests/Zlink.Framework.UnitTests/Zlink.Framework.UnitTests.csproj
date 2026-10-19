@@ -37,6 +37,7 @@
     </ItemGroup>
 
     <ItemGroup>
+        <Compile Include="Runtime/CanonicalSessionBindCrossLanguageTests.cs" Condition="'$(ZLinkCrossLanguageBind)' == 'true'"/>
         <Compile Include="Runtime/BoundSessionDisconnectTests.cs"/>
         <Compile Include="Runtime/BoundSessionReplacementCloseTests.cs"/>
         <Compile Include="AssemblyInfo.cs"/>
