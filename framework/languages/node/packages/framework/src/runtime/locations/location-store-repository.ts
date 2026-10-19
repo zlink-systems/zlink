@@ -219,6 +219,7 @@ const MAX_OWNER_CLEANUP_BATCH_ROWS = 2_047;
  */
 export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
   private readonly provider: ZLinkLocationStore;
+  private readonly confirmedCapacities = new Map<string, CapacityRecord | undefined>();
   private readonly aggregateInventory: ZLinkAggregateInventoryStore;
 
   constructor(
@@ -227,20 +228,38 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
   ) {
     super(nowProvider);
     // Classify only failures of the opaque SPI, before interpreting its records.
+    const confirm = (key: ZLinkStoreKey, bytes?: Uint8Array) => {
+      if (this.confirmedCapacities.has(key.value)) {
+        this.confirmedCapacities.set(
+          key.value,
+          bytes === undefined ? emptyCapacityRecord() : decodeJson<CapacityRecord>(bytes)
+        );
+      }
+    };
     this.provider = {
       async read(key, signal) {
+        let result: ZLinkStoreReadResult;
         try {
-          return await provider.read(key, signal);
+          result = await provider.read(key, signal);
         } catch (error) {
           throw locationStoreProviderFailure(error, signal);
         }
+        confirm(key, result.kind === 'found' ? result.value.bytes : undefined);
+        return result;
       },
       async write(request, signal) {
+        let result;
         try {
-          return await provider.write(request, signal);
+          result = await provider.write(request, signal);
         } catch (error) {
           throw locationStoreProviderFailure(error, signal);
         }
+        if (result.kind === 'applied') {
+          for (const mutation of request.mutations) {
+            if (mutation.kind === 'put') confirm(mutation.key, mutation.bytes);
+          }
+        }
+        return result;
       },
       async scan(request, signal) {
         try {
@@ -251,6 +270,14 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       }
     };
     this.aggregateInventory = new ZLinkAggregateInventoryStore(this.provider);
+  }
+
+  confirmedCapacity(
+    key: ZLinkMeshNodeDescriptorKey,
+    limits: ZLinkMeshNodeDescriptor['populationCapacity']
+  ): ZLinkMeshNodeDescriptor['populationCapacity'] | undefined {
+    const record = this.confirmedCapacities.get(capacityKey(key.meshName, String(key.rid)).value);
+    return record === undefined ? undefined : projectCapacity(limits, record);
   }
 
   override async readAuthority(
@@ -2051,6 +2078,9 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     intent: ZLinkLocationWriteIntent,
     signal?: AbortSignal
   ): Promise<ZLinkLocationWriteResult> {
+    const capacityRowKey = capacityKey(descriptor.meshName, String(descriptor.rid));
+    if (!this.confirmedCapacities.has(capacityRowKey.value))
+      this.confirmedCapacities.set(capacityRowKey.value, undefined);
     return this.updateDescriptor(
       meshKey(descriptor.meshName, descriptor.rid),
       descriptor,
@@ -2086,6 +2116,8 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       },
       signal
     );
+    if (result.kind === 'applied')
+      this.confirmedCapacities.delete(capacityKey(key.meshName, String(key.rid)).value);
     return result.kind === 'applied' ? WriteStatus.Stored : WriteStatus.IgnoredStale;
   }
 
@@ -2123,30 +2155,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
             : decodeJson<CapacityRecord>(capacityRead.value.bytes);
         return {
           ...descriptor,
-          populationCapacity: {
-            actors: {
-              ...descriptor.populationCapacity.actors,
-              active: capacity.active.actors,
-              reserved: capacity.pending.actors
-            },
-            spots: {
-              ...descriptor.populationCapacity.spots,
-              active: capacity.active.spots,
-              reserved: capacity.pending.spots
-            },
-            spotTypes: descriptor.populationCapacity.spotTypes.map((value) => {
-              const key = capacityTypeKey({
-                objectKind: value.objectKind,
-                stableType: value.stableType,
-                count: 0
-              });
-              return {
-                ...value,
-                active: capacity.active.spotTypes[key] ?? 0,
-                reserved: capacity.pending.spotTypes[key] ?? 0
-              };
-            })
-          }
+          populationCapacity: projectCapacity(descriptor.populationCapacity, capacity)
         };
       })
     );
@@ -4843,4 +4852,34 @@ function locationStoreProviderFailure(error: unknown, signal?: AbortSignal): unk
     'Location Store provider is unavailable.',
     error
   );
+}
+
+function projectCapacity(
+  limits: ZLinkMeshNodeDescriptor['populationCapacity'],
+  capacity: CapacityRecord
+): ZLinkMeshNodeDescriptor['populationCapacity'] {
+  return {
+    actors: {
+      ...limits.actors,
+      active: capacity.active.actors,
+      reserved: capacity.pending.actors
+    },
+    spots: {
+      ...limits.spots,
+      active: capacity.active.spots,
+      reserved: capacity.pending.spots
+    },
+    spotTypes: limits.spotTypes.map((value) => {
+      const key = capacityTypeKey({
+        objectKind: value.objectKind,
+        stableType: value.stableType,
+        count: 0
+      });
+      return {
+        ...value,
+        active: capacity.active.spotTypes[key] ?? 0,
+        reserved: capacity.pending.spotTypes[key] ?? 0
+      };
+    })
+  };
 }

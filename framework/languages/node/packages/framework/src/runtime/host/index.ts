@@ -1576,7 +1576,13 @@ export class ZLinkFrameworkRuntimeHost
       const hasDiscovery = hasConfiguredLocationStore(this.options.registration);
       const source =
         hasManual && hasDiscovery ? 'manual_and_redis' : hasManual ? 'manual' : 'redis';
-      const emptyCapacity = { active: 0, reserved: 0, limit: 0 };
+      const capacity =
+        descriptor === undefined
+          ? undefined
+          : this.locationOwner.currentStores?.locationStore.confirmedCapacity?.(
+              { meshName, rid: descriptor.rid },
+              descriptor.populationCapacity
+            );
       snapshots.push({
         meshName,
         source,
@@ -1588,9 +1594,9 @@ export class ZLinkFrameworkRuntimeHost
           channelName: channel.channelName,
           readyMembers: channel.readyTargetCount
         })),
-        actorCapacity: descriptor?.populationCapacity.actors ?? emptyCapacity,
-        spotCapacity: descriptor?.populationCapacity.spots ?? emptyCapacity,
-        spotTypeCapacities: (descriptor?.populationCapacity.spotTypes ?? []).map((capacity) => ({
+        actorCapacity: capacity?.actors,
+        spotCapacity: capacity?.spots,
+        spotTypeCapacities: (capacity?.spotTypes ?? []).map((capacity) => ({
           spotKind: capacity.objectKind === 'instance_spot' ? 'instance' : 'user',
           stableType: capacity.stableType,
           active: capacity.active,

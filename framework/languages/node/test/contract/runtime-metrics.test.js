@@ -416,3 +416,105 @@ test('OBS-B2/B3 observable gauges use bounded labels and isolate snapshot failur
     !['actor_id', 'spot_id', 'flow_id', 'correlation_id'].some((key) => key in sample.attributes)));
   registration.dispose();
 });
+
+
+test('capacity repository starts without a confirmed Store observation', () => {
+  const provider = new framework.ZLinkInMemoryProviderLocationStore();
+  const repository = new (require('../../packages/framework/dist/runtime/locations/location-store-repository').ZLinkLocationStoreRepository)(provider);
+  assert.equal(typeof repository.confirmedCapacity, 'function');
+  assert.equal(repository.confirmedCapacity({ meshName: 'unobserved', rid: 'local' }), undefined);
+});
+
+
+test('shared fixture defines capacity and takeover catalog and observation labels', () => {
+  const fixture = require('../../../../runtime/protocol/fixtures/runtime-metrics-v1.json');
+  const selected = fixture.metrics.filter(row => row.name.startsWith('zlink.object.capacity.') || row.name.startsWith('zlink.spot.type.capacity.') || row.name === 'zlink.instance_spot.takeovers' || row.name === 'zlink.mesh_node.request.duration');
+  const { provider, instruments, observables, records } = collector();
+  const metrics = new framework.ZLinkRuntimeMetrics(provider);
+  metrics.registerMeshSnapshots(() => [{
+    meshName: 'fixture', source: 'manual', configuredPeers: 0, connectedPeers: 0, readyPeers: 0, channels: [],
+    actorCapacity: { active: 1, reserved: 2, limit: 8 }, spotCapacity: { active: 1, reserved: 2, limit: 8 },
+    spotTypeCapacities: [{ spotKind: 'user', stableType: 'room', active: 1, reserved: 2, limit: 8 }],
+    activation: { active: 0, limit: 1 }, instanceSpots: []
+  }]);
+  for (const observable of observables) {
+    if (!selected.some(row => row.name === observable.name)) continue;
+    observable.callback({ observe(value, attributes) { records.push({ name: observable.name, value, attributes }); } });
+  }
+  metrics.startRequest('fixture', 'channel').complete('completed');
+  for (const outcome of ['claimed', 'lost', 'failed']) metrics.recordInstanceSpotTakeover('fixture', 'room', outcome);
+  for (const row of selected) {
+    const instrument = instruments.find(value => value.name === row.name);
+    assert(instrument, row.name);
+    assert.equal(instrument.kind, row.kind === 'observable' ? 'gauge' : row.kind, row.name);
+    assert.equal(instrument.unit, row.unit, row.name);
+    const samples = records.filter(record => record.name === row.name);
+    assert(samples.length > 0, row.name);
+    for (const sample of samples) assert.deepEqual(Object.keys(sample.attributes).sort(), [...row.labels].sort(), row.name);
+  }
+});
+
+test('capacity population series are absent before the first Store observation', () => {
+  const { provider, observables } = collector();
+  const metrics = new framework.ZLinkRuntimeMetrics(provider);
+  metrics.registerMeshSnapshots(() => [{
+    meshName: 'unobserved', source: 'redis', configuredPeers: 0, connectedPeers: 0, readyPeers: 0, channels: [],
+    actorCapacity: undefined, spotCapacity: undefined, spotTypeCapacities: [],
+    activation: { active: 0, limit: 1 }, instanceSpots: []
+  }]);
+  const samples = [];
+  for (const observable of observables.filter(value => value.name.includes('.capacity.'))) observable.callback({ observe(value) { samples.push(value); } });
+  assert.deepEqual(samples, []);
+});
+
+test('channel terminal metrics normalize all five outcomes including caller cancellation and missing target', async () => {
+  const { ZLinkRuntimeRouteTransport } = require('../../packages/framework/dist/runtime/channels/channel-transports');
+  const { ZLinkBufferMessage } = require('../../packages/framework/dist/runtime/backend/runtime-message');
+  const { RequestResult } = require('../../packages/framework/dist/runtime/backend/runtime-values');
+  const fixture = require('../../../../runtime/protocol/fixtures/runtime-metrics-v1.json');
+  const expected = fixture.metrics.find(row => row.name === 'zlink.mesh_node.request.duration').labelValues.outcome;
+  const { provider, records } = collector();
+  const metrics = new framework.ZLinkRuntimeMetrics(provider);
+  for (const outcome of expected) {
+    const caller = new AbortController();
+    let parts;
+    const node = { requestToChannel(_channel, requestParts) { parts = requestParts; return { high: 1n, low: 1n }; } };
+    const table = { async submit(operation) {
+      operation();
+      if (outcome === 'cancelled') { caller.abort(); throw caller.signal.reason; }
+      const terminalResult = outcome === 'timed_out' ? RequestResult.TimedOut : outcome === 'shutdown' ? RequestResult.Terminated : outcome === 'failed' ? RequestResult.NotFound : 0;
+      const header = channelEnvelope.decodeChannelHeader(parts.map(part => ZLinkBufferMessage.from(part)));
+      return { terminalResult, failureErrno: 0, parts: terminalResult === 0 ? channelEnvelope.encodeChannelReplyParts(header, { ok: true }).map(part => ZLinkBufferMessage.from(part)) : [] };
+    }};
+    const transport = new ZLinkRuntimeRouteTransport(() => undefined, undefined,
+      () => ({ meshNode: () => node, meshCompletionTable: () => table }),
+      undefined, undefined, undefined, metrics, () => false);
+    const pending = transport.requestToChannel('mesh', 'orders', 'Probe', { value: 1 }, 1000, caller.signal);
+    if (outcome === 'completed') assert.deepEqual(await pending, { ok: true });
+    else await assert.rejects(pending);
+  }
+  assert.deepEqual(records.filter(row => row.name === 'zlink.mesh_node.request.duration').map(row => row.attributes.outcome), expected);
+  assert.equal(records.filter(row => row.name === 'zlink.mesh_node.request.timeouts').length, 1);
+});
+
+
+test('host capacity metrics use the repository observation rather than the publication descriptor', () => {
+  const registration = framework.createFrameworkRegistrationWithBuilder(builder => builder.addRouteMesh('metric-mesh').objects().server());
+  const host = new framework.ZLinkFrameworkRuntimeHost({ registration });
+  host.routeMeshCoordinator.snapshot = () => ({ peers: [], channels: [], readyPeerCount: 0 });
+  const zero = { active: 0, reserved: 0, limit: 12 };
+  const descriptor = { rid: 'metric-node', populationCapacity: { actors: zero, spots: zero, spotTypes: [] } };
+  host.spotNodeRuntime = { meshNodeDescriptor: () => descriptor };
+  let confirmed;
+  host.locationOwner.stores = { locationStore: { confirmedCapacity(key, limits) {
+    assert.deepEqual(key, { meshName: 'metric-mesh', rid: 'metric-node' });
+    assert.equal(limits, descriptor.populationCapacity);
+    return confirmed;
+  } } };
+  assert.equal(host.runtimeMetricMeshSnapshots()[0].actorCapacity, undefined);
+  confirmed = { actors: { active: 9, reserved: 2, limit: 12 }, spots: zero, spotTypes: [] };
+  const snapshot = host.runtimeMetricMeshSnapshots()[0];
+  assert.equal(snapshot.actorCapacity.active, 9);
+  assert.equal(snapshot.actorCapacity.reserved, 2);
+  assert.equal(descriptor.populationCapacity.actors.active, 0);
+});

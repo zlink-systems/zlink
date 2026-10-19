@@ -16,6 +16,189 @@ namespace Zlink.Framework.UnitTests;
 
 public sealed class ProviderLocationRepositoryAuthorityTests
 {
+    [Fact]
+    public async Task Capacity_Uses_Last_Confirmed_Record_And_Poll_Refreshes_External_Reservations()
+    {
+        var provider = new InspectAuthorityBatchLocationStore(
+            new ZLinkInMemoryProviderLocationStore()
+        );
+        var repository = new ZLinkProviderLocationRepository(provider);
+        var other = new ZLinkProviderLocationRepository(provider);
+        var owner = await ClaimAsync(repository, "capacity-local");
+        var descriptor = Descriptor("source", owner);
+        var key = new ZLinkMeshNodeDescriptorKey(descriptor.MeshName, descriptor.Rid);
+        await repository.UpdateMeshNodeAsync(descriptor, ZLinkLocationWriteIntent.NewClaim);
+        Assert.Null(repository.ConfirmedCapacity(key, descriptor.Capacity));
+        var reads = 0;
+        provider.BeforeRead = _ =>
+        {
+            reads++;
+            return Task.CompletedTask;
+        };
+        Assert.Null(repository.ConfirmedCapacity(key, descriptor.Capacity));
+        Assert.Equal(0, reads);
+        var reserved = Assert.IsType<ZLinkObjectReserveResult.Reserved>(
+            await repository.ReserveAsync(
+                Reservation("capacity-one", descriptor, owner, ZLinkPlacementObjectKind.UserSpot)
+            )
+        );
+        var capacity = repository.ConfirmedCapacity(key, descriptor.Capacity)!;
+        Assert.Equal(1, capacity.Spots.Reserved);
+        Assert.Equal(1, Assert.Single(capacity.SpotTypes).Reserved);
+        Assert.Equal(2048, capacity.Spots.Limit);
+        Assert.IsType<ZLinkObjectCommitResult.Committed>(
+            await repository.CommitAsync(reserved.Reservation, new byte[] { 0x94 })
+        );
+        capacity = repository.ConfirmedCapacity(key, descriptor.Capacity)!;
+        Assert.Equal(1, capacity.Spots.Active);
+        Assert.Equal(0, capacity.Spots.Reserved);
+        Assert.IsType<ZLinkObjectReserveResult.Reserved>(
+            await other.ReserveAsync(
+                Reservation("capacity-two", descriptor, owner, ZLinkPlacementObjectKind.UserSpot)
+            )
+        );
+        Assert.Equal(0, repository.ConfirmedCapacity(key, descriptor.Capacity)!.Spots.Reserved);
+        var options = new ZLinkLocationOptions();
+        var location = new ZLinkLocationRuntime(options, repository);
+        var local = new ZLinkAutoConnectLocal(
+            ZLinkLocationAutoConnectType.SpotMesh,
+            Zlink.Framework.Runtime.Identifiers.ZLinkMeshName.FromBoundary(
+                descriptor.MeshName,
+                "mesh"
+            ),
+            ZLinkLocationRole.Spot,
+            descriptor.Rid,
+            descriptor.Endpoint
+        );
+        var resolver = new ZLinkStoreLocationResolvers(
+            repository,
+            new ZLinkOwnerLeaseTracker(repository, options)
+        );
+        var reconciler = new ZLinkAutoConnectReconciler(
+            local,
+            null,
+            location,
+            resolver,
+            new RecordingAutoConnectExecutor(),
+            options
+        );
+        await using var loop = new ZLinkAutoConnectLoop(
+            new ZLinkRuntimeErrorSink(),
+            reconciler,
+            local,
+            options,
+            repository
+        );
+        reads = 0;
+        await loop.TickAsync();
+        Assert.Equal(1, reads);
+        capacity = repository.ConfirmedCapacity(key, descriptor.Capacity)!;
+        Assert.Equal(1, capacity.Spots.Active);
+        Assert.Equal(1, capacity.Spots.Reserved);
+        Assert.Equal(1, Assert.Single(capacity.SpotTypes).Active);
+        provider.BeforeRead = _ => throw new IOException("capacity read failure");
+        await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
+            repository.RefreshCapacityAsync(key).AsTask()
+        );
+        var observed = repository.ConfirmedCapacity(key, descriptor.Capacity)!;
+        Assert.Equal(capacity.Spots, observed.Spots);
+        Assert.Equal(capacity.SpotTypes, observed.SpotTypes);
+        provider.BeforeRead = null;
+        Assert.Equal(
+            ZLinkLocationWriteStatus.Stored,
+            await repository.RemoveMeshNodeAsync(key, owner)
+        );
+        Assert.Null(repository.ConfirmedCapacity(key, descriptor.Capacity));
+    }
+
+    [Theory]
+    [InlineData("claimed")]
+    [InlineData("lost")]
+    [InlineData("failed")]
+    public async Task Expired_Instance_Takeover_Metric_Records_Reservation_Terminal(string outcome)
+    {
+        var samples = new List<string>();
+        using var listener = new System.Diagnostics.Metrics.MeterListener
+        {
+            InstrumentPublished = (instrument, owner) =>
+            {
+                if (instrument.Name == "zlink.instance_spot.takeovers")
+                    owner.EnableMeasurementEvents(instrument);
+            },
+        };
+        listener.SetMeasurementEventCallback<long>(
+            (_, _, tags, _) =>
+            {
+                foreach (var tag in tags)
+                    if (tag.Key == "outcome")
+                        samples.Add((string)tag.Value!);
+            }
+        );
+        listener.Start();
+        var time = new ManualTimeProvider();
+        var provider = new InspectAuthorityBatchLocationStore(
+            new ZLinkInMemoryProviderLocationStore(time)
+        );
+        var store = new ZLinkProviderLocationRepository(provider);
+        var oldOwner = await ClaimAsync(store, "takeover-old");
+        var oldDescriptor = SpotReclaimDescriptor(
+            "source",
+            oldOwner,
+            ZLinkPlacementObjectKind.InstanceSpot
+        );
+        await store.UpdateMeshNodeAsync(oldDescriptor, ZLinkLocationWriteIntent.NewClaim);
+        _ = Assert.IsType<ZLinkObjectReserveResult.Reserved>(
+            await store.ReserveAsync(
+                Reservation(
+                    "takeover-pending",
+                    oldDescriptor,
+                    oldOwner,
+                    ZLinkPlacementObjectKind.InstanceSpot
+                )
+            )
+        );
+        time.Advance(TimeSpan.FromMinutes(11));
+        var nextOwner = await ClaimAsync(store, "takeover-new");
+        var descriptor = SpotReclaimDescriptor(
+            "target",
+            nextOwner,
+            ZLinkPlacementObjectKind.InstanceSpot
+        );
+        await store.UpdateMeshNodeAsync(descriptor, ZLinkLocationWriteIntent.NewClaim);
+        var request = Reservation(
+            "takeover-pending",
+            descriptor,
+            nextOwner,
+            ZLinkPlacementObjectKind.InstanceSpot
+        ) with
+        {
+            ObjectRelocationPolicy = ZLinkObjectRelocationRegistration.DisabledPolicy,
+        };
+        if (outcome != "claimed")
+            provider.Inspect = async write =>
+            {
+                if (!write.Mutations.OfType<ZLinkStoreMutation.Delete>().Any())
+                    return;
+                provider.Inspect = null;
+                if (outcome == "failed")
+                    throw new IOException("takeover failed");
+                Assert.IsType<ZLinkObjectReserveResult.Reserved>(
+                    await new ZLinkProviderLocationRepository(provider).ReserveAsync(request)
+                );
+            };
+        if (outcome == "failed")
+            await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
+                store.ReserveAsync(request).AsTask()
+            );
+        else if (outcome == "claimed")
+            Assert.IsType<ZLinkObjectReserveResult.Reserved>(await store.ReserveAsync(request));
+        else
+            Assert.IsType<ZLinkObjectReserveResult.Conflict>(await store.ReserveAsync(request));
+        // The competing repository records its own successful claim before this caller loses.
+        Assert.Equal(outcome, samples.Last());
+        Assert.Equal(outcome == "lost" ? 2 : 1, samples.Count);
+    }
+
     [Theory]
     [InlineData((int)ZLinkPlacementObjectKind.UserSpot, "expired", false)]
     [InlineData((int)ZLinkPlacementObjectKind.UserSpot, "expired", true)]

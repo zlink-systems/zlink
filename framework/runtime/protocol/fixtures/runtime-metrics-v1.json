@@ -1,0 +1,878 @@
+{
+  "format": "runtime-metrics-v1",
+  "description": "Runtime metrics specification sections 3-9; request outcomes from spec/2190-request-outcome section 4.",
+  "metrics": [
+    {
+      "name": "zlink.host.core_hwm.effective_budget",
+      "kind": "observable",
+      "unit": "By",
+      "labels": []
+    },
+    {
+      "name": "zlink.host.core_hwm.applied",
+      "kind": "observable",
+      "unit": "By",
+      "labels": []
+    },
+    {
+      "name": "zlink.host.core_hwm.accounted",
+      "kind": "observable",
+      "unit": "By",
+      "labels": [
+        "state"
+      ],
+      "labelValues": {
+        "state": [
+          "current",
+          "peak"
+        ]
+      }
+    },
+    {
+      "name": "zlink.host.core_hwm.completion_accounted",
+      "kind": "observable",
+      "unit": "By",
+      "labels": [
+        "state"
+      ],
+      "labelValues": {
+        "state": [
+          "current",
+          "peak"
+        ]
+      }
+    },
+    {
+      "name": "zlink.host.core_hwm.blocked_ratio",
+      "kind": "observable",
+      "unit": "{ppm}",
+      "labels": []
+    },
+    {
+      "name": "zlink.host.application_job_queue.limit",
+      "kind": "observable",
+      "unit": "{job}",
+      "labels": []
+    },
+    {
+      "name": "zlink.host.application_job_queue.jobs",
+      "kind": "observable",
+      "unit": "{job}",
+      "labels": [
+        "state"
+      ],
+      "labelValues": {
+        "state": [
+          "reserved",
+          "queued",
+          "in_use",
+          "peak"
+        ]
+      }
+    },
+    {
+      "name": "zlink.host.application_job_queue.capacity_waiters",
+      "kind": "observable",
+      "unit": "{waiter}",
+      "labels": []
+    },
+    {
+      "name": "zlink.host.application_job_queue.capacity_waits",
+      "kind": "counter",
+      "unit": "{wait}",
+      "labels": []
+    },
+    {
+      "name": "zlink.host.application_job_queue.capacity_wait_duration",
+      "kind": "counter",
+      "unit": "s",
+      "labels": []
+    },
+    {
+      "name": "zlink.host.application_job_queue.pressure_state",
+      "kind": "observable",
+      "unit": "{state}",
+      "labels": [
+        "state"
+      ],
+      "labelValues": {
+        "state": [
+          "running",
+          "paused"
+        ]
+      }
+    },
+    {
+      "name": "zlink.host.application_job_queue.pressure_transitions",
+      "kind": "counter",
+      "unit": "{transition}",
+      "labels": [
+        "state"
+      ],
+      "labelValues": {
+        "state": [
+          "running",
+          "paused"
+        ]
+      }
+    },
+    {
+      "name": "zlink.host.application_job_queue.pause_duration",
+      "kind": "observable",
+      "unit": "s",
+      "labels": [
+        "state"
+      ],
+      "labelValues": {
+        "state": [
+          "current",
+          "cumulative"
+        ]
+      }
+    },
+    {
+      "name": "zlink.host.application_job_queue.flow_state_config_failures",
+      "kind": "counter",
+      "unit": "{failure}",
+      "labels": []
+    },
+    {
+      "name": "zlink.mesh_node.peers.configured",
+      "kind": "observable",
+      "unit": "{peer}",
+      "labels": [
+        "mesh_name",
+        "source"
+      ],
+      "labelValues": {
+        "source": [
+          "manual",
+          "redis",
+          "manual_and_redis"
+        ]
+      }
+    },
+    {
+      "name": "zlink.mesh_node.peers.connected",
+      "kind": "observable",
+      "unit": "{peer}",
+      "labels": [
+        "mesh_name",
+        "source"
+      ],
+      "labelValues": {
+        "source": [
+          "manual",
+          "redis",
+          "manual_and_redis"
+        ]
+      }
+    },
+    {
+      "name": "zlink.mesh_node.peers.ready",
+      "kind": "observable",
+      "unit": "{peer}",
+      "labels": [
+        "mesh_name",
+        "source"
+      ],
+      "labelValues": {
+        "source": [
+          "manual",
+          "redis",
+          "manual_and_redis"
+        ]
+      }
+    },
+    {
+      "name": "zlink.mesh_node.channels.ready_members",
+      "kind": "observable",
+      "unit": "{member}",
+      "labels": [
+        "mesh_name",
+        "channel_name"
+      ]
+    },
+    {
+      "name": "zlink.mesh_node.channel.selection_failures",
+      "kind": "counter",
+      "unit": "{failure}",
+      "labels": [
+        "mesh_name",
+        "channel_name",
+        "reason"
+      ],
+      "labelValues": {
+        "reason": [
+          "no_member",
+          "not_ready",
+          "draining"
+        ]
+      }
+    },
+    {
+      "name": "zlink.mesh_node.requests.inflight",
+      "kind": "updown",
+      "unit": "{request}",
+      "labels": [
+        "mesh_name",
+        "surface"
+      ],
+      "labelValues": {
+        "surface": [
+          "node",
+          "channel",
+          "spot",
+          "instance_spot",
+          "actor"
+        ]
+      }
+    },
+    {
+      "name": "zlink.mesh_node.request.duration",
+      "kind": "histogram",
+      "unit": "s",
+      "labels": [
+        "mesh_name",
+        "surface",
+        "outcome"
+      ],
+      "labelValues": {
+        "outcome": [
+          "completed",
+          "timed_out",
+          "cancelled",
+          "shutdown",
+          "failed"
+        ],
+        "surface": [
+          "node",
+          "channel",
+          "spot",
+          "instance_spot",
+          "actor"
+        ]
+      }
+    },
+    {
+      "name": "zlink.mesh_node.request.timeouts",
+      "kind": "counter",
+      "unit": "{request}",
+      "labels": [
+        "mesh_name",
+        "surface"
+      ],
+      "labelValues": {
+        "surface": [
+          "node",
+          "channel",
+          "spot",
+          "instance_spot",
+          "actor"
+        ]
+      }
+    },
+    {
+      "name": "zlink.mesh_node.messages.dropped",
+      "kind": "counter",
+      "unit": "{message}",
+      "labels": [
+        "mesh_name",
+        "surface",
+        "message_kind",
+        "reason"
+      ],
+      "labelValues": {
+        "surface": [
+          "node",
+          "channel",
+          "spot",
+          "instance_spot",
+          "actor"
+        ],
+        "reason": [
+          "no_handler",
+          "decode_error",
+          "backpressure",
+          "stale_target",
+          "shutdown"
+        ]
+      }
+    },
+    {
+      "name": "zlink.spot.count",
+      "kind": "updown",
+      "unit": "{spot}",
+      "labels": [
+        "mesh_name",
+        "spot_kind"
+      ],
+      "labelValues": {
+        "spot_kind": [
+          "entry",
+          "user",
+          "instance"
+        ]
+      }
+    },
+    {
+      "name": "zlink.actor.count",
+      "kind": "updown",
+      "unit": "{actor}",
+      "labels": [
+        "mesh_name"
+      ]
+    },
+    {
+      "name": "zlink.object.capacity.active",
+      "kind": "observable",
+      "unit": "{object}",
+      "labels": [
+        "mesh_name",
+        "capacity_scope"
+      ],
+      "labelValues": {
+        "capacity_scope": [
+          "actor",
+          "spot"
+        ]
+      }
+    },
+    {
+      "name": "zlink.object.capacity.reserved",
+      "kind": "observable",
+      "unit": "{object}",
+      "labels": [
+        "mesh_name",
+        "capacity_scope"
+      ],
+      "labelValues": {
+        "capacity_scope": [
+          "actor",
+          "spot"
+        ]
+      }
+    },
+    {
+      "name": "zlink.object.capacity.limit",
+      "kind": "observable",
+      "unit": "{object}",
+      "labels": [
+        "mesh_name",
+        "capacity_scope"
+      ],
+      "labelValues": {
+        "capacity_scope": [
+          "actor",
+          "spot"
+        ]
+      }
+    },
+    {
+      "name": "zlink.spot.type.capacity.active",
+      "kind": "observable",
+      "unit": "{spot}",
+      "labels": [
+        "mesh_name",
+        "spot_kind",
+        "stable_type"
+      ],
+      "labelValues": {
+        "spot_kind": [
+          "user",
+          "instance"
+        ]
+      }
+    },
+    {
+      "name": "zlink.spot.type.capacity.reserved",
+      "kind": "observable",
+      "unit": "{spot}",
+      "labels": [
+        "mesh_name",
+        "spot_kind",
+        "stable_type"
+      ],
+      "labelValues": {
+        "spot_kind": [
+          "user",
+          "instance"
+        ]
+      }
+    },
+    {
+      "name": "zlink.spot.type.capacity.limit",
+      "kind": "observable",
+      "unit": "{spot}",
+      "labels": [
+        "mesh_name",
+        "spot_kind",
+        "stable_type"
+      ],
+      "labelValues": {
+        "spot_kind": [
+          "user",
+          "instance"
+        ]
+      }
+    },
+    {
+      "name": "zlink.object.activation.active",
+      "kind": "observable",
+      "unit": "{activation}",
+      "labels": [
+        "mesh_name"
+      ]
+    },
+    {
+      "name": "zlink.object.activation.limit",
+      "kind": "observable",
+      "unit": "{activation}",
+      "labels": [
+        "mesh_name"
+      ]
+    },
+    {
+      "name": "zlink.relocation.started",
+      "kind": "counter",
+      "unit": "{relocation}",
+      "labels": [
+        "mesh_name",
+        "object_kind",
+        "policy"
+      ],
+      "labelValues": {
+        "policy": [
+          "recreate",
+          "snapshot"
+        ],
+        "object_kind": [
+          "actor",
+          "user_spot",
+          "instance_spot"
+        ]
+      }
+    },
+    {
+      "name": "zlink.relocation.completed",
+      "kind": "counter",
+      "unit": "{relocation}",
+      "labels": [
+        "mesh_name",
+        "object_kind",
+        "policy",
+        "outcome"
+      ],
+      "labelValues": {
+        "outcome": [
+          "completed",
+          "aborted",
+          "failed",
+          "shutdown"
+        ],
+        "policy": [
+          "recreate",
+          "snapshot"
+        ],
+        "object_kind": [
+          "actor",
+          "user_spot",
+          "instance_spot"
+        ]
+      }
+    },
+    {
+      "name": "zlink.relocation.duration",
+      "kind": "histogram",
+      "unit": "s",
+      "labels": [
+        "mesh_name",
+        "object_kind",
+        "policy",
+        "outcome"
+      ],
+      "labelValues": {
+        "outcome": [
+          "completed",
+          "aborted",
+          "failed",
+          "shutdown"
+        ],
+        "policy": [
+          "recreate",
+          "snapshot"
+        ],
+        "object_kind": [
+          "actor",
+          "user_spot",
+          "instance_spot"
+        ]
+      }
+    },
+    {
+      "name": "zlink.relocation.bytes",
+      "kind": "histogram",
+      "unit": "By",
+      "labels": [
+        "mesh_name",
+        "object_kind",
+        "policy"
+      ],
+      "labelValues": {
+        "policy": [
+          "recreate",
+          "snapshot"
+        ],
+        "object_kind": [
+          "actor",
+          "user_spot",
+          "instance_spot"
+        ]
+      }
+    },
+    {
+      "name": "zlink.stream.connections.active",
+      "kind": "updown",
+      "unit": "{connection}",
+      "labels": [
+        "transport"
+      ]
+    },
+    {
+      "name": "zlink.stream.connections.opened",
+      "kind": "counter",
+      "unit": "{connection}",
+      "labels": [
+        "transport"
+      ]
+    },
+    {
+      "name": "zlink.stream.connections.closed",
+      "kind": "counter",
+      "unit": "{connection}",
+      "labels": [
+        "transport",
+        "close_reason"
+      ],
+      "labelValues": {
+        "close_reason": [
+          "client_close",
+          "idle_timeout",
+          "heartbeat_timeout",
+          "server_shutdown",
+          "protocol_error",
+          "transport_error"
+        ]
+      }
+    },
+    {
+      "name": "zlink.instance_spot.activations",
+      "kind": "counter",
+      "unit": "{activation}",
+      "labels": [
+        "mesh_name",
+        "instance_spot_type",
+        "outcome"
+      ],
+      "labelValues": {
+        "outcome": [
+          "ready",
+          "rejected",
+          "conflict",
+          "timed_out",
+          "shutdown",
+          "store_failure",
+          "fenced"
+        ]
+      }
+    },
+    {
+      "name": "zlink.instance_spot.activation.duration",
+      "kind": "histogram",
+      "unit": "s",
+      "labels": [
+        "mesh_name",
+        "instance_spot_type",
+        "outcome"
+      ],
+      "labelValues": {
+        "outcome": [
+          "ready",
+          "rejected",
+          "conflict",
+          "timed_out",
+          "shutdown",
+          "store_failure",
+          "fenced"
+        ]
+      }
+    },
+    {
+      "name": "zlink.instance_spot.pending.messages",
+      "kind": "observable",
+      "unit": "{message}",
+      "labels": [
+        "mesh_name",
+        "instance_spot_type"
+      ]
+    },
+    {
+      "name": "zlink.instance_spot.pending.bytes",
+      "kind": "observable",
+      "unit": "By",
+      "labels": [
+        "mesh_name",
+        "instance_spot_type"
+      ]
+    },
+    {
+      "name": "zlink.instance_spot.claim.conflicts",
+      "kind": "counter",
+      "unit": "{claim}",
+      "labels": [
+        "mesh_name",
+        "instance_spot_type",
+        "reason"
+      ],
+      "labelValues": {
+        "reason": [
+          "authority",
+          "spot_kind",
+          "spot_type",
+          "closing"
+        ]
+      }
+    },
+    {
+      "name": "zlink.instance_spot.takeovers",
+      "kind": "counter",
+      "unit": "{takeover}",
+      "labels": [
+        "mesh_name",
+        "instance_spot_type",
+        "outcome"
+      ],
+      "labelValues": {
+        "outcome": [
+          "claimed",
+          "lost",
+          "failed"
+        ]
+      }
+    },
+    {
+      "name": "zlink.host.state",
+      "kind": "observable",
+      "unit": "{runtime}",
+      "labels": [
+        "state"
+      ],
+      "labelValues": {
+        "state": [
+          "preparing",
+          "serving",
+          "relocating",
+          "relocated",
+          "draining",
+          "stopped",
+          "error"
+        ]
+      }
+    },
+    {
+      "name": "zlink.host.relocation.duration",
+      "kind": "histogram",
+      "unit": "s",
+      "labels": [
+        "mode",
+        "outcome"
+      ],
+      "labelValues": {
+        "outcome": [
+          "relocated",
+          "blocked"
+        ],
+        "mode": [
+          "planned_maintenance",
+          "rolling_update"
+        ]
+      }
+    },
+    {
+      "name": "zlink.host.relocation.blocked",
+      "kind": "counter",
+      "unit": "{operation}",
+      "labels": [
+        "mode",
+        "reason"
+      ],
+      "labelValues": {
+        "mode": [
+          "planned_maintenance",
+          "rolling_update"
+        ],
+        "reason": [
+          "target_unavailable",
+          "store_unavailable",
+          "relocation_disabled",
+          "state_incompatible",
+          "deadline_exceeded",
+          "relocation_failed",
+          "runtime_not_ready",
+          "manual_topology_unsupported",
+          "shutdown_requested",
+          "operation_in_progress"
+        ]
+      }
+    },
+    {
+      "name": "zlink.relocation.interruption",
+      "kind": "histogram",
+      "unit": "s",
+      "labels": [
+        "unit_kind",
+        "execution_mode"
+      ],
+      "optionalLabels": [
+        "execution_mode"
+      ],
+      "labelValues": {
+        "unit_kind": [
+          "actor",
+          "instance_spot",
+          "user_spot"
+        ]
+      }
+    },
+    {
+      "name": "zlink.relocation.target_resume",
+      "kind": "histogram",
+      "unit": "s",
+      "labels": [
+        "unit_kind"
+      ],
+      "labelValues": {
+        "unit_kind": [
+          "actor",
+          "instance_spot",
+          "user_spot"
+        ]
+      }
+    },
+    {
+      "name": "zlink.relocation.route_convergence",
+      "kind": "histogram",
+      "unit": "s",
+      "labels": [
+        "unit_kind"
+      ],
+      "labelValues": {
+        "unit_kind": [
+          "actor",
+          "instance_spot",
+          "user_spot"
+        ]
+      }
+    },
+    {
+      "name": "zlink.relocation.cutover_timeout",
+      "kind": "counter",
+      "unit": "{warning}",
+      "labels": [
+        "unit_kind"
+      ],
+      "labelValues": {
+        "unit_kind": [
+          "actor",
+          "instance_spot",
+          "user_spot"
+        ]
+      }
+    },
+    {
+      "name": "zlink.host.shutdown.duration",
+      "kind": "histogram",
+      "unit": "s",
+      "labels": [
+        "outcome"
+      ],
+      "labelValues": {
+        "outcome": [
+          "stopped",
+          "force_stopped"
+        ]
+      }
+    },
+    {
+      "name": "zlink.host.shutdown.forced",
+      "kind": "counter",
+      "unit": "{operation}",
+      "labels": [
+        "reason"
+      ],
+      "labelValues": {
+        "reason": [
+          "deadline_exceeded",
+          "teardown_failed"
+        ]
+      }
+    },
+    {
+      "name": "zlink.location.store.errors",
+      "kind": "counter",
+      "unit": "{error}",
+      "labels": [
+        "operation"
+      ],
+      "labelValues": {
+        "operation": [
+          "read",
+          "compare_exchange",
+          "relocation_put",
+          "relocation_get",
+          "relocation_delete",
+          "lease_renew",
+          "release"
+        ]
+      }
+    },
+    {
+      "name": "zlink.location.owner_lease.renew.failures",
+      "kind": "counter",
+      "unit": "{failure}",
+      "labels": [
+        "scope_kind",
+        "scope_name"
+      ],
+      "labelValues": {
+        "scope_kind": [
+          "mesh",
+          "channel"
+        ]
+      }
+    },
+    {
+      "name": "zlink.location.owner_lease.renew.lateness",
+      "kind": "histogram",
+      "unit": "s",
+      "labels": [
+        "scope_kind",
+        "scope_name"
+      ],
+      "labelValues": {
+        "scope_kind": [
+          "mesh",
+          "channel"
+        ]
+      }
+    },
+    {
+      "name": "zlink.observability.events.overflow",
+      "kind": "counter",
+      "unit": "{event}",
+      "labels": [
+        "source"
+      ]
+    }
+  ]
+}
