@@ -164,6 +164,7 @@ const livenessCodec = createServiceWireCodec({
 interface ControlSendState {
   task?: Promise<boolean>;
   next?: () => boolean | Promise<boolean>;
+  // HELLO send eligibility; admission suspension does not end the exchange.
   current?: () => boolean;
   // Admission owns the first HELLO until ADMIT or route termination.
   hello?: Uint8Array;
@@ -485,13 +486,17 @@ export class RawServiceMeshRuntime {
       this.isPeerAnnouncementCurrent(nodeRoutingId, generation) &&
       this.peerAdmissionSealed?.() !== true;
     const existing = this.controlSends.get(key);
+    if (!current()) {
+      if (existing === undefined) this.controlSends.set(key, { current });
+      return false;
+    }
     const hello =
       existing?.hello ??
       encodeRouteMeshAdmission(M6aServiceWireCommand.hello, this.topology.localDescriptor());
     return this.startControlSend(
       nodeRoutingId,
       M6aServiceWireCommand.hello,
-      () => current() && this.submitControl(nodeRoutingId, [hello]),
+      () => this.submitControl(nodeRoutingId, [hello]),
       current,
       hello
     );
@@ -1329,7 +1334,7 @@ export class RawServiceMeshRuntime {
   nextMaintenanceDeadlineMs(nowMs: number): number {
     if (!this.closed && this.controlSends.size !== 0) {
       for (const exchange of this.controlSends.values()) {
-        if (exchange.hello !== undefined && exchange.current?.() === true) return nowMs;
+        if (exchange.current?.() === true) return nowMs;
       }
     }
     return Math.min(this.operations.nextDeadlineMs(), this.liveness.nextDeadlineMs());
