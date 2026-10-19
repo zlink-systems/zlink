@@ -38,6 +38,7 @@
 
     <ItemGroup>
         <Compile Include="Runtime/BoundSessionDisconnectTests.cs"/>
+        <Compile Include="Runtime/BoundSessionReplacementCloseTests.cs"/>
         <Compile Include="AssemblyInfo.cs"/>
         <Compile Include="Runtime/InstanceReadyAdmissionTests.cs"/>
         <Compile Include="Runtime/SessionFailureClassificationTests.cs"/>
