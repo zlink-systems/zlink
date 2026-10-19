@@ -212,7 +212,7 @@ function encodeVarint(value: number | bigint): Buffer {
     if (remaining !== 0n) byte |= 0x80;
     bytes[offset++] = byte;
   } while (remaining !== 0n);
-  return Buffer.from(bytes.subarray(0, offset));
+  return bytes.subarray(0, offset);
 }
 
 type WireField = {
