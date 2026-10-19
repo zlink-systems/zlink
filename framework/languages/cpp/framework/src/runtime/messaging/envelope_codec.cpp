@@ -22,6 +22,8 @@ namespace zlink::framework::runtime::messaging
 
 message_parts_t::message_parts_t (zlink::message_t header, zlink::message_t body)
 {
+    constexpr std::size_t envelope_part_count = 2;
+    _parts.reserve (envelope_part_count);
     _parts.push_back (std::move (header));
     _parts.push_back (std::move (body));
 }

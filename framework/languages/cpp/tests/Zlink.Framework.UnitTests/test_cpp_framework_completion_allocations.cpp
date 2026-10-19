@@ -4,6 +4,7 @@
 #include "allocation_counter.hpp"
 
 #include "runtime/dispatch/coroutine_executor.hpp"
+#include "runtime/messaging/envelope_codec.hpp"
 
 #include <array>
 #include <chrono>
@@ -13,7 +14,9 @@
 #include <functional>
 #include <iostream>
 #include <new>
+#include <optional>
 #include <stdexcept>
+#include <string>
 #include <thread>
 #include <utility>
 
@@ -84,6 +87,39 @@ std::size_t measure_task_wait_resumption ()
     return allocations;
 }
 
+std::size_t measure_envelope_parts (std::size_t iterations)
+{
+    using zlink::framework::runtime::messaging::message_parts_t;
+    constexpr std::size_t header_size = 128;
+    constexpr std::size_t body_size = 160;
+    std::size_t allocations = 0;
+    for (std::size_t iteration = 0; iteration < iterations; ++iteration) {
+        auto header = zlink::message_t::from (std::string (header_size, 'h'));
+        auto body = zlink::message_t::from (std::string (body_size, 'b'));
+        const auto *header_storage = header.data ();
+        const auto *body_storage = body.data ();
+        std::optional<message_parts_t> parts;
+        allocations +=
+          count_allocations ([&] { parts.emplace (std::move (header), std::move (body)); });
+        if (parts->size () != 2 || (*parts)[0].data () != header_storage
+            || (*parts)[1].data () != body_storage || (*parts)[0].size () != header_size
+            || (*parts)[1].size () != body_size || header.valid () || body.valid ()) {
+            throw std::runtime_error ("envelope parts changed storage, order, or ownership");
+        }
+        auto items = std::move (*parts).take_items ();
+        const auto *items_storage = items.data ();
+        std::optional<message_parts_t> transferred;
+        const auto transfer_allocations =
+          count_allocations ([&] { transferred.emplace (std::move (items)); });
+        if (transfer_allocations != 0 || transferred->items ().data () != items_storage
+            || (*transferred)[0].data () != header_storage
+            || (*transferred)[1].data () != body_storage) {
+            throw std::runtime_error ("envelope vector transfer allocated or changed storage");
+        }
+    }
+    return allocations;
+}
+
 bool exceeds_main_baseline (const char *variable, std::size_t observed)
 {
     const char *const text = std::getenv (variable);
@@ -121,6 +157,13 @@ int main ()
         std::cerr << "std::function copy probe expected>0 observed=" << function_copy_probe << '\n';
         return 1;
     }
+    constexpr std::size_t envelope_iterations = 1000;
+    const std::size_t envelope_parts = measure_envelope_parts (envelope_iterations);
+    if (envelope_parts != envelope_iterations) {
+        std::cerr << "envelope-parts expected=" << envelope_iterations
+                  << " observed=" << envelope_parts << '\n';
+        return 1;
+    }
 
     zlink::framework::runtime::configure_handler_coroutine_executor (1);
     zlink::framework::runtime::install_host_context_hooks ();
@@ -135,7 +178,8 @@ int main ()
     zlink::framework::detail::set_ambient_context_hooks (nullptr);
 
     std::cout << "allocation probe=" << probe << " function-copy-probe=" << function_copy_probe
-              << " native-completion=" << native << " task-wait-resumption=" << task_wait << '\n';
+              << " envelope-parts=" << envelope_parts << " native-completion=" << native
+              << " task-wait-resumption=" << task_wait << '\n';
     const bool native_regressed =
       exceeds_main_baseline ("ZLINK_EXPECT_MAIN_NATIVE_COMPLETION_ALLOCATIONS", native);
     const bool task_wait_regressed =
