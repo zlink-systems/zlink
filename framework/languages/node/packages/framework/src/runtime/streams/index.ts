@@ -743,9 +743,10 @@ export class ZLinkStreamBindingRuntime {
   async disconnectNativeBoundSession(
     node: ZLinkBackendActorSessionNode,
     actorRef: ActorRef,
+    timeoutMs: number,
     signal?: AbortSignal
   ): Promise<void> {
-    await this.boundSessions.disconnectNativeBoundSession(node, actorRef, signal);
+    await this.boundSessions.disconnectNativeBoundSession(node, actorRef, timeoutMs, signal);
   }
 
   async disconnectBoundSession(actorId: string, signal?: AbortSignal): Promise<void> {

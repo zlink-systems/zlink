@@ -1101,6 +1101,61 @@ final class ZLinkStreamRuntimeIngressTest {
     }
 
     @Test
+    void replacedSessionRejectsStaleCloseAndPreservesTheReplacementConnection() throws Exception {
+        TestSession.replacementMode = ReplacementMode.PENDING;
+        FakeStream stream = new FakeStream();
+        ReplacementFixture fixture = startReplacement(stream);
+        runtimes.add(fixture.runtime());
+        TestSession first = awaitSession();
+        assertTrue(first.dispatchLatch.await(5, TimeUnit.SECONDS));
+        ZLinkActor actor =
+                fixture.actors()
+                        .getOrCreateLocalActor(REPLACEMENT_ACTOR, ZLinkActor.class)
+                        .toCompletableFuture()
+                        .join()
+                        .orElseThrow();
+        var ref = fixture.actors().currentRef(actor);
+        var target = new ActorRef(ref.actorId(), ref.generation(), MESH, ref.nodeRid());
+        first.context().actors().bind(target).toCompletableFuture().join();
+        stream.enqueue(PEER_B, frame("replacement", "{}"));
+        awaitCondition(() -> TestSession.created.size() == 2);
+        TestSession second =
+                TestSession.created.stream()
+                        .filter(
+                                session ->
+                                        session.context().routingId().orElseThrow().equals(PEER_B))
+                        .findFirst()
+                        .orElseThrow();
+        assertTrue(second.dispatchLatch.await(5, TimeUnit.SECONDS));
+        second.context().actors().bind(target).toCompletableFuture().join();
+        fixture.runtime().handleBoundSessionReplaced(ref.nodeRid(), replacement(ref));
+        try {
+            assertTrue(first.replacementEntered.await(5, TimeUnit.SECONDS));
+            var stale =
+                    new ZLinkServiceM6BWireCodec.BoundSessionClose(
+                            17, ref.actorId(), ref.generation(), replacement(ref).retiredSession());
+            var failure =
+                    assertThrows(
+                            CompletionException.class,
+                            () ->
+                                    fixture.runtime()
+                                            .handleBoundSessionClose(
+                                                    RoutingId.from("session-owner-node"), 3, stale)
+                                            .toCompletableFuture()
+                                            .join());
+            assertEquals(
+                    ZLinkFrameworkErrorKind.UNAVAILABLE,
+                    org.junit.jupiter.api.Assertions.assertInstanceOf(
+                                    ZLinkFrameworkException.class, failure.getCause())
+                            .kind());
+            assertFalse(stream.disconnectedPeers.contains(PEER_B));
+            assertTrue(second.context().actors().find(ref.actorId()).isPresent());
+        } finally {
+            first.replacementCompletion.complete(System.nanoTime());
+        }
+    }
+
+    @Test
     void boundSessionReplacementRunsCallbackBeforeADeferredClose() throws Exception {
         TestSession.replacementMode = ReplacementMode.FAILURE;
         FakeStream stream = new FakeStream();
@@ -2159,6 +2214,8 @@ final class ZLinkStreamRuntimeIngressTest {
         private final AtomicInteger actorUnboundSubmissions = new AtomicInteger();
         private final CountDownLatch sessionClosingSendsLatch = new CountDownLatch(1);
         private final CompletableFuture<RoutingId> disconnectedPeer = new CompletableFuture<>();
+        private final List<RoutingId> disconnectedPeers =
+                new java.util.concurrent.CopyOnWriteArrayList<>();
         private final AtomicInteger disconnectCalls = new AtomicInteger();
         private volatile long disconnectStartedAt;
         private boolean completeClosingControlSend = true;
@@ -2315,6 +2372,7 @@ final class ZLinkStreamRuntimeIngressTest {
 
         @Override
         public void disconnectPeer(RoutingId routingId) {
+            disconnectedPeers.add(routingId);
             disconnectStartedAt = System.nanoTime();
             disconnectCalls.incrementAndGet();
             disconnectedPeer.complete(routingId);

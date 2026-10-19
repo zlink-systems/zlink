@@ -23,34 +23,8 @@ internal sealed class ZLinkBoundSessionService(ZLinkFrameworkRuntime runtime)
     )
     {
         using var operation = (await runtime.AdmitOperationAsync().ConfigureAwait(false)).Enter();
-        if (
-            ZLinkBoundSessionDispatchScope.TryDeferClose(
-                actorId,
-                ct => DisconnectNowAsync(actorId, ct)
-            )
-        )
-            return;
-
-        await DisconnectNowAsync(actorId, cancellationToken).ConfigureAwait(false);
-    }
-
-    private async ValueTask DisconnectNowAsync(string actorId, CancellationToken cancellationToken)
-    {
         cancellationToken.ThrowIfCancellationRequested();
-        var route = ResolveSessionRoute(actorId);
-        try
-        {
-            await runtime
-                .CloseActorBoundSessionAsync(actorId, cancellationToken)
-                .ConfigureAwait(false);
-        }
-        finally
-        {
-            if (runtime.TryGetSessionActorContext(actorId, route.BindingToken, out var context))
-                runtime.UnbindSessionActor(actorId, context, route.BindingToken);
-
-            runtime.UnbindActorSession(actorId, route.BindingToken);
-        }
+        await runtime.CloseActorBoundSessionAsync(actorId, cancellationToken).ConfigureAwait(false);
     }
 
     internal async ValueTask<ZLinkOneWaySubmitResult> SubmitBoundSessionAsync<TMessage>(

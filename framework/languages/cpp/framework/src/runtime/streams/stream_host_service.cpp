@@ -2217,7 +2217,8 @@ class stream_host_service_t::listener_t
         auto transport_connection = _mesh_node->native_node ().sessions ().open (
           key,
           [this, rid] { request_core_peer_disconnect (rid, "session_relocation_seal_timeout"); },
-          _mesh_node->routing_id (), _mesh_node->native_node ().status ().lifecycle_generation ());
+          _mesh_node->routing_id (), _mesh_node->native_node ().status ().lifecycle_generation (),
+          [this, rid] { _core_socket->disconnect_rid (rid); });
         detail::session_actor_manager_access_t::attach (actors, stream);
         auto created = std::make_shared<core_session_t> (
           std::move (scope), session, actors, std::move (stream), std::move (transport_connection),

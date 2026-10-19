@@ -1202,6 +1202,26 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
     }
 
     @Override
+    public CompletionStage<Void> closeActorBoundSessionAsync(
+            ZLinkBackendActorRef actor, Duration timeout) {
+        BindingEntry entry = actorBindings.get(actor.actorId());
+        if (entry == null || !entry.binding().actor().equals(actor))
+            return CompletableFuture.failedFuture(
+                    new systems.zlink.framework.errors.ZLinkFrameworkException(
+                            systems.zlink.framework.errors.ZLinkFrameworkErrorKind
+                                    .INVALID_OPERATION,
+                            "No current session binding exists for Actor " + actor.actorId()));
+        var binding = entry.binding();
+        return owner.requestBoundSessionClose(
+                new ZLinkServiceM6BWireCodec.BoundSessionClose(
+                        nextActorRequestSequence.getAndIncrement(),
+                        actor.actorId(),
+                        actor.generation(),
+                        sessionOwnerFence(binding)),
+                timeout);
+    }
+
+    @Override
     public void closeActorBoundSession(ZLinkBackendActorRef actor, Duration timeout) {
         closeActorBoundSession(actor, null, actorAuthorityOwnerGeneration(actor), timeout);
     }
@@ -2341,25 +2361,25 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
         return true;
     }
 
+    private ZLinkServiceM6BWireCodec.RetiredSessionRouteFence sessionOwnerFence(
+            ActorSessionBinding binding) {
+        return new ZLinkServiceM6BWireCodec.RetiredSessionRouteFence(
+                binding.sessionOwnerNodeRid(),
+                binding.remote()
+                        ? binding.sessionOwnerNodeGeneration()
+                        : ownerLifecycleGeneration(),
+                binding.remote() ? binding.sessionOwnerId() : owner.localAuthorityOwnerId(),
+                binding.remote()
+                        ? binding.sessionOwnerLeaseGeneration()
+                        : owner.localAuthorityLeaseGeneration(),
+                binding.sessionRid(),
+                binding.bindingGeneration());
+    }
+
     private void notifyBoundSessionReplaced(ActorSessionBinding retired) {
         ZLinkServiceM6BWireCodec.BoundSessionReplaced replacement =
                 new ZLinkServiceM6BWireCodec.BoundSessionReplaced(
-                        actorAuthorityFence(retired.actor()),
-                        retired.remote()
-                                ? new ZLinkServiceM6BWireCodec.RetiredSessionRouteFence(
-                                        retired.sessionOwnerNodeRid(),
-                                        retired.sessionOwnerNodeGeneration(),
-                                        retired.sessionOwnerId(),
-                                        retired.sessionOwnerLeaseGeneration(),
-                                        retired.sessionRid(),
-                                        retired.bindingGeneration())
-                                : new ZLinkServiceM6BWireCodec.RetiredSessionRouteFence(
-                                        owner.routingId(),
-                                        ownerLifecycleGeneration(),
-                                        owner.localAuthorityOwnerId(),
-                                        owner.localAuthorityLeaseGeneration(),
-                                        retired.sessionRid(),
-                                        retired.bindingGeneration()));
+                        actorAuthorityFence(retired.actor()), sessionOwnerFence(retired));
         owner.sendBoundSessionReplaced(retired.sessionOwnerNodeRid(), replacement);
     }
 
