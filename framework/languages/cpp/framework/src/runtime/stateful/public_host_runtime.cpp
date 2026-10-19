@@ -1057,6 +1057,15 @@ public_host_runtime_t::accepted_record_authority (
   std::shared_ptr<const location_owner_token_t> owner,
   live_location_reader_t *sources) const
 {
+    const auto &local = _options.mesh.descriptor;
+    // The execution owner checks a Spot's current incarnation. Actor admission
+    // validates the native object fence here, independently of sender availability.
+    if ((query.target.kind == stateful::object_kind_t::actor
+         && query.requested_authority_owner_generation != query.target.authority_owner_generation)
+        || query.target_node_routing_id != local.node_routing_id
+        || query.target_node_generation != local.lifecycle_generation)
+        throw detail_make_boundary_exception (detail::boundary_error_t::stale_generation,
+                                              "accepted target fence is stale");
     if (query.source_original)
         if (const auto *lookup =
               std::get_if<mesh::request_source_lookup_t> (&*query.source_original)) {
@@ -1066,7 +1075,6 @@ public_host_runtime_t::accepted_record_authority (
         }
     using authority_t = std::optional<stateful::accepted_record_authority_t>;
     authority_t accepted;
-    const auto &local = _options.mesh.descriptor;
     // Location §9.3: the first accepting owner resolves once; forwarded records keep it.
     if (!query.source_original && sources) {
         auto cached = sources->cached_request_source (local.mesh_name, query.source_node_routing_id,
@@ -1079,15 +1087,7 @@ public_host_runtime_t::accepted_record_authority (
             query.source_original = mesh::request_source_t{std::move (descriptor)};
     }
     if (owner && !owner->owner_id.empty () && owner->lease_generation > 0
-        && query.source_original
-        // A Spot mailbox facade can outlive an incarnation. Its execution
-        // owner validates the current fence; Actor admission uses the exact
-        // native object authority here.
-        && (query.target.kind != stateful::object_kind_t::actor
-            || query.requested_authority_owner_generation
-                 == query.target.authority_owner_generation)
-        && query.target_node_routing_id == local.node_routing_id
-        && query.target_node_generation == local.lifecycle_generation) {
+        && query.source_original) {
         protocol::request_source_fence_t source;
         if (const auto *reference =
               std::get_if<mesh::local_request_source_t> (&*query.source_original)) {

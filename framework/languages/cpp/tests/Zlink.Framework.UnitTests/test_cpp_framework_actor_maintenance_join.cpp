@@ -1269,10 +1269,10 @@ TEST (RelayAdmission, AcceptedSourceRejectsWrongFences)
     denied (bad, pair.source_wire.lifecycle_generation, stateful::stateful_error_t::conflict);
     bad = header;
     ++bad.target.authority_owner_generation;
-    denied (bad, pair.source_wire.lifecycle_generation, stateful::stateful_error_t::unavailable);
+    denied (bad, pair.source_wire.lifecycle_generation, stateful::stateful_error_t::conflict);
     bad = header;
     ++bad.target.target_node_generation;
-    denied (bad, pair.source_wire.lifecycle_generation, stateful::stateful_error_t::unavailable);
+    denied (bad, pair.source_wire.lifecycle_generation, stateful::stateful_error_t::conflict);
     denied (header, pair.source_wire.lifecycle_generation + 1,
             stateful::stateful_error_t::unavailable);
 }

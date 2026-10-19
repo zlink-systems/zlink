@@ -1032,6 +1032,8 @@ raw_stateful_dispatch_t::resolve_accepted_authority (
         authority = co_await _authority_resolver (query);
     }
     catch (const framework_exception_t &error) {
+        if (detail_boundary_state (error) == detail::boundary_error_t::stale_generation)
+            co_return std::pair{stateful_error_t::conflict, std::nullopt};
         if (error.kind () != framework_error_kind_t::unavailable)
             throw;
     }
